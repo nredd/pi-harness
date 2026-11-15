@@ -6,7 +6,7 @@ import resourceSampler from "../../../packages/resource-sampler/vitest.config.ts
 import sessionKit from "../../../packages/session-kit/vitest.config.ts";
 import subagents from "../../../packages/subagents/vitest.config.ts";
 import subscriptionRouter from "../../../packages/subscription-router/vitest.config.ts";
-import todo from "../../../packages/todo/.vitest.config.ts";
+import todo from "../../../packages/todo/vitest.config.ts";
 import inprocess from "../vitest.config.ts";
 
 // Assert the actual configs, not a copied policy or CLI argument. Direct Vitest

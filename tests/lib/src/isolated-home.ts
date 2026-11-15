@@ -7,7 +7,6 @@ export function isolatedHomeEnv(home: string): Record<string, string> {
 		HOME: home,
 		USERPROFILE: home,
 		XDG_CONFIG_HOME: join(home, ".config"),
-		XDG_DATA_HOME: join(home, ".local", "share"),
 		XDG_STATE_HOME: join(home, ".local", "state"),
 		PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
 		PI_SUBAGENTS_CONFIG_DIR: join(home, ".pi", "agent"),

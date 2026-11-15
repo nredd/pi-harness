@@ -1,7 +1,9 @@
 // Outlines live in the agent-cache store, not the session file (#648).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { beforeEach, test, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, test, vi } from "vitest";
 
 const uiNode = (ref, title, fields = {}) => ({ ref, wireRef: `w${ref}`, role: "AXGroup", subrole: "", identifier: `id-${ref}`, title, description: "An element description", value: "", actions: ["AXPress"], canPress: true, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: { x: 1, y: 2, w: 30, h: 40 }, focused: false, offscreen: false, pictureOnly: false, truncated: false, text: [], children: [], ...fields });
 
@@ -34,9 +36,21 @@ async function modules() {
 	return { ...store, ...bridge, serializeOutline };
 }
 
-beforeEach(async () => {
-	const { outlineStoreDir } = await import("../src/outline-store.ts");
-	fs.rmSync(outlineStoreDir(), { recursive: true, force: true });
+// Vitest overlaps test files, and every file shares the run's HOME. Other suites write outlines through the bridge into the
+// default store, which breaks exact-count assertions and races `rmSync` (#930). Give each test its own agent directory.
+let savedAgentDir;
+let agentDir;
+
+beforeEach(() => {
+	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+	agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "cu-outline-store-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+});
+
+afterEach(() => {
+	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+	fs.rmSync(agentDir, { recursive: true, force: true });
 });
 
 test("store round-trips, replaces a state, and evicts past the newest limit", async () => {

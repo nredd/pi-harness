@@ -212,3 +212,19 @@ Hosted job totals were 1373 s and 1666 s. `packages/subagents` and
 `ts` split as Ubuntu; the remainder is about 400 s of gate time. Self-hosted `pi-macos` runners are
 slower still, which is the headroom the split buys. Re-measure from `Duration` and `> <pkg> check`
 lines after a split lands and update `CELL_SECONDS` in `scripts/runner_pools.py`.
+
+## `maxWorkers: 1` and `VITEST_MAX_WORKERS` (#934)
+
+Vitest 5.0.3 applies `process.env.VITEST_MAX_WORKERS` after the config resolves, over `maxWorkers` and
+over `fileParallelism: false` alike. A shell that exports it (the shared heavy-slot wrapper sets 2) ran
+`computer-use` files two at a time: pool ids 1 and 2, 70 files with 50 overlapping pairs in one run. Not a
+pool (`forks` and `threads` both serialize) or `isolate` effect: a scratch repro with `maxWorkers: 1`
+serializes without the variable and overlaps with it, with or without `fileParallelism: false`. CI never
+sets the variable, so CI always ran these serially.
+
+`definePackageConfig` now sets `fileParallelism: false` and drops `VITEST_MAX_WORKERS` for any package with
+`maxWorkers: 1` (`computer-use` twice, `resource-sampler`, `subagents` runtime-build), pinned in
+`scripts/coverage-configs.test.ts`. Rule: a suite that shares state beyond serial files (HOME, ports,
+global tools) isolates it per file, as `run-vitest.ts` does per run; it does not lean on serialization.
+Locally the four packages now run serially under the wrapper, so `computer-use` takes about twice as long
+there; CI timings do not change.

@@ -120,7 +120,7 @@ function isDarwin() {
 }
 
 // Opt-in, as before the port: `check` never ran this suite, and its two macOS helper builds outlast the
-// scripts' own 120 s deadline on a loaded host. `npm run test:windows-scripts` sets the flag.
+// scripts' own 120 s deadline on a loaded host. `PI_CU_WINDOWS_SCRIPTS=1 npm test -- test/windows-build-scripts.test.mjs --coverage.enabled=false` sets it.
 describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")("Windows build/install script routing (PI_CU_WINDOWS_SCRIPTS=1)", () => {
 	beforeAll(() => {
 		TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-script-test-"));

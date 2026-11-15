@@ -223,7 +223,7 @@ match the release `verify` run; CI's `contracts` job runs it on every non-docs P
 Upstream sync provenance is packed in `UPSTREAM.md`; `activity_glow.swift` is required by both
 build-source lists and the tarball audit. The release descriptor is unchanged: locally rebuilt
 per-architecture macOS payloads, locally signed at install, and no upstream-signed app substitution.
-Computer-use remains outside the coverage gate. `test:sync-reverts` supplies deterministic negative
+Computer-use remains outside the coverage gate. `scripts/check-sync-reverts.mjs` supplies deterministic negative
 controls for the carried patches, without running GUI tools.
 
 `scenario_computer_use` is platform-aware because `extensions/computer-use.ts` registers
