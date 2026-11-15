@@ -6,9 +6,10 @@
  */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
+  const actual = await vi.importActual<typeof AgentRunner>("../src/agent-runner.js");
   return { ...actual, runAgent: vi.fn() };
 });
 
@@ -26,10 +27,13 @@ import { bootPi, ctx, flush, hermeticDir, textOf } from "../test/helpers/boot-ex
 type ToolActivity = { type: "start" | "end"; toolName: string };
 
 let restore: (() => void) | undefined;
+let shutdown: (() => Promise<void>) | undefined;
 beforeEach(() => {
   vi.mocked(runAgent).mockReset();
 });
-afterEach(() => {
+afterEach(async () => {
+  await shutdown?.();
+  shutdown = undefined;
   restore?.();
   restore = undefined;
 });
@@ -60,29 +64,30 @@ async function boot(planning: boolean, admit: { ok: boolean; resetAt?: number } 
   await lifecycle.get("session_start")?.({}, c);
   const run = (name: string, params: Record<string, unknown>, onUpdate?: (update: unknown) => void) =>
     tools.get(name).execute("tc", { prompt: "go", description: "work", ...params }, undefined, onUpdate, c);
-  return { run, plan, shutdown: async () => lifecycle.get("session_shutdown")?.() };
+  shutdown = async () => {
+    await lifecycle.get("session_shutdown")?.({}, c);
+  };
+  return { run, plan };
 }
 
 describe("while Plan is active", () => {
   it("refuses a scheduled agent", async () => {
-    const { run, shutdown } = await boot(true);
+    const { run } = await boot(true);
     expect(textOf(await run("Agent", { subagent_type: "general-purpose", schedule: "0 3 * * * *" }))).toBe(
       PLAN_SCHEDULE_REFUSAL,
     );
-    await shutdown();
   });
 
   it("refuses to park a quota-blocked background dispatch", async () => {
-    const { run, shutdown } = await boot(true, { ok: false, resetAt: Date.now() + 3_600_000 });
+    const { run } = await boot(true, { ok: false, resetAt: Date.now() + 3_600_000 });
     await expect(run("Agent", { subagent_type: "general-purpose", run_in_background: true })).rejects.toThrow(
       PLAN_PARK_REFUSAL,
     );
-    await shutdown();
   });
 
   it("refuses to steer a running agent that started before Plan, and steers once Plan is off", async () => {
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
-    const { run, plan, shutdown } = await boot(false);
+    const { run, plan } = await boot(false);
     const started = await run("Agent", { subagent_type: "general-purpose", run_in_background: true });
     await flush();
     const id = /Agent ID: (\S+)/.exec(textOf(started))?.[1] ?? "";
@@ -90,7 +95,6 @@ describe("while Plan is active", () => {
     expect(textOf(await run("steer_subagent", { agent_id: id, message: "EDIT" }))).toBe(planSteerRefusal(id));
     plan.active = false;
     expect(textOf(await run("steer_subagent", { agent_id: id, message: "EDIT" }))).toContain("Steering message queued");
-    await shutdown();
   });
 });
 
@@ -106,7 +110,7 @@ describe("tool activity tracking", () => {
         options?.onToolActivity?.(activity);
       return { responseText: "done", session: { dispose: vi.fn(), messages: [] }, aborted: false, steered: false } as never;
     });
-    const { run, shutdown } = await boot(false);
+    const { run } = await boot(false);
     const updates: { toolUses: number; activity: string }[] = [];
     const result = await run("Agent", { subagent_type: "general-purpose", run_in_background: false }, (update) => {
       const { details } = update as { details: { toolUses: number; activity: string } };
@@ -121,6 +125,5 @@ describe("tool activity tracking", () => {
       { toolUses: 1, activity: "reading…" },
       { toolUses: 2, activity: "thinking…" },
     ]);
-    await shutdown();
   });
 });
