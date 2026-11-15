@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { runTree } from "../src/run-tree.ts";
 
@@ -14,7 +15,26 @@ it("kills a TERM-resistant descendant holding the pipes, then resolves", async (
 	expect(performance.now() - start).toBeLessThan(8_000);
 	const descendant = Number(result.stdout.trim());
 	expect(descendant).toBeGreaterThan(0);
-	expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
+	// Orphans can remain as zombies until the OS reaps them; they are dead even while kill(0) succeeds.
+	await expect
+		.poll(
+			() => {
+				try {
+					process.kill(descendant, 0);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+					throw error;
+				}
+				const state = spawnSync("ps", ["-o", "stat=", "-p", String(descendant)], {
+					encoding: "utf8",
+					timeout: 500,
+				});
+				if (state.error) throw state.error;
+				return state.stdout.trimStart().startsWith("Z");
+			},
+			{ timeout: 2_000, interval: 20 },
+		)
+		.toBe(true);
 });
 
 it("reports a spawn failure instead of hanging", async () => {
