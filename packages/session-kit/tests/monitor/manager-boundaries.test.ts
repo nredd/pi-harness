@@ -7,8 +7,8 @@ import { COALESCE_MS, MonitorManager } from "../../src/monitor/manager.ts";
 import { rootDir } from "../../src/monitor/pidfiles.ts";
 import type { MonitorProcess, SpawnOptions } from "../../src/monitor/process.ts";
 import type { MonitorMessage } from "../../src/monitor/types.ts";
-import { ControlledProcess, ControlledProcesses } from "../fixtures/session.ts";
 import { tempDir } from "../fixtures/monitor/helpers.ts";
+import { ControlledProcess, ControlledProcesses } from "../fixtures/session.ts";
 
 const matcherFault = vi.hoisted(() => ({ fail: false }));
 vi.mock("../../src/monitor/matcher.ts", async (importOriginal) => {

@@ -7,9 +7,9 @@ import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerMon } from "../../src/mon/index.ts";
+import { snapshot } from "../fixtures/mon/fixtures.ts";
 import { configFor, TerminalFixture } from "../fixtures/session.ts";
 import { assistant, history } from "../fixtures/stats.ts";
-import { snapshot } from "../fixtures/mon/fixtures.ts";
 
 let fixture: TerminalFixture | undefined;
 afterEach(async () => {

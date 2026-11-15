@@ -11,9 +11,9 @@ import {
 	TOOL_NAMES,
 } from "../../src/monitor/index.ts";
 import { psInfo, rootDir, writePidfile } from "../../src/monitor/pidfiles.ts";
-import { ControlledProcesses } from "../fixtures/session.ts";
 import { alive, cleanupProcs, deadPid, spawnSleeper, tempDir, waitFor } from "../fixtures/monitor/helpers.ts";
 import { STAY } from "../fixtures/monitor/stay.ts";
+import { ControlledProcesses } from "../fixtures/session.ts";
 
 const shutdowns: (() => Promise<void>)[] = [];
 

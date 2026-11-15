@@ -6,8 +6,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { MonView } from "../../src/mon/component.ts";
 import type { MonSnapshot } from "../../src/mon/model.ts";
 import { createSamplerSource } from "../../src/mon/source.ts";
-import { getThemeByName } from "../fixtures/themes.ts";
 import { snapshot } from "../fixtures/mon/fixtures.ts";
+import { getThemeByName } from "../fixtures/themes.ts";
 
 const SIZES = [
 	[40, 12],
