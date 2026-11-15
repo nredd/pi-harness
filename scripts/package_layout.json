@@ -164,8 +164,6 @@
   "packages/subagents: test/lifecycle-coverage-ui.test.ts: test-name",
   "packages/subagents: test/lifecycle-coverage-workflow.test.ts: test-name",
   "packages/subagents: test: top-level-entry",
-  "packages/subscription-router: .gitignore: dotfile",
-  "packages/subscription-router: test: top-level-entry",
   "packages/todo: .bun-version: dotfile",
   "packages/todo: .gitignore: dotfile",
   "packages/todo: .test-support: dotfile",

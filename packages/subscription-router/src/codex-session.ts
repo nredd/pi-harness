@@ -3,7 +3,7 @@ import { type ChildProcessWithoutNullStreams, execFile, spawn } from "node:child
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CODEX_VERSION, type CodexIdentity, CodexResetError, readIdentity, record } from "./codex-contract.js";
+import { CODEX_VERSION, type CodexIdentity, CodexResetError, readIdentity, record } from "./codex-contract.ts";
 
 /** Injectable only for credential-free fixtures; production always invokes the documented Codex surface. */
 export interface CodexSessionOptions {

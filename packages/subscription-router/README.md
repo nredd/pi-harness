@@ -4,6 +4,14 @@ Published to npm as `@nredd/pi-subscription-router` (public). From `0.4.0`, each
 Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install
 below describes legacy deployment, not installation or candidate verification of this package.
 
+## Development
+
+Tests live in `tests/`, with non-test code and data in `tests/fixtures/`. Shared clocks and
+recording Pi doubles come from `@nredd/pi-test-lib`. The byte-pinned legacy oracle in
+`tests/fixtures/legacy-oracle/` must never be edited or regenerated; root Biome disables
+formatting, linting and assists there. Snapshot provenance and oracle rules live beside the
+checks in `tests/policy-compatibility.test.ts` and `tests/policy-differential.test.ts`.
+
 ## Standalone use
 
 The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.

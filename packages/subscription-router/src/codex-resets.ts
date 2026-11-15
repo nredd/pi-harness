@@ -8,11 +8,11 @@ import {
 	parseOffers,
 	readIdentity,
 	record,
-} from "./codex-contract.js";
-import { type CodexSession, openCodexSession } from "./codex-session.js";
-import type { ExhaustionTracker } from "./exhaustion.js";
-import { type ResetAttempt, ResetJournal, type ResetOutcome } from "./reset-journal.js";
-import type { UsageService } from "./usage.js";
+} from "./codex-contract.ts";
+import { type CodexSession, openCodexSession } from "./codex-session.ts";
+import type { ExhaustionTracker } from "./exhaustion.ts";
+import { type ResetAttempt, ResetJournal, type ResetOutcome } from "./reset-journal.ts";
+import type { UsageService } from "./usage.ts";
 
 export interface ResetInspection {
 	binding: string;

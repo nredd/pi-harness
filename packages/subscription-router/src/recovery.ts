@@ -19,9 +19,9 @@
 
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentBeforeSettleEvent, BoundaryResult, ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
-import type { Profile } from "./config.js";
-import { refKey, sameModel } from "./model-ref.js";
-import { ChainExhaustedError, hasPartialOutput, isQuotaError, type RouteEnv, type Router } from "./router.js";
+import type { Profile } from "./config.ts";
+import { refKey, sameModel } from "./model-ref.ts";
+import { ChainExhaustedError, hasPartialOutput, isQuotaError, type RouteEnv, type Router } from "./router.ts";
 
 /** What happened at one settle boundary. */
 export type RecoveryOutcome =

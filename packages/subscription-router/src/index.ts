@@ -17,8 +17,8 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { showCodexResets } from "./codex-reset-command.js";
-import { CodexResets } from "./codex-resets.js";
+import { showCodexResets } from "./codex-reset-command.ts";
+import { CodexResets } from "./codex-resets.ts";
 import {
 	type ChainEntry,
 	type ConfigResult,
@@ -26,16 +26,16 @@ import {
 	type Profile,
 	ROUTER_PROVIDER,
 	THINKING_LEVELS,
-} from "./config.js";
-import { ExhaustionTracker } from "./exhaustion.js";
-import { refKey } from "./model-ref.js";
-import { compilePolicy } from "./policy.js";
-import { SettleRecovery } from "./recovery.js";
-import { ResetView, refreshSchedules } from "./reset-view.js";
-import { formatResets } from "./resets.js";
-import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.js";
-import { formatScore } from "./selection.js";
-import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.js";
+} from "./config.ts";
+import { ExhaustionTracker } from "./exhaustion.ts";
+import { refKey } from "./model-ref.ts";
+import { compilePolicy } from "./policy.ts";
+import { SettleRecovery } from "./recovery.ts";
+import { ResetView, refreshSchedules } from "./reset-view.ts";
+import { formatResets } from "./resets.ts";
+import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.ts";
+import { formatScore } from "./selection.ts";
+import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.ts";
 
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const DECISIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.decisions");

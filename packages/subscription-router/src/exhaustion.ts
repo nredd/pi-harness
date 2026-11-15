@@ -8,7 +8,7 @@
  * same scope was re-confirmed.
  */
 
-import { modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "./usage.js";
+import { modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "./usage.ts";
 
 const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_CAP_MS = 60 * 60_000;
@@ -24,7 +24,7 @@ export interface ExhaustionMark {
 	confirmations: number;
 }
 
-import type { ModelRef } from "./model-ref.js";
+import type { ModelRef } from "./model-ref.ts";
 
 function scopeKey(provider: string, families: readonly string[] | undefined): string {
 	return families?.length ? `${provider}:${[...families].sort().join(",")}` : `${provider}:*`;
