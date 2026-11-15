@@ -45,7 +45,6 @@
   "packages/computer-use: test/build-native.test.mjs: test-extension",
   "packages/computer-use: test/cdp-client.test.mjs: test-extension",
   "packages/computer-use: test/cleanup.test.mjs: test-extension",
-  "packages/computer-use: test/commit-messages.test.mjs: test-extension",
   "packages/computer-use: test/config-load.test.mjs: test-extension",
   "packages/computer-use: test/cursor-headless-gate.test.mjs: test-extension",
   "packages/computer-use: test/desktop-seam.test.mjs: test-extension",

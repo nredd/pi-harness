@@ -2,13 +2,14 @@
 // Exercise the actual CLI against disposable Git histories, including a depth-one file:// clone.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "vitest";
+import { main as commits } from "../check-commit-messages.mjs";
 
-const checker = fileURLToPath(new URL("../scripts/check-commit-messages.mjs", import.meta.url));
+const checker = fileURLToPath(new URL("../check-commit-messages.mjs", import.meta.url));
 const env = Object.fromEntries(
 	Object.entries(process.env).filter(
 		([key]) => !key.startsWith("GIT_") && !key.startsWith("GITHUB_") && key !== "COMMIT_RANGE",
@@ -180,15 +181,37 @@ test("depth-one history never silently passes PR, push or local validation; rest
 	passed(f.run(push, [], shallow), `${hidden}..${head}`, 1);
 });
 
-test("owned CI checkout supplies complete history for event-selected ranges", () => {
-	const workflow = readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
-	// This lint runs in computer-use's `check-ts`, inside the `owned` shard jobs; all three OSes share their steps.
-	const owned = workflow.slice(
-		workflow.indexOf("\n  owned-shards-ubuntu:"),
-		workflow.indexOf("\n  owned-shards-macos:"),
-	);
-	assert.ok(workflow.includes("    steps: *owned-shard-steps"), "macOS and WSL shards must reuse these steps");
-	const checkout = owned.match(/- uses: actions\/checkout@[^\n]+[\s\S]*?(?=\n {6}- |$)/)?.[0];
-	assert.ok(checkout, "owned checkout must exist");
-	assert.match(checkout, /fetch-depth: 0/, "owned checkout must fetch event base/head history");
+test("CI validates commit subjects before path classification can skip any workspace", () => {
+	const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+	const classify = workflow.slice(workflow.indexOf("\n  classify:"), workflow.indexOf("\n  owned-shards-ubuntu:"));
+	assert.match(classify, /fetch-depth: 0/);
+	assert.match(classify, /run: make check-commits/);
+	assert.ok(classify.indexOf("run: make check-commits") < classify.indexOf("id: classify"));
+	const makefile = readFileSync(new URL("../../Makefile", import.meta.url), "utf8");
+	assert.match(makefile, /check-commits:[^\n]*\n\tnode scripts\/check-commit-messages.mjs/);
+});
+
+test("commit policy measures real disposable history success and refusal in process", (t) => {
+	const f = fixture(t);
+	for (const subject of ["Initial commit", "bad subject"]) {
+		f.commit(subject);
+		assert.equal(
+			commits(["HEAD~1..HEAD"], {
+				env: {},
+				read: readFileSync,
+				log() {},
+				error() {},
+				exec: (command, args, options) => execFileSync(command, ["-C", f.repo, ...args], { ...options, env }),
+			}),
+			subject === "Initial commit" ? 0 : 1,
+		);
+	}
+});
+
+test("commit CLI dispatches through a symlink", (t) => {
+	const f = fixture(t);
+	const link = path.join(f.work, "commit-gate.mjs");
+	symlinkSync(checker, link);
+	const result = spawnSync(process.execPath, [link, "HEAD..HEAD"], { cwd: f.repo, env, encoding: "utf8" });
+	passed(result, "HEAD..HEAD", 0);
 });

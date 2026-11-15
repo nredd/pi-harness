@@ -31,6 +31,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Always validate the event's complete commit range, even for docs-only or single-workspace PRs.
+      - name: Validate commit subjects
+        run: make check-commits
       - id: classify
         name: Classify changed paths
         # `plan` is every cell's decision (run, scenarios, gates, NOT RUN reason); the jobs below only read it.
