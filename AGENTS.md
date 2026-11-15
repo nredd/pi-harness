@@ -48,5 +48,5 @@ HEAD SHA, reviewer identities/models, both reports, gate evidence, and finding d
 Fix blocking findings and re-review. Document the rationale for unimplemented judgement findings.
 Every HEAD change invalidates previous review evidence. Do not merge, tag, or promote unreviewed code.
 Reviews are not a CI gate: the receipt is a PR comment, and branch protection requires only the CI
-jobs listed in `docs/ci.md`. A receipt committed by PR code is not a review. Additional critic
+jobs listed in `README.md` under "Required checks". A receipt committed by PR code is not a review. Additional critic
 reviews do not replace either required axis.

@@ -35,7 +35,10 @@ GIT = "/usr/bin/git"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTED_DOCUMENTATION = frozenset(
     {
+        "AGENTS.md",
         "README.md",
+        "docs/coverage.md",
+        "docs/install.md",
         "packages/computer-use/README.md",
         "packages/plan-mode/README.md",
         "packages/preset/README.md",
@@ -119,11 +122,11 @@ class Shard:
     workspaces: tuple[str, ...] = ()
 
 
-# Shard units and timings are in #350 and docs/ci.md. Native cells run every Python gate; WSL keeps only the
-# LCOV producers (Ubuntu runs the Python unit suites). macOS stays at two shards: a public repo gets 5
-# concurrent macOS runners, shared by every PR. WSL stays at two: each Windows job pays ~3.5 min of guest
-# setup, and two shards already finish inside the macOS critical path. `check-benchmark` marks the shard that
-# carries the macOS benchmark steps.
+# Shard units and timings are in #350 and .github/workflows/ci.yml. Native cells run every Python gate;
+# WSL keeps only the LCOV producers (Ubuntu runs the Python unit suites). macOS mirrors Ubuntu's four
+# shards to keep the TypeScript work inside the job budget. WSL stays at two: each Windows job pays
+# ~3.5 min of guest setup, and two shards already finish inside the macOS critical path. `check-benchmark`
+# marks the shard that carries the macOS benchmark steps.
 OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
     "ubuntu-24.04": (
         Shard("subagents", (CHECK_TS,), ("packages/subagents",)),

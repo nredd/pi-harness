@@ -1,4 +1,4 @@
-# Re-route runs stranded on a dead self-hosted pool onto hosted runners. See docs/ci.md#self-hosted-pools.
+# Re-route runs stranded on a dead self-hosted pool onto hosted runners. Routing policy: ci.yml classify comments; rescue bounds below.
 name: Runner rescue
 
 on:
@@ -12,6 +12,11 @@ concurrency:
 
 permissions:
   contents: read
+
+# Policy: Dead-pool rescue and retry bounds
+# - Window: a pool that dies right after `classify` read a live heartbeat strands its job for up to ~10 minutes (the 5 minute queue threshold, in which the 2 minute heartbeat TTL has already elapsed, plus up to one 5 minute cron interval) plus the cancel wait. A pool that beats but never runs jobs is covered only by the kill switch. Concurrent runs read the same free count, so a pool can briefly be oversubscribed; the extra job queues behind the running one
+
+# - `.github/workflows/runner-rescue.yml` runs every 5 minutes on a hosted runner. A same-repo run with a job queued on a pool label for over 5 minutes while that pool's heartbeat is stale is cancelled and rerun (at most 3 runs per tick, at most 3 attempts per run, rerun retried 3 times, run id logged before the cancel); the rerun's `classify` then plans those cells hosted. Fork runs are never touched. It needs `actions: write` only
 
 jobs:
   rescue:
