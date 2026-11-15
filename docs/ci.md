@@ -63,6 +63,8 @@ The macOS `Benchmark unit gate` exports `UV_PYTHON` from `.python-version` befor
 
 There is no `bench` job. `classify`'s step summary and a notice say bench is NOT RUN: no quiet self-hosted runner exists yet.
 
+Bench admission policy (what a quiet `bench` runner must meet): benchmarks run one at a time; the host is idle only after 5 minutes without console input plus a 1-minute low-CPU sample; every run records hardware, runtime and artifact identity; sleep is prevented by a process-scoped assertion (e.g. `caffeinate -is` on the command), never by changing power settings.
+
 Which cell does what. Every required check name reports, per the ruleset below. A *bypass cell* takes the job name on a cheap `ubuntu-24.04` runner, holds no macOS or Windows slot, runs only the `plan` step and emits a `::notice` plus a step summary saying NOT RUN, why, and that this is not a pass. A green bypass cell is a reported name, not evidence.
 
 | Check | PR | `main` push |

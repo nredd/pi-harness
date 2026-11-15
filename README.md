@@ -55,6 +55,7 @@ make help                    # every target
 - Vitest 5.0.3 applies `VITEST_MAX_WORKERS` over `maxWorkers` and `fileParallelism: false` alike (the heavy-slot wrapper
   exports it). `definePackageConfig` therefore sets `fileParallelism: false` and drops the variable for packages with
   `maxWorkers: 1` (`computer-use`, `resource-sampler`, `subagents` runtime-build), pinned in `scripts/coverage-configs.test.ts` (#934).
+  CI never sets `VITEST_MAX_WORKERS`; locally the `heavy` wrapper sets 2, so these packages now run serially and `computer-use` takes about twice as long locally; CI timings are unchanged.
   A suite that shares state beyond serial files (HOME, ports, global tools) isolates it per file; it does not lean on serialization
 - `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
@@ -348,6 +349,6 @@ The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` wi
 ### Remaining
 
 - `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
-- Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the bench admission policy
+- Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](docs/ci.md)
 - `pi-wsl2` acceptance before `PI_WSL2_HEARTBEAT` is set: three consecutive green real jobs and a clean smoke on the laptop, then replace the estimated `CELL_SECONDS` entries for the `wsl2` cells with measured ones. Until the variable exists the pool reads as down and every `wsl2` cell stays hosted. Pooled cells keep reporting as `owned (wsl2)` and `contracts (wsl2)`, and the pool's own job is `smoke (pi-wsl2)`; no new required check name is added
 - Alerting: the daemon only logs to journald; nothing pages when it is down
