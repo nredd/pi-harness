@@ -7,13 +7,13 @@ import { git } from "@nredd/pi-test-lib/git";
 import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
-import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
+import { runTools } from "../../packages/dev-tools/tests/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
-const SSH = new URL("../../packages/dev-tools/test/fixtures/ssh/fake-ssh", import.meta.url).pathname;
-const SCP = new URL("../../packages/dev-tools/test/fixtures/ssh/fake-scp", import.meta.url).pathname;
+const SSH = new URL("../../packages/dev-tools/tests/fixtures/ssh/fake-ssh", import.meta.url).pathname;
+const SCP = new URL("../../packages/dev-tools/tests/fixtures/ssh/fake-scp", import.meta.url).pathname;
 
 describe("Plan consumes stack annotations", () => {
 	let home: Awaited<ReturnType<typeof isolateStackHome>>;

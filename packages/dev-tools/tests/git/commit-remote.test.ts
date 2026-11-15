@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 const ENV = {
 	...process.env,

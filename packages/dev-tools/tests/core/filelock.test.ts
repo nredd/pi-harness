@@ -11,7 +11,7 @@ import {
 	withFileLock,
 } from "../../src/core/filelock.ts";
 
-const CHILD = fileURLToPath(new URL("./filelock-child.ts", import.meta.url));
+const CHILD = fileURLToPath(new URL("../fixtures/filelock-child.ts", import.meta.url));
 const roots: string[] = [];
 const children: ChildProcess[] = [];
 

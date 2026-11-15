@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { HOOK_RUNNER, prepareMerge } from "../../src/git/merge.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 const ENV = {
 	...process.env,

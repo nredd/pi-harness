@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { findWorkspaceRoot, registerCargoTools } from "../../src/cargo/index.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 function have(cmd: string): boolean {
 	try {

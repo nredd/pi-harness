@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { beforeAll, describe, expect, it } from "vitest";
 import { findProjectRoot, registerPyTools } from "../../src/py/index.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 function haveUv(): boolean {
 	try {

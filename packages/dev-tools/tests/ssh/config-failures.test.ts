@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { readKnownHosts, sshConfigPath } from "../../src/ssh/hosts.ts";
 import { registerSshTools } from "../../src/ssh/index.ts";
-import { createToolHost } from "../support.ts";
-import { wrapperFixture } from "../wrapper-fixture.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
+import { wrapperFixture } from "../fixtures/wrapper.ts";
 
 const home = vi.hoisted(() => ({ path: "/unused-fixture-home" }));
 vi.mock("node:os", async (original) => ({ ...(await original<typeof import("node:os")>()), homedir: () => home.path }));

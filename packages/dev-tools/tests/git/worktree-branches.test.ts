@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 const GIT_ENV = {
 	...process.env,

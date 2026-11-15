@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { branchSlug, formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 const GIT_ENV = {
 	...process.env,
@@ -483,7 +483,7 @@ describe("filesystem errors stay inside the { error } contract", () => {
 });
 
 describe("cross-process lock", () => {
-	const CHILD = fileURLToPath(new URL("./worktree-child.ts", import.meta.url));
+	const CHILD = fileURLToPath(new URL("../fixtures/worktree-child.ts", import.meta.url));
 	const lockDir = () => join(repo, ".git", "pi-dev-tools-worktree.lock");
 
 	function child(branch: string, path: string, startAt: number) {
