@@ -490,26 +490,6 @@
 			}
 		},
 		{
-			"id": "harness-package",
-			"purpose": "Preserve scoped metadata, source-only Linux, exact macOS source payload and the shared repo toolchain; remove the package CI commit check because root CI owns it (#869)",
-			"files": [
-				".github/workflows/ci.yml",
-				"CONTRIBUTING.md",
-				"package.json",
-				"scripts/check-package-assets.mjs",
-				"tsconfig.json"
-			],
-			"check": "scripts/check-package-assets.mjs",
-			"dropControls": [
-				"cursor source packaging (harness 6207189)"
-			],
-			"upstream": {
-				"status": "harness-only",
-				"reference": "README.md",
-				"detail": "Owned package payload; not filed"
-			}
-		},
-		{
 			"id": "headless-cursor-gate",
 			"purpose": "Keep cursor motion deterministic by default and require exact live opt-in before actual AppKit overlay lifecycle checks",
 			"files": [
@@ -829,12 +809,15 @@
 		},
 		{
 			"id": "owned-install-release-docs",
-			"purpose": "Document owned package identity, root release ownership and Linux build opt-in",
+			"purpose": "Document owned package identity, root release ownership and Linux build opt-in; move commit lint to root CI (#869) and route release payload validation through the central package contracts, deleting the duplicate asset checker (#868)",
 			"files": [
+				".github/workflows/ci.yml",
+				".github/workflows/publish-npm.yml",
 				"docs/content/docs/how-to-guides/develop-and-validate.mdx",
 				"docs/content/docs/how-to-guides/troubleshooting.mdx",
 				"docs/content/docs/tutorials/getting-started.mdx",
-				"scripts/check-docs.mjs"
+				"scripts/check-docs.mjs",
+				"scripts/check-package-assets.mjs"
 			],
 			"check": "scripts/check-docs.mjs",
 			"dropControls": [
@@ -1217,30 +1200,6 @@
 			}
 		},
 		{
-			"id": "verification-gate-coverage",
-			"purpose": "Measure seven retained verification gates in process with offline success and refusal controls (#697)",
-			"files": [
-				"scripts/check-commit-messages.mjs",
-				"scripts/check-docs-platform.mjs",
-				"scripts/check-docs.mjs",
-				"scripts/check-package-assets.mjs",
-				"scripts/check-sync-ledger.mjs",
-				"scripts/check-sync-reverts.mjs",
-				"scripts/check-upstream-sync.mjs",
-				"test/verification-gates.test.mjs",
-				"test/verification-sync-gates.test.mjs",
-				"vitest.config.ts"
-			],
-			"check": "test/verification-gates.test.mjs",
-			"dropControls": [
-				"Verification gates reject a missing required asset (#697)"
-			],
-			"upstream": {
-				"status": "harness-only",
-				"reference": "README.md"
-			}
-		},
-		{
 			"id": "wheel-horizontal-sign",
 			"purpose": "Post the macOS scroll wheel with positive `scrollX` scrolling right, matching the AX scroll-bar convention and `scrollY` (upstream posts `wheel2: Int32(deltaX)`, which scrolls left)",
 			"files": [
@@ -1323,6 +1282,7 @@
 	],
 	"files": [
 		".github/workflows/ci.yml",
+		".github/workflows/publish-npm.yml",
 		"CHANGELOG.md",
 		"CONTRIBUTING.md",
 		"README.md",

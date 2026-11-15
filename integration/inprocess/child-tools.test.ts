@@ -6,7 +6,7 @@ import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, it } from "vitest";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
 import { agentStack, ask, closeAgentStack, jsonFile, listTools, ROOT } from "./agents-support.ts";
 import childProbe from "./fixtures/child-probe.ts";
 import { OPTIONS } from "./fixtures/pi-session-kit/index.ts";

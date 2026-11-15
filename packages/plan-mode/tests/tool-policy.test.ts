@@ -76,13 +76,13 @@ test("Plan registration forwards its injected home to Bash and PowerShell truste
 	for (const [toolName, command] of [
 		["bash", `git -C ${trusted} status`],
 		["powershell", `git -C ${trusted} status`],
-	]) {
+	] as const) {
 		assert.equal(await hook?.({ toolName, input: { command } }, context.ctx), undefined, toolName);
 	}
 	for (const [toolName, command] of [
 		["bash", `git -C ${home}/untrusted status`],
 		["powershell", `git -C ${home}/untrusted status`],
-	]) {
+	] as const) {
 		assert.equal(
 			((await hook?.({ toolName, input: { command } }, context.ctx)) as { block?: boolean } | undefined)?.block,
 			true,
