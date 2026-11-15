@@ -491,8 +491,9 @@
 		},
 		{
 			"id": "harness-package",
-			"purpose": "Preserve scoped metadata, source-only Linux, exact macOS source payload and the shared repo toolchain (root tsconfig base, hoisted TypeScript and @types/node)",
+			"purpose": "Preserve scoped metadata, source-only Linux, exact macOS source payload and the shared repo toolchain; remove the package CI commit check because root CI owns it (#869)",
 			"files": [
+				".github/workflows/ci.yml",
 				"CONTRIBUTING.md",
 				"package.json",
 				"scripts/check-package-assets.mjs",
@@ -1321,6 +1322,7 @@
 		}
 	],
 	"files": [
+		".github/workflows/ci.yml",
 		"CHANGELOG.md",
 		"CONTRIBUTING.md",
 		"README.md",
@@ -1428,7 +1430,6 @@
 		"test/build-native.test.mjs",
 		"test/cdp-client.test.mjs",
 		"test/cleanup.test.mjs",
-		"test/commit-messages.test.mjs",
 		"test/config-load.test.mjs",
 		"test/cursor-headless-gate.test.mjs",
 		"test/desktop-seam.test.mjs",
