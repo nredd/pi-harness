@@ -1,11 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // nredd/pi-harness#943 tracks removing the upstream indexed-access and parameter-property exceptions.
     "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "noUncheckedIndexedAccess": false,
-    "erasableSyntaxOnly": false
+    "moduleResolution": "NodeNext"
   },
   "include": ["src", "tests", "*.ts"]
 }

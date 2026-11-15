@@ -19,7 +19,7 @@ import {
 } from "../src/question-tool.ts";
 import { createPlanContext, createPlanPi } from "./fixtures/support.ts";
 
-const questions: PlanModeQuestion[] = [
+const questions: [PlanModeQuestion, PlanModeQuestion] = [
 	{
 		id: "scope",
 		header: "Scope",
