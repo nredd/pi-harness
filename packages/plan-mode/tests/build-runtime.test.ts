@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -46,17 +46,25 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
 
 test("direct build script invocation publishes the generated runtime", async () => {
 	const scriptUrl = pathToFileURL(join(packageRoot, "scripts", "build-runtime.mjs")).href;
-	const indexPath = join(packageRoot, "dist", "index.ts");
+	const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+	const output = join(root, "dist");
+	const indexPath = join(output, "index.ts");
 	const builder = await loadBuilder();
-	await builder.buildRuntime();
-	const built = await readFile(indexPath, "utf8");
-	const previousArgv = process.argv[1];
+	const sharedOutput = join(packageRoot, "dist");
+	const sharedBefore = await stat(sharedOutput);
+	const previousArgv = process.argv;
 	try {
-		process.argv[1] = fileURLToPath(scriptUrl);
+		await builder.buildRuntime({ outputDirectory: output });
+		const built = await readFile(indexPath, "utf8");
+		process.argv = [previousArgv[0] ?? "node", fileURLToPath(scriptUrl), output];
 		await import(`${scriptUrl}?direct-invocation=${crypto.randomUUID()}`);
 		assert.equal(await readFile(indexPath, "utf8"), built);
+		const sharedAfter = await stat(sharedOutput);
+		assert.equal(sharedAfter.ino, sharedBefore.ino, "direct invocation must not replace the shared dist/");
+		assert.equal(sharedAfter.mtimeMs, sharedBefore.mtimeMs, "direct invocation must not rewrite the shared dist/");
 	} finally {
-		process.argv[1] = previousArgv;
+		process.argv = previousArgv;
+		await rm(root, { force: true, recursive: true });
 	}
 });
 
@@ -252,17 +260,27 @@ test("generated interactive UI stays loadable with a lazy external questionnaire
 
 test("two builds of the same tree are byte-identical", async () => {
 	const builder = await loadBuilder();
-	const output = join(packageRoot, "dist");
+	const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+	const output = join(root, "dist");
+	const sharedOutput = join(packageRoot, "dist");
+	const sharedBefore = await stat(sharedOutput);
 	const snapshot = async () =>
 		Object.fromEntries(
 			await Promise.all(
 				(await listFiles(output)).map(async (path) => [path, await readFile(join(output, path), "base64")]),
 			),
 		);
-	await builder.buildRuntime();
-	const first = await snapshot();
-	await builder.buildRuntime();
-	assert.deepEqual(await snapshot(), first);
+	try {
+		await builder.buildRuntime({ outputDirectory: output });
+		const first = await snapshot();
+		await builder.buildRuntime({ outputDirectory: output });
+		assert.deepEqual(await snapshot(), first);
+		const sharedAfter = await stat(sharedOutput);
+		assert.equal(sharedAfter.ino, sharedBefore.ino, "reproducibility builds must not replace the shared dist/");
+		assert.equal(sharedAfter.mtimeMs, sharedBefore.mtimeMs, "reproducibility builds must not rewrite the shared dist/");
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
 });
 
 const minimalBanner = "// minimal runtime builder fixture";

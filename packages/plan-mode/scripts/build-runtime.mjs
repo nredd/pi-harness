@@ -24,4 +24,5 @@ export const { buildRuntime, validateEagerGraph, validateGeneratedFiles, publish
 });
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
-if (invokedPath === import.meta.url) await buildRuntime();
+// An optional output directory keeps direct-invocation tests off the package's shared dist/.
+if (invokedPath === import.meta.url) await buildRuntime({ outputDirectory: process.argv[2] });

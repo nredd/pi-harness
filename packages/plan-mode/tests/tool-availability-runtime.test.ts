@@ -66,9 +66,7 @@ for (const fixture of fixtures) {
 					noExtensions: true,
 					noSkills: true,
 					noContextFiles: true,
-					// build-runtime.test.ts replaces dist/ concurrently. Test settings through the source
-					// entry so discovery cannot miss /plan and fall through to an unauthenticated prompt.
-					additionalExtensionPaths: [packagePath("src/index.ts")],
+					additionalExtensionPaths: [packagePath()],
 				});
 				await loader.reload();
 				assert.deepEqual(loader.getExtensions().errors, []);
