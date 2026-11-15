@@ -10,9 +10,9 @@
 
 import type { Api, AssistantMessage, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
-import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.js";
-import type { ExhaustionTracker } from "./exhaustion.js";
-import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.js";
+import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.ts";
+import type { ExhaustionTracker } from "./exhaustion.ts";
+import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.ts";
 import {
 	compilePolicy,
 	evaluatePolicy,
@@ -21,9 +21,9 @@ import {
 	type PolicyEvaluation,
 	type PolicyMember,
 	type SafetyFilter,
-} from "./policy.js";
-import { formatScore, type QuotaScore } from "./selection.js";
-import type { UsageDecision, UsageSnapshot } from "./usage.js";
+} from "./policy.ts";
+import { formatScore, type QuotaScore } from "./selection.ts";
+import type { UsageDecision, UsageSnapshot } from "./usage.ts";
 
 /**
  * Failure text worth a confirming usage read: rate limits and 429s (which

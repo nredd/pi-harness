@@ -5,7 +5,7 @@ import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
-import { CodexResetError } from "./codex-contract.js";
+import { CodexResetError } from "./codex-contract.ts";
 
 export const AttemptSchema = Type.Object(
 	{

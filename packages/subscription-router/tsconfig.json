@@ -4,5 +4,5 @@
     // nredd/pi-harness#880: constructor parameter properties
     "erasableSyntaxOnly": false
   },
-  "include": ["src", "test", "*.ts"]
+  "include": ["src", "tests", "*.ts"]
 }

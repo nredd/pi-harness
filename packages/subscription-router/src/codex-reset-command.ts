@@ -1,9 +1,9 @@
 /** Human-only FREE reset entrypoint. There is deliberately no model-callable consume tool. */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CancellableLoader } from "@earendil-works/pi-tui";
-import { CodexResetError, eligibleGrant, formatOffers } from "./codex-contract.js";
-import type { CodexResets } from "./codex-resets.js";
-import { ResetView } from "./reset-view.js";
+import { CodexResetError, eligibleGrant, formatOffers } from "./codex-contract.ts";
+import type { CodexResets } from "./codex-resets.ts";
+import { ResetView } from "./reset-view.ts";
 
 /** Native cancellable operation, with no custom terminal UI in RPC/print/JSON modes. */
 async function operation<T>(

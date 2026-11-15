@@ -1,8 +1,8 @@
 /** Version 1's bounded, pure policy calculus. No I/O, clocks, randomness or observation mutation. */
-import type { Profile, Strategy } from "./config.js";
-import { type ModelRef, refKey } from "./model-ref.js";
-import { type QuotaScore, STALE_GRACE_MS, scoreQuota, selectCandidate } from "./selection.js";
-import { modelMatchesFamily, type UsageSnapshot } from "./usage.js";
+import type { Profile, Strategy } from "./config.ts";
+import { type ModelRef, refKey } from "./model-ref.ts";
+import { type QuotaScore, STALE_GRACE_MS, scoreQuota, selectCandidate } from "./selection.ts";
+import { modelMatchesFamily, type UsageSnapshot } from "./usage.ts";
 
 export type WindowSelector = "binding" | { name: string };
 export type OrderKey =

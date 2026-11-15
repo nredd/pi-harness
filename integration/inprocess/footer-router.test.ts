@@ -3,7 +3,7 @@ import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-c
 import { expect, it } from "vitest";
 import { FooterFixture } from "../../packages/preset/test/fixtures/footer.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
-import { CachedUsage, Clock } from "../../packages/subscription-router/test/fixtures/router.ts";
+import { CachedUsage, Clock } from "../../packages/subscription-router/tests/fixtures/router.ts";
 
 it("shows quota fallback/provider changes and never labels refused admission as dispatched", async () => {
 	const usage = new CachedUsage(new Clock());
