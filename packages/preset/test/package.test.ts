@@ -3,36 +3,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "vitest";
-import { manifest, packedFiles, pkgRoot, readText, walk } from "./support.ts";
+import { manifest, pkgRoot, readText, resourceFiles } from "./support.ts";
 
 const SHIPPED_DIRS = ["agents", "extensions", "lib", "licenses", "settings", "skills", "themes"];
-const EXPECTED_FILES = [
-	"LICENSE",
-	"NOTICE.md",
-	"README.md",
-	"package.json",
-	"agents/architect.md",
-	"agents/code-reviewer.md",
-	"agents/critic.md",
-	"agents/debugger.md",
-	"agents/general-purpose.md",
-	"agents/principal-investigator.md",
-	"agents/researcher.md",
-	"agents/verifier.md",
-	"extensions/expanded-footer.ts",
-	"lib/footer-cache.ts",
-	"lib/footer-quota.ts",
-	"licenses/Apache-2.0-tokyonight.nvim.txt",
-	"licenses/CC-BY-SA-4.0.txt",
-	"licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
-	"settings/personal-defaults.json",
-	"skills/code-review/SKILL.md",
-	"skills/coding-like-redd/SKILL.md",
-	"skills/get-it-merged/SKILL.md",
-	"skills/ship-issue/SKILL.md",
-	"themes/belafonte-day.json",
-	"themes/tokyonight-storm.json",
-].sort();
 const HOST_PEERS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"];
 const HOST_PACKAGES = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", ...HOST_PEERS, "typebox"];
 /** Require a domain TLD so pinned npm specs are not mistaken for addresses. */
@@ -89,25 +62,6 @@ test("host packages are peers (*) and exact-pinned devDependencies; none are bun
 		if (!name.startsWith("@earendil-works/pi-")) assert.match(range, /^\d+\.\d+\.\d+$/, name);
 });
 
-test("npm pack ships exactly the allowlist", () => {
-	assert.deepEqual(packedFiles(), EXPECTED_FILES);
-	const { files } = manifest();
-	assert.deepEqual(
-		[...files].sort(),
-		[...SHIPPED_DIRS.map((d) => `${d}/`), "LICENSE", "NOTICE.md", "README.md"].sort(),
-	);
-	for (const file of packedFiles()) {
-		assert.ok(!/(^|\/)(test|node_modules)\//.test(file), file);
-		assert.ok(!/(^|\/)(tsconfig|biome)\.json$|\.gitignore$|package-lock/.test(file), file);
-	}
-	for (const dir of SHIPPED_DIRS)
-		assert.deepEqual(
-			walk(dir).filter((f) => !EXPECTED_FILES.includes(f)),
-			[],
-			dir,
-		);
-});
-
 test("privacy email scan distinguishes addresses from exact npm pins", () => {
 	for (const address of ["person@example.invalid", "first.last+tag@sub.example.invalid"])
 		assert.ok(EMAIL_PATTERN.test(address));
@@ -134,19 +88,19 @@ test("shipped files contain no machine, network, account, or credential details"
 		[/enterprise\.local|personal\.local|auth\.json|\.ssh\/|id_ed25519/i, "local manifest or credential file"],
 		[/\bKeychron\b|Karabiner|MX Master|MonitorControl/i, "hardware"],
 	];
-	for (const file of packedFiles()) {
+	for (const file of resourceFiles()) {
 		if (file === "licenses/CC-BY-SA-4.0.txt" || file.endsWith(".txt")) continue; // third-party legal text, hashed separately
 		const text = readFileSync(`${pkgRoot}/${file}`, "utf8");
 		for (const [pattern, label] of FORBIDDEN) assert.ok(!pattern.test(text), `${file}: ${label}`);
 	}
-	for (const file of packedFiles().filter((f) => f.endsWith(".txt"))) {
+	for (const file of resourceFiles().filter((f) => f.endsWith(".txt"))) {
 		const text = readFileSync(`${pkgRoot}/${file}`, "utf8");
 		assert.ok(!/\/Users\/|\.meep\.net/.test(text), file);
 	}
 });
 
 test("nothing from global, machine, or private configuration ships", () => {
-	const names = packedFiles().map((f) => f.toLowerCase());
+	const names = resourceFiles().map((f) => f.toLowerCase());
 	for (const banned of [
 		"agents.md",
 		"claude.md",

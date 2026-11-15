@@ -1,5 +1,4 @@
 // Shared helpers for the static resource tests. Not a test file (no `.test.ts` suffix).
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,13 +71,13 @@ export function frontmatterOf(rel: string): { frontmatter: Json; body: string } 
 	return parseFrontmatter<Json>(readText(rel));
 }
 
-/** Files `npm pack` would publish (package-relative, sorted). Offline, no scripts, no tarball. */
-export function packedFiles(): string[] {
-	const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-		cwd: pkgRoot,
-		encoding: "utf8",
-		env: { ...process.env, npm_config_loglevel: "silent" },
-	});
-	const [report] = JSON.parse(out) as [{ files: { path: string }[] }];
-	return report.files.map((f) => f.path).sort();
+/** Resource files for content assertions; tarball membership belongs to package_contracts.py. */
+export function resourceFiles(): string[] {
+	return [
+		"LICENSE",
+		"NOTICE.md",
+		"README.md",
+		"package.json",
+		...["agents", "extensions", "lib", "licenses", "settings", "skills", "themes"].flatMap(walk),
+	].sort();
 }

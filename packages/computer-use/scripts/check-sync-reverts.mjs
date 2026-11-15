@@ -276,14 +276,6 @@ export const cases = [
 		failure: /Missing expected exception/,
 	},
 	{
-		name: "Verification gates reject a missing required asset (#697)",
-		file: "scripts/check-package-assets.mjs",
-		before: "for (const file of expected) assert.ok(files.has(file),",
-		after: "for (const file of []) assert.ok(files.has(file),",
-		check: "test/verification-gates.test.mjs",
-		failure: /Missing expected rejection/,
-	},
-	{
 		name: "WSL2 empty-roots hint (#672)",
 		file: "src/platform/linux/backend.ts",
 		before: "emptyRootsHint: () => wslNoWindowsHint(),",
@@ -523,14 +515,6 @@ export const cases = [
 		after: "let cursor = NSEvent.mouseLocation",
 		check: "test/desktop-tools.test.mjs",
 		failure: /cursor readback must use top-left global coordinates/,
-	},
-	{
-		name: "cursor source packaging (harness 6207189)",
-		file: "package.json",
-		before: '"native/macos/agent_cursor_motion.swift",',
-		after: "",
-		check: "scripts/check-package-assets.mjs",
-		failure: /missing package\/native\/macos\/agent_cursor_motion.swift/,
 	},
 	{
 		name: "daemon age guard (1eabebd/50cbfe2)",

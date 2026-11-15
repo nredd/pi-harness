@@ -168,7 +168,6 @@
   "packages/todo: package.json: pi-media",
   "packages/todo: plan-hooks.test.ts: top-level-entry",
   "packages/todo: plan-hooks.ts: top-level-entry",
-  "packages/todo: ship-manifest.test.ts: top-level-entry",
   "packages/todo: src/index.ts: missing-file",
   "packages/todo: state: top-level-entry",
   "packages/todo: todo-overlay.lifecycle.test.ts: top-level-entry",

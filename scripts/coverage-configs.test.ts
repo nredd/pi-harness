@@ -170,7 +170,6 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/build-native.mjs",
 	"scripts/check-docs-platform.mjs",
 	"scripts/check-docs.mjs",
-	"scripts/check-package-assets.mjs",
 	"scripts/check-sync-ledger.mjs",
 	"scripts/check-sync-reverts.mjs",
 	"scripts/check-upstream-sync.mjs",

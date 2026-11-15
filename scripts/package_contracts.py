@@ -152,6 +152,7 @@ class PackageContract:
         packed_files (tuple[str, ...]): Exact packed paths, when the package has a fixed public payload.
         library (bool): Compiled ESM library, with no Pi entrypoint or host dependency permissions.
         node_probe (str): Fixed ESM consumer program executed against the isolated installed tarball.
+        resource_directories (tuple[str, ...]): Non-src resource trees whose every file must ship.
         packed_patterns (tuple[tuple[re.Pattern[str], int], ...]): (pattern, exact count) pairs for packed
             paths with build-hashed names; together with `packed_files` they must cover the tarball exactly.
     """
@@ -169,6 +170,7 @@ class PackageContract:
     node_probe: str = ""
     standalone_artifacts: frozenset[str] = frozenset()
     packed_files: tuple[str, ...] = ()
+    resource_directories: tuple[str, ...] = ()
     packed_patterns: tuple[tuple[re.Pattern[str], int], ...] = ()
 
 
@@ -405,6 +407,35 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-dev-tools",
         directory="dev-tools",
+        packed_files=(
+            "LICENSE",
+            "README.md",
+            "package.json",
+            "src/cargo/index.ts",
+            "src/cargo/parse.ts",
+            "src/core/filelock.ts",
+            "src/core/index.ts",
+            "src/core/lock.ts",
+            "src/core/output.ts",
+            "src/core/process.ts",
+            "src/core/result.ts",
+            "src/core/tool.ts",
+            "src/git/commit-message.ts",
+            "src/git/guard.ts",
+            "src/git/index.ts",
+            "src/git/merge.ts",
+            "src/git/push-remote.ts",
+            "src/git/run.ts",
+            "src/git/status.ts",
+            "src/git/worktree.ts",
+            "src/index.ts",
+            "src/py/index.ts",
+            "src/py/parse.ts",
+            "src/resource/index.ts",
+            "src/ssh/exec.ts",
+            "src/ssh/hosts.ts",
+            "src/ssh/index.ts",
+        ),
         required=("LICENSE", "README.md", "package.json", "src/index.ts"),
         allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
         exposes_tools=frozenset({"git_status", "resource_snapshot"}),
@@ -413,6 +444,77 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-session-kit",
         directory="session-kit",
+        packed_files=(
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "dist/pi-stats-export.mjs",
+            "package.json",
+            "src/agent-dir.ts",
+            "src/child.ts",
+            "src/clock.ts",
+            "src/config.ts",
+            "src/diff/component.ts",
+            "src/diff/git.ts",
+            "src/diff/index.ts",
+            "src/diff/parse.ts",
+            "src/diff/view.ts",
+            "src/goal/index.ts",
+            "src/goal/state.ts",
+            "src/goal/subagents.ts",
+            "src/index.ts",
+            "src/loop/index.ts",
+            "src/loop/state.ts",
+            "src/mon/component.ts",
+            "src/mon/index.ts",
+            "src/mon/model.ts",
+            "src/mon/poll.ts",
+            "src/mon/source.ts",
+            "src/monitor/README.md",
+            "src/monitor/coalescer.ts",
+            "src/monitor/index.ts",
+            "src/monitor/manager.ts",
+            "src/monitor/matcher.ts",
+            "src/monitor/messages.ts",
+            "src/monitor/output.ts",
+            "src/monitor/pidfiles.ts",
+            "src/monitor/process.ts",
+            "src/monitor/ring.ts",
+            "src/monitor/splitter.ts",
+            "src/monitor/types.ts",
+            "src/monitor/validate.ts",
+            "src/monitor/widget.ts",
+            "src/output.ts",
+            "src/rules/index.ts",
+            "src/rules/logic.ts",
+            "src/shared.ts",
+            "src/stats/aggregate.ts",
+            "src/stats/chart.ts",
+            "src/stats/cli.ts",
+            "src/stats/component.ts",
+            "src/stats/days.ts",
+            "src/stats/format.ts",
+            "src/stats/freshness.ts",
+            "src/stats/harness/claude.ts",
+            "src/stats/harness/codex.ts",
+            "src/stats/harness/common.ts",
+            "src/stats/harness/index.ts",
+            "src/stats/harness/opencode.ts",
+            "src/stats/harness/scan.ts",
+            "src/stats/heatmap.ts",
+            "src/stats/index.ts",
+            "src/stats/jsonl.ts",
+            "src/stats/library.ts",
+            "src/stats/load.ts",
+            "src/stats/nth.ts",
+            "src/stats/palette.ts",
+            "src/stats/quota.ts",
+            "src/stats/snapshot.ts",
+            "src/stats/ticks.ts",
+            "src/titles/aliases.ts",
+            "src/titles/index.ts",
+            "src/titles/logic.ts",
+        ),
         required=(
             "LICENSE",
             "README.md",
@@ -432,6 +534,32 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-subscription-router",
         directory="subscription-router",
+        packed_files=(
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "examples/policies.json",
+            "examples/subscription-router.json",
+            "package.json",
+            "schemas/codex-reset-journal.schema.json",
+            "schemas/subscription-router.schema.json",
+            "src/codex-contract.ts",
+            "src/codex-reset-command.ts",
+            "src/codex-resets.ts",
+            "src/codex-session.ts",
+            "src/config.ts",
+            "src/exhaustion.ts",
+            "src/index.ts",
+            "src/model-ref.ts",
+            "src/policy.ts",
+            "src/recovery.ts",
+            "src/reset-journal.ts",
+            "src/reset-view.ts",
+            "src/resets.ts",
+            "src/router.ts",
+            "src/selection.ts",
+            "src/usage.ts",
+        ),
         required=(
             "LICENSE",
             "README.md",
@@ -460,6 +588,34 @@ CONTRACTS = (
 PRESET_CONTRACT = PackageContract(
     name="@nredd/pi-preset",
     directory="preset",
+    resource_directories=("agents", "extensions", "lib", "licenses", "settings", "skills", "themes"),
+    packed_files=(
+        "LICENSE",
+        "NOTICE.md",
+        "README.md",
+        "package.json",
+        "agents/architect.md",
+        "agents/code-reviewer.md",
+        "agents/critic.md",
+        "agents/debugger.md",
+        "agents/general-purpose.md",
+        "agents/principal-investigator.md",
+        "agents/researcher.md",
+        "agents/verifier.md",
+        "extensions/expanded-footer.ts",
+        "lib/footer-cache.ts",
+        "lib/footer-quota.ts",
+        "licenses/Apache-2.0-tokyonight.nvim.txt",
+        "licenses/CC-BY-SA-4.0.txt",
+        "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
+        "settings/personal-defaults.json",
+        "skills/code-review/SKILL.md",
+        "skills/coding-like-redd/SKILL.md",
+        "skills/get-it-merged/SKILL.md",
+        "skills/ship-issue/SKILL.md",
+        "themes/belafonte-day.json",
+        "themes/tokyonight-storm.json",
+    ),
     required=(
         "LICENSE",
         "NOTICE.md",
@@ -661,6 +817,101 @@ COMPUTER_USE_CONTRACT = PackageContract(
 SUBAGENTS_CONTRACT = PackageContract(
     name="@nredd/pi-subagents",
     directory="subagents",
+    packed_files=(
+        "LICENSE",
+        "README.md",
+        "dist/index.ts",
+        "dist/index.ts.map",
+        "package.json",
+        "src/abortable.ts",
+        "src/agent-color.ts",
+        "src/agent-file-toggle.ts",
+        "src/agent-manager.ts",
+        "src/agent-runner.ts",
+        "src/agent-source-badge.ts",
+        "src/agent-types.ts",
+        "src/child-context.ts",
+        "src/clock.ts",
+        "src/completion-outbox.ts",
+        "src/context.ts",
+        "src/cross-extension-rpc.ts",
+        "src/custom-agents.ts",
+        "src/default-agents.ts",
+        "src/detached-results.ts",
+        "src/enabled-models.ts",
+        "src/enterprise-local.ts",
+        "src/env.ts",
+        "src/error-message.ts",
+        "src/events.ts",
+        "src/git-path.ts",
+        "src/group-join.ts",
+        "src/home-paths.ts",
+        "src/index.ts",
+        "src/invocation-config.ts",
+        "src/memory.ts",
+        "src/mention-clone.ts",
+        "src/mention.ts",
+        "src/model-call.ts",
+        "src/model-explanation.ts",
+        "src/model-resolver.ts",
+        "src/model-scope.ts",
+        "src/model-selection.ts",
+        "src/model-tiers.ts",
+        "src/nested-tools.ts",
+        "src/notification-result.ts",
+        "src/output-file.ts",
+        "src/package-resources.ts",
+        "src/plan-mode-children.ts",
+        "src/process-budget.ts",
+        "src/prompts.ts",
+        "src/quota-admission.ts",
+        "src/resource-loader.ts",
+        "src/saved-agent-record.ts",
+        "src/schedule-store.ts",
+        "src/schedule.ts",
+        "src/settings.ts",
+        "src/skill-loader.ts",
+        "src/stale-ctx.ts",
+        "src/startup-error.ts",
+        "src/status-note.ts",
+        "src/structured-output.ts",
+        "src/types.ts",
+        "src/ui/agent-mention.ts",
+        "src/ui/agent-row.ts",
+        "src/ui/agent-widget.ts",
+        "src/ui/conversation-viewer.ts",
+        "src/ui/fallback-flag.ts",
+        "src/ui/fleet-list.ts",
+        "src/ui/fleet-state.ts",
+        "src/ui/notification-view.ts",
+        "src/ui/schedule-menu.ts",
+        "src/ui/select-item.ts",
+        "src/ui/viewer-keys.ts",
+        "src/ui/workflow-card.ts",
+        "src/ui/workflow-dialog.ts",
+        "src/ui/workflow-menu.ts",
+        "src/usage.ts",
+        "src/workflow/collisions.ts",
+        "src/workflow/entry.ts",
+        "src/workflow/host.ts",
+        "src/workflow/journal.ts",
+        "src/workflow/json-schema.ts",
+        "src/workflow/meta.ts",
+        "src/workflow/progress.ts",
+        "src/workflow/runtime.ts",
+        "src/workflow/saved.ts",
+        "src/workflow/task.ts",
+        "src/workflow/tool-description.ts",
+        "src/workflow/worker-source.ts",
+        "src/worktree.ts",
+        "src/xml.ts",
+    ),
+    packed_patterns=(
+        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]{8}\.ts$"), 1),
+        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]{8}\.ts\.map$"), 1),
+        (re.compile(r"^dist/chunks/conversation-viewer-[A-Z0-9]{8}\.ts$"), 1),
+        (re.compile(r"^dist/chunks/conversation-viewer-[A-Z0-9]{8}\.ts\.map$"), 1),
+    ),
     required=("LICENSE", "README.md", "package.json", "src/index.ts", "dist/index.ts"),
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
@@ -751,6 +1002,41 @@ PLAN_MODE_CONTRACT = PackageContract(
 TODO_CONTRACT = PackageContract(
     name="@nredd/pi-todo",
     directory="todo",
+    packed_files=(
+        "LICENSE",
+        "README.md",
+        "config.ts",
+        "index.ts",
+        "locales/de.json",
+        "locales/en.json",
+        "locales/es.json",
+        "locales/fr.json",
+        "locales/pt-BR.json",
+        "locales/pt.json",
+        "locales/ru.json",
+        "locales/uk.json",
+        "locales/zh.json",
+        "package.json",
+        "plan-hooks.ts",
+        "state/agents.ts",
+        "state/i18n-bridge.ts",
+        "state/invariants.ts",
+        "state/lineage.ts",
+        "state/monitors.ts",
+        "state/plan.ts",
+        "state/replay.ts",
+        "state/selectors.ts",
+        "state/state-reducer.ts",
+        "state/state.ts",
+        "state/store.ts",
+        "state/task-graph.ts",
+        "todo-overlay.ts",
+        "todo.ts",
+        "tool/response-envelope.ts",
+        "tool/sanitize.ts",
+        "tool/types.ts",
+        "view/format.ts",
+    ),
     required=("LICENSE", "README.md", "package.json", "index.ts", "todo.ts", "state/store.ts"),
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
@@ -766,6 +1052,17 @@ TODO_CONTRACT = PackageContract(
         ("@juicesharp/rpiv-i18n", "^2.13.9"),
     ),
     own_license=True,
+)
+
+
+ALL_CONTRACTS = (
+    *CONTRACTS,
+    RESOURCE_SAMPLER_CONTRACT,
+    PRESET_CONTRACT,
+    COMPUTER_USE_CONTRACT,
+    SUBAGENTS_CONTRACT,
+    PLAN_MODE_CONTRACT,
+    TODO_CONTRACT,
 )
 
 
@@ -1972,6 +2269,112 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
             if name not in counts
         ]
     return problems
+
+
+def audit_source_files(
+    package_dir: Path,
+    files: Sequence[str],
+    *,
+    library: bool = False,
+    resource_directories: tuple[str, ...] = (),
+) -> list[str]:
+    """Require production sources in the pack and forbid test payloads.
+
+    Parameters:
+        package_dir (Path): Workspace root, including source-only development files.
+        files (Sequence[str]): Actual npm tarball paths.
+        library (bool): Compiled libraries ship matching JavaScript and declaration outputs.
+        resource_directories (tuple[str, ...]): Resource trees whose complete disk contents must ship.
+
+    Returns:
+        list[str]: Missing production files and forbidden test payloads.
+    """
+    problems = [
+        f"test or fixture file '{name}' must not ship"
+        for name in files
+        if set(PurePosixPath(name).parts) & {"test", "tests", "fixtures"}
+        or name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs"))
+    ]
+    for directory in resource_directories:
+        for resource in sorted((package_dir / directory).rglob("*")):
+            name = resource.relative_to(package_dir).as_posix()
+            if resource.is_file() and name not in files:
+                problems.append(f"resource file '{name}' is not packed")
+    source_root = package_dir / "src"
+    # Todo's upstream layout still has root-level modules. Preserve its production walker
+    # until its independent src/ migration; skip development directories, not production ones.
+    legacy_layout = not source_root.is_dir()
+    root = package_dir if legacy_layout else source_root
+    excluded = {"test", "tests", "fixtures"} | ({"node_modules", "docs", "dist"} if legacy_layout else set())
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(package_dir)
+        if legacy_layout and any(part.startswith(".") for part in relative.parts):
+            continue
+        if set(relative.parts) & excluded:
+            continue
+        if not path.is_file():
+            continue
+        if path.name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs")):
+            continue
+        if path.name == "test-fixtures.ts" or (legacy_layout and path.name == "vitest.config.ts"):
+            continue
+        # Packages without src/ (preset, todo) also carry development scripts/configs.
+        # Todo's old walker required every production .ts module, not JavaScript tooling.
+        if legacy_layout and (package_dir.name != "todo" or path.suffix != ".ts"):
+            continue
+        expected = (
+            (
+                f"dist/{path.relative_to(source_root).with_suffix('.js').as_posix()}",
+                f"dist/{path.relative_to(source_root).with_suffix('.d.ts').as_posix()}",
+            )
+            if library
+            else (relative.as_posix(),)
+        )
+        for name in expected:
+            if name not in files:
+                problems.append(f"production source '{relative.as_posix()}' requires packed '{name}'")
+    return problems
+
+
+def run_packed_files_gate(
+    work: Path, supplied: Mapping[str, Path] | None = None, *, only: Sequence[str] | None = None
+) -> dict[str, list[str]]:
+    """Check workspace payloads without installing or launching stock Pi.
+
+    Supplied tarballs restrict the gate to those packages and are never repacked.
+
+    Parameters:
+        work (Path): Scratch directory for disposable tarballs and npm environment.
+        supplied (Mapping[str, Path] | None): Existing tarballs keyed by package directory.
+        only (Sequence[str] | None): Selected workspace directories, or all when absent.
+
+    Returns:
+        dict[str, list[str]]: Actual shipped files per package directory.
+
+    Raises:
+        ContractError: If a file contract or production source rule fails.
+    """
+    sandbox = Sandbox(work / "base", locate_tools())
+    tarballs = work / "tarballs"
+    tarballs.mkdir()
+    report: dict[str, list[str]] = {}
+    for contract in ALL_CONTRACTS:
+        if only is not None and contract.directory not in only:
+            continue
+        if supplied and contract.directory not in supplied:
+            continue
+        artifact = select_artifact(contract, tarballs, sandbox, supplied or {})
+        problems = audit_files(contract, artifact.files)
+        problems += audit_source_files(
+            REPO_ROOT / "packages" / contract.directory,
+            artifact.files,
+            library=contract.library,
+            resource_directories=contract.resource_directories,
+        )
+        if problems:
+            raise ContractError(f"Packed files for '{contract.name}':\n" + "\n".join(problems))
+        report[contract.directory] = list(artifact.files)
+    return report
 
 
 def audit_chunk_graph(
@@ -4478,10 +4881,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--work-dir", type=Path, help="Scratch directory (must be empty or absent); default: a temporary one"
     )
     parser.add_argument("--keep", action="store_true", help="Keep the scratch directory after the run")
+    parser.add_argument(
+        "--packed-files-only", action="store_true", help="Check every workspace payload without stock Pi"
+    )
     parser.add_argument("--tarball", action="append", default=[], metavar="DIRECTORY=PATH")
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     parser.add_argument(
-        "--package", action="append", choices=[c.directory for c in CONTRACTS], help="Restrict to one package"
+        "--package",
+        action="append",
+        choices=[c.directory for c in ALL_CONTRACTS],
+        help="Restrict to one package",
     )
     parser.add_argument(
         "--audit-preset", action="store_true", help="Only audit and install the packed `@nredd/pi-preset`"
@@ -4511,6 +4920,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="pi-package-contracts-"))
     work.mkdir(parents=True, exist_ok=True)
     try:
+        if args.packed_files_only:
+            packed = run_packed_files_gate(
+                work.resolve(), parse_tarballs(args.tarball, ALL_CONTRACTS), only=args.package
+            )
+            text = json.dumps(packed, indent=2, sort_keys=True) + "\n"
+            if args.report:
+                args.report.write_text(text)
+            sys.stdout.write(text)
+            LOGGER.info(f"packed-file contracts: {len(packed)} passed")
+            return 0
         if args.audit_preset or args.audit_resource_sampler:
             contract = RESOURCE_SAMPLER_CONTRACT if args.audit_resource_sampler else PRESET_CONTRACT
             evidence = run_audit_gate(work.resolve(), contract)
