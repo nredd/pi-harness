@@ -113,7 +113,10 @@ for (const [exposure, active, nested, allowed] of cases) {
 }
 
 test("native MCP and orchestration require separate opt-in; annotations do not grant permission", async () => {
-	const tools = [nativeTool("codemode", "model-only", "codemode"), nativeTool("mcp__docs__read", "codemode")];
+	const tools: [ToolInfo, ToolInfo] = [
+		nativeTool("codemode", "model-only", "codemode"),
+		nativeTool("mcp__docs__read", "codemode"),
+	];
 	tools[1].annotations = { readOnlyHint: true, destructiveHint: false };
 	for (const selected of [undefined, ["codemode"], ["mcp__docs__read"], ["codemode", "mcp__docs__read"]]) {
 		const f = await fixture(tools, ["codemode"], selected);

@@ -296,13 +296,13 @@ export function decideBlockedCommand(
 		if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
 			const target =
 				tokens.length === 2 && !hasShellExpansion(segment.text)
-					? resolveDirectory(tokens[1], base, roots, homeDir)
+					? resolveDirectory(tokens[1]!, base, roots, homeDir)
 					: undefined;
 			if (target === undefined || segments[index + 1]?.separator === "|") {
 				return {
 					segment: segment.text,
 					explain: () => ({
-						token: tokens.length === 2 ? tokens[1] : "cd",
+						token: tokens.length === 2 ? tokens[1]! : "cd",
 						reason: "cd needs one plain directory under the working or trusted directories, not piped",
 					}),
 				};
@@ -707,7 +707,7 @@ function splitPowerShellSegments(command: string): ShellSegment[] | undefined {
 	let quote: "'" | '"' | undefined;
 	let start = 0;
 	for (let index = 0; index < trimmed.length; index += 1) {
-		const character = trimmed[index];
+		const character = trimmed.charAt(index);
 		if (quote === "'") {
 			if (character !== "'") continue;
 			if (trimmed[index + 1] === "'") {
@@ -751,7 +751,7 @@ function isSafePowerShellSegment(segment: string, safeSubcommands: SafeSubcomman
 	if (matchConfiguredPrefix(segment, safeSubcommands) !== undefined) return true;
 	const tokens = powerShellWords(segment);
 	if (tokens.includes("--%")) return false;
-	const command = tokens[0].toLowerCase();
+	const command = tokens[0]!.toLowerCase();
 	if (!command) return false;
 	const args = tokens.slice(1);
 	if (READ_ONLY_POWERSHELL_COMMANDS.has(command)) return true;
@@ -768,7 +768,7 @@ function powerShellWords(segment: string): string[] {
 	let hasWord = false;
 	let quote: "'" | '"' | undefined;
 	for (let index = 0; index < segment.length; index += 1) {
-		const character = segment[index];
+		const character = segment.charAt(index);
 		if (quote === "'") {
 			if (character !== "'") {
 				word += character;
@@ -967,8 +967,8 @@ function isSafeCurlArguments(args: string[]) {
 		return args[index];
 	};
 	for (; index < args.length; index += 1) {
-		const argument = args[index];
-		const name = argument.split("=", 1)[0];
+		const argument = args[index]!;
+		const name = argument.split("=", 1)[0]!;
 		// curl accepts unambiguous abbreviations of long options, so match prefixes too.
 		if (argument.startsWith("--") && name.length >= 5 && "--request".startsWith(name)) {
 			const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext();
@@ -979,7 +979,7 @@ function isSafeCurlArguments(args: string[]) {
 			}
 		} else if (argument.startsWith("-") && argument.length > 1) {
 			for (let position = 1; position < argument.length; position += 1) {
-				const flag = argument[position];
+				const flag = argument.charAt(position);
 				if (CURL_FORBIDDEN_SHORT.has(flag)) return false;
 				if (flag === "X") {
 					const attached = argument.slice(position + 1);
@@ -1007,7 +1007,7 @@ function isSafeGhApiArguments(args: string[]) {
 		return args[index];
 	};
 	for (; index < args.length; index += 1) {
-		const argument = args[index];
+		const argument = args[index]!;
 		if (argument === "graphql") return false;
 		if (argument === "--method" || argument.startsWith("--method=")) {
 			if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext())) return false;
@@ -1018,7 +1018,7 @@ function isSafeGhApiArguments(args: string[]) {
 		} else if (argument.startsWith("-") && argument.length > 1) {
 			// Short-flag cluster (`-iXGET`): f/F send a body, X sets the method, H/q/p/t take the rest as a value.
 			for (let position = 1; position < argument.length; position += 1) {
-				const flag = argument[position];
+				const flag = argument.charAt(position);
 				if (flag === "f" || flag === "F") return false;
 				if (flag === "X") {
 					if (!isGet(argument.slice(position + 1) || takeNext())) return false;
@@ -1039,7 +1039,7 @@ function findShellExpansion(segment: string): number | undefined {
 	let quote: "'" | '"' | undefined;
 	let escaped = false;
 	for (let index = 0; index < segment.length; index += 1) {
-		const character = segment[index];
+		const character = segment.charAt(index);
 		if (escaped) {
 			escaped = false;
 			continue;
@@ -1239,7 +1239,7 @@ function isSafeStructuredCommand(command: string, args: string[], safeSubcommand
 
 function isSafeTasklistArguments(args: string[]) {
 	for (let index = 0; index < args.length; index += 1) {
-		const argument = args[index].toLowerCase();
+		const argument = args[index]!.toLowerCase();
 		if (["/v", "/nh", "/svc"].includes(argument)) continue;
 		if (argument === "/fo") {
 			const format = args[index + 1]?.toLowerCase();
@@ -1368,7 +1368,7 @@ function isSafeGitGrepArguments(args: string[]) {
 }
 
 function matchesLongOptionPrefix(argument: string, option: string, shortest: string) {
-	const optionName = argument.split("=", 1)[0];
+	const optionName = argument.split("=", 1)[0]!;
 	return optionName.length >= shortest.length && option.startsWith(optionName);
 }
 
@@ -1432,7 +1432,7 @@ function isUnsafeGhReadArgument(argument: string) {
 function hasGhJsonOutput(args: string[]) {
 	let hasJson = false;
 	for (let index = 0; index < args.length; index += 1) {
-		const argument = args[index];
+		const argument = args[index]!;
 		if (argument === "--json") {
 			const value = args[index + 1];
 			if (!value || value.startsWith("-")) return false;
