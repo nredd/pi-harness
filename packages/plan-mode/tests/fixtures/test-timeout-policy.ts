@@ -14,29 +14,29 @@ export const jitiRuntimeLoadBudgetMs = 13_000;
 
 /** Tests allowed past the cap, each by exact name and only up to its own measured budget. */
 export const measuredTestBudgetsMs: ReadonlyMap<string, number> = new Map([
-  [jitiRuntimeLoadTestName, jitiRuntimeLoadBudgetMs],
+	[jitiRuntimeLoadTestName, jitiRuntimeLoadBudgetMs],
 ]);
 
 export type TimeoutTask = {
-  name: string;
-  type: string;
-  timeout?: number;
-  tasks?: readonly TimeoutTask[];
+	name: string;
+	type: string;
+	timeout?: number;
+	tasks?: readonly TimeoutTask[];
 };
 
 export function assertTestTasksWithinCap(tasks: readonly TimeoutTask[]): void {
-  for (const task of tasks) {
-    if (task.type === "test") {
-      assertTestTimeoutWithinCap(task.timeout, task.name);
-    }
-    if (task.tasks) assertTestTasksWithinCap(task.tasks);
-  }
+	for (const task of tasks) {
+		if (task.type === "test") {
+			assertTestTimeoutWithinCap(task.timeout, task.name);
+		}
+		if (task.tasks) assertTestTasksWithinCap(task.tasks);
+	}
 }
 
 export function assertTestTimeoutWithinCap(timeoutMs: number | undefined, testName: string): void {
-  const maximumMs = measuredTestBudgetsMs.get(testName) ?? maximumTestTimeoutMs;
-  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 && timeoutMs <= maximumMs) {
-    return;
-  }
-  throw new Error(`Test ${JSON.stringify(testName)} has a ${timeoutMs} ms timeout; the maximum is ${maximumMs} ms`);
+	const maximumMs = measuredTestBudgetsMs.get(testName) ?? maximumTestTimeoutMs;
+	if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 && timeoutMs <= maximumMs) {
+		return;
+	}
+	throw new Error(`Test ${JSON.stringify(testName)} has a ${timeoutMs} ms timeout; the maximum is ${maximumMs} ms`);
 }

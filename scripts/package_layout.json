@@ -104,7 +104,6 @@
   "packages/computer-use: test/wsl2-diagnostics.test.mjs: test-extension",
   "packages/computer-use: test: top-level-entry",
   "packages/computer-use: tsconfig.signing.json: top-level-entry",
-  "packages/plan-mode: biome.json: biome-config",
   "packages/preset: .gitignore: dotfile",
   "packages/preset: CHANGELOG.md: missing-file",
   "packages/preset: extensions: top-level-entry",

@@ -1,100 +1,100 @@
 import {
-  normalizePlanModeCompletion,
-  PLAN_MODE_COMPLETE_TOOL_NAME,
-  planFromCompletionDetails,
+	normalizePlanModeCompletion,
+	PLAN_MODE_COMPLETE_TOOL_NAME,
+	planFromCompletionDetails,
 } from "./completion-tool.ts";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.ts";
 import { PLAN_EDIT_SOURCE } from "./plan-edit.ts";
 import {
-  IMPLEMENTATION_PLAN_RETENTIONS,
-  type ImplementationPlanRetention,
-  PLAN_MODE_THINKING_LEVELS,
-  type PlanModeFixedThinkingLevel,
+	IMPLEMENTATION_PLAN_RETENTIONS,
+	type ImplementationPlanRetention,
+	PLAN_MODE_THINKING_LEVELS,
+	type PlanModeFixedThinkingLevel,
 } from "./settings.ts";
 
 export type { ImplementationModelOverride } from "./implementation-models.ts";
 export {
-  isPendingImplementationModelIdentifier,
-  MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
+	isPendingImplementationModelIdentifier,
+	MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
 } from "./implementation-models.ts";
 
 export type PlanCompletionSource =
-  | typeof PLAN_MODE_COMPLETE_TOOL_NAME
-  | "legacy_proposed_plan"
-  | typeof PLAN_EDIT_SOURCE;
+	| typeof PLAN_MODE_COMPLETE_TOOL_NAME
+	| "legacy_proposed_plan"
+	| typeof PLAN_EDIT_SOURCE;
 
 export interface ActiveImplementationPlan {
-  id: string;
-  plan: string;
-  source: PlanCompletionSource;
-  startedAt: number;
-  retention?: ImplementationPlanRetention;
+	id: string;
+	plan: string;
+	source: PlanCompletionSource;
+	startedAt: number;
+	retention?: ImplementationPlanRetention;
 }
 
 export interface SavedPlan {
-  plan: string;
-  source: PlanCompletionSource;
+	plan: string;
+	source: PlanCompletionSource;
 }
 
 export interface ImplementationRuntimeSelection {
-  model?: ImplementationModelOverride;
-  thinkingLevel?: PlanModeFixedThinkingLevel;
+	model?: ImplementationModelOverride;
+	thinkingLevel?: PlanModeFixedThinkingLevel;
 }
 
 export interface PendingImplementationRuntime extends ImplementationRuntimeSelection {
-  version: 1;
+	version: 1;
 }
 
 export type ReproposalReview = "required" | "confirmed";
 
 /** The model switch a Plan start made, kept until exit restores it or a manual `/model` supersedes it. */
 export interface PlanModelSwitch {
-  applied: ImplementationModelOverride;
-  previous: ImplementationModelOverride;
-  /** Thinking level before the switch, re-applied when Pi's per-model default would replace it. */
-  thinkingBefore: PlanModeFixedThinkingLevel;
-  /** Effective thinking level right after the switch; a different level on exit is a manual change. */
-  thinkingAfter: PlanModeFixedThinkingLevel;
+	applied: ImplementationModelOverride;
+	previous: ImplementationModelOverride;
+	/** Thinking level before the switch, re-applied when Pi's per-model default would replace it. */
+	thinkingBefore: PlanModeFixedThinkingLevel;
+	/** Effective thinking level right after the switch; a different level on exit is a manual change. */
+	thinkingAfter: PlanModeFixedThinkingLevel;
 }
 
 /** An explicit policy keeps the names the user chose; an automatic one re-derives them. */
 export type PlanModeWorkflowToolPolicy =
-  | { kind: "automatic"; desiredNames?: undefined; allowedNames: string[]; resolved: boolean }
-  | { kind: "explicit"; desiredNames: string[]; allowedNames: string[]; resolved: boolean };
+	| { kind: "automatic"; desiredNames?: undefined; allowedNames: string[]; resolved: boolean }
+	| { kind: "explicit"; desiredNames: string[]; allowedNames: string[]; resolved: boolean };
 
 interface PlanModeStateBase {
-  latestPlan?: string;
-  latestPlanSource?: PlanCompletionSource;
-  awaitingAction: boolean;
-  /** Ready plans the user declined (Esc/Stay or a reply) since this planning workflow began. */
-  declinedPlans: number;
-  /** Explicit proposal-review permission, normally requested after a decline. */
-  reproposalReview?: ReproposalReview;
-  /** The current proposal already counted as declined; keeps Esc then a reply from double counting. */
-  planDeclined?: boolean;
-  savedPlan?: SavedPlan;
-  activeImplementation?: ActiveImplementationPlan;
-  pendingImplementationRuntime?: PendingImplementationRuntime;
-  selectedToolNames?: string[];
-  selectedToolKeys?: string[];
-  previousThinkingLevel?: PlanModeFixedThinkingLevel;
-  appliedThinkingLevel?: PlanModeFixedThinkingLevel;
-  manualThinkingLevel?: PlanModeFixedThinkingLevel;
-  planModelSwitch?: PlanModelSwitch;
-  /** Start fresh switched this source back to the pre-Plan model; resuming the Plan re-applies the Plan model. */
-  resumePlanModel?: true;
+	latestPlan?: string;
+	latestPlanSource?: PlanCompletionSource;
+	awaitingAction: boolean;
+	/** Ready plans the user declined (Esc/Stay or a reply) since this planning workflow began. */
+	declinedPlans: number;
+	/** Explicit proposal-review permission, normally requested after a decline. */
+	reproposalReview?: ReproposalReview;
+	/** The current proposal already counted as declined; keeps Esc then a reply from double counting. */
+	planDeclined?: boolean;
+	savedPlan?: SavedPlan;
+	activeImplementation?: ActiveImplementationPlan;
+	pendingImplementationRuntime?: PendingImplementationRuntime;
+	selectedToolNames?: string[];
+	selectedToolKeys?: string[];
+	previousThinkingLevel?: PlanModeFixedThinkingLevel;
+	appliedThinkingLevel?: PlanModeFixedThinkingLevel;
+	manualThinkingLevel?: PlanModeFixedThinkingLevel;
+	planModelSwitch?: PlanModelSwitch;
+	/** Start fresh switched this source back to the pre-Plan model; resuming the Plan re-applies the Plan model. */
+	resumePlanModel?: true;
 }
 
 /** Plan is off: there is no workflow tool policy to enforce. */
 export interface DisabledPlanModeState extends PlanModeStateBase {
-  enabled: false;
-  workflowToolPolicy?: undefined;
+	enabled: false;
+	workflowToolPolicy?: undefined;
 }
 
 /** Plan is on: the workflow tool policy is frozen, so enforcement never has to check for one. */
 export interface EnabledPlanModeState extends PlanModeStateBase {
-  enabled: true;
-  workflowToolPolicy: PlanModeWorkflowToolPolicy;
+	enabled: true;
+	workflowToolPolicy: PlanModeWorkflowToolPolicy;
 }
 
 export type PlanModeState = DisabledPlanModeState | EnabledPlanModeState;
@@ -104,216 +104,216 @@ export type PlanModeState = DisabledPlanModeState | EnabledPlanModeState;
  * enabled without one; installing the state derives it, which yields an `EnabledPlanModeState`.
  */
 export interface RestoredEnabledPlanModeState extends PlanModeStateBase {
-  enabled: true;
-  workflowToolPolicy?: PlanModeWorkflowToolPolicy;
+	enabled: true;
+	workflowToolPolicy?: PlanModeWorkflowToolPolicy;
 }
 
 export type RestoredPlanModeState = DisabledPlanModeState | RestoredEnabledPlanModeState;
 
 type SessionEntry = {
-  type?: string;
-  customType?: string;
-  data?: unknown;
-  message?: {
-    role?: string;
-    toolName?: string;
-    details?: unknown;
-  };
+	type?: string;
+	customType?: string;
+	data?: unknown;
+	message?: {
+		role?: string;
+		toolName?: string;
+		details?: unknown;
+	};
 };
 
 export function restorePlanModeState(entries: unknown[], stateEntryType: string): RestoredPlanModeState {
-  const branch = entries as SessionEntry[];
-  let stateEntryIndex = -1;
-  for (let index = branch.length - 1; index >= 0; index -= 1) {
-    const candidate = branch[index];
-    if (candidate?.type === "custom" && candidate.customType === stateEntryType) {
-      stateEntryIndex = index;
-      break;
-    }
-  }
-  const entry = branch[stateEntryIndex];
-  if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false, declinedPlans: 0 };
+	const branch = entries as SessionEntry[];
+	let stateEntryIndex = -1;
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		const candidate = branch[index];
+		if (candidate?.type === "custom" && candidate.customType === stateEntryType) {
+			stateEntryIndex = index;
+			break;
+		}
+	}
+	const entry = branch[stateEntryIndex];
+	if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false, declinedPlans: 0 };
 
-  const enabled = entry.data.enabled === true;
-  const persistedSource = enabled ? planCompletionSource(entry.data.latestPlanSource) : undefined;
-  const persistedPlan = enabled ? normalizePersistedPlan(entry.data.latestPlan) : undefined;
-  const recoveredPlan = enabled && !persistedPlan ? latestCompletionPlan(branch.slice(stateEntryIndex + 1)) : undefined;
-  const latestPlan = persistedPlan ?? recoveredPlan;
-  const activeImplementation = enabled ? undefined : normalizeActiveImplementation(entry.data.activeImplementation);
-  const savedPlan = enabled || activeImplementation ? undefined : normalizeSavedPlan(entry.data.savedPlan);
-  const pendingImplementationRuntime = enabled
-    ? undefined
-    : normalizePendingImplementationRuntime(entry.data.pendingImplementationRuntime);
-  const base: PlanModeStateBase = {
-    latestPlan,
-    latestPlanSource: enabled
-      ? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
-      : undefined,
-    awaitingAction: enabled && latestPlan !== undefined,
-    declinedPlans: enabled ? nonNegativeInteger(entry.data.declinedPlans) : 0,
-    reproposalReview: enabled
-      ? restoreReproposalReview(
-          entry.data.reproposalReview,
-          entry.data.declineGated,
-          entry.data.declinedPlans,
-          latestPlan,
-        )
-      : undefined,
-    planDeclined: enabled && latestPlan !== undefined && entry.data.planDeclined === true,
-    savedPlan,
-    activeImplementation,
-    pendingImplementationRuntime,
-    selectedToolNames: stringArray(entry.data.selectedToolNames),
-    selectedToolKeys: stringArray(entry.data.selectedToolKeys),
-    previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : undefined,
-    appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
-    manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
-    planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : undefined,
-    resumePlanModel: enabled && entry.data.resumePlanModel === true ? true : undefined,
-  };
-  return enabled
-    ? { ...base, enabled, workflowToolPolicy: normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) }
-    : { ...base, enabled, workflowToolPolicy: undefined };
+	const enabled = entry.data.enabled === true;
+	const persistedSource = enabled ? planCompletionSource(entry.data.latestPlanSource) : undefined;
+	const persistedPlan = enabled ? normalizePersistedPlan(entry.data.latestPlan) : undefined;
+	const recoveredPlan = enabled && !persistedPlan ? latestCompletionPlan(branch.slice(stateEntryIndex + 1)) : undefined;
+	const latestPlan = persistedPlan ?? recoveredPlan;
+	const activeImplementation = enabled ? undefined : normalizeActiveImplementation(entry.data.activeImplementation);
+	const savedPlan = enabled || activeImplementation ? undefined : normalizeSavedPlan(entry.data.savedPlan);
+	const pendingImplementationRuntime = enabled
+		? undefined
+		: normalizePendingImplementationRuntime(entry.data.pendingImplementationRuntime);
+	const base: PlanModeStateBase = {
+		latestPlan,
+		latestPlanSource: enabled
+			? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
+			: undefined,
+		awaitingAction: enabled && latestPlan !== undefined,
+		declinedPlans: enabled ? nonNegativeInteger(entry.data.declinedPlans) : 0,
+		reproposalReview: enabled
+			? restoreReproposalReview(
+					entry.data.reproposalReview,
+					entry.data.declineGated,
+					entry.data.declinedPlans,
+					latestPlan,
+				)
+			: undefined,
+		planDeclined: enabled && latestPlan !== undefined && entry.data.planDeclined === true,
+		savedPlan,
+		activeImplementation,
+		pendingImplementationRuntime,
+		selectedToolNames: stringArray(entry.data.selectedToolNames),
+		selectedToolKeys: stringArray(entry.data.selectedToolKeys),
+		previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : undefined,
+		appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
+		manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
+		planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : undefined,
+		resumePlanModel: enabled && entry.data.resumePlanModel === true ? true : undefined,
+	};
+	return enabled
+		? { ...base, enabled, workflowToolPolicy: normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) }
+		: { ...base, enabled, workflowToolPolicy: undefined };
 }
 
 function restoreReproposalReview(
-  value: unknown,
-  legacyGate: unknown,
-  declinedPlans: unknown,
-  latestPlan: string | undefined,
+	value: unknown,
+	legacyGate: unknown,
+	declinedPlans: unknown,
+	latestPlan: string | undefined,
 ): ReproposalReview | undefined {
-  if (value === "required" || value === "confirmed") return value;
-  // Old sessions only recorded a boolean clarification gate. A closed legacy gate is always
-  // conservatively restored as an explicit review requirement; an already-ready replacement
-  // remains reviewable, while an interrupted old workflow with decline history must reconfirm.
-  if (legacyGate === true || (nonNegativeInteger(declinedPlans) > 0 && latestPlan === undefined)) return "required";
-  return undefined;
+	if (value === "required" || value === "confirmed") return value;
+	// Old sessions only recorded a boolean clarification gate. A closed legacy gate is always
+	// conservatively restored as an explicit review requirement; an already-ready replacement
+	// remains reviewable, while an interrupted old workflow with decline history must reconfirm.
+	if (legacyGate === true || (nonNegativeInteger(declinedPlans) > 0 && latestPlan === undefined)) return "required";
+	return undefined;
 }
 
 function normalizeWorkflowToolPolicy(value: unknown): PlanModeWorkflowToolPolicy | undefined {
-  if (value === undefined) return undefined;
-  const denied: PlanModeWorkflowToolPolicy = {
-    kind: "automatic",
-    allowedNames: [],
-    resolved: true,
-  };
-  if (!isRecord(value)) return denied;
-  const kind = value.kind === "automatic" || value.kind === "explicit" ? value.kind : undefined;
-  const allowedNames = stringArray(value.allowedNames);
-  if (!kind || !allowedNames || typeof value.resolved !== "boolean") return denied;
-  if (kind === "automatic") {
-    return { kind, allowedNames, resolved: value.resolved };
-  }
-  const desiredNames = stringArray(value.desiredNames);
-  if (!desiredNames) return denied;
-  return { kind, desiredNames, allowedNames, resolved: value.resolved };
+	if (value === undefined) return undefined;
+	const denied: PlanModeWorkflowToolPolicy = {
+		kind: "automatic",
+		allowedNames: [],
+		resolved: true,
+	};
+	if (!isRecord(value)) return denied;
+	const kind = value.kind === "automatic" || value.kind === "explicit" ? value.kind : undefined;
+	const allowedNames = stringArray(value.allowedNames);
+	if (!kind || !allowedNames || typeof value.resolved !== "boolean") return denied;
+	if (kind === "automatic") {
+		return { kind, allowedNames, resolved: value.resolved };
+	}
+	const desiredNames = stringArray(value.desiredNames);
+	if (!desiredNames) return denied;
+	return { kind, desiredNames, allowedNames, resolved: value.resolved };
 }
 
 function normalizeSavedPlan(value: unknown): SavedPlan | undefined {
-  if (!isRecord(value)) return undefined;
-  const source = planCompletionSource(value.source);
-  const normalized = normalizePlanModeCompletion({ plan: value.plan });
-  if (!source || !normalized.ok) return undefined;
-  return { plan: normalized.plan, source };
+	if (!isRecord(value)) return undefined;
+	const source = planCompletionSource(value.source);
+	const normalized = normalizePlanModeCompletion({ plan: value.plan });
+	if (!source || !normalized.ok) return undefined;
+	return { plan: normalized.plan, source };
 }
 
 function normalizePlanModelSwitch(value: unknown): PlanModelSwitch | undefined {
-  if (!isRecord(value)) return undefined;
-  const applied = modelReference(value.applied);
-  const previous = modelReference(value.previous);
-  const thinkingBefore = fixedThinkingLevel(value.thinkingBefore);
-  const thinkingAfter = fixedThinkingLevel(value.thinkingAfter);
-  if (!applied || !previous || !thinkingBefore || !thinkingAfter) return undefined;
-  return { applied, previous, thinkingBefore, thinkingAfter };
+	if (!isRecord(value)) return undefined;
+	const applied = modelReference(value.applied);
+	const previous = modelReference(value.previous);
+	const thinkingBefore = fixedThinkingLevel(value.thinkingBefore);
+	const thinkingAfter = fixedThinkingLevel(value.thinkingAfter);
+	if (!applied || !previous || !thinkingBefore || !thinkingAfter) return undefined;
+	return { applied, previous, thinkingBefore, thinkingAfter };
 }
 
 function modelReference(value: unknown): ImplementationModelOverride | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "provider" && key !== "modelId")) {
-    return undefined;
-  }
-  if (
-    !isPendingImplementationModelIdentifier(value.provider) ||
-    !isPendingImplementationModelIdentifier(value.modelId)
-  ) {
-    return undefined;
-  }
-  return { provider: value.provider, modelId: value.modelId };
+	if (!isRecord(value) || Object.keys(value).some((key) => key !== "provider" && key !== "modelId")) {
+		return undefined;
+	}
+	if (
+		!isPendingImplementationModelIdentifier(value.provider) ||
+		!isPendingImplementationModelIdentifier(value.modelId)
+	) {
+		return undefined;
+	}
+	return { provider: value.provider, modelId: value.modelId };
 }
 
 function normalizePendingImplementationRuntime(value: unknown): PendingImplementationRuntime | undefined {
-  if (!isRecord(value) || value.version !== 1) return undefined;
-  if (Object.keys(value).some((key) => key !== "version" && key !== "model" && key !== "thinkingLevel")) {
-    return undefined;
-  }
-  const model = value.model === undefined ? undefined : modelReference(value.model);
-  if (value.model !== undefined && !model) return undefined;
-  const thinkingLevel = value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
-  if (value.thinkingLevel !== undefined && !thinkingLevel) return undefined;
-  if (!model && !thinkingLevel) return undefined;
-  return {
-    version: 1,
-    ...(model ? { model } : {}),
-    ...(thinkingLevel ? { thinkingLevel } : {}),
-  };
+	if (!isRecord(value) || value.version !== 1) return undefined;
+	if (Object.keys(value).some((key) => key !== "version" && key !== "model" && key !== "thinkingLevel")) {
+		return undefined;
+	}
+	const model = value.model === undefined ? undefined : modelReference(value.model);
+	if (value.model !== undefined && !model) return undefined;
+	const thinkingLevel = value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
+	if (value.thinkingLevel !== undefined && !thinkingLevel) return undefined;
+	if (!model && !thinkingLevel) return undefined;
+	return {
+		version: 1,
+		...(model ? { model } : {}),
+		...(thinkingLevel ? { thinkingLevel } : {}),
+	};
 }
 
 function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan | undefined {
-  if (!isRecord(value)) return undefined;
-  const id = typeof value.id === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value.id) ? value.id : undefined;
-  const source = planCompletionSource(value.source);
-  const normalized = normalizePlanModeCompletion({ plan: value.plan });
-  const startedAt =
-    typeof value.startedAt === "number" && Number.isSafeInteger(value.startedAt) && value.startedAt >= 0
-      ? value.startedAt
-      : undefined;
-  if (!id || !source || !normalized.ok || startedAt === undefined) return undefined;
-  const retention = IMPLEMENTATION_PLAN_RETENTIONS.includes(value.retention as ImplementationPlanRetention)
-    ? (value.retention as ImplementationPlanRetention)
-    : "keep";
-  return { id, plan: normalized.plan, source, startedAt, retention };
+	if (!isRecord(value)) return undefined;
+	const id = typeof value.id === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value.id) ? value.id : undefined;
+	const source = planCompletionSource(value.source);
+	const normalized = normalizePlanModeCompletion({ plan: value.plan });
+	const startedAt =
+		typeof value.startedAt === "number" && Number.isSafeInteger(value.startedAt) && value.startedAt >= 0
+			? value.startedAt
+			: undefined;
+	if (!id || !source || !normalized.ok || startedAt === undefined) return undefined;
+	const retention = IMPLEMENTATION_PLAN_RETENTIONS.includes(value.retention as ImplementationPlanRetention)
+		? (value.retention as ImplementationPlanRetention)
+		: "keep";
+	return { id, plan: normalized.plan, source, startedAt, retention };
 }
 
 function normalizePersistedPlan(value: unknown) {
-  const normalized = normalizePlanModeCompletion({ plan: value });
-  return normalized.ok ? normalized.plan : undefined;
+	const normalized = normalizePlanModeCompletion({ plan: value });
+	return normalized.ok ? normalized.plan : undefined;
 }
 
 function latestCompletionPlan(entries: SessionEntry[]) {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const message = entries[index]?.message;
-    if (message?.role !== "toolResult" || message.toolName !== PLAN_MODE_COMPLETE_TOOL_NAME) {
-      continue;
-    }
-    const plan = planFromCompletionDetails(message.details);
-    if (plan) return plan;
-  }
-  return undefined;
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const message = entries[index]?.message;
+		if (message?.role !== "toolResult" || message.toolName !== PLAN_MODE_COMPLETE_TOOL_NAME) {
+			continue;
+		}
+		const plan = planFromCompletionDetails(message.details);
+		if (plan) return plan;
+	}
+	return undefined;
 }
 
 function planCompletionSource(value: unknown): PlanCompletionSource | undefined {
-  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" || value === PLAN_EDIT_SOURCE
-    ? value
-    : undefined;
+	return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" || value === PLAN_EDIT_SOURCE
+		? value
+		: undefined;
 }
 
 function fixedThinkingLevel(value: unknown): PlanModeFixedThinkingLevel | undefined {
-  return typeof value === "string" &&
-    value !== "inherit" &&
-    PLAN_MODE_THINKING_LEVELS.includes(value as (typeof PLAN_MODE_THINKING_LEVELS)[number])
-    ? (value as PlanModeFixedThinkingLevel)
-    : undefined;
+	return typeof value === "string" &&
+		value !== "inherit" &&
+		PLAN_MODE_THINKING_LEVELS.includes(value as (typeof PLAN_MODE_THINKING_LEVELS)[number])
+		? (value as PlanModeFixedThinkingLevel)
+		: undefined;
 }
 
 function nonNegativeInteger(value: unknown) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 function stringArray(value: unknown) {
-  return Array.isArray(value) && value.every((item): item is string => typeof item === "string")
-    ? Array.from(new Set(value))
-    : undefined;
+	return Array.isArray(value) && value.every((item): item is string => typeof item === "string")
+		? Array.from(new Set(value))
+		: undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

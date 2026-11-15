@@ -3,22 +3,22 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 
 export const BUILTIN_SAFE_GIT_SUBCOMMANDS = [
-  "status",
-  "log",
-  "diff",
-  "show",
-  "branch",
-  "remote",
-  "ls-files",
-  "grep",
+	"status",
+	"log",
+	"diff",
+	"show",
+	"branch",
+	"remote",
+	"ls-files",
+	"grep",
 ] as const;
 export const CONFIGURABLE_SAFE_GIT_SUBCOMMANDS = [
-  "rev-parse",
-  "blame",
-  "describe",
-  "merge-base",
-  "ls-tree",
-  "cat-file",
+	"rev-parse",
+	"blame",
+	"describe",
+	"merge-base",
+	"ls-tree",
+	"cat-file",
 ] as const;
 export const SAFE_GIT_SUBCOMMANDS = [...BUILTIN_SAFE_GIT_SUBCOMMANDS, ...CONFIGURABLE_SAFE_GIT_SUBCOMMANDS] as const;
 export const SAFE_GH_SUBCOMMAND_PATHS = ["pr view", "pr list", "issue view", "issue list"] as const;
@@ -28,7 +28,7 @@ export type ConfigurableSafeGitSubcommand = (typeof CONFIGURABLE_SAFE_GIT_SUBCOM
 export type SafeGitSubcommand = (typeof SAFE_GIT_SUBCOMMANDS)[number];
 export type SafeGhSubcommandPath = (typeof SAFE_GH_SUBCOMMAND_PATHS)[number];
 export interface SafeSubcommands {
-  [command: string]: string[] | undefined;
+	[command: string]: string[] | undefined;
 }
 
 export const SAFE_BUILTIN_PLAN_TOOLS = new Set(["read", "bash", "powershell", "grep", "find", "ls"]);
@@ -36,82 +36,82 @@ export type PlanModeToolPolicy = "read-only" | "limited" | "user-opt-in" | "bloc
 
 const BLOCKED_BUILTIN_TOOLS = new Set(["edit", "write"]);
 const MUTATING_COMMANDS = new Set([
-  "rm",
-  "rmdir",
-  "mv",
-  "cp",
-  "mkdir",
-  "touch",
-  "chmod",
-  "chown",
-  "chgrp",
-  "ln",
-  "tee",
-  "truncate",
-  "dd",
-  "sudo",
-  "su",
-  "kill",
-  "pkill",
-  "killall",
-  "reboot",
-  "shutdown",
-  "vim",
-  "vi",
-  "nano",
-  "emacs",
-  "code",
-  "subl",
+	"rm",
+	"rmdir",
+	"mv",
+	"cp",
+	"mkdir",
+	"touch",
+	"chmod",
+	"chown",
+	"chgrp",
+	"ln",
+	"tee",
+	"truncate",
+	"dd",
+	"sudo",
+	"su",
+	"kill",
+	"pkill",
+	"killall",
+	"reboot",
+	"shutdown",
+	"vim",
+	"vi",
+	"nano",
+	"emacs",
+	"code",
+	"subl",
 ]);
 const READ_ONLY_POWERSHELL_COMMANDS = new Set([
-  "format-list",
-  "format-table",
-  "get-childitem",
-  "get-content",
-  "get-item",
-  "get-location",
-  "measure-object",
-  "out-string",
-  "resolve-path",
-  "select-string",
-  "sort-object",
-  "test-path",
-  "write-output",
+	"format-list",
+	"format-table",
+	"get-childitem",
+	"get-content",
+	"get-item",
+	"get-location",
+	"measure-object",
+	"out-string",
+	"resolve-path",
+	"select-string",
+	"sort-object",
+	"test-path",
+	"write-output",
 ]);
 const READ_ONLY_COMMANDS = new Set([
-  "cat",
-  "head",
-  "tail",
-  "grep",
-  "find",
-  "ls",
-  "pwd",
-  "echo",
-  "printf",
-  "wc",
-  "sort",
-  "uniq",
-  "diff",
-  "file",
-  "stat",
-  "du",
-  "df",
-  "tree",
-  "which",
-  "whereis",
-  "type",
-  "printenv",
-  "uname",
-  "whoami",
-  "id",
-  "date",
-  "uptime",
-  "ps",
-  "jq",
-  "rg",
-  "fd",
-  "bat",
-  "eza",
+	"cat",
+	"head",
+	"tail",
+	"grep",
+	"find",
+	"ls",
+	"pwd",
+	"echo",
+	"printf",
+	"wc",
+	"sort",
+	"uniq",
+	"diff",
+	"file",
+	"stat",
+	"du",
+	"df",
+	"tree",
+	"which",
+	"whereis",
+	"type",
+	"printenv",
+	"uname",
+	"whoami",
+	"id",
+	"date",
+	"uptime",
+	"ps",
+	"jq",
+	"rg",
+	"fd",
+	"bat",
+	"eza",
 ]);
 
 // `-i` edits in place for sed. For these inspection commands it is case-insensitive
@@ -119,11 +119,11 @@ const READ_ONLY_COMMANDS = new Set([
 const INSPECTION_CASE_FLAG_COMMANDS = new Set(["rg", "grep", "git", "diff", "fd", "ls", "sort", "find", "bat", "eza"]);
 
 export function isBuiltinTool(tool: ToolInfo) {
-  const source = tool.sourceInfo;
-  if (source?.source !== "builtin") return false;
-  // Core tools own builtin:<name>; built-in extensions may own many tools or
-  // expose model-only orchestration. Missing paths preserve legacy core policy.
-  return !source.path || (source.path === `builtin:${tool.name}` && tool.exposure !== "model-only");
+	const source = tool.sourceInfo;
+	if (source?.source !== "builtin") return false;
+	// Core tools own builtin:<name>; built-in extensions may own many tools or
+	// expose model-only orchestration. Missing paths preserve legacy core policy.
+	return !source.path || (source.path === `builtin:${tool.name}` && tool.exposure !== "model-only");
 }
 
 /**
@@ -133,13 +133,13 @@ export function isBuiltinTool(tool: ToolInfo) {
  * servers, and project-scope extensions, which an untrusted repository could ship.
  */
 function isTrustedExtensionTool(tool: ToolInfo) {
-  const source = tool.sourceInfo;
-  return (
-    !!source?.source &&
-    source.source !== "builtin" &&
-    !source.path?.startsWith("builtin:") &&
-    source.scope !== "project"
-  );
+	const source = tool.sourceInfo;
+	return (
+		!!source?.source &&
+		source.source !== "builtin" &&
+		!source.path?.startsWith("builtin:") &&
+		source.scope !== "project"
+	);
 }
 
 /** The typed remote-shell tool Plan mode re-validates like `ssh <host> <command>`. */
@@ -151,7 +151,7 @@ export const SSH_EXEC_TOOL_NAME = "ssh_exec";
  * `conftest.py`, tests) that writes build or cache outputs.
  */
 export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
-  return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
+	return isTrustedExtensionTool(tool) && tool.annotations?.readOnlyHint === true;
 }
 
 /**
@@ -160,45 +160,45 @@ export function isAnnotatedReadOnlyTool(tool: ToolInfo) {
  * This is risk reduction, not an operating-system sandbox for trusted extension code.
  */
 export function isPlanSshExecTool(tool: ToolInfo) {
-  return tool.name === SSH_EXEC_TOOL_NAME && isTrustedExtensionTool(tool);
+	return tool.name === SSH_EXEC_TOOL_NAME && isTrustedExtensionTool(tool);
 }
 
 /** The single default-admission decision for extension tools: Plan mode's list and labels both use it. */
 export function isDefaultAdmittedExtensionTool(tool: ToolInfo) {
-  return isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool);
+	return isAnnotatedReadOnlyTool(tool) || isPlanSshExecTool(tool);
 }
 
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {
-  if (!tool.sourceInfo?.source) return "blocked";
-  if (isDefaultAdmittedExtensionTool(tool)) return "read-only";
-  if (!isBuiltinTool(tool)) return "user-opt-in";
-  if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
-  if (tool.name === "bash" || tool.name === "powershell") return "limited";
-  return SAFE_BUILTIN_PLAN_TOOLS.has(tool.name) ? "read-only" : "blocked";
+	if (!tool.sourceInfo?.source) return "blocked";
+	if (isDefaultAdmittedExtensionTool(tool)) return "read-only";
+	if (!isBuiltinTool(tool)) return "user-opt-in";
+	if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
+	if (tool.name === "bash" || tool.name === "powershell") return "limited";
+	return SAFE_BUILTIN_PLAN_TOOLS.has(tool.name) ? "read-only" : "blocked";
 }
 
 export function canSelectToolInPlanMode(tool: ToolInfo) {
-  return classifyPlanModeTool(tool) !== "blocked";
+	return classifyPlanModeTool(tool) !== "blocked";
 }
 
 export function readCommand(input: unknown) {
-  const command = input as { command?: unknown } | undefined;
-  return typeof command?.command === "string" ? command.command : "";
+	const command = input as { command?: unknown } | undefined;
+	return typeof command?.command === "string" ? command.command : "";
 }
 
 /** Where a shell command runs and which directories it may reach; omitted values keep the defaults. */
 export interface ShellPolicyOptions {
-  /** Effective directory for relative `cd`/`git -C` targets; none means only trusted roots. */
-  workingDirectory?: string;
-  /** Extra roots `cd`/`git -C` may reach. */
-  trustedDirectories?: readonly string[];
-  /** Home for `~` in trusted roots and directory arguments; omitted keeps the native one. */
-  homeDir?: string;
+	/** Effective directory for relative `cd`/`git -C` targets; none means only trusted roots. */
+	workingDirectory?: string;
+	/** Extra roots `cd`/`git -C` may reach. */
+	trustedDirectories?: readonly string[];
+	/** Home for `~` in trusted roots and directory arguments; omitted keeps the native one. */
+	homeDir?: string;
 }
 
 /** Bash also needs the platform for its platform-specific inspection commands. */
 export interface CommandPolicyOptions extends ShellPolicyOptions {
-  platform?: NodeJS.Platform;
+	platform?: NodeJS.Platform;
 }
 
 /** `ssh_exec` parameters Plan mode understands; anything else fails closed. `cwd` is a plain path. */
@@ -210,32 +210,32 @@ const SSH_EXEC_ALLOWED_KEYS = new Set(["host", "command", "cwd", "timeout"]);
  * policy. `stdin` is refused outright because the gate cannot see what a remote command does with it.
  */
 export function findBlockedSshExecCall(
-  input: unknown,
-  safeSubcommands: SafeSubcommands = {},
-  platform: NodeJS.Platform = process.platform,
+	input: unknown,
+	safeSubcommands: SafeSubcommands = {},
+	platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return "input is not an object";
-  const unknownKey = Object.keys(input).find((key) => !SSH_EXEC_ALLOWED_KEYS.has(key));
-  if (unknownKey !== undefined) return `parameter '${unknownKey}' is not allowed in Plan mode`;
-  const call = input as { host?: unknown; cwd?: unknown };
-  const host = typeof call.host === "string" ? call.host.trim() : "";
-  if (!host) return "host is required";
-  if (!(safeSubcommands.ssh ?? []).some((prefix) => prefix.trim() === host)) {
-    return `host '${host}' is not a configured ssh prefix`;
-  }
-  if (
-    call.cwd !== undefined &&
-    (typeof call.cwd !== "string" || hasShellExpansion(call.cwd) || /[\s;&|<>]/.test(call.cwd))
-  ) {
-    return "cwd must be a plain path";
-  }
-  const blocked = findBlockedRemoteCommand(readCommand(input), safeSubcommands, platform);
-  return blocked === undefined ? undefined : `remote command: ${blocked}`;
+	if (typeof input !== "object" || input === null || Array.isArray(input)) return "input is not an object";
+	const unknownKey = Object.keys(input).find((key) => !SSH_EXEC_ALLOWED_KEYS.has(key));
+	if (unknownKey !== undefined) return `parameter '${unknownKey}' is not allowed in Plan mode`;
+	const call = input as { host?: unknown; cwd?: unknown };
+	const host = typeof call.host === "string" ? call.host.trim() : "";
+	if (!host) return "host is required";
+	if (!(safeSubcommands.ssh ?? []).some((prefix) => prefix.trim() === host)) {
+		return `host '${host}' is not a configured ssh prefix`;
+	}
+	if (
+		call.cwd !== undefined &&
+		(typeof call.cwd !== "string" || hasShellExpansion(call.cwd) || /[\s;&|<>]/.test(call.cwd))
+	) {
+		return "cwd must be a plain path";
+	}
+	const blocked = findBlockedRemoteCommand(readCommand(input), safeSubcommands, platform);
+	return blocked === undefined ? undefined : `remote command: ${blocked}`;
 }
 
 /** The remote side of `ssh <host> <command>` and `ssh_exec`: local directories mean nothing there. */
 function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcommands, platform: NodeJS.Platform) {
-  return findBlockedCommandSegment(command, safeSubcommands, { platform });
+	return findBlockedCommandSegment(command, safeSubcommands, { platform });
 }
 
 /**
@@ -250,19 +250,19 @@ function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcomma
  *   neither, as for the remote side of `ssh <host> <command>`, both are rejected.
  */
 export function findBlockedCommandSegment(
-  command: string,
-  safeSubcommands: SafeSubcommands = {},
-  options: CommandPolicyOptions = {},
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+	options: CommandPolicyOptions = {},
 ): string | undefined {
-  return decideBlockedCommand(command, safeSubcommands, options)?.segment;
+	return decideBlockedCommand(command, safeSubcommands, options)?.segment;
 }
 
 /** The reviewed policy's verdict on a rejected command: the segment, and a lazy explanation of it. */
 export interface BlockedDecision {
-  /** The segment (or whole command, for syntax rejected before splitting) that failed. */
-  segment: string;
-  /** Names the offending token. Message only: may throw, and must never be consulted for the decision. */
-  explain: () => SyntaxRejection;
+	/** The segment (or whole command, for syntax rejected before splitting) that failed. */
+	segment: string;
+	/** Names the offending token. Message only: may throw, and must never be consulted for the decision. */
+	explain: () => SyntaxRejection;
 }
 
 /**
@@ -271,54 +271,54 @@ export interface BlockedDecision {
  * whether a command is allowed. `explain` is lazy for that reason.
  */
 export function decideBlockedCommand(
-  command: string,
-  safeSubcommands: SafeSubcommands = {},
-  { workingDirectory, platform = process.platform, trustedDirectories = [], homeDir = homedir() }: CommandPolicyOptions,
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+	{ workingDirectory, platform = process.platform, trustedDirectories = [], homeDir = homedir() }: CommandPolicyOptions,
 ): BlockedDecision | undefined {
-  const scan = scanShellSegments(command);
-  if ("rejection" in scan) {
-    return { segment: command.trim() || "(empty command)", explain: () => scan.rejection };
-  }
-  const { segments } = scan;
-  const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
-  let base = workingDirectory;
-  for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
-      return {
-        segment: segment.text,
-        explain: () => ({
-          token: firstWord(shellWords(segment.text) ?? [], segment.text),
-          reason: "interpreter in a pipeline",
-        }),
-      };
-    }
-    const tokens = shellWords(segment.text);
-    if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
-      const target =
-        tokens.length === 2 && !hasShellExpansion(segment.text)
-          ? resolveDirectory(tokens[1], base, roots, homeDir)
-          : undefined;
-      if (target === undefined || segments[index + 1]?.separator === "|") {
-        return {
-          segment: segment.text,
-          explain: () => ({
-            token: tokens.length === 2 ? tokens[1] : "cd",
-            reason: "cd needs one plain directory under the working or trusted directories, not piped",
-          }),
-        };
-      }
-      base = target;
-      continue;
-    }
-    const paths: PathPolicy = { base, roots, homeDir };
-    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
-      return {
-        segment: segment.text,
-        explain: () => explainUnsafeSegment(segment.text, safeSubcommands, platform, paths),
-      };
-    }
-  }
-  return undefined;
+	const scan = scanShellSegments(command);
+	if ("rejection" in scan) {
+		return { segment: command.trim() || "(empty command)", explain: () => scan.rejection };
+	}
+	const { segments } = scan;
+	const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
+	let base = workingDirectory;
+	for (const [index, segment] of segments.entries()) {
+		if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
+			return {
+				segment: segment.text,
+				explain: () => ({
+					token: firstWord(shellWords(segment.text) ?? [], segment.text),
+					reason: "interpreter in a pipeline",
+				}),
+			};
+		}
+		const tokens = shellWords(segment.text);
+		if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
+			const target =
+				tokens.length === 2 && !hasShellExpansion(segment.text)
+					? resolveDirectory(tokens[1], base, roots, homeDir)
+					: undefined;
+			if (target === undefined || segments[index + 1]?.separator === "|") {
+				return {
+					segment: segment.text,
+					explain: () => ({
+						token: tokens.length === 2 ? tokens[1] : "cd",
+						reason: "cd needs one plain directory under the working or trusted directories, not piped",
+					}),
+				};
+			}
+			base = target;
+			continue;
+		}
+		const paths: PathPolicy = { base, roots, homeDir };
+		if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
+			return {
+				segment: segment.text,
+				explain: () => explainUnsafeSegment(segment.text, safeSubcommands, platform, paths),
+			};
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -327,22 +327,22 @@ export function decideBlockedCommand(
  * the command is acceptable. An explainer failure degrades to a generic reason, never a throw.
  */
 export function explainBlockedCommand(
-  command: string,
-  safeSubcommands: SafeSubcommands = {},
-  options: CommandPolicyOptions = {},
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+	options: CommandPolicyOptions = {},
 ): BlockedCommand | undefined {
-  const decision = decideBlockedCommand(command, safeSubcommands, options);
-  if (decision === undefined) return undefined;
-  return { segment: decision.segment, ...explainDecision(decision) };
+	const decision = decideBlockedCommand(command, safeSubcommands, options);
+	if (decision === undefined) return undefined;
+	return { segment: decision.segment, ...explainDecision(decision) };
 }
 
 /** The explanation for `decision`, or a generic one when the explainer throws. */
 export function explainDecision(decision: BlockedDecision): SyntaxRejection {
-  try {
-    return decision.explain();
-  } catch {
-    return { token: decision.segment, reason: GENERIC_REASON };
-  }
+	try {
+		return decision.explain();
+	} catch {
+		return { token: decision.segment, reason: GENERIC_REASON };
+	}
 }
 
 const GENERIC_REASON = "outside the reviewed inspection policy";
@@ -355,17 +355,17 @@ const NOT_ALLOWLISTED_REASON = "not on the reviewed read-only allowlist";
  * and it states that a configured prefix skips every argument check.
  */
 function notAllowlistedReason(optIn?: { readonly key: "git" | "gh"; readonly entry: string }): string {
-  if (!optIn) return NOT_ALLOWLISTED_REASON;
-  return `${NOT_ALLOWLISTED_REASON}; the reviewed opt-in is the exact entry \`${optIn.entry}\` in \`safeSubcommands.${optIn.key}\`, a trust override that skips all argument checks`;
+	if (!optIn) return NOT_ALLOWLISTED_REASON;
+	return `${NOT_ALLOWLISTED_REASON}; the reviewed opt-in is the exact entry \`${optIn.entry}\` in \`safeSubcommands.${optIn.key}\`, a trust override that skips all argument checks`;
 }
 
 /** The reviewed `gh` opt-in for `args` (`<group> <action>`), only when it is an exact reviewed path. */
 function ghOptIn(args: readonly string[]): { readonly key: "gh"; readonly entry: string } | undefined {
-  const [group, action] = args
-    .filter((argument) => !argument.startsWith("-"))
-    .map((argument) => argument.toLowerCase());
-  const entry = `${group} ${action}`;
-  return (SAFE_GH_SUBCOMMAND_PATHS as readonly string[]).includes(entry) ? { key: "gh", entry } : undefined;
+	const [group, action] = args
+		.filter((argument) => !argument.startsWith("-"))
+		.map((argument) => argument.toLowerCase());
+	const entry = `${group} ${action}`;
+	return (SAFE_GH_SUBCOMMAND_PATHS as readonly string[]).includes(entry) ? { key: "gh", entry } : undefined;
 }
 
 /** Commands whose policy turns on a subcommand, so the subcommand is part of the offending token. */
@@ -376,69 +376,69 @@ const SUBCOMMAND_COMMANDS = new Set(["gh", "npm", "cargo", "go"]);
  * and is only called after it returned false, so it always yields something to point at.
  */
 function explainUnsafeSegment(
-  segment: string,
-  safeSubcommands: SafeSubcommands,
-  platform: NodeJS.Platform,
-  paths: PathPolicy,
+	segment: string,
+	safeSubcommands: SafeSubcommands,
+	platform: NodeJS.Platform,
+	paths: PathPolicy,
 ): SyntaxRejection {
-  const prefix = matchConfiguredPrefix(segment, safeSubcommands);
-  const tokens = shellWords(segment);
-  const first = tokens?.[0];
-  if (!tokens || !first) return { token: segment, reason: "unparseable segment" };
-  const command = first.toLowerCase();
-  const args = tokens.slice(1);
-  const expansion = findShellExpansion(segment);
-  const expansionBlock: SyntaxRejection | undefined =
-    expansion === undefined ? undefined : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
-  if (command === "ssh") {
-    if (prefix === undefined) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
-    if (expansionBlock) return expansionBlock;
-    const words = shellWords(segment.trimStart().slice(prefix.length));
-    if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
-    if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
-    // Invariant: `isSafeSshSegment` rejected via this same remote check, so a decision exists. If that
-    // ever broke, the TypeError is caught by `explainDecision` around this explainer.
-    const remote = decideBlockedCommand(words.join(" "), safeSubcommands, { platform }) as BlockedDecision;
-    const why = remote.explain();
-    return { token: why.token, reason: `remote command: ${why.reason}` };
-  }
-  if (command === "curl" || (command === "gh" && args[0]?.toLowerCase() === "api")) {
-    return (
-      expansionBlock ?? {
-        token: command === "curl" ? first : `${first} api`,
-        reason: "arguments write files, send a body, or are not GET-only",
-      }
-    );
-  }
-  if (expansionBlock) return expansionBlock;
-  const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
-  if (assignment) {
-    return {
-      token: wordAround(segment, assignment.index + assignment[0].length - 1),
-      reason: "environment assignment",
-    };
-  }
-  if (MUTATING_COMMANDS.has(command)) return { token: first, reason: "mutating command" };
-  const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
-  if (unsafeArgument !== undefined) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
-  if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
-  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform, paths);
-  if (reviewed) return reviewed;
-  const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
-  return {
-    token: subcommand === undefined ? first : `${first} ${subcommand}`,
-    reason: notAllowlistedReason(command === "gh" ? ghOptIn(args) : undefined),
-  };
+	const prefix = matchConfiguredPrefix(segment, safeSubcommands);
+	const tokens = shellWords(segment);
+	const first = tokens?.[0];
+	if (!tokens || !first) return { token: segment, reason: "unparseable segment" };
+	const command = first.toLowerCase();
+	const args = tokens.slice(1);
+	const expansion = findShellExpansion(segment);
+	const expansionBlock: SyntaxRejection | undefined =
+		expansion === undefined ? undefined : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
+	if (command === "ssh") {
+		if (prefix === undefined) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
+		if (expansionBlock) return expansionBlock;
+		const words = shellWords(segment.trimStart().slice(prefix.length));
+		if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
+		if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
+		// Invariant: `isSafeSshSegment` rejected via this same remote check, so a decision exists. If that
+		// ever broke, the TypeError is caught by `explainDecision` around this explainer.
+		const remote = decideBlockedCommand(words.join(" "), safeSubcommands, { platform }) as BlockedDecision;
+		const why = remote.explain();
+		return { token: why.token, reason: `remote command: ${why.reason}` };
+	}
+	if (command === "curl" || (command === "gh" && args[0]?.toLowerCase() === "api")) {
+		return (
+			expansionBlock ?? {
+				token: command === "curl" ? first : `${first} api`,
+				reason: "arguments write files, send a body, or are not GET-only",
+			}
+		);
+	}
+	if (expansionBlock) return expansionBlock;
+	const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
+	if (assignment) {
+		return {
+			token: wordAround(segment, assignment.index + assignment[0].length - 1),
+			reason: "environment assignment",
+		};
+	}
+	if (MUTATING_COMMANDS.has(command)) return { token: first, reason: "mutating command" };
+	const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
+	if (unsafeArgument !== undefined) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
+	if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
+	const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform, paths);
+	if (reviewed) return reviewed;
+	const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
+	return {
+		token: subcommand === undefined ? first : `${first} ${subcommand}`,
+		reason: notAllowlistedReason(command === "gh" ? ghOptIn(args) : undefined),
+	};
 }
 
 /** First of `words`, else `fallback`. */
 function firstWord(words: readonly string[], fallback: string): string {
-  return words[0] ?? fallback;
+	return words[0] ?? fallback;
 }
 
 /** Reason for a command already on the reviewed allowlist whose arguments failed its validator. */
 function validatorRejection(label: string, token: string): SyntaxRejection {
-  return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
+	return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
 }
 
 /**
@@ -447,196 +447,196 @@ function validatorRejection(label: string, token: string): SyntaxRejection {
  * skips every argument check, so following that hint would weaken the policy.
  */
 function explainReviewedRejection(
-  command: string,
-  first: string,
-  args: string[],
-  safeSubcommands: SafeSubcommands,
-  platform: NodeJS.Platform,
-  paths: PathPolicy,
+	command: string,
+	first: string,
+	args: string[],
+	safeSubcommands: SafeSubcommands,
+	platform: NodeJS.Platform,
+	paths: PathPolicy,
 ): SyntaxRejection | undefined {
-  // Invariant: `hostname` and Windows `tasklist` accept no-argument forms, so a rejection has `args[0]`.
-  if (command === "hostname") return validatorRejection("hostname", args[0] as string);
-  if (command === "tasklist") {
-    return platform === "win32"
-      ? validatorRejection("tasklist", args[0] as string)
-      : { token: first, reason: "`tasklist` is only allowed on Windows" };
-  }
-  if (command === "sed") {
-    return validatorRejection(
-      "sed",
-      firstWord([...args.filter((argument) => !argument.startsWith("-")), ...args], first),
-    );
-  }
-  if (command === "git") return explainGitRejection(first, args, safeSubcommands, paths);
-  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
-    const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
-    return validatorRejection(command, forbidden ?? firstWord(args, first));
-  }
-  const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
-  if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
-  if (command === "npm" && subcommand === "run") {
-    // `isSafeStructuredCommand` only accepts the script at `args[1]`, so a leading flag is the offender.
-    return validatorRejection(
-      "npm run",
-      args[0]?.toLowerCase() === "run" ? firstWord(args.slice(1), "run") : (args[0] as string),
-    );
-  }
-  return undefined;
+	// Invariant: `hostname` and Windows `tasklist` accept no-argument forms, so a rejection has `args[0]`.
+	if (command === "hostname") return validatorRejection("hostname", args[0] as string);
+	if (command === "tasklist") {
+		return platform === "win32"
+			? validatorRejection("tasklist", args[0] as string)
+			: { token: first, reason: "`tasklist` is only allowed on Windows" };
+	}
+	if (command === "sed") {
+		return validatorRejection(
+			"sed",
+			firstWord([...args.filter((argument) => !argument.startsWith("-")), ...args], first),
+		);
+	}
+	if (command === "git") return explainGitRejection(first, args, safeSubcommands, paths);
+	if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
+		const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
+		return validatorRejection(command, forbidden ?? firstWord(args, first));
+	}
+	const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
+	if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
+	if (command === "npm" && subcommand === "run") {
+		// `isSafeStructuredCommand` only accepts the script at `args[1]`, so a leading flag is the offender.
+		return validatorRejection(
+			"npm run",
+			args[0]?.toLowerCase() === "run" ? firstWord(args.slice(1), "run") : (args[0] as string),
+		);
+	}
+	return undefined;
 }
 
 /** Same as {@link explainReviewedRejection} for `git`, where the subcommand follows `--no-pager` / `-C <dir>`. */
 function explainGitRejection(
-  first: string,
-  args: string[],
-  safeSubcommands: SafeSubcommands,
-  paths: PathPolicy,
+	first: string,
+	args: string[],
+	safeSubcommands: SafeSubcommands,
+	paths: PathPolicy,
 ): SyntaxRejection | undefined {
-  let index = 0;
-  while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
-    if (args[index] === "-C") {
-      const directory = args[index + 1];
-      if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === undefined) {
-        return {
-          token: directory ?? "-C",
-          reason: "arguments rejected by the reviewed `git` validator: `-C` directory outside the allowed roots",
-        };
-      }
-      index += 2;
-    } else {
-      index += 1;
-    }
-  }
-  const subcommand = args[index]?.toLowerCase();
-  if (!subcommand) return { token: first, reason: "arguments rejected by the reviewed `git` validator: no subcommand" };
-  if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
-  const validator =
-    (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand] ??
-    (safeSubcommands.git?.includes(subcommand as SafeGitSubcommand)
-      ? (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand]
-      : undefined);
-  if (!validator) {
-    const configurable = (CONFIGURABLE_SAFE_GIT_SUBCOMMANDS as readonly string[]).includes(subcommand);
-    return {
-      token: `${first} ${subcommand}`,
-      reason: notAllowlistedReason(configurable ? { key: "git", entry: subcommand } : undefined),
-    };
-  }
-  const label = `git ${subcommand}`;
-  const subcommandArgs = args.slice(index + 1);
-  const unsafe = subcommandArgs.filter(
-    (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument]),
-  );
-  return validatorRejection(label, firstWord(unsafe, label));
+	let index = 0;
+	while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
+		if (args[index] === "-C") {
+			const directory = args[index + 1];
+			if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === undefined) {
+				return {
+					token: directory ?? "-C",
+					reason: "arguments rejected by the reviewed `git` validator: `-C` directory outside the allowed roots",
+				};
+			}
+			index += 2;
+		} else {
+			index += 1;
+		}
+	}
+	const subcommand = args[index]?.toLowerCase();
+	if (!subcommand) return { token: first, reason: "arguments rejected by the reviewed `git` validator: no subcommand" };
+	if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
+	const validator =
+		(BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand] ??
+		(safeSubcommands.git?.includes(subcommand as SafeGitSubcommand)
+			? (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand]
+			: undefined);
+	if (!validator) {
+		const configurable = (CONFIGURABLE_SAFE_GIT_SUBCOMMANDS as readonly string[]).includes(subcommand);
+		return {
+			token: `${first} ${subcommand}`,
+			reason: notAllowlistedReason(configurable ? { key: "git", entry: subcommand } : undefined),
+		};
+	}
+	const label = `git ${subcommand}`;
+	const subcommandArgs = args.slice(index + 1);
+	const unsafe = subcommandArgs.filter(
+		(argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument]),
+	);
+	return validatorRejection(label, firstWord(unsafe, label));
 }
 
 /** The whitespace-delimited chunk of `segment` that contains `index`. */
 function wordAround(segment: string, index: number) {
-  let from = index;
-  while (from > 0 && !/\s/u.test(segment.charAt(from - 1))) from -= 1;
-  let to = index;
-  while (to < segment.length && !/\s/u.test(segment.charAt(to))) to += 1;
-  return segment.slice(from, to);
+	let from = index;
+	while (from > 0 && !/\s/u.test(segment.charAt(from - 1))) from -= 1;
+	let to = index;
+	while (to < segment.length && !/\s/u.test(segment.charAt(to))) to += 1;
+	return segment.slice(from, to);
 }
 
 export function isSafeCommand(
-  command: string,
-  safeSubcommands: SafeSubcommands = {},
-  options: CommandPolicyOptions = {},
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+	options: CommandPolicyOptions = {},
 ) {
-  return findBlockedCommandSegment(command, safeSubcommands, options) === undefined;
+	return findBlockedCommandSegment(command, safeSubcommands, options) === undefined;
 }
 
 export function findBlockedPowerShellCommandSegment(
-  command: string,
-  safeSubcommands: SafeSubcommands = {},
-  { workingDirectory, trustedDirectories = [], homeDir = homedir() }: ShellPolicyOptions = {},
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+	{ workingDirectory, trustedDirectories = [], homeDir = homedir() }: ShellPolicyOptions = {},
 ): string | undefined {
-  const segments = splitPowerShellSegments(command);
-  if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  const paths: PathPolicy = {
-    base: workingDirectory,
-    roots: allowedRoots(workingDirectory, trustedDirectories, homeDir),
-    homeDir,
-  };
-  return segments.find(
-    (segment) =>
-      (segment.separator === "|" && isInterpreterSegment(segment.text, POWERSHELL_INTERPRETERS)) ||
-      !isSafePowerShellSegment(segment.text, safeSubcommands, paths),
-  )?.text;
+	const segments = splitPowerShellSegments(command);
+	if (!segments || segments.length === 0) return command.trim() || "(empty command)";
+	const paths: PathPolicy = {
+		base: workingDirectory,
+		roots: allowedRoots(workingDirectory, trustedDirectories, homeDir),
+		homeDir,
+	};
+	return segments.find(
+		(segment) =>
+			(segment.separator === "|" && isInterpreterSegment(segment.text, POWERSHELL_INTERPRETERS)) ||
+			!isSafePowerShellSegment(segment.text, safeSubcommands, paths),
+	)?.text;
 }
 
 export function isSafePowerShellCommand(
-  command: string,
-  safeSubcommands: SafeSubcommands = {},
-  options: ShellPolicyOptions = {},
+	command: string,
+	safeSubcommands: SafeSubcommands = {},
+	options: ShellPolicyOptions = {},
 ) {
-  return findBlockedPowerShellCommandSegment(command, safeSubcommands, options) === undefined;
+	return findBlockedPowerShellCommandSegment(command, safeSubcommands, options) === undefined;
 }
 
 type ShellSeparator = "start" | "&&" | "||" | ";" | "|";
 interface ShellSegment {
-  text: string;
-  /** The operator that precedes this segment (`start` for the first one). */
-  separator: ShellSeparator;
+	text: string;
+	/** The operator that precedes this segment (`start` for the first one). */
+	separator: ShellSeparator;
 }
 
 /** Directories a `cd`/`git -C` may target (`roots`) and the directory relative paths resolve from (`base`). */
 interface PathPolicy {
-  base: string | undefined;
-  roots: readonly string[];
-  homeDir: string;
+	base: string | undefined;
+	roots: readonly string[];
+	homeDir: string;
 }
 
 const INTERPRETERS = new Set([
-  "sh",
-  "bash",
-  "zsh",
-  "dash",
-  "ksh",
-  "fish",
-  "csh",
-  "tcsh",
-  "python",
-  "node",
-  "nodejs",
-  "deno",
-  "bun",
-  "perl",
-  "ruby",
-  "php",
-  "lua",
-  "awk",
-  "gawk",
-  "mawk",
-  "osascript",
-  "pwsh",
-  "powershell",
-  "env",
-  "xargs",
-  "eval",
-  "exec",
-  "source",
-  "sudo",
-  "su",
+	"sh",
+	"bash",
+	"zsh",
+	"dash",
+	"ksh",
+	"fish",
+	"csh",
+	"tcsh",
+	"python",
+	"node",
+	"nodejs",
+	"deno",
+	"bun",
+	"perl",
+	"ruby",
+	"php",
+	"lua",
+	"awk",
+	"gawk",
+	"mawk",
+	"osascript",
+	"pwsh",
+	"powershell",
+	"env",
+	"xargs",
+	"eval",
+	"exec",
+	"source",
+	"sudo",
+	"su",
 ]);
 const POWERSHELL_INTERPRETERS = new Set([
-  ...INTERPRETERS,
-  "cmd",
-  "invoke-expression",
-  "iex",
-  "invoke-command",
-  "start-process",
+	...INTERPRETERS,
+	"cmd",
+	"invoke-expression",
+	"iex",
+	"invoke-command",
+	"start-process",
 ]);
 
 /** Whether the segment's first word, by basename and without `.exe`, names an interpreter. */
 function isInterpreterSegment(segment: string, interpreters: ReadonlySet<string>) {
-  const name = segment
-    .trim()
-    .replace(/\s.*$/su, "")
-    .replace(/^.*[\\/]/su, "")
-    .toLowerCase()
-    .replace(/\.exe$/u, "");
-  return interpreters.has(name) || /^(?:python|ruby|perl|php|lua)[\d.]*$/u.test(name);
+	const name = segment
+		.trim()
+		.replace(/\s.*$/su, "")
+		.replace(/^.*[\\/]/su, "")
+		.toLowerCase()
+		.replace(/\.exe$/u, "");
+	return interpreters.has(name) || /^(?:python|ruby|perl|php|lua)[\d.]*$/u.test(name);
 }
 
 /**
@@ -646,38 +646,38 @@ function isInterpreterSegment(segment: string, interpreters: ReadonlySet<string>
  * match `kubectl applies`).
  */
 function matchConfiguredPrefix(segment: string, safeSubcommands: SafeSubcommands): string | undefined {
-  const candidate = segment.trimStart();
-  for (const [configuredCommand, subcommands] of Object.entries(safeSubcommands)) {
-    for (const subcommand of subcommands ?? []) {
-      const prefix = `${configuredCommand.trim()} ${subcommand.trim()}`;
-      if (!configuredCommand.trim() || !subcommand.trim() || !candidate.startsWith(prefix)) continue;
-      const boundary = candidate[prefix.length];
-      const endsBounded = !/[A-Za-z0-9]$/u.test(prefix);
-      if (boundary === undefined || /\s/u.test(boundary) || endsBounded) return prefix;
-    }
-  }
-  return undefined;
+	const candidate = segment.trimStart();
+	for (const [configuredCommand, subcommands] of Object.entries(safeSubcommands)) {
+		for (const subcommand of subcommands ?? []) {
+			const prefix = `${configuredCommand.trim()} ${subcommand.trim()}`;
+			if (!configuredCommand.trim() || !subcommand.trim() || !candidate.startsWith(prefix)) continue;
+			const boundary = candidate[prefix.length];
+			const endsBounded = !/[A-Za-z0-9]$/u.test(prefix);
+			if (boundary === undefined || /\s/u.test(boundary) || endsBounded) return prefix;
+		}
+	}
+	return undefined;
 }
 
 function expandTilde(path: string, homeDir: string): string | undefined {
-  if (path === "~") return homeDir;
-  if (path.startsWith("~/")) return resolve(homeDir, path.slice(2));
-  return path.startsWith("~") ? undefined : path;
+	if (path === "~") return homeDir;
+	if (path.startsWith("~/")) return resolve(homeDir, path.slice(2));
+	return path.startsWith("~") ? undefined : path;
 }
 
 function allowedRoots(workingDirectory: string | undefined, trustedDirectories: readonly string[], homeDir: string) {
-  const roots: string[] = [];
-  if (workingDirectory) roots.push(resolve(workingDirectory));
-  for (const directory of trustedDirectories) {
-    const expanded = expandTilde(directory.trim(), homeDir);
-    if (expanded && isAbsolute(expanded)) roots.push(resolve(expanded));
-  }
-  return roots;
+	const roots: string[] = [];
+	if (workingDirectory) roots.push(resolve(workingDirectory));
+	for (const directory of trustedDirectories) {
+		const expanded = expandTilde(directory.trim(), homeDir);
+		if (expanded && isAbsolute(expanded)) roots.push(resolve(expanded));
+	}
+	return roots;
 }
 
 function isUnder(path: string, root: string) {
-  const difference = relative(root, path);
-  return difference === "" || (!difference.startsWith("..") && !isAbsolute(difference));
+	const difference = relative(root, path);
+	return difference === "" || (!difference.startsWith("..") && !isAbsolute(difference));
 }
 
 /**
@@ -685,137 +685,137 @@ function isUnder(path: string, root: string) {
  * and the result must sit under the working directory or a trusted directory.
  */
 function resolveDirectory(
-  raw: string | undefined,
-  base: string | undefined,
-  roots: readonly string[],
-  homeDir: string,
+	raw: string | undefined,
+	base: string | undefined,
+	roots: readonly string[],
+	homeDir: string,
 ) {
-  if (!raw || raw.startsWith("-") || raw.split(/[\\/]+/u).includes("..")) return undefined;
-  const expanded = expandTilde(raw, homeDir);
-  if (expanded === undefined) return undefined;
-  if (!isAbsolute(expanded) && base === undefined) return undefined;
-  const resolved = resolve(base ?? "/", expanded);
-  return roots.some((root) => isUnder(resolved, root)) ? resolved : undefined;
+	if (!raw || raw.startsWith("-") || raw.split(/[\\/]+/u).includes("..")) return undefined;
+	const expanded = expandTilde(raw, homeDir);
+	if (expanded === undefined) return undefined;
+	if (!isAbsolute(expanded) && base === undefined) return undefined;
+	const resolved = resolve(base ?? "/", expanded);
+	return roots.some((root) => isUnder(resolved, root)) ? resolved : undefined;
 }
 
 function splitPowerShellSegments(command: string): ShellSegment[] | undefined {
-  const trimmed = command.trim();
-  if (!trimmed || /[\n\r`\u2018-\u201e]/.test(trimmed)) return undefined;
+	const trimmed = command.trim();
+	if (!trimmed || /[\n\r`\u2018-\u201e]/.test(trimmed)) return undefined;
 
-  const segments: ShellSegment[] = [];
-  let separator: ShellSeparator = "start";
-  let quote: "'" | '"' | undefined;
-  let start = 0;
-  for (let index = 0; index < trimmed.length; index += 1) {
-    const character = trimmed[index];
-    if (quote === "'") {
-      if (character !== "'") continue;
-      if (trimmed[index + 1] === "'") {
-        index += 1;
-        continue;
-      }
-      quote = undefined;
-      continue;
-    }
-    if (quote === '"') {
-      if (character === "$" || character === "`") return undefined;
-      if (character === '"') quote = undefined;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    if (["$", "@", "#", "!", "?", "{", "}", "(", ")", "[", "]", ">", "<"].includes(character)) {
-      return undefined;
-    }
-    const next = trimmed[index + 1];
-    if (character === "&" || (character === "|" && next === "|")) return undefined;
-    const separatorLength = character === ";" || character === "|" ? 1 : 0;
-    if (separatorLength === 0) continue;
-    const segment = trimmed.slice(start, index).trim();
-    if (!segment) return undefined;
-    segments.push({ text: segment, separator });
-    separator = character === "|" ? "|" : ";";
-    index += separatorLength - 1;
-    start = index + 1;
-  }
-  if (quote) return undefined;
-  const finalSegment = trimmed.slice(start).trim();
-  if (!finalSegment) return undefined;
-  segments.push({ text: finalSegment, separator });
-  return segments;
+	const segments: ShellSegment[] = [];
+	let separator: ShellSeparator = "start";
+	let quote: "'" | '"' | undefined;
+	let start = 0;
+	for (let index = 0; index < trimmed.length; index += 1) {
+		const character = trimmed[index];
+		if (quote === "'") {
+			if (character !== "'") continue;
+			if (trimmed[index + 1] === "'") {
+				index += 1;
+				continue;
+			}
+			quote = undefined;
+			continue;
+		}
+		if (quote === '"') {
+			if (character === "$" || character === "`") return undefined;
+			if (character === '"') quote = undefined;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (["$", "@", "#", "!", "?", "{", "}", "(", ")", "[", "]", ">", "<"].includes(character)) {
+			return undefined;
+		}
+		const next = trimmed[index + 1];
+		if (character === "&" || (character === "|" && next === "|")) return undefined;
+		const separatorLength = character === ";" || character === "|" ? 1 : 0;
+		if (separatorLength === 0) continue;
+		const segment = trimmed.slice(start, index).trim();
+		if (!segment) return undefined;
+		segments.push({ text: segment, separator });
+		separator = character === "|" ? "|" : ";";
+		index += separatorLength - 1;
+		start = index + 1;
+	}
+	if (quote) return undefined;
+	const finalSegment = trimmed.slice(start).trim();
+	if (!finalSegment) return undefined;
+	segments.push({ text: finalSegment, separator });
+	return segments;
 }
 
 function isSafePowerShellSegment(segment: string, safeSubcommands: SafeSubcommands, paths: PathPolicy) {
-  if (matchConfiguredPrefix(segment, safeSubcommands) !== undefined) return true;
-  const tokens = powerShellWords(segment);
-  if (tokens.includes("--%")) return false;
-  const command = tokens[0].toLowerCase();
-  if (!command) return false;
-  const args = tokens.slice(1);
-  if (READ_ONLY_POWERSHELL_COMMANDS.has(command)) return true;
-  if (command === "get-process") return isSafeGetProcessArguments(args);
-  if (command === "get-service") return isSafeGetServiceArguments(args);
-  if (command !== "git" && command !== "gh") return false;
-  return isSafeStructuredCommand(command, args, safeSubcommands, paths);
+	if (matchConfiguredPrefix(segment, safeSubcommands) !== undefined) return true;
+	const tokens = powerShellWords(segment);
+	if (tokens.includes("--%")) return false;
+	const command = tokens[0].toLowerCase();
+	if (!command) return false;
+	const args = tokens.slice(1);
+	if (READ_ONLY_POWERSHELL_COMMANDS.has(command)) return true;
+	if (command === "get-process") return isSafeGetProcessArguments(args);
+	if (command === "get-service") return isSafeGetServiceArguments(args);
+	if (command !== "git" && command !== "gh") return false;
+	return isSafeStructuredCommand(command, args, safeSubcommands, paths);
 }
 
 /** Words of one segment from `splitPowerShellSegments`, which is trimmed and has balanced quotes. */
 function powerShellWords(segment: string): string[] {
-  const words: string[] = [];
-  let word = "";
-  let hasWord = false;
-  let quote: "'" | '"' | undefined;
-  for (let index = 0; index < segment.length; index += 1) {
-    const character = segment[index];
-    if (quote === "'") {
-      if (character !== "'") {
-        word += character;
-        continue;
-      }
-      if (segment[index + 1] === "'") {
-        word += "'";
-        index += 1;
-        continue;
-      }
-      quote = undefined;
-      continue;
-    }
-    if (quote === '"') {
-      if (character === '"') quote = undefined;
-      else word += character;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      hasWord = true;
-    } else if (/\s/.test(character)) {
-      if (hasWord) words.push(word);
-      word = "";
-      hasWord = false;
-    } else {
-      word += character;
-      hasWord = true;
-    }
-  }
-  words.push(word);
-  return words;
+	const words: string[] = [];
+	let word = "";
+	let hasWord = false;
+	let quote: "'" | '"' | undefined;
+	for (let index = 0; index < segment.length; index += 1) {
+		const character = segment[index];
+		if (quote === "'") {
+			if (character !== "'") {
+				word += character;
+				continue;
+			}
+			if (segment[index + 1] === "'") {
+				word += "'";
+				index += 1;
+				continue;
+			}
+			quote = undefined;
+			continue;
+		}
+		if (quote === '"') {
+			if (character === '"') quote = undefined;
+			else word += character;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			hasWord = true;
+		} else if (/\s/.test(character)) {
+			if (hasWord) words.push(word);
+			word = "";
+			hasWord = false;
+		} else {
+			word += character;
+			hasWord = true;
+		}
+	}
+	words.push(word);
+	return words;
 }
 
 /** Why a command was rejected: the offending token and a short reason. */
 export interface BlockedCommand {
-  /** The segment (or whole command, for syntax rejected before splitting) that failed. */
-  segment: string;
-  /** The exact token that tripped the policy, e.g. `>`, `$(`, `rm`, `-delete`. */
-  token: string;
-  /** Short reason the token is rejected. */
-  reason: string;
+	/** The segment (or whole command, for syntax rejected before splitting) that failed. */
+	segment: string;
+	/** The exact token that tripped the policy, e.g. `>`, `$(`, `rm`, `-delete`. */
+	token: string;
+	/** Short reason the token is rejected. */
+	reason: string;
 }
 
 export interface SyntaxRejection {
-  token: string;
-  reason: string;
+	token: string;
+	reason: string;
 }
 
 const REASON_REDIRECTION = "redirection";
@@ -823,99 +823,99 @@ const REASON_SUBSTITUTION = "command or process substitution";
 const REASON_EMPTY_SEGMENT = "operator with no command";
 
 function scanShellSegments(command: string): { segments: ShellSegment[] } | { rejection: SyntaxRejection } {
-  const trimmed = command.trim();
-  if (!trimmed) return { rejection: { token: "(empty command)", reason: "empty command" } };
-  if (trimmed.includes("`")) return { rejection: { token: "`", reason: REASON_SUBSTITUTION } };
-  if (/[\n\r]/.test(trimmed)) return { rejection: { token: "\\n", reason: "newline (multi-line command)" } };
+	const trimmed = command.trim();
+	if (!trimmed) return { rejection: { token: "(empty command)", reason: "empty command" } };
+	if (trimmed.includes("`")) return { rejection: { token: "`", reason: REASON_SUBSTITUTION } };
+	if (/[\n\r]/.test(trimmed)) return { rejection: { token: "\\n", reason: "newline (multi-line command)" } };
 
-  const segments: ShellSegment[] = [];
-  let separator: ShellSeparator = "start";
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  let start = 0;
-  for (let index = 0; index < trimmed.length; index += 1) {
-    const character = trimmed[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (character === quote) quote = undefined;
-      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") {
-        return { rejection: { token: "$(", reason: REASON_SUBSTITUTION } };
-      }
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    const next = trimmed[index + 1];
-    if (character === ">" || character === "<") {
-      if (next === "(") return { rejection: { token: `${character}(`, reason: REASON_SUBSTITUTION } };
-      const token = next === character ? `${character}${character}` : character;
-      return { rejection: { token, reason: REASON_REDIRECTION } };
-    }
-    if (character === "(" || character === ")") {
-      const substitution = character === "(" && trimmed[index - 1] === "$";
-      return {
-        rejection: substitution
-          ? { token: "$(", reason: REASON_SUBSTITUTION }
-          : { token: character, reason: "subshell or grouping" },
-      };
-    }
-    if (character === "&" && next !== "&") return { rejection: { token: "&", reason: "background execution" } };
-    const separatorLength =
-      character === ";" || character === "|" ? (next === character ? 2 : 1) : character === "&" && next === "&" ? 2 : 0;
-    if (separatorLength === 0) continue;
-    const segment = trimmed.slice(start, index).trim();
-    if (!segment) {
-      return { rejection: { token: trimmed.slice(index, index + separatorLength), reason: REASON_EMPTY_SEGMENT } };
-    }
-    segments.push({ text: segment, separator });
-    separator = trimmed.slice(index, index + separatorLength) as ShellSeparator;
-    index += separatorLength - 1;
-    start = index + 1;
-  }
-  if (quote) return { rejection: { token: quote, reason: "unbalanced quote" } };
-  if (escaped) return { rejection: { token: "\\", reason: "trailing escape" } };
-  const finalSegment = trimmed.slice(start).trim();
-  if (!finalSegment) return { rejection: { token: separator, reason: REASON_EMPTY_SEGMENT } };
-  segments.push({ text: finalSegment, separator });
-  return { segments };
+	const segments: ShellSegment[] = [];
+	let separator: ShellSeparator = "start";
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	let start = 0;
+	for (let index = 0; index < trimmed.length; index += 1) {
+		const character = trimmed[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = undefined;
+			else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") {
+				return { rejection: { token: "$(", reason: REASON_SUBSTITUTION } };
+			}
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		const next = trimmed[index + 1];
+		if (character === ">" || character === "<") {
+			if (next === "(") return { rejection: { token: `${character}(`, reason: REASON_SUBSTITUTION } };
+			const token = next === character ? `${character}${character}` : character;
+			return { rejection: { token, reason: REASON_REDIRECTION } };
+		}
+		if (character === "(" || character === ")") {
+			const substitution = character === "(" && trimmed[index - 1] === "$";
+			return {
+				rejection: substitution
+					? { token: "$(", reason: REASON_SUBSTITUTION }
+					: { token: character, reason: "subshell or grouping" },
+			};
+		}
+		if (character === "&" && next !== "&") return { rejection: { token: "&", reason: "background execution" } };
+		const separatorLength =
+			character === ";" || character === "|" ? (next === character ? 2 : 1) : character === "&" && next === "&" ? 2 : 0;
+		if (separatorLength === 0) continue;
+		const segment = trimmed.slice(start, index).trim();
+		if (!segment) {
+			return { rejection: { token: trimmed.slice(index, index + separatorLength), reason: REASON_EMPTY_SEGMENT } };
+		}
+		segments.push({ text: segment, separator });
+		separator = trimmed.slice(index, index + separatorLength) as ShellSeparator;
+		index += separatorLength - 1;
+		start = index + 1;
+	}
+	if (quote) return { rejection: { token: quote, reason: "unbalanced quote" } };
+	if (escaped) return { rejection: { token: "\\", reason: "trailing escape" } };
+	const finalSegment = trimmed.slice(start).trim();
+	if (!finalSegment) return { rejection: { token: separator, reason: REASON_EMPTY_SEGMENT } };
+	segments.push({ text: finalSegment, separator });
+	return { segments };
 }
 
 function isSafeSegment(
-  segment: string,
-  safeSubcommands: SafeSubcommands,
-  paths: PathPolicy,
-  platform: NodeJS.Platform,
+	segment: string,
+	safeSubcommands: SafeSubcommands,
+	paths: PathPolicy,
+	platform: NodeJS.Platform,
 ) {
-  const prefix = matchConfiguredPrefix(segment, safeSubcommands);
-  const tokens = shellWords(segment);
-  const command = tokens?.[0]?.toLowerCase();
-  if (!tokens || !command) return false;
-  const args = tokens.slice(1);
-  // Hardened commands keep their argument checks even when a configured prefix names them.
-  if (command === "ssh") return prefix !== undefined && isSafeSshSegment(segment, prefix, safeSubcommands, platform);
-  if (command === "curl") return !hasShellExpansion(segment) && isSafeCurlArguments(args);
-  if (command === "gh" && args[0]?.toLowerCase() === "api") {
-    return !hasShellExpansion(segment) && isSafeGhApiArguments(args.slice(1));
-  }
-  if (prefix !== undefined) return true;
-  if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
-    return false;
-  }
-  if (MUTATING_COMMANDS.has(command)) return false;
-  if (!hasSafeArguments(command, args)) return false;
-  if (command === "hostname") return args.length === 0;
-  if (command === "tasklist") return platform === "win32" && isSafeTasklistArguments(args);
-  if (READ_ONLY_COMMANDS.has(command)) return true;
-  return isSafeStructuredCommand(command, args, safeSubcommands, paths);
+	const prefix = matchConfiguredPrefix(segment, safeSubcommands);
+	const tokens = shellWords(segment);
+	const command = tokens?.[0]?.toLowerCase();
+	if (!tokens || !command) return false;
+	const args = tokens.slice(1);
+	// Hardened commands keep their argument checks even when a configured prefix names them.
+	if (command === "ssh") return prefix !== undefined && isSafeSshSegment(segment, prefix, safeSubcommands, platform);
+	if (command === "curl") return !hasShellExpansion(segment) && isSafeCurlArguments(args);
+	if (command === "gh" && args[0]?.toLowerCase() === "api") {
+		return !hasShellExpansion(segment) && isSafeGhApiArguments(args.slice(1));
+	}
+	if (prefix !== undefined) return true;
+	if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
+		return false;
+	}
+	if (MUTATING_COMMANDS.has(command)) return false;
+	if (!hasSafeArguments(command, args)) return false;
+	if (command === "hostname") return args.length === 0;
+	if (command === "tasklist") return platform === "win32" && isSafeTasklistArguments(args);
+	if (READ_ONLY_COMMANDS.has(command)) return true;
+	return isSafeStructuredCommand(command, args, safeSubcommands, paths);
 }
 
 /**
@@ -923,37 +923,37 @@ function isSafeSegment(
  * non-empty, must not start with an ssh option, and is re-validated with the same policy.
  */
 function isSafeSshSegment(
-  segment: string,
-  prefix: string,
-  safeSubcommands: SafeSubcommands,
-  platform: NodeJS.Platform,
+	segment: string,
+	prefix: string,
+	safeSubcommands: SafeSubcommands,
+	platform: NodeJS.Platform,
 ) {
-  if (hasShellExpansion(segment)) return false;
-  const remainder = segment.trimStart().slice(prefix.length);
-  const words = shellWords(remainder);
-  if (!words || words.length === 0 || words[0]?.startsWith("-")) return false;
-  return findBlockedRemoteCommand(words.join(" "), safeSubcommands, platform) === undefined;
+	if (hasShellExpansion(segment)) return false;
+	const remainder = segment.trimStart().slice(prefix.length);
+	const words = shellWords(remainder);
+	if (!words || words.length === 0 || words[0]?.startsWith("-")) return false;
+	return findBlockedRemoteCommand(words.join(" "), safeSubcommands, platform) === undefined;
 }
 
 const CURL_FORBIDDEN_LONG = [
-  "--output",
-  "--remote-name",
-  "--remote-name-all",
-  "--remote-header-name",
-  "--output-dir",
-  "--create-dirs",
-  "--data",
-  "--form",
-  "--upload-file",
-  "--json",
-  "--config",
-  "--dump-header",
-  "--cookie-jar",
-  "--trace",
-  "--libcurl",
-  "--stderr",
-  "--netrc-file",
-  "--next",
+	"--output",
+	"--remote-name",
+	"--remote-name-all",
+	"--remote-header-name",
+	"--output-dir",
+	"--create-dirs",
+	"--data",
+	"--form",
+	"--upload-file",
+	"--json",
+	"--config",
+	"--dump-header",
+	"--cookie-jar",
+	"--trace",
+	"--libcurl",
+	"--stderr",
+	"--netrc-file",
+	"--next",
 ];
 /** Short options that write files, send bodies, upload, or load a config file. */
 const CURL_FORBIDDEN_SHORT = new Set(["o", "O", "J", "d", "F", "T", "K", "D", "c"]);
@@ -961,487 +961,487 @@ const CURL_VALUE_SHORT = new Set(["A", "b", "e", "E", "H", "m", "u", "w", "x", "
 
 /** GET only, no output files, bodies, uploads, or config files. */
 function isSafeCurlArguments(args: string[]) {
-  let index = 0;
-  const takeNext = () => {
-    index += 1;
-    return args[index];
-  };
-  for (; index < args.length; index += 1) {
-    const argument = args[index];
-    const name = argument.split("=", 1)[0];
-    // curl accepts unambiguous abbreviations of long options, so match prefixes too.
-    if (argument.startsWith("--") && name.length >= 5 && "--request".startsWith(name)) {
-      const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext();
-      if (method?.toUpperCase() !== "GET") return false;
-    } else if (argument.startsWith("--")) {
-      if (CURL_FORBIDDEN_LONG.some((forbidden) => forbidden.startsWith(name) || name.startsWith(`${forbidden}-`))) {
-        return false;
-      }
-    } else if (argument.startsWith("-") && argument.length > 1) {
-      for (let position = 1; position < argument.length; position += 1) {
-        const flag = argument[position];
-        if (CURL_FORBIDDEN_SHORT.has(flag)) return false;
-        if (flag === "X") {
-          const attached = argument.slice(position + 1);
-          const method = attached || takeNext();
-          if (method?.toUpperCase() !== "GET") return false;
-          break;
-        }
-        // The rest of the cluster (or the next word) is this option's value.
-        if (CURL_VALUE_SHORT.has(flag)) {
-          if (position === argument.length - 1) index += 1;
-          break;
-        }
-      }
-    }
-  }
-  return true;
+	let index = 0;
+	const takeNext = () => {
+		index += 1;
+		return args[index];
+	};
+	for (; index < args.length; index += 1) {
+		const argument = args[index];
+		const name = argument.split("=", 1)[0];
+		// curl accepts unambiguous abbreviations of long options, so match prefixes too.
+		if (argument.startsWith("--") && name.length >= 5 && "--request".startsWith(name)) {
+			const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext();
+			if (method?.toUpperCase() !== "GET") return false;
+		} else if (argument.startsWith("--")) {
+			if (CURL_FORBIDDEN_LONG.some((forbidden) => forbidden.startsWith(name) || name.startsWith(`${forbidden}-`))) {
+				return false;
+			}
+		} else if (argument.startsWith("-") && argument.length > 1) {
+			for (let position = 1; position < argument.length; position += 1) {
+				const flag = argument[position];
+				if (CURL_FORBIDDEN_SHORT.has(flag)) return false;
+				if (flag === "X") {
+					const attached = argument.slice(position + 1);
+					const method = attached || takeNext();
+					if (method?.toUpperCase() !== "GET") return false;
+					break;
+				}
+				// The rest of the cluster (or the next word) is this option's value.
+				if (CURL_VALUE_SHORT.has(flag)) {
+					if (position === argument.length - 1) index += 1;
+					break;
+				}
+			}
+		}
+	}
+	return true;
 }
 
 /** `gh api` is GET only: no `-X`/`--method` other than GET, no body flags, no `graphql`. */
 function isSafeGhApiArguments(args: string[]) {
-  const isGet = (method: string | undefined) => method?.toUpperCase() === "GET";
-  let index = 0;
-  const takeNext = () => {
-    index += 1;
-    return args[index];
-  };
-  for (; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "graphql") return false;
-    if (argument === "--method" || argument.startsWith("--method=")) {
-      if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext())) return false;
-    } else if (argument.startsWith("--")) {
-      if (["--field", "--raw-field", "--input"].some((flag) => argument === flag || argument.startsWith(`${flag}=`))) {
-        return false;
-      }
-    } else if (argument.startsWith("-") && argument.length > 1) {
-      // Short-flag cluster (`-iXGET`): f/F send a body, X sets the method, H/q/p/t take the rest as a value.
-      for (let position = 1; position < argument.length; position += 1) {
-        const flag = argument[position];
-        if (flag === "f" || flag === "F") return false;
-        if (flag === "X") {
-          if (!isGet(argument.slice(position + 1) || takeNext())) return false;
-          break;
-        }
-        if ("Hqpt".includes(flag)) {
-          if (position === argument.length - 1) index += 1;
-          break;
-        }
-      }
-    }
-  }
-  return true;
+	const isGet = (method: string | undefined) => method?.toUpperCase() === "GET";
+	let index = 0;
+	const takeNext = () => {
+		index += 1;
+		return args[index];
+	};
+	for (; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === "graphql") return false;
+		if (argument === "--method" || argument.startsWith("--method=")) {
+			if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext())) return false;
+		} else if (argument.startsWith("--")) {
+			if (["--field", "--raw-field", "--input"].some((flag) => argument === flag || argument.startsWith(`${flag}=`))) {
+				return false;
+			}
+		} else if (argument.startsWith("-") && argument.length > 1) {
+			// Short-flag cluster (`-iXGET`): f/F send a body, X sets the method, H/q/p/t take the rest as a value.
+			for (let position = 1; position < argument.length; position += 1) {
+				const flag = argument[position];
+				if (flag === "f" || flag === "F") return false;
+				if (flag === "X") {
+					if (!isGet(argument.slice(position + 1) || takeNext())) return false;
+					break;
+				}
+				if ("Hqpt".includes(flag)) {
+					if (position === argument.length - 1) index += 1;
+					break;
+				}
+			}
+		}
+	}
+	return true;
 }
 
 /** Index of the first unquoted (or double-quoted `$`) expansion character, if any. */
 function findShellExpansion(segment: string): number | undefined {
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  for (let index = 0; index < segment.length; index += 1) {
-    const character = segment[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (character === quote) quote = undefined;
-      else if (character === "$" && quote === '"') return index;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    if (["$", "*", "?", "[", "{"].includes(character)) return index;
-  }
-  return undefined;
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	for (let index = 0; index < segment.length; index += 1) {
+		const character = segment[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = undefined;
+			else if (character === "$" && quote === '"') return index;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (["$", "*", "?", "[", "{"].includes(character)) return index;
+	}
+	return undefined;
 }
 
 function hasShellExpansion(segment: string) {
-  return findShellExpansion(segment) !== undefined;
+	return findShellExpansion(segment) !== undefined;
 }
 
 function shellWords(segment: string): string[] | undefined {
-  const words: string[] = [];
-  let word = "";
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  for (const character of segment) {
-    if (escaped) {
-      word += character;
-      escaped = false;
-      continue;
-    }
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (character === quote) quote = undefined;
-      else word += character;
-      continue;
-    }
-    if (character === "'" || character === '"') quote = character;
-    else if (/\s/.test(character)) {
-      if (word) words.push(word);
-      word = "";
-    } else word += character;
-  }
-  if (quote || escaped) return undefined;
-  if (word) words.push(word);
-  return words;
+	const words: string[] = [];
+	let word = "";
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	for (const character of segment) {
+		if (escaped) {
+			word += character;
+			escaped = false;
+			continue;
+		}
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = undefined;
+			else word += character;
+			continue;
+		}
+		if (character === "'" || character === '"') quote = character;
+		else if (/\s/.test(character)) {
+			if (word) words.push(word);
+			word = "";
+		} else word += character;
+	}
+	if (quote || escaped) return undefined;
+	if (word) words.push(word);
+	return words;
 }
 
 function hasSafeArguments(command: string, args: string[]) {
-  const forbidden = new Set(["--in-place", "--fix", "--write", "-delete", "--delete"]);
-  if (!INSPECTION_CASE_FLAG_COMMANDS.has(command)) forbidden.add("-i");
-  if (args.some((argument) => forbidden.has(argument))) return false;
-  if (
-    command === "sed" &&
-    args.some(
-      (argument) => argument.startsWith("--in-place=") || (/^-[^-]+/.test(argument) && argument.slice(1).includes("i")),
-    )
-  ) {
-    return false;
-  }
-  if (
-    command === "find" &&
-    args.some((argument) =>
-      ["-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(argument),
-    )
-  ) {
-    return false;
-  }
-  if (command === "date" && args.some((argument) => argument === "-s" || argument.startsWith("--set"))) {
-    return false;
-  }
-  if (
-    (command === "sort" || command === "tree") &&
-    args.some(
-      (argument) =>
-        argument === "-o" ||
-        (argument.startsWith("-o") && !argument.startsWith("--")) ||
-        argument.startsWith("--output"),
-    )
-  ) {
-    return false;
-  }
-  if (
-    command === "sort" &&
-    args.some(
-      (argument) =>
-        argument === "-T" ||
-        (argument.startsWith("-T") && argument.length > 2) ||
-        argument.startsWith("--temporary-directory") ||
-        argument.startsWith("--compress-program"),
-    )
-  ) {
-    return false;
-  }
-  if (command === "diff" && args.some((argument) => argument === "--output" || argument.startsWith("--output="))) {
-    return false;
-  }
-  if (command === "uniq" && args.filter((argument) => !argument.startsWith("-")).length > 1) {
-    return false;
-  }
-  if (
-    command === "fd" &&
-    args.some((argument) =>
-      ["-x", "-X", "--exec", "--exec-batch"].some((flag) => argument === flag || argument.startsWith(`${flag}=`)),
-    )
-  ) {
-    return false;
-  }
-  if (command === "rg" && args.some((argument) => argument === "--pre" || argument.startsWith("--pre="))) {
-    return false;
-  }
-  if (command === "bat" && args.some((argument) => argument === "--pager" || argument.startsWith("--pager="))) {
-    return false;
-  }
-  return true;
+	const forbidden = new Set(["--in-place", "--fix", "--write", "-delete", "--delete"]);
+	if (!INSPECTION_CASE_FLAG_COMMANDS.has(command)) forbidden.add("-i");
+	if (args.some((argument) => forbidden.has(argument))) return false;
+	if (
+		command === "sed" &&
+		args.some(
+			(argument) => argument.startsWith("--in-place=") || (/^-[^-]+/.test(argument) && argument.slice(1).includes("i")),
+		)
+	) {
+		return false;
+	}
+	if (
+		command === "find" &&
+		args.some((argument) =>
+			["-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"].includes(argument),
+		)
+	) {
+		return false;
+	}
+	if (command === "date" && args.some((argument) => argument === "-s" || argument.startsWith("--set"))) {
+		return false;
+	}
+	if (
+		(command === "sort" || command === "tree") &&
+		args.some(
+			(argument) =>
+				argument === "-o" ||
+				(argument.startsWith("-o") && !argument.startsWith("--")) ||
+				argument.startsWith("--output"),
+		)
+	) {
+		return false;
+	}
+	if (
+		command === "sort" &&
+		args.some(
+			(argument) =>
+				argument === "-T" ||
+				(argument.startsWith("-T") && argument.length > 2) ||
+				argument.startsWith("--temporary-directory") ||
+				argument.startsWith("--compress-program"),
+		)
+	) {
+		return false;
+	}
+	if (command === "diff" && args.some((argument) => argument === "--output" || argument.startsWith("--output="))) {
+		return false;
+	}
+	if (command === "uniq" && args.filter((argument) => !argument.startsWith("-")).length > 1) {
+		return false;
+	}
+	if (
+		command === "fd" &&
+		args.some((argument) =>
+			["-x", "-X", "--exec", "--exec-batch"].some((flag) => argument === flag || argument.startsWith(`${flag}=`)),
+		)
+	) {
+		return false;
+	}
+	if (command === "rg" && args.some((argument) => argument === "--pre" || argument.startsWith("--pre="))) {
+		return false;
+	}
+	if (command === "bat" && args.some((argument) => argument === "--pager" || argument.startsWith("--pager="))) {
+		return false;
+	}
+	return true;
 }
 
 type ArgumentValidator = (args: string[]) => boolean;
 const allowReadOnlyArguments: ArgumentValidator = () => true;
 const BUILTIN_GIT_VALIDATORS: Record<BuiltinSafeGitSubcommand, ArgumentValidator> = {
-  status: allowReadOnlyArguments,
-  log: allowReadOnlyArguments,
-  diff: allowReadOnlyArguments,
-  show: allowReadOnlyArguments,
-  branch: isSafeGitBranchArguments,
-  remote: isSafeGitRemoteArguments,
-  "ls-files": allowReadOnlyArguments,
-  grep: isSafeGitGrepArguments,
+	status: allowReadOnlyArguments,
+	log: allowReadOnlyArguments,
+	diff: allowReadOnlyArguments,
+	show: allowReadOnlyArguments,
+	branch: isSafeGitBranchArguments,
+	remote: isSafeGitRemoteArguments,
+	"ls-files": allowReadOnlyArguments,
+	grep: isSafeGitGrepArguments,
 };
 const CONFIGURABLE_GIT_VALIDATORS: Record<ConfigurableSafeGitSubcommand, ArgumentValidator> = {
-  "rev-parse": allowReadOnlyArguments,
-  blame: allowReadOnlyArguments,
-  describe: allowReadOnlyArguments,
-  "merge-base": allowReadOnlyArguments,
-  "ls-tree": allowReadOnlyArguments,
-  "cat-file": isSafeGitCatFileArguments,
+	"rev-parse": allowReadOnlyArguments,
+	blame: allowReadOnlyArguments,
+	describe: allowReadOnlyArguments,
+	"merge-base": allowReadOnlyArguments,
+	"ls-tree": allowReadOnlyArguments,
+	"cat-file": isSafeGitCatFileArguments,
 };
 const GH_VALIDATORS: Record<SafeGhSubcommandPath, ArgumentValidator> = {
-  "pr view": isSafeGhReadArguments,
-  "pr list": isSafeGhReadArguments,
-  "issue view": isSafeGhReadArguments,
-  "issue list": isSafeGhReadArguments,
+	"pr view": isSafeGhReadArguments,
+	"pr list": isSafeGhReadArguments,
+	"issue view": isSafeGhReadArguments,
+	"issue list": isSafeGhReadArguments,
 };
 
 function isSafeStructuredCommand(command: string, args: string[], safeSubcommands: SafeSubcommands, paths: PathPolicy) {
-  if (command === "git") return isSafeGitCommand(args, safeSubcommands, paths);
-  if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
+	if (command === "git") return isSafeGitCommand(args, safeSubcommands, paths);
+	if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
 
-  const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
-  const subcommand = args[subcommandIndex]?.toLowerCase();
-  const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
-  if (command === "sed") {
-    const script = args.find((argument) => !argument.startsWith("-"));
-    return (
-      script !== undefined &&
-      (args.includes("-n") || args.some((argument) => /^-[^-]*n[^-]*$/.test(argument))) &&
-      /^\d+(,\d+)?p$/.test(script)
-    );
-  }
-  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
-    if (args.includes("--version")) return true;
-    return (
-      command === "tsc" &&
-      args.includes("--noEmit") &&
-      !args.some(
-        (argument) =>
-          argument === "--incremental" ||
-          argument.startsWith("--incremental=") ||
-          argument === "--tsBuildInfoFile" ||
-          argument.startsWith("--tsBuildInfoFile=") ||
-          argument === "--generateTrace" ||
-          argument.startsWith("--generateTrace="),
-      )
-    );
-  }
-  if (command === "npm") {
-    if (subcommand === "audit" && subcommandArgs.includes("fix")) return false;
-    if (["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(subcommand ?? "")) {
-      return true;
-    }
-    return subcommand === "run" && ["test", "check", "typecheck", "lint"].includes(args[1] ?? "");
-  }
-  if (["cargo", "go", "pytest", "vitest", "jest"].includes(command)) {
-    return ["test", "check"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command);
-  }
-  return false;
+	const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
+	const subcommand = args[subcommandIndex]?.toLowerCase();
+	const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
+	if (command === "sed") {
+		const script = args.find((argument) => !argument.startsWith("-"));
+		return (
+			script !== undefined &&
+			(args.includes("-n") || args.some((argument) => /^-[^-]*n[^-]*$/.test(argument))) &&
+			/^\d+(,\d+)?p$/.test(script)
+		);
+	}
+	if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
+		if (args.includes("--version")) return true;
+		return (
+			command === "tsc" &&
+			args.includes("--noEmit") &&
+			!args.some(
+				(argument) =>
+					argument === "--incremental" ||
+					argument.startsWith("--incremental=") ||
+					argument === "--tsBuildInfoFile" ||
+					argument.startsWith("--tsBuildInfoFile=") ||
+					argument === "--generateTrace" ||
+					argument.startsWith("--generateTrace="),
+			)
+		);
+	}
+	if (command === "npm") {
+		if (subcommand === "audit" && subcommandArgs.includes("fix")) return false;
+		if (["list", "ls", "view", "info", "search", "outdated", "audit", "test"].includes(subcommand ?? "")) {
+			return true;
+		}
+		return subcommand === "run" && ["test", "check", "typecheck", "lint"].includes(args[1] ?? "");
+	}
+	if (["cargo", "go", "pytest", "vitest", "jest"].includes(command)) {
+		return ["test", "check"].includes(subcommand ?? "") || ["pytest", "vitest", "jest"].includes(command);
+	}
+	return false;
 }
 
 function isSafeTasklistArguments(args: string[]) {
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index].toLowerCase();
-    if (["/v", "/nh", "/svc"].includes(argument)) continue;
-    if (argument === "/fo") {
-      const format = args[index + 1]?.toLowerCase();
-      if (!format || !["table", "list", "csv"].includes(format)) return false;
-      index += 1;
-      continue;
-    }
-    if (argument === "/fi") {
-      const filter = args[index + 1];
-      if (!filter || filter.startsWith("/")) return false;
-      index += 1;
-      continue;
-    }
-    if (argument === "/m") {
-      const module = args[index + 1];
-      if (module && !module.startsWith("/")) index += 1;
-      continue;
-    }
-    return false;
-  }
-  return true;
+	for (let index = 0; index < args.length; index += 1) {
+		const argument = args[index].toLowerCase();
+		if (["/v", "/nh", "/svc"].includes(argument)) continue;
+		if (argument === "/fo") {
+			const format = args[index + 1]?.toLowerCase();
+			if (!format || !["table", "list", "csv"].includes(format)) return false;
+			index += 1;
+			continue;
+		}
+		if (argument === "/fi") {
+			const filter = args[index + 1];
+			if (!filter || filter.startsWith("/")) return false;
+			index += 1;
+			continue;
+		}
+		if (argument === "/m") {
+			const module = args[index + 1];
+			if (module && !module.startsWith("/")) index += 1;
+			continue;
+		}
+		return false;
+	}
+	return true;
 }
 
 function isSafeGetProcessArguments(args: string[]) {
-  return hasSafePowerShellQueryArguments(
-    args,
-    new Set(["-module", "-fileversioninfo", "-includeusername"]),
-    new Set(["-name", "-id"]),
-  );
+	return hasSafePowerShellQueryArguments(
+		args,
+		new Set(["-module", "-fileversioninfo", "-includeusername"]),
+		new Set(["-name", "-id"]),
+	);
 }
 
 function isSafeGetServiceArguments(args: string[]) {
-  return hasSafePowerShellQueryArguments(
-    args,
-    new Set(["-dependentservices", "-requiredservices"]),
-    new Set(["-name", "-displayname", "-include", "-exclude"]),
-  );
+	return hasSafePowerShellQueryArguments(
+		args,
+		new Set(["-dependentservices", "-requiredservices"]),
+		new Set(["-name", "-displayname", "-include", "-exclude"]),
+	);
 }
 
 function hasSafePowerShellQueryArguments(
-  args: string[],
-  switches: ReadonlySet<string>,
-  valueOptions: ReadonlySet<string>,
+	args: string[],
+	switches: ReadonlySet<string>,
+	valueOptions: ReadonlySet<string>,
 ) {
-  let positionalValues = 0;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    const normalized = argument?.toLowerCase();
-    if (!argument || !normalized) return false;
-    if (!argument.startsWith("-")) {
-      positionalValues += 1;
-      if (positionalValues > 1) return false;
-      continue;
-    }
-    if (switches.has(normalized)) continue;
-    if (!valueOptions.has(normalized)) return false;
-    const value = args[index + 1];
-    if (!value || value.startsWith("-")) return false;
-    index += 1;
-  }
-  return true;
+	let positionalValues = 0;
+	for (let index = 0; index < args.length; index += 1) {
+		const argument = args[index];
+		const normalized = argument?.toLowerCase();
+		if (!argument || !normalized) return false;
+		if (!argument.startsWith("-")) {
+			positionalValues += 1;
+			if (positionalValues > 1) return false;
+			continue;
+		}
+		if (switches.has(normalized)) continue;
+		if (!valueOptions.has(normalized)) return false;
+		const value = args[index + 1];
+		if (!value || value.startsWith("-")) return false;
+		index += 1;
+	}
+	return true;
 }
 
 function isSafeGitCommand(args: string[], safeSubcommands: SafeSubcommands, paths: PathPolicy) {
-  const subcommandIndex = parseGitGlobalOptions(args, paths);
-  if (subcommandIndex === undefined) return false;
-  const subcommand = args[subcommandIndex]?.toLowerCase();
-  if (!subcommand || subcommand.startsWith("-")) return false;
-  const subcommandArgs = args.slice(subcommandIndex + 1);
-  const builtinValidator = (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand];
-  const configuredValidator = (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand];
-  const configured = safeSubcommands.git?.includes(subcommand as SafeGitSubcommand) === true;
-  const validator = builtinValidator ?? (configured ? configuredValidator : undefined);
-  return validator !== undefined && hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs);
+	const subcommandIndex = parseGitGlobalOptions(args, paths);
+	if (subcommandIndex === undefined) return false;
+	const subcommand = args[subcommandIndex]?.toLowerCase();
+	if (!subcommand || subcommand.startsWith("-")) return false;
+	const subcommandArgs = args.slice(subcommandIndex + 1);
+	const builtinValidator = (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand];
+	const configuredValidator = (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand];
+	const configured = safeSubcommands.git?.includes(subcommand as SafeGitSubcommand) === true;
+	const validator = builtinValidator ?? (configured ? configuredValidator : undefined);
+	return validator !== undefined && hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs);
 }
 
 function parseGitGlobalOptions(args: string[], paths: PathPolicy) {
-  let index = 0;
-  while (index < args.length) {
-    const argument = args[index];
-    if (argument === "--no-pager") {
-      index += 1;
-      continue;
-    }
-    if (argument !== "-C") break;
-    if (resolveDirectory(args[index + 1], paths.base, paths.roots, paths.homeDir) === undefined) return undefined;
-    index += 2;
-  }
-  return index;
+	let index = 0;
+	while (index < args.length) {
+		const argument = args[index];
+		if (argument === "--no-pager") {
+			index += 1;
+			continue;
+		}
+		if (argument !== "-C") break;
+		if (resolveDirectory(args[index + 1], paths.base, paths.roots, paths.homeDir) === undefined) return undefined;
+		index += 2;
+	}
+	return index;
 }
 
 function hasSafeGitArguments(subcommand: string, args: string[]) {
-  return !args.some(
-    (argument) =>
-      argument === "--help" ||
-      argument === "--show-signature" ||
-      argument.startsWith("--show-signature=") ||
-      argument.includes("%G") ||
-      argument === "--output" ||
-      argument.startsWith("--output=") ||
-      argument === "--ext-diff" ||
-      argument.startsWith("--ext-diff=") ||
-      argument === "--textconv" ||
-      argument.startsWith("--textconv=") ||
-      argument === "--paginate" ||
-      argument === "--open-files-in-pager" ||
-      argument.startsWith("--open-files-in-pager=") ||
-      (subcommand === "grep" && (argument === "-O" || argument.startsWith("-O"))),
-  );
+	return !args.some(
+		(argument) =>
+			argument === "--help" ||
+			argument === "--show-signature" ||
+			argument.startsWith("--show-signature=") ||
+			argument.includes("%G") ||
+			argument === "--output" ||
+			argument.startsWith("--output=") ||
+			argument === "--ext-diff" ||
+			argument.startsWith("--ext-diff=") ||
+			argument === "--textconv" ||
+			argument.startsWith("--textconv=") ||
+			argument === "--paginate" ||
+			argument === "--open-files-in-pager" ||
+			argument.startsWith("--open-files-in-pager=") ||
+			(subcommand === "grep" && (argument === "-O" || argument.startsWith("-O"))),
+	);
 }
 
 function isSafeGitCatFileArguments(args: string[]) {
-  return !args.some(
-    (argument) =>
-      matchesLongOptionPrefix(argument, "--filters", "--fi") || matchesLongOptionPrefix(argument, "--textconv", "--t"),
-  );
+	return !args.some(
+		(argument) =>
+			matchesLongOptionPrefix(argument, "--filters", "--fi") || matchesLongOptionPrefix(argument, "--textconv", "--t"),
+	);
 }
 
 function isSafeGitGrepArguments(args: string[]) {
-  return !args.some(
-    (argument) =>
-      matchesLongOptionPrefix(argument, "--textconv", "--textc") ||
-      matchesLongOptionPrefix(argument, "--open-files-in-pager", "--op") ||
-      matchesLongOptionPrefix(argument, "--ext-grep", "--ext"),
-  );
+	return !args.some(
+		(argument) =>
+			matchesLongOptionPrefix(argument, "--textconv", "--textc") ||
+			matchesLongOptionPrefix(argument, "--open-files-in-pager", "--op") ||
+			matchesLongOptionPrefix(argument, "--ext-grep", "--ext"),
+	);
 }
 
 function matchesLongOptionPrefix(argument: string, option: string, shortest: string) {
-  const optionName = argument.split("=", 1)[0];
-  return optionName.length >= shortest.length && option.startsWith(optionName);
+	const optionName = argument.split("=", 1)[0];
+	return optionName.length >= shortest.length && option.startsWith(optionName);
 }
 
 function isSafeGitBranchArguments(args: string[]) {
-  if (args.some((argument) => !argument.startsWith("-"))) return false;
-  return !args.some(
-    (argument) =>
-      /^-[^-]*[dDmMcCu]/.test(argument) ||
-      matchesLongOptionPrefix(argument, "--delete", "--del") ||
-      matchesLongOptionPrefix(argument, "--move", "--mov") ||
-      matchesLongOptionPrefix(argument, "--copy", "--cop") ||
-      matchesLongOptionPrefix(argument, "--edit-description", "--e") ||
-      matchesLongOptionPrefix(argument, "--unset-upstream", "--u") ||
-      matchesLongOptionPrefix(argument, "--set-upstream-to", "--set-u") ||
-      matchesLongOptionPrefix(argument, "--create-reflog", "--creat"),
-  );
+	if (args.some((argument) => !argument.startsWith("-"))) return false;
+	return !args.some(
+		(argument) =>
+			/^-[^-]*[dDmMcCu]/.test(argument) ||
+			matchesLongOptionPrefix(argument, "--delete", "--del") ||
+			matchesLongOptionPrefix(argument, "--move", "--mov") ||
+			matchesLongOptionPrefix(argument, "--copy", "--cop") ||
+			matchesLongOptionPrefix(argument, "--edit-description", "--e") ||
+			matchesLongOptionPrefix(argument, "--unset-upstream", "--u") ||
+			matchesLongOptionPrefix(argument, "--set-upstream-to", "--set-u") ||
+			matchesLongOptionPrefix(argument, "--create-reflog", "--creat"),
+	);
 }
 
 function isSafeGitRemoteArguments(args: string[]) {
-  const actionIndex = args.findIndex((argument) => !argument.startsWith("-"));
-  if (actionIndex < 0) return true;
-  const action = args[actionIndex];
-  if (action === "get-url") return true;
-  if (action !== "show") return false;
+	const actionIndex = args.findIndex((argument) => !argument.startsWith("-"));
+	if (actionIndex < 0) return true;
+	const action = args[actionIndex];
+	if (action === "get-url") return true;
+	if (action !== "show") return false;
 
-  const showArgs = args.slice(actionIndex + 1);
-  if (showArgs.includes("--")) return false;
-  const remotes = showArgs.filter((argument) => !argument.startsWith("-"));
-  return remotes.length === 0 || (remotes.length === 1 && showArgs.includes("-n"));
+	const showArgs = args.slice(actionIndex + 1);
+	if (showArgs.includes("--")) return false;
+	const remotes = showArgs.filter((argument) => !argument.startsWith("-"));
+	return remotes.length === 0 || (remotes.length === 1 && showArgs.includes("-n"));
 }
 
 function isSafeGhCommand(args: string[], safeSubcommands: SafeSubcommands) {
-  const group = args[0]?.toLowerCase();
-  const action = args[1]?.toLowerCase();
-  if (!group || !action || group.startsWith("-") || action.startsWith("-")) return false;
-  const path = `${group} ${action}` as SafeGhSubcommandPath;
-  const validator = (GH_VALIDATORS as Record<string, ArgumentValidator | undefined>)[path];
-  if (!validator || !safeSubcommands.gh?.includes(path)) return false;
-  return validator(args.slice(2));
+	const group = args[0]?.toLowerCase();
+	const action = args[1]?.toLowerCase();
+	if (!group || !action || group.startsWith("-") || action.startsWith("-")) return false;
+	const path = `${group} ${action}` as SafeGhSubcommandPath;
+	const validator = (GH_VALIDATORS as Record<string, ArgumentValidator | undefined>)[path];
+	if (!validator || !safeSubcommands.gh?.includes(path)) return false;
+	return validator(args.slice(2));
 }
 
 function isSafeGhReadArguments(args: string[]) {
-  return !args.some(isUnsafeGhReadArgument) && hasGhJsonOutput(args);
+	return !args.some(isUnsafeGhReadArgument) && hasGhJsonOutput(args);
 }
 
 function isUnsafeGhReadArgument(argument: string) {
-  return (
-    argument.startsWith("-w") ||
-    argument === "--web" ||
-    argument.startsWith("--web=") ||
-    argument === "--browser" ||
-    argument.startsWith("--browser=") ||
-    argument === "--paginate" ||
-    argument === "--pager" ||
-    argument.startsWith("--pager=") ||
-    argument === "--output" ||
-    argument.startsWith("--output=")
-  );
+	return (
+		argument.startsWith("-w") ||
+		argument === "--web" ||
+		argument.startsWith("--web=") ||
+		argument === "--browser" ||
+		argument.startsWith("--browser=") ||
+		argument === "--paginate" ||
+		argument === "--pager" ||
+		argument.startsWith("--pager=") ||
+		argument === "--output" ||
+		argument.startsWith("--output=")
+	);
 }
 
 function hasGhJsonOutput(args: string[]) {
-  let hasJson = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--json") {
-      const value = args[index + 1];
-      if (!value || value.startsWith("-")) return false;
-      hasJson = true;
-      index += 1;
-    } else if (argument.startsWith("--json=")) {
-      if (argument === "--json=") return false;
-      hasJson = true;
-    }
-  }
-  return hasJson;
+	let hasJson = false;
+	for (let index = 0; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === "--json") {
+			const value = args[index + 1];
+			if (!value || value.startsWith("-")) return false;
+			hasJson = true;
+			index += 1;
+		} else if (argument.startsWith("--json=")) {
+			if (argument === "--json=") return false;
+			hasJson = true;
+		}
+	}
+	return hasJson;
 }

@@ -3,161 +3,161 @@ import { findAvailableImplementationModel, snapshotAvailableImplementationModels
 import type { FreshPlanModel } from "./plan-action-menus.ts";
 import type { PlanExportDestination } from "./plan-export.ts";
 import {
-  configuredImplementationModel,
-  configuredImplementationThinkingLevel,
-  type PlanModeFixedThinkingLevel,
-  type PlanModeSettings,
+	configuredImplementationModel,
+	configuredImplementationThinkingLevel,
+	type PlanModeFixedThinkingLevel,
+	type PlanModeSettings,
 } from "./settings.ts";
 import type { ImplementationRuntimeSelection, PlanModeState } from "./state.ts";
 
 type InteractiveUi = typeof import("./interactive-ui.ts");
 
 interface MenuLifecycle {
-  signal: AbortSignal;
-  isCurrent(): boolean;
+	signal: AbortSignal;
+	isCurrent(): boolean;
 }
 
 interface PlanActionControllerOptions {
-  loadInteractiveUi(): Promise<InteractiveUi>;
-  getState(): PlanModeState;
-  captureLifecycle(): MenuLifecycle;
-  statusText(): string;
-  getThinkingLevel(): PlanModeFixedThinkingLevel | undefined;
-  /** What Start fresh's "same as plan" runs on; the pre-Plan model while a Plan model is applied. */
-  getFreshPlanModel(ctx: ExtensionContext): FreshPlanModel;
-  getSettings(): PlanModeSettings;
-  implementationOutcome(): string;
-  getExportDestination(ctx: ExtensionContext): PlanExportDestination;
-  show(ctx: ExtensionContext): void;
-  /** Edits the ready or saved plan; `isCurrent` is the opening menu's lifecycle. */
-  edit(ctx: ExtensionContext, isCurrent: () => boolean): Promise<void>;
-  finalize(ctx: ExtensionContext): void;
-  implementHere(ctx: ExtensionContext): void | Promise<void>;
-  implementFresh(
-    ctx: ExtensionContext,
-    isCurrent: () => boolean,
-    runtime: ImplementationRuntimeSelection | undefined,
-  ): void | Promise<void>;
-  exportPlan(ctx: ExtensionContext, path: string, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
-  settings(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
-  save(ctx: ExtensionContext): void;
-  stay(ctx: ExtensionContext): void;
-  exitReady(ctx: ExtensionContext): void;
-  clearSaved(ctx: ExtensionContext): void;
+	loadInteractiveUi(): Promise<InteractiveUi>;
+	getState(): PlanModeState;
+	captureLifecycle(): MenuLifecycle;
+	statusText(): string;
+	getThinkingLevel(): PlanModeFixedThinkingLevel | undefined;
+	/** What Start fresh's "same as plan" runs on; the pre-Plan model while a Plan model is applied. */
+	getFreshPlanModel(ctx: ExtensionContext): FreshPlanModel;
+	getSettings(): PlanModeSettings;
+	implementationOutcome(): string;
+	getExportDestination(ctx: ExtensionContext): PlanExportDestination;
+	show(ctx: ExtensionContext): void;
+	/** Edits the ready or saved plan; `isCurrent` is the opening menu's lifecycle. */
+	edit(ctx: ExtensionContext, isCurrent: () => boolean): Promise<void>;
+	finalize(ctx: ExtensionContext): void;
+	implementHere(ctx: ExtensionContext): void | Promise<void>;
+	implementFresh(
+		ctx: ExtensionContext,
+		isCurrent: () => boolean,
+		runtime: ImplementationRuntimeSelection | undefined,
+	): void | Promise<void>;
+	exportPlan(ctx: ExtensionContext, path: string, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
+	settings(ctx: ExtensionContext, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean>;
+	save(ctx: ExtensionContext): void;
+	stay(ctx: ExtensionContext): void;
+	exitReady(ctx: ExtensionContext): void;
+	clearSaved(ctx: ExtensionContext): void;
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
-  const configuredDefaults = (): ImplementationRuntimeSelection => {
-    const settings = options.getSettings();
-    const model = configuredImplementationModel(settings);
-    const thinkingLevel = configuredImplementationThinkingLevel(settings);
-    return {
-      ...(model ? { model: { ...model } } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-    };
-  };
-  const effectiveDefaults = (ctx: ExtensionContext): ImplementationRuntimeSelection => {
-    const configured = configuredDefaults();
-    const availableModel = findAvailableImplementationModel(
-      snapshotAvailableImplementationModels(ctx),
-      configured.model,
-    );
-    if (configured.model && !availableModel) {
-      ctx.ui.notify("The configured fresh implementation model is unavailable; using the planning model.", "warning");
-    }
-    const planModel = options.getFreshPlanModel(ctx).model;
-    const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : planModel;
-    const thinkingLevel = configured.thinkingLevel ?? options.getThinkingLevel();
-    return {
-      ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-    };
-  };
-  const freshAction = (
-    ctx: ExtensionContext,
-    lifecycle: MenuLifecycle,
-    signal: AbortSignal,
-    runtime: ImplementationRuntimeSelection | undefined,
-  ) => {
-    if (signal.aborted) return;
-    const isCurrent = () => lifecycle.isCurrent() && !signal.aborted;
-    return options.implementFresh(ctx, isCurrent, runtime);
-  };
+	const configuredDefaults = (): ImplementationRuntimeSelection => {
+		const settings = options.getSettings();
+		const model = configuredImplementationModel(settings);
+		const thinkingLevel = configuredImplementationThinkingLevel(settings);
+		return {
+			...(model ? { model: { ...model } } : {}),
+			...(thinkingLevel ? { thinkingLevel } : {}),
+		};
+	};
+	const effectiveDefaults = (ctx: ExtensionContext): ImplementationRuntimeSelection => {
+		const configured = configuredDefaults();
+		const availableModel = findAvailableImplementationModel(
+			snapshotAvailableImplementationModels(ctx),
+			configured.model,
+		);
+		if (configured.model && !availableModel) {
+			ctx.ui.notify("The configured fresh implementation model is unavailable; using the planning model.", "warning");
+		}
+		const planModel = options.getFreshPlanModel(ctx).model;
+		const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : planModel;
+		const thinkingLevel = configured.thinkingLevel ?? options.getThinkingLevel();
+		return {
+			...(model ? { model } : {}),
+			...(thinkingLevel ? { thinkingLevel } : {}),
+		};
+	};
+	const freshAction = (
+		ctx: ExtensionContext,
+		lifecycle: MenuLifecycle,
+		signal: AbortSignal,
+		runtime: ImplementationRuntimeSelection | undefined,
+	) => {
+		if (signal.aborted) return;
+		const isCurrent = () => lifecycle.isCurrent() && !signal.aborted;
+		return options.implementFresh(ctx, isCurrent, runtime);
+	};
 
-  return {
-    async showSaved(ctx: ExtensionContext) {
-      const lifecycle = options.captureLifecycle();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      const ui = await options.loadInteractiveUi();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      await ui.showSavedPlanMenu(ctx, {
-        statusText: options.statusText(),
-        implementationOutcome: options.implementationOutcome,
-        getExportDestination: () => options.getExportDestination(ctx),
-        signal: lifecycle.signal,
-        isCurrent: lifecycle.isCurrent,
-        show: () => options.show(ctx),
-        edit: () => options.edit(ctx, lifecycle.isCurrent),
-        implementHere: () => options.implementHere(ctx),
-        implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
-        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
-        settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
-        clear: () => options.clearSaved(ctx),
-      });
-    },
-    async showReady(ctx: ExtensionContext, readyIsCurrent: () => boolean) {
-      if (!ctx.hasUI) return;
-      const lifecycle = options.captureLifecycle();
-      const isCurrent = () => lifecycle.isCurrent() && readyIsCurrent();
-      if (!isCurrent() || lifecycle.signal.aborted) return;
-      const ui = await options.loadInteractiveUi();
-      if (!isCurrent() || lifecycle.signal.aborted) return;
-      await ui.showReadyPlanMenu(ctx, {
-        planThinkingLevel: options.getThinkingLevel(),
-        planModel: options.getFreshPlanModel(ctx),
-        implementationDefaults: configuredDefaults(),
-        implementationOutcome: options.implementationOutcome,
-        getExportDestination: () => options.getExportDestination(ctx),
-        signal: lifecycle.signal,
-        isCurrent,
-        show: () => options.show(ctx),
-        edit: () => options.edit(ctx, isCurrent),
-        implementHere: () => options.implementHere(ctx),
-        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
-        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
-        save: () => options.save(ctx),
-        stay: () => options.stay(ctx),
-        exit: () => options.exitReady(ctx),
-      });
-    },
-    async showCurrent(ctx: ExtensionContext) {
-      if (!ctx.hasUI) {
-        ctx.ui.notify(options.statusText(), "info");
-        return;
-      }
-      const lifecycle = options.captureLifecycle();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      const ui = await options.loadInteractiveUi();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      await ui.showPlanModeMenu(ctx, {
-        statusText: options.statusText(),
-        planThinkingLevel: options.getThinkingLevel(),
-        planModel: options.getFreshPlanModel(ctx),
-        implementationDefaults: configuredDefaults(),
-        hasReadyPlan: options.getState().latestPlan !== undefined,
-        implementationOutcome: options.implementationOutcome,
-        getExportDestination: () => options.getExportDestination(ctx),
-        ...lifecycle,
-        show: () => options.show(ctx),
-        edit: () => options.edit(ctx, lifecycle.isCurrent),
-        finalize: () => options.finalize(ctx),
-        implementHere: () => options.implementHere(ctx),
-        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
-        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
-        save: () => options.save(ctx),
-        stay: () => options.stay(ctx),
-        exit: () => options.exitReady(ctx),
-      });
-    },
-  };
+	return {
+		async showSaved(ctx: ExtensionContext) {
+			const lifecycle = options.captureLifecycle();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
+			const ui = await options.loadInteractiveUi();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
+			await ui.showSavedPlanMenu(ctx, {
+				statusText: options.statusText(),
+				implementationOutcome: options.implementationOutcome,
+				getExportDestination: () => options.getExportDestination(ctx),
+				signal: lifecycle.signal,
+				isCurrent: lifecycle.isCurrent,
+				show: () => options.show(ctx),
+				edit: () => options.edit(ctx, lifecycle.isCurrent),
+				implementHere: () => options.implementHere(ctx),
+				implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
+				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
+				settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
+				clear: () => options.clearSaved(ctx),
+			});
+		},
+		async showReady(ctx: ExtensionContext, readyIsCurrent: () => boolean) {
+			if (!ctx.hasUI) return;
+			const lifecycle = options.captureLifecycle();
+			const isCurrent = () => lifecycle.isCurrent() && readyIsCurrent();
+			if (!isCurrent() || lifecycle.signal.aborted) return;
+			const ui = await options.loadInteractiveUi();
+			if (!isCurrent() || lifecycle.signal.aborted) return;
+			await ui.showReadyPlanMenu(ctx, {
+				planThinkingLevel: options.getThinkingLevel(),
+				planModel: options.getFreshPlanModel(ctx),
+				implementationDefaults: configuredDefaults(),
+				implementationOutcome: options.implementationOutcome,
+				getExportDestination: () => options.getExportDestination(ctx),
+				signal: lifecycle.signal,
+				isCurrent,
+				show: () => options.show(ctx),
+				edit: () => options.edit(ctx, isCurrent),
+				implementHere: () => options.implementHere(ctx),
+				implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
+				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
+				save: () => options.save(ctx),
+				stay: () => options.stay(ctx),
+				exit: () => options.exitReady(ctx),
+			});
+		},
+		async showCurrent(ctx: ExtensionContext) {
+			if (!ctx.hasUI) {
+				ctx.ui.notify(options.statusText(), "info");
+				return;
+			}
+			const lifecycle = options.captureLifecycle();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
+			const ui = await options.loadInteractiveUi();
+			if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
+			await ui.showPlanModeMenu(ctx, {
+				statusText: options.statusText(),
+				planThinkingLevel: options.getThinkingLevel(),
+				planModel: options.getFreshPlanModel(ctx),
+				implementationDefaults: configuredDefaults(),
+				hasReadyPlan: options.getState().latestPlan !== undefined,
+				implementationOutcome: options.implementationOutcome,
+				getExportDestination: () => options.getExportDestination(ctx),
+				...lifecycle,
+				show: () => options.show(ctx),
+				edit: () => options.edit(ctx, lifecycle.isCurrent),
+				finalize: () => options.finalize(ctx),
+				implementHere: () => options.implementHere(ctx),
+				implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
+				exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
+				save: () => options.save(ctx),
+				stay: () => options.stay(ctx),
+				exit: () => options.exitReady(ctx),
+			});
+		},
+	};
 }
