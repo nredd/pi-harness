@@ -78,7 +78,7 @@ for f in config.ts index.ts plan-hooks.ts todo-overlay.ts todo.ts \
   view/format.ts; do
   set -- "$@" --coverage.include="$f"
 done
-../../node_modules/.bin/vitest run --maxWorkers=1 \
+npx vitest run --maxWorkers=1 \
   --coverage --coverage.provider=istanbul --coverage.reporter=lcov \
   --coverage.reporter=text --coverage.reporter=json \
   --coverage.reportsDirectory=/tmp/cov-todo-after "$@"

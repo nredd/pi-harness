@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { parseCLI } from "vitest/node";
+import { isolatedHomeEnv } from "../tests/lib/src/isolated-home.ts";
 
 interface SpawnCall {
 	command: string;
@@ -32,7 +33,7 @@ vi.mock("node:child_process", () => ({
 	},
 }));
 
-const { dispatch, isolatedHomeEnv, main, toolchainHomeEnv } = await import("./run-vitest.ts");
+const { dispatch, main, toolchainHomeEnv } = await import("./run-vitest.ts");
 
 const VITEST = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
 const BUN_COVERAGE = [

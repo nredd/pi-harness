@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // One shared guard (#505): its planted cases live with it in the preset; keep this path in step.
-import { dataModelLeaks } from "../../preset/test/model-guard.ts";
+import { dataModelLeaks } from "@nredd/pi-test-lib/model-guard";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BUILTIN_TOOL_NAMES,
   getAgentConfig,

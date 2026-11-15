@@ -3,6 +3,7 @@ import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isolatedHomeEnv } from "../tests/lib/src/isolated-home.ts";
 
 const FAILURE_EXIT_STATUS = 1;
 const MILLISECONDS_PER_SECOND = 1000;
@@ -29,17 +30,6 @@ const COVERAGE_DISABLED_ARG = "--coverage.enabled=false";
  * only, so a per-run cache path is not an option.
  */
 const TEST_JITI_ENV = { JITI_FS_CACHE: "false" } as const;
-
-/** Every home-derived variable a Vitest child must not inherit; one place for each new guarded var. */
-export function isolatedHomeEnv(home: string): Record<string, string> {
-	return {
-		HOME: home,
-		USERPROFILE: home,
-		XDG_CONFIG_HOME: join(home, ".config"),
-		PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
-		PI_SUBAGENTS_CONFIG_DIR: join(home, ".pi", "agent"),
-	};
-}
 
 /**
  * Pin the Rust toolchain homes to the account's before HOME is isolated. rustup's `cargo` proxy and

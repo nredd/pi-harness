@@ -1,9 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { afterEach, describe, expect, it } from "vitest";
-import { isolatedHomeEnv } from "../../../../scripts/run-vitest.ts";
 import { psInfo } from "../../src/monitor/pidfiles.ts";
 import { signalGroup } from "../../src/monitor/process.ts";
 import { published, running, tempDir, waitFor } from "./helpers.ts";
@@ -18,7 +19,8 @@ interface WorkerReady {
 }
 
 const config = join(import.meta.dirname, "worker-death.vitest.config.ts");
-const vitest = join(import.meta.dirname, "../../../../node_modules/vitest/vitest.mjs");
+// `vitest` resolves to `<pkg>/dist/index.js`; its CLI entry sits at the package root.
+const vitest = join(dirname(dirname(fileURLToPath(import.meta.resolve("vitest")))), "vitest.mjs");
 let runner: ChildProcess | undefined;
 let ready: WorkerReady | undefined;
 

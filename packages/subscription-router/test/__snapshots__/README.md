@@ -6,14 +6,14 @@ Both suites have been reproduced in a detached worktree at that exact immutable 
 The original suite and its committed snapshot were copied there, then run *without* updating it:
 
 ```sh
-JITI_FS_CACHE=false ../../node_modules/.bin/vitest run test/policy-compatibility.test.ts
+JITI_FS_CACHE=false npx vitest run test/policy-compatibility.test.ts
 ```
 
 The old implementation passes that snapshot unchanged. This is reproducible evidence, independent
 of the original capture chronology. The extended suite was also run on that immutable base:
 
 ```sh
-JITI_FS_CACHE=false ../../node_modules/.bin/vitest run test/policy-compatibility-edges.test.ts -u
+JITI_FS_CACHE=false npx vitest run test/policy-compatibility-edges.test.ts -u
 ```
 
 That old-base run wrote three snapshots, with all three tests passing. The resulting snapshot was

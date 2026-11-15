@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "lint": "biome check --error-on-warnings .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.loose.json",
     "pretest": "npm run --prefix ../.. build",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",

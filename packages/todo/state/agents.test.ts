@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-// pi-subagents' own slugger, imported from source so the two cannot drift unnoticed.
-import { handleBase } from "../../subagents/src/mention.ts";
 import {
 	STATE_ENTRY_TYPE,
 	SUBAGENT_COMPLETED_EVENT,
@@ -17,7 +15,6 @@ import {
 	isAbandoned,
 	isRunningElsewhere,
 	MAX_TRACKED_AGENTS,
-	ownerKey,
 	ownerLabel,
 	setForkLineage,
 } from "./agents.ts";
@@ -444,31 +441,5 @@ describe("ownerLabel and isAbandoned", () => {
 		expect(isAbandoned({ status: "in_progress" }, "done")).toBe(false);
 		expect(isAbandoned({ status: "in_progress" }, undefined)).toBe(false);
 		expect(isAbandoned({ status: "pending" }, "failed")).toBe(false);
-	});
-});
-
-describe("ownerKey parity with pi-subagents handleBase", () => {
-	it.each([
-		"auth-audit",
-		"Auth Audit",
-		"@auth-audit",
-		"  Auth  Audit!  ",
-		"--Auth.Audit--",
-		"snake_case_name",
-		"Ünïcödé Nämé",
-		"a/b\\c:d",
-		"x".repeat(70),
-		`${"a".repeat(63)}-b`,
-		`${"a".repeat(63)}!!!b`,
-		"MiXeD-123_ok",
-	])("slugs %j the same way", (name) => {
-		expect(ownerKey(name)).toBe(handleBase(name));
-	});
-
-	it("diverges only where handleBase falls back to `agent`", () => {
-		for (const name of ["", "!!!", " @ "]) {
-			expect(handleBase(name)).toBe("agent");
-			expect(ownerKey(name)).toBeUndefined();
-		}
 	});
 });

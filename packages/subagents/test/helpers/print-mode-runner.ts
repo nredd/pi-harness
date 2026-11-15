@@ -294,7 +294,6 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
   // --- model backend ---
   let faux: ReturnType<typeof registerFauxProvider> | undefined;
   let model: Model<string> | undefined;
-  let modelRegistry: unknown;
   let modelRuntime: unknown;
   if (live) {
     // Explicit pin wins (options.live or PI_PROVIDER + PI_MODEL). Otherwise leave
@@ -319,7 +318,6 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
       }
     }
     // Let createAgentSession build the real, auth-backed registry/runtime.
-    modelRegistry = undefined;
     modelRuntime = undefined;
   } else {
     if (!options.steps && !options.respond) {
@@ -330,7 +328,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     // Structural faux registry + runtime (see faux-model-backend.ts): the parent
     // session uses `model` directly; subagents inherit it via ctx.model since
     // resolveDefaultModel falls back to the parent model when no model is pinned.
-    ({ modelRegistry, modelRuntime } = fauxModelBackend(model));
+    ({ modelRuntime } = fauxModelBackend(model));
 
     // Pad the response queue: one context-branching responder per expected model
     // call. The queue is a single FIFO shared by parent + child, but every entry
@@ -374,8 +372,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     cwd,
     agentDir,
     model,
-    // Structural faux registry/runtime in faux mode; undefined in live mode (defaults).
-    modelRegistry: modelRegistry as any,
+    // Structural faux runtime in faux mode; undefined in live mode (defaults).
     modelRuntime: modelRuntime as any,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(cwd),

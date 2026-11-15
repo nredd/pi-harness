@@ -84,7 +84,7 @@ export const SUBAGENT_LIFECYCLE_EVENTS = [
 
 /**
  * `session-kit` monitor lifecycle, payload `{ sessionId, id, name }`; read only to see whether a wake is armed.
- * Mirrors `MONITOR_STARTED_EVENT` / `MONITOR_STOPPED_EVENT` in session-kit; `monitors.test.ts` pins the two.
+ * Mirrors `MONITOR_STARTED_EVENT` / `MONITOR_STOPPED_EVENT` in session-kit; `integration/inprocess/channel-contracts.test.ts` pins them.
  */
 export const MONITOR_STARTED_EVENT = "session-kit:monitor:started";
 export const MONITOR_STOPPED_EVENT = "session-kit:monitor:stopped";
