@@ -1,4 +1,4 @@
-.PHONY: help build verify-root-overrides install install-owned install-benchmark check check-ts check-scripts check-coverage check-integration check-probes check-providers check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
+.PHONY: help build verify-root-overrides install install-owned install-benchmark check check-commits check-ts check-scripts check-coverage check-integration check-probes check-providers check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -45,8 +45,11 @@ check-core-compaction:  ## Assembled child compaction on built candidate forks/p
 	  node --import ./forks/pi/packages/coding-agent/src/experimental/source-resolver.ts \
 	  --test --test-concurrency=1 --test-timeout=120000 integration/core-source/compaction-children.test.ts
 
-check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
+check: check-commits check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 	$(MAKE) check-coverage
+
+check-commits:  ## Validate the complete PR/push commit range, or the latest local commit (COMMIT_RANGE overrides)
+	node scripts/check-commit-messages.mjs
 
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
@@ -54,6 +57,7 @@ check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or onl
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../integration,,.)
+	uv run --locked --project integration python scripts/package_contracts.py --packed-files-only
 	uv run --locked --project integration python scripts/package_layout.py --compare-ref "$(or $(BASE),origin/main)"
 	$(MAKE) check-import-audit
 
@@ -83,7 +87,7 @@ check-providers:  ## Synthetic providers and auth preloads Biome on the director
 	cd integration/providers && node ../../scripts/run-vitest.ts bun
 
 check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node coverage and Bun compatibility against the real TypeScript parser
-	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs
+	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs scripts/tests/*.mjs
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \

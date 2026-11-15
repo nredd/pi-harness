@@ -364,6 +364,9 @@ def test_write_github_output_keeps_input_flags_independent(
         "integration/uv.lock",
         "integration/probes/stack-resources.ts",
         "integration/providers/faux.ts",
+        "scripts/check-commit-messages.mjs",
+        "scripts/tests/commit-messages.test.mjs",
+        "scripts/tests/commit-policy.test.mjs",
         "scripts/coverage-configs.test.ts",
         "scripts/import_audit.test.ts",
         "scripts/import_audit.ts",
@@ -1096,7 +1099,7 @@ def test_cli_blocks_every_cell_when_a_pull_request_has_no_title(repo: Path, tmp_
     assert all(cell["blocked"] and "--pr-title" in cell["reason"] for cell in plan.values())
 
 
-LINT = ci_paths.REPO_ROOT / "packages/computer-use/scripts/check-commit-messages.mjs"
+LINT = ci_paths.REPO_ROOT / "scripts/check-commit-messages.mjs"
 SUBJECT_CASES = [
     ("Fix the thing", True),
     ("rtl: Preserve the root target", True),

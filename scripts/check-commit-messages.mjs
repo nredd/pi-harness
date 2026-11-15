@@ -5,7 +5,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// This imported workspace follows the harness house style, not upstream's conventional commits.
+// Repository commits follow the harness house style, not conventional commits.
 const validSubject = (subject) => subject.length <= 72 && /^(?:[a-z][a-z0-9-]*: )?[A-Z][^\n]*[^.\s]$/.test(subject);
 for (const subject of ["Resync computer-use with upstream", "rtl: Preserve the root target"])
 	assert.ok(validSubject(subject));

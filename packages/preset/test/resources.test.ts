@@ -8,7 +8,7 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { modelLeaks, modelValues, TIER_REF } from "@nredd/pi-test-lib/model-guard";
 import Schema from "typebox/schema";
 import { test } from "vitest";
-import { frontmatterOf, type Json, manifest, packedFiles, pkgRoot, readJson, readText, walk } from "./support.ts";
+import { frontmatterOf, type Json, manifest, pkgRoot, readJson, readText, walk } from "./support.ts";
 
 const AGENTS = [
 	"architect",
@@ -595,7 +595,6 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 		'from "../lib/footer-cache.ts"',
 		'from "../lib/footer-quota.ts"',
 	]);
-	assert.equal(packedFiles().filter((f) => f.startsWith("lib/")).length, 2);
 });
 
 test("code-review binds both axes to one immutable whole-PR range", () => {

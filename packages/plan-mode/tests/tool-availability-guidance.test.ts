@@ -23,7 +23,7 @@ test("published activation examples separate full selection from Pi 0.99+ modifi
 		.split("### Enable inactive built-in search tools in Pi")[1]
 		?.split("### Plan reinjection")[0];
 	assert.ok(activation);
-	const examples = [...activation.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => JSON.parse(match[1]));
+	const examples = [...activation.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => JSON.parse(match[1]!));
 	assert.deepEqual(examples, [
 		{ defaultTools: ["read", "bash", "edit", "write", "grep", "find", "ls"] },
 		{ defaultTools: ["+grep", "+find", "+ls"] },

@@ -168,10 +168,8 @@ const PRODUCERS: Producer[] = [
 const ZERO_UNCOVERED_FILES = [
 	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
-	"scripts/check-commit-messages.mjs",
 	"scripts/check-docs-platform.mjs",
 	"scripts/check-docs.mjs",
-	"scripts/check-package-assets.mjs",
 	"scripts/check-sync-ledger.mjs",
 	"scripts/check-sync-reverts.mjs",
 	"scripts/check-upstream-sync.mjs",
@@ -360,6 +358,8 @@ const RESOLVED: Record<string, unknown> = {
 	"scripts/vitest.config.ts": {
 		test: {
 			include: [
+				"scripts/tests/commit-messages.test.mjs",
+				"scripts/tests/commit-policy.test.mjs",
 				"scripts/coverage-configs.test.ts",
 				"scripts/import_audit.test.ts",
 				"scripts/merge-pr.test.ts",

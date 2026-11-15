@@ -36,21 +36,22 @@ Node `26.12.0` (`.node-version`), npm `11.20.0` (`packageManager`), Python `3.13
 
 ```sh
 make install                 # install-owned (verify core overrides, npm ci --ignore-scripts, uv sync --locked) + install-benchmark
-make check                   # owned-code gate: check-ts check-scripts check-integration check-benchmark
+make check                   # owned-code gate: check-commits check-ts check-scripts check-integration check-benchmark
 make check-package-contracts # packed tarballs through exact stock Pi; not part of `make check`
 make help                    # every target
 ```
 
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
+- `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
 - Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
   config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
   set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
   root `package.json`. Packages never pin them. A package that cannot meet a flag yet overrides it in its own
-  `tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents` and `todo` keep their own
+  `tsconfig.json` with a comment naming the issue; `subagents` and `todo` keep their own
   `biome.json` until their layout issues land (`computer-use` has none yet). In `dev-tools`, `preset`, `resource-sampler`,
-  `session-kit` and `subscription-router`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`
+  `session-kit`, `subscription-router` and `plan-mode`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`
 - `dist/` is gitignored build output (#866): `npm run build` or `make install-owned` regenerates it, `npm run check` builds first, and
   `package_contracts.pack` removes and rebuilds it in place before `npm pack --ignore-scripts`, so do not run contract packing
   concurrently with builds or readers of the same checkout. A missing `dist/index.ts` fails the `required` audit
@@ -61,7 +62,15 @@ make help                    # every target
   A suite that shares state beyond serial files (HOME, ports, global tools) isolates it per file; it does not lean on serialization
 - `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
-  Stock Pi compatibility is `make check-package-contracts`' job
+  Stock Pi compatibility is `make check-package-contracts`' job.
+  `scripts/package_contracts.py` is the sole tarball-membership authority: every package has exact
+  `packed_files` (and counted patterns for hashed chunks). `make check-scripts` runs its
+  `--packed-files-only` path without stock Pi, including production-source completeness and test/fixture
+  exclusion. Compiled libraries require their matching JavaScript and declaration outputs instead of
+  raw sources. Computer-use, preset and todo also begin their own `npm run check` with
+  `--packed-files-only --package <workspace-directory>` using the shared uv environment. This catches
+  missing assets and newly added, unpacked production modules before their language/test gates.
+  Add moved shipped paths there, not in package-local tarball tests
 - Keep package-local `node_modules/` host copies absent: the in-process stack loader refuses a
   second host copy
 - On macOS run long gates under `/usr/bin/caffeinate -is`. Do not relax real-time deadlines

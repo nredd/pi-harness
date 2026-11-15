@@ -4,8 +4,9 @@ Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7
 (`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`).
 
 `upstream/{session,theme}.ts` are unchanged copies from `packages/test-utils/`, with the upstream MIT
-license. `upstream/manifest.ts` also skips `tests/` and `vitest.config.ts` in its ship-manifest walk;
-neither is shipped. The local barrel exports only those helpers used by this package. The `ExtensionAPI`
+license. Tarball membership and production-source completeness are checked centrally by
+`scripts/package_contracts.py`, not an upstream manifest walker. The local barrel exports only
+those helpers used by this package. The `ExtensionAPI`
 and context doubles are no longer vendored: `todo-host.ts` presets the shared recording doubles from
 `@nredd/pi-test-lib/pi` (#865), which also dropped the `rpiv-workflow` type dependency.
 
@@ -15,9 +16,9 @@ cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home 
 config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:
 when its config is absent, the legacy fallback must use that same injected home.
 Tests never mutate `HOME` or `USERPROFILE`. `home-injection.test.ts` asserts zero
-real-home filesystem probes for both present and missing fallback configs. No
-upstream test assertions or tests are removed. Keep support/config files in dot paths so
-the ship-manifest walker does not mistake them for production.
+real-home filesystem probes for both present and missing fallback configs. The redundant upstream
+ship-manifest test and walker are removed in favor of the central package contracts. Support files
+remain in their existing dot paths until the package layout migration.
 
 Path audit: `config.ts` imports `homedir` for the call-time `loadConfig` default;
 its `XDG_CONFIG_HOME` read and `~/` expansion use the injected home. Both config

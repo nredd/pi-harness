@@ -212,6 +212,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         for path in ROOT.glob(pattern)
     }
     assert inventory(ROOT, audit) == {
+        "scripts/check-commit-messages.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
@@ -454,10 +455,8 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
 @pytest.mark.parametrize(
     "name",
     [
-        "check-commit-messages",
         "check-docs-platform",
         "check-docs",
-        "check-package-assets",
         "check-sync-ledger",
         "check-sync-reverts",
         "check-upstream-sync",
@@ -518,7 +517,6 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
         "async.test.mjs",
         "bounded-output.test.mjs",
         "cleanup.test.mjs",
-        "commit-messages.test.mjs",
         "desktop-tools.test.mjs",
         "find-params.test.mjs",
         "invariants.test.mjs",
