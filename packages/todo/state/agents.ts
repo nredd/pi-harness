@@ -301,7 +301,7 @@ function latestSettled(entries: readonly AgentEntry[]): AgentEntry | undefined {
 	return settled[0];
 }
 
-/** The state of the agent in `sessionId` that `owner` names, per `docs/overlay.md#owner-match-rule`. */
+/** The state of the agent in `sessionId` that `owner` names, per the README's owner match rule. */
 function agentEntryFor(sessionId: string, owner: string | undefined): AgentEntry | undefined {
 	const wanted = ownerKey(owner);
 	const agents = sessions.get(sessionId);

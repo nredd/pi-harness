@@ -138,7 +138,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 	assert.match(
 		linuxDoc,
 		/PI_COMPUTER_USE_ALLOW_BUILD=1/,
-		"docs/linux.md must document the opt-in source build",
+		"the Linux guide must document the opt-in source build",
 	);
 	assert.match(linuxDoc, /cargo/);
 	assert.equal(

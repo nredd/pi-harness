@@ -8,7 +8,7 @@ panes, and types into pane 0 meanwhile.
 - Per-OS baselines (+20%): `ms_input_p95_n4`, `ms_loop_lag_p99_n4`.
 - Ceilings, identical on macOS and WSL2: how much worse N=8 is than N=1 (`ratio_*`), and the
   bytes per second an idle pane writes (an idle pane must stay silent).
-Windows Terminal (ConPTY) and Ghostty cannot be driven from here; see `docs/tui-latency.md`.
+Windows Terminal (ConPTY) and Ghostty cannot be driven from here.
 """
 
 from __future__ import annotations

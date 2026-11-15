@@ -54,8 +54,7 @@ behavior are not comparable across providers.
   agent-controlled pytest configuration or plugins. Visible test side effects cannot reach hidden
   acceptance.
 - `workspace/` and `artifacts/` are disposable, git-ignored, and local-only; never push them.
-  This repository publishes audited source and sanitized historical results only. See the
-  [import provenance](../../docs/source-provenance.md) for redactions and preserved evidence.
+  This repository publishes audited source and sanitized historical results only. See the git history for redactions and preserved evidence.
 
 ## Install
 

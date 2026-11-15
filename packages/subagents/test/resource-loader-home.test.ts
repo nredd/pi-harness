@@ -17,7 +17,7 @@ let bundleDir: string;
 // bound; the test gets that bound plus a margin for its non-spawn part (fixture dirs, JSON parse,
 // `rmSync`), measured at most 11.5ms alone and 10ms under 50 spinners. Child time per test: 0.4-1.4s
 // alone, at most 2.28s hosted and 7.51s in a local gate. Rule and job IDs:
-// `docs/test-worker-budgets.md#measured-cold-budgets-312` (owner decision on #312, 2026-11-03).
+// the cold budgets measured for #312 (owner decision, 2026-11-03).
 const PROBE_CHILD_TIMEOUT_MS = 10_000;
 const PROBE_OVERHEAD_MARGIN_MS = 1_000;
 const PROBE_TEST_BUDGET_MS = PROBE_CHILD_TIMEOUT_MS + PROBE_OVERHEAD_MARGIN_MS;

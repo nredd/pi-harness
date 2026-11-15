@@ -8,7 +8,7 @@ export const jitiRuntimeLoadTestName = "generated runtime is loadable by Pi's Ji
  * `mkdtemp` that no cache can hit (#312). Measured: 0.37-0.46s alone, 2.76-3.12s under 50
  * self-terminating spinners, at most 1.36s hosted and 6.27s in a local 3-slot gate
  * (`issue158-gate7.log`). Budget is twice the worst gate figure. Rule and job IDs:
- * `docs/test-worker-budgets.md#measured-cold-budgets-312` (owner decision on #312, 2026-11-03).
+ * the cold budgets measured for #312 (owner decision, 2026-11-03).
  */
 export const jitiRuntimeLoadBudgetMs = 13_000;
 

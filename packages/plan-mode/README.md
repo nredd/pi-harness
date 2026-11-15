@@ -141,7 +141,7 @@ There is no startup flag.
 State-changing transitions require an idle run; tool selection is locked once planning starts.
 `show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
 Export defaults to the configured destination (`PLAN.md` when unset), never overwrites an existing target, and ends Plan mode only when exporting a ready plan.
-See [command workflows](./docs/command-workflows.md) for tool selection, busy-state recovery, path handling, and export cancellation, and [Security and privacy](#-security-and-privacy) before allowing custom tools.
+See [command workflows](#plan-command-workflows) for tool selection, busy-state recovery, path handling, and export cancellation, and [Security and privacy](#-security-and-privacy) before allowing custom tools.
 
 ## 🔒 Security and privacy
 
@@ -247,7 +247,7 @@ Its searchable model list snapshots the session's scoped models when configured,
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
 The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** (or **previous model** while a Plan model is applied) and carry it into the fresh session independently.
-With a [Plan model](./docs/settings.md#plan-model) applied, the model row shows the pre-Plan model as **previous model** instead of the tier and starts the fresh session on it, and the source session switches back to it; resuming the source plans on the tier again.
+With a [Plan model](#plan-model) applied, the model row shows the pre-Plan model as **previous model** instead of the tier and starts the fresh session on it, and the source session switches back to it; resuming the source plans on the tier again.
 The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu restores both persistent defaults.
 If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** (or **previous model**) without deleting the stored preference.
@@ -358,7 +358,7 @@ The default `thinkingLevel: "inherit"` avoids a Plan-specific reasoning-paramete
 A fixed Plan thinking level remains supported, but changing reasoning parameters can prevent provider-side state reuse even when prompts and tool schemas stay stable.
 
 The default `planModel` is unset, so Plan inherits the current model.
-A configured [Plan model](./docs/settings.md#plan-model) switches models, which costs the provider cache twice: on the first Plan request and again on the first post-Plan request.
+A configured [Plan model](#plan-model) switches models, which costs the provider cache twice: on the first Plan request and again on the first post-Plan request.
 
 ## 🤝 Workflow coexistence
 
@@ -421,18 +421,18 @@ The shortcut is disabled unless configured; enabling, changing, or removing it t
 Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
-Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
+Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
 
 > [!WARNING]
 > `safeSubcommands` is a JSON-only trust override for the matched command segment, not a read-only allowlist.
 > A matching prefix skips the argument checks for that one segment (e.g. `gh pr view 1 --web`); other segments, redirects, substitutions, and pipes into interpreters are still checked.
-> `trustedDirectories` (JSON-only, global settings only) widens where `cd` and `git -C` may point. See [`docs/settings.md`](docs/settings.md).
+> `trustedDirectories` (JSON-only, global settings only) widens where `cd` and `git -C` may point. See the [settings reference](#pi-plan-mode-settings-reference).
 > Configure both only for commands and directories you fully trust.
 
 Saves are ordered within one Pi process, preserve unknown fields, and publish atomically; separate Pi processes can still race.
 Invalid settings remain untouched and make Settings read-only; session-start failures use safe defaults.
 
-Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, shortcut configuration, shell-override examples, and legacy-file migration.
+Read the [settings reference](#pi-plan-mode-settings-reference) for all accepted values, tool-policy resolution, reinjection choices, shortcut configuration, shell-override examples, and legacy-file migration.
 
 ## 🧠 Codex-like behavior
 
@@ -471,6 +471,370 @@ Pi extension, Pi coding agent, plan mode, Codex-like plan mode, AI coding workfl
 
 Lockfile: there is no nested `package-lock.json`; the root workspace lock governs
 (`npm ci --ignore-scripts` at the repository root).
+
+## Pi Plan Mode settings reference
+
+Back to README
+
+- [Plan model](#plan-model)
+- [Default Plan policy tools](#default-plan-policy-tools)
+- [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)
+- [Plan reinjection](#plan-reinjection)
+- [Fresh implementation runtime](#fresh-implementation-runtime)
+- [Export destination](#export-destination)
+- [Toggle shortcut](#toggle-shortcut)
+- [Safe shell subcommands](#safe-shell-subcommands)
+- [Thinking level and persistence](#thinking-level)
+
+### ⚙️ Settings
+
+Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, **Plan mode shortcut**, and **Plan model**.
+You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
+`safeSubcommands` and `trustedDirectories` are JSON-only, and are read from this global file only (there are no project-level plan-mode settings, so a repository cannot widen its own shell policy).
+The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
+The shortcut is disabled when `toggleShortcut` is omitted.
+```json
+{
+  "thinkingLevel": "inherit",
+  "planModel": "@deep",
+  "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
+  "implementationPlanRetention": "clear-on-start",
+  "defaultImplementationModel": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5"
+  },
+  "defaultImplementationThinkingLevel": "high",
+  "defaultPlanExportPath": "PLAN.md",
+  "safeSubcommands": {
+    "git": ["rev-parse", "blame"],
+    "gh": ["pr view", "issue list"],
+    "kubectl": ["get", "apply"],
+    "npm": ["run inspect-custom"]
+  },
+  "trustedDirectories": ["~/code", "~/.local/share/chezmoi"],
+  "toggleShortcut": "<your_key>"
+}
+```
+
+#### Plan helper tools
+
+Plan helper schemas are stable from extension registration onward. Plan mode never changes the active status of `plan_mode_question` or `plan_mode_complete`. The separate model-only `plan_mode_enter({ reason })` tool is active by default, but `modelPlanEntry: false` removes it at session start or reload without widening any active-tool policy. The setting accepts only a boolean and is JSON-only; watched edits do not change entry-tool visibility mid-session. Entry requires explicit TUI/RPC confirmation within 10 seconds and is refused in print/JSON. Consent requests planning only; normal Plan admission and implementation approval remain mandatory.
+Tool visibility alone is not Plan activation.
+Only the latest effective active Plan contract authorizes `plan_mode_question` or `plan_mode_complete`; ordinary planning and the `writing-plans` skill use their own workflow instead.
+The retired `toolVisibility` key is ignored and preserved as unknown data when another setting is saved or a legacy settings file is migrated.
+
+#### Plan model
+
+`planModel` runs Plan turns on a subscription-router tier, like Claude Code's `opusplan`: plan on `@deep`, implement on whatever you were using.
+Omit it, or choose **Inherit**, to plan on the current model; that is the default.
+The value is a tier reference, `@` plus a router profile key matching `^[a-z0-9][a-z0-9._-]*$` (at most 512 characters), and selects the router's `router/<tier>` virtual model.
+A concrete `provider/modelId` is rejected and invalidates the settings file with `planModel must be a router tier like "@deep", not a concrete model id`: profile differences live in the router's tier mapping, not here.
+Settings lists the `router/*` models in the current scoped or available catalogue.
+
+When a Plan workflow starts, Plan mode remembers the current model and switches to the tier before the first Plan request.
+Pi's per-model thinking default does not replace the current or configured Plan thinking level during the switch.
+**Implement here**, **Export plan…**, **Save for later**, and `/plan exit` switch back to the remembered model and thinking before the next request.
+A `/model` change during Plan wins and stays after exit, as does a manual thinking change.
+The switch is persisted with Plan state, so `/reload` and resume keep planning on the tier and still restore the previous model on exit.
+**Start fresh and implement** uses **Fresh model** when set; otherwise its model row shows and uses the remembered pre-Plan model as **previous model**, not the tier.
+Either way, once Pi replaces the source session, the source switches back to the remembered model and thinking; its plan stays resumable, and resuming it, including after a partial start, plans on the tier again.
+
+An unregistered or unauthenticated tier warns once (`... is no longer available; using the current model.`) and Plan starts on the current model; the stored preference is kept.
+Quota exhaustion is the router's business: its exhaustion policy waits or fails, and Plan mode never substitutes another tier or model.
+A workflow-mutex refusal changes nothing.
+Saving applies to the next Plan workflow.
+See [cache-stable mode transitions](#-cache-stable-mode-transitions) for the cache cost of switching.
+
+#### Default Plan policy tools
+
+`defaultPlanTools` defines the initial runtime allowlist when a session has no stored pre-start selection.
+Omit it—or choose **Use automatic safe built-ins**—to allow already-active safe built-ins by default.
+Extension tools that declare `annotations.readOnlyHint: true` are admitted in addition to either list; see [annotated read-only tools](#annotated-read-only-tools).
+An explicit empty array appears as **No optional tools** and denies every ordinary tool while the required helpers remain callable in Plan mode.
+Neither setting changes model-visible tool schemas.
+
+Tool names must be non-empty strings; duplicates are removed in first-seen order.
+Explicit configured or session-selected names remain policy intent when their tool is unknown or inactive, but Plan mode never registers or activates them.
+The inactive menu takes a fresh registered and active tool snapshot each time it opens, while an already open picker does not update in place.
+At the workflow's first provider-bound context, after every `before_agent_start` handler has settled, Plan mode resolves retained names against Pi's live registry, exposure, and active declarations and freezes the executable allowlist.
+Automatic defaults recheck the effective source metadata at that boundary, so a custom override of a safe built-in name still requires explicit opt-in.
+The resolved allowlist persists with the active workflow and restores without reopening the resolution boundary after reload, resume, or tree navigation.
+Names unavailable at resolution wait for the next Plan workflow rather than a new session.
+An admitted tool may be reactivated or declared later without widening that frozen policy, but current hidden exposure still blocks it.
+Settings shows unresolved names as pending registration; resetting to automatic removes the entire override.
+
+Direct and `model-only` tools must be active; registered `codemode` or `deferred` tools can be selected without direct activation.
+MCP `codemode-deferred` is represented as public exposure `deferred`.
+`model-only` tools cannot run as nested calls; hidden and unsupported exposure remain unavailable regardless of active declarations or saved names.
+Missing exposure on older Pi versions retains the direct-tool behavior.
+Native MCP tools and orchestration tools require explicit opt-in just like other tools outside the reviewed core policy; server annotations never grant permission.
+For example, `"defaultPlanTools": ["read", "codemode", "mcp__docs__read"]` permits that MCP tool through an already-active `codemode` orchestrator.
+Selecting either tool does not enable the other, and every nested call needs its own Plan-policy admission.
+Pi's `tool_search` can declare a tool without restarting an admitted workflow, but cannot add an unselected name to its frozen Plan policy.
+
+Allowing a custom tool trusts its effective implementation; Plan mode does not infer its side effects from arguments or annotations.
+Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead.
+Names `edit`, `write`, and `update_plan` stay blocked, and `bash` or `powershell` stays subject to its limited-shell policy, including nested calls and regardless of source metadata.
+
+A selection accepted through **Choose tools, then start…** or `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes.
+The global setting remains the policy baseline for fresh sessions and sessions without an explicit selection.
+Settings saves immediately, but saved policy names and thinking apply only when a later Plan workflow starts; they never mutate active schemas or a workflow already in progress.
+
+#### Enable inactive built-in search tools in Pi
+
+Pi's default selection leaves the registered built-ins `grep`, `find`, and `ls` inactive.
+Settings and `/plan tools` label these rows **inactive in Pi**, not **blocked by Plan policy**.
+Pi controls tool activation; `defaultPlanTools` only grants Plan-mode execution permission and never activates tools.
+Built-in `edit` and `write` remain policy-blocked even when active in Pi.
+
+Change the Pi settings used by the current session, **not** `pi-plan-mode.json`.
+For the CLI, the user file is normally `~/.pi/agent/settings.json`, or `$PI_CODING_AGENT_DIR/settings.json` when configured.
+SDK hosts can use a different `agentDir` or a custom or in-memory `SettingsManager`; ask the host which settings source and restart procedure apply rather than assuming the CLI path.
+The picker cannot determine that source and does not display a concrete Pi settings path.
+
+**Full selection (including Pi releases before 0.99 with `defaultTools`):** plain names replace the defaults.
+If you use Pi's normal defaults, this full list preserves them and adds the search tools:
+
+```json
+{
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"]
+}
+```
+
+If you already have a plain-name `defaultTools` list, add `"grep"`, `"find"`, and `"ls"` to it instead of replacing your custom selection with this example.
+
+**Additive selection (Pi 0.99 or newer only):** `+name` and `-name` modifiers change the inherited selection.
+With no existing `defaultTools`, use:
+
+```json
+{
+  "defaultTools": ["+grep", "+find", "+ls"]
+}
+```
+
+On Pi 0.99+, append these modifiers to an existing non-empty `defaultTools` array to preserve custom inclusions and exclusions.
+If your existing list is `[]`, use plain names `["grep", "find", "ls"]` to enable only the search tools; a modifier-only list would restore the inherited defaults too.
+Do not use modifiers on older releases: they treat them as exact names and can disable the normal built-in tools.
+Preserve unrelated settings in either setup.
+Releases without `defaultTools` need an upgrade for this setup; the extension's older-Pi compatibility is unchanged.
+Restart Pi, then reopen `/plan settings` → **Plan policy tools** or `/plan tools` and select the tools if your Plan policy does not already allow them.
+CLI tool allowlists/exclusions can override this setting, and trusted project settings can affect the effective selection.
+If the rows remain inactive, check those overrides before changing Plan policy.
+Custom tools and overrides of built-in names still require explicit Plan-policy opt-in; this setup does not bypass blocked policy, hidden exposure, or missing registration.
+
+#### Plan reinjection
+
+The stable JSON field `implementationPlanRetention` controls whether and how long the `context` hook restores the exact approved plan when ordinary model context no longer contains it.
+Omit it or use `clear-on-start` for **Off — conversation history only**, the default Codex-like behavior with no active-plan state or hidden context injection.
+In the planning session, this policy sends `Implement the plan.` and relies on the accepted plan already present in ordinary conversation history.
+A fresh session or saved-plan implementation instead places the complete plan in one ordinary kickoff prompt because its planning history is unavailable or intentionally excluded.
+Use `clear-after-first-run` for **Through first implementation run** to guarantee the exact plan until that implementation's first fully settled run ends.
+Use `keep` for **Until manually cleared** to guarantee and reinject the exact plan until `/plan exit` or supersession.
+A resumed guaranteed-plan cleanup policy re-arms against the first context in the replacement session.
+Failed handoff delivery restores the ready or saved plan and does not run automatic cleanup.
+
+Changing this setting applies to the next Implement action only.
+Each guaranteed-plan implementation stores its effective policy, so a later Settings save cannot shorten or extend an implementation already in progress.
+Conversation-history-only implementation has no active Plan-mode state to show, export, or clear after kickoff.
+
+#### Fresh implementation runtime
+
+Omit `defaultImplementationModel` and `defaultImplementationThinkingLevel` to use **same as plan**, the default.
+While a [Plan model](#plan-model) is applied, the model row shows **previous model** instead and uses the pre-Plan model, not the tier.
+A configured model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
+`defaultImplementationThinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use omission rather than `inherit` for **same as plan**.
+Choosing **Same as plan** in Settings removes the corresponding field.
+
+The model picker snapshots the current session's scoped models when a non-empty scope exists, otherwise Pi's currently available models.
+A configured model outside that catalogue remains stored but is ineffective for that handoff: Settings and the ready-plan fresh screen report that it is unavailable and fall back to the planning session model (or **previous model** while a Plan model is applied).
+The preference becomes effective again if the model returns to the applicable catalogue.
+This fallback also protects a persistent default that disappears while the ready-plan fresh screen is open.
+Authentication and one-shot model races still use the normal fresh-handoff preflight and recovery behavior.
+
+These persistent values seed each ready-plan **Start fresh and implement** screen, where either choice can be overridden once without changing Settings.
+The saved-plan direct fresh action applies the persistent values without an extra picker and warns when its configured model falls back.
+Changes save immediately and apply to later fresh implementation actions; an already open fresh-action screen keeps its own menu-local draft.
+They never switch the planning session's current model or thinking level.
+
+#### Export destination
+
+`defaultPlanExportPath` controls only exports that omit a path.
+Omit it—or submit an empty value in Settings—to use `PLAN.md`.
+The value must be a non-empty string of at most 4,096 characters without terminal control characters or NUL.
+Relative values are resolved against the current working directory at export time; the Settings detail and every export input preview the concrete resolved destination.
+An explicit `/plan export <path>` is a one-off override and does not edit Settings.
+Saving a new destination affects the next export immediately, including export of a currently active implementation.
+
+The existing no-overwrite, cancellation, and atomic Plan-state behavior is unchanged.
+A failed save rolls the row back to its previous value; a failed or cancelled export preserves the plan and target.
+Long previews wrap or truncate to the available terminal width without changing the raw path used by the action.
+
+#### Toggle shortcut
+
+`toggleShortcut` configures the Plan-mode toggle in TUI mode; it is disabled by default.
+Set it to a Pi key identifier, or omit it to disable the shortcut on the next load.
+Enabling, changing, or removing the shortcut requires `/reload` or restarting Pi, whether saved through Settings or edited in JSON.
+The current binding stays unchanged until then; Settings shows the configured value separately from the value loaded at startup.
+Pi snapshots shortcut registrations when binding the editor, so Plan mode registers once per extension runtime rather than attempting live rebinding.
+Other settings retain their existing watched reload behavior, and `/plan` commands are unchanged.
+
+Avoid conflicts with Pi or other extension shortcuts; the startup value is a registration preference, not a guarantee that Pi accepts it or the terminal sends that key combination.
+Tree navigation and compaction do not apply pending shortcut changes.
+
+#### Safe shell subcommands
+
+`safeSubcommands` maps any command prefix to subcommand prefixes that the user chooses to trust in limited `bash` and `powershell`.
+For example, `"kubectl": ["get", "apply"]` trusts a command segment beginning with `kubectl get` or `kubectl apply`, while `"npm": ["run inspect-custom"]` trusts a segment beginning with `npm run inspect-custom`.
+Command keys and subcommand entries are trimmed and must be non-empty strings.
+Matches are literal and case-sensitive after leading whitespace in the segment is ignored.
+A match requires the complete `<command> <subcommand>` prefix followed by whitespace or the end of the segment, or a prefix that itself ends in a non-alphanumeric character (`"gh": ["api repos/"]` matches `gh api repos/x`), so `"kubectl": ["apply"]` does not match `kubectl applies`.
+Duplicate values and command keys that become equal after trimming are merged in first-seen order.
+Omitted `safeSubcommands`, an empty object, and empty arrays preserve the default policy.
+
+A matching prefix approves *only its own segment*: Plan mode splits the submitted command on `&&`, `||`, `;` and `|`, and every other segment is validated independently.
+For example, `"kubectl": ["apply"]` permits `kubectl apply -f deployment.yaml && git status` but not `kubectl apply -f deployment.yaml && rm -rf build`.
+The matched segment skips the command-specific argument checks, so `gh pr view 218 --web` is still permitted by `"gh": ["pr view"]`; choose entries that are as specific as your workflow permits.
+Shell syntax is still enforced for the whole command, prefix or not: redirections, `$(...)` or backtick substitution, multiline input, and background `&` are rejected, and piping into an interpreter (`sh`, `bash`, `zsh`, `python`, `node`, `perl`, `ruby`, `awk`, `env`, `xargs`, `eval`, `pwsh`, ...) is rejected even when that interpreter is itself configured.
+A trusted command can still read or modify anything available to Pi's process, so it is not a sandbox or a read-only guarantee.
+
+Three commands keep built-in argument checks even when a prefix names them:
+
+- `ssh <host> <command>` needs a configured `ssh <host>` prefix (e.g. `"ssh": ["home"]`). The remote command must be non-empty, must not start with an ssh option, and is re-validated recursively with the same policy; `cd` and `git -C` are rejected on the remote side.
+- `gh api` is allowed without configuration but is GET only: `-X`/`--method` other than `GET`, `-f`, `-F`, `--field`, `--raw-field`, `--input`, and the `graphql` endpoint are rejected.
+- `curl` is allowed without configuration but rejects output (`-o`, `-O`, `--output`, `--remote-name*`), data (`-d`, `--data*`, `-F`, `--form*`, `--json`), upload (`-T`, `--upload-file`), config and file-writing flags (`-K`, `-D`, `-c`), and any non-GET `-X`/`--request`. Quote URLs containing `?`, `*`, `[` or `{`.
+
+#### Annotated read-only tools
+
+A tool registered by an installed extension or package with `annotations: { readOnlyHint: true }` classifies as `read-only (annotated)` and is admitted to the default Plan policy alongside `defaultPlanTools` (or the safe built-ins when that is unset).
+A session-selected list from **Choose tools, then start…** or `/plan tools` still takes precedence, and the usual activation and exposure rules apply.
+The hint is author-asserted and unverified, so it only covers user-scope extensions and packages and explicit `-e` files; native MCP tools (`builtin:mcp`), other built-in extensions, and project-scope extensions keep needing explicit opt-in even when they declare the hint. A user-installed package that proxies an MCP server is trusted as that package.
+A tool with a mutating mode must not declare the hint.
+The hint means the tool makes no direct edits, not that it has no side effects. Plan is not a sandbox: an admitted tool may run repo code such as `build.rs`, `conftest.py` and tests, which may write build or cache outputs (`target/`, `.coverage`, `.pytest_cache`). `pi-dev-tools` `cargo_check`, `cargo_test`, `cargo_doc` and `py_test` are admitted on that basis.
+
+`ssh_exec` is mutating outside Plan mode, so it carries no `readOnlyHint`; Plan admits a trusted-source tool named `ssh_exec` by name (same source rules as above) and gates every call as follows. `ssh_pull` and `ssh_push` get no such exception in default admission; an explicit opt-in of either gets no input gate. This is risk reduction, not an OS sandbox.
+
+`ssh_exec` calls (`{ host, command }`) are validated like `ssh <host> <command>`: `host` must be a configured `ssh` prefix in `safeSubcommands` and `command` must pass the remote reviewed policy, so `cd`, `git -C`, redirects and mutations are rejected; `cwd` must be a plain path and parameters other than `host`, `command`, `cwd` and `timeout` (notably `stdin`) are refused.
+
+#### Trusted directories
+
+`trustedDirectories` lists extra directories, beyond Pi's working directory, that `cd` and `git -C` may target in limited `bash` and `powershell` (`cd` is `bash` only).
+Entries must be absolute paths or start with `~`/`~/`, which is expanded to the home directory; anything else invalidates the settings file.
+A target is accepted only when it resolves under the working directory or a trusted directory, has no `..` component or flag, and uses no shell expansion other than a leading `~`.
+Resolution is lexical: symlinks are not followed.
+`cd <dir>` takes exactly one such argument and moves the effective directory for the following segments, so `cd ~/code/pi && git -C sub log` resolves `sub` under `~/code/pi`; a `cd` followed by `|` is rejected.
+`git -C <dir>` additionally keeps rejecting `-c`, `--git-dir`, `--work-tree`, and `--exec-path`.
+Omitted or empty `trustedDirectories` limits both to the working directory.
+
+**Migration from whole-command trust:** a configured prefix no longer exempts trailing commands or unsupported syntax.
+Simple configured commands continue to work; for supported chains, each additional segment must be reviewed independently or explicitly trusted through its own narrow entry.
+Run workflows requiring redirects, multiline input, or other unsupported syntax outside Plan mode after review rather than relying on the old bypass.
+The JSON schema and settings file do not need migration.
+
+Segments that do not match still use the built-in fail-closed reviewed policy.
+That default policy includes Git `status`, `log`, `diff`, `show`, `branch`, `remote`, `ls-files`, and `grep`, with command-specific argument checks.
+It rejects output and input redirects, shell expansion and substitution, explicit pager or browser requests, explicit external diff, textconv, filter, or signature helpers, mutating flags, malformed command layouts, and any parsed chain containing an unsafe segment.
+Read-dominant Git validators accept ordinary inspection flags without requiring `--no-textconv` or `--no-ext-diff`; Git may therefore invoke a helper configured by the user or trusted repository even when the command does not request one explicitly.
+Use the negative flags when you want to suppress those configured helpers.
+Mixed read/write surfaces remain narrower: use `git remote show -n` to avoid invoking a transport helper, while mutating `branch` and `remote` forms remain blocked unless explicitly trusted through `safeSubcommands`.
+
+Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while configured commands can expose or modify any data available to Pi's process.
+A built-in-policy `git -C <path>` inspection is accepted only when the path stays under Pi's working directory or a trusted directory.
+The default policy reduces accidental mutation and cross-repository executable configuration; the segment a configured `safeSubcommands` prefix approves bypasses that protection.
+A non-object `safeSubcommands`, empty command or subcommand string, non-array value, or non-string entry invalidates the entire settings file and triggers the normal warning/default fallback on session start.
+Likewise a `trustedDirectories` value that is not an array of absolute or `~`-prefixed path strings invalidates the file.
+
+#### Thinking level
+
+Plan mode inherits Pi's current thinking level by default.
+Set `thinkingLevel` to request a fixed level only while Plan mode is active.
+Supported values are `inherit`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+The extension snapshots the prior level and restores it on exit only if the level still matches the value it applied; a manual change made during Plan mode is preserved.
+A Settings save does not change Pi's current or default thinking level and takes effect only when the next Plan workflow starts.
+
+Settings saves are serialized in invocation order inside one Pi process.
+Each save re-reads the latest valid document, preserves unknown top-level fields and unedited `safeSubcommands`, then publishes through a same-directory temporary file and rename.
+A missing file stays absent until an explicit save.
+Invalid JSON, invalid values, oversized content, non-regular files, and read failures make Settings read-only; the existing bytes and previous effective settings remain.
+This in-process queue is not a cross-process lock, so concurrent separate Pi processes can still race.
+
+Invalid settings produce a warning and fall back to inherited Plan thinking, available safe-built-in tool defaults, `clear-on-start`, same-as-plan fresh runtime choices, and `PLAN.md`.
+Compatibility: a valid legacy `plan-mode.json` remains readable with a warning and is never modified automatically.
+If Settings is explicitly saved while only that legacy file exists, the extension creates canonical `pi-plan-mode.json` from the complete legacy document, applies the selected change, preserves unknown fields, and leaves the legacy file untouched.
+If both files exist, the canonical filename takes precedence.
+
+## Plan command workflows
+
+[Back to README](#-commands)
+
+### Start and choose tools
+
+`/plan start` activates Plan mode without sending a model message.
+`/plan <prompt>` starts with an initial planning message, or sends an ordinary follow-up when already active.
+Only the exact argument `start` selects direct activation; `/plan start a migration` is a planning prompt.
+There is no startup flag; run `/plan start` after Pi launches.
+
+Before starting, `/plan tools` or **Choose tools, then start…** stages a session-specific tool policy.
+**Done — start with this policy** stores the selection and starts Plan mode.
+Back, Escape, Ctrl+C, disposal, session replacement, or shutdown discards the unconfirmed draft without changing Plan state, active tools, thinking, or stored selection.
+Persistent defaults belong in [Settings](#pi-plan-mode-settings-reference).
+
+The TUI selector supports fuzzy search and paging; RPC shows the unfiltered list.
+The selector distinguishes callable tools, inactive direct tools, hidden tools, blocked policies, and pending registration.
+**Inactive in Pi** means Pi must enable the tool separately; **blocked by Plan policy** cannot be enabled by selecting the row.
+For inactive built-in `grep`, `find`, and `ls`, follow the [Pi settings setup](#enable-inactive-built-in-search-tools-in-pi) before reopening the selector.
+Native MCP tools are explicit opt-ins; registered `codemode` and `deferred` exposure is selectable without direct activation.
+Select the needed orchestrator separately, and select every nested callee; neither choice grants the other permission.
+Selected names awaiting metadata stay selected for first-request resolution.
+Reopen the selector to refresh newly registered tools.
+Active and ready workflows lock tools and settings; exit and start a new workflow to change the allowlist.
+See [Planning and implementation](#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
+
+### Ready-plan approval
+
+After a valid standalone `plan_mode_complete` call, or an accepted legacy completion, the ready-plan chooser opens once when the run is idle and has no queued messages. It does not open for incomplete prose, cancellation, session replacement, reload, supersession, or exit.
+
+The fullscreen chooser has no policy or reinjection copy. It packs `Show latest proposed plan`, `Implement here`, `Start fresh and implement`, `Export plan…`, `Edit plan…`, `Save for later`, `Stay in Plan mode`, and `Discard plan and exit` into responsive action cells. Use arrows or Tab to select, Enter to confirm, or click a cell. Escape runs `Stay in Plan mode` (the plan is kept); Ctrl+C closes the chooser with no action; Ctrl+G runs `Edit plan…`. Only `Discard plan and exit` discards the plan. Narrow terminals wrap cells safely. RPC retains the same description-free selector fallback.
+
+The stored plan and ready state remain intact until the selected action completes. `/plan` still opens the state-aware management menu when needed.
+
+### Edit a plan
+
+`Edit plan…` in the ready-plan chooser, the `/plan` ready menu, and the saved-plan menu opens the plan in Pi's editor (`ctx.ui.editor`, so `externalEditor`/`$VISUAL`/`$EDITOR`; RPC uses its `editor` dialog). Saving applies the `plan_mode_complete` limits (trimmed, non-empty, at most 50,000 characters), replaces the ready or saved plan with source `user_edit`, persists it with the Plan state, and reopens the same menu. The next model request carries one hidden `plan-mode-plan-edit` message with a unified diff from the earlier version. Implement here, Start fresh, export, `/plan show`, and `pi-plan-mode:plan-approved` use the edited text; under **Off — conversation history only**, Implement here sends the edited plan in its prompt instead of `Implement the plan.`, and Start fresh transfers only the edited plan.
+
+Editing is refused with a warning while an agent run is active, both before the editor opens and when it closes, because a deferred edit message could land after a newer plan. Cancelling the editor or saving unchanged text changes nothing. An edit refused after the editor closes (a run started, the text is empty or over the limit, the plan changed meanwhile, or the edit could not be recorded) is reported and not applied; its text is kept in memory and prefills the editor the next time you edit the same plan in this session, until it is saved or that plan changes; a tree move or session switch drops it. Cancelling that restored text keeps it; saving text identical to the plan drops it. Editing is not a decline. Print and JSON modes have no editor and reach none of these menus.
+
+### Busy transitions and recovery
+
+Wait for Pi's run to settle before starting, exiting, saving, exporting a ready plan, implementing, or using another state-changing menu action or configured shortcut.
+Busy transitions leave state unchanged and report a warning in TUI/RPC or an error in print/JSON mode.
+An ordinary follow-up or `/plan finalize` can still run while Plan mode is active because neither changes its mode contract.
+
+`show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
+Cancellation and failed implementation preflight leave the stored plan intact.
+For finalization retries, fresh-session recovery, and non-interactive limitations, see [Planning and implementation](#-planning-and-implementation).
+
+### Export Markdown
+
+`/plan export [path]` writes a ready, saved, or active implementation plan.
+Without a path, it uses the configured **Export destination**, defaulting to `PLAN.md`; an explicit path always overrides the setting for that export.
+Relative paths resolve from Pi's current working directory at export time, absolute paths stay absolute, a leading `@` is accepted, and missing parent directories are created.
+Existing files, directories, and symbolic links are never overwritten: choose another path or remove the target first.
+The output preserves accepted Markdown exactly apart from one trailing newline.
+
+In TUI or RPC, **Export plan…** asks for a destination and shows the configured value and its resolved path.
+Submit an empty value to use the configured destination.
+A failed export retains the TUI draft for correction or reopens the RPC input; Escape returns without writing.
+
+A successful ready-plan export ends Plan mode, restores thinking, and clears the ready state without starting a model turn or changing active tools.
+Saved and active implementation exports preserve their existing state.
+Failed or cancelled exports leave Plan state unchanged.
+Export is an explicit user-requested file mutation, and the resulting file can be read with normal tools; model-initiated Plan-mode writes remain blocked.
+
+### Declined plans
+
+Every explicit confirmation request supersedes earlier permission, including a voluntary confirmation before the first proposal. Until an affirmative answer or `/plan finalize`, completion stays blocked; this does not invent a declined proposal in the history.
+
+Escape or `Stay in Plan mode` on a ready plan, or a message sent while a plan awaits action, is a decline; `Edit plan…` is not. `declinedPlans` remains historical, while the persisted `reproposalReview` lifecycle controls both the completion guard and model instruction. After a decline, `plan_mode_complete` errors until `plan_mode_question` is called with `mode: "reproposal_confirmation"` and its canonical **Re-propose now** choice is selected, or `/plan finalize` runs. The tool fixes the confirmation wording to permission to submit the revised plan for review, not implementation. Ordinary clarification, **Not yet**, cancellation, custom text, and label-like text never grant permission. On `ui_unavailable`, the model tells the user to run `/plan finalize`; after cancellation or **Not yet**, it continues material planning or waits for input instead of immediately repeating confirmation. One decline asks the model to restate and re-verify; two or more require a resolved/open thread list. The counter resets when Plan mode exits or a new workflow starts.
 
 ## 📄 License
 

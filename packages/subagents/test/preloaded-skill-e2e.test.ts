@@ -28,7 +28,7 @@ function writeScout(agentDir: string): void {
 // extension's ~74 source files with no fs cache (`JITI_FS_CACHE=false`, #354). Cold case: 1.3-1.7s
 // alone, up to 4.94s passing hosted, 9.69s in a local gate (`gate-321-r2.log`); warm case at most
 // 3.25s hosted and 5.82s there. Budget is twice the worst gate figure. Rule and job IDs:
-// `docs/test-worker-budgets.md#measured-cold-budgets-312` (owner decision on #312, 2026-11-03).
+// the cold budgets measured for #312 (owner decision, 2026-11-03).
 const COLD_CHILD_PROMPT_BUDGET_MS = 20_000;
 
 describe("preloaded skills in real child prompts", () => {

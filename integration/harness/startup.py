@@ -3,7 +3,7 @@
 Unlike `scenarios/bench/test_startup.py`, this accepts an explicit installed `pi` and profile.
 It loads a temporary local extension and submits only its nonce-bearing command, never a model
 prompt. Use a synthetic sandbox when measuring without live-profile startup side effects.
-Run with `uv run python -m harness.startup`, see `docs/startup-latency.md`.
+Run with `uv run python -m harness.startup`.
 
 `input_ready_s` requires acknowledgement from the command handler after the footer is drawn.
 Screen echo alone, including a cooked tty echoing typed characters, proves no readiness.

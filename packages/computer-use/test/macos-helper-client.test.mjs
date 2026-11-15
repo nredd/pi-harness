@@ -23,7 +23,7 @@ import {
 } from "./support/fake-helper.mjs";
 
 // Cases that wait out the client's own fixed timers (30 x 100 ms probe loop, 400 ms restart pause, 2 s glow
-// timeout). Longest alone: ~5.9 s; budget is ~7x that, see docs/test-worker-budgets.md.
+// timeout). Longest alone: ~5.9 s; budget is ~7x that (#312).
 const SLOW_MS = 45_000;
 
 const cleanups = [];

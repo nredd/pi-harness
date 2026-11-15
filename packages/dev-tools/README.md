@@ -7,7 +7,7 @@ of this package.
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Typed pi tools for the workflows agents otherwise drive through raw Bash: git, ssh, Python
 (uv, ruff, ty, pytest) and Rust (cargo). Each tool spawns the real binary with an argv array,
@@ -327,9 +327,7 @@ All nine are deferred (found via `search_tools`).
 
 ## Development
 
-Wrapper coverage measurement, executable-boundary scope, fixture isolation, and Node/Bun commands:
-[coverage evidence](../../docs/dev-tools-coverage.md). External tool implementations are not part of
-this package's coverage denominator.
+External tool implementations are not part of this package's coverage denominator.
 
 ```
 # From the monorepo root:

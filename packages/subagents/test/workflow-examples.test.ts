@@ -1,7 +1,7 @@
 /**
  * workflow-examples.test.ts — the shipped example workflows, actually run.
  *
- * `docs/workflows.md` links every file in `examples/workflows/` as a recipe, so
+ * `README.md` links every file in `examples/workflows/` as a recipe, so
  * a broken one is documentation that lies. Nothing else guards them: `biome.json`
  * scopes linting to `src/**` and `test/**`, and `tsconfig.json` compiles only
  * `src/**`, so these files are neither linted nor typechecked. This suite is it.
@@ -196,7 +196,7 @@ const runExample = (name: string, host: WorkflowHost, onScriptCoverage = collect
 
 describe("shipped example workflows", () => {
   it("ships at least the examples the guide links", () => {
-    // docs/workflows.md has a row per file; a deletion should break this first.
+    // README.md has a row per file; a deletion should break this first.
     expect(exampleFiles).toEqual([
       "compose.js",
       "fan-out-audit.js",

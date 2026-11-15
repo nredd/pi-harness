@@ -62,10 +62,10 @@ export function runCoverage(args, spawn = spawnSync) {
 	const version = spawn("cargo", ["llvm-cov", "--version"], { encoding: "utf8" });
 	if (version.error || version.status !== 0)
 		throw new Error(
-			"Missing cargo-llvm-cov; install pinned cargo-llvm-cov and llvm-tools-preview using docs/rust-coverage.md",
+			"Missing cargo-llvm-cov; install pinned cargo-llvm-cov and llvm-tools-preview per the package README",
 		);
 	if (version.stdout.trim() !== `cargo-llvm-cov ${TOOL_VERSION}`)
-		throw new Error(`Expected cargo-llvm-cov ${TOOL_VERSION}; see docs/rust-coverage.md`);
+		throw new Error(`Expected cargo-llvm-cov ${TOOL_VERSION}; see the package README`);
 	const directory = output ?? mkdtempSync(path.join(os.tmpdir(), `cu-rust-coverage-${crate}-`));
 	// Never clean a caller's output or reuse instrumented profiles from an earlier run.
 	mkdirSync(directory, { recursive: true });
@@ -112,7 +112,7 @@ export function runCoverage(args, spawn = spawnSync) {
 		writeFileSync(path.join(run, "run.log"), `${result.stdout ?? ""}\n${result.stderr ?? ""}`, { flag: "a" });
 		if (result.error || result.status !== 0)
 			throw new Error(
-				`cargo llvm-cov failed (${result.error?.message ?? result.status}); inspect ${run}/run.log; install matching llvm-tools-preview per docs/rust-coverage.md`,
+				`cargo llvm-cov failed (${result.error?.message ?? result.status}); inspect ${run}/run.log; install matching llvm-tools-preview per the package README`,
 			);
 		return result.stdout;
 	};

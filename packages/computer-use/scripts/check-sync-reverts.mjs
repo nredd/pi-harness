@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Negative controls for the carried patch groups. Only deterministic, non-GUI checks run.
-// Source-wiring assertions are not live native verification; UPSTREAM.md records that boundary.
+// Source-wiring assertions are not live native verification; the package README records that boundary.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateLedger, validateLedgerOrder, validateUpstreamRows } from "./check-sync-ledger.mjs";
+import { validateLedger, validateLedgerOrder } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const cases = [
@@ -1212,10 +1212,8 @@ export function main(
 	const nodeModules = path.join(repository, "node_modules");
 	try {
 		const ledger = JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8"));
-		const upstreamMarkdown = readFileSync(path.join(root, "UPSTREAM.md"), "utf8");
 		validateLedger(ledger, cases);
-		validateUpstreamRows(ledger, upstreamMarkdown);
-		validateLedgerOrder(ledger, upstreamMarkdown, readFileSync(fileURLToPath(import.meta.url), "utf8"));
+		validateLedgerOrder(ledger, readFileSync(fileURLToPath(import.meta.url), "utf8"));
 		if (argv.includes("--validate-only")) {
 			deps.log("Sync ledger and actual revert cases validated");
 			return 0;
@@ -1235,7 +1233,6 @@ export function main(
 			"package.json",
 			"README.md",
 			"CONTRIBUTING.md",
-			"UPSTREAM.md",
 			"sync-patches.json",
 			"LICENSE",
 		]) {

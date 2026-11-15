@@ -100,7 +100,6 @@ OAuth state, context usage, branch/session entries and footer data from Pi; home
 uses `HOME`, then `USERPROFILE`, then the OS home; SDK callers can instead inject `homeDir` through
 `createExpandedFooter`. It does not read `settings/personal-defaults.json`,
 router configuration files, `cacheWarming`, or the persisted compaction setting.
-See [the behavior comparison](../../docs/footer-port.md) for source references and migration boundaries.
 
 ## Contents
 
@@ -237,8 +236,7 @@ footer scenarios (quota, cache, widths, lifecycle), headless mode bindings, stat
 dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource discovery in a temporary
 `HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
 
-Packed-tarball evidence (`make check-package-contracts`, see
-[package contracts](../../docs/package-contracts.md)): the packed preset is audited and installed alone.
+Packed-tarball evidence (`make check-package-contracts`): the packed preset is audited and installed alone.
 The native preset package gate separately loads its installed skill/extension resources through Pi
 from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
 the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
@@ -257,14 +255,10 @@ npm ci --ignore-scripts
 npm run check -w @nredd/pi-preset   # biome, strict tsc, full Vitest on Node and Bun 1.4.4
 ```
 
-Istanbul measurement commands, per-file before/after counts, default-timer/failure/replay
-contracts and mutation evidence are recorded [here](../../docs/preset-istanbul-coverage.md).
-The provider used for that receipt is ephemeral; it does not change coverage policy or config.
-
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock, timeZone, homeDir })` optionally injects one clock, an IANA zone pinning reset labels, and a home for cwd presentation (all default to process values) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
 - `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
-- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam and routed physical model/thinking labels. `lib/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- The footer now differs from its source snapshot by the optional factory/clock seam and routed physical model/thinking labels. `lib/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
 - All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,

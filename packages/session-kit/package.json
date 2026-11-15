@@ -11,8 +11,6 @@
   "files": [
     "src",
     "dist/pi-stats-export.mjs",
-    "docs/stats-snapshots.md",
-    "docs/mon-dashboard.md",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"

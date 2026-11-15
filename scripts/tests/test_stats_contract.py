@@ -1,7 +1,7 @@
 """Attack portable-stats contract inspections without executing the artifact matrix.
 
 References:
-    https://github.com/nredd/pi-harness/blob/main/docs/package-contracts.md
+    https://github.com/nredd/pi-harness/blob/main/scripts/package_contracts.py
 """
 
 from __future__ import annotations

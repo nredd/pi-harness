@@ -64,7 +64,6 @@ ALLOWED = frozenset(
 # Exact synthetic values (normalized IPv4 text, or a home path name) that a fixture file may carry. Every
 # entry must still appear in its file, so a stale entry fails instead of lingering as a blind spot.
 FIXTURE_VALUES: dict[str, frozenset[str]] = {
-    "docs/source-provenance.md": frozenset({"user"}),
     "integration/tests/test_startup.py": frozenset({"x"}),
     "packages/computer-use/test/macos-helper-client.test.mjs": frozenset({"u"}),
     "packages/dev-tools/tests/fixtures/cargo/check.jsonl": frozenset({"user"}),
@@ -72,7 +71,7 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
     "packages/plan-mode/test/blocked-token-explainer-failure.test.ts": frozenset({"user"}),
     "packages/plan-mode/test/blocked-token.test.ts": frozenset({"user"}),
     "packages/plan-mode/test/child-policy.test.ts": frozenset({"u"}),
-    "packages/subagents/docs/workflows.md": frozenset({"me"}),
+    "packages/subagents/README.md": frozenset({"me"}),
     "packages/subagents/src/output-file.ts": frozenset({"user"}),
     "packages/subagents/test/manager-registry-guard.test.ts": frozenset({"victim"}),
     "packages/subagents/test/output-file-path.test.ts": frozenset({"user"}),
