@@ -41,6 +41,7 @@ import {
 } from "./detached-results.js";
 import { readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
 import { errorMessage } from "./error-message.js";
+import { SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, SUBAGENT_COMPLETED_EVENT, SUBAGENT_CREATED_EVENT, SUBAGENT_FAILED_EVENT, SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT, SUBAGENT_STARTED_EVENT } from "./events.js";
 import { GroupJoinManager } from "./group-join.js";
 import { resolveAgentDir } from "./home-paths.js";
 import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam } from "./invocation-config.js";
@@ -775,9 +776,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }
 
   /** The terminal lifecycle channel for a settled record; shared by the live and the detached path. */
-  function lifecycleChannel(record: AgentRecord): "subagents:failed" | "subagents:completed" {
+  function lifecycleChannel(record: AgentRecord): typeof SUBAGENT_FAILED_EVENT | typeof SUBAGENT_COMPLETED_EVENT {
     return record.status === "error" || record.status === "stopped" || record.status === "aborted"
-      ? "subagents:failed" : "subagents:completed";
+      ? SUBAGENT_FAILED_EVENT : SUBAGENT_COMPLETED_EVENT;
   }
 
   function spoolDetachedResult(sessionFile: string, record: AgentRecord) {
@@ -821,7 +822,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       const { record } = agent;
       const own = sessionFile === current;
       const { wakesParent: _wakes, ...fields } = eventFields(record);
-      pi.events.emit(own ? "subagents:started" : "subagents:other_session_survivor", survivorEventData({
+      pi.events.emit(own ? SUBAGENT_STARTED_EVENT : SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT, survivorEventData({
         id: record.id,
         type: record.type,
         description: record.description,
@@ -923,7 +924,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // Bind later handoff announcements to this exact run.
     lifecycleRuns.set(record, manager.nextSequence());
     // Emit started event when agent transitions to running (including from queue)
-    pi.events.emit("subagents:started", {
+    pi.events.emit(SUBAGENT_STARTED_EVENT, {
       id: record.id,
       type: record.type,
       description: record.description,
@@ -989,7 +990,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // `subagents:created` must still see it end. Same payload as a settled stop.
     if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
     record.settleSeq = manager.nextSequence();
-    pi.events.emit("subagents:failed", buildEventData(record));
+    pi.events.emit(SUBAGENT_FAILED_EVENT, buildEventData(record));
   }, (note) => {
     // The retention sweep dropped a result nobody read: say so now, where the parent sees it on
     // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
@@ -1228,7 +1229,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       keepSessionIds: [ctx.sessionManager.getSessionId(), ...retainReferencedTranscripts(referenced, ctx.sessionManager?.getHeader?.()?.parentSession)],
     });
     announceSurvivors();
-    unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
+    unwatchAnnounce ??= pi.events.on(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
     fleet.update();
     // Guard mirrors the `!scheduler.isActive()` pattern below: session_start
@@ -1613,7 +1614,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // detached resume re-announces an existing id. `sendToBackground` only
       // hands off a record it holds.
       const record = manager.getRecord(id)!;
-      pi.events.emit("subagents:created", {
+      pi.events.emit(SUBAGENT_CREATED_EVENT, {
         id,
         type: record.type,
         description: record.description,
@@ -2025,7 +2026,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // spawned with), so report the record's own identity — a "created"
     // event carrying the caller's type would re-register the agent under
     // the wrong one in cross-extension mirrors keyed by id.
-    pi.events.emit("subagents:created", {
+    pi.events.emit(SUBAGENT_CREATED_EVENT, {
       id,
       type: existing.type,
       description: existing.description,
@@ -2903,7 +2904,7 @@ Terse command-style prompts produce shallow, generic work.
         fleet.update();
 
         // Emit created event
-        pi.events.emit("subagents:created", {
+        pi.events.emit(SUBAGENT_CREATED_EVENT, {
           id,
           type: subagentType,
           description: params.description,

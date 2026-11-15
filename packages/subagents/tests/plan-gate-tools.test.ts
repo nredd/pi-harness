@@ -58,8 +58,8 @@ async function boot(planning: boolean, admit: { ok: boolean; resetAt?: number } 
   subagentsExtension(pi);
   const c = ctx({ model: { provider: "anthropic", id: "claude-sonnet-5-5", name: "Sonnet" } });
   await lifecycle.get("session_start")?.({}, c);
-  const run = (name: string, params: Record<string, unknown>) =>
-    tools.get(name).execute("tc", { prompt: "go", description: "work", ...params }, undefined, undefined, c);
+  const run = (name: string, params: Record<string, unknown>, onUpdate?: (update: unknown) => void) =>
+    tools.get(name).execute("tc", { prompt: "go", description: "work", ...params }, undefined, onUpdate, c);
   return { run, plan, shutdown: async () => lifecycle.get("session_shutdown")?.() };
 }
 
@@ -107,8 +107,20 @@ describe("tool activity tracking", () => {
       return { responseText: "done", session: { dispose: vi.fn(), messages: [] }, aborted: false, steered: false } as never;
     });
     const { run, shutdown } = await boot(false);
-    const result = await run("Agent", { subagent_type: "general-purpose", run_in_background: false });
-    expect(textOf(result)).toContain("done");
+    const updates: { toolUses: number; activity: string }[] = [];
+    const result = await run("Agent", { subagent_type: "general-purpose", run_in_background: false }, (update) => {
+      const { details } = update as { details: { toolUses: number; activity: string } };
+      updates.push({ toolUses: details.toolUses, activity: details.activity });
+    });
+    expect(result.details.toolUses).toBe(2);
+    // Ending `grep` leaves `read` running; ending `read` leaves nothing.
+    expect(updates).toEqual([
+      { toolUses: 0, activity: "thinking…" },
+      { toolUses: 0, activity: "reading…" },
+      { toolUses: 0, activity: "reading, searching…" },
+      { toolUses: 1, activity: "reading…" },
+      { toolUses: 2, activity: "thinking…" },
+    ]);
     await shutdown();
   });
 });

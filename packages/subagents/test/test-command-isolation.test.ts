@@ -1,10 +1,10 @@
 /** Exercise the public npm test entry point, not a hand-isolated Vitest invocation. */
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
+import { runTree } from "@nredd/pi-test-lib/run-tree";
 import { expect, it } from "vitest";
 
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
@@ -26,18 +26,13 @@ it("npm test cannot inherit operator model tiers through HOME or explicit config
   try {
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "subagents.json"), cfg);
-    const result = spawnSync(
+    const result = await runTree(
       "npm",
       ["test", "--", "test/background-by-default.test.ts", "--coverage.enabled=false", "--maxWorkers=1"],
-      {
-        cwd: packageDir,
-        timeout: CHILD_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-        encoding: "utf8",
-        env: { ...process.env, ...isolatedHomeEnv(home) },
-      },
+      { cwd: packageDir, timeoutMs: CHILD_TIMEOUT_MS, env: { ...process.env, ...isolatedHomeEnv(home) } },
     );
     expect(result.error).toBeUndefined();
+    expect(result.timedOut).toBe(false);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("3 passed");
     // Isolation must not repair or erase the caller's config to get green.

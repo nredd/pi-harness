@@ -2,15 +2,13 @@
  * Cross-package parity pins. The packages install standalone and redeclare these literals, so the one
  * place that sees both sides asserts they agree (nredd/pi-harness#867).
  */
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PLAN_APPROVED_EVENT as PLAN_MODE_APPROVED_EVENT } from "../../packages/plan-mode/src/plan-approval.ts";
 import { MONITOR_STARTED_EVENT, MONITOR_STOPPED_EVENT } from "../../packages/session-kit/src/monitor/index.ts";
+import * as subagentEvents from "../../packages/subagents/src/events.ts";
 import { handleBase } from "../../packages/subagents/src/mention.ts";
 import { ownerKey } from "../../packages/todo/state/agents.ts";
 import * as todo from "../../packages/todo/tool/types.ts";
-
-const subagentsSource = readFileSync(new URL("../../packages/subagents/src/index.ts", import.meta.url), "utf8");
 
 describe("todo's redeclared channel names", () => {
 	it("match plan-mode's approval channel", () => {
@@ -23,24 +21,27 @@ describe("todo's redeclared channel names", () => {
 		expect(todo.MONITOR_LIFECYCLE_EVENTS).toEqual([MONITOR_STARTED_EVENT, MONITOR_STOPPED_EVENT]);
 	});
 
-	// subagents declares these inline at each `pi.events.emit`/`on` site, so pin the literal in its source.
 	it.each([
-		todo.SUBAGENT_CREATED_EVENT,
-		todo.SUBAGENT_STARTED_EVENT,
-		todo.SUBAGENT_COMPLETED_EVENT,
-		todo.SUBAGENT_FAILED_EVENT,
-		todo.SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
-		todo.SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
-	])("match the %s channel subagents uses", (channel) => {
-		expect(subagentsSource).toContain(`"${channel}"`);
+		["created", todo.SUBAGENT_CREATED_EVENT, subagentEvents.SUBAGENT_CREATED_EVENT],
+		["started", todo.SUBAGENT_STARTED_EVENT, subagentEvents.SUBAGENT_STARTED_EVENT],
+		["completed", todo.SUBAGENT_COMPLETED_EVENT, subagentEvents.SUBAGENT_COMPLETED_EVENT],
+		["failed", todo.SUBAGENT_FAILED_EVENT, subagentEvents.SUBAGENT_FAILED_EVENT],
+		["announce_survivors", todo.SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, subagentEvents.SUBAGENT_ANNOUNCE_SURVIVORS_EVENT],
+		[
+			"other_session_survivor",
+			todo.SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
+			subagentEvents.SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
+		],
+	])("match subagents' %s channel", (_name, theirs, ours) => {
+		expect(theirs).toBe(ours);
 	});
 
 	it("keep the full lifecycle list", () => {
 		expect(todo.SUBAGENT_LIFECYCLE_EVENTS).toEqual([
-			"subagents:created",
-			"subagents:started",
-			"subagents:completed",
-			"subagents:failed",
+			subagentEvents.SUBAGENT_CREATED_EVENT,
+			subagentEvents.SUBAGENT_STARTED_EVENT,
+			subagentEvents.SUBAGENT_COMPLETED_EVENT,
+			subagentEvents.SUBAGENT_FAILED_EVENT,
 		]);
 	});
 });

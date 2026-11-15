@@ -57,6 +57,8 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "scripts/run-vitest.test.ts",
     "scripts/run-vitest.ts",
     "scripts/vitest.config.ts",
+    # `run-vitest.ts` imports `isolatedHomeEnv` from it.
+    "tests/lib/src/isolated-home.ts",
 }
 WSL_INPUT_PREFIXES = (
     ".github/",

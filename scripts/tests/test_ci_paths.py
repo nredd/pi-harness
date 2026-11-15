@@ -363,6 +363,7 @@ def test_write_github_output_keeps_input_flags_independent(
         "scripts/run-vitest.test.ts",
         "scripts/run-vitest.ts",
         "scripts/vitest.config.ts",
+        "tests/lib/src/isolated-home.ts",
     ],
 )
 def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> None:
