@@ -2303,22 +2303,24 @@ def audit_source_files(
     source_root = package_dir / "src"
     # Todo's upstream layout still has root-level modules. Preserve its production walker
     # until its independent src/ migration; skip development directories, not production ones.
-    root = source_root if source_root.is_dir() else package_dir
+    legacy_layout = not source_root.is_dir()
+    root = package_dir if legacy_layout else source_root
+    excluded = {"test", "tests", "fixtures"} | ({"node_modules", "docs", "dist"} if legacy_layout else set())
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(package_dir)
-        if any(part.startswith(".") for part in relative.parts):
+        if legacy_layout and any(part.startswith(".") for part in relative.parts):
             continue
-        if set(relative.parts) & {"node_modules", "docs", "dist", "test", "tests", "fixtures"}:
+        if set(relative.parts) & excluded:
             continue
         if not path.is_file():
             continue
         if path.name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs")):
             continue
-        if path.name in {"test-fixtures.ts", "vitest.config.ts"}:
+        if path.name == "test-fixtures.ts" or (legacy_layout and path.name == "vitest.config.ts"):
             continue
         # Packages without src/ (preset, todo) also carry development scripts/configs.
         # Todo's old walker required every production .ts module, not JavaScript tooling.
-        if not source_root.is_dir() and (package_dir.name != "todo" or path.suffix != ".ts"):
+        if legacy_layout and (package_dir.name != "todo" or path.suffix != ".ts"):
             continue
         expected = (
             (

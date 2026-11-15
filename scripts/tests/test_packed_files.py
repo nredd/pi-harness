@@ -62,6 +62,8 @@ def test_source_completeness_and_test_exclusion(tmp_path: Path) -> None:
         "src/test/helper.ts",
         "src/fixtures/data.ts",
         "src/.hidden/helper.ts",
+        "src/docs/runtime.ts",
+        "src/dist/runtime.ts",
         "src/notes.md",
         "src/vitest.config.ts",
         "src/test-fixtures.ts",
@@ -69,7 +71,19 @@ def test_source_completeness_and_test_exclusion(tmp_path: Path) -> None:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("")
-    assert pc.audit_source_files(tmp_path, ["src/index.ts", "src/extra.mjs", "src/notes.md"]) == []
+    production = [
+        "src/index.ts",
+        "src/extra.mjs",
+        "src/notes.md",
+        "src/.hidden/helper.ts",
+        "src/docs/runtime.ts",
+        "src/dist/runtime.ts",
+        "src/vitest.config.ts",
+    ]
+    assert pc.audit_source_files(tmp_path, production) == []
+    for omitted in production:
+        problems = pc.audit_source_files(tmp_path, [name for name in production if name != omitted])
+        assert any(omitted in problem for problem in problems)
     problems = pc.audit_source_files(tmp_path, ["src/index.ts", "test/a.ts", "unit.test.ts"])
     assert any("src/extra.mjs" in problem for problem in problems)
     assert sum("must not ship" in problem for problem in problems) == 2
