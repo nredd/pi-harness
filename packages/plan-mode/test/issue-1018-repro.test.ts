@@ -3,7 +3,7 @@ import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { filterAvailableSelectedToolNames, snapshotPlanModeSelectedNames } from "../src/tool-selection.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
 const LATE_TOOL = "late_tool";
 
@@ -13,7 +13,7 @@ async function startPlan(options: {
   allTools?: ReturnType<typeof builtinTool>[];
 }) {
   const allTools = options.allTools ?? [builtinTool("read")];
-  const mock = createMockPi({ activeTools: options.activeTools ?? ["read"], allTools });
+  const mock = createPlanPi({ activeTools: options.activeTools ?? ["read"], allTools });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
@@ -23,31 +23,31 @@ async function startPlan(options: {
       },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   return { allTools, context, mock };
 }
 
 function registerLateTool(fixture: Awaited<ReturnType<typeof startPlan>>, name = LATE_TOOL) {
   fixture.allTools.push(extensionTool(name));
-  fixture.mock.rawPi.setActiveTools([...new Set([...fixture.mock.rawPi.getActiveTools(), name])]);
+  fixture.mock.pi.setActiveTools([...new Set([...fixture.mock.pi.getActiveTools(), name])]);
 }
 
 async function runBeforeAgentStart(fixture: Awaited<ReturnType<typeof startPlan>>) {
-  for (const handler of fixture.mock.events.get("before_agent_start") ?? []) {
+  for (const handler of fixture.mock.handlers.get("before_agent_start") ?? []) {
     await handler({ prompt: "plan", systemPrompt: "stable" }, fixture.context.ctx);
   }
 }
 
 async function runContext(fixture: Awaited<ReturnType<typeof startPlan>>) {
-  for (const handler of fixture.mock.events.get("context") ?? []) {
+  for (const handler of fixture.mock.handlers.get("context") ?? []) {
     await handler({ messages: [] }, fixture.context.ctx);
   }
 }
 
 async function callTool(fixture: Awaited<ReturnType<typeof startPlan>>, toolName: string) {
-  return fixture.mock.events.get("tool_call")?.[0]?.({ toolName, input: {} }, fixture.context.ctx) as
+  return fixture.mock.handlers.get("tool_call")?.[0]?.({ toolName, input: {} }, fixture.context.ctx) as
     | { block?: boolean; reason?: string }
     | undefined;
 }
@@ -177,17 +177,17 @@ test("a resolved allowlist stays frozen when its active workflow is restored", a
 
   registerLateTool(fixture);
   const branch = fixture.mock.entries.map((entry) => ({ type: "custom", ...entry }));
-  const replacement = createMockContext({
+  const replacement = createPlanContext({
     sessionManager: {
       getBranch: () => branch,
       getEntries: () => branch,
       getEntry: () => undefined,
     },
   });
-  await fixture.mock.events.get("session_start")?.[0]?.({ reason: "resume" }, replacement.ctx);
-  await fixture.mock.events.get("context")?.[0]?.({ messages: [] }, replacement.ctx);
+  await fixture.mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, replacement.ctx);
+  await fixture.mock.handlers.get("context")?.[0]?.({ messages: [] }, replacement.ctx);
 
-  const result = (await fixture.mock.events.get("tool_call")?.[0]?.(
+  const result = (await fixture.mock.handlers.get("tool_call")?.[0]?.(
     { toolName: LATE_TOOL, input: {} },
     replacement.ctx,
   )) as { block?: boolean } | undefined;
@@ -203,21 +203,21 @@ test("restoration revalidates a frozen allowed name after late registration", as
   await runContext(fixture);
   const branch = fixture.mock.entries.map((entry) => ({ type: "custom", ...entry }));
   fixture.allTools.splice(1, 1);
-  fixture.mock.rawPi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
-  const replacement = createMockContext({
+  fixture.mock.pi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
+  const replacement = createPlanContext({
     sessionManager: {
       getBranch: () => branch,
       getEntries: () => branch,
       getEntry: () => undefined,
     },
   });
-  await fixture.mock.events.get("session_start")?.[0]?.({ reason: "resume" }, replacement.ctx);
+  await fixture.mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, replacement.ctx);
   fixture.allTools.push(extensionTool(LATE_TOOL));
-  fixture.mock.rawPi.setActiveTools([...fixture.mock.rawPi.getActiveTools(), LATE_TOOL]);
-  await fixture.mock.events.get("context")?.[0]?.({ messages: [] }, replacement.ctx);
+  fixture.mock.pi.setActiveTools([...fixture.mock.pi.getActiveTools(), LATE_TOOL]);
+  await fixture.mock.handlers.get("context")?.[0]?.({ messages: [] }, replacement.ctx);
 
   assert.equal(
-    await fixture.mock.events.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, replacement.ctx),
+    await fixture.mock.handlers.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, replacement.ctx),
     undefined,
   );
 });
@@ -238,22 +238,22 @@ test("malformed persisted workflow policy fails closed", async () => {
       },
     },
   };
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", LATE_TOOL],
     allTools: [builtinTool("read"), extensionTool(LATE_TOOL)],
   });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: {
       getBranch: () => [stateEntry],
       getEntries: () => [stateEntry],
       getEntry: () => undefined,
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
-  await mock.events.get("context")?.[0]?.({ messages: [] }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  await mock.handlers.get("context")?.[0]?.({ messages: [] }, context.ctx);
 
-  const result = (await mock.events.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, context.ctx)) as
+  const result = (await mock.handlers.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, context.ctx)) as
     | { block?: boolean }
     | undefined;
   assert.equal(result?.block, true);
@@ -262,26 +262,26 @@ test("malformed persisted workflow policy fails closed", async () => {
 test("session replacement discards pending intent from the replaced workflow", async () => {
   let configured = [LATE_TOOL];
   const allTools = [builtinTool("read")];
-  const mock = createMockPi({ activeTools: ["read"], allTools });
+  const mock = createPlanPi({ activeTools: ["read"], allTools });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
       settings: { thinkingLevel: "inherit" as const, defaultPlanTools: [...configured] },
     }),
   });
-  const first = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, first.ctx);
+  const first = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, first.ctx);
   await mock.commands.get("plan")?.handler("start", first.ctx);
 
   configured = [];
-  const replacement = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, replacement.ctx);
+  const replacement = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, replacement.ctx);
   await mock.commands.get("plan")?.handler("start", replacement.ctx);
   allTools.push(extensionTool(LATE_TOOL));
-  mock.rawPi.setActiveTools([...mock.rawPi.getActiveTools(), LATE_TOOL]);
-  await mock.events.get("context")?.[0]?.({ messages: [] }, replacement.ctx);
+  mock.pi.setActiveTools([...mock.pi.getActiveTools(), LATE_TOOL]);
+  await mock.handlers.get("context")?.[0]?.({ messages: [] }, replacement.ctx);
 
-  const result = (await mock.events.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, replacement.ctx)) as
+  const result = (await mock.handlers.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, replacement.ctx)) as
     | { block?: boolean }
     | undefined;
   assert.equal(result?.block, true);
@@ -290,21 +290,21 @@ test("session replacement discards pending intent from the replaced workflow", a
 test("tree restoration replaces pending intent with the restored selection", async () => {
   let branch: unknown[] = [];
   const allTools = [builtinTool("read")];
-  const mock = createMockPi({ activeTools: ["read"], allTools });
+  const mock = createPlanPi({ activeTools: ["read"], allTools });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
       settings: { thinkingLevel: "inherit" as const, defaultPlanTools: [LATE_TOOL] },
     }),
   });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: {
       getBranch: () => branch,
       getEntries: () => branch,
       getEntry: () => undefined,
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   branch = [
     {
@@ -313,14 +313,14 @@ test("tree restoration replaces pending intent with the restored selection", asy
       data: { enabled: true, awaitingAction: false, selectedToolNames: ["read"] },
     },
   ];
-  await mock.events.get("session_tree")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_tree")?.[0]?.({}, context.ctx);
   allTools.push(extensionTool(LATE_TOOL));
-  mock.rawPi.setActiveTools([...mock.rawPi.getActiveTools(), LATE_TOOL]);
-  await mock.events.get("context")?.[0]?.({ messages: [] }, context.ctx);
+  mock.pi.setActiveTools([...mock.pi.getActiveTools(), LATE_TOOL]);
+  await mock.handlers.get("context")?.[0]?.({ messages: [] }, context.ctx);
 
-  const lateResult = (await mock.events.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, context.ctx)) as
+  const lateResult = (await mock.handlers.get("tool_call")?.[0]?.({ toolName: LATE_TOOL, input: {} }, context.ctx)) as
     | { block?: boolean }
     | undefined;
   assert.equal(lateResult?.block, true);
-  assert.equal(await mock.events.get("tool_call")?.[0]?.({ toolName: "read", input: {} }, context.ctx), undefined);
+  assert.equal(await mock.handlers.get("tool_call")?.[0]?.({ toolName: "read", input: {} }, context.ctx), undefined);
 });

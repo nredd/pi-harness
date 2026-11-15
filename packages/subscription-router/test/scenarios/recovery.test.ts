@@ -2,7 +2,7 @@
 import { fauxAssistantMessage, fauxToolCall, getAssistantTexts } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
+import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.js";
 
 const TERMINAL = "insufficient_quota: You exceeded your current quota";
 const RETRY = "429 Too Many Requests: rate_limit_error";

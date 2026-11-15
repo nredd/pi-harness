@@ -15,7 +15,7 @@ import {
   type NestedAgentManager,
   setMaxSubagentDepth,
 } from "../src/nested-tools.js";
-import { encodeCwd } from "../src/output-file.js";
+import { encodeCwd, transcriptRoot } from "../src/output-file.js";
 import { resetPackageState, setProjectTrusted } from "../src/package-resources.js";
 
 let cwd: string;
@@ -754,7 +754,7 @@ describe("child-safe nested Agent tools", () => {
     });
 
     // Real path construction (not mocked here), so clean up what it writes.
-    const transcriptRoot = join(tmpdir(), `pi-subagents-${process.getuid?.() ?? 0}`, encodeCwd(cwd));
+    const cwdRoot = join(transcriptRoot(), encodeCwd(cwd));
     try {
       const [agent] = tools();
       await execute(agent, { subagent_type: "scout", description: "traced", prompt: "Do work" });
@@ -767,7 +767,7 @@ describe("child-safe nested Agent tools", () => {
       await execute(agent, { subagent_type: "quiet", description: "untraced", prompt: "Do work" });
       expect(records.get("child-1").outputFile).toBeUndefined();
     } finally {
-      rmSync(transcriptRoot, { recursive: true, force: true });
+      rmSync(cwdRoot, { recursive: true, force: true });
     }
   });
 

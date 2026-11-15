@@ -67,9 +67,9 @@ source-bound references, and `npm run docs:check` validates them without buildin
 
 `npm run check` runs the owned deterministic package checks. Vitest reports native and live suites off
 their platform or opt-in as skipped; this package remains outside the coverage gate. Never run
-`test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
+`test/macos-helper-live.test.mjs` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
-`npm run test:macos-live` and the TCC-granted smoke are owner-only and NOT RUN in CI.
+`test/macos-helper-live.test.mjs` and the TCC-granted smoke are owner-only and NOT RUN in CI.
 
 `npm run coverage:rust` needs Rust `1.97.1` with `llvm-tools-preview` and `cargo-llvm-cov` `0.9.1`, with
 that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot):
@@ -95,7 +95,7 @@ stays in the denominator; this slice does not claim whole-file coverage or chang
 against the ledger without running mutations; the normal command still runs every applicable
 mutation.
 
-`npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
+`npm test -- test/platform-linux.test.mjs --coverage.enabled=false` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
 The next request carries a 64 KiB payload so Bun also reaches an OS write failure instead of accepting
@@ -234,9 +234,9 @@ Non-pointer actions on the same tool:
 
 ### Tests
 
-`npm run test:macos-target`, `test:macos-native` (compiles the `PURE` region of `bridge.swift`),
-`test:act-outcomes`, `test:desktop`, `test:unpaired` (stubbed backend: unpaired successor, delta refs, lock
-scope). `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live` drives the real helper against an `NSAlert` fixture
+`npm test -- test/macos-observe-target.test.mjs --coverage.enabled=false`, `test/macos-native-pure.test.mjs` (compiles the `PURE` region of `bridge.swift`),
+`test/act-outcomes.test.mjs`, `test/desktop-tools.test.mjs`, `test/unpaired-act.test.mjs` (stubbed backend: unpaired successor, delta refs, lock
+scope). `PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false` drives the real helper against an `NSAlert` fixture
 (`windowElement`, `look`, `act`, `axWaitFor`, `desktopInput` parsing, `activateApp`, clipboard round trip with
 restore, ref epoch across a restart, look-scoped ref eviction). It restarts only its own helper instance, launched
 from the installed bundle on the isolated test home's socket.
@@ -290,7 +290,7 @@ Bugs found by the live run and fixed:
   coordinates sent, including negative y.
 - Multi-waypoint drag selects text in TextEdit; a rejected drag leaves no button held.
 - Real modal `NSAlert` (`scripts/fixtures/alert-app.swift`): ref-only observe works, visual gives `root_not_capturable`,
-  `act` press by ref dismisses it; the `act_ui` dismissal reports `target_closed`. Opt-in script: `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live`.
+  `act` press by ref dismisses it; the `act_ui` dismissal reports `target_closed`. Opt-in script: `PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false`.
   It fails when `windowElement` is mutated to always fall back to the first window (checked).
 - Fusion with the sidebar up: Py radio via SPACE, then click console field + `print(1)` + RETURN in one batch; the console shows `1`.
 - Bambu Cmd+I: `act_ui` reports `New root: dialog "Open" (modal)` and a `Note:` that a foreground modal is in front. Background-delivered Escape

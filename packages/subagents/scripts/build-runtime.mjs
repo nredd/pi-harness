@@ -2,8 +2,8 @@
 
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-// Repository-only build tool (not packed); plan-mode owns the shared builder, see its README.
-import { createRuntimeBuilder } from "../../plan-mode/scripts/runtime-builder.mjs";
+// Repository-only build tool (not packed); the shared builder lives in the root `scripts/`.
+import { createRuntimeBuilder } from "../../../scripts/runtime-builder.mjs";
 
 /**
  * `src/index.ts` is ~80 TypeScript modules (1.3 MB) that Pi's Jiti transforms on every launch,

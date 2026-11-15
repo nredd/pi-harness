@@ -4,7 +4,7 @@ import { test } from "vitest";
 import { createDeclineContractMessage, DECLINE_CONTRACT_MESSAGE_TYPE } from "../src/decline-contract.js";
 import planMode from "../src/plan-mode.js";
 import { restorePlanModeState } from "../src/state.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
+import { createCustomSelectorHarness, createPlanContext, createPlanPi } from "./support.js";
 
 const PLAN = "# Decline gate plan\n\n1. Do the thing.";
 const QUESTION = {
@@ -39,8 +39,8 @@ const MISSING_SETTINGS = { readSettings: async () => ({ kind: "missing" as const
 type Execute = (...args: unknown[]) => Promise<{ details?: { cancelled?: boolean } }>;
 
 interface Fixture {
-  mock: ReturnType<typeof createMockPi>;
-  ctx: ReturnType<typeof createMockContext>["ctx"];
+  mock: ReturnType<typeof createPlanPi>;
+  ctx: ReturnType<typeof createPlanContext>["ctx"];
   complete(): Promise<unknown>;
   ask(
     question?: Record<string, unknown>,
@@ -54,11 +54,11 @@ interface Fixture {
 
 /** `readyChoice` picks what the TUI chooser does once a plan settles. */
 async function fixture(readyChoice: "tui.select.cancel" | "stay" | "\u0003" = "stay"): Promise<Fixture> {
-  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  const mock = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const questionTui = createTuiHarness({ width: 60, rows: 30 });
   let questionPending = false;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -71,9 +71,10 @@ async function fixture(readyChoice: "tui.select.cancel" | "stay" | "\u0003" = "s
       return harness.resultPromise;
     },
   });
-  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const tool = (name: string) => mock.tools.find((candidate) => candidate.name === name)?.execute as Execute;
+  const tool = (name: string) =>
+    [...mock.tools.values()].find((candidate) => candidate.name === name)?.execute as Execute;
   return {
     mock,
     ctx: context.ctx,
@@ -91,12 +92,12 @@ async function fixture(readyChoice: "tui.select.cancel" | "stay" | "\u0003" = "s
       return result;
     },
     async settle() {
-      await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+      await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
     },
-    input: async (text, source = "interactive") => mock.events.get("input")?.[0]?.({ text, source }, context.ctx),
+    input: async (text, source = "interactive") => mock.handlers.get("input")?.[0]?.({ text, source }, context.ctx),
     state: () => mock.entries.at(-1)?.data as Record<string, unknown>,
     async contract() {
-      const result = (await mock.events.get("context")?.[0]?.({ messages: [] }, context.ctx)) as {
+      const result = (await mock.handlers.get("context")?.[0]?.({ messages: [] }, context.ctx)) as {
         messages: Array<{ customType?: string; content?: string }>;
       };
       return result.messages.find((message) => message.customType === DECLINE_CONTRACT_MESSAGE_TYPE)?.content;
@@ -192,8 +193,9 @@ test("a cancelled question does not lift the gate", async () => {
   const f = await fixture();
   await f.complete();
   await f.settle();
-  const noUi = createMockContext({ mode: "rpc", hasUI: false });
-  const ask = f.mock.tools.find((candidate) => candidate.name === "plan_mode_question")?.execute as Execute;
+  const noUi = createPlanContext({ mode: "rpc", hasUI: false });
+  const ask = [...f.mock.tools.values()].find((candidate) => candidate.name === "plan_mode_question")
+    ?.execute as Execute;
   const result = await ask("q", REPROPOSAL_CONFIRMATION, undefined, undefined, noUi.ctx);
   assert.equal(result.details?.cancelled, true);
   assert.equal(f.state().reproposalReview, "required");
@@ -237,7 +239,7 @@ test("extension prompts and replies without a ready plan do not decline", async 
 test("custom-message wakes preserve a ready plan and do not decline it", async () => {
   const f = await fixture("\u0003");
   await f.complete();
-  await f.mock.events.get("before_agent_start")?.[0]?.({ messageType: "custom", systemPrompt: "s" }, f.ctx);
+  await f.mock.handlers.get("before_agent_start")?.[0]?.({ messageType: "custom", systemPrompt: "s" }, f.ctx);
   assert.equal(f.state().latestPlan, PLAN);
   assert.equal(f.state().awaitingAction, true);
   assert.equal(f.state().declinedPlans ?? 0, 0);
@@ -248,7 +250,7 @@ test("a new proposal can be declined again and the counter accumulates", async (
   await f.complete();
   await f.settle();
   await f.ask(REPROPOSAL_CONFIRMATION);
-  await f.mock.events.get("before_agent_start")?.[0]?.({ prompt: "p", systemPrompt: "s" }, f.ctx);
+  await f.mock.handlers.get("before_agent_start")?.[0]?.({ prompt: "p", systemPrompt: "s" }, f.ctx);
   await f.complete();
   await f.settle();
   assert.equal(f.state().declinedPlans, 2);
@@ -274,7 +276,7 @@ test("the injected contract follows the decline count", async () => {
 
   await f.ask(REPROPOSAL_CONFIRMATION);
   assert.equal(await f.contract(), undefined);
-  await f.mock.events.get("before_agent_start")?.[0]?.({ prompt: "p", systemPrompt: "s" }, f.ctx);
+  await f.mock.handlers.get("before_agent_start")?.[0]?.({ prompt: "p", systemPrompt: "s" }, f.ctx);
   await f.complete();
   await f.settle();
   const twice = await f.contract();

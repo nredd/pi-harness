@@ -8,29 +8,29 @@ import {
   type PlanApprovedPayload,
 } from "../src/plan-approval.js";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 const PLAN = "# Widgets\n\n## Work\n- Add `alpha`\n- Wire `beta`\n";
 
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown, plan = PLAN) {
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
+async function completePlan(mock: ReturnType<typeof createPlanPi>, ctx: unknown, plan = PLAN) {
+  const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as
     | ((...args: unknown[]) => Promise<unknown>)
     | undefined;
   assert.ok(complete);
   await complete("complete", { plan }, undefined, undefined, ctx);
 }
 
-function listen(mock: ReturnType<typeof createMockPi>) {
+function listen(mock: ReturnType<typeof createPlanPi>) {
   const seen: PlanApprovedPayload[] = [];
-  mock.eventBus.on(PLAN_APPROVED_EVENT, (data) => seen.push(data as PlanApprovedPayload));
+  mock.bus.on(PLAN_APPROVED_EVENT, (data) => seen.push(data as PlanApprovedPayload));
   return seen;
 }
 
 test("implementing an approved plan in this session announces it once, verbatim", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi);
   const seen = listen(mock);
-  const context = createMockContext();
+  const context = createPlanContext();
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
   assert.equal(seen.length, 0, "a proposed plan is not an approved one");
@@ -52,9 +52,9 @@ test("implementing an approved plan in this session announces it once, verbatim"
 });
 
 test("approval without any listener is harmless", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi);
-  const context = createMockContext();
+  const context = createPlanContext();
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
   await mock.commands.get("plan")?.handler("implement", context.ctx);
@@ -62,11 +62,11 @@ test("approval without any listener is harmless", async () => {
 });
 
 test("a session whose branch holds an approval announces it before the first prompt, once per plan", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi);
   const seen = listen(mock);
   const branch: unknown[] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: {
       getSessionId: () => "fresh-session",
       getSessionName: () => undefined,
@@ -74,13 +74,13 @@ test("a session whose branch holds an approval announces it before the first pro
       getEntries: () => branch,
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   assert.equal(seen.length, 0);
 
   // Fresh-session setup lands after session_start.
   const first = createPlanApproval(PLAN);
   branch.push({ type: "custom", customType: PLAN_APPROVAL_ENTRY_TYPE, data: first });
-  const beforeAgentStart = mock.events.get("before_agent_start")?.[0];
+  const beforeAgentStart = mock.handlers.get("before_agent_start")?.[0];
   await beforeAgentStart?.({}, context.ctx);
   await beforeAgentStart?.({}, context.ctx);
   assert.deepEqual(seen, [{ ...first, sessionId: "fresh-session" }]);
@@ -95,11 +95,11 @@ test("a session whose branch holds an approval announces it before the first pro
 });
 
 test("custom starts restore late setup and announce approvals before returning, once per plan", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi);
   const seen = listen(mock);
   const branch: unknown[] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: {
       getSessionId: () => "custom-first-session",
       getSessionName: () => undefined,
@@ -107,7 +107,7 @@ test("custom starts restore late setup and announce approvals before returning, 
       getEntries: () => branch,
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   assert.equal(seen.length, 0);
 
   // New-session setup arrives after session_start, before an extension wakes the session.
@@ -121,11 +121,11 @@ test("custom starts restore late setup and announce approvals before returning, 
     },
   );
   const statusesAtDelivery: Array<string | undefined> = [];
-  mock.eventBus.on(PLAN_APPROVED_EVENT, () => {
+  mock.bus.on(PLAN_APPROVED_EVENT, () => {
     // Event-bus observers swallow errors, so assert on captured state outside the callback.
     statusesAtDelivery.push(context.statuses.get("plan-mode"));
   });
-  const beforeAgentStart = mock.events.get("before_agent_start")?.[0];
+  const beforeAgentStart = mock.handlers.get("before_agent_start")?.[0];
   assert.ok(beforeAgentStart);
   for (const content of ["notice", [{ type: "text", text: "notice" }]]) {
     await beforeAgentStart(

@@ -23,6 +23,7 @@ vi.mock("../src/worktree.js", () => ({
   isWorktreeIsolationEnabled: vi.fn(() => false),
 }));
 
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { AgentManager } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
@@ -31,7 +32,6 @@ import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { AgentConfig } from "../src/types.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };

@@ -10,9 +10,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
-import { answer, barrier, calls, nextEvent, notices, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, notices, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());
@@ -31,12 +33,12 @@ async function heldChild(marker: string) {
   fixture = new ScenarioSession({ agentModels: { "*": "kid/child" } });
   const hold = fixture.heldTool();
   fixture.physical("kid", "child", [
-    calls({ name: "hold", args: {} }),
-    calls({ name: "write", args: { path: marker, content: "the child kept going" } }),
+    toolCalls({ name: "hold", args: {} }),
+    toolCalls({ name: "write", args: { path: marker, content: "the child kept going" } }),
     answer("CHILD DONE 454"),
   ]);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("runaway")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("runaway")), answer("SPAWNED")]);
   await h.session.prompt("spawn");
   await hold.entered;
   return { h, hold, id: agentId(h) };
@@ -44,7 +46,7 @@ async function heldChild(marker: string) {
 
 /** One parent turn calling `tool`; returns its settled result. */
 async function callOnce(h: Harness, name: string, args: Record<string, unknown>) {
-  h.setResponses([calls({ name, args }), answer("DONE")]);
+  h.setResponses([toolCalls({ name, args }), answer("DONE")]);
   await h.session.prompt(name);
   const outcome = outcomes(h, name).at(-1);
   if (!outcome) throw new Error(`${name} never settled`);
@@ -98,7 +100,7 @@ it("stop_subagent cancels a SubagentWorkflow run by its Task ID, with its agents
   const stream = fixture.holdStream(child);
   const h = await fixture.start();
   h.setResponses([
-    calls({ name: "SubagentWorkflow", args: { script: 'export const meta = { name: "wf454", description: "x" }; return await agent("work", { agentType: "general-purpose" });' } }),
+    toolCalls({ name: "SubagentWorkflow", args: { script: 'export const meta = { name: "wf454", description: "x" }; return await agent("work", { agentType: "general-purpose" });' } }),
     answer("STARTED"),
   ]);
   await h.session.prompt("workflow");
@@ -115,7 +117,7 @@ it("stop_subagent cancels a SubagentWorkflow run by its Task ID, with its agents
     return notice !== "" && e.type === "agent_settled";
   });
   // The run settles in its worker thread; its notice is armed on the injected clock.
-  const armed = barrier();
+  const armed = deferred();
   const setTimeout = fixture.clock.setTimeout.bind(fixture.clock);
   fixture.clock.setTimeout = (callback, ms) => {
     if (ms === NOTIFICATION_HOLD_MS) armed.resolve();

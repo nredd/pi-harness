@@ -95,7 +95,7 @@ export interface WorkflowSpawnRequest {
     modelName?: string;
     modelId?: string;
     thinking?: string;
-    requestedThinking?: string;
+    requestedThinking?: string | undefined;
     /** `Note:` line when the child ran on the parent model because its configured one did not resolve. */
     modelNote?: string;
     modelTier?: TierDisclosure;
@@ -1025,7 +1025,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
             if (info.modelName !== undefined) base.model = info.modelName;
             if (info.modelId !== undefined) base.modelId = info.modelId;
             if (info.thinking !== undefined) base.thinking = info.thinking;
-            if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking;
+            if ("requestedThinking" in info) base.requestedThinking = info.requestedThinking;
             if (info.modelNote !== undefined) base.modelNote = info.modelNote;
             if (info.modelTier !== undefined) base.modelTier = info.modelTier;
             // `base.state` is still "start", so emitting after the row reached a

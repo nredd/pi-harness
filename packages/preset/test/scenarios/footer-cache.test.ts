@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { STATUS, WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { afterEach, expect, it } from "vitest";
 import { formatCwd } from "../../extensions/expanded-footer.ts";
 import {
@@ -9,11 +10,9 @@ import {
 	DROP_SWITCH,
 	DROP_WARM,
 	FooterFixture,
-	STATUS,
 	type Turn,
 	WARM,
-	WIDTHS,
-} from "./support.ts";
+} from "../fixtures/footer.ts";
 
 const STATS = /\bhit \d+\.\d%|\bCH\d+\.\d%/;
 const FULL =

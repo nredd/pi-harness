@@ -2,9 +2,10 @@ import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { beforeAll, describe, expect, it } from "vitest";
 import { findProjectRoot, registerPyTools } from "../../src/py/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 function haveUv(): boolean {
 	try {
@@ -15,7 +16,7 @@ function haveUv(): boolean {
 	}
 }
 
-const mock = createMockPi();
+const mock = createToolHost();
 let root: string;
 
 /** A tiny uv project with one lint, one format, one type and one test failure, synced offline-ish. */
@@ -56,7 +57,7 @@ build-backend = "hatchling.build"
 // Plan admits py_test by owner decision (#307): no direct edits, though `conftest.py` and tests run
 // and may write `.coverage` or `.pytest_cache`. Registration needs no uv, so this pin runs everywhere.
 it("annotates typecheck and test read-only, lint/format/uv not", () => {
-	const plain = createMockPi();
+	const plain = createToolHost();
 	registerPyTools(plain.pi);
 	expect(plain.tools.get("py_typecheck")?.annotations?.readOnlyHint).toBe(true);
 	expect(plain.tools.get("py_test")?.annotations?.readOnlyHint).toBe(true);
@@ -230,7 +231,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 			`#!/bin/sh\necho "start $$" >> "${log}"\nsleep 0.3\necho "end $$" >> "${log}"\necho "All checks passed!"\n`,
 			{ mode: 0o755 },
 		);
-		const slow = createMockPi();
+		const slow = createToolHost();
 		registerPyTools(slow.pi, { uvBin: fakeUv });
 		const updates: string[] = [];
 		const tool = slow.tools.get("py_typecheck");
@@ -240,7 +241,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 				{},
 				undefined,
 				((u: { content: { text: string }[] }) => updates.push(u.content[0]?.text ?? "")) as never,
-				{ cwd: root },
+				createRecordingContext({ cwd: root }).ctx,
 			);
 		await Promise.all([call(), call()]);
 		const events = readFileSync(log, "utf8").trim().split("\n");

@@ -18,7 +18,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
-import { flush, makePi, startSession } from "./helpers/boot-extension.js";
+import { bootPi, flush, startSession } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
@@ -60,7 +60,7 @@ afterEach(() => {
 });
 
 async function boot() {
-  const b = makePi();
+  const b = bootPi();
   subagentsExtension(b.pi);
   await startSession(b.lifecycle, true);
   return b;
@@ -152,7 +152,7 @@ describe("lifecycle event identity", () => {
   });
 
   it.each([false, true])("classifies actual RPC completion wake eligibility: background=%s", async (isBackground) => {
-    const b = makePi();
+    const b = bootPi();
     const handlers = new Map<string, Array<(data: unknown) => void>>();
     b.pi.events.on.mockImplementation((name: string, handler: (data: unknown) => void) => {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);

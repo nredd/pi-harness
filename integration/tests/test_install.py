@@ -81,7 +81,7 @@ from harness.release import (
 from harness.runtime_lock import acquire
 from harness.stack import Stack, install_overrides, package_declarations, source_string
 from scenarios.installer import test_installer as acceptance
-from tests.runtime_fixtures import fixture_graph, native_npm
+from tests.runtime_fixtures import fixture_graph, model_supported_platform, native_npm
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -283,16 +283,26 @@ def owned_integrity(snapshot: StackSnapshot) -> dict[str, str]:
 class Harness:
     """One isolated HOME plus a fake core whose `pi` records every install."""
 
-    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Prepare the HOME and patch the network seams.
+    def __init__(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        platform_model: tuple[str, str] = ("Linux", "x86_64"),
+    ) -> None:
+        """Prepare the HOME and logical platform, then patch the network seams.
 
         Parameters:
             tmp_path (Path): private directory.
             monkeypatch (pytest.MonkeyPatch): module patcher.
+            platform_model (tuple[str, str]): logical `(system, machine)` for the fixture.
 
         Returns:
             None: isolated HOME and network seams are ready.
         """
+        # Transaction fixtures use synthetic release/runtime graphs, not the pytest host's
+        # binaries. Model one supported platform explicitly; platform-contract tests override
+        # these seams separately and still exercise the production admission guard.
+        model_supported_platform(monkeypatch, *platform_model)
         self.home = (tmp_path / "home").resolve()
         self.home.mkdir()
         self.log = tmp_path / "pi-calls.jsonl"
@@ -305,8 +315,6 @@ class Harness:
         self.fetched: list[Mapping[str, str] | None] = []
         self.env = {"PATH": str(self.home / ".local" / "bin")}
         monkeypatch.setattr(install.Path, "home", classmethod(lambda cls: self.home))
-        # Generic installer units model a native host, even when this test suite runs on WSL.
-        monkeypatch.setattr(install, "is_wsl", lambda: False)
         monkeypatch.setattr(install, "preflight", lambda system, machine: {"node": "node"})
         monkeypatch.setattr(install, "verify_snapshot", lambda sha, workdir, **kwargs: self.snapshot)
         monkeypatch.setattr(
@@ -509,6 +517,38 @@ def test_real_snapshot_fixture_is_the_published_promotion() -> None:
     assert preset.extensions == ["extensions/expanded-footer.ts"]
     assert preset.skills == preset.prompts == preset.themes == []
     assert set(snapshot.stack.disabled_extensions) == {"npm:@nredd/pi-computer-use@0.5.2"}
+
+
+def test_transaction_harness_models_supported_platform_on_arm_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Synthetic transaction tests select a logical platform, independent of the pytest host."""
+    monkeypatch.setattr(install.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(install.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(install, "is_wsl", lambda: True)
+    harness = Harness(tmp_path, monkeypatch)
+    assert install.platform.system() == "Linux"
+    assert install.platform.machine() == "x86_64"
+    assert install.is_wsl() is False
+    assert harness.run() == ExitCode.OK
+
+
+@pytest.mark.parametrize(("system", "machine"), [("Darwin", "arm64"), ("Linux", "x86_64")])
+def test_transaction_harness_models_each_supported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, machine: str
+) -> None:
+    """The transaction fixture keeps darwin-arm64 and linux-x64 covered, not only one model."""
+    harness = Harness(tmp_path, monkeypatch, (system, machine))
+    assert (install.platform.system(), install.platform.machine()) == (system, machine)
+    assert harness.run() == ExitCode.OK
+
+
+def test_real_runtime_guard_still_rejects_linux_arm64(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fixture modeling must not silently expand the production installer's platform contract."""
+    monkeypatch.setattr(install.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(install.platform, "machine", lambda: "aarch64")
+    with pytest.raises(install.UnsupportedError, match="Linux/aarch64"):
+        install.require_unix_runtime(wsl=True)
 
 
 def test_fresh_install_reproduces_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1654,9 +1694,13 @@ def test_verify_snapshot_rejects_invalid_contents(
         verify_snapshot(SHA, tmp_path)
 
 
-def test_main_maps_outcomes_to_exit_codes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_maps_outcomes_to_exit_codes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A malformed pin is a usage refusal; verification failures have their own status."""
+    model_supported_platform(monkeypatch)
     assert install.main(["not-a-sha"]) == ExitCode.UNSUPPORTED
+    assert "Stack SHA must be 40 lowercase hex characters" in caplog.text
 
     def refuse(opts: Options, env: object, ask: object) -> ExitCode:
         """Fail verification.
@@ -2571,12 +2615,15 @@ def test_kind_changed_mid_run_rolls_back_and_fails(tmp_path: Path, monkeypatch: 
 SPECIAL_CHILD = """\
 import sys
 from pathlib import Path
+from pytest import MonkeyPatch
+from tests.runtime_fixtures import model_supported_platform
 from harness import install
 from harness.promotion import load_promoted_snapshot
 from harness.stack import source_string
 snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
 sources = [source_string(package) for package in snapshot.stack.sources]
-install.is_wsl = lambda: False
+fixture_platform = MonkeyPatch()
+model_supported_platform(fixture_platform)
 install.preflight = lambda system, machine: {"node": "node"}
 install.verify_snapshot = lambda sha, workdir, **kwargs: snapshot
 install.verify_release = lambda snapshot, node, workdir, **kwargs: install.Verified(snapshot, sources, {})
@@ -7281,6 +7328,7 @@ def test_unreadable_core_tarball_is_a_verification_failure(tmp_path: Path) -> No
 
 def test_runtime_lock_must_match_owned_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An attested graph whose owned package integrity differs from the promotion is refused."""
+    model_supported_platform(monkeypatch)
     stack = Stack.model_validate_json((INTEGRATION / "stacks" / "personal.json").read_bytes())
     runtime = runtime_lock.RuntimeLocks.model_validate_json(
         (INTEGRATION.parent / runtime_lock.SOURCE_LOCK).read_bytes()
@@ -7326,7 +7374,7 @@ def test_runtime_lock_must_match_owned_provenance(tmp_path: Path, monkeypatch: p
 
 
 def runtime_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Verified, Path]:
-    """Replay a real authenticated fixture graph natively and offline into a core prefix.
+    """Install portable JS fixture bytes with native npm; model platform-specific graph selection.
 
     Parameters:
         tmp_path (Path): private archives, npm scratch and install prefix.
@@ -7335,6 +7383,7 @@ def runtime_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Ve
     Returns:
         tuple[Verified, Path]: verification result carrying the graph and archives, and the prefix.
     """
+    model_supported_platform(monkeypatch)
     graph, responses = fixture_graph()
     monkeypatch.setattr(runtime_lock, "fetch_bytes", responses.__getitem__)
     archives = acquire(graph, tmp_path / "archives")

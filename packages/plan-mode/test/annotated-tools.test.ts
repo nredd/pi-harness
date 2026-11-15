@@ -12,7 +12,7 @@ import {
   isPlanSshExecTool,
 } from "../src/tool-policy.js";
 import { defaultPlanModeToolNames, toolPolicyLabel } from "../src/tool-selection.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
 /** The mock event map erases handler results; restore the async tool-call contract for assertions. */
 type ToolCallHook = (...args: unknown[]) => Promise<ToolCallEventResult | undefined>;
@@ -163,7 +163,7 @@ test("configured defaultPlanTools and annotated tools are both admitted through 
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     await writeFile(join(agentDir, "pi-plan-mode.json"), JSON.stringify({ defaultPlanTools: ["read"] }));
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read", "grep", "git_status", "git_commit"],
       allTools: [
         builtinTool("read"),
@@ -173,10 +173,10 @@ test("configured defaultPlanTools and annotated tools are both admitted through 
       ],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0] as ToolCallHook | undefined;
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0] as ToolCallHook | undefined;
     assert.ok(hook);
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(await hook({ toolName: "read", input: {} }, context.ctx), undefined);
     assert.equal(await hook({ toolName: "git_status", input: {} }, context.ctx), undefined);
@@ -202,7 +202,7 @@ test("active Plan mode admits annotated tools and gates ssh_exec at the tool hoo
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     await writeFile(join(agentDir, "pi-plan-mode.json"), JSON.stringify({ safeSubcommands: { ssh: ["home"] } }));
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read", "git_status", "git_commit", "ssh_exec"],
       allTools: [
         builtinTool("read"),
@@ -212,10 +212,10 @@ test("active Plan mode admits annotated tools and gates ssh_exec at the tool hoo
       ],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0] as ToolCallHook | undefined;
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0] as ToolCallHook | undefined;
     assert.ok(hook);
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
 
     assert.equal(await hook({ toolName: "git_status", input: {} }, context.ctx), undefined);

@@ -1,6 +1,7 @@
 /** Real todo boundaries with synthetic ownership, never real agents/monitors or inferred model intent. */
 import { type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
-import { createTestUiContext, fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HELD_REMINDER_MESSAGE_TYPE, STATE_ENTRY_TYPE, type Task } from "../../packages/todo/tool/types.ts";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
@@ -112,7 +113,7 @@ describe("owned-work settlement diagnostics", () => {
 		const manager = SessionManager.inMemory(home.root);
 		manager.appendCustomEntry(STATE_ENTRY_TYPE, { persistenceVersion: 1, tasks, nextId: tasks.length + 1 });
 		const decisions: boolean[] = [];
-		const notices: Array<[string, string | undefined]> = [];
+		const notices: [string, string | undefined][] = [];
 		const ownership: ExtensionFactory = (pi) => {
 			pi.on("session_start", (_event, ctx) => {
 				if (agent) {

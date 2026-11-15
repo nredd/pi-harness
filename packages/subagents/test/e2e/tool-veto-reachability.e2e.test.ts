@@ -45,6 +45,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../../src/agent-types.js";
 import type { AgentConfig } from "../../src/types.js";
+import { bootPi } from "../helpers/boot-extension.js";
 import { registerFauxProvider } from "../helpers/pi-ai.js";
 import { runAgent } from "../helpers/run-selected-agent.js";
 
@@ -56,9 +57,6 @@ const ALPHA = resolve(fileURLToPath(new URL("../fixtures/ext-alpha.mjs", import.
 /** Registers `beta_tool` — loaded but NOT selected by the `ext:` selector below. */
 const BETA = resolve(fileURLToPath(new URL("../fixtures/ext-beta.mjs", import.meta.url)));
 
-function makePi() {
-  return { exec: async () => ({ code: 1, stdout: "", stderr: "" }) } as any;
-}
 
 describe("tool veto reachability against real pi-mono", () => {
   let cwd: string;
@@ -116,7 +114,7 @@ describe("tool veto reachability against real pi-mono", () => {
     let session: any;
     try {
       await runAgent(ctx, "veto", "go", {
-        pi: makePi(),
+        pi: bootPi({}, { execResult: { code: 1, stdout: "", stderr: "", killed: false } }).pi,
         model,
         onSessionCreated: (s: any) => {
           session = s;

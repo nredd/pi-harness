@@ -11,7 +11,7 @@ import planMode from "../src/plan-mode.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
 import { planModeToolSelection, toolNameFromLegacyKey } from "../src/tool-selection.js";
 import { packagePath } from "./package-path.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
 const tools = ["read", "grep", "find", "ls", "edit", "write"].map(builtinTool) as ToolInfo[];
 tools.push(extensionTool("custom") as ToolInfo);
@@ -109,7 +109,7 @@ test("Settings guidance is bounded, sanitized, and display-only with remapped ke
   unsafeTool.sourceInfo.path = "owner\u001b[31m\u202e/path";
   const menuTools = [...tools, unsafeTool];
   const before = JSON.stringify(menuTools);
-  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const context = createPlanContext({ mode: "tui", hasUI: true, custom: tui.custom });
   const saved: unknown[] = [];
   let running: Promise<unknown> | undefined;
   const frames: string[] = [];
@@ -169,7 +169,7 @@ test("launch picker sanitizes metadata before search while retaining colliding r
     ...planModeToolSelection(item, new Set(["custom", unsafeName]), false),
   }));
   const tui = createTuiHarness({ width: 72, rows: 30 });
-  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const context = createPlanContext({ mode: "tui", hasUI: true, custom: tui.custom });
   const accepted: string[][] = [];
   let frame = "";
   let filtered = "";
@@ -216,18 +216,18 @@ for (const route of ["settings", "tools"]) {
     const settingsPath = join(directory, "pi-plan-mode.json");
     const retained = ["grep", "custom", "pending\u001b[31m"];
     const original = JSON.stringify({ defaultPlanTools: retained, unknown: { keep: true } });
-    const mock = createMockPi({ allTools: tools, activeTools: active });
+    const mock = createPlanPi({ allTools: tools, activeTools: active });
     const before = JSON.stringify(tools);
     const rpc = createRpcHarness([
       ...(route === "settings" ? [{ kind: "select" as const, response: "Plan policy tools (3 selected)" }] : []),
       { kind: "select", response: undefined },
       ...(route === "settings" ? [{ kind: "select" as const, response: undefined }] : []),
     ]);
-    const context = createMockContext({ mode: "rpc", hasUI: true, cwd: directory, ...rpc.ui });
+    const context = createPlanContext({ mode: "rpc", hasUI: true, cwd: directory, ...rpc.ui });
     planMode(mock.pi, { settingsPath });
     try {
       await writeFile(settingsPath, original);
-      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
       await mock.commands.get("plan")?.handler(route, context.ctx);
       rpc.assertConsumed();
       const options = rpc.dialogs[route === "settings" ? 1 : 0]?.options ?? [];
@@ -241,13 +241,13 @@ for (const route of ["settings", "tools"]) {
       assert.ok(options.some((option) => /write — blocked by Plan policy.*Blocked by Plan-mode policy/.test(option)));
       assert.ok(options.some((option) => /pending.*Not registered yet/.test(option)));
       assert.ok(options.every((option) => !option.includes("\u001b") && !option.includes("\u202e")));
-      assert.deepEqual(mock.rawPi.getActiveTools(), active);
+      assert.deepEqual(mock.pi.getActiveTools(), active);
       assert.equal(JSON.stringify(tools), before);
       assert.deepEqual(mock.entries, []);
       assert.deepEqual(mock.sentUserMessages, []);
       assert.equal(await readFile(settingsPath, "utf8"), original);
     } finally {
-      await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+      await mock.handlers.get("session_shutdown")?.[0]?.({}, context.ctx);
       await rm(directory, { recursive: true, force: true });
     }
   });

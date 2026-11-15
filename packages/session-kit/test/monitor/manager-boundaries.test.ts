@@ -1,11 +1,13 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COALESCE_MS, MonitorManager } from "../../src/monitor/manager.ts";
 import { rootDir } from "../../src/monitor/pidfiles.ts";
 import type { MonitorProcess, SpawnOptions } from "../../src/monitor/process.ts";
 import type { MonitorMessage } from "../../src/monitor/types.ts";
-import { ControlledProcess, ControlledProcesses, deferred, FakeClock } from "../scenarios/support.ts";
+import { ControlledProcess, ControlledProcesses } from "../fixtures/session.ts";
 import { tempDir } from "./helpers.ts";
 
 const matcherFault = vi.hoisted(() => ({ fail: false }));

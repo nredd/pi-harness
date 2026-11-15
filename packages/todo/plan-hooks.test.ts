@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
 import {
@@ -17,6 +17,7 @@ import {
 import { type AgentRunState, applyAgentEvent } from "./state/agents.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { getState } from "./state/store.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { __resetState } from "./todo.ts";
 import {
 	HELD_REMINDER_MESSAGE_TYPE,
@@ -48,7 +49,7 @@ function setup() {
 	__resetState();
 	const bus = new Map<string, Handler[]>();
 	const appendEntry = vi.fn();
-	const { pi, captured } = createMockPi({
+	const { pi, captured } = createTodoPi({
 		appendEntry,
 		events: {
 			emit: vi.fn((channel: string, data: unknown) => {
@@ -64,7 +65,7 @@ function setup() {
 		throw new Error("overlay must not load in headless tests");
 	});
 	const handler = (name: string) => {
-		const found = captured.events.get(name)?.[0];
+		const found = captured.handlers.get(name)?.[0];
 		if (!found) throw new Error(`${name} not registered`);
 		return found;
 	};
@@ -93,7 +94,7 @@ describe("prompt-less settlement", () => {
 		async ({ messages }) => {
 			expect(remindedSinceLastPrompt(messages)).toBe(false);
 			const { handler, announce } = setup();
-			const ctx = createMockCtx({ sessionId: "s1" });
+			const ctx = createTodoCtx({ sessionId: "s1" });
 			await handler("session_start")({}, ctx);
 			await announce(approval("p1"));
 			expect(
@@ -124,7 +125,7 @@ describe("prompt-less settlement", () => {
 describe("plan approval event", () => {
 	it("seeds verbatim plan todos for the live session and persists a snapshot", async () => {
 		const { handler, announce, appendEntry, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 
@@ -153,13 +154,13 @@ describe("plan approval event", () => {
 		const { handler, announce } = setup();
 		await announce(approval("p1", "fresh"));
 		expect(getState("fresh").tasks).toEqual([]);
-		await handler("session_start")({}, createMockCtx({ sessionId: "fresh" }));
+		await handler("session_start")({}, createTodoCtx({ sessionId: "fresh" }));
 		expect(getState("fresh").tasks).toHaveLength(3);
 	});
 
 	it("replaces plan todos on re-approval, ignores a re-announcement, keeps agent todos", async () => {
 		const { handler, announce, appendEntry, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await call(ctx, { action: "create", subject: "agent todo" });
 		await announce(approval("p1"));
@@ -177,7 +178,7 @@ describe("plan approval event", () => {
 
 	it("ignores malformed and future-version payloads", async () => {
 		const { handler, announce } = setup();
-		await handler("session_start")({}, createMockCtx({ sessionId: "s1" }));
+		await handler("session_start")({}, createTodoCtx({ sessionId: "s1" }));
 		await announce({ ...approval("p1"), version: 2 });
 		await announce({ planId: "p1", sessionId: "s1" });
 		expect(getState("s1").tasks).toEqual([]);
@@ -187,7 +188,7 @@ describe("plan approval event", () => {
 describe("todo tool on plan items", () => {
 	it("rejects completed without evidence, accepts it with, and shows the evidence", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 
@@ -208,8 +209,8 @@ describe("todo tool on plan items", () => {
 
 	it("tells the user when a plan item is deferred", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
-		await handler("session_start")({}, createMockCtx({ sessionId: "s1" }));
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
+		await handler("session_start")({}, createTodoCtx({ sessionId: "s1" }));
 		await announce(approval("p1"));
 		const result = await call(ctx, { action: "update", id: 2, status: "deferred", reason: "needs a design call" });
 		expect(text(result)).toContain("Tell the user this plan item is descoped and why: needs a design call");
@@ -235,7 +236,7 @@ describe("wrap-up reminder", () => {
 
 	it("fires once per prompt while plan items are open, and the context hook expands it", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 		await call(ctx, { action: "update", id: 1, status: "completed", evidence: "done" });
@@ -279,7 +280,7 @@ describe("wrap-up reminder", () => {
 
 	it("suspends old-plan reminders while replanning, including after compaction and restore", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 		const transition = (mode: string) => ({
@@ -306,7 +307,7 @@ describe("wrap-up reminder", () => {
 
 	it("honors a current projected mode contract when the branch has no mode history", async () => {
 		const { handler, announce } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 		const planning = { role: "custom", customType: "plan-mode-transition", details: { version: 1, mode: "plan" } };
@@ -315,7 +316,7 @@ describe("wrap-up reminder", () => {
 
 	it("stays silent with no plan, or once every plan item is closed", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		const settle = handler("agent_before_settle");
 		await call(ctx, { action: "create", subject: "agent only" });
@@ -330,7 +331,7 @@ describe("wrap-up reminder", () => {
 describe("TaskDetails snapshot", () => {
 	it("carries the plan on every todo tool result so replay keeps it", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 		const result = await call(ctx, { action: "create", subject: "x" });
@@ -350,7 +351,7 @@ describe("settling with in_progress todos", () => {
 
 	it("reports the in_progress todos once the run settles", async () => {
 		const { handler, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await call(ctx, { action: "create", subject: "Ship the thing" });
 		await call(ctx, { action: "update", id: 1, status: "in_progress" });
@@ -480,7 +481,7 @@ describe("settling with in_progress todos", () => {
 
 	it("stays silent in Plan mode", async () => {
 		const { handler, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await call(ctx, { action: "create", subject: "Ship the thing" });
 		await call(ctx, { action: "update", id: 1, status: "in_progress" });
@@ -493,7 +494,7 @@ describe("settling with in_progress todos", () => {
 
 	it("stays silent when nothing is in_progress", async () => {
 		const { handler, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await call(ctx, { action: "create", subject: "Later" });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
@@ -528,7 +529,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	) {
 		const s = setup();
 		beforeStart?.(s.bus);
-		const ctx = createMockCtx({
+		const ctx = createTodoCtx({
 			sessionId: "s1",
 			branch: [{ type: "custom", customType: STATE_ENTRY_TYPE, data: snapshot }] as never,
 		});
@@ -1131,7 +1132,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(asks).toHaveBeenCalledTimes(1);
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(asks).toHaveBeenCalledTimes(2);
-		await handler("agent_settled")({ type: "agent_settled" }, createMockCtx({ sessionId: "child" }));
+		await handler("agent_settled")({ type: "agent_settled" }, createTodoCtx({ sessionId: "child" }));
 		expect(asks).toHaveBeenCalledTimes(2);
 	});
 
@@ -1141,7 +1142,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			b.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [asks]),
 		);
 		expect(asks).toHaveBeenCalledTimes(1);
-		await handler("session_start")({ reason: "startup" }, createMockCtx({ sessionId: "child" }));
+		await handler("session_start")({ reason: "startup" }, createTodoCtx({ sessionId: "child" }));
 		expect(asks).toHaveBeenCalledTimes(1);
 	});
 
@@ -1194,7 +1195,7 @@ describe("plan payload and mode guards", () => {
 
 	it("ignores malformed branch entries when deciding whether Plan mode is active", async () => {
 		const { handler, announce } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1"));
 		const transition = (details: unknown) => ({
@@ -1220,7 +1221,7 @@ describe("plan payload and mode guards", () => {
 
 	it("does not expand a plan reminder once no plan item is open", async () => {
 		const { handler, announce, call } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		await handler("session_start")({}, ctx);
 		await announce(approval("p1", "s1", "# T\n\n## Work\n- one\n"));
 		for (const task of getState("s1").tasks)

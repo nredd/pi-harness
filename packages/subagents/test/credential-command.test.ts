@@ -6,8 +6,10 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { nextEvent, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { answer, barrier, calls, nextEvent, notices, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, notices, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 /** Key-shaped text the helper writes to stderr; core must redact it from every surfaced error. */
 const LEAK = "sk-ant-api03-LEAKEDLEAKEDLEAKED0123456789";
@@ -45,7 +47,7 @@ function helper(fails: number) {
 
 /** Resolves at the child's terminal lifecycle event, whichever way it ended. */
 function settled() {
-  const done = barrier();
+  const done = deferred();
   const pi = fixture.pi;
   if (!pi) throw new Error("Host not started");
   const offs: (() => void)[] = [];
@@ -77,7 +79,7 @@ async function startChild(fails: number, responses: ReturnType<typeof answer>[])
   const key = helper(fails);
   // Replace the fixture's literal key with the helper, the way `models.json` would.
   h.session.modelRuntime.registerProvider("credphys", { baseUrl: physical.getModel().baseUrl, apiKey: key.command, api: physical.api, models: physical.models });
-  h.setResponses([calls(spawn("credential child", { model: "credphys/physical" })), answer("SPAWNED"), answer("NOTICE SEEN")]);
+  h.setResponses([toolCalls(spawn("credential child", { model: "credphys/physical" })), answer("SPAWNED"), answer("NOTICE SEEN")]);
   const completed = settled();
   const before = h.session.messages.length;
   await h.session.prompt("go");
@@ -132,7 +134,7 @@ it("a dead helper fails the child with a bounded, redacted error and leaves it r
   key.heal();
   await h.session.waitForIdle();
   const resumedDone = settled();
-  h.setResponses([calls({ name: "Agent", args: { subagent_type: "general-purpose", description: "retry", prompt: "continue", resume: record.id } }), answer("RESUME STARTED")]);
+  h.setResponses([toolCalls({ name: "Agent", args: { subagent_type: "general-purpose", description: "retry", prompt: "continue", resume: record.id } }), answer("RESUME STARTED")]);
   await h.session.prompt("resume it");
   await resumedDone;
   await record.promise;

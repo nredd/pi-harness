@@ -1,9 +1,10 @@
 import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import { git, makeGitFixture } from "@nredd/pi-test-lib/git";
 import { afterEach, describe, expect, it } from "vitest";
 import extension from "../../src/index.ts";
-import { git, makeGitFixture, runTools, startSession } from "./support.ts";
+import { runTools, startSession } from "../fixtures/session.ts";
 
 const GUARD_MARKER = "pi-dev-tools blocks this git command";
 

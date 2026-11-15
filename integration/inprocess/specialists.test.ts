@@ -2,12 +2,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
 	agentStack,
 	ask,
-	call,
 	closeAgentStack,
 	GIT_READS,
 	listTools,
@@ -89,7 +89,7 @@ it.each(["architect", "critic", "principal-investigator", "researcher"])(
 		const path = join(home.root, "protected.txt");
 		const original = "MUST NOT CHANGE\n";
 		writeFileSync(path, original);
-		const answer = await ask(h, type, [call("write", { path, content: "CORRUPTED\n" }), report]);
+		const answer = await ask(h, type, [toolCall("write", { path, content: "CORRUPTED\n" }), report]);
 		expect(answer).toMatch(unavailable("write"));
 		expect(readFileSync(path, "utf8")).toBe(original);
 	},
@@ -97,7 +97,7 @@ it.each(["architect", "critic", "principal-investigator", "researcher"])(
 
 it("debugger excludes commit despite always-active defaults", async () => {
 	const answer = await ask(h, "debugger", [
-		call("git_commit", { subject: "Sneak", paths: ["x"], push: false }),
+		toolCall("git_commit", { subject: "Sneak", paths: ["x"], push: false }),
 		report,
 	]);
 	expect(answer).toMatch(unavailable("git_commit"));

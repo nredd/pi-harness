@@ -13,7 +13,7 @@
 				"native/macos/bridge.swift",
 				"src/platform/macos/backend.ts"
 			],
-			"check": "test:macos-target; test:unpaired"
+			"check": "test/macos-observe-target.test.mjs; test/unpaired-act.test.mjs"
 		}
 	],
 	"release": {
@@ -491,11 +491,12 @@
 		},
 		{
 			"id": "harness-package",
-			"purpose": "Preserve scoped metadata, source-only Linux and exact macOS source payload",
+			"purpose": "Preserve scoped metadata, source-only Linux, exact macOS source payload and the shared repo toolchain (root tsconfig base, hoisted TypeScript and @types/node)",
 			"files": [
 				"CONTRIBUTING.md",
 				"package.json",
-				"scripts/check-package-assets.mjs"
+				"scripts/check-package-assets.mjs",
+				"tsconfig.json"
 			],
 			"check": "scripts/check-package-assets.mjs",
 			"dropControls": [
@@ -1491,6 +1492,7 @@
 		"test/windows-native-refusals.test.mjs",
 		"test/wsl-detection.test.mjs",
 		"test/wsl2-diagnostics.test.mjs",
+		"tsconfig.json",
 		"tsconfig.signing.json",
 		"vitest.async.config.ts",
 		"vitest.config.ts"

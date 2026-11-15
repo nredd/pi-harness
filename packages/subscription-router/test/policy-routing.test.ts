@@ -6,7 +6,7 @@ import type { Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
 import { compilePolicy } from "../src/policy.js";
 import { type RouteDecision, Router } from "../src/router.js";
-import { CachedUsage, Clock } from "./scenarios/support.js";
+import { CachedUsage, Clock } from "./fixtures/router.js";
 
 it("explain empty sets and registry failures without refreshing, tracing or leaking raw snapshot fields", () => {
 	const clock = new Clock();

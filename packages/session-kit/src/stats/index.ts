@@ -10,11 +10,19 @@ import type { KitConfig } from "../config.ts";
 import { say } from "../output.ts";
 import { StatsView, summary } from "./component.ts";
 import { freshnessLines } from "./freshness.ts";
+import { EXTERNAL_HARNESSES } from "./harness/index.ts";
 import type { Loaded } from "./load.ts";
 import { type Combined, coverageLabel, loadCombined } from "./snapshot.ts";
 
 const STATUS_KEY = "session-kit:stats";
 export const MESSAGE_TYPE = "session-kit:stats";
+
+/**
+ * Other harnesses are read from the native home, or an explicit `homeDir`. An explicit `agentDir` alone is an
+ * isolated root (SDK embedders, tests): it must not pick up whatever tools the real home holds.
+ */
+const readsOtherHarnesses = (options: AgentDirOptions): boolean =>
+	options.agentDir === undefined || options.homeDir !== undefined;
 
 /** What could not be read, so partial totals never pass for complete ones. */
 function problems({ errors, badLines }: Pick<Loaded, "errors" | "badLines">): string[] {
@@ -24,14 +32,11 @@ function problems({ errors, badLines }: Pick<Loaded, "errors" | "badLines">): st
 	];
 }
 
-export function register(
-	pi: ExtensionAPI,
-	_config: KitConfig,
-	options: AgentDirOptions & { clock?: Clock } = {},
-): void {
+export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDirOptions & { clock?: Clock }): void {
 	const clock = options.clock ?? realClock;
 	pi.registerCommand("stats", {
-		description: "Usage stats: activity heatmap, tokens per day and per-model breakdown across all sessions",
+		description:
+			"Usage stats: activity heatmap, tokens per day, per-model breakdown and subscription quota across pi, Claude Code, Codex and OpenCode",
 		async handler(args: string, ctx: ExtensionCommandContext) {
 			if (args.trim()) {
 				ctx.ui.notify("usage: /stats", "warning");
@@ -44,6 +49,12 @@ export function register(
 				loaded = await loadCombined(
 					resolveAgentDir(options),
 					tui ? (done, total) => ctx.ui.setStatus(STATUS_KEY, `stats: loading ${done}/${total}...`) : undefined,
+					clock.now(),
+					{
+						harnesses: readsOtherHarnesses(options) ? EXTERNAL_HARNESSES : [],
+						home: options.homeDir,
+						onHarnessProgress: tui ? (status) => ctx.ui.setStatus(STATUS_KEY, `stats: ${status}...`) : undefined,
+					},
 				);
 			} catch (error) {
 				say(pi, ctx, MESSAGE_TYPE, `/stats: ${(error as Error).message}`, "error");
@@ -52,7 +63,11 @@ export function register(
 				if (tui) ctx.ui.setStatus(STATUS_KEY, undefined);
 			}
 
-			const damage = [...problems(loaded), ...loaded.coverage.problems.map((p) => `/stats: ${p}`)];
+			const damage = [
+				...problems(loaded),
+				...loaded.coverage.problems.map((p) => `/stats: ${p}`),
+				...loaded.harnessProblems.map((p) => `/stats: ${p}`),
+			];
 			const coverage = coverageLabel(loaded.coverage);
 			const freshness = freshnessLines(loaded.coverage, clock.now());
 			if (!tui) {
@@ -60,17 +75,26 @@ export function register(
 					pi,
 					ctx,
 					MESSAGE_TYPE,
-					[summary(loaded.calls.filter((c) => c.ms <= clock.now())), coverage, ...freshness, ...damage].join("\n"),
+					[
+						summary(
+							loaded.calls.filter((c) => c.ms <= clock.now()),
+							loaded.quota,
+							clock.now(),
+						),
+						coverage,
+						...freshness,
+						...damage,
+					].join("\n"),
 					"info",
 				);
 				return;
 			}
 			for (const line of damage) ctx.ui.notify(line, "warning");
-			if (loaded.calls.length === 0) {
+			if (loaded.calls.length === 0 && loaded.quota.length === 0) {
 				ctx.ui.notify(`/stats: no usage recorded yet\n${coverage}\n${freshness.join("\n")}`, "info");
 				return;
 			}
-			const { calls, sessions, badLines } = loaded;
+			const { calls, sessions, badLines, quota } = loaded;
 			await ctx.ui.custom<void>(
 				(tuiHost, theme, _kb, done) =>
 					new StatsView({
@@ -79,6 +103,7 @@ export function register(
 						badLines,
 						coverage,
 						freshness,
+						quota,
 						now: clock.now(),
 						theme,
 						rows: () => tuiHost.terminal.rows,

@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerFauxProvider } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { expect, it } from "vitest";
-import { FakeClock } from "../../packages/session-kit/test/scenarios/support.ts";
 import { UsageService } from "../../packages/subscription-router/src/usage.ts";
 import { OFFLINE, routePhysical, StackUsage } from "./goal-support.ts";
 

@@ -25,6 +25,7 @@ from harness.promotion import (
 )
 from harness.runtime_lock import DependencyGraph, RuntimeLocks
 from harness.stack import Stack, source_string
+from tests.runtime_fixtures import model_supported_platform
 
 ROOT = Path(__file__).parents[2]
 SHA = "a" * 40
@@ -70,6 +71,7 @@ def test_supplemental_graph_is_attested_before_any_registry_bytes_are_acquired(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The installer independently authenticates exact graph bytes before interpreting registry URLs."""
+    model_supported_platform(monkeypatch)
     snapshot, graph = inputs()
     contents = graph.model_dump_json().encode()
     events: list[str] = []

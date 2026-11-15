@@ -1,9 +1,10 @@
 /** Single-fork interactive sessions on the locked core host, never the installed Pi. */
 import { join } from "node:path";
 import { type ExtensionAPI, SessionManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { expect } from "vitest";
 import { isolateStackHome, loadFork } from "./support.ts";
 

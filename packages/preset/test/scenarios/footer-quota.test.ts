@@ -1,7 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { STATUS } from "@nredd/pi-test-lib/terminal";
 import { afterEach, expect, it } from "vitest";
 import { parseUsageReply } from "../../lib/footer-quota.ts";
-import { FooterFixture, providerSegment, quotaRow, quotaRows, STATUS, snapshot, values } from "./support.ts";
+import { FooterFixture, providerSegment, quotaRow, quotaRows, snapshot, values } from "../fixtures/footer.ts";
 
 let fixture: FooterFixture;
 afterEach(async () => fixture?.dispose());

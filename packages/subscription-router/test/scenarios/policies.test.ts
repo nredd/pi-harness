@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import type { PolicyV1 } from "../../src/policy.js";
 import { STALE_GRACE_MS } from "../../src/selection.js";
-import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
+import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.js";
 
 let scenario: RouterScenario | undefined;
 afterEach(() => scenario?.cleanup());

@@ -1,8 +1,9 @@
 /** `steer_subagent` on a finished agent resumes it, like Claude Code's `SendMessage` (#442), on the real core host. */
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
-import { answer, calls, nextEvent, notices, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, notices, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());
@@ -22,7 +23,7 @@ function agentId(h: Harness): string {
 
 /** One parent turn calling the real steer_subagent tool; returns its settled result. */
 async function steerOnce(h: Harness, agent_id: string, message: string, ...after: ReturnType<typeof answer>[]) {
-  h.setResponses([calls({ name: "steer_subagent", args: { agent_id, message } }), answer("STEERED"), ...after]);
+  h.setResponses([toolCalls({ name: "steer_subagent", args: { agent_id, message } }), answer("STEERED"), ...after]);
   await h.session.prompt("steer");
   const outcome = outcomes(h, "steer_subagent").at(-1);
   if (!outcome) throw new Error("steer_subagent never settled");
@@ -56,7 +57,7 @@ async function completedChild(settings: Record<string, unknown>, childSteps: Par
   fixture = new ScenarioSession({ agentModels: { "*": "kid/child" }, ...settings });
   fixture.physical("kid", "child", childSteps);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("finished")), () => calls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
+  h.setResponses([toolCalls(spawn("finished")), () => toolCalls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
   await h.session.prompt("go");
   const id = agentId(h);
   expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("FIRST 442");
@@ -102,7 +103,7 @@ it("refuses an agent the user stopped, naming why", async () => {
   const child = fixture.physical("kid", "child", [answer("NEVER 442")]);
   const stream = fixture.holdStream(child);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("doomed")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("doomed")), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
   const id = agentId(h);

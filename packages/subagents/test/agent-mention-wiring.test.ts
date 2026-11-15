@@ -29,7 +29,7 @@ import { getDefaultMaxTurns, resumeAgent, runAgent, setDefaultMaxTurns } from ".
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import subagentsExtension from "../src/index.js";
 import { runMentionClone } from "../src/mention-clone.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, startSession, textOf } from "./helpers/boot-extension.js";
 
 let hermetic: Hermetic | undefined;
 /** The most recently booted extension, so teardown runs even when a test throws. */
@@ -90,7 +90,7 @@ function finishedRun(session: any) {
 /** Boot the real extension. `outputTranscript: false` keeps the run off disk. */
 function boot(settings: Record<string, unknown> = {}) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, ...settings } });
-  const b = makePi();
+  const b = bootPi();
   subagentsExtension(b.pi);
   booted = b.lifecycle;
   return b;
@@ -211,7 +211,7 @@ describe("messaging a finished agent", () => {
       settings: { outputTranscript: true },
       agentFiles: { quiet: "---\ndescription: writes no transcript\noutput_transcript: false\n---\nbody" },
     });
-    const b = makePi();
+    const b = bootPi();
     subagentsExtension(b.pi);
     booted = b.lifecycle;
     await startSession(b.lifecycle, true); // project agents load at session_start
@@ -604,7 +604,7 @@ describe("letting a clone of the conversation start the agent", () => {
       settings: { outputTranscript: false },
       agentFiles: { rogue: "---\ndescription: ROGUE project only\ntools: read\n---\nRogue.\n" },
     });
-    const b = makePi();
+    const b = bootPi();
     subagentsExtension(b.pi);
     booted = b.lifecycle;
     const activation = b.tools.get("Agent");
@@ -1176,7 +1176,7 @@ describe("resuming an evicted agent by name", () => {
       settings: { outputTranscript: false },
       agentFiles: { scout: "---\ndescription: scouts\n---\nbody" },
     });
-    const b = makePi();
+    const b = bootPi();
     subagentsExtension(b.pi);
     booted = b.lifecycle;
     await startSession(b.lifecycle, true); // project agents load at session_start
@@ -1208,7 +1208,7 @@ describe("resuming an evicted agent by name", () => {
       settings: { outputTranscript: false },
       agentFiles: { scout: "---\ndescription: scouts\nenabled: false\n---\nbody" },
     });
-    const b = makePi();
+    const b = bootPi();
     subagentsExtension(b.pi);
     booted = b.lifecycle;
     await startSession(b.lifecycle, true); // project agents load at session_start
@@ -1307,6 +1307,21 @@ describe("resuming an evicted agent by name", () => {
 
     expect(textOf(steered)).toContain("Agent not found");
     expect(textOf(read)).toContain("Agent not found");
+  });
+
+  it("get_subagent_result still returns the text of an evicted agent's result (#372)", async () => {
+    const { tools } = boot();
+    finishedRun(fakeSession());
+    const id = await spawnBackground(tools);
+    await evict(id);
+    await flush();
+
+    const read = await tools.get("get_subagent_result").execute(
+      "tc", { agent_id: id }, undefined, undefined, ctx(),
+    );
+
+    expect(textOf(read)).toContain("evicted after");
+    expect(textOf(read)).toContain("first answer");
   });
 
   it("reports a session that is gone, rather than starting something else", async () => {
@@ -1454,7 +1469,7 @@ describe("resuming an evicted agent by name", () => {
         settings: { outputTranscript: false },
         agentFiles: { scout: "---\ndescription: scouts\n---\nbody" },
       });
-      const b = makePi();
+      const b = bootPi();
       subagentsExtension(b.pi);
       booted = b.lifecycle;
       await startSession(b.lifecycle, true);

@@ -2,10 +2,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, it } from "vitest";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { ControlledProcesses, configFor, FakeClock } from "../../packages/session-kit/test/scenarios/support.ts";
-import { agentStack, ask, call, closeAgentStack, jsonFile, listTools, ROOT } from "./agents-support.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
+import { agentStack, ask, closeAgentStack, jsonFile, listTools, ROOT } from "./agents-support.ts";
 import childProbe from "./fixtures/child-probe.ts";
 import { OPTIONS } from "./fixtures/pi-session-kit/index.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";
@@ -50,7 +52,7 @@ it.each([false, true])(
 			extensions: [fileURLToPath(new URL("fixtures/child-probe.ts", import.meta.url))],
 		});
 		try {
-			h.setResponses([call("search_tools", { query: "background monitor", kind: "tool" }), listTools]);
+			h.setResponses([toolCall("search_tools", { query: "background monitor", kind: "tool" }), listTools]);
 			await h.session.prompt("promote and list");
 			const parent = h.session.messages
 				.filter((m) => m.role === "assistant")
@@ -58,11 +60,11 @@ it.each([false, true])(
 			const parentText = JSON.stringify(parent);
 			for (const tool of TOOLS) expect(parentText).toContain(tool);
 			const answer = await ask(h, "general-purpose", [
-				call("session_kit_child_scope_probe", {}),
-				call("search_tools", { query: "background monitor", kind: "tool" }),
-				call("monitor_read", { id: "parent" }),
-				call("monitor_start", { argv: ["/bin/echo", "CHILD MUST NOT SPAWN"], name: "child" }),
-				call("monitor_stop", { id: "parent" }),
+				toolCall("session_kit_child_scope_probe", {}),
+				toolCall("search_tools", { query: "background monitor", kind: "tool" }),
+				toolCall("monitor_read", { id: "parent" }),
+				toolCall("monitor_start", { argv: ["/bin/echo", "CHILD MUST NOT SPAWN"], name: "child" }),
+				toolCall("monitor_stop", { id: "parent" }),
 				listTools,
 			]);
 			expect(answer).toContain("TOOLS ");

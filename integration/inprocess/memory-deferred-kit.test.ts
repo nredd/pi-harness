@@ -2,11 +2,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
+import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { ControlledProcesses, configFor, FakeClock } from "../../packages/session-kit/test/scenarios/support.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import extensionInventory from "../providers/extension_inventory.ts";
 import { jsonFile } from "./agents-support.ts";
 import { isolateResearchPackages, isolateStackHome, loadThirdParty, startStack } from "./support.ts";

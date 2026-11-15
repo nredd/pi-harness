@@ -9,7 +9,7 @@ import { createSubscriptionRouter } from "../src/index.js";
 import { SettleRecovery } from "../src/recovery.js";
 import { formatDecision, type RouteDecision, Router } from "../src/router.js";
 import { UsageService } from "../src/usage.js";
-import { CachedUsage, Clock } from "./scenarios/support.js";
+import { CachedUsage, Clock } from "./fixtures/router.js";
 
 const STATES = [
 	"hysteresis-below",

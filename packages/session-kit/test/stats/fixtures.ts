@@ -16,7 +16,19 @@ export function call(
 	output = 0,
 	extra: Partial<Call> = {},
 ): Call {
-	return { session: "/s", ms: at(day), provider, model, input, output, cacheRead: 0, cacheWrite: 0, cost: 0, ...extra };
+	return {
+		harness: "pi",
+		session: "/s",
+		ms: at(day),
+		provider,
+		model,
+		input,
+		output,
+		cacheRead: 0,
+		cacheWrite: 0,
+		cost: 0,
+		...extra,
+	};
 }
 
 interface Assistant {

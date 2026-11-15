@@ -46,6 +46,7 @@ COVERAGE_LEAVES = ("lcov.info", "coverage-summary.json")
 COVERAGE_ROOTS = (
     "packages/*",
     "integration/inprocess",
+    "tests/lib",
     "integration/probes",
     "integration/providers",
     "scripts",

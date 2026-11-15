@@ -34,7 +34,7 @@ import { registerAgents } from "../src/agent-types.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
 import { runWorkflow, type WorkflowSpawnRequest } from "../src/workflow/runtime.js";
-import { ctx } from "./helpers/boot-extension.js";
+import { bootPi, ctx } from "./helpers/boot-extension.js";
 
 /** What the child leaves behind, and the thing a correct gate can see. */
 const CHILD_FILE = "child-work.txt";
@@ -62,7 +62,7 @@ interface ExecResult {
  * instant. Sampling inside the call is the point: afterwards the worktree is
  * gone, so a post-hoc `existsSync` would prove nothing either way.
  */
-function makePi(gate: (command: string) => ExecResult | Promise<ExecResult> = () => execOk("3 passing")) {
+function createGateHost(gate: (command: string) => ExecResult | Promise<ExecResult> = () => execOk("3 passing")) {
   const gateRuns: GateRun[] = [];
   const exec = vi.fn(
     async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
@@ -88,7 +88,7 @@ function makePi(gate: (command: string) => ExecResult | Promise<ExecResult> = ()
       return await gate(args[args.length - 1]);
     },
   );
-  return { pi: { exec } as any, gateRuns, exec };
+  return { pi: bootPi({}, { overrides: { exec } }).pi, gateRuns, exec };
 }
 
 const execOk = (stdout = ""): ExecResult => ({ stdout, stderr: "", code: 0, killed: false });
@@ -152,7 +152,7 @@ describe("gate on an isolated child", () => {
   });
 
   it("runs the gate inside the child's worktree, while it still exists", async () => {
-    const { pi, gateRuns } = makePi();
+    const { pi, gateRuns } = createGateHost();
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(
@@ -176,7 +176,7 @@ describe("gate on an isolated child", () => {
   });
 
   it("fails the agent with the gate's output, and still cleans the worktree up", async () => {
-    const { pi, gateRuns } = makePi(() => execFail("FAIL src/auth.test.ts\n1 failing"));
+    const { pi, gateRuns } = createGateHost(() => execFail("FAIL src/auth.test.ts\n1 failing"));
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
@@ -201,7 +201,7 @@ describe("gate on an isolated child", () => {
   });
 
   it("names the command when a failing gate in a worktree says nothing", async () => {
-    const { pi } = makePi(() => ({ stdout: "  ", stderr: "", code: 1, killed: false }));
+    const { pi } = createGateHost(() => ({ stdout: "  ", stderr: "", code: 1, killed: false }));
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
@@ -213,7 +213,7 @@ describe("gate on an isolated child", () => {
   });
 
   it("counts a killed gate as failed even though pi.exec reports exit code 0", async () => {
-    const { pi } = makePi(() => ({ stdout: "", stderr: "", code: 0, killed: true }));
+    const { pi } = createGateHost(() => ({ stdout: "", stderr: "", code: 0, killed: true }));
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "sleep 999" }));
@@ -226,7 +226,7 @@ describe("gate on an isolated child", () => {
     // If this leaked as an exception the manager would swallow it, the spawn
     // result would carry no verdict, and the runtime would helpfully re-run the
     // command — in the session's tree, which is the bug.
-    const { pi, gateRuns } = makePi(() => {
+    const { pi, gateRuns } = createGateHost(() => {
       throw new Error("spawn sh ENOENT");
     });
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
@@ -247,7 +247,7 @@ describe("gate on an isolated child", () => {
       writeFileSync(join(opts.cwd, CHILD_FILE), "steered work");
       return { responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: true };
     });
-    const { pi, gateRuns } = makePi();
+    const { pi, gateRuns } = createGateHost();
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "npm test" }));
@@ -267,7 +267,7 @@ describe("gate on an isolated child", () => {
       steered: false,
       failure: "provider exploded",
     } as any);
-    const { pi, gateRuns } = makePi();
+    const { pi, gateRuns } = createGateHost();
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "npm test" }));
@@ -297,7 +297,7 @@ describe("gate on a child with no worktree of its own", () => {
   });
 
   it("runs the gate once, in the session's own tree", async () => {
-    const { pi, gateRuns } = makePi();
+    const { pi, gateRuns } = createGateHost();
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
@@ -331,7 +331,7 @@ describe("an isolated child with no gate", () => {
   });
 
   it("is untouched: nothing runs, and the work still lands on a branch", async () => {
-    const { pi, gateRuns } = makePi();
+    const { pi, gateRuns } = createGateHost();
     const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree" }));

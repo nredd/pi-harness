@@ -1,9 +1,9 @@
 {
-	"extends": "../../forks/pi/tsconfig.json",
-	"compilerOptions": {
-		"types": ["node"],
-		"typeRoots": ["../../forks/pi/node_modules/@types"],
-		"skipLibCheck": true
-	},
-	"include": ["compaction-children.test.ts", "../../forks/pi/packages/*/src/**/*.d.ts"]
+  "extends": "../../forks/pi/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "typeRoots": ["../../forks/pi/node_modules/@types"],
+    "skipLibCheck": true
+  },
+  "include": ["compaction-children.test.ts", "../../forks/pi/packages/*/src/**/*.d.ts"]
 }

@@ -18,32 +18,9 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>(); // pi.on(...) — session_start, session_before_switch, session_shutdown
-  const events = new Map<string, any>(); // pi.events.on(...) — subagents:rpc:*, etc.
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        events.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle, events };
-}
 
 function ctx() {
   return {
@@ -94,10 +71,10 @@ describe("evicted agents", () => {
   let prevAgentDir: string | undefined;
   // The extension under test, loaded per case. afterEach shuts it down so a failing
   // case cannot leave the global manager slot claimed for the next (#481).
-  let lifecycle: ReturnType<typeof makePi>["lifecycle"] | undefined;
+  let lifecycle: ReturnType<typeof bootPi>["lifecycle"] | undefined;
 
-  function load(): ReturnType<typeof makePi>["tools"] {
-    const made = makePi();
+  function load(): ReturnType<typeof bootPi>["tools"] {
+    const made = bootPi();
     subagentsExtension(made.pi);
     lifecycle = made.lifecycle;
     return made.tools;

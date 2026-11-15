@@ -1,14 +1,8 @@
 {
-	"compilerOptions": {
-		"target": "ES2022",
-		"module": "ES2022",
-		"moduleResolution": "bundler",
-		"strict": true,
-		"noUncheckedIndexedAccess": true,
-		"skipLibCheck": true,
-		"noEmit": true,
-		"allowImportingTsExtensions": true,
-		"types": ["node"]
-	},
-	"include": ["**/*.ts"]
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // nredd/pi-harness#867: imports package sources that still use parameter properties (#878, #879, #880)
+    "erasableSyntaxOnly": false
+  },
+  "include": ["**/*.ts"]
 }

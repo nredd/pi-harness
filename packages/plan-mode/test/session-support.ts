@@ -3,13 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import {
-  createHarness,
-  fauxAssistantMessage,
-  fauxToolCall,
-  type Harness,
-  type HarnessOptions,
-} from "@earendil-works/pi-coding-agent/testing";
+import { createHarness, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import planMode from "../src/plan-mode.js";
 import type { PlanModeState } from "../src/state.js";
 
@@ -69,27 +64,9 @@ export class SessionFixture {
   }
 }
 
-/** Script one real tool request with the harness's own faux builder instance. */
-export function tool(name: string, args: Parameters<typeof fauxToolCall>[1]) {
-  return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
-}
-
 /** One distinct one-bullet proposal. */
 export function complete(title: string) {
-  return tool("plan_mode_complete", { plan: `# ${title}\n\n- Do the ${title} thing.\n` });
-}
-
-/** Settled tool events, including failures, as emitted by the real core loop. */
-export function outcomes(harness: Harness, name: string) {
-  const starts = new Map(harness.eventsOfType("tool_execution_start").map((event) => [event.toolCallId, event]));
-  return harness
-    .eventsOfType("tool_execution_end")
-    .filter((event) => event.toolName === name)
-    .map((event) => {
-      const start = starts.get(event.toolCallId);
-      if (!start) throw new Error(`Missing tool start: ${event.toolCallId}`);
-      return { ...event, args: start.args as Record<string, unknown> };
-    });
+  return toolCall("plan_mode_complete", { plan: `# ${title}\n\n- Do the ${title} thing.\n` });
 }
 
 /** Latest persisted Plan state, not a mirrored fixture state machine. */
@@ -101,15 +78,4 @@ export function state(harness: Harness): PlanModeState {
     .find((entry) => entry.type === "custom" && entry.customType === "plan-mode-state");
   if (entry?.type !== "custom") throw new Error("No persisted Plan state");
   return entry.data as PlanModeState;
-}
-
-/** Promise barrier for lifecycle observations without polling or wall-clock waits. */
-export function deferred<T>() {
-  let resolve: (value: T) => void = () => {
-    throw new Error("Uninitialized barrier");
-  };
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }

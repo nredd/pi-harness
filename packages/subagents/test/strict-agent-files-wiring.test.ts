@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
-import { ctx, makePi, startSession } from "./helpers/boot-extension.js";
+import { bootPi, ctx, startSession } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
 vi.mock("@earendil-works/pi-coding-agent", async importOriginal => {
@@ -78,7 +78,7 @@ describe("strictAgentFiles gates session startup", () => {
   it("activates, then fails session_start naming the file with the host's startup error", async () => {
     const path = writeBrokenAgent();
     writeSettings({ strictAgentFiles: true });
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
 
     expect(() => subagentsExtension(pi)).not.toThrow();
     const failure = await startSession(lifecycle, true).then(
@@ -95,7 +95,7 @@ describe("strictAgentFiles gates session startup", () => {
   it("stays latched until a bind succeeds, so a retried bind is strict again", async () => {
     const path = writeBrokenAgent();
     writeSettings({ strictAgentFiles: true });
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await expect(startSession(lifecycle, true)).rejects.toThrow(path);
@@ -107,7 +107,7 @@ describe("strictAgentFiles gates session startup", () => {
   it("never reads a malformed project file of an untrusted project", async () => {
     writeBrokenAgent();
     writeSettings({ strictAgentFiles: true });
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await expect(startSession(lifecycle, false)).resolves.toBeUndefined();
@@ -116,7 +116,7 @@ describe("strictAgentFiles gates session startup", () => {
 
   it("skips the file and starts when disabled (the default)", async () => {
     writeBrokenAgent();
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
@@ -129,7 +129,7 @@ describe("strictAgentFiles gates session startup", () => {
 
     // Start clean, so the session exists — then break the file underneath it.
     writeFileSync(path, "---\ndescription: Fixed\n---\n\nFixed.\n");
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     await startSession(lifecycle, true);
     writeFileSync(path, BROKEN);

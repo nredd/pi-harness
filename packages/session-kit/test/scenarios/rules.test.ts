@@ -2,8 +2,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { configFor, outcomes, ScenarioFixture, sessionFile, tool } from "./support.ts";
+import { configFor, ScenarioFixture, sessionFile } from "../fixtures/session.ts";
 
 const RULE = "RULE-MARKER use tabs in TypeScript";
 let fixture: ScenarioFixture | undefined;
@@ -31,7 +32,7 @@ function injectedRules(harness: Awaited<ReturnType<ScenarioFixture["start"]>>): 
 it("matching rule injects once after unmatched read", async () => {
 	fixture = files();
 	const harness = await fixture.start(configFor("rules"));
-	harness.setResponses([tool("read", { path: "README.md" }), fauxAssistantMessage("OK")]);
+	harness.setResponses([toolCall("read", { path: "README.md" }), fauxAssistantMessage("OK")]);
 	await harness.session.prompt("unmatched");
 	const [unmatched] = outcomes(harness, "read");
 	expect(unmatched?.isError).toBe(false);
@@ -39,8 +40,8 @@ it("matching rule injects once after unmatched read", async () => {
 	expect(injectedRules(harness)).toEqual([]);
 
 	harness.setResponses([
-		tool("read", { path: "src/a.ts" }),
-		tool("read", { path: "src/b.ts" }),
+		toolCall("read", { path: "src/a.ts" }),
+		toolCall("read", { path: "src/b.ts" }),
 		fauxAssistantMessage("OK"),
 	]);
 	await harness.session.prompt("matched");
@@ -57,8 +58,8 @@ it("tree navigation rebuilds injected rules for the actual selected branch", asy
 	const harness = await fixture.start(configFor("rules"));
 	const root = harness.sessionManager.appendCustomEntry("fixture:branch-root", {});
 	harness.setResponses([
-		tool("read", { path: "src/a.ts" }),
-		tool("read", { path: "src/b.ts" }),
+		toolCall("read", { path: "src/a.ts" }),
+		toolCall("read", { path: "src/b.ts" }),
 		fauxAssistantMessage("OK"),
 	]);
 	await harness.session.prompt("first branch");
@@ -66,7 +67,7 @@ it("tree navigation rebuilds injected rules for the actual selected branch", asy
 	expect(injectedRules(harness)).toEqual([{ rule: "project:ts.md" }]);
 	await harness.session.navigateTree(root, { summarize: false });
 	expect(injectedRules(harness)).toEqual([]);
-	harness.setResponses([tool("read", { path: "src/a.ts" }), fauxAssistantMessage("OK")]);
+	harness.setResponses([toolCall("read", { path: "src/a.ts" }), fauxAssistantMessage("OK")]);
 	await harness.session.prompt("new branch");
 	expect(outcomes(harness, "read").at(-1)?.text).toContain(RULE);
 	expect(injectedRules(harness)).toEqual([{ rule: "project:ts.md" }]);
@@ -75,13 +76,13 @@ it("tree navigation rebuilds injected rules for the actual selected branch", asy
 it("file-backed restore remembers injected rules", async () => {
 	fixture = files();
 	const first = await fixture.start(configFor("rules"));
-	first.setResponses([tool("read", { path: "src/a.ts" }), fauxAssistantMessage("OK")]);
+	first.setResponses([toolCall("read", { path: "src/a.ts" }), fauxAssistantMessage("OK")]);
 	await first.session.prompt("go");
 	expect(outcomes(first, "read")[0]?.text).toContain(RULE);
 	const file = sessionFile(first);
 	first.cleanup();
 	const second = await fixture.start(configFor("rules"), { sessionManager: SessionManager.open(file) });
-	second.setResponses([tool("read", { path: "src/b.ts" }), fauxAssistantMessage("OK")]);
+	second.setResponses([toolCall("read", { path: "src/b.ts" }), fauxAssistantMessage("OK")]);
 	await second.session.prompt("again");
 	expect(outcomes(second, "read").at(-1)?.text).not.toContain(RULE);
 	expect(outcomes(second, "read").at(-1)?.isError).toBe(false);

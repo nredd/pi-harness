@@ -20,7 +20,7 @@ import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
+import { AgentManager, describeEvicted, describeEvictedResult, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
@@ -54,7 +54,7 @@ import { admitModelSelection, describeSelection, modelIdentityNote, modelSelecti
 import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
-import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, retainReferencedTranscripts, schedulePrune, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
@@ -995,7 +995,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      content: describeEvictedResult(note) === undefined
+        ? `${describeEvicted(note)}. Its result was never read and its record is gone; it left no result text. Reopen it with steer_subagent or Agent resume if its session is still saved.`
+        : `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true,
     }, { deliverAs: "nextTurn" });
   });
@@ -1218,6 +1220,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     for (const note of saved.values()) {
       if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
+    // Retention (#900), off the startup path: whatever this session's records and
+    // eviction notes (or its fork source) still point at is touched and exempted.
+    const referenced = [...[...saved.values()].map((n) => n.transcript), ...manager.listAgents().map((r) => r.outputFile)]
+      .filter((path): path is string => path !== undefined);
+    schedulePrune({
+      keepSessionIds: [ctx.sessionManager.getSessionId(), ...retainReferencedTranscripts(referenced, ctx.sessionManager?.getHeader?.()?.parentSession)],
+    });
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
@@ -1953,7 +1962,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // path is deterministic per agent+session, so writing an initial entry
     // would truncate the previous run's turns (see ensureOutputFile).
     if (opts.outputTranscript) {
-      existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      // Keep a transcript that still exists where it is: an ENOSPC/EROFS retry (#900) may have
+      // relocated it under the temp root, and a recomputed path would start an empty file elsewhere.
+      if (!existing.outputFile || !existsSync(existing.outputFile)) {
+        existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      }
       ensureOutputFile(existing.outputFile);
       // A fresh transcript for a later resume must still say what the agent ran on.
       if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
@@ -2146,6 +2159,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         description:
           'Opt-in only — fire later instead of now. Omit to run immediately (the default, almost always correct). ' +
           'Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). ' +
+          'Append " until <ISO or +2h>" to a cron or interval to stop firing at a deadline (e.g. "30m until +6h"), instead of re-arming by hand. ' +
           'Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.',
       }),
     ),
@@ -2497,7 +2511,7 @@ Terse command-style prompts produce shallow, generic work.
       const attachTranscript = (rec: AgentRecord | undefined, agentId: string): void => {
         if (!rec || !outputTranscript) return;
         rec.outputFile = createOutputFilePath(ctx.cwd, agentId, ctx.sessionManager.getSessionId());
-        writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
+        rec.outputFile = writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
       };
 
       // Unconditional, not "only when it differs from the parent": a thinking
@@ -2625,8 +2639,9 @@ Terse command-style prompts produce shallow, generic work.
             isolation: isolation,
           });
           const next = scheduler.getNextRun(job.id);
+          const untilNote = job.until ? `, until: ${job.until}` : "";
           return textResult(
-            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). ` +
+            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${untilNote}). ` +
             `Next run: ${next ?? "(unknown)"}. ` +
             `Manage via /agents → Scheduled jobs.`,
           );
@@ -2645,15 +2660,17 @@ Terse command-style prompts produce shallow, generic work.
         if (!existing) {
           // Evicted by the retention sweep, but a persisted conversation is
           // still on disk: reopen it, as `@handle` does.
-          const entry = manager.listTombstones().find(t => t.id === latest);
+          const entry = manager.tombstoneById(latest);
           if (!entry) {
             // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
             const note = manager.getEvictedNote(latest);
             const gone = note?.fromSavedSession
               ? "only historical metadata is available; reopen the recorded session manually."
-              : note?.nameTaken
-                ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
-                : "no saved session is left to reopen.";
+              : note?.tombstoneBoundSession
+                ? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.`
+                : note?.nameTaken
+                  ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+                  : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
           }
@@ -3558,9 +3575,10 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   /** "Not found", or what became of the agent when its record was evicted. */
-  function agentNotFound(ref: string): string {
+  function agentNotFound(ref: string, withResult = false): string {
     const note = manager.getEvictedNote(ref);
-    return note ? describeEvicted(note) : `Agent not found: "${ref}". It may have been cleaned up.`;
+    const result = withResult && note ? describeEvictedResult(note) : undefined;
+    return note ? describeEvicted(note) + (result ? `\n\n${result}` : "") : `Agent not found: "${ref}". It may have been cleaned up.`;
   }
 
   // ---- get_subagent_result tool ----
@@ -3588,7 +3606,7 @@ Terse command-style prompts produce shallow, generic work.
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
-      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id, !record));
 
       // Wait for completion if requested. Cancellation stops only this tool
       // call; the background agent keeps running and remains unconsumed so its

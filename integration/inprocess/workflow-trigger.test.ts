@@ -7,7 +7,7 @@ import {
 	getAssistantTexts,
 	getUserTexts,
 	type Harness,
-} from "@earendil-works/pi-coding-agent/testing";
+} from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { isolateStackHome, loadThirdParty, startStack } from "./support.ts";
 

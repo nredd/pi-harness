@@ -6,8 +6,8 @@ const entry = readFileSync(new URL("../dist/index.ts", import.meta.url), "utf8")
 
 /**
  * Pi's Jiti transforms every `src/` module on every launch; the pre-bundled `dist/index.ts`
- * only has to be evaluated (#577, ~300 ms of startup). `npm run check:runtime` proves the
- * committed bundle is fresh; these pin the properties that make it fast and loadable.
+ * only has to be evaluated (#577, ~300 ms of startup). The bundle is gitignored build
+ * output (`npm run build`); these pin the properties that make it fast and loadable.
  */
 describe("pre-bundled runtime entry", () => {
   it("is what Pi loads", () => {

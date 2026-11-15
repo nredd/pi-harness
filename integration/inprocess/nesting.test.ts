@@ -1,9 +1,10 @@
 /** Nested calls meet both the independently owned workflow tool and subagents' scoped gate. */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { agentStack, ask, call, closeAgentStack, jsonFile, report } from "./agents-support.ts";
+import { agentStack, ask, closeAgentStack, jsonFile, report } from "./agents-support.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
@@ -30,9 +31,9 @@ afterAll(async () => {
 
 it("child refuses promoted workflow and background Agent with reasons", async () => {
 	const answer = await ask(h, "general-purpose", [
-		call("search_tools", { query: "workflow", kind: "tool" }),
-		call("workflow", { script: "export const meta = { name: 'x', description: 'x' }" }),
-		call("Agent", { subagent_type: "general-purpose", description: "inner", prompt: "x", run_in_background: true }),
+		toolCall("search_tools", { query: "workflow", kind: "tool" }),
+		toolCall("workflow", { script: "export const meta = { name: 'x', description: 'x' }" }),
+		toolCall("Agent", { subagent_type: "general-purpose", description: "inner", prompt: "x", run_in_background: true }),
 		report,
 	]);
 	expect(answer).toContain("Workflows are not available inside a subagent");

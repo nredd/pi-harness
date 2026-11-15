@@ -32,28 +32,9 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn(() => vi.fn()),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 function ctx() {
   return {
@@ -133,7 +114,7 @@ describe("issue #174: foreground agent that hits max_turns", () => {
   });
 
   it("is NOT cleaned up — get_subagent_result with the real id still resolves it", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const { res, id } = await runForegroundSteeredAgent(tools);
 
@@ -150,7 +131,7 @@ describe("issue #174: foreground agent that hits max_turns", () => {
   });
 
   it("never hands the model an agent id — the id lives only in renderer details", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const { res, id } = await runForegroundSteeredAgent(tools);
 
@@ -180,13 +161,13 @@ describe("issue #174: foreground agent that hits max_turns", () => {
     // under `inChildSessionContext()` — but any other in-process activation still
     // can, and if its session_start / session_shutdown reached the PARENT's
     // manager, that activation ending would wipe the parent's records.
-    const parent = makePi();
+    const parent = bootPi();
     subagentsExtension(parent.pi);
     await parent.lifecycle.get("session_start")?.({}, ctx());
     const { id } = await runForegroundSteeredAgent(parent.tools);
 
     // A child activation runs its full lifecycle, as a subagent session does.
-    const child = makePi();
+    const child = bootPi();
     subagentsExtension(child.pi);
     await child.lifecycle.get("session_start")?.({}, ctx());
     await child.lifecycle.get("session_shutdown")?.({}, ctx());
@@ -201,7 +182,7 @@ describe("issue #174: foreground agent that hits max_turns", () => {
   });
 
   it("IS evicted by a session switch — its result was already delivered inline", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const { id } = await runForegroundSteeredAgent(tools);
 

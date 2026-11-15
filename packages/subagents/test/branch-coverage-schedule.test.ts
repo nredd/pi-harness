@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { getAgentConfig, NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
@@ -12,7 +13,7 @@ import { type ScheduleChangeEvent, SubagentScheduler } from "../src/schedule.js"
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { ScheduledSubagent } from "../src/types.js";
 import { showSchedulesMenu } from "../src/ui/schedule-menu.js";
-import { FakeClock } from "./helpers/fake-clock.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
 let dir: string;
 let registry: ModelRegistry;
@@ -37,35 +38,30 @@ afterEach(() => {
 });
 
 /** `pi.events` that records schedule events and lets a test answer router admission by hand. */
-function makePi() {
+function bootSchedulePi() {
   const events: ScheduleChangeEvent[] = [];
   const admits: string[] = [];
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      emit: (channel: string, data: unknown) => {
-        if (channel === "subagents:scheduled") events.push(data as ScheduleChangeEvent);
-        if (channel === ADMIT_CHANNEL) admits.push((data as { requestId: string }).requestId);
-      },
-      on: (channel: string, handler: (data: unknown) => void) => {
-        handlers.set(channel, handler);
-        return () => handlers.delete(channel);
-      },
-    },
-  } as unknown as ExtensionAPI;
+  const booted = bootPi();
+  const emit = vi.mocked(booted.bus.emit).getMockImplementation();
+  vi.mocked(booted.bus.emit).mockImplementation((channel, data) => {
+    if (channel === "subagents:scheduled") events.push(data as ScheduleChangeEvent);
+    if (channel === ADMIT_CHANNEL) admits.push((data as { requestId: string }).requestId);
+    emit?.(channel, data);
+  });
+  const handlers = booted.busHandlers;
   const reply = (data: unknown) => {
     const requestId = admits.shift();
     if (requestId === undefined) throw new Error("no admission request pending");
     handlers.get(`${ADMIT_CHANNEL}:reply:${requestId}`)?.(data);
   };
-  return { pi, events, admits, reply, handlers };
+  return { pi: booted.pi as ExtensionAPI, events, admits, reply, handlers };
 }
 
 function setup(opts: { clock?: FakeClock; spawn?: () => string; path?: string } = {}) {
   const clock = opts.clock ?? new FakeClock();
   const spawn = vi.fn(opts.spawn ?? (() => "spawned"));
   const manager = { spawn, awaitStartup: async () => {}, getRecord: () => ({ status: "completed", promise: Promise.resolve("done") }) } as unknown as AgentManager;
-  const { pi, events, admits, reply, handlers } = makePi();
+  const { pi, events, admits, reply, handlers } = bootSchedulePi();
   const ctx = { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext;
   const path = opts.path ?? join(dir, "jobs.json");
   const store = new ScheduleStore(path);
@@ -141,7 +137,7 @@ describe("scheduler branches", () => {
 
   it("keeps no admission token for a job that never armed", () => {
     class FullClock extends FakeClock {
-      override setInterval(): never { throw "timer table full"; }
+      override setTimeout(): never { throw "timer table full"; }
     }
     const tokens = (s: SubagentScheduler) => (s as unknown as { scheduled: Map<string, object> }).scheduled;
     const full = setup({ clock: new FullClock(), path: join(dir, "full.json") });
@@ -159,7 +155,7 @@ describe("scheduler branches", () => {
 
   it("reports a non-Error timer failure as its string", () => {
     class FullClock extends FakeClock {
-      override setInterval(): never { throw "timer table full"; }
+      override setTimeout(): never { throw "timer table full"; }
     }
     const f = setup({ clock: new FullClock() });
     const job = f.scheduler.addJob(input);
@@ -192,7 +188,7 @@ describe("scheduler branches", () => {
     expect(f.admits).toHaveLength(1);
     // /resume: same scheduler, a fresh store on the same file, a new context.
     f.scheduler.stop();
-    const next = { ...makePi(), ctx: { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext };
+    const next = { ...bootSchedulePi(), ctx: { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext };
     f.scheduler.start(next.pi, next.ctx, f.manager, new ScheduleStore(f.path));
     f.reply({ success: true, data: { ok: true } });
     await flush();
@@ -218,7 +214,7 @@ describe("scheduler branches", () => {
     const job = f.scheduler.addJob({ ...input, model: "@cheap" });
     f.clock.advance(1000);
     f.scheduler.stop();
-    const next = makePi();
+    const next = bootSchedulePi();
     f.scheduler.start(next.pi, f.ctx, f.manager, new ScheduleStore(f.path));
     await failure;
     await flush();
@@ -238,8 +234,8 @@ describe("scheduler branches", () => {
     });
     let reported!: () => void;
     const report = new Promise<void>(resolve => { reported = resolve; });
-    const emit = f.pi.events.emit.bind(f.pi.events);
-    vi.spyOn(f.pi.events, "emit").mockImplementation((channel, event) => {
+    const emit = vi.mocked(f.pi.events.emit).getMockImplementation() as (channel: string, event: unknown) => void;
+    vi.mocked(f.pi.events.emit).mockImplementation((channel, event) => {
       emit(channel, event);
       if ((event as ScheduleChangeEvent).type === "error") reported();
     });
@@ -283,7 +279,7 @@ describe("scheduler branches", () => {
     const job = f.scheduler.addJob({ ...input, model, quotaParked: true });
     f.clock.advance(1000);
     expect(f.handlers.size).toBe(1);
-    expect(f.clock.pending).toBe(2);
+    expect(f.clock.pending).toBe(3); // interval, admission timeout, lease renewal
     f.scheduler.updateJob(job.id, { enabled: false });
     expect(f.handlers.size).toBe(0);
     expect(f.clock.pending).toBe(0);
@@ -308,6 +304,94 @@ describe("scheduler branches", () => {
     expect(f.spawn).toHaveBeenCalledTimes(1);
   });
 
+  describe("claimed fires", () => {
+    /** A job whose first fire spawned a never-settling run, with a second fire's admission left pending. */
+    const liveRunPlusPending = async () => {
+      const f = setup();
+      vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "running", promise: new Promise<string>(() => {}) } as never);
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      f.reply({ success: true, data: { ok: true } });
+      await flush();
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      f.clock.advance(1000);
+      expect(f.admits).toHaveLength(1);
+      return { f, job };
+    };
+
+    it("keeps the owner when a pending admission is cancelled beside a live run", async () => {
+      const { f, job } = await liveRunPlusPending();
+      f.scheduler.updateJob(job.id, { enabled: false });
+      expect(f.store.get(job.id)?.runOwner?.pid).toBe(process.pid);
+    });
+
+    it("keeps the owner when a refused admission ends beside a live run", async () => {
+      const { f, job } = await liveRunPlusPending();
+      f.reply({ success: true, data: { ok: false } });
+      await flush();
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "error", runOwner: { pid: process.pid } });
+    });
+
+    it("skips a spawn whose job another process removed after the claim", async () => {
+      const f = setup();
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      new ScheduleStore(f.path).remove(job.id);
+      f.clock.advance(1000); // the next claim reloads the cache and finds the job gone
+      f.reply({ success: true, data: { ok: true } });
+      await flush();
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(f.store.get(job.id)).toBeUndefined();
+    });
+
+    const foreign = () => ({ pid: process.ppid, leaseUntil: Date.parse("2020-01-01T00:00:00Z") + 600_000 });
+
+    it("a run settling after another process took the claim leaves its status and owner", async () => {
+      const f = setup();
+      let finish!: () => void;
+      vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "completed", promise: new Promise<void>(r => { finish = r; }) } as never);
+      const job = f.scheduler.addJob({ ...input, schedule: "+1s" });
+      f.clock.advance(1000);
+      f.store.update(job.id, { runOwner: foreign() });
+      finish();
+      await flush();
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "running", runOwner: foreign(), runCount: 1 });
+    });
+
+    it("a failed spawn after another process took the claim keeps its status and owner", () => {
+      const f = setup({ spawn: () => { throw new Error("boom"); } });
+      const job = f.scheduler.addJob({ ...input, schedule: "+1s" });
+      f.spawn.mockImplementation(() => {
+        f.store.update(job.id, { runOwner: foreign() });
+        throw new Error("boom");
+      });
+      f.clock.advance(1000);
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "running", runOwner: foreign() });
+      expect(f.store.get(job.id)?.lastRun).toBeDefined();
+    });
+
+    it("a cancelled admission after another process took the claim leaves its status and owner", () => {
+      const f = setup();
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      f.store.update(job.id, { runOwner: foreign() });
+      f.scheduler.updateJob(job.id, { enabled: false });
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "running", runOwner: foreign() });
+    });
+
+    it("settling a fire whose registry entry is gone is harmless", async () => {
+      const f = setup();
+      let finish!: () => void;
+      vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "completed", promise: new Promise<void>(r => { finish = r; }) } as never);
+      const job = f.scheduler.addJob({ ...input, schedule: "+1s" });
+      f.clock.advance(1000);
+      delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:scheduled-runs")];
+      finish();
+      await flush();
+      expect(f.store.get(job.id)?.lastStatus).toBe("success");
+    });
+  });
+
   it("cancels overlapping admissions while an already spawned run finishes after stop", async () => {
     const f = setup();
     let finish!: (value: string) => void;
@@ -319,12 +403,13 @@ describe("scheduler branches", () => {
     f.clock.advance(1000);
     expect(f.spawn).toHaveBeenCalledTimes(1);
     expect(f.handlers.size).toBe(2);
-    expect(f.clock.pending).toBe(5);
+    expect(f.clock.pending).toBe(8); // adds the lease renewal of each of the three claimed fires
     f.scheduler.stop();
     expect(f.handlers.size).toBe(0);
-    expect(f.clock.pending).toBe(0);
+    expect(f.clock.pending).toBe(1); // only the spawned run keeps renewing its lease
     finish("done");
     await flush();
+    expect(f.clock.pending).toBe(0);
     expect(f.store.get(running.id)?.lastStatus).toBe("success");
     expect(f.spawn).toHaveBeenCalledTimes(1);
   });

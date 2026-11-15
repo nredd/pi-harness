@@ -6,10 +6,11 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	createTestUiContext,
 	fauxAssistantMessage,
-	fauxToolCall,
+	type fauxToolCall,
 	getMessageText,
-	type Harness,
 } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
@@ -59,11 +60,6 @@ function getAssistantTexts(h: Harness): string[] {
 
 type Step = Parameters<Harness["setResponses"]>[0][number];
 const echoLast: Step = (ctx) => fauxAssistantMessage(`ECHO ${getMessageText(ctx.messages.at(-1))}`);
-
-/** A scripted call goes through pi's schema validation, tool policy and real executor. */
-function call(name: string, args: Parameters<typeof fauxToolCall>[1]): Step {
-	return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
-}
 
 interface Outcome {
 	args: Record<string, unknown>;
@@ -170,14 +166,14 @@ describe("approved plan todos in one real session", () => {
 	) {
 		const result = await open(undefined, ["Implement here"]);
 		await result.h.session.prompt("/plan start");
-		await turn(result.h, [call("plan_mode_complete", { plan: PLAN }), ...implementation], "make the original plan");
+		await turn(result.h, [toolCall("plan_mode_complete", { plan: PLAN }), ...implementation], "make the original plan");
 		expect(only(outcomes(result.h, "plan_mode_complete")).isError).toBe(false);
 		return result;
 	}
 
 	it("approval seeds verbatim bullets before any todo call", async () => {
 		const { h } = await approved();
-		await turn(h, [call("todo", { action: "list" }), fauxAssistantMessage("Listed"), echoLast]);
+		await turn(h, [toolCall("todo", { action: "list" }), fauxAssistantMessage("Listed"), echoLast]);
 		const listed = only(outcomes(h, "todo"));
 		expect(listed.args).toEqual({ action: "list" });
 		expect(listed.text.split("\n")).toEqual(["Plan: Ship widgets -- 3/3 plan items open", ...PLAN_ROWS]);
@@ -185,9 +181,9 @@ describe("approved plan todos in one real session", () => {
 
 	it("seeded plan tasks keep the evidence gate", async () => {
 		const { h } = await approved([
-			call("todo", { action: "list" }),
-			call("todo", { action: "update", id: 1, status: "completed" }),
-			call("todo", { action: "update", id: 1, status: "completed", evidence: EVIDENCE }),
+			toolCall("todo", { action: "list" }),
+			toolCall("todo", { action: "update", id: 1, status: "completed" }),
+			toolCall("todo", { action: "update", id: 1, status: "completed", evidence: EVIDENCE }),
 			fauxAssistantMessage(PREMATURE_DONE),
 			echoLast,
 		]);
@@ -199,9 +195,9 @@ describe("approved plan todos in one real session", () => {
 
 	it("open approved work reminds once at settlement", async () => {
 		const { h } = await approved([
-			call("todo", { action: "list" }),
-			call("todo", { action: "update", id: 1, status: "completed" }),
-			call("todo", { action: "update", id: 1, status: "completed", evidence: EVIDENCE }),
+			toolCall("todo", { action: "list" }),
+			toolCall("todo", { action: "update", id: 1, status: "completed" }),
+			toolCall("todo", { action: "update", id: 1, status: "completed", evidence: EVIDENCE }),
 			fauxAssistantMessage(PREMATURE_DONE),
 			echoLast,
 		]);
@@ -234,8 +230,8 @@ describe("approved plan todos in one real session", () => {
 			{ action: "update", id: 3, status: "completed", evidence: BATCH_EVIDENCE },
 		];
 		const { h } = await approved([
-			call("todo", { ops }),
-			call("todo", { action: "list" }),
+			toolCall("todo", { ops }),
+			toolCall("todo", { action: "list" }),
 			fauxAssistantMessage("Closed"),
 		]);
 		const [batch, listed] = outcomes(h, "todo");
@@ -262,7 +258,7 @@ describe("approved plan todos in one real session", () => {
 		expect(message).not.toContain("Pending");
 		expect(message).not.toContain("In Progress");
 		expect(listed?.text.split("\n")[0]).toBe("Plan: Ship widgets -- 0/3 plan items open");
-		await turn(resumed.h, [call("todo", { action: "list" }), fauxAssistantMessage("Restored")]);
+		await turn(resumed.h, [toolCall("todo", { action: "list" }), fauxAssistantMessage("Restored")]);
 		expect(only(outcomes(resumed.h, "todo")).text).toBe(listed?.text);
 	});
 
@@ -275,8 +271,8 @@ describe("approved plan todos in one real session", () => {
 		await turn(
 			h,
 			[
-				call("plan_mode_complete", { plan: REPLACEMENT_PLAN }),
-				call("todo", { action: "list" }),
+				toolCall("plan_mode_complete", { plan: REPLACEMENT_PLAN }),
+				toolCall("todo", { action: "list" }),
 				fauxAssistantMessage("Listed"),
 				echoLast,
 			],
@@ -294,12 +290,12 @@ describe("approved plan todos in one real session", () => {
 		await close(initial.h);
 		const { h, offered } = await open(file, ["Stay in Plan mode", undefined]);
 		await h.session.prompt("/plan start");
-		await turn(h, [call("plan_mode_complete", { plan: REPLACEMENT_PLAN })], "draft a replacement");
+		await turn(h, [toolCall("plan_mode_complete", { plan: REPLACEMENT_PLAN })], "draft a replacement");
 		await turn(
 			h,
 			[
-				call("plan_mode_question", REPROPOSAL_CONFIRMATION),
-				call("plan_mode_complete", { plan: REPLACEMENT_PLAN }),
+				toolCall("plan_mode_question", REPROPOSAL_CONFIRMATION),
+				toolCall("plan_mode_complete", { plan: REPLACEMENT_PLAN }),
 				fauxAssistantMessage("Awaiting permission"),
 			],
 			"no, keep working on the old plan",
@@ -316,7 +312,7 @@ describe("approved plan todos in one real session", () => {
 		await remaining.h.session.prompt("/plan exit");
 		await turn(
 			remaining.h,
-			[call("todo", { action: "list" }), fauxAssistantMessage("Listed"), echoLast],
+			[toolCall("todo", { action: "list" }), fauxAssistantMessage("Listed"), echoLast],
 			"list the remaining work",
 		);
 		expect(only(outcomes(remaining.h, "todo")).text.split("\n")).toEqual([
@@ -365,7 +361,7 @@ describe("approved plan todos in one real session", () => {
 		const listed = await open(file);
 		await turn(
 			listed.h,
-			[call("todo", { action: "list" }), fauxAssistantMessage("Listed"), echoLast],
+			[toolCall("todo", { action: "list" }), fauxAssistantMessage("Listed"), echoLast],
 			"list the remaining work",
 		);
 		const outcome = only(outcomes(listed.h, "todo"));

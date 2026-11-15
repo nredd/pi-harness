@@ -2,7 +2,8 @@ import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import type { PlanModeSettings } from "./settings.js";
 import {
   classifyPlanModeTool,
-  findBlockedCommandSegment,
+  decideBlockedCommand,
+  explainDecision,
   findBlockedPowerShellCommandSegment,
   findBlockedSshExecCall,
   readCommand,
@@ -73,9 +74,10 @@ export function blockedShellCallReason(
 ): string | undefined {
   const shellOptions = { ...options, trustedDirectories: settings.trustedDirectories };
   if (toolName === "bash") {
-    const blocked = findBlockedCommandSegment(readCommand(input), settings.safeSubcommands, shellOptions);
-    if (blocked !== undefined) {
-      return `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${blocked}`;
+    const decision = decideBlockedCommand(readCommand(input), settings.safeSubcommands, shellOptions);
+    if (decision !== undefined) {
+      const why = explainDecision(decision);
+      return `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${decision.segment}\nOffending token: ${why.token} (${why.reason})`;
     }
   }
   if (toolName === SSH_EXEC_TOOL_NAME) {

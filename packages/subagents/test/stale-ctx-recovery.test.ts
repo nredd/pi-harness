@@ -9,9 +9,11 @@
 import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, staleCtxOutcome } from "../src/agent-runner.js";
-import { answer, barrier, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => {
@@ -49,12 +51,12 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   Reflect.set(globalThis, "__subagentScenarioHold", async () => { executions++; return original(); });
   const first = earlierProse
     ? fauxAssistantMessage([{ type: "text", text: "EARLIER PROGRESS" }, fauxToolCall("hold", {})], { stopReason: "toolUse" })
-    : calls({ name: "hold", args: {} });
+    : toolCalls({ name: "hold", args: {} });
   const physical = fixture.physical("fauxphys", "physical", [first, ...responses]);
   // A persisted session: only then does a reload detach (not abort) running children.
   const sessionManager = SessionManager.create(fixture.cwd, join(fixture.root, "sessions"));
   const h = await fixture.start({ factories: [routedModel(() => physical.getModel())], harness: { sessionManager } });
-  h.setResponses([calls(spawn("probe child", { model: virtual ? "vroute/default" : "fauxphys/physical" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("probe child", { model: virtual ? "vroute/default" : "fauxphys/physical" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await hold.entered;
   const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
@@ -65,8 +67,8 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
 it("#581: routes during the parent's invalidated reload gap without retrying", { timeout: 30_000 }, async () => {
   const { h, hold, record, executions } = await startHeldChild([answer("CHILD DONE")]);
   // Stop core's reload after `oldRunner.invalidate()` but before the new runner binds.
-  const entered = barrier();
-  const gate = barrier();
+  const entered = deferred();
+  const gate = deferred();
   const settings = h.session.settingsManager;
   const reloadSettings = settings.reload.bind(settings);
   settings.reload = async () => { entered.resolve(); await gate.promise; return reloadSettings(); };

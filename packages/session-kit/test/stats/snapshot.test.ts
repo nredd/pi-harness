@@ -6,6 +6,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -27,6 +28,8 @@ import {
 	validateShard,
 } from "../../src/stats/snapshot.ts";
 import { assistantLine, at, call, sessionFile } from "./fixtures.ts";
+import { CANARY } from "./harness/fixtures.ts";
+import { seedHarnessHome } from "./harness/home.ts";
 
 let dir: string;
 let repo: string;
@@ -299,7 +302,7 @@ it("rejects incomplete local scans, invalid machine directories, and older expor
 	rmSync(join(repo, "machines", "not-a-machine"), { recursive: true });
 	const manifestPath = join(exported.snapshotDir, "manifest.json");
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-	writeFileSync(manifestPath, JSON.stringify({ ...manifest, exportedAt: 1 }));
+	writeFileSync(manifestPath, JSON.stringify({ ...manifest, exportedAt: 1, lastGoodAt: { pi: 1 } }));
 	expect((await importStats(viewer, repo)).problems).toContain(`Incomplete snapshot ${exported.machineId}`);
 });
 
@@ -402,6 +405,50 @@ describe("actual portable bundled CLI", () => {
 		expect(JSON.parse(imported.stdout).imported).toBe(1);
 		expect(readFileSync(join(b, "pi-session-kit", "stats-global.json"), "utf8")).toContain("wire-model");
 	});
+	it("exports a fake HOME's harnesses from the packed CLI and imports them into a second agent dir", () => {
+		seed(a);
+		const fakeHome = join(dir, "fake-home");
+		seedHarnessHome(fakeHome);
+		const artifact = packedArtifact(join(dir, "packed"));
+		// Only HOME is set: the roots come from the harnesses' standard paths.
+		const env = { HOME: fakeHome, USERPROFILE: fakeHome } as NodeJS.ProcessEnv;
+		for (const name of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_DATA_HOME", "OPENCODE_DB"]) env[name] = undefined;
+		const tree = (): [string, string, number][] =>
+			readdirSync(fakeHome, { recursive: true, withFileTypes: true })
+				.filter((e) => e.isFile())
+				.map((e) => join(e.parentPath, e.name))
+				.sort()
+				.map((path) => [path, readFileSync(path, "latin1"), statSync(path).mtimeMs]);
+		const before = tree();
+		const exported = run(
+			artifact,
+			["export", "--agent-dir", a, "--output", repo, "--harness", "pi,claude,codex,opencode"],
+			env,
+		);
+		expect(exported.status, exported.stderr).toBe(0);
+		expect(exported.stdout.trim().split("\n")).toHaveLength(1);
+		const value = JSON.parse(exported.stdout);
+		expect(value.harnesses).toEqual({
+			claude: { found: true, problems: [] },
+			codex: { found: true, problems: [] },
+			opencode: { found: true, problems: [] },
+		});
+		// the artifact only reads: no new file, and every source keeps its bytes and mtime
+		expect(tree()).toEqual(before);
+		const imported = run(artifact, ["import", "--agent-dir", b, "--input", repo]);
+		expect(imported.status, imported.stderr).toBe(0);
+		const cached = readFileSync(join(b, "pi-session-kit", "stats-global.json"), "utf8");
+		const events = Object.values(JSON.parse(cached).machines).flatMap((m) =>
+			(m as { shards: { events: { harness: string; cost: number | null }[] }[] }).shards.flatMap((s) => s.events),
+		);
+		expect(events.map((e) => e.harness).sort()).toEqual(["claude", "codex", "opencode", "pi"]);
+		expect(events.find((e) => e.harness === "claude")?.cost).toBeNull();
+		expect(cached).toContain("openai-codex");
+		expect(cached).not.toContain(CANARY);
+		// an old viewer dir has no harness cache of its own: only the producer wrote one
+		expect(readdirSync(join(a, "pi-session-kit"))).toContain("stats-harness-cache.json");
+	});
+
 	it("runs directly but not on import from a packed path with portable characters", () => {
 		seed(a);
 		const artifact = packedArtifact(join(dir, "packed artifact é"));
@@ -425,11 +472,11 @@ describe("actual portable bundled CLI", () => {
 		const faulty = join(dir, "faulty#artifact?.mjs");
 		const interpolation = String.fromCharCode(36, 123);
 		const faultyGuard = `new URL(\`file://${interpolation}process.argv[1]}\`).href`;
-		const bytes = readFileSync(artifact, "utf8").replace(
-			"pathToFileURL(realpathSync(process.argv[1])).href",
-			faultyGuard,
-		);
-		writeFileSync(faulty, bytes);
+		// esbuild renames the import when another bundled module also imports `pathToFileURL`.
+		const guard = /pathToFileURL\d*\(realpathSync\(process\.argv\[1\]\)\)\.href/;
+		const original = readFileSync(artifact, "utf8");
+		expect(original).toMatch(guard);
+		writeFileSync(faulty, original.replace(guard, faultyGuard));
 		const result = run(faulty, ["export", "--agent-dir", a, "--output", repo]);
 		expect(result.status).toBe(0);
 		expect(result.stdout).toBe("");
@@ -491,10 +538,13 @@ describe("actual portable bundled CLI", () => {
 		expect(run(artifact, ["unknown"]).status).toBe(1);
 	});
 	it("build is byte reproducible and contains only Node builtin imports", () => {
-		const before = readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");
-		const result = spawnSync("npm", ["run", "build:stats-export"], { cwd: resolve("."), encoding: "utf8" });
-		expect(result.status, result.stderr).toBe(0);
-		expect(readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8")).toBe(before);
+		const build = () => {
+			const result = spawnSync("npm", ["run", "build"], { cwd: resolve("."), encoding: "utf8" });
+			expect(result.status, result.stderr).toBe(0);
+			return readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");
+		};
+		const before = build();
+		expect(build()).toBe(before);
 		expect(before).not.toContain("@earendil");
 		expect(before).not.toContain("node_modules");
 	});

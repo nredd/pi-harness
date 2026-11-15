@@ -4,7 +4,7 @@ import * as kit from "@narumitw/pi-tui-kit";
 import { test, vi } from "vitest";
 import type { PlanModeSettings } from "../src/settings.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
-import { builtinTool, createMockContext } from "./harness/support.js";
+import { builtinTool, createPlanContext } from "./harness/support.js";
 
 vi.mock("@narumitw/pi-tui-kit", { spy: true });
 
@@ -17,7 +17,7 @@ type Handlers = Record<string, (input: ActionInput) => Promise<Outcome>>;
  * menu's action handlers and drive them with values the Kit contract types but never produces.
  */
 async function captureSettingsActions(overrides: Partial<Parameters<typeof showPlanModeSettings>[1]> = {}) {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   let captured: Handlers | undefined;
   let state: unknown;
   vi.spyOn(kit, "runMenu").mockImplementation(async (ctx, definition, options) => {

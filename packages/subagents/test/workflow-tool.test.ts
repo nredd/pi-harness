@@ -28,7 +28,7 @@ import type { AgentRecord } from "../src/types.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import { compileJsonSchema } from "../src/workflow/json-schema.js";
 import type { WorkflowSpawnRequest } from "../src/workflow/runtime.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 /* ------------------------------------------------------------------------- *
  * Fixtures
@@ -538,8 +538,45 @@ describe("createWorkflowHost — abort, resume and gate", () => {
     await host.spawnAgent(request({ agentId: "wf-agent-0" }));
     const resumed = await host.resumeAgent?.("wf-agent-0", "and now this");
 
-    expect(stub.resume).toHaveBeenCalledWith("manager-id-7", "and now this", undefined);
+    expect(stub.resume).toHaveBeenCalledWith("manager-id-7", "and now this", undefined, expect.any(Object));
     expect(resumed).toMatchObject({ ok: true, text: "resumed" });
+  });
+
+  it("relabels a resumed child per answered message and skips unchanged reports (#906)", async () => {
+    const invocation = (thinking: string) => ({ modelName: "phys", modelId: "p/phys", thinking, requestedThinking: "high" });
+    let current: AgentRecord = record({ id: "manager-id-7", invocation: invocation("high") as never });
+    const stub = stubManager(() => current);
+    const getRecord = () => current;
+    const manager = { ...(stub.manager as object), getRecord } as unknown as AgentManager;
+    stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
+      current = record({ id: "manager-id-7", invocation: invocation("off") as never });
+      options.onAssistantUsage();
+      options.onAssistantUsage(); // same answer again: nothing new to say
+      return current;
+    });
+    const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager });
+    await host.spawnAgent(request({ agentId: "wf-agent-0" }));
+    const onResolved = vi.fn();
+
+    await host.resumeAgent?.("wf-agent-0", "again", onResolved);
+
+    const thinking = onResolved.mock.calls.map(([info]) => info.thinking).filter(Boolean);
+    expect(thinking).toEqual(["high", "off"]);
+  });
+
+  it("ignores a per-message relabel before the resumed child's model is known (#906)", async () => {
+    const stub = stubManager(() => record({ id: "manager-id-7" }));
+    stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
+      options.onAssistantUsage();
+      return record({ id: "manager-id-7" });
+    });
+    const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
+    await host.spawnAgent(request({ agentId: "wf-agent-0" }));
+    const onResolved = vi.fn();
+
+    await host.resumeAgent?.("wf-agent-0", "again", onResolved);
+
+    expect(onResolved.mock.calls.every(([info]) => info.modelName === undefined)).toBe(true);
   });
 
   it("refuses to resume an agent the run never spawned", async () => {
@@ -637,13 +674,13 @@ const plainTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 
 describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
   let hermetic: Hermetic;
-  let booted: ReturnType<typeof makePi>;
+  let booted: ReturnType<typeof bootPi>;
   let tools: Map<string, any>;
 
   beforeEach(() => {
     // Hermetic dir first — settings and agent files are read at boot.
     hermetic = hermeticDir({ settings: { schedulingEnabled: false, workflowsEnabled: true } });
-    booted = makePi();
+    booted = bootPi();
     subagentsExtension(booted.pi);
     tools = booted.tools;
   });
@@ -1096,7 +1133,7 @@ describe("--subagents-workflow-file", () => {
     // The regression this guards: a run's agents are owned by it, so their
     // lifecycle callbacks no longer refresh the fleet — and nothing else did,
     // which left a running workflow invisible in FleetView.
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     const context = uiCtx();
     await booted.lifecycle.get("session_start")?.({}, context);
@@ -1115,7 +1152,7 @@ describe("--subagents-workflow-file", () => {
   it("captures the UI at session_start, before any tool has executed", () => {
     // A flag-launched workflow runs from session_start, so a UI captured only
     // from tool_execution_start would leave it with no widget and no fleet row.
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     const context = uiCtx();
 
@@ -1125,7 +1162,7 @@ describe("--subagents-workflow-file", () => {
   });
 
   it("registers the flag at activation but does not read it there", () => {
-    const booted = makePi({ [WORKFLOW_FILE_FLAG]: "ignored-at-activation.js" });
+    const booted = bootPi({ [WORKFLOW_FILE_FLAG]: "ignored-at-activation.js" });
     subagentsExtension(booted.pi);
 
     expect(booted.registeredFlags.get(WORKFLOW_FILE_FLAG)).toMatchObject({ type: "string" });
@@ -1137,7 +1174,7 @@ describe("--subagents-workflow-file", () => {
   it("reads the flag from session_start", async () => {
     const path = join(hermetic.dir, "flow.js");
     writeFileSync(path, fileScript);
-    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    const booted = bootPi({ [WORKFLOW_FILE_FLAG]: path });
     subagentsExtension(booted.pi);
 
     await booted.lifecycle.get("session_start")?.({}, uiCtx());
@@ -1146,7 +1183,7 @@ describe("--subagents-workflow-file", () => {
   });
 
   it("explains the `=` form when the flag arrives bare as boolean true", async () => {
-    const booted = makePi({ [WORKFLOW_FILE_FLAG]: true });
+    const booted = bootPi({ [WORKFLOW_FILE_FLAG]: true });
     subagentsExtension(booted.pi);
     const context = uiCtx();
 
@@ -1158,7 +1195,7 @@ describe("--subagents-workflow-file", () => {
   });
 
   it("does nothing at all when the flag was not passed", async () => {
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     const context = uiCtx();
 
@@ -1170,7 +1207,7 @@ describe("--subagents-workflow-file", () => {
   });
 
   it("reports a script it cannot read without starting a run", async () => {
-    const booted = makePi({ [WORKFLOW_FILE_FLAG]: join(hermetic.dir, "absent.js") });
+    const booted = bootPi({ [WORKFLOW_FILE_FLAG]: join(hermetic.dir, "absent.js") });
     subagentsExtension(booted.pi);
     const context = uiCtx();
 
@@ -1184,7 +1221,7 @@ describe("--subagents-workflow-file", () => {
   it("renders the finished run as a session entry and hands it to the model as next-turn context", async () => {
     const path = join(hermetic.dir, "flow.js");
     writeFileSync(path, `${fileScript}log("scanned");\nreturn "all clear";\n`);
-    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    const booted = bootPi({ [WORKFLOW_FILE_FLAG]: path });
     subagentsExtension(booted.pi);
 
     await booted.lifecycle.get("session_start")?.({}, uiCtx());
@@ -1207,7 +1244,7 @@ describe("--subagents-workflow-file", () => {
   });
 
   it("renders the persisted entry through the shared workflow card layout", async () => {
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     const renderer = booted.entryRenderers.get(WORKFLOW_ENTRY_TYPE);
     expect(renderer, "a custom entry with no renderer is silently dropped by the host").toBeTruthy();
@@ -1265,7 +1302,7 @@ describe("workflowsEnabled — the master switch", () => {
   /** Boot the extension against a project whose settings say `settings`. */
   const boot = (settings: Record<string, unknown>, flags: Record<string, string | boolean> = {}) => {
     hermetic = hermeticDir({ settings });
-    const booted = makePi(flags);
+    const booted = bootPi(flags);
     subagentsExtension(booted.pi);
     return booted;
   };
@@ -1321,7 +1358,7 @@ describe("collisions with another extension", () => {
 
   const boot = (settings: Record<string, unknown> = { workflowsEnabled: true }) => {
     hermetic = hermeticDir({ settings });
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     return booted;
   };
@@ -1487,7 +1524,7 @@ describe("collisions with another extension", () => {
     hermetic = hermeticDir({ settings: {} });
     const path = join(hermetic.dir, "flow.js");
     writeFileSync(path, fileScript);
-    const booted = makePi({ [WORKFLOW_FILE_FLAG]: path });
+    const booted = bootPi({ [WORKFLOW_FILE_FLAG]: path });
     subagentsExtension(booted.pi);
     booted.pi.getAllTools.mockReturnValue([foreign("Workflow")]);
     const context = uiContext();

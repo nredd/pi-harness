@@ -116,7 +116,7 @@ describe("snapshot bounded publication and session schemas", () => {
 			// Inject only the final document's byte accounting, not policy or serialization. This exercises
 			// the real import/validation/atomic-write path at the 128 MiB edge without allocating 128 MiB.
 			const measurement = vi.spyOn(Buffer, "byteLength").mockImplementation((value, encoding) => {
-				if (typeof value === "string" && value.startsWith('{"version":1,"importedAt":')) {
+				if (typeof value === "string" && value.startsWith('{"version":2,"importedAt":')) {
 					measured.push(value);
 					return measuredBytes;
 				}

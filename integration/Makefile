@@ -26,6 +26,7 @@ test:  ## Infrastructure units only, no Pi or tmux
 
 stack:  ## Real D/E boundaries; explicit PI_BIN and STACK, CI/runner only
 	@test -n "$(STACK)" || (printf 'Set STACK=stacks/personal.json or stacks/local.json\n'; exit 2)
+	@case "$(STACK)" in *local.json) $(MAKE) -C .. build;; esac
 	$(PYTEST) $(STACK_FILES) $(STACK_ARGS) -m stack -n 2 --dist loadfile --log-cli-level=INFO
 
 installer:  ## Real one-shot installer in throwaway HOMEs; explicit INSTALLER_SPEC and STACK_SHA, network

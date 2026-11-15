@@ -1,7 +1,8 @@
 /** Teardown must settle an unfinished reviewer turn before another test can run. */
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, it } from "vitest";
-import { agentStack, call, closeAgentStack } from "./agents-support.ts";
+import { agentStack, closeAgentStack } from "./agents-support.ts";
 import { isolateStackHome } from "./support.ts";
 
 it("aborts and drains a running reviewer and parent before disposing their session", async () => {
@@ -13,7 +14,7 @@ it("aborts and drains a running reviewer and parent before disposing their sessi
 	});
 	let aborted = false;
 	h.setResponses([
-		call("Agent", {
+		toolCall("Agent", {
 			subagent_type: "code-reviewer",
 			description: "hold reviewer",
 			prompt: "wait until teardown",

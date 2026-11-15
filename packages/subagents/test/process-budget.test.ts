@@ -12,14 +12,12 @@ import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import TypeScript from "typescript";
+import { transformSync } from "esbuild";
 import { build } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Use the real compiler API directly. A module-wide TypeScript mock also
-// intercepts the real SDK loader, and spreading a default-only CJS namespace
-// drops ModuleKind.
-const { ModuleKind, transpileModule } = TypeScript;
+// TypeScript 7 ships no JS compiler API, so the fixture source is stripped with esbuild instead.
+const transpile = (source: string): string => transformSync(source, { loader: "ts", format: "esm" }).code;
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -334,7 +332,7 @@ describe("process budget across managers", () => {
     const dir = mkdtempSync(join(tmpdir(), "budget-reload-"));
     try {
       const source = readFileSync(new URL("../src/process-budget.ts", import.meta.url), "utf8");
-      const { outputText } = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext } });
+      const outputText = transpile(source);
       writeFileSync(join(dir, "old.mjs"), outputText);
       writeFileSync(join(dir, "fresh.mjs"), outputText);
       // Model a reload onto the next incompatible state version, using the
@@ -342,9 +340,7 @@ describe("process budget across managers", () => {
       const incompatibleSource = source.replace(/const BUDGET_VERSION = (\d+);/, (_, version: string) =>
         `const BUDGET_VERSION = ${Number(version) + 1};`);
       expect(incompatibleSource).not.toBe(source);
-      writeFileSync(join(dir, "incompatible.mjs"), transpileModule(incompatibleSource, {
-        compilerOptions: { module: ModuleKind.ESNext },
-      }).outputText);
+      writeFileSync(join(dir, "incompatible.mjs"), transpile(incompatibleSource));
       copyFileSync(new URL("./fixtures/process-budget-reload.mjs", import.meta.url), join(dir, "check.mjs"));
       expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
     } finally {

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { branchSlug, formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const GIT_ENV = {
 	...process.env,
@@ -28,7 +28,7 @@ function sh(cwd: string, ...args: string[]): string {
 	});
 }
 
-const mock = createMockPi();
+const mock = createToolHost();
 registerGitTools(mock.pi);
 
 interface Wt {

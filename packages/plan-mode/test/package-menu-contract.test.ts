@@ -7,13 +7,13 @@ import { showPlanModeMenu, showReadyPlanMenu } from "../src/plan-action-menus.js
 import { showPlanLaunchMenu } from "../src/plan-launch-menu.js";
 import { showSavedPlanMenu } from "../src/saved-plan-menu.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 vi.mock("@narumitw/pi-tui-kit", { spy: true });
 
 /** Adapter fault injection, not a claim that the current Kit UI emits invalid selections. */
 test("settings adapters reject unknown thinking values and absent tools without saving", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   let checked = 0;
   try {
     vi.spyOn(kit, "runMenu").mockImplementation(async (ctx, definition, options) => {
@@ -47,7 +47,7 @@ test("settings adapters reject unknown thinking values and absent tools without 
 });
 
 test("launch adapter rejects an unknown tool ID without broadening its selected policy", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   let started: string[] | undefined;
   try {
     vi.spyOn(kit, "runMenu").mockImplementation(async (ctx, definition) => {
@@ -88,7 +88,7 @@ test("launch adapter rejects an unknown tool ID without broadening its selected 
 
 /** Adapter fault injection: Kit checks currency before dispatch, the adapter must still not act on a stale one. */
 test("launch adapter refuses every action from a closed or stale menu", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   const closed = new AbortController();
   closed.abort(new DOMException("Menu closed", "AbortError"));
   const effects: string[] = [];
@@ -153,7 +153,7 @@ test("launch adapter refuses every action from a closed or stale menu", async ()
 });
 
 test("launch Settings that finish after the menu went stale do not change the draft", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   let current = true;
   let outcome: unknown;
   try {
@@ -243,7 +243,7 @@ test("every export action sends a missing value to the default destination and r
         }
         return { kind: "closed", reason: "close" };
       });
-      const context = createMockContext({ hasUI: true, mode: "rpc" });
+      const context = createPlanContext({ hasUI: true, mode: "rpc" });
       await show(
         context.ctx,
         menuOptions(async (path) => {

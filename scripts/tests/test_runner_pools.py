@@ -106,25 +106,53 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
 @pytest.mark.parametrize(
     ("beat", "capacity"),
     [
-        (f"{FRESH}:2", 3),  # two free plus the one queued cell the pool allows
-        (f"{FRESH}:0", 1),  # full, but one may wait
-        (f"{FRESH}:-1", 0),  # one already waits: the allowed queue is taken
-        (f"{FRESH}:-5", 0),  # deeper backlog never goes negative
-        (f"{FRESH}:drain", None),  # draining: starts nothing, so nothing may be queued on it
+        (f"{FRESH}:2", 3),  # idle: two free plus one queued, held to the per-run cap
+        (f"{FRESH}:1", 2),
+        (f"{FRESH}:0", 1),  # full: one may wait
+        (f"{FRESH}:-1", 0),  # the allowed queue is taken
+        (f"{FRESH}:-9", 0),  # deeper backlog never goes negative
+        (FRESH, 1),  # no count means no backlog report: the one free slot, no queue allowance
+        (f"{FRESH}:drain", None),  # draining (also how low disk is published): nothing may be queued
         ("0", None),
     ],
 )
-def test_a_queue_depth_pool_allows_one_waiting_cell_and_no_more(beat: str, capacity: int | None) -> None:
-    """The macOS pool lets one cell wait beyond its free slots; the backlog the pool reports caps it."""
+def test_a_busy_macos_pool_queues_a_bounded_run_share(beat: str, capacity: int | None) -> None:
+    """An idle pool takes up to `run_cap`; a busy one queues one; a count-less beat never queues."""
     got = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
     assert got.get("pi-macos") == capacity
 
 
-def test_assign_cells_gives_a_pool_one_cell_beyond_its_free_slots(table: dict[Any, int]) -> None:
-    """With the pool full (capacity 1 from depth alone), the longest macOS cell queues; no more."""
-    running = [("owned", "macos-14", "ts"), ("owned", "macos-14", "python")]
+@pytest.mark.usefixtures("table")
+def test_an_idle_run_splits_macos_cells_across_both_pools() -> None:
+    """An idle pool takes `run_cap` cells from a run; the rest stay hosted on `xcode-27`."""
+    capacity = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:2"}, NOW, trusted=True)
+    planned = plan_runners(full_plan(capacity=capacity))
+    shards = [v for k, v in planned.items() if k[:2] == ("owned", "macos-14")]
+    # A hosted `contracts` cell carries no runner of its own; its matrix supplies `xcode-27`.
+    runners = [*shards, planned[("contracts", "macos-14", "")] or "xcode-27"]
+    assert runners.count("pi-macos") == MACOS.run_cap
+    assert runners.count("xcode-27") == len(runners) - MACOS.run_cap
+    assert runners.count("xcode-27") >= 1
+
+
+@pytest.mark.usefixtures("table")
+@pytest.mark.parametrize("beat", [f"{FRESH}:-1", f"{FRESH}:drain"])
+def test_a_saturated_or_draining_macos_pool_takes_nothing_from_a_run(beat: str) -> None:
+    """At the allowed backlog, or draining, no cell goes to the pool: all stay on `xcode-27`."""
+    capacity = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
+    assert "pi-macos" not in set(plan_runners(full_plan(capacity=capacity)).values())
+
+
+def test_assign_cells_queues_the_longest_macos_cells_on_a_full_pool(table: dict[Any, int]) -> None:
+    """With the pool full, depth alone takes the longest cells, longest first; a deep backlog takes none."""
+    running = [("owned", "macos-14", "ts"), ("owned", "macos-14", "python"), ("contracts", "macos-14", "")]
     full = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:0"}, NOW, trusted=True)
-    assert runner_pools.assign_cells(running, full) == {("owned", "macos-14", "ts"): "pi-macos"}
+    assert set(runner_pools.assign_cells(running, full)) == {("owned", "macos-14", "ts")}
+    two = {"pi-macos": 2}
+    assert set(runner_pools.assign_cells(running, two)) == {
+        ("owned", "macos-14", "python"),
+        ("owned", "macos-14", "ts"),
+    }
     backlog = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-1"}, NOW, trusted=True)
     assert runner_pools.assign_cells(running, backlog) == {}
 
@@ -371,7 +399,7 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
     stale = plan_with(tmp_path, "c", "--pool-heartbeat", "pi-macos=0", "--pool-heartbeat", "pi-linux=")
     assert set(cell_runners(stale, "owned (macos-14)").values()) == {"xcode-27"}
     full = plan_with(
-        tmp_path, "e", "--pool-heartbeat", f"pi-linux={beat}:0", "--pool-heartbeat", f"pi-macos={beat}:-1"
+        tmp_path, "e", "--pool-heartbeat", f"pi-linux={beat}:0", "--pool-heartbeat", f"pi-macos={beat}:-4"
     )
     assert full == stale == blocked == plan_with(tmp_path, "d")
 
@@ -406,7 +434,13 @@ def wsl2_hosts(plan: dict[str, ci_paths.CellPlan]) -> dict[tuple[str, str], tupl
 def test_the_wsl2_pool_is_one_strict_slot_with_a_variable_of_its_own() -> None:
     """`pi-wsl2` runs one job at a time and never queues a second one behind it."""
     pool = runner_pools.POOLS["pi-wsl2"]
-    assert (pool.label, pool.variable, pool.slots, pool.queue_depth) == ("pi-wsl2", "PI_WSL2_HEARTBEAT", 1, 0)
+    assert (pool.label, pool.variable, pool.slots, pool.queue_depth, pool.run_cap) == (
+        "pi-wsl2",
+        "PI_WSL2_HEARTBEAT",
+        1,
+        0,
+        0,
+    )
     assert runner_pools.OS_POOLS["wsl2"] == "pi-wsl2"
     listed = {key for key in runner_pools.CELL_SECONDS if key[1] == "wsl2"}
     assert listed == {WSL2_FIRST, ("owned", "wsl2", "ts"), ("contracts", "wsl2", "")}

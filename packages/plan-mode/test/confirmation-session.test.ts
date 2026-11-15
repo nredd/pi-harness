@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createTestUiContext, fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
+import { settled, toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, test } from "vitest";
-import { CONFIRMATION, complete, GATE_ERROR, outcomes, SessionFixture, state, tool } from "./session-support.js";
+import { CONFIRMATION, complete, GATE_ERROR, SessionFixture, state } from "./session-support.js";
 
 /** Persist a decline through real input, then reopen its actual JSONL through a fresh factory. */
 async function restoredConfirmation(fixture: SessionFixture, answer: "Re-propose now" | "Not yet" | undefined) {
@@ -32,7 +33,7 @@ async function restoredConfirmation(fixture: SessionFixture, answer: "Re-propose
   });
   expect(state(harness).reproposalReview).toBe("required");
   harness.setResponses([
-    tool("plan_mode_question", CONFIRMATION),
+    toolCall("plan_mode_question", CONFIRMATION),
     complete("Replacement"),
     ...(answer === "Re-propose now" ? [] : [fauxAssistantMessage("Blocked.")]),
   ]);
@@ -50,10 +51,10 @@ test("canonical affirmative permits one completion after restore", async () => {
   const fixture = new SessionFixture();
   try {
     const harness = await restoredConfirmation(fixture, "Re-propose now");
-    const completions = outcomes(harness, "plan_mode_complete");
+    const completions = settled(harness, "plan_mode_complete");
     expect(completions).toHaveLength(1);
     expect(completions[0]?.isError).toBe(false);
-    const questions = outcomes(harness, "plan_mode_question");
+    const questions = settled(harness, "plan_mode_question");
     expect(questions).toHaveLength(1);
     expect(questions[0]?.isError).toBe(false);
     expect(JSON.stringify(questions[0]?.result)).toContain("reproposal_confirmation");
@@ -63,7 +64,7 @@ test("canonical affirmative permits one completion after restore", async () => {
     // Permission is consumed: another unsolicited completion cannot reuse the affirmative answer.
     harness.setResponses([complete("Unauthorized"), fauxAssistantMessage("Blocked.")]);
     await harness.session.prompt("keep thinking");
-    const next = outcomes(harness, "plan_mode_complete");
+    const next = settled(harness, "plan_mode_complete");
     expect(next).toHaveLength(2);
     expect(next[1]?.isError).toBe(true);
     expect(getMessageText(next[1]?.result)).toContain(GATE_ERROR);
@@ -77,7 +78,7 @@ for (const answer of ["Not yet", undefined] as const) {
     const fixture = new SessionFixture();
     try {
       const harness = await restoredConfirmation(fixture, answer);
-      const completions = outcomes(harness, "plan_mode_complete");
+      const completions = settled(harness, "plan_mode_complete");
       expect(completions).toHaveLength(1);
       expect(completions[0]?.isError).toBe(true);
       expect(getMessageText(completions[0]?.result)).toContain(GATE_ERROR);

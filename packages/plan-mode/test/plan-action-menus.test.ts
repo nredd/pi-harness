@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { editPlanThenReopen } from "../src/plan-edit.js";
 import { showSavedPlanMenu } from "../src/saved-plan-menu.js";
-import { createCustomSelectorHarness, createMockContext, showPlanModeMenu, showReadyPlanMenu } from "./support.js";
+import { createCustomSelectorHarness, createPlanContext, showPlanModeMenu, showReadyPlanMenu } from "./support.js";
 
 /**
  * Build a complete menu callback contract, overriding only the outcome under test.
@@ -38,7 +38,7 @@ function menuOptions(overrides: Record<string, unknown> = {}) {
  */
 function rpcContext(choices: readonly string[], input = "review.md") {
   let choice = 0;
-  return createMockContext({
+  return createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => choices[choice++],
@@ -84,7 +84,7 @@ test("Plan menu carries selected models and submitted export paths to their outc
     { provider: "provider-two", id: "model-two", name: "Second" },
   ];
   let settingsVisits = 0;
-  const freshContext = createMockContext({
+  const freshContext = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: models[0],
@@ -177,7 +177,7 @@ test("Plan menu keeps a rejected export input open for cancellation", async () =
   let inputs = 0;
   let exports = 0;
   let selections = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => {
@@ -249,7 +249,7 @@ test("Ready-plan full menu applies selected model and exports submitted paths", 
   ];
   const runtime: unknown[] = [];
   let settingsVisits = 0;
-  const freshContext = createMockContext({
+  const freshContext = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: models[0],
@@ -295,7 +295,7 @@ test("Ready-plan chooser renders at narrow widths and routes explicit choices", 
     [7, "exit"],
   ] as const) {
     const actions: string[] = [];
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "tui",
       hasUI: true,
       custom: async (factory: unknown) => {
@@ -332,7 +332,7 @@ test("Ready-plan chooser distinguishes Escape from Ctrl-C cancellation", async (
     ["\u0003", []],
   ] as const) {
     const actions: string[] = [];
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "tui",
       hasUI: true,
       custom: async (factory: unknown) => {
@@ -390,7 +390,7 @@ test("Edit plan in every ready and saved menu edits after closing, then reopens 
   const saved: string[] = [];
   const titles: string[] = [];
   await showSavedPlanMenu(
-    createMockContext({
+    createPlanContext({
       mode: "rpc",
       hasUI: true,
       select: async (title: string, options: string[]) => {
@@ -423,7 +423,7 @@ test("Edit plan in every ready and saved menu edits after closing, then reopens 
 test("Ctrl+G in the ready chooser edits, then reopens the chooser on the edited plan", async () => {
   const actions: string[] = [];
   let opened = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -449,7 +449,7 @@ test("Ctrl+G in the ready chooser edits, then reopens the chooser on the edited 
 test("A menu does not reopen after its edit leaves the plan stale", async () => {
   let current = true;
   let opened = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {

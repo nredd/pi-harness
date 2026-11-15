@@ -10,7 +10,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { ADMIT_CHANNEL, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
 const registry = () => (globalThis as any)[managerKey];
@@ -32,7 +32,7 @@ afterEach(async () => {
 
 function boot(settings: Record<string, unknown> = {}, bus?: EventEmitter) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings } });
-  const b = makePi();
+  const b = bootPi();
   if (bus) {
     b.pi.events = {
       emit: (channel: string, data: unknown) => bus.emit(channel, data),

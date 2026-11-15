@@ -2,7 +2,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-responses";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isolateStackHome, startStack } from "./support.ts";

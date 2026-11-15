@@ -12,12 +12,10 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, type Dirent } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
-import { setImmediate as tick } from "node:timers/promises";
 import { agentDir } from "../agent-dir.ts";
+import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, num, timeOf } from "./jsonl.ts";
 import { nth } from "./nth.ts";
 export const CACHE_VERSION = 3;
 
@@ -30,7 +28,6 @@ const EXCLUDED_PROVIDERS = new Set(["faux", "faux-provider", "fake-provider", "r
 const CHILD_NAME = /#[0-9a-f]{8}$/;
 /** Entries open with `{"type":..,"id":..,"parentId":..,"timestamp":".."`: read it without a full parse. */
 const LEADING_TIMESTAMP = /^.{0,200}?"timestamp"\s*:\s*"([^"]+)"/;
-const YIELD_EVERY_LINES = 2000;
 
 /** One assistant call, compact so the cache stays small: `[ms, model index, in, out, cacheRead, cacheWrite, cost]`. */
 export type CallTuple = [number, number, number, number, number, number, number];
@@ -57,7 +54,12 @@ export interface FileStats {
 	badLines: number;
 }
 
+/** Which tool wrote the usage. Part of the event identity, so pi and Codex rows can never collide. */
+export const HARNESSES = ["pi", "claude", "codex", "opencode"] as const;
+export type Harness = (typeof HARNESSES)[number];
+
 export interface Call {
+	harness: Harness;
 	/** Opaque owning session ID (the oldest copy, after fork dedup). */
 	session: string;
 	/** Opaque preserved entry identity; absent on old transcripts. */
@@ -69,7 +71,8 @@ export interface Call {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	cost: number;
+	/** Recorded notional cost; `null` when the harness records none (Claude, Codex), which is not 0. */
+	cost: number | null;
 }
 
 export interface Session {
@@ -104,27 +107,6 @@ export function sessionsDir(dir = agentDir()): string {
 export function cachePath(dir = agentDir()): string {
 	return join(dir, "pi-session-kit", "stats-cache.json");
 }
-
-function num(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function timeOf(value: unknown): number {
-	if (typeof value === "number")
-		return Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000 ? value : 0;
-	if (typeof value !== "string") return 0;
-	const ms = Date.parse(value);
-	return Number.isFinite(ms) ? ms : 0;
-}
-
-/** Cheap structural check for lines that are not parsed: one JSON object per line. */
-function looksLikeObject(line: string): boolean {
-	const text = line.trim();
-	return text.startsWith("{") && text.endsWith("}");
-}
-
-/** A line of only NULs: crash padding (file size extended, data never written) that carries no data. */
-const NUL_PADDING = /^\0+$/;
 
 /** Line-at-a-time parser for one session file. */
 export class SessionParser {
@@ -261,47 +243,12 @@ export function parseSession(text: string, size = text.length, mtimeMs = 0): Fil
 	return parser.finish();
 }
 
-/** Stream a file through `SessionParser`, yielding to the event loop every 2000 lines so the TUI keeps painting. */
+/** Stream a file through `SessionParser`. */
 export async function parseFile(path: string, size: number, mtimeMs: number): Promise<FileStats> {
 	const parser = new SessionParser(size, mtimeMs);
-	const rl = createInterface({
-		input: createReadStream(path, { encoding: "utf8" }),
-		crlfDelay: Number.POSITIVE_INFINITY,
-	});
-	let n = 0;
-	for await (const line of rl) {
-		parser.accept(line);
-		if (++n % YIELD_EVERY_LINES === 0) await tick();
-	}
+	await feedFile(path, parser);
 	return parser.finish();
 }
-
-/**
- * Every `*.jsonl` under `root`. A missing root is an empty history; any other directory that cannot
- * be listed (EACCES, ...) is counted in `errors` so partial totals are never presented as complete.
- */
-async function listJsonl(root: string): Promise<{ paths: string[]; errors: number }> {
-	const out: string[] = [];
-	let errors = 0;
-	const walk = async (dir: string): Promise<void> => {
-		let entries: Dirent[];
-		try {
-			entries = await readdir(dir, { withFileTypes: true });
-		} catch (error) {
-			if (!(dir === root && (error as NodeJS.ErrnoException).code === "ENOENT")) errors++;
-			return;
-		}
-		for (const entry of entries) {
-			const path = join(dir, entry.name);
-			if (entry.isDirectory()) await walk(path);
-			else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(path);
-		}
-	};
-	await walk(root);
-	return { paths: out.sort(), errors };
-}
-
-const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** Whether a cached record has exactly the shape `flatten` relies on. */
 export function isFileStats(value: unknown): value is FileStats {
@@ -381,9 +328,9 @@ async function writeCache(path: string, files: Record<string, FileStats>): Promi
 	await rename(tmp, path);
 }
 
-/** Old caches deduplicated this tuple, without cost or entry identity. */
+/** Old caches deduplicated this tuple, without cost or entry identity; `harness` keeps tools apart. */
 export function legacyKey(c: Call): string {
-	return JSON.stringify([c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
+	return JSON.stringify([c.harness, c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
 }
 
 /** Prefer identified records over their legacy copies, but retain distinct preserved IDs. */
@@ -499,6 +446,7 @@ export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"
 
 			const slash = raw.indexOf("/");
 			candidates.push({
+				harness: "pi",
 				session,
 				entryId: file.entryIds?.[i] ?? undefined,
 				ms,

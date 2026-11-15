@@ -9,7 +9,7 @@ import {
   planModeToolSelection,
   toolNameFromLegacyKey,
 } from "../src/tool-selection.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 type Decision = { block?: boolean; reason?: string } | undefined;
@@ -21,23 +21,23 @@ test("legacy tool keys resolve their pre-separator name", () => {
 });
 
 async function fixture(tools: ToolInfo[], activeTools: string[], selected?: string[]) {
-  const mock = createMockPi({ allTools: tools, activeTools });
+  const mock = createPlanPi({ allTools: tools, activeTools });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
       settings: { thinkingLevel: "inherit" as const, ...(selected ? { defaultPlanTools: selected } : {}) },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const resolve = () => mock.events.get("context")?.[0]?.({ messages: [] }, context.ctx);
+  const resolve = () => mock.handlers.get("context")?.[0]?.({ messages: [] }, context.ctx);
   const call = async (name: string, nested = false, input: unknown = {}): Promise<Decision> =>
-    (await mock.events.get("tool_call")?.[0]?.(
+    (await mock.handlers.get("tool_call")?.[0]?.(
       { toolName: name, input, ...(nested ? { parentToolCallId: "outer" } : {}) },
       context.ctx,
     )) as Decision;
-  const close = () => mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, context.ctx);
+  const close = () => mock.handlers.get("session_shutdown")?.[0]?.({ reason: "exit" }, context.ctx);
   return { mock, context, resolve, call, close };
 }
 
@@ -118,14 +118,14 @@ test("native MCP and orchestration require separate opt-in; annotations do not g
   for (const selected of [undefined, ["codemode"], ["mcp__docs__read"], ["codemode", "mcp__docs__read"]]) {
     const f = await fixture(tools, ["codemode"], selected);
     try {
-      const active = f.mock.rawPi.getActiveTools();
+      const active = f.mock.pi.getActiveTools();
       await f.resolve();
       assert.equal((await f.call("codemode"))?.block !== true, selected?.includes("codemode") === true);
       assert.equal(
         (await f.call("mcp__docs__read", true))?.block !== true,
         selected?.includes("mcp__docs__read") === true,
       );
-      assert.deepEqual(f.mock.rawPi.getActiveTools(), active);
+      assert.deepEqual(f.mock.pi.getActiveTools(), active);
     } finally {
       await f.close();
     }
@@ -138,14 +138,14 @@ test("callable admissions survive declaration and restoration but hidden calls f
   try {
     await f.resolve();
     assert.equal(await f.call(tool.name, true), undefined);
-    f.mock.rawPi.setActiveTools([...f.mock.rawPi.getActiveTools(), tool.name]);
+    f.mock.pi.setActiveTools([...f.mock.pi.getActiveTools(), tool.name]);
     assert.equal(await f.call(tool.name), undefined);
     const branch = f.mock.entries.map((entry) => ({ type: "custom", ...entry }));
-    const restored = createMockContext({ sessionManager: { getBranch: () => branch, getEntries: () => branch } });
-    await f.mock.events.get("session_start")?.[0]?.({ reason: "resume" }, restored.ctx);
-    await f.mock.events.get("context")?.[0]?.({ messages: [] }, restored.ctx);
+    const restored = createPlanContext({ sessionManager: { getBranch: () => branch, getEntries: () => branch } });
+    await f.mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, restored.ctx);
+    await f.mock.handlers.get("context")?.[0]?.({ messages: [] }, restored.ctx);
     const invoke = () =>
-      f.mock.events.get("tool_call")?.[0]?.(
+      f.mock.handlers.get("tool_call")?.[0]?.(
         { toolName: tool.name, input: {}, parentToolCallId: "outer" },
         restored.ctx,
       ) as Promise<Decision>;
@@ -170,19 +170,19 @@ test("late callable registration resolves before first context only, including a
       await f.resolve();
       assert.equal((await f.call(name, true))?.block !== true, !late);
       const branch = f.mock.entries.map((entry) => ({ type: "custom", ...entry }));
-      const restored = createMockContext({ sessionManager: { getBranch: () => branch, getEntries: () => branch } });
-      await f.mock.events.get("session_start")?.[0]?.({ reason: "resume" }, restored.ctx);
-      await f.mock.events.get("context")?.[0]?.({ messages: [] }, restored.ctx);
-      const result = (await f.mock.events.get("tool_call")?.[0]?.(
+      const restored = createPlanContext({ sessionManager: { getBranch: () => branch, getEntries: () => branch } });
+      await f.mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, restored.ctx);
+      await f.mock.handlers.get("context")?.[0]?.({ messages: [] }, restored.ctx);
+      const result = (await f.mock.handlers.get("tool_call")?.[0]?.(
         { toolName: name, input: {}, parentToolCallId: "outer" },
         restored.ctx,
       )) as Decision;
       assert.equal(result?.block !== true, !late);
       await f.mock.commands.get("plan")?.handler("exit", restored.ctx);
       await f.mock.commands.get("plan")?.handler("start", restored.ctx);
-      await f.mock.events.get("context")?.[0]?.({ messages: [] }, restored.ctx);
+      await f.mock.handlers.get("context")?.[0]?.({ messages: [] }, restored.ctx);
       assert.equal(
-        await f.mock.events.get("tool_call")?.[0]?.(
+        await f.mock.handlers.get("tool_call")?.[0]?.(
           { toolName: name, input: {}, parentToolCallId: "outer" },
           restored.ctx,
         ),

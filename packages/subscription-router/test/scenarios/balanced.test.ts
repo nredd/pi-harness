@@ -3,7 +3,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-ag
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { STALE_GRACE_MS } from "../../src/selection.js";
-import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
+import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.js";
 
 describe("balanced router through a real session", () => {
 	let scenario: RouterScenario | undefined;

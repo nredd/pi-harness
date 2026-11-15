@@ -2,7 +2,8 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { fauxAssistantMessage, fauxToolCall, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { agentStack, ask, closeAgentStack, jsonFile, type Step } from "./agents-support.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";

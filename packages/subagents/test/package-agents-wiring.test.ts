@@ -19,7 +19,7 @@ import { getAgentConfig, getAllTypes } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
 import { packageNameForPath, resetPackageState } from "../src/package-resources.js";
 import { listSavedWorkflows, readSavedWorkflow } from "../src/workflow/saved.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 vi.mock("@earendil-works/pi-coding-agent", async importOriginal => {
   class ExtensionStartupError extends Error {
@@ -105,7 +105,7 @@ describe("package-provided agents, wired through the extension", () => {
 
   /** Activate the extension, without starting a session. */
   async function activate(): Promise<void> {
-    booted = makePi();
+    booted = bootPi();
     subagentsExtension(booted.pi);
   }
 

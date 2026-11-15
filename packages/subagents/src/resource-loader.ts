@@ -2,6 +2,11 @@
 import { DefaultPackageManager, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { normalizeHomePath } from "./home-paths.js";
 
+/**
+ * `homeDir` is a fork-core option (nredd/pi#13). Upstream 1.5 does not declare it and ignores it at runtime, so it is
+ * typed here to compile against both cores; on upstream the automatic `<home>/.agents/skills` root is not redirected.
+ */
+type HomeOption = { homeDir?: string };
 type ResourceLoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 type ResourceSettings = ReturnType<SettingsManager["getGlobalSettings"]>;
 
@@ -54,12 +59,20 @@ function normalizeHomeResourceSettings(settingsManager: SettingsManager, homeDir
 export function createHomePackageManager(options: PackageManagerOptions, homeDir?: string): DefaultPackageManager {
   if (homeDir === undefined) return new DefaultPackageManager(options);
   // `homeDir` also redirects Pi's automatic `<home>/.agents/skills` root (nredd/pi#13).
-  return new DefaultPackageManager({ ...options, homeDir, settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir) });
+  return new DefaultPackageManager({
+    ...options,
+    homeDir,
+    settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir),
+  } satisfies PackageManagerOptions & HomeOption as PackageManagerOptions);
 }
 
 /** Use the real loader/manager while preventing ambient-home expansion of explicit settings. */
 export function createHomeResourceLoader(options: ResourceLoaderOptions, homeDir?: string): DefaultResourceLoader {
   if (homeDir === undefined) return new DefaultResourceLoader(options);
   const settingsManager = options.settingsManager ?? SettingsManager.create(options.cwd, options.agentDir);
-  return new DefaultResourceLoader({ ...options, homeDir, settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir) });
+  return new DefaultResourceLoader({
+    ...options,
+    homeDir,
+    settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir),
+  } satisfies ResourceLoaderOptions & HomeOption as ResourceLoaderOptions);
 }

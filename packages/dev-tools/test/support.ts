@@ -1,28 +1,15 @@
 /**
- * Minimal pi mock: enough `ExtensionAPI` to register tools and hooks and call them. Calls are
- * validated against the tool's TypeBox `parameters`, and results against its `outputSchema`, so a
- * test cannot pass with arguments or structured content pi itself would reject.
+ * Tool host for dev-tools tests: the shared recording `ExtensionAPI` (`@nredd/pi-test-lib/pi`)
+ * plus `call`, which validates arguments against the tool's TypeBox `parameters` and results
+ * against its `outputSchema`, so a test cannot pass with arguments or structured content pi
+ * itself would reject.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createRecordingContext, createRecordingPi } from "@nredd/pi-test-lib/pi";
 import type { TSchema } from "typebox";
 import { Errors } from "typebox/value";
 
-type AnyTool = {
-	name: string;
-	description?: string;
-	annotations?: Record<string, boolean>;
-	parameters: TSchema;
-	outputSchema?: TSchema;
-	execute: (
-		id: string,
-		params: unknown,
-		signal: AbortSignal | undefined,
-		update: undefined,
-		ctx: { cwd: string },
-	) => Promise<unknown>;
-};
-type Hook = (event: unknown, ctx: unknown) => unknown;
 export type MockResult = {
 	content: { text: string }[];
 	structuredContent: unknown;
@@ -35,27 +22,23 @@ function schemaProblem(schema: TSchema, value: unknown): string | undefined {
 	return first ? `${first.instancePath || "/"}: ${first.message}` : undefined;
 }
 
-export function createMockPi() {
-	const tools = new Map<string, AnyTool>();
-	const hooks = new Map<string, Hook[]>();
-	const pi = {
-		registerTool(tool: AnyTool) {
-			tools.set(tool.name, tool);
-		},
-		on(event: string, handler: Hook) {
-			hooks.set(event, [...(hooks.get(event) ?? []), handler]);
-		},
-	} as unknown as ExtensionAPI;
-	return {
-		pi,
-		tools,
-		hooks,
+type SchemaTool = ToolDefinition & { outputSchema?: TSchema };
+
+export function createToolHost() {
+	const recording = createRecordingPi({ autoActivate: false });
+	return Object.assign(recording, {
 		async call(name: string, params: unknown, cwd: string): Promise<MockResult> {
-			const tool = tools.get(name);
+			const tool = recording.tools.get(name) as SchemaTool | undefined;
 			if (!tool) throw new Error(`tool ${name} not registered`);
-			const bad = schemaProblem(tool.parameters, params);
+			const bad = schemaProblem(tool.parameters as TSchema, params);
 			if (bad) throw new Error(`${name} params rejected by schema ${bad}`);
-			const result = (await tool.execute("id", params, undefined, undefined, { cwd })) as MockResult;
+			const result = (await tool.execute(
+				"id",
+				params,
+				undefined,
+				undefined,
+				createRecordingContext({ cwd }).ctx,
+			)) as unknown as MockResult;
 			if (tool.outputSchema) {
 				const badOut = schemaProblem(tool.outputSchema, result.structuredContent);
 				if (badOut) throw new Error(`${name} structuredContent violates outputSchema ${badOut}`);
@@ -66,11 +49,12 @@ export function createMockPi() {
 			return result.content.map((c) => c.text).join("\n");
 		},
 		toolCall(toolName: string, input: unknown) {
-			for (const hook of hooks.get("tool_call") ?? []) {
-				const decision = hook({ toolName, input }, {});
+			const ctx = createRecordingContext().ctx;
+			for (const hook of recording.handlers.get("tool_call") ?? []) {
+				const decision = hook({ toolName, input }, ctx);
 				if (decision) return decision;
 			}
 			return undefined;
 		},
-	};
+	});
 }

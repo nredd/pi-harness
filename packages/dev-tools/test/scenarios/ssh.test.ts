@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../src/index.ts";
-import { runTools, startSession } from "./support.ts";
+import { runTools, startSession } from "../fixtures/session.ts";
 
 const FAKE_SSH = join(import.meta.dirname, "..", "fixtures", "ssh", "fake-ssh");
 

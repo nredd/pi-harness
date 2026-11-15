@@ -1,6 +1,8 @@
 import { fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { nextEvent } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { configFor, FakeClock, goalStates, heldResponse, nextEvent, ScenarioFixture, spoken, tick } from "./support.ts";
+import { configFor, goalStates, heldResponse, ScenarioFixture, spoken, tick } from "../fixtures/session.ts";
 
 let fixture: ScenarioFixture | undefined;
 afterEach(async () => {

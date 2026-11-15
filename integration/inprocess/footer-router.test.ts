@@ -1,9 +1,9 @@
 /** Real quota admission/routing -> assistant metadata -> preset footer, without paid calls. */
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-coding-agent/testing";
 import { expect, it } from "vitest";
-import { FooterFixture } from "../../packages/preset/test/scenarios/support.ts";
+import { FooterFixture } from "../../packages/preset/test/fixtures/footer.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
-import { CachedUsage, Clock } from "../../packages/subscription-router/test/scenarios/support.ts";
+import { CachedUsage, Clock } from "../../packages/subscription-router/test/fixtures/router.ts";
 
 it("shows quota fallback/provider changes and never labels refused admission as dispatched", async () => {
 	const usage = new CachedUsage(new Clock());

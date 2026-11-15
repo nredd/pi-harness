@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerCargoTools } from "../../src/cargo/index.ts";
 import { withLock } from "../../src/core/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 import { wrapperFixture } from "../wrapper-fixture.ts";
 
 const fixtures: ReturnType<typeof wrapperFixture>[] = [];
@@ -17,7 +18,7 @@ function setup() {
 	vi.stubEnv("CARGO_TARGET_DIR", "");
 	const fixture = wrapperFixture("Cargo.toml");
 	fixtures.push(fixture);
-	const mock = createMockPi();
+	const mock = createToolHost();
 	registerCargoTools(mock.pi, { cargoBin: fixture.bin, rustupBin: fixture.bin });
 	return { ...fixture, ...mock };
 }
@@ -76,7 +77,7 @@ console.log(${JSON.stringify(JSON.stringify(diagnostic("error", "error")))});`);
 			{ toolchain: "stable", features: ["a", "b"], limit: 1 },
 			undefined,
 			((value: unknown) => updates.push(value)) as never,
-			{ cwd: f.root },
+			createRecordingContext({ cwd: f.root }).ctx,
 		);
 		expect(result).toMatchObject({ isError: true, structuredContent: { errors: 1, warnings: 1 } });
 		expect(JSON.stringify(result)).toContain("... 1 more");
@@ -188,7 +189,13 @@ console.log(${JSON.stringify(JSON.stringify(diagnostic("error", "error")))});`);
 		await withLock(`cargo:${f.root}`, async () => {
 			const pending = f.tools
 				.get("cargo_check")
-				?.execute("id", {}, controller.signal, ((value: unknown) => updates.push(value)) as never, { cwd: f.root });
+				?.execute(
+					"id",
+					{},
+					controller.signal,
+					((value: unknown) => updates.push(value)) as never,
+					createRecordingContext({ cwd: f.root }).ctx,
+				);
 			controller.abort();
 			expect(await pending).toMatchObject({ isError: true });
 		});

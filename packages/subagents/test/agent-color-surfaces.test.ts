@@ -5,6 +5,7 @@ import type { AgentConfig, AgentRecord } from "../src/types.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
 const TYPE = "colored-reviewer";
 const DISPLAY_NAME = "Code Reviewer";
@@ -33,17 +34,6 @@ type WidgetFactory = (
   tui: { terminal: { columns: number; rows?: number }; requestRender: ReturnType<typeof vi.fn> },
   activeTheme: typeof theme,
 ) => RenderedComponent;
-type SessionHandler = (...args: unknown[]) => unknown;
-
-interface RegisteredTool {
-  name: string;
-  renderCall(
-    args: Record<string, unknown>,
-    activeTheme: typeof theme,
-    context: { isPartial: boolean; isError: boolean },
-  ): RenderedComponent;
-}
-
 function registerColoredReviewer(color = "purple"): void {
   registerAgents(new Map([[TYPE, { ...config, color }]]));
 }
@@ -75,26 +65,6 @@ function makeActivity(): AgentActivity {
   };
 }
 
-function makePi() {
-  const tools = new Map<string, RegisteredTool>();
-  const handlers = new Map<string, SessionHandler>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((tool: unknown) => {
-      const registered = tool as RegisteredTool;
-      tools.set(registered.name, registered);
-    }),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: unknown) => handlers.set(event, handler as SessionHandler)),
-    events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as unknown as Parameters<typeof subagentsExtension>[0];
-  return { pi, tools, handlers };
-}
 
 beforeEach(() => {
   registerColoredReviewer();
@@ -106,7 +76,7 @@ afterEach(() => {
 
 describe("custom agent color runtime surfaces", () => {
   it("renders the registered Agent tool call header with the display name and color", async () => {
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi();
     subagentsExtension(pi);
     registerColoredReviewer();
 

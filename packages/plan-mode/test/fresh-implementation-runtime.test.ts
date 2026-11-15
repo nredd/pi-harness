@@ -3,7 +3,7 @@ import { test } from "vitest";
 import { startFreshImplementationSession } from "../src/fresh-implementation.js";
 import planMode from "../src/plan-mode.js";
 import { MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH, restorePlanModeState } from "../src/state.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const PLAN = "# Runtime plan\n\n1. Apply destination settings.";
@@ -14,14 +14,14 @@ function stateEntry(data: Record<string, unknown>) {
 }
 
 async function submitInput(
-  mock: ReturnType<typeof createMockPi>,
+  mock: ReturnType<typeof createPlanPi>,
   ctx: unknown,
   text = "implement",
   source: "extension" | "rpc" = "extension",
 ) {
-  const input = mock.events.get("input")?.[0];
+  const input = mock.handlers.get("input")?.[0];
   assert.ok(input);
-  return Promise.resolve(input({ text, source }, ctx));
+  return Promise.resolve(input({ text, source }, ctx as never));
 }
 
 test("pending implementation runtime state restores only strict bounded one-shot values", () => {
@@ -105,7 +105,7 @@ test("pending implementation runtime state restores only strict bounded one-shot
 test("fresh preflight re-resolves an explicit model and persists intent beside destination state", async () => {
   let destinationState: unknown;
   const authModels: unknown[] = [];
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "planning-provider", id: "planning-model" },
@@ -166,7 +166,7 @@ test("fresh preflight re-resolves an explicit model and persists intent beside d
 
 test("clear-on-start persists only temporary runtime intent when an override is selected", async () => {
   let destinationState: unknown;
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "planning-provider", id: "planning-model" },
@@ -219,7 +219,7 @@ test("clear-on-start persists only temporary runtime intent when an override is 
 test("missing or unauthenticated selected models reject before replacing the source session", async () => {
   for (const failure of ["missing", "auth"] as const) {
     let newSessionCalls = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "rpc",
       hasUI: true,
       model: { provider: "planning-provider", id: "planning-model" },
@@ -265,7 +265,7 @@ test("unpersistable selected model identifiers reject before source replacement"
     let findCalls = 0;
     let authCalls = 0;
     let newSessionCalls = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "rpc",
       hasUI: true,
       model: { provider: "planning-provider", id: "planning-model" },
@@ -335,7 +335,7 @@ test("fresh preflight suppresses stale warnings and contains notification failur
   ];
   for (const scenario of staleScenarios) {
     let currentChecks = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "rpc",
       hasUI: true,
       model: scenario.model,
@@ -356,13 +356,13 @@ test("fresh preflight suppresses stale warnings and contains notification failur
     assert.deepEqual(context.notifications, []);
   }
 
-  const throwingNotification = createMockContext({
+  const throwingNotification = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "planning-provider", id: "planning-model" },
     modelRegistry: { find: () => undefined },
   });
-  (throwingNotification.ctx as { ui: { notify(): void } }).ui.notify = () => {
+  (throwingNotification.ctx as unknown as { ui: { notify(): void } }).ui.notify = () => {
     throw new Error("stale UI");
   };
   const result = await startFreshImplementationSession(throwingNotification.ctx, {
@@ -410,14 +410,14 @@ test("destination consumes and applies all runtime override classes exactly once
         ]
       : [];
     const order: string[] = [];
-    const mock = createMockPi({ thinkingLevel: "low" });
-    const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
-    mock.rawPi.setModel = async (model) => {
+    const mock = createPlanPi({ thinkingLevel: "low" });
+    const originalSetModel = mock.pi.setModel.bind(mock.pi);
+    mock.pi.setModel = async (model) => {
       order.push("model");
       return originalSetModel(model);
     };
-    const originalSetThinking = mock.rawPi.setThinkingLevel.bind(mock.rawPi);
-    mock.rawPi.setThinkingLevel = (level) => {
+    const originalSetThinking = mock.pi.setThinkingLevel.bind(mock.pi);
+    mock.pi.setThinkingLevel = (level) => {
       order.push(`thinking:${level}`);
       originalSetThinking(level);
     };
@@ -426,14 +426,14 @@ test("destination consumes and applies all runtime override classes exactly once
       getBranch: () => branch,
       getEntries: () => branch,
     };
-    const context = createMockContext({
+    const context = createPlanContext({
       sessionManager,
       modelRegistry: {
         find: (provider: string, id: string) => (provider === TARGET.provider && id === TARGET.id ? TARGET : undefined),
         getApiKeyAndHeaders: async () => ({ ok: true as const }),
       },
     });
-    await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
     assert.equal(await submitInput(mock, context.ctx), undefined);
     assert.deepEqual(order, scenario.expectedOrder, scenario.name);
     if (scenario.runtime) {
@@ -442,7 +442,7 @@ test("destination consumes and applies all runtime override classes exactly once
       };
       assert.equal(consumed.pendingImplementationRuntime, undefined, scenario.name);
     }
-    await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
     assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
     assert.deepEqual(order, scenario.expectedOrder, `${scenario.name} reapplied`);
   }
@@ -461,19 +461,19 @@ test("destination applies restored runtime during resumed session startup", asyn
     }),
   ];
   const order: string[] = [];
-  const mock = createMockPi({ thinkingLevel: "low" });
-  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
-  mock.rawPi.setModel = async (model) => {
+  const mock = createPlanPi({ thinkingLevel: "low" });
+  const originalSetModel = mock.pi.setModel.bind(mock.pi);
+  mock.pi.setModel = async (model) => {
     order.push("model");
     return originalSetModel(model);
   };
-  const originalSetThinking = mock.rawPi.setThinkingLevel.bind(mock.rawPi);
-  mock.rawPi.setThinkingLevel = (level) => {
+  const originalSetThinking = mock.pi.setThinkingLevel.bind(mock.pi);
+  mock.pi.setThinkingLevel = (level) => {
     order.push(`thinking:${level}`);
     originalSetThinking(level);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: (provider: string, id: string) => (provider === TARGET.provider && id === TARGET.id ? TARGET : undefined),
@@ -481,7 +481,7 @@ test("destination applies restored runtime during resumed session startup", asyn
     },
   });
 
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
 
   assert.deepEqual(order, ["model", "thinking:high"]);
   assert.deepEqual(mock.setModels, [TARGET]);
@@ -494,16 +494,16 @@ test("destination applies restored runtime during resumed session startup", asyn
 
 test("destination applies restored runtime during tree navigation", async () => {
   const branch: ReturnType<typeof stateEntry>[] = [];
-  const mock = createMockPi({ thinkingLevel: "low" });
+  const mock = createPlanPi({ thinkingLevel: "low" });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: (provider: string, id: string) => (provider === TARGET.provider && id === TARGET.id ? TARGET : undefined),
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   branch.push(
     stateEntry({
       enabled: false,
@@ -516,7 +516,7 @@ test("destination applies restored runtime during tree navigation", async () => 
     }),
   );
 
-  await mock.events.get("session_tree")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_tree")?.[0]?.({}, context.ctx);
 
   assert.deepEqual(mock.setModels, [TARGET]);
   assert.equal(mock.thinkingLevel, "high");
@@ -541,23 +541,23 @@ test("destination warns on thinking clamping and consumes a model race failure w
       },
     }),
   ];
-  const mock = createMockPi({ thinkingLevel: "low", clampThinkingLevel: () => "high" });
+  const mock = createPlanPi({ thinkingLevel: "low", clampThinkingLevel: () => "high" });
   let setModelCalls = 0;
-  mock.rawPi.setModel = async () => {
+  mock.pi.setModel = async () => {
     setModelCalls += 1;
     return false;
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   assert.equal(await submitInput(mock, context.ctx), undefined);
-  await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
   assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 
   assert.equal(setModelCalls, 1);
@@ -592,22 +592,22 @@ test("destination serializes concurrent prompts across the full runtime applicat
       },
     }),
   ];
-  const mock = createMockPi({ thinkingLevel: "low" });
-  const setModel = mock.rawPi.setModel.bind(mock.rawPi);
-  mock.rawPi.setModel = async (model) => {
+  const mock = createPlanPi({ thinkingLevel: "low" });
+  const setModel = mock.pi.setModel.bind(mock.pi);
+  mock.pi.setModel = async (model) => {
     markModelStarted();
     await modelGate;
     return setModel(model);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const first = submitInput(mock, context.ctx, "implement", "rpc");
   await modelStarted;
   let secondSettled = false;
@@ -624,14 +624,14 @@ test("destination serializes concurrent prompts across the full runtime applicat
     action: "handled",
   });
   assert.deepEqual(mock.sentUserMessages, []);
-  await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
   assert.deepEqual(mock.sentUserMessages, [
     {
-      text: "concurrent",
+      content: "concurrent",
       options: { deliverAs: "followUp", expandPromptTemplates: true },
     },
     {
-      text: "late",
+      content: "late",
       options: { deliverAs: "followUp", expandPromptTemplates: true },
     },
   ]);
@@ -658,29 +658,29 @@ test("destination preserves pre-admission prompts when shutdown interrupts runti
       },
     }),
   ];
-  const mock = createMockPi();
-  const setModel = mock.rawPi.setModel.bind(mock.rawPi);
-  mock.rawPi.setModel = async (model) => {
+  const mock = createPlanPi();
+  const setModel = mock.pi.setModel.bind(mock.pi);
+  mock.pi.setModel = async (model) => {
     markModelStarted();
     await modelGate;
     return setModel(model);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const leading = submitInput(mock, context.ctx, "implement", "rpc");
   await modelStarted;
   const image = { type: "image" as const, data: "queued-image", mimeType: "image/png" };
-  const input = mock.events.get("input")?.[0];
+  const input = mock.handlers.get("input")?.[0];
   assert.ok(input);
   const follower = Promise.resolve(input({ text: "queued prompt", images: [image], source: "rpc" }, context.ctx));
-  const shutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx));
+  const shutdown = Promise.resolve(mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx));
 
   assert.deepEqual(mock.sentMessages, [
     {
@@ -718,15 +718,15 @@ test("destination blocks tree navigation during runtime application and admissio
       },
     }),
   ];
-  const mock = createMockPi();
-  const setModel = mock.rawPi.setModel.bind(mock.rawPi);
-  mock.rawPi.setModel = async (model) => {
+  const mock = createPlanPi();
+  const setModel = mock.pi.setModel.bind(mock.pi);
+  mock.pi.setModel = async (model) => {
     markModelStarted();
     await modelGate;
     return setModel(model);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
@@ -734,10 +734,10 @@ test("destination blocks tree navigation during runtime application and admissio
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const leading = submitInput(mock, context.ctx, "implement", "rpc");
   await modelStarted;
-  const beforeTree = mock.events.get("session_before_tree")?.[0];
+  const beforeTree = mock.handlers.get("session_before_tree")?.[0];
   assert.ok(beforeTree);
 
   assert.deepEqual(await beforeTree({ preparation: { targetId: "during-application" } }, context.ctx), {
@@ -748,7 +748,7 @@ test("destination blocks tree navigation during runtime application and admissio
   assert.deepEqual(await beforeTree({ preparation: { targetId: "before-admission" } }, context.ctx), { cancel: true });
   assert.match(context.notifications.at(-1)?.message ?? "", /pending prompts/u);
 
-  await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
   assert.deepEqual(mock.sentUserMessages, []);
 });
 
@@ -771,9 +771,9 @@ test("destination serializes a concurrent prompt while authentication is pending
       },
     }),
   ];
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
@@ -784,7 +784,7 @@ test("destination serializes a concurrent prompt while authentication is pending
       },
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const first = submitInput(mock, context.ctx, "implement", "rpc");
   await authStarted;
   let secondSettled = false;
@@ -796,10 +796,10 @@ test("destination serializes a concurrent prompt while authentication is pending
   assert.equal(secondSettled, false);
   releaseAuth();
   assert.deepEqual(await Promise.all([first, second]), [undefined, { action: "handled" }]);
-  await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
   assert.deepEqual(mock.sentUserMessages, [
     {
-      text: "concurrent",
+      content: "concurrent",
       options: { deliverAs: "followUp", expandPromptTemplates: true },
     },
   ]);
@@ -814,20 +814,20 @@ test("destination blocks a prompt until runtime intent consumption can persist",
       pendingImplementationRuntime: { version: 1, thinkingLevel: "high" },
     }),
   ];
-  const mock = createMockPi({ thinkingLevel: "low" });
-  const appendEntry = mock.rawPi.appendEntry.bind(mock.rawPi);
+  const mock = createPlanPi({ thinkingLevel: "low" });
+  const appendEntry = mock.pi.appendEntry.bind(mock.pi);
   const attemptedStates: unknown[] = [];
   let persistenceAvailable = false;
-  mock.rawPi.appendEntry = (customType, data) => {
+  mock.pi.appendEntry = (customType, data) => {
     attemptedStates.push(data);
     if (!persistenceAvailable) throw new Error("disk unavailable");
     appendEntry(customType, data);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
 
   assert.deepEqual(await submitInput(mock, context.ctx), { action: "handled" });
   assert.equal(mock.thinkingLevel, "low");
@@ -866,10 +866,10 @@ test("destination retains concurrent prompts when runtime consumption is blocked
       },
     }),
   ];
-  const mock = createMockPi();
-  const setModel = mock.rawPi.setModel.bind(mock.rawPi);
+  const mock = createPlanPi();
+  const setModel = mock.pi.setModel.bind(mock.pi);
   let firstApplication = true;
-  mock.rawPi.setModel = async (model) => {
+  mock.pi.setModel = async (model) => {
     if (firstApplication) {
       firstApplication = false;
       markModelStarted();
@@ -877,21 +877,21 @@ test("destination retains concurrent prompts when runtime consumption is blocked
     }
     return setModel(model);
   };
-  const appendEntry = mock.rawPi.appendEntry.bind(mock.rawPi);
+  const appendEntry = mock.pi.appendEntry.bind(mock.pi);
   let persistenceAvailable = false;
-  mock.rawPi.appendEntry = (customType, data) => {
+  mock.pi.appendEntry = (customType, data) => {
     if (!persistenceAvailable) throw new Error("disk unavailable");
     appendEntry(customType, data);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const leading = submitInput(mock, context.ctx, "implement", "rpc");
   await modelStarted;
   const follower = submitInput(mock, context.ctx, "keep me", "rpc");
@@ -902,10 +902,10 @@ test("destination retains concurrent prompts when runtime consumption is blocked
 
   persistenceAvailable = true;
   assert.equal(await submitInput(mock, context.ctx, "retry", "rpc"), undefined);
-  await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
   assert.deepEqual(mock.sentUserMessages, [
     {
-      text: "keep me",
+      content: "keep me",
       options: { deliverAs: "followUp", expandPromptTemplates: true },
     },
   ]);
@@ -931,25 +931,25 @@ test("destination drains asynchronous model application and preserves stale runt
       },
     }),
   ];
-  const mock = createMockPi({ thinkingLevel: "low" });
-  mock.rawPi.setModel = async () => {
+  const mock = createPlanPi({ thinkingLevel: "low" });
+  mock.pi.setModel = async () => {
     markModelStarted();
     await modelGate;
     return true;
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const pending = submitInput(mock, context.ctx);
   await modelStarted;
   let shutdownSettled = false;
-  const shutdown = Promise.resolve(mock.events.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx)).then(
+  const shutdown = Promise.resolve(mock.handlers.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx)).then(
     () => {
       shutdownSettled = true;
     },
@@ -989,9 +989,9 @@ test("destination shutdown preserves intent during uncancellable authentication 
       },
     }),
   ];
-  const mock = createMockPi({ thinkingLevel: "low" });
+  const mock = createPlanPi({ thinkingLevel: "low" });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
@@ -1002,10 +1002,10 @@ test("destination shutdown preserves intent during uncancellable authentication 
       },
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   const pending = submitInput(mock, context.ctx);
   await authStarted;
-  await mock.events.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
   releaseAuth();
   await pending;
 
@@ -1019,7 +1019,7 @@ test("destination shutdown preserves intent during uncancellable authentication 
     },
   );
 
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
   assert.equal(mock.setModels.length, 1);
   assert.equal(
     (mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)?.pendingImplementationRuntime,
@@ -1038,23 +1038,23 @@ test("destination consumes a thrown model application without retrying", async (
       },
     }),
   ];
-  const mock = createMockPi();
+  const mock = createPlanPi();
   let calls = 0;
-  mock.rawPi.setModel = async () => {
+  mock.pi.setModel = async () => {
     calls += 1;
     throw new Error("provider\u001b[31m changed");
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => TARGET,
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
   assert.equal(await submitInput(mock, context.ctx), undefined);
-  await mock.events.get("agent_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_start")?.[0]?.({}, context.ctx);
   assert.equal(await submitInput(mock, context.ctx, "again"), undefined);
 
   assert.equal(calls, 1);
@@ -1064,7 +1064,7 @@ test("destination consumes a thrown model application without retrying", async (
 
 test("a model-only runtime override persists no thinking level", async () => {
   let destinationState: unknown;
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "planning-provider", id: "planning-model" },
@@ -1111,7 +1111,7 @@ test("fresh preflight stops quietly when the request lapses during or after auth
     let current = true;
     let isCurrentCalls = 0;
     let newSessionCalls = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "rpc",
       hasUI: true,
       model: { provider: "planning-provider", id: "planning-model" },
@@ -1152,7 +1152,7 @@ test("fresh preflight failures show one sanitized, bounded line of detail", asyn
     { error: "\u0001\u0085\u202e\u2069", expected: /: unknown error\. Choose another model/u },
   ];
   for (const { error, expected } of cases) {
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "rpc",
       hasUI: true,
       model: { provider: "planning-provider", id: "planning-model" },

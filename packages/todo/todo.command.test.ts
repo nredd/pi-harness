@@ -1,11 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetState, registerTodosCommand, registerTodoTool, TOOL_NAME } from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 function setup() {
 	__resetState();
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	registerTodosCommand(pi);
 	const tool = captured.tools.get(TOOL_NAME);
@@ -16,7 +16,7 @@ function setup() {
 }
 
 async function seed(tool: ReturnType<typeof setup>["tool"], actions: Array<Record<string, unknown>>) {
-	const ctx = createMockCtx();
+	const ctx = createTodoCtx();
 	for (const p of actions) {
 		await tool.execute?.("tc", p as never, undefined as never, undefined as never, ctx as never);
 	}
@@ -40,7 +40,7 @@ describe("/todos command — registration", () => {
 describe("/todos command — guard branches", () => {
 	it("notifies an error when the session has no UI", async () => {
 		const { cmd } = setup();
-		const ctx = createMockCtx({ hasUI: false });
+		const ctx = createTodoCtx({ hasUI: false });
 		await cmd.handler("", ctx as never);
 		const notify = ctx.ui.notify as ReturnType<typeof vi.fn>;
 		expect(notify).toHaveBeenCalledTimes(1);
@@ -49,7 +49,7 @@ describe("/todos command — guard branches", () => {
 
 	it("notifies an info message when there are no visible tasks", async () => {
 		const { cmd } = setup();
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const notify = ctx.ui.notify as ReturnType<typeof vi.fn>;
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("No todos"), "info");
@@ -61,7 +61,7 @@ describe("/todos command — guard branches", () => {
 			{ action: "create", subject: "a" },
 			{ action: "update", id: 1, status: "deleted" },
 		]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const notify = ctx.ui.notify as ReturnType<typeof vi.fn>;
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("No todos"), "info");
@@ -80,7 +80,7 @@ describe("/todos command — grouped output", () => {
 	it("renders 'Pending' group with ○ glyph and task id", async () => {
 		const { tool, cmd } = setup();
 		await seed(tool, [{ action: "create", subject: "research" }]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const out = grabOutput(ctx);
 		expect(out).toContain("── Pending ──");
@@ -94,7 +94,7 @@ describe("/todos command — grouped output", () => {
 			{ action: "create", subject: "build", activeForm: "Building" },
 			{ action: "update", id: 1, status: "in_progress" },
 		]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const out = grabOutput(ctx);
 		expect(out).toContain("── In Progress ──");
@@ -108,7 +108,7 @@ describe("/todos command — grouped output", () => {
 			{ action: "create", subject: "ship" },
 			{ action: "update", id: 1, status: "completed", evidence: "ok" },
 		]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const out = grabOutput(ctx);
 		expect(out).toContain("── Completed ──");
@@ -127,7 +127,7 @@ describe("/todos command — grouped output", () => {
 			{ action: "create", subject: "later" },
 			{ action: "update", id: 4, status: "deferred", reason: "no" },
 		]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		expect(grabOutput(ctx).split("\n")[0]).toBe("1 done, 1 deferred, 2 open, 1 in progress");
 	});
@@ -138,7 +138,7 @@ describe("/todos command — grouped output", () => {
 			{ action: "create", subject: "base" },
 			{ action: "create", subject: "follow-up", blockedBy: [1] },
 		]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const out = grabOutput(ctx);
 		expect(out).toContain("⛓ #1");
@@ -151,7 +151,7 @@ describe("/todos command — grouped output", () => {
 			{ action: "create", subject: "drop" },
 			{ action: "update", id: 2, status: "deleted" },
 		]);
-		const ctx = createMockCtx({ hasUI: true });
+		const ctx = createTodoCtx({ hasUI: true });
 		await cmd.handler("", ctx as never);
 		const out = grabOutput(ctx);
 		expect(out).toContain("keep");

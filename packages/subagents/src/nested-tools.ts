@@ -402,7 +402,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         const rec = context.manager.getRecord(id);
         if (!rec) return;
         rec.outputFile = createOutputFilePath(context.configCwd, id, transcriptSessionId);
-        writeInitialEntry(rec.outputFile, id, params.prompt, ctx.cwd);
+        rec.outputFile = writeInitialEntry(rec.outputFile, id, params.prompt, ctx.cwd);
       };
       options.onSessionCreated = (session) => {
         const rec = childId === undefined ? undefined : context.manager.getRecord(childId);

@@ -9,10 +9,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 import { createHarness } from "@earendil-works/pi-coding-agent/testing";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import subscriptionRouter from "../../subscription-router/src/index.js";
 import { AgentManager } from "../src/agent-manager.js";
-import { answer, barrier, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 const ROUTER_SOURCE = fileURLToPath(new URL("../../subscription-router/src/index.ts", import.meta.url));
 /** Past the longest record retention, so the sweep disposes a finished child no matter who read it. */
@@ -49,7 +51,7 @@ type Fleet = Awaited<ReturnType<typeof startFleet>>;
 
 /** Spawn one `router/default` child through the real Agent tool and return its live record. */
 async function startChild({ h }: Fleet, description: string) {
-  h.setResponses([calls(spawn(description, { model: "router/default" })), answer("SPAWNED"), answer("NOTED"), answer("NOTED")]);
+  h.setResponses([toolCalls(spawn(description, { model: "router/default" })), answer("SPAWNED"), answer("NOTED"), answer("NOTED")]);
   const before = h.session.messages.length;
   await h.session.prompt(`start ${description}`);
   const id = h.session.messages.slice(before)
@@ -72,7 +74,7 @@ async function sweepAllowing(statuses: string[], ...records: ReturnType<Scenario
     expect(statuses).toContain(record.status);
     const session = record.session;
     if (!session) throw new Error("Finished child has no session");
-    const disposed = barrier();
+    const disposed = deferred();
     const dispose = session.dispose.bind(session);
     session.dispose = () => { dispose(); disposed.resolve(); };
     return disposed.promise;
@@ -98,7 +100,7 @@ function expectRouted(message: Record<string, unknown>) {
 }
 
 it("control: with the last-registered child alive a sibling routes on unmodified main too", { timeout: 30_000 }, async () => {
-  const fleet = await startFleet([calls({ name: "hold", args: {} }), answer("B DONE"), answer("A DONE")]);
+  const fleet = await startFleet([toolCalls({ name: "hold", args: {} }), answer("B DONE"), answer("A DONE")]);
   const a = await startChild(fleet, "child a");
   await fleet.hold.entered;
   await (await startChild(fleet, "child b")).promise;
@@ -109,7 +111,7 @@ it("control: with the last-registered child alive a sibling routes on unmodified
 });
 
 it("#581: a sibling and parent route after an unstarted disk-loaded child is disposed", { timeout: 30_000 }, async () => {
-  const fleet = await startFleet([calls({ name: "hold", args: {} }), answer("PARENT ROUTED"), answer("A DONE")]);
+  const fleet = await startFleet([toolCalls({ name: "hold", args: {} }), answer("PARENT ROUTED"), answer("A DONE")]);
   const a = await startChild(fleet, "child a");
   await fleet.hold.entered;
   await registerAndDisposeUnstarted(fleet);
@@ -132,8 +134,8 @@ async function registerAndDisposeUnstarted(fleet: Fleet) {
 
 /** #581: cancel the real manager run after SDK construction but before session_start. */
 async function cancelBeforeStart(fleet: Fleet) {
-  const entered = barrier();
-  const release = barrier();
+  const entered = deferred();
+  const release = deferred();
   const bind = AgentSession.prototype.bindExtensions;
   const spy = vi.spyOn(AgentSession.prototype, "bindExtensions").mockImplementationOnce(async function (this: AgentSession, ...args) {
     entered.resolve();
@@ -189,7 +191,7 @@ it("#581: a manager-owned cancelled child resumes and routes after the newest re
 });
 
 it("a sibling routes after the last-registered child is disposed", { timeout: 30_000 }, async () => {
-  const fleet = await startFleet([calls({ name: "hold", args: {} }), answer("B DONE"), answer("A DONE")]);
+  const fleet = await startFleet([toolCalls({ name: "hold", args: {} }), answer("B DONE"), answer("A DONE")]);
   const a = await startChild(fleet, "child a");
   await fleet.hold.entered;
   const b = await startChild(fleet, "child b");
@@ -202,7 +204,7 @@ it("a sibling routes after the last-registered child is disposed", { timeout: 30
 });
 
 it("the parent routes after the last-registered child is disposed while a sibling runs", { timeout: 30_000 }, async () => {
-  const fleet = await startFleet([calls({ name: "hold", args: {} }), answer("B DONE"), answer("PARENT ROUTED"), answer("A DONE")]);
+  const fleet = await startFleet([toolCalls({ name: "hold", args: {} }), answer("B DONE"), answer("PARENT ROUTED"), answer("A DONE")]);
   const a = await startChild(fleet, "child a");
   await fleet.hold.entered;
   await sweep(await startChild(fleet, "child b"));
@@ -223,7 +225,7 @@ it("the parent routes after every child is disposed", { timeout: 30_000 }, async
 });
 
 it("a parent reload still leaves a running child and the parent routing", { timeout: 30_000 }, async () => {
-  const fleet = await startFleet([calls({ name: "hold", args: {} }), answer("CHILD DONE"), answer("NOTED"), answer("PARENT ROUTED")]);
+  const fleet = await startFleet([toolCalls({ name: "hold", args: {} }), answer("CHILD DONE"), answer("NOTED"), answer("PARENT ROUTED")]);
   const child = await startChild(fleet, "child a");
   await fleet.hold.entered;
   await fleet.h.session.reload();

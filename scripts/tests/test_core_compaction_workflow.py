@@ -52,7 +52,7 @@ def test_candidate_child_inputs_trigger_the_fork_gate() -> None:
         "integration/core-source/**",
         "integration/inprocess/support.ts",
         "packages/subagents/**",
-        "packages/dev-tools/biome.json",
+        "biome.json",
         "package.json",
         "package-lock.json",
         ".npmrc",

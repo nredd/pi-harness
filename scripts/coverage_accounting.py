@@ -627,6 +627,10 @@ def is_test_path(path: Path) -> bool:
     """
     # Rust modules inside src belong to the instrumented source denominator, even when named
     # tests/fixtures. Only conventional test/fixture directories OUTSIDE src are excluded.
+    # `tests/lib` is the shared helper workspace: owned, measured code, not a test tree. Its own
+    # `test/` directory and `*.test.ts` files below it are still tests.
+    if path.parts[:2] == ("tests", "lib"):
+        path = Path(*path.parts[2:])
     if path.suffix == ".rs" and "src" in path.parts:
         path = Path(*path.parts[: path.parts.index("src")])
     return (
@@ -857,7 +861,12 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
         key = (entry.package, entry.signal, entry.path)
         if key in declarations or key not in losses:
             raise ValueError(f"Duplicate or stale `reclassification`: '{key}'")
-        if entry.replacement is not None and entry.replacement not in after.get(key[:2], set()):
+        # A move may cross packages (e.g. shared helpers into `tests/lib`), so any current scope of the
+        # same signal can hold the replacement.
+        replacement = entry.replacement
+        if replacement is not None and not any(
+            replacement in files for (_, signal), files in after.items() if signal == key[1]
+        ):
             raise ValueError(f"Replacement is outside current inventory: '{entry.replacement}'")
         declarations[key] = entry
     missing = losses - declarations.keys()

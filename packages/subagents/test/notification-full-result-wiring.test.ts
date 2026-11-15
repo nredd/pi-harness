@@ -16,7 +16,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 
@@ -37,7 +37,7 @@ afterEach(async () => {
 /** Boot with a parent that is running a turn. */
 async function boot(settings: Record<string, unknown> = {}) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings } });
-  booted = makePi();
+  booted = bootPi();
   subagentsExtension(booted.pi);
   const signal = new AbortController().signal;
   const parentCtx = ctx();

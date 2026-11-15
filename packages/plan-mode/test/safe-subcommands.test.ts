@@ -4,7 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
+
+/** The bash policy names the offending token on its own line; PowerShell keeps the segment-only form. */
+function assertBlockedReason(reason: string, toolName: string, blocked: string) {
+  const head = `Plan mode blocks ${toolName === "bash" ? "bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments" : "PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax"}.\nBlocked command: ${blocked}`;
+  if (toolName === "bash")
+    assert.match(reason, new RegExp(`^${escapeRegExp(head)}\\nOffending token: .+ \\(.+\\)$`, "u"));
+  else assert.equal(reason, head);
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
 
 test("active Plan mode enforces session-loaded safe subcommands", async () => {
   await withAgentDir(async (agentDir) => {
@@ -17,13 +29,13 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
         },
       }),
     );
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["bash"],
       allTools: [builtinTool("read"), builtinTool("bash")],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0];
     assert.ok(hook);
 
     assert.equal(
@@ -31,7 +43,7 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
       undefined,
       "inactive Plan mode must not enforce its shell policy",
     );
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(
       await hook({ toolName: "bash", input: { command: "git rev-parse --show-toplevel" } }, context.ctx),
@@ -45,7 +57,7 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
     assert.deepEqual(await hook({ toolName: "bash", input: { command: compoundCommand } }, context.ctx), {
       block: true,
       reason:
-        "Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: gh pr list --json number",
+        "Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: gh pr list --json number\nOffending token: gh pr (not on the reviewed read-only allowlist; the reviewed opt-in is the exact entry `pr list` in `safeSubcommands.gh`, a trust override that skips all argument checks)",
     });
   });
 });
@@ -62,7 +74,7 @@ test("active Plan mode enforces limited policy for effective bash overrides", as
         },
       }),
     );
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read", "bash", "grep", "find", "ls"],
       allTools: [
         builtinTool("read"),
@@ -73,20 +85,21 @@ test("active Plan mode enforces limited policy for effective bash overrides", as
       ],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0];
     assert.ok(hook);
 
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    assert.ok(mock.rawPi.getActiveTools().includes("bash"));
+    assert.ok(mock.pi.getActiveTools().includes("bash"));
 
     const heredoc = `python - <<'PY'\nfrom pathlib import Path\nPath("plan-mode-write-probe.txt").write_text("unexpected write\\n", encoding="utf-8")\nPY`;
-    const blocked = await hook({ toolName: "bash", input: { command: heredoc } }, context.ctx);
-    assert.deepEqual(blocked, {
-      block: true,
-      reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${heredoc}`,
-    });
+    const blocked = (await hook({ toolName: "bash", input: { command: heredoc } }, context.ctx)) as {
+      block: boolean;
+      reason: string;
+    };
+    assert.equal(blocked.block, true);
+    assertBlockedReason(blocked.reason, "bash", heredoc);
     assert.equal(
       await hook({ toolName: "bash", input: { command: "git rev-parse --show-toplevel" } }, context.ctx),
       undefined,
@@ -103,13 +116,13 @@ test("active Plan mode enforces limited policy for effective PowerShell override
         safeSubcommands: { git: ["rev-parse"] },
       }),
     );
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["powershell"],
       allTools: [extensionTool("powershell")],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0];
     assert.ok(hook);
 
     assert.equal(
@@ -117,7 +130,7 @@ test("active Plan mode enforces limited policy for effective PowerShell override
       undefined,
       "inactive Plan mode must not enforce its PowerShell policy",
     );
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(
       await hook({ toolName: "powershell", input: { command: "git rev-parse --show-toplevel" } }, context.ctx),
@@ -153,16 +166,16 @@ test("active Plan mode scopes session-loaded safe subcommands to each segment", 
         },
       }),
     );
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["bash", "powershell"],
       allTools: [builtinTool("bash"), builtinTool("powershell")],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0];
     assert.ok(hook);
 
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     for (const [toolName, command] of [
       ["bash", "deploy now --write"],
@@ -182,10 +195,9 @@ test("active Plan mode scopes session-loaded safe subcommands to each segment", 
       ["powershell", "Invoke-Trusted run; Remove-Item -Recurse src", "Remove-Item -Recurse src"],
       ["powershell", "Invoke-Trusted run | Remove-Item src", "Remove-Item src"],
     ] as const) {
-      assert.deepEqual(await hook({ toolName, input: { command } }, context.ctx), {
-        block: true,
-        reason: `Plan mode blocks ${toolName === "bash" ? "bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments" : "PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax"}.\nBlocked command: ${blocked}`,
-      });
+      const result = (await hook({ toolName, input: { command } }, context.ctx)) as { block: boolean; reason: string };
+      assert.equal(result.block, true);
+      assertBlockedReason(result.reason, toolName, blocked);
     }
     for (const [toolName, command] of [
       ["bash", "deploy now > release.txt && rm -rf src"],
@@ -195,10 +207,9 @@ test("active Plan mode scopes session-loaded safe subcommands to each segment", 
       ["powershell", "Invoke-Trusted run > release.txt"],
       ["powershell", "Invoke-Trusted run $(Remove-Item src)"],
     ] as const) {
-      assert.deepEqual(await hook({ toolName, input: { command } }, context.ctx), {
-        block: true,
-        reason: `Plan mode blocks ${toolName === "bash" ? "bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments" : "PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax"}.\nBlocked command: ${command}`,
-      });
+      const result = (await hook({ toolName, input: { command } }, context.ctx)) as { block: boolean; reason: string };
+      assert.equal(result.block, true);
+      assertBlockedReason(result.reason, toolName, command);
     }
   });
 });
@@ -207,16 +218,16 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
   await withAgentDir(async (agentDir) => {
     const settingsPath = join(agentDir, "pi-plan-mode.json");
     await writeFile(settingsPath, JSON.stringify({ safeSubcommands: { git: ["rev-parse"], gh: ["pr view"] } }));
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["bash"],
       allTools: [builtinTool("read"), builtinTool("bash")],
     });
     planMode(mock.pi);
-    const context = createMockContext();
-    const hook = mock.events.get("tool_call")?.[0];
+    const context = createPlanContext();
+    const hook = mock.handlers.get("tool_call")?.[0];
     assert.ok(hook);
 
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(
       await hook({ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } }, context.ctx),
@@ -225,13 +236,13 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
     await mock.commands.get("plan")?.handler("exit", context.ctx);
 
     await rm(settingsPath);
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.ok(await hook({ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } }, context.ctx));
     await mock.commands.get("plan")?.handler("exit", context.ctx);
 
     await writeFile(settingsPath, JSON.stringify({ safeSubcommands: { gh: [42] } }));
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     assert.match(context.notifications.at(-1)?.message ?? "", /settings ignored/i);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.ok(await hook({ toolName: "bash", input: { command: "gh pr view 218 --json number,title" } }, context.ctx));

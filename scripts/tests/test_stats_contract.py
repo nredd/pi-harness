@@ -159,7 +159,7 @@ def artifact_runner(mutation: str, calls: list[str]) -> Callable[..., subprocess
                 if mutation == "duplicate" and calls.count("import") == 2:
                     machine["shards"] *= 2
                 (directory / "stats-global.json").write_text(json.dumps({"machines": {MACHINE: machine}}))
-            result = {"imported": 1, "retained": 0, "problems": [], "importedAt": STAMP}
+            result = {"imported": 1, "retained": 0, "problems": [], "importedAt": STAMP, "stale": []}
         return subprocess.CompletedProcess(argv, 0, json.dumps(result), "")
 
     return run

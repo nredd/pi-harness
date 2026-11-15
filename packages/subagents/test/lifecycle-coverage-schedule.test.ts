@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { setModelTiers } from "../src/model-tiers.js";
 import { type ScheduleChangeEvent, SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 let dir: string;
 let scheduler: SubagentScheduler;
@@ -85,20 +85,15 @@ describe("scheduler lifecycle failures", () => {
     expect(f.spawn).not.toHaveBeenCalled();
   });
 
-  it("fires a cron callback through the real Croner boundary and cancels it on stop", async () => {
-    // Croner does not accept the owned Clock interface. Its external timer
-    // boundary is controlled separately; all owned scheduler time stays injected.
-    vi.useFakeTimers();
+  it("fires a cron tick through the injected clock and cancels it on stop", () => {
     const f = setup();
-    vi.setSystemTime(f.clock.now());
     const job = scheduler.addJob({ ...input, schedule: "* * * * * *" });
     expect(SubagentScheduler.validateCronExpression("* * * * * *")).toEqual({ valid: true });
-    await vi.advanceTimersByTimeAsync(1000);
+    f.clock.advance(1000);
     expect(f.spawn).toHaveBeenCalledTimes(1);
     expect(f.events).toContainEqual({ type: "fired", jobId: job.id, agentId: "spawned", name: "job" });
     scheduler.stop();
-    await vi.advanceTimersByTimeAsync(1000);
+    f.clock.advance(1000);
     expect(f.spawn).toHaveBeenCalledTimes(1);
-    vi.clearAllTimers();
   });
 });

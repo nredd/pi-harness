@@ -1,8 +1,10 @@
-/** Manager callbacks, resumed-turn ownership and bounded eviction through public APIs. */
+/** Manager callbacks, resumed-turn ownership and eviction through public APIs. */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, markConsumed } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
@@ -10,7 +12,6 @@ import { streamToOutputFile } from "../src/output-file.js";
 import * as budget from "../src/process-budget.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import * as worktrees from "../src/worktree.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 vi.mock("../src/agent-runner.js", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
 
@@ -42,12 +43,6 @@ function transcriptCleanup(id: string) {
 }
 
 /** A caller-controlled runner boundary, no timer or scheduling assumptions. */
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
-
 function managerWithClock(onStart?: ConstructorParameters<typeof AgentManager>[2]) {
   const clock = new FakeClock();
   const onComplete = vi.fn();
@@ -304,8 +299,8 @@ describe("workflow host lifecycle", () => {
   });
 });
 
-describe("bounded eviction records", () => {
-  it("retains only the newest 500 evicted ids, without dropping the newest result", async () => {
+describe("eviction records", () => {
+  it("retains every evicted id for the session, past the old 500 cap", async () => {
     const f = managerWithClock();
     const ids: string[] = [];
     let newest = "";
@@ -318,8 +313,8 @@ describe("bounded eviction records", () => {
       f.clock.advance(600000);
     }
     expect(f.manager.getRecord(newest)).toBeUndefined();
-    expect(f.manager.getEvictedNote(ids[0])).toBeUndefined();
-    expect(f.manager.getEvictedNote(ids[1])).toBeUndefined();
+    expect(f.manager.getEvictedNote(ids[0])).toMatchObject({ id: ids[0], description: "run-0" });
+    expect(f.manager.getEvictedNote(ids[1])).toMatchObject({ id: ids[1], description: "run-1" });
     expect(f.manager.getEvictedNote(ids[2])).toMatchObject({ id: ids[2], description: "run-2", status: "completed" });
     expect(f.manager.getEvictedNote(newest)).toMatchObject({ id: newest, description: "run-501", status: "completed", evictedAfterMin: 10 });
   });

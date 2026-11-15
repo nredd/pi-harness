@@ -4,6 +4,10 @@
 
 ### Added
 
+- Limited Bash rejections add an `Offending token: <token> (<reason>)` line naming the redirection,
+  substitution, mutating command, unsafe argument, glob or env assignment that tripped the policy. The
+  policy is unchanged: compounds pass only when every segment is independently read-only.
+
 - `planModel` (`/plan settings` -> **Plan model**) runs Plan turns on a router tier such as `@deep`,
   like Claude Code's `opusplan`. Plan start remembers the current model and thinking, and Implement
   here, Export, Save and exit restore them; a `/model` change during Plan wins. The switch persists

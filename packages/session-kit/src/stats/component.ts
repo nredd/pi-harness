@@ -1,7 +1,8 @@
 /**
  * The `/stats` overlay: Claude Code's Stats pane rebuilt over pi sessions. Overview has the activity
  * heatmap, headline numbers and the token chart; Models has the chart and the per-model breakdown
- * grouped by provider. `r` cycles the date range, `m` / `M` the provider/model filter.
+ * grouped by provider. `r` cycles the date range, `h` the harness (pi, Claude Code, Codex, OpenCode),
+ * `m` / `M` the provider/model filter. Overview shows the subscription quota readings above the chart.
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
@@ -22,12 +23,12 @@ import {
 	type Filter,
 	filterCycle,
 	filterLabel,
+	harnessesOf,
 	hourlySeries,
 	inRange,
 	isHourly,
 	type ModelTotals,
 	matches,
-	modelName,
 	modelTotals,
 	type Overview,
 	overview,
@@ -35,16 +36,20 @@ import {
 	RANGES,
 	type Range,
 	rangeStart,
+	type SeriesBy,
+	seriesKey,
 	TOKENS_NOTE,
 	tokensOf,
 } from "./aggregate.ts";
 import { bucketize, GUTTER, plot, TICKS } from "./chart.ts";
 import { dayKey, keyDate, shortDate } from "./days.ts";
-import { duration, formatTokens, money, percent } from "./format.ts";
+import { costLabel, duration, formatTokens, percent } from "./format.ts";
+import type { QuotaObservation } from "./harness/common.ts";
 import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEEKS } from "./heatmap.ts";
-import type { Call, Session } from "./load.ts";
+import { type Call, HARNESSES, type Harness, type Session } from "./load.ts";
 import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
+import { claudeHasNoReading, gauge, NO_LOCAL_READING, quotaRows, usedLabel } from "./quota.ts";
 import { timeAxis } from "./ticks.ts";
 
 type ThemeLike = Pick<Theme, "fg" | "bg" | "bold" | "style" | "colors">;
@@ -52,6 +57,10 @@ export type Tab = "Overview" | "Models" | "Machines";
 const TABS: readonly Tab[] = ["Overview", "Models", "Machines"];
 /** Chart lines, at most; their colours are shared by the chart, its legend and the model list. */
 const SERIES = 3;
+/** The provider Claude Code's quota would belong to. */
+const ANTHROPIC = "anthropic (Claude Code)";
+/** The harness filter: every harness, or one. */
+type HarnessFilter = "all" | Harness;
 /** Narrowest plot `plot` can draw; only panes too narrow for a 6-week heatmap hit it. */
 const MIN_PLOT_WIDTH = 2;
 
@@ -87,12 +96,14 @@ export interface StatsViewOptions {
 	coverage?: string;
 	/** Offline per-source provenance, rendered as a scrollable Machines tab. */
 	freshness?: readonly string[];
+	/** Merged subscription quota readings, shown at the end of Overview. */
+	quota?: readonly QuotaObservation[];
 	tab?: Tab;
 }
 
 /** One scroll step of the model list: a provider header, or one or two models side by side. */
 /** Per-provider or per-model sums the list shows. */
-type Totals = Pick<ModelTotals, "input" | "output" | "cacheRead" | "cacheWrite" | "cost">;
+type Totals = Pick<ModelTotals, "input" | "output" | "cacheRead" | "cacheWrite" | "cost" | "unpriced" | "calls">;
 
 interface ListRow {
 	lines: string[];
@@ -104,16 +115,22 @@ export class StatsView implements Component {
 	private tab: Tab;
 	private range: Range = "all";
 	private filterIndex = 0;
+	private harnessIndex = 0;
 	private scroll = 0;
 	private readonly palettes = new Map<number, Color[]>();
-	private readonly filters: Filter[];
+	private readonly counted: Call[];
+	/** `all`, then every harness with data; just `all` when one harness is all there is to choose. */
+	private readonly harnesses: HarnessFilter[];
+	private readonly filtersByHarness = new Map<HarnessFilter, Filter[]>();
 	private readonly today: string;
 	private readonly now: number;
 
 	constructor(private readonly o: StatsViewOptions) {
 		this.tab = o.tab ?? "Overview";
 		this.now = o.now ?? Date.now();
-		this.filters = filterCycle(o.calls.filter((c) => c.ms <= this.now));
+		this.counted = o.calls.filter((c) => c.ms <= this.now);
+		const present = harnessesOf(this.counted);
+		this.harnesses = present.length > 1 ? ["all", ...present] : ["all"];
 		this.today = o.today ?? dayKey(this.now);
 	}
 
@@ -121,8 +138,31 @@ export class StatsView implements Component {
 		// Nothing themed is cached: every render rebuilds colours from the live theme.
 	}
 
-	get state(): { tab: Tab; range: Range; filter: Filter; scroll: number } {
-		return { tab: this.tab, range: this.range, filter: this.filter, scroll: this.scroll };
+	get state(): { tab: Tab; range: Range; filter: Filter; harness: HarnessFilter; scroll: number } {
+		return { tab: this.tab, range: this.range, filter: this.filter, harness: this.harness, scroll: this.scroll };
+	}
+
+	private get harness(): HarnessFilter {
+		return nth(this.harnesses, this.harnessIndex);
+	}
+
+	/** Provider and model choices for the calls the harness filter lets through. */
+	private get filters(): Filter[] {
+		let filters = this.filtersByHarness.get(this.harness);
+		if (!filters) {
+			filters = filterCycle(this.counted.filter((c) => this.inHarness(c)));
+			this.filtersByHarness.set(this.harness, filters);
+		}
+		return filters;
+	}
+
+	private inHarness(c: Pick<Call, "harness">): boolean {
+		return this.harness === "all" || c.harness === this.harness;
+	}
+
+	/** Whether harnesses are told apart on screen: several have data and none is picked. */
+	private get splitHarness(): boolean {
+		return this.harness === "all" && this.harnesses.length > 1;
 	}
 
 	private get filter(): Filter {
@@ -142,12 +182,25 @@ export class StatsView implements Component {
 		} else if (data === "r") {
 			this.range = cycle(RANGES, this.range, 1);
 			this.scroll = 0;
-		} else if (data === "m") this.stepFilter(1);
+		} else if (data === "h" || data === "H") this.stepHarness(data === "h" ? 1 : -1);
+		else if (data === "m") this.stepFilter(1);
 		else if (data === "M" || matchesKey(data, Key.shift("m"))) this.stepFilter(-1);
 		else if (data === "j" || matchesKey(data, Key.down)) this.scroll++;
 		else if (data === "k" || matchesKey(data, Key.up)) this.scroll = Math.max(0, this.scroll - 1);
 		else return;
 		this.o.requestRender();
+	}
+
+	/** Next harness; the provider/model filter stays when that harness has it, else falls back to All. */
+	private stepHarness(delta: number): void {
+		const kept = JSON.stringify(this.filter);
+		const n = this.harnesses.length;
+		this.harnessIndex = (((this.harnessIndex + delta) % n) + n) % n;
+		this.filterIndex = Math.max(
+			0,
+			this.filters.findIndex((f) => JSON.stringify(f) === kept),
+		);
+		this.scroll = 0;
 	}
 
 	private stepFilter(delta: number): void {
@@ -244,15 +297,26 @@ export class StatsView implements Component {
 		return `${t.bold(this.paint("accent", "/stats"))}  ${tabs}${bad}`;
 	}
 
-	/** Range choices and the filter on one line, or the filter on its own line when they do not fit. */
+	/**
+	 * Range choices, the harness (when there is a choice) and the filter on one line; when they do not fit,
+	 * the harness drops under the ranges and the filter onto its own line.
+	 */
 	private selectors(inner: number): string[] {
 		const t = this.o.theme;
 		const ranges = RANGES.map((r) =>
 			r === this.range ? t.bold(this.paint("accent", RANGE_LABEL[r])) : this.paint("dim", RANGE_LABEL[r]),
 		).join(this.paint("dim", " · "));
+		const harness =
+			this.harnesses.length > 1
+				? `${this.paint("muted", "harness:")} ${t.bold(this.harness === "all" ? "All" : this.harness)}`
+				: "";
 		const filter = `${this.paint("muted", "filter:")} ${t.bold(sanitize(filterLabel(this.filter)))}`;
-		const line = `${ranges}    ${filter}`;
-		return visibleWidth(line) <= inner ? [line] : [ranges, truncateToWidth(filter, inner, "…")];
+		const gap = "    ";
+		const line = [ranges, harness, filter].filter(Boolean).join(gap);
+		if (visibleWidth(line) <= inner) return [line];
+		const top = harness ? `${ranges}${gap}${harness}` : ranges;
+		const fits = visibleWidth(top) <= inner;
+		return [fits ? top : ranges, ...(fits || !harness ? [] : [harness]), truncateToWidth(filter, inner, "…")];
 	}
 
 	/** Muted `parts` joined by a dim ` · `, wrapped onto more lines rather than cut. */
@@ -272,12 +336,15 @@ export class StatsView implements Component {
 	}
 
 	private help(hint: string): string {
-		const keys = this.paint("dim", "tab tabs · r dates · m/M filter · ↑↓ scroll · q close");
+		const picker = this.harnesses.length > 1 ? "h harness · " : "";
+		const keys = this.paint("dim", `tab tabs · r dates · ${picker}m/M filter · ↑↓ scroll · q close`);
 		return hint ? `${this.paint("muted", hint)}  ${keys}` : keys;
 	}
 
 	private scoped(): { all: Call[]; ranged: Call[] } {
-		const all = this.o.calls.filter((c) => matches(this.filter, c) && inRange("all", this.today, c.ms, this.now));
+		const all = this.o.calls.filter(
+			(c) => this.inHarness(c) && matches(this.filter, c) && inRange("all", this.today, c.ms, this.now),
+		);
 		return { all, ranged: all.filter((c) => inRange(this.range, this.today, c.ms, this.now)) };
 	}
 
@@ -303,7 +370,7 @@ export class StatsView implements Component {
 				label: "Cache tokens",
 				value: `${v(formatTokens(ov.cacheRead))} read · ${v(formatTokens(ov.cacheWrite))} write`,
 			},
-			{ label: "Notional cost", value: v(money(ov.cost)) },
+			{ label: "Notional cost", value: v(costLabel(ov.cost, ov.unpriced, ov.calls)) },
 		];
 	}
 
@@ -339,13 +406,50 @@ export class StatsView implements Component {
 		return out.map((line) => truncateToWidth(line, width, "…"));
 	}
 
+	/**
+	 * One row per quota window: gauge, percent used, reset time and how old the reading is, dimmed past 15
+	 * minutes. Account-wide, so the harness, model and range filters do not apply. A window that has reset
+	 * shows no percent. Empty when there is nothing to say.
+	 */
+	private quotaBlock(inner: number): string[] {
+		const readings = this.o.quota ?? [];
+		const rows = quotaRows(readings, this.now);
+		const noClaude = claudeHasNoReading(
+			readings,
+			this.counted.some((c) => c.harness === "claude"),
+		);
+		if (rows.length === 0 && !noClaude) return [];
+		const t = this.o.theme;
+		const out = ["", t.bold("Quota") + this.paint("muted", "  latest reading per window · local files, never fetched")];
+		const labelWidth = Math.max(...rows.map((r) => visibleWidth(sanitize(r.label))), noClaude ? ANTHROPIC.length : 0);
+		const pad = (label: string) => `  ${padTo(sanitize(label), labelWidth)}  `;
+		for (const row of rows) {
+			const tone: ThemeColor = row.old || row.expired ? "dim" : "muted";
+			const detail = this.paint(tone, `${row.reset} · ${row.observed}`);
+			const head = row.expired
+				? ""
+				: `${this.paint(row.old ? "dim" : "accent", gauge(row.usedPercent))} ${this.paint(tone, usedLabel(row.usedPercent).padStart(5))}`;
+			const label = this.paint(row.old || row.expired ? "dim" : "text", pad(row.label));
+			const joined = `${label}${head}${head ? "  " : ""}${detail}`;
+			if (visibleWidth(joined) <= inner) out.push(joined);
+			else
+				out.push(
+					truncateToWidth(`${label}${head}`.trimEnd(), inner, "…"),
+					truncateToWidth(`    ${detail}`, inner, "…"),
+				);
+		}
+		if (noClaude) out.push(this.paint("muted", `${pad(ANTHROPIC)}${NO_LOCAL_READING}`));
+		return out;
+	}
+
 	private overviewBody(width: number, room: number): string[] {
 		const { all, ranged } = this.scoped();
 		const inner = contentWidth(width);
 		const out: string[] = [];
+		const quota = this.quotaBlock(inner);
 		const daily = dailyTotals(all);
 		const showHeat = !isHourly(this.range);
-		if (ranged.length === 0 && !showHeat) return [this.paint("muted", "No usage in this range.")];
+		if (ranged.length === 0 && !showHeat) return [this.paint("muted", "No usage in this range."), ...quota];
 		const cells =
 			ranged.length === 0
 				? []
@@ -368,6 +472,7 @@ export class StatsView implements Component {
 				if (cells.length > 0) out.push("", ...this.statGrid(cells, inner, 2));
 			}
 		} else out.push(...this.statGrid(cells, inner, width >= 130 ? 3 : 2));
+		out.push(...quota);
 		if (ranged.length === 0) {
 			out.push("", this.paint("muted", "No usage in this range."));
 			return out;
@@ -381,16 +486,17 @@ export class StatsView implements Component {
 
 	/**
 	 * Title, legend, plot, time axis and a peak/average caption. One line per provider under the "all"
-	 * filter, else one per model; top three. The legend shares the title row when both fit.
+	 * filter (one per harness when several have data and none is picked), else one per model; top three. The legend shares the title row when both fit.
 	 */
 	private chart(
 		ranged: readonly Call[],
 		width: number,
 		height: number,
-	): { lines: string[]; colors: Map<string, number> } {
+	): { lines: string[]; colors: Map<string, number>; by: SeriesBy } {
 		const t = this.o.theme;
 		const inner = contentWidth(width);
-		const { by, keys: top } = chartSeries(this.filter, ranged, SERIES);
+		const byHarness = this.splitHarness && this.filter.kind === "all";
+		const { by, keys: top } = chartSeries(this.filter, ranged, byHarness ? HARNESSES.length : SERIES, byHarness);
 		const colors = new Map(top.map((k, i): [string, number] => [k.key, i]));
 		const hourly = isHourly(this.range);
 		const unit = hourly ? "hour" : undefined;
@@ -413,12 +519,7 @@ export class StatsView implements Component {
 			color === "axis" ? this.paint("muted", text) : this.paintSeries(color, top.length, text);
 		const plotWidth = Math.max(MIN_PLOT_WIDTH, inner - GUTTER);
 		if (hourly) {
-			const series = hourlySeries(
-				ranged,
-				this.range as "5h" | "24h",
-				this.now,
-				by === "provider" ? (c) => c.provider : modelName,
-			);
+			const series = hourlySeries(ranged, this.range as "5h" | "24h", this.now, seriesKey(by));
 			const p = plot(
 				top.map((k, i) => ({ values: series.map((s) => s.byKey.get(k.key) ?? 0), color: i })),
 				{ width: plotWidth, height, paint },
@@ -448,17 +549,17 @@ export class StatsView implements Component {
 					inner,
 				),
 			);
-			return { lines: out, colors };
+			return { lines: out, colors, by };
 		}
 		const from = rangeStart(this.range, this.today) ?? dayKey(nth(ranged, 0).ms);
-		const series = dailySeries(ranged, from, this.today, by === "provider" ? (c) => c.provider : modelName);
+		const series = dailySeries(ranged, from, this.today, seriesKey(by));
 		const byDay = new Map(series.map((p) => [p.day, top.map((k) => p.byKey.get(k.key) ?? 0)]));
 		// `series` holds every day from `from` to today, so `byDay` has every day `bucketize` asks for.
 		const bucketed = bucketize(from, this.today, (d) => byDay.get(d) as number[], top.length, plotWidth + 1);
 		const out = head(`Tokens per ${bucketed.unit}`);
 		if (series.length < 2) {
 			out.push(this.paint("muted", "Not enough data for a chart yet"));
-			return { lines: out, colors };
+			return { lines: out, colors, by };
 		}
 		const p = plot(
 			top.map((_k, i) => ({
@@ -482,7 +583,7 @@ export class StatsView implements Component {
 				inner,
 			),
 		);
-		return { lines: out, colors };
+		return { lines: out, colors, by };
 	}
 
 	/** `● a · ● b · ● c`, wrapped onto more lines rather than cutting a series name off. */
@@ -518,8 +619,8 @@ export class StatsView implements Component {
 			return { lines, owners: lines.map(() => []), count: 0 };
 		}
 		// The list scrolls under the chart: the chart gets what a short list leaves, at least half the pane.
-		const colors = this.chart(ranged, width, TICKS).colors;
-		const list = this.listRows(totals, contentWidth(width), colors);
+		const { colors, by } = this.chart(ranged, width, TICKS);
+		const list = this.listRows(totals, contentWidth(width), colors, by);
 		const listLines = list.reduce((n, row) => n + row.lines.length, 0);
 		const chart = this.chart(ranged, width, chartHeight(Math.max(Math.floor(room / 2), room - listLines) - 7));
 		const head = [...chart.lines, ""];
@@ -534,7 +635,14 @@ export class StatsView implements Component {
 	 * Models grouped under their provider: a table when its columns fit, one aligned line per model with a
 	 * provider subtotal line above its models, else three-line cards one per row. Indented two columns.
 	 */
-	private listRows(totals: readonly ModelTotals[], inner: number, colors: ReadonlyMap<string, number>): ListRow[] {
+	private listRows(
+		totals: readonly ModelTotals[],
+		inner: number,
+		chartColors: ReadonlyMap<string, number>,
+		by: SeriesBy,
+	): ListRow[] {
+		// Harness lines are coloured by harness name, which says nothing about a provider or model row.
+		const colors: ReadonlyMap<string, number> = by === "harness" ? new Map() : chartColors;
 		const t = this.o.theme;
 		const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
 		const bullet = (key: string) => {
@@ -547,41 +655,60 @@ export class StatsView implements Component {
 			cacheRead: models.reduce((n, m) => n + m.cacheRead, 0),
 			cacheWrite: models.reduce((n, m) => n + m.cacheWrite, 0),
 			cost: models.reduce((n, m) => n + m.cost, 0),
+			unpriced: models.reduce((n, m) => n + m.unpriced, 0),
+			calls: models.reduce((n, m) => n + m.calls, 0),
 		});
 		const providers = [...new Set(totals.map((m) => m.provider))].map((provider) => {
 			const models = totals.filter((m) => m.provider === provider);
 			const sub = sumOf(models);
-			return { provider, models, sub, sum: models.reduce((n, m) => n + tokensOf(m), 0) };
+			return {
+				provider,
+				models,
+				sub,
+				sum: models.reduce((n, m) => n + tokensOf(m), 0),
+				via: HARNESSES.filter((h) => models.some((m) => m.harnesses.includes(h))),
+			};
 		});
 		const rows: ListRow[] = [];
 		let position = 0;
-		const numbers = (m: Totals, sum: number) => [
+		const split = this.splitHarness;
+		const numbers = (m: Totals, sum: number, via: readonly Harness[]) => [
+			...(split ? [via.join(",")] : []),
 			formatTokens(sum),
 			percent(sum, grand),
 			formatTokens(m.input),
 			formatTokens(m.output),
 			formatTokens(m.cacheRead),
 			formatTokens(m.cacheWrite),
-			money(m.cost),
+			costLabel(m.cost, m.unpriced, m.calls),
 		];
-		const heads = ["Tokens", "Share", "In", "Out", "Cache read", "Cache write", "Cost (notional)"];
+		const heads = [
+			...(split ? ["Harness"] : []),
+			"Tokens",
+			"Share",
+			"In",
+			"Out",
+			"Cache read",
+			"Cache write",
+			"Cost (notional)",
+		];
 		const nameWidth = Math.max(
 			...totals.map((m) => visibleWidth(sanitize(m.model)) + 4),
 			...providers.map((p) => visibleWidth(sanitize(p.provider)) + 2),
 		);
 		const widths = [
 			heads,
-			...totals.map((m) => numbers(m, tokensOf(m))),
-			...providers.map((p) => numbers(p.sub, p.sum)),
+			...totals.map((m) => numbers(m, tokensOf(m), m.harnesses)),
+			...providers.map((p) => numbers(p.sub, p.sum, p.via)),
 		].reduce<number[]>((acc, cells) => cells.map((cell, c) => Math.max(cell.length, acc[c] ?? 0)), []);
 		const tableWidth = 2 + nameWidth + widths.reduce((n, x) => n + x + 2, 0);
 		if (tableWidth <= inner) {
 			const line = (name: string, cells: readonly string[], paint: (s: string) => string) =>
 				`  ${padTo(name, nameWidth)}${cells.map((cell, c) => paint(cell.padStart(nth(widths, c) + 2))).join("")}`;
 			rows.push({ lines: [line("", heads, (s) => this.paint("muted", s))], models: [] });
-			for (const { provider, models, sub, sum } of providers) {
+			for (const { provider, models, sub, sum, via } of providers) {
 				rows.push({
-					lines: [line(`${bullet(provider)} ${t.bold(sanitize(provider))}`, numbers(sub, sum), (s) => t.bold(s))],
+					lines: [line(`${bullet(provider)} ${t.bold(sanitize(provider))}`, numbers(sub, sum, via), (s) => t.bold(s))],
 					models: [],
 				});
 				for (const m of models)
@@ -589,7 +716,7 @@ export class StatsView implements Component {
 						lines: [
 							line(
 								`${colors.has(m.name) ? `  ${bullet(m.name)} ` : "    "}${sanitize(m.model)}`,
-								numbers(m, tokensOf(m)),
+								numbers(m, tokensOf(m), m.harnesses),
 								(s) => this.paint("muted", s),
 							),
 						],
@@ -599,11 +726,13 @@ export class StatsView implements Component {
 			return rows;
 		}
 		const entry = (m: ModelTotals): string[] => [
-			`${bullet(m.name)} ${t.bold(sanitize(m.model))} ${this.paint("muted", `(${percent(tokensOf(m), grand)})`)}`,
+			`${bullet(m.name)} ${t.bold(sanitize(m.model))} ${this.paint("muted", `(${percent(tokensOf(m), grand)})${split ? ` · ${m.harnesses.join(",")}` : ""}`)}`,
 			this.paint("muted", `  In: ${formatTokens(m.input)} · Out: ${formatTokens(m.output)}`),
 			this.paint(
 				"muted",
-				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${money(m.cost)} notional`,
+				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${
+					m.unpriced > 0 ? costLabel(m.cost, m.unpriced, m.calls) : `${costLabel(m.cost, 0, m.calls)} notional`
+				}`,
 			),
 		];
 		for (const { provider, models, sum } of providers) {
@@ -639,27 +768,75 @@ function spread(left: string, right: string, width: number): string | undefined 
 	return gap >= 3 ? `${left}${" ".repeat(gap)}${right}` : undefined;
 }
 
-/** Plain-text per-model table for print/json/rpc modes, all time. */
-export function summary(calls: readonly Call[]): string {
+/** `quota:` section for print output: one line per window, then Claude's missing reading; empty when neither. */
+function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], now: number): string[] {
+	const rows = quotaRows(quota, now);
+	const noClaude = claudeHasNoReading(
+		quota,
+		calls.some((c) => c.harness === "claude"),
+	);
+	if (rows.length === 0 && !noClaude) return [];
+	return [
+		"quota:",
+		...rows.map(
+			(r) =>
+				`  ${sanitize(r.label)}: ${r.expired ? "" : `${usedLabel(r.usedPercent)} used, `}${r.reset}, ${r.observed}`,
+		),
+		...(noClaude ? [`  ${ANTHROPIC}: ${NO_LOCAL_READING}`] : []),
+	];
+}
+
+/**
+ * Plain-text per-model table for print/json/rpc modes, all time, then the harness split and quota readings.
+ * Quota stands on its own: readings with no usage still print.
+ */
+export function summary(calls: readonly Call[], quota: readonly QuotaObservation[] = [], now = Date.now()): string {
 	const totals = modelTotals(calls);
-	if (totals.length === 0) return "/stats: no usage recorded yet";
+	const quotas = quotaLines(calls, quota, now);
+	if (totals.length === 0) return ["/stats: no usage recorded yet", ...quotas].join("\n");
 	const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
-	const head = ["provider", "model", "in", "out", "cache read", "cache write", "cost", "%"];
+	const harnesses = harnessesOf(calls);
+	const split = harnesses.length > 1;
+	const head = [
+		"provider",
+		"model",
+		...(split ? ["harness"] : []),
+		"in",
+		"out",
+		"cache read",
+		"cache write",
+		"cost",
+		"%",
+	];
 	const body = totals.map((m) => [
 		sanitize(m.provider),
 		sanitize(m.model),
+		...(split ? [m.harnesses.join(",")] : []),
 		formatTokens(m.input),
 		formatTokens(m.output),
 		formatTokens(m.cacheRead),
 		formatTokens(m.cacheWrite),
-		money(m.cost),
+		costLabel(m.cost, m.unpriced, m.calls),
 		percent(tokensOf(m), grand),
 	]);
 	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => nth(r, c).length)));
+	const textual = split ? 3 : 2;
 	const fmt = (r: string[]) =>
 		r
-			.map((cell, c) => (c < 2 ? cell.padEnd(nth(widths, c)) : cell.padStart(nth(widths, c))))
+			.map((cell, c) => (c < textual ? cell.padEnd(nth(widths, c)) : cell.padStart(nth(widths, c))))
 			.join("  ")
 			.trimEnd();
-	return [`/stats: ${formatTokens(grand)} tokens ${TOKENS_NOTE}, all time`, fmt(head), ...body.map(fmt)].join("\n");
+	const lines = [`/stats: ${formatTokens(grand)} tokens ${TOKENS_NOTE}, all time`, fmt(head), ...body.map(fmt)];
+	if (split) {
+		lines.push("by harness:");
+		for (const h of harnesses) {
+			const mine = calls.filter((c) => c.harness === h);
+			const sum = mine.reduce((n, c) => n + tokensOf(c), 0);
+			const unpriced = mine.filter((c) => c.cost === null).length;
+			const cost = mine.reduce((n, c) => n + (c.cost ?? 0), 0);
+			lines.push(`  ${h}: ${formatTokens(sum)} (${percent(sum, grand)}), ${costLabel(cost, unpriced, mine.length)}`);
+		}
+	}
+	lines.push(...quotas);
+	return lines.join("\n");
 }

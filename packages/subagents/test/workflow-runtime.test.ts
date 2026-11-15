@@ -637,6 +637,24 @@ describe("abort", () => {
       expect(last?.requestedThinking).toBe("max");
     });
 
+    it("clears the asked level when a later report no longer differs (#886)", async () => {
+      const seen: WorkflowEntry[][] = [];
+      const host = {
+        async spawnAgent(request: any) {
+          request.onResolved?.({ modelName: "haiku 4.5", thinking: "low", requestedThinking: "max" });
+          request.onResolved?.({ modelName: "haiku 4.5", thinking: "max", requestedThinking: undefined });
+          return { ok: true, text: "done", outputTokens: 1 };
+        },
+        abortAgent() {},
+      };
+
+      await run('return await agent("go", { effort: "max" });', { host, onProgress(e) { seen.push([...e]); } });
+
+      const last = rowsFor(seen, 0).at(-1);
+      expect(last?.thinking).toBe("max");
+      expect(last?.requestedThinking).toBeUndefined();
+    });
+
     it("keeps a resumed row saying what the row it continues said", async () => {
       // CompletedChild's own contract: "the progress entry has to show the same
       // thing the first entry showed". A resumed call never goes through

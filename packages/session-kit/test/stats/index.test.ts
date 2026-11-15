@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseColor } from "@earendil-works/pi-tui";
@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/stats/index.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
+import { codexMeta, codexTokenCount, limits, writeLines } from "./harness/fixtures.ts";
+import { seedHarnessHome } from "./harness/home.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: fake pi/ctx surface
 type Any = any;
@@ -58,10 +60,14 @@ function seed(): void {
 	});
 }
 
-function setup(mode: string) {
+function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir: join(dir, "home") }) {
 	let handler: Any;
 	const sendMessage = vi.fn();
-	register({ registerCommand: (_n: string, c: Any) => (handler = c.handler), sendMessage } as Any, defaultConfig());
+	register(
+		{ registerCommand: (_n: string, c: Any) => (handler = c.handler), sendMessage } as Any,
+		defaultConfig(),
+		options,
+	);
 	const rendered: string[][] = [];
 	const custom = vi.fn(async (factory: Any) => {
 		const view = factory(
@@ -184,5 +190,65 @@ describe("/stats command", () => {
 			expect.stringContaining("/stats: no usage recorded yet\n1 machine · local-only · viewer never imported"),
 			"info",
 		);
+	});
+
+	it("shows the other harnesses found in the home, labelled, with unpriced cost and quota", async () => {
+		seed();
+		seedHarnessHome(join(dir, "home"));
+		// a live reading: the seeded one has long reset, and is dropped
+		writeLines(join(dir, "home", ".codex", "sessions", "2026", "10", "03", "rollout-live.jsonl"), [
+			codexMeta(),
+			codexTokenCount(
+				limits({ used_percent: 12.5, window_minutes: 10080, resets_at: Math.floor(Date.now() / 1000) + 3600 }),
+			),
+		]);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print").run("");
+		const text = String(out.mock.calls[0]?.[0]);
+		expect(text).toMatch(/provider +model +harness/);
+		expect(text).toContain("by harness:");
+		expect(text).toMatch(/claude: .*unpriced/);
+		expect(text).toContain("quota:");
+		expect(text).toContain("openai-codex/codex 7d");
+		expect(text).toContain("  codex: found");
+		expect(text).toContain("  opencode: found");
+	});
+
+	it("reads no other harness for an isolated agent dir, and says when it cannot", async () => {
+		seed();
+		seedHarnessHome(join(dir, "home"));
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", { agentDir: dir }).run("");
+		const isolated = String(out.mock.calls[0]?.[0]);
+		expect(isolated).not.toContain("harness");
+		expect(isolated).not.toContain("quota:");
+		// an explicit home opts back in
+		out.mockClear();
+		await setup("print", { agentDir: dir, homeDir: join(dir, "home") }).run("");
+		expect(String(out.mock.calls[0]?.[0])).toContain("by harness:");
+		out.mockClear();
+		mkdirSync(join(dir, "pi-session-kit"), { recursive: true });
+		writeFileSync(join(dir, "pi-session-kit", "export-state.json"), "{ nope");
+		await setup("print").run("");
+		expect(String(out.mock.calls[0]?.[0])).toContain("/stats: other harnesses not read: export state unreadable");
+	});
+
+	it("still shows quota readings when there is no usage to total", async () => {
+		// a Codex rollout with a rate-limit reading but no per-turn usage records
+		writeLines(join(dir, "home", ".codex", "sessions", "2026", "10", "02", "rollout-a.jsonl"), [
+			codexMeta(),
+			codexTokenCount(
+				limits({ used_percent: 12.5, window_minutes: 10080, resets_at: Math.floor(Date.now() / 1000) + 3600 }),
+			),
+		]);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print").run("");
+		expect(String(out.mock.calls[0]?.[0])).toMatch(
+			/^\/stats: no usage recorded yet\nquota:\n {2}openai-codex\/codex 7d: /,
+		);
+		const { run, custom, rendered } = setup("tui");
+		await run("");
+		expect(custom).toHaveBeenCalledOnce();
+		expect(rendered[0]?.join("\n")).toMatch(/Quota[\s\S]*openai-codex\/codex 7d/);
 	});
 });

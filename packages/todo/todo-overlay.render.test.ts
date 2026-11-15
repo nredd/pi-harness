@@ -1,5 +1,4 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createMockCtx, createMockPi, createMockUI } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetState,
@@ -8,6 +7,7 @@ import {
 	type TaskAction,
 } from "./.test-support/home-fixtures.ts";
 import { TEST_HOME } from "./.test-support/setup.ts";
+import { createTodoCtx, createTodoPi, createTodoUI } from "./tests/fixtures/todo-host.ts";
 import { TodoOverlay } from "./todo-overlay.ts";
 
 const identityTheme = {
@@ -23,14 +23,14 @@ async function setup(
 ) {
 	__resetState();
 	setActiveRenderSession("test-session");
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	const tool = captured.tools.get("todo")!;
-	const ctx = createMockCtx();
+	const ctx = createTodoCtx();
 	for (const p of actions) {
 		await tool.execute?.("tc", p as never, undefined as never, undefined as never, ctx as never);
 	}
-	const ui = createMockUI(uiOverrides) as unknown as ExtensionUIContext;
+	const ui = createTodoUI(uiOverrides) as unknown as ExtensionUIContext;
 	const overlay = new TodoOverlay(TEST_HOME);
 	overlay.setUICtx(ui);
 	overlay.update();
@@ -218,7 +218,7 @@ describe("TodoOverlay — scrollable window", () => {
 			{ action: "update", id: 25, status: "in_progress" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		const out = widget.render(200).join("\n");
 		expect(out).toContain("t25");
@@ -250,7 +250,7 @@ describe("TodoOverlay — scrollable window", () => {
 			{ action: "clear" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		expect(widget.render(200)).toEqual([]);
 	});
@@ -258,7 +258,7 @@ describe("TodoOverlay — scrollable window", () => {
 	it("leaves the window alone when the in_progress task is already visible or stops being active", async () => {
 		const { widget, tool } = await setup(creates(30));
 		const run = (params: Record<string, unknown>) =>
-			tool.execute?.("tc", params as never, undefined as never, undefined as never, createMockCtx() as never);
+			tool.execute?.("tc", params as never, undefined as never, undefined as never, createTodoCtx() as never);
 		await run({ action: "update", id: 6, status: "in_progress" });
 		const visible = widget.render(200);
 		expect(visible.join("\n")).not.toContain("↑");
@@ -276,7 +276,7 @@ describe("TodoOverlay — scrollable window", () => {
 			{ action: "update", id: 8, status: "in_progress" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		const lines = widget.render(200);
 		expect(lines[1]).toContain("↑ 5 above");
@@ -328,7 +328,7 @@ describe("TodoOverlay — scrollable window", () => {
 			{ action: "update", id: 1, status: "in_progress" },
 		]);
 		const tagged = { ...identityTheme, fg: (c: string, s: string) => `<${c}>${s}</${c}>` };
-		const ui = createMockUI() as unknown as ExtensionUIContext;
+		const ui = createTodoUI() as unknown as ExtensionUIContext;
 		const o = new TodoOverlay(TEST_HOME);
 		o.setUICtx(ui);
 		o.update();
@@ -364,7 +364,7 @@ describe("TodoOverlay — scrollable window", () => {
 			{ action: "delete", id: 1 } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		expect(widget.render(200)[0]).toContain("Todos (2 open)");
 		expect(widget.render(200)[0]).not.toContain("plan items open");
@@ -440,7 +440,7 @@ describe("TodoOverlay — width truncation", () => {
 			{ action: "create", subject: "second" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		const out2 = widget.render(200).join("\n");
 		expect(out2).toContain("first");

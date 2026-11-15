@@ -14,7 +14,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerRunningDetached, unregisterRunningDetached } from "../src/detached-results.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 const SESSION_FILE = "/sessions/stop-wiring.jsonl";
 
@@ -36,13 +36,13 @@ function heldRuns() {
 }
 
 let hermetic: Hermetic;
-let booted: ReturnType<typeof makePi>;
+let booted: ReturnType<typeof bootPi>;
 const context = (overrides: Record<string, unknown> = {}) =>
   ctx({ sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []), getSessionFile: () => SESSION_FILE }, ...overrides });
 
 async function boot(settings: Record<string, unknown> = {}) {
   hermetic = hermeticDir({ settings });
-  booted = makePi();
+  booted = bootPi();
   subagentsExtension(booted.pi);
   await booted.lifecycle.get("session_start")?.({ type: "session_start", reason: "startup" } as any, context());
 }
@@ -215,7 +215,7 @@ describe("stop_subagent", () => {
 describe("FleetView stop-all chord", () => {
   it("stops every running agent through the extension on the second press", async () => {
     hermetic = hermeticDir();
-    booted = makePi();
+    booted = bootPi();
     subagentsExtension(booted.pi);
     const listeners: ((data: string) => unknown)[] = [];
     const notify = vi.fn();

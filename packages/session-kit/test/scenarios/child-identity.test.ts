@@ -7,10 +7,11 @@ import {
 	fauxAssistantMessage,
 	registerFauxProvider,
 } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { createSessionKit } from "../../src/index.ts";
-import { configFor, ScenarioFixture, sessionFile, tool } from "./support.ts";
+import { configFor, ScenarioFixture, sessionFile } from "../fixtures/session.ts";
 
 const NAMES = ["goal_update", "monitor_start", "monitor_read", "monitor_stop"];
 interface Report {
@@ -87,7 +88,7 @@ for (const child of [true, false]) {
 			},
 		};
 		const harness = await fixture.start(configFor(), { resourceLoader: loader, extensionFactories: undefined });
-		harness.setResponses([tool("kit_probe", {}), fauxAssistantMessage("first")]);
+		harness.setResponses([toolCall("kit_probe", {}), fauxAssistantMessage("first")]);
 		await harness.session.prompt("probe");
 		await harness.session.prompt("/kit-rename");
 		await harness.session.reload();
@@ -95,7 +96,7 @@ for (const child of [true, false]) {
 		// reload clears API registrations; a real loader would also reload the faux-provider extension.
 		const reloadedProvider = registerFauxProvider({ api: harness.getModel().api });
 		try {
-			reloadedProvider.setResponses([tool("kit_probe", {}), fauxAssistantMessage("finished")]);
+			reloadedProvider.setResponses([toolCall("kit_probe", {}), fauxAssistantMessage("finished")]);
 			await harness.session.prompt("probe again");
 		} finally {
 			reloadedProvider.unregister();

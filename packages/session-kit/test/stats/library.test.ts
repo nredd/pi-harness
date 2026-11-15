@@ -24,6 +24,7 @@ it("preserves every type-only binding from the original export-star targets", ()
 	expectTypeOf<library.SeriesKey>().toEqualTypeOf<aggregate.SeriesKey>();
 	expectTypeOf<library.CallTuple>().toEqualTypeOf<load.CallTuple>();
 	expectTypeOf<library.FileStats>().toEqualTypeOf<load.FileStats>();
+	expectTypeOf<library.Harness>().toEqualTypeOf<load.Harness>();
 	expectTypeOf<library.Call>().toEqualTypeOf<load.Call>();
 	expectTypeOf<library.Session>().toEqualTypeOf<load.Session>();
 	expectTypeOf<library.Loaded>().toEqualTypeOf<load.Loaded>();

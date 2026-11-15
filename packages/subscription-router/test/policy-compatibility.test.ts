@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 import { parseConfig } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
 import { formatDecision, type RouteDecision, Router } from "../src/router.js";
-import { CachedUsage, Clock } from "./scenarios/support.js";
+import { CachedUsage, Clock } from "./fixtures/router.js";
 
 it("preserves legacy routes, diagnostics, errors and admissions byte for byte", async () => {
 	const results = [];

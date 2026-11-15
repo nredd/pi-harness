@@ -6,7 +6,7 @@ import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { showPlanLaunchMenu } from "../src/plan-launch-menu.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 test("launch Settings refreshes an untouched selection but preserves an edited draft", async () => {
   for (const edited of [false, true]) {
@@ -25,7 +25,7 @@ test("launch Settings refreshes an untouched selection but preserves an edited d
       { kind: "select", response: "Choose tools, then start…" },
       { kind: "select", response: "Done — start with this policy" },
     ]);
-    const context = createMockContext({ hasUI: true, mode: "rpc", ...rpc.ui });
+    const context = createPlanContext({ hasUI: true, mode: "rpc", ...rpc.ui });
     await showPlanLaunchMenu(context.ctx, {
       statusText: "off",
       toolSummary: (names) => [...names].join(","),
@@ -51,7 +51,7 @@ test("launch Settings refreshes an untouched selection but preserves an edited d
 
 test("launch Settings can close its parent menu without starting Plan mode", async () => {
   const rpc = createRpcHarness([{ kind: "select", response: "Settings" }]);
-  const context = createMockContext({ hasUI: true, mode: "rpc", ...rpc.ui });
+  const context = createPlanContext({ hasUI: true, mode: "rpc", ...rpc.ui });
   let settingsCalls = 0;
   await showPlanLaunchMenu(context.ctx, {
     statusText: "off",
@@ -83,7 +83,7 @@ test("settings resets fresh thinking to same as plan and rejects an invalid past
       { kind: "input", response: undefined },
       { kind: "select", response: undefined },
     ]);
-    const context = createMockContext({ hasUI: true, mode: "rpc", ...rpc.ui });
+    const context = createPlanContext({ hasUI: true, mode: "rpc", ...rpc.ui });
     let saves = 0;
     await showPlanModeSettings(context.ctx, {
       settingsPath,

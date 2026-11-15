@@ -1,7 +1,7 @@
 /** Allocation through real Pi prompts, including its persisted physical incumbent. */
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
-import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
+import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.js";
 
 it("real Pi remaining balance keeps equal-debit normalized skew within one debit", async () => {
 	const usage = new CachedUsage(new Clock());

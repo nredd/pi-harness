@@ -1,15 +1,15 @@
 import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	advanceQuietly,
 	ControlledProcesses,
 	configFor,
-	FakeClock,
 	goalStates,
 	ScenarioFixture,
 	spoken,
-	tool,
-} from "./support.ts";
+} from "../fixtures/session.ts";
 
 let fixture: ScenarioFixture;
 let clock: FakeClock;
@@ -107,8 +107,8 @@ describe("public command completion routing", () => {
 			ui: { notify },
 		});
 		harness.setResponses([
-			tool("monitor_start", { argv: ["/controlled/watcher"], name: "alpha" }),
-			tool("monitor_start", { argv: ["/controlled/watcher"], name: "beta" }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name: "alpha" }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name: "beta" }),
 			fauxAssistantMessage("watching"),
 		]);
 		await harness.session.prompt("watch both");

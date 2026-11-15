@@ -16,7 +16,7 @@ import {
 	resolveCollapseKey,
 } from "../src/config.ts";
 import { createSessionKit } from "../src/index.ts";
-import { fakePi } from "./goal/fake-pi.ts";
+import { createGoalHost } from "../tests/fixtures/goal-host.ts";
 
 vi.mock("node:os", async (importOriginal) => {
 	const os = await importOriginal<typeof import("node:os")>();
@@ -114,8 +114,8 @@ describe("isChildSessionName", () => {
 
 describe("child identity", () => {
 	it("does not infer child identity from a Plan fresh-session parent link or another session's marker", async () => {
-		const fake = fakePi({ sessionName: "Plan fresh session" });
-		fake.ctx.sessionManager.getHeader = () => ({ parentSession: "/sessions/parent.jsonl" });
+		const fake = createGoalHost({ sessionName: "Plan fresh session" });
+		fake.ctx.sessionManager.getHeader = () => ({ parentSession: "/sessions/parent.jsonl" }) as never;
 		fake.entries.push(
 			{ type: "custom", customType: CHILD_ENTRY, data: { version: 1, sessionId: "another-child" } },
 			{ type: "custom", customType: CHILD_ENTRY, data: null },
@@ -153,7 +153,7 @@ describe("createSessionKit", () => {
 		const dir = mkdtempSync(join(tmpdir(), "kit-agent-"));
 		const disabled = Object.fromEntries(FEATURES.map((feature) => [feature, { enabled: feature === "diff" }]));
 		writeFileSync(join(dir, "pi-session-kit.json"), JSON.stringify(disabled));
-		const fake = fakePi();
+		const fake = createGoalHost();
 		createSessionKit({ agentDir: dir })(fake.pi);
 		expect([...fake.commands.keys()]).toEqual(["diff"]);
 	});

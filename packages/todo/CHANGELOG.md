@@ -9,6 +9,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `renderCall` reads the fork-only `probe` render-context field structurally, so it compiles and behaves the same on upstream 1.5 cores that omit it ([#918](https://github.com/nredd/pi-harness/issues/918))
 - A todo with a running `session-kit` monitor started for it (`monitor_start` with `todo: <id>`) is reported at a settle as `waiting on a monitor, which wakes the parent` (info, shown once) instead of `held by the parent`, and falls back to the warning when the monitor stops or expires with the todo still `in_progress`. A linked monitor arms only its todo and the notice reads `armed: monitor for #<id>`; a monitor without a link now arms no todo (it used to arm the whole session, so an unrelated long monitor silenced every held todo and the held-work reminder), and `todo clear` drops links to cleared todos ([#522](https://github.com/nredd/pi-harness/issues/522))
 - First CI-attested release; no code change.
 - Cover every branch of the extension on the primary and Bun signals, deleting fallbacks that no caller could reach; no behavior change ([#414](https://github.com/nredd/pi-harness/issues/414)).

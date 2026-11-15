@@ -3,11 +3,11 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentsExtension } from "../src/index.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
-import { barrier } from "./helpers/scenario-session.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 
 type Component = { render(width: number): string[]; invalidate(): void; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Component;
@@ -39,7 +39,7 @@ beforeEach(async () => {
     widgetMode: "background", fallbackSubagent: "general-purpose", toolDescriptionMode: "full", packageAgents: ["only-package"], packageWorkflows: [],
   } });
   scripts = []; inputs = []; notify.mockReset();
-  boot = makePi();
+  boot = bootPi();
   createSubagentsExtension({ clock: new FakeClock() })(boot.pi);
   let firstMenu = true;
   context = ctx({ cwd: env.dir, isProjectTrusted: () => true, ui: {
@@ -73,7 +73,7 @@ afterEach(async () => {
 
 describe("settings callbacks", () => {
   it.each(["schedulingEnabled", "workflowsEnabled"])("preserves state when overlapping dialogs both disable %s", async key => {
-    const ready = barrier();
+    const ready = deferred();
     const dialogs: { component: Component; close(): void }[] = [];
     let menus = 0;
     context.ui.select = vi.fn(async () => menus++ < 2 ? "Settings" : undefined);

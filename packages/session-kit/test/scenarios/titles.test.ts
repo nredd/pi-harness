@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { nextEvent } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { configFor, nextEvent, ScenarioFixture, sessionFile, spoken, TerminalFixture } from "./support.ts";
+import { configFor, ScenarioFixture, sessionFile, spoken, TerminalFixture } from "../fixtures/session.ts";
 
 let fixture: ScenarioFixture | undefined;
 let terminal: TerminalFixture | undefined;

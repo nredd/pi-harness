@@ -17,6 +17,7 @@ investigation notes; put the why in the commit.
   - `dev-tools`, `session-kit`, `subscription-router`, `preset`: own extensions and the optional preset
   - `resource-sampler`: Pi-independent ESM library used by session-kit
 - `forks/pi`: the only Gitlink, the `nredd/pi` core fork
+- `tests/lib/`: private `@nredd/pi-test-lib` workspace, the one copy of shared test helpers: `FakeClock`, `deferred`, faux tool-call turns (`toolCall`, `settled`, `outcomes`, `nextEvent`), terminal constants, the disposable git fixture, temp/agent-dir/config-home sandboxes, the HOME guard, the recording `ExtensionAPI` / context doubles for tests that load an extension factory directly (`createRecordingPi`, `createRecordingContext`; typed against the public SDK types, so they compile on stock releases too) and the non-interactive in-process session harness (`createHarness`, `createTestUiContext`, `createTestExtensionsResult`; public `@earendil-works/pi-coding-agent` root export only, so it typechecks and runs on the fork and on stock releases; the interactive harness stays on the fork's `/testing/interactive`, which needs fork-only `InteractiveModeOptions.{keybindings,footerDataProvider,prepareTools,onInput,onEditorSubmit}`, `InteractiveMode.flushRender()` -> `TUI.flushRender()`, the `FooterDataProvider` and `KeybindingsManager` classes (stock exports only types) and `@earendil-works/pi-tui/testing` `VirtualTerminal`). It imports nothing under `packages/` and is measured at 0/0/0/0 by its own tests (`test-lib` in `coverage/policy.json`). Packages take it as an exact-pinned devDependency; package-specific fixtures stay in the package under its `fixtures/` directory (today `test/fixtures/`; the `test/` -> `tests/` rename is left to the package issues)
 - `integration/`: `inprocess/` (real extension factories on core's session harness, Vitest and
   Bun), `scenarios/` (process and terminal boundaries, run by the CI `stack` jobs), `stacks/`
   (`personal.json` is the one maintained package selection), `harness/` and its unit tests.
@@ -41,6 +42,20 @@ make help                    # every target
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
 - `check-ts` takes `WORKSPACES=<paths>`
+- Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
+  config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
+  set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
+  root `package.json`. Packages never pin them. A package that cannot meet a flag yet overrides it in its own
+  `tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents` and `todo` keep their own
+  `biome.json` until their layout issues land (`computer-use` has none yet). In `dev-tools`, `preset`, `resource-sampler`,
+  `session-kit` and `subscription-router`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`
+- `dist/` is gitignored build output (#866): `npm run build` or `make install-owned` regenerates it, `npm run check` builds first, and
+  `package_contracts.pack` removes and rebuilds it in place before `npm pack --ignore-scripts`, so do not run contract packing
+  concurrently with builds or readers of the same checkout. A missing `dist/index.ts` fails the `required` audit
+- Vitest 5.0.3 applies `VITEST_MAX_WORKERS` over `maxWorkers` and `fileParallelism: false` alike (the heavy-slot wrapper
+  exports it). `definePackageConfig` therefore sets `fileParallelism: false` and drops the variable for packages with
+  `maxWorkers: 1` (`computer-use`, `resource-sampler`, `subagents` runtime-build), pinned in `scripts/coverage-configs.test.ts` (#934).
+  A suite that shares state beyond serial files (HOME, ports, global tools) isolates it per file; it does not lean on serialization
 - `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
   Stock Pi compatibility is `make check-package-contracts`' job
@@ -326,7 +341,9 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 
 ### Smoke
 
-`.github/workflows/runner-smoke.yml` runs on same-repo PRs touching it and on `workflow_dispatch`. Each pool must show: runner name and arch, public internet reachable, private targets (`192.168.x`, `100.x` tailnet, `10.x`) blocked. `pi-wsl2` runs `scripts/wsl2_smoke.sh`, which also checks non-root, no sudo, aarch64, IPv6 off, no `/mnt/c`, no WSL interop, no Windows path or `.exe` on `PATH`, no drvfs/9p mounts and closed loopback ports. The host's address and the dev environment's address and ports come from the runner's environment (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository. The same script is the first step of every `pi-wsl2` cell in `ci.yml`.
+`.github/workflows/runner-smoke.yml` runs on same-repo PRs touching it and on `workflow_dispatch`. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Host-specific extra targets go in the repository variable `SMOKE_EXTRA_TARGETS` (space-separated `host:port`, appended to the neutral targets in both loops; the job prints a note when it is empty and fails on any entry that is not `host:port`) and the home directory to probe in `SMOKE_OWNER_HOME` (the macOS home probe is skipped with a note when unset and fails when the path is not a directory). Set both privately, never in the repository. `scripts/tests/test_private_probe_addresses.py` enforces this across every tracked file except `forks/`, lockfiles and generated build output (`dist/` and `*.map`). Any RFC1918, CGNAT (`100.64/10`) or link-local address, tailnet-style hostname (`*.ts.net`, `*.tailscale.net`) or ULA/link-local IPv6 address (also zero-padded octets and IPv4-mapped IPv6 forms), and any path rooted at a `Users` or `home` directory whose next segment is not `<user>`, `$USER` or `runner`, fails unless it is one of the neutral probe targets allowlisted in that test. Fixture files that carry synthetic values (e.g. made-up home names or private-range test addresses) are scanned too: their exact values are listed per file in `FIXTURE_VALUES`, and a stale entry fails the test. `pi-wsl2` runs `scripts/wsl2_smoke.sh`, which also checks non-root, no sudo, aarch64, IPv6 off, no `/mnt/c`, an explicitly disabled interop and automount policy, no Windows path or `.exe` on `PATH`, no drvfs/9p mounts and closed loopback ports. The host's address and the dev environment's address and ports come from the runner's environment (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository. The same script is the first step of every `pi-wsl2` cell in `ci.yml`.
+
+The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` with explicit `false` values for interop, Windows PATH injection, automount and fstab mounting in their respective sections. Inherited `[DEFAULT]` settings and boolean aliases such as `off`, `no` or `0` do not satisfy this check. WSL may retain binfmt registrations or broker paths even with execution disabled. A `WSLInterop` or `WSLInterop-late` registration must read exactly `disabled` on its first line (anything else, including `enabled`, empty or unreadable, fails) and then is only a diagnostic note; broker paths are notes. Mount, PATH and Windows-command checks remain blocking. Image acceptance must separately verify rejection of a checksum-verified Windows executable, including explicit broker overrides; mocked smoke fixtures do not prove that runtime property.
 
 ### Remaining
 

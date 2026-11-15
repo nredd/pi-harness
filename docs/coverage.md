@@ -3,7 +3,7 @@
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
 `runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321, plus the root
-`run-vitest.ts`, `check-biome-paths.mjs` and `router_contract.mjs` helpers since #379),
+`run-vitest.ts` and `router_contract.mjs` helpers since #379),
 `probes` (every executable `integration/probes` source, 0/0 since #377) and
 `inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals,
 and `python-benchmarks` (`benchmarks/comparison`, darwin only, 0/0 since #387).
@@ -41,7 +41,7 @@ current policy rejects the key, and only the base-policy read drops it so a ratc
 older commit still parses.
 `enforce_target` is enabled now that eligible runtime tooling/examples are measured with complete
 primary reports. Their source-complete
-producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:dist`
+producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:runtime-build`
 and `packages/subagents/coverage/workflow-examples/lcov.info` from `test:workflow-examples`.
 Workflow examples are instrumented only after metadata validation, including their literal metadata
 initializers, then executed by the real worker/VM with nested scripts sharing counters. Collection is
@@ -160,9 +160,7 @@ same way. `run-vitest.ts` exports `main(argv, env)`; `run-vitest.test.ts` fakes 
 asserts engine selection, the appended Bun coverage arguments and the exact opt-out, real home
 creation and removal, toolchain homes, the step summary, and rejection of a bad engine. Its
 `dispatch(isMain)` is asserted in process for both arms, and the real entry stays with the subprocess
-tests in `launcher.test.ts` and `test_coverage_producers.py`. `check-biome-paths.mjs` stays a top-level CLI that its test re-imports
-per case with its own argv, like `anthropic-block-types.mjs`, against real Biome, faking `spawnSync`
-only for a spawn error and a signal-killed child. `router_contract.mjs` exports the per-scenario
+tests in `launcher.test.ts` and `test_coverage_producers.py`. `router_contract.mjs` exports the per-scenario
 synthetic utilization so every scenario runs in process; its two placeholder imports are virtual
 mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of `run-vitest.ts` and
 `import_audit.ts` were the signal's last two uncovered branches (#418, #539): each is now an exported
@@ -170,8 +168,9 @@ mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of 
 calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
 optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
 and linux. Since #380 it also owns all 15 Vitest producer configurations (`packages/*/vitest*.config.ts`,
-`packages/todo/.vitest.config.ts`, `integration/{inprocess,probes,providers}/vitest.config.ts` and
-`scripts/vitest.config.ts`), and the pending `coverage-configurations` package is deleted (reclassified
+`integration/{inprocess,probes,providers}/vitest.config.ts` and `scripts/vitest.config.ts`; since #863 each is one
+`definePackageConfig` call from `scripts/vitest-package.ts`, which is owned in this signal at 0/0/0/0, and todo's
+config lost its dot prefix), and the pending `coverage-configurations` package is deleted (reclassified
 file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
 imports each one as a module and asserts the resolved `test.coverage`: provider, the `text`, `lcov` + `json-summary`
 reporters, `reportsDirectory`, `reportOnFailure`, and `include`/`exclude` equal to the config's own policy
@@ -365,7 +364,7 @@ each file. Blanket globs, missing files, duplicate entries and overlap with owne
 source fail. Classification also applies to imported LCOV records. A verification label does
 not waive the base-tree ratchet: moving previously owned production into this classification
 still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` files such as
-`scripts/check-biome-paths.test.mjs` and `scripts/router_contract.test.mjs` need their own verification-helper entry; classifying the
+`scripts/router_contract.test.mjs` needs their own verification-helper entry; classifying the
 implementation helper does not implicitly classify its regression test.
 
 `computer-use-async/primary` (#759) independently measures the whole
@@ -584,7 +583,8 @@ Use `signal: "owned"` for production membership; compatibility subsets require t
 signal entry when they lose membership too. A measured package can never be removed; a pending one
 (no signals, so no budget) can, once every file it owned has an entry here, e.g. `probe-boundaries`
 in #377. For a deletion or genuine role change, omit
-`replacement` (or use null). A replacement must exist in the current inventory for that scope.
+`replacement` (or use null). A replacement must exist in the current inventory for that signal, in any
+package, so shared code may move across packages.
 Entries name exact files, not waiver globs. Old historical entries cannot authorize a new loss;
 duplicate, unrelated or invalid new entries fail. Reclassification never permits budget increases
 or an unsupported exclusion category. Review it as an explicit source-accounting change, not as a
@@ -670,11 +670,12 @@ tests cover the branch but cannot fail without it. Measured on darwin; hosted CI
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
-`support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts`, `todo-support.ts`,
-`verification/core-artifacts.ts` and `verification/home-guard.ts`. The first two `test-helper` exclusions and the `home-guard.ts`
-verification-helper entry are gone. `verification/home-setup.ts` stays a verification helper:
+`support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts`, `todo-support.ts` and
+`verification/core-artifacts.ts`. The HOME guard moved to `tests/lib/src/home-guard.ts` (#864, `test-lib` in the policy, 0/0/0/0 on both
+signals from its own tests). The first two `test-helper` exclusions and the `home-guard.ts`
+verification-helper entry are gone. `tests/lib/src/home-setup.ts` stays a verification helper:
 Vitest hard-excludes a config's own `setupFiles` from coverage, so it is now a one-call entry and the
-guard it installs (`installHomeGuard`) is measured in `home-guard.ts`. `verification/core-pins.ts`
+guard it installs (`installHomeGuard`) is measured in `tests/lib/src/home-guard.ts`. `verification/core-pins.ts`
 likewise stays a verification helper: it only reads the lockfile, `releases/` and the home directory,
 while pin selection, cache search order and tarball authentication are measured in `core-artifacts.ts` (#843). Before #376, main `f2d607eb`
 measured primary 15 / 4 darwin, 25 / 8 linux and Bun 17 / 4, 27 / 8 (run `41781117332`); the Linux
