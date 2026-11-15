@@ -127,8 +127,6 @@
   "packages/preset: test/footer-cache.test.mjs: test-extension",
   "packages/preset: test/footer-quota.test.mjs: test-extension",
   "packages/preset: test: top-level-entry",
-  "packages/resource-sampler: CHANGELOG.md: missing-file",
-  "packages/resource-sampler: test: top-level-entry",
   "packages/session-kit: .gitignore: dotfile",
   "packages/session-kit: src/monitor/README.md: markdown",
   "packages/session-kit: test/mon/terminal.ts: import-escape ../../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js",
