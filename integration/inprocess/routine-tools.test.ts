@@ -10,7 +10,7 @@ import type { Harness } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
-import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
+import { runTools } from "../../packages/dev-tools/tests/fixtures/session.ts";
 import { defaultConfig } from "../../packages/session-kit/src/config.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor } from "../../packages/session-kit/test/fixtures/session.ts";

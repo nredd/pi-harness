@@ -3,8 +3,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
-import { createToolHost } from "../support.ts";
-import { wrapperFixture } from "../wrapper-fixture.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
+import { wrapperFixture } from "../fixtures/wrapper.ts";
 
 const fixtures: ReturnType<typeof wrapperFixture>[] = [];
 afterEach(() => {

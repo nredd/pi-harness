@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { beforeAll, describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "ssh");
 const mock = createToolHost();

@@ -5,8 +5,8 @@ import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { afterEach, describe, expect, it } from "vitest";
 import { withLock } from "../../src/core/index.ts";
 import { findProjectRoot, registerPyTools } from "../../src/py/index.ts";
-import { createToolHost } from "../support.ts";
-import { wrapperFixture } from "../wrapper-fixture.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
+import { wrapperFixture } from "../fixtures/wrapper.ts";
 
 const fixtures: ReturnType<typeof wrapperFixture>[] = [];
 afterEach(() => {

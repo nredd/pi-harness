@@ -4,7 +4,7 @@
  * in-process lock map. argv: repo branch path [startAtEpochMs]
  */
 import { registerGitTools } from "../../src/git/index.ts";
-import { createToolHost } from "../support.ts";
+import { createToolHost } from "./tool-host.ts";
 
 const [repo, branch, path, startAt] = process.argv.slice(2);
 if (!repo || !branch || !path) throw new Error("usage: worktree-child <repo> <branch> <path> [startAt]");

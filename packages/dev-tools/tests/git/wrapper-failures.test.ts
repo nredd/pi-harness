@@ -5,8 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FileLockFailedError, LockAbortedError, withFileLock } from "../../src/core/index.ts";
 import { registerGitTools } from "../../src/git/index.ts";
 import { git } from "../../src/git/run.ts";
-import { createToolHost } from "../support.ts";
-import { wrapperFixture } from "../wrapper-fixture.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
+import { wrapperFixture } from "../fixtures/wrapper.ts";
 
 vi.mock("../../src/git/run.ts", async (original) => {
 	const actual = await original<typeof import("../../src/git/run.ts")>();

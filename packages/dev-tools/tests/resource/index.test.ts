@@ -15,10 +15,15 @@ import {
 } from "@nredd/pi-resource-sampler";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { describe, expect, it } from "vitest";
-import type { RunOptions, RunResult } from "../src/core/index.ts";
-import { type ResourceSnapshotOptions, registerResourceTools, resourceSnapshot } from "../src/resource/index.ts";
-import { describeProcessLoss, firstBadProcessField, type HostProbes, probeHost } from "./process-diagnostics.ts";
-import { createToolHost } from "./support.ts";
+import type { RunOptions, RunResult } from "../../src/core/index.ts";
+import { type ResourceSnapshotOptions, registerResourceTools, resourceSnapshot } from "../../src/resource/index.ts";
+import {
+	describeProcessLoss,
+	firstBadProcessField,
+	type HostProbes,
+	probeHost,
+} from "../fixtures/process-diagnostics.ts";
+import { createToolHost } from "../fixtures/tool-host.ts";
 
 it("attempts the default Linux memory read and keeps optional failures null off Linux", async () => {
 	const fake = fakeSampler(fixture("linux", []));
@@ -29,7 +34,7 @@ it("attempts the default Linux memory read and keeps optional failures null off 
 });
 
 const execFileAsync = promisify(execFile);
-const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const INTERVAL_MS = 100;
 const nativeDarwinCpu =
 	process.platform === "darwin" &&
@@ -387,7 +392,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 	it("reports a real registry producer's interrupted Linux enumeration through the tool schema", async () => {
 		// The disposable Node process forces Linux and injects an EACCES from the published producer's
 		// names-only /proc readdir. On macOS this models the Linux path; it is not a native Linux execution.
-		const { stdout } = await execFileAsync("node", [join(PACKAGE_ROOT, "test", "resource-producer-fixture.mjs")], {
+		const { stdout } = await execFileAsync("node", [join(PACKAGE_ROOT, "tests", "fixtures", "resource-producer.mjs")], {
 			cwd: PACKAGE_ROOT,
 		});
 		const output = JSON.parse(stdout);
