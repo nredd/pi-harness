@@ -9,9 +9,9 @@ import {
   messageContainsPlanModeImplementationHandoff,
   stripPlanModeCompletionCallsFromMessage,
   stripProposedPlanBlocksFromMessage,
-} from "./message-transform.js";
-import type { ImplementationPlanRetention } from "./settings.js";
-import type { ActiveImplementationPlan, PlanModeState } from "./state.js";
+} from "./message-transform.ts";
+import type { ImplementationPlanRetention } from "./settings.ts";
+import type { ActiveImplementationPlan, PlanModeState } from "./state.ts";
 
 export function retentionLabel(retention: ImplementationPlanRetention) {
   return {

@@ -1,16 +1,16 @@
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type RunMenuResult, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
-import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.ts";
 import {
   type AvailableImplementationModel,
   findAvailableImplementationModel,
   type ImplementationModelOverride,
   snapshotAvailableImplementationModels,
-} from "./implementation-models.js";
-import { retentionLabel } from "./implementation-retention.js";
-import { planExportDestination } from "./plan-export.js";
-import { availablePlanModelTiers, type PlanModelTier, planModelTarget } from "./plan-model.js";
-import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
+} from "./implementation-models.ts";
+import { retentionLabel } from "./implementation-retention.ts";
+import { planExportDestination } from "./plan-export.ts";
+import { availablePlanModelTiers, type PlanModelTier, planModelTarget } from "./plan-model.ts";
+import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.ts";
 import {
   configuredImplementationModel,
   configuredImplementationPlanRetention,
@@ -28,10 +28,10 @@ import {
   readPlanModeSettings,
   type UpdatePlanModeSettingsOptions,
   updatePlanModeSettings,
-} from "./settings.js";
-import { planModeToolAvailability } from "./tool-availability.js";
-import { canSelectToolInPlanMode } from "./tool-policy.js";
-import { defaultPlanModeToolNames, planModeToolSelection } from "./tool-selection.js";
+} from "./settings.ts";
+import { planModeToolAvailability } from "./tool-availability.ts";
+import { canSelectToolInPlanMode } from "./tool-policy.ts";
+import { defaultPlanModeToolNames, planModeToolSelection } from "./tool-selection.ts";
 
 type SettingsMenuState =
   | { kind: "valid"; settings: PlanModeSettings; notice?: string }

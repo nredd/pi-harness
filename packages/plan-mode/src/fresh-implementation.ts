@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
-import { createModeContractMessage } from "./mode-contract.js";
-import { createPlanApproval, PLAN_APPROVAL_ENTRY_TYPE } from "./plan-approval.js";
-import type { ImplementationPlanRetention } from "./settings.js";
+import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.ts";
+import { createModeContractMessage } from "./mode-contract.ts";
+import { createPlanApproval, PLAN_APPROVAL_ENTRY_TYPE } from "./plan-approval.ts";
+import type { ImplementationPlanRetention } from "./settings.ts";
 import {
   type ImplementationRuntimeSelection,
   isPendingImplementationModelIdentifier,
@@ -13,7 +13,7 @@ import {
   type PlanCompletionSource,
   type PlanModeState,
   restorePlanModeState,
-} from "./state.js";
+} from "./state.ts";
 
 type NewSessionOptions = Exclude<Parameters<ExtensionCommandContext["newSession"]>[0], undefined>;
 type ReplacementContext = Parameters<NonNullable<NewSessionOptions["withSession"]>>[0];
@@ -132,6 +132,8 @@ export async function startFreshImplementationSession(
   const handoff = usesConversationHistory
     ? formatTransferredPlanPrompt(request.plan, true)
     : formatImplementationHandoff(request.plan);
+  // Transfer the live branch's selected plan, even without a backing file: `pi --no-session`
+  // and `getSessionFile() === undefined` do not imply an empty in-memory branch.
   const parentSession = ctx.sessionManager.getSessionFile();
   let setupError: string | undefined;
   let kickoffError: string | undefined;

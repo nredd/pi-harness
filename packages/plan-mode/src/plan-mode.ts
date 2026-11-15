@@ -18,8 +18,8 @@ import {
   PLAN_MODE_STATE_VERSION,
   SUBAGENT_SPAWN_TOOLS,
   subagentGateInstalled,
-} from "./child-policy.js";
-import { completePlanArguments } from "./command.js";
+} from "./child-policy.ts";
+import { completePlanArguments } from "./command.ts";
 import {
   normalizePlanModeCompletion,
   PLAN_MODE_COMPLETE_PARAMS,
@@ -27,33 +27,33 @@ import {
   planModeCompleted,
   renderPlanModeCompletion,
   renderPlanModeCompletionCall,
-} from "./completion-tool.js";
-import { createDeclineContractMessage, DECLINE_GATE_ERROR } from "./decline-contract.js";
-import { isStaleExtensionContextError } from "./extension-runtime.js";
+} from "./completion-tool.ts";
+import { createDeclineContractMessage, DECLINE_GATE_ERROR } from "./decline-contract.ts";
+import { isStaleExtensionContextError } from "./extension-runtime.ts";
 import {
   createFinalizationRequestCoordinator,
   FINALIZE_PLAN_PROMPT,
   type FinalizationRunOutcome,
   RETRY_FINALIZE_PLAN_PROMPT,
-} from "./finalization-request.js";
+} from "./finalization-request.ts";
 import {
   formatHistoryImplementationPrompt,
   formatImplementationHandoff,
   formatTransferredPlanPrompt,
   startFreshImplementationFromState,
-} from "./fresh-implementation.js";
-import { createHeadlessTurns } from "./headless-turn.js";
+} from "./fresh-implementation.ts";
+import { createHeadlessTurns } from "./headless-turn.ts";
 import {
   createImplementationRetentionCoordinator,
   implementationRetentionPreview,
-} from "./implementation-retention.js";
+} from "./implementation-retention.ts";
 import {
   invalidPlanMessage,
   latestAssistantStopReason,
   latestAssistantText,
   messageTextContent,
   parseProposedPlan,
-} from "./message-transform.js";
+} from "./message-transform.ts";
 import {
   createModeContractMessage,
   hasModeContractArtifact,
@@ -61,12 +61,12 @@ import {
   MODE_CONTRACT_MESSAGE_TYPE,
   type PlanModeContract,
   reconcileModeContract,
-} from "./mode-contract.js";
-import { createPlanActionController } from "./plan-action-controller.js";
-import { createPlanApprovals } from "./plan-approval.js";
-import { createPlanEditMessage, PLAN_EDIT_SOURCE, reviewEditedPlan } from "./plan-edit.js";
-import { createPlanExportController } from "./plan-export-controller.js";
-import { createPlanModelSwitch, sameModel } from "./plan-model-switch.js";
+} from "./mode-contract.ts";
+import { createPlanActionController } from "./plan-action-controller.ts";
+import { createPlanApprovals } from "./plan-approval.ts";
+import { createPlanEditMessage, PLAN_EDIT_SOURCE, reviewEditedPlan } from "./plan-edit.ts";
+import { createPlanExportController } from "./plan-export-controller.ts";
+import { createPlanModelSwitch, sameModel } from "./plan-model-switch.ts";
 import {
   clearPlanModeUi,
   planModeStatusText as formatPlanModeStatusText,
@@ -74,7 +74,7 @@ import {
   renderPlanMessage,
   showStoredPlan,
   updatePlanModeUi,
-} from "./presentation.js";
+} from "./presentation.ts";
 import {
   answerPlanModeQuestions,
   isReproposalConfirmed,
@@ -84,9 +84,9 @@ import {
   planModeQuestionCancelled,
   renderPlanModeQuestion,
   renderPlanModeQuestionCall,
-} from "./question-tool.js";
-import { assertPlanModeHelperToolsAvailable, planModeHelperToolsAvailable } from "./required-tools.js";
-import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./saved-plan-preflight.js";
+} from "./question-tool.ts";
+import { assertPlanModeHelperToolsAvailable, planModeHelperToolsAvailable } from "./required-tools.ts";
+import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./saved-plan-preflight.ts";
 import {
   awaitPlanModeSettingsWrites,
   configuredImplementationPlanRetention,
@@ -98,7 +98,7 @@ import {
   readPlanModeSettings,
   type UpdatePlanModeSettingsOptions,
   updatePlanModeSettings,
-} from "./settings.js";
+} from "./settings.ts";
 import {
   type ImplementationRuntimeSelection,
   type PlanCompletionSource,
@@ -107,16 +107,16 @@ import {
   type RestoredEnabledPlanModeState,
   type RestoredPlanModeState,
   restorePlanModeState,
-} from "./state.js";
-import { planModeToolAvailability } from "./tool-availability.js";
-import { canSelectToolInPlanMode, classifyPlanModeTool } from "./tool-policy.js";
+} from "./state.ts";
+import { planModeToolAvailability } from "./tool-availability.ts";
+import { canSelectToolInPlanMode, classifyPlanModeTool } from "./tool-policy.ts";
 import {
   compareTools,
   filterAvailableSelectedToolNames,
   planModeToolSelection,
   snapshotPlanModeSelectedNames,
-} from "./tool-selection.js";
-import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
+} from "./tool-selection.ts";
+import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.ts";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
@@ -153,7 +153,7 @@ interface QueuedRuntimeAdmissionInput {
   source: InputSource;
 }
 type ToolSelection = Pick<PlanModeState, "selectedToolNames" | "selectedToolKeys">;
-type InteractiveUi = typeof import("./interactive-ui.js");
+type InteractiveUi = typeof import("./interactive-ui.ts");
 
 /** The slice of `fs.FSWatcher` the settings reload needs. */
 export interface SettingsDirectoryWatcher {
@@ -191,7 +191,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./interactive-ui.js").catch((error) => {
+      interactiveUiPromise = import("./interactive-ui.ts").catch((error) => {
         interactiveUiPromise = undefined;
         throw error;
       });
@@ -2326,27 +2326,27 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 }
 
-export { completePlanArguments } from "./command.js";
+export { completePlanArguments } from "./command.ts";
 export {
   extractProposedPlan,
   latestAssistantText,
   parseProposedPlan,
   stripProposedPlanBlocks,
   stripProposedPlanBlocksFromMessage,
-} from "./message-transform.js";
+} from "./message-transform.ts";
 export {
   createModeContractMessage,
   modeContractContent,
   reconcileModeContract,
-} from "./mode-contract.js";
-export { buildPlanModePrompt } from "./prompt.js";
-export { normalizePlanModeQuestionParams } from "./question-tool.js";
-export { withRequiredPlanModeTools } from "./required-tools.js";
-export { normalizePlanModeSettings, readPlanModeSettings } from "./settings.js";
+} from "./mode-contract.ts";
+export { buildPlanModePrompt } from "./prompt.ts";
+export { normalizePlanModeQuestionParams } from "./question-tool.ts";
+export { withRequiredPlanModeTools } from "./required-tools.ts";
+export { normalizePlanModeSettings, readPlanModeSettings } from "./settings.ts";
 export {
   canSelectToolInPlanMode,
   classifyPlanModeTool,
   findBlockedSshExecCall,
   isAnnotatedReadOnlyTool,
   isSafeCommand,
-} from "./tool-policy.js";
+} from "./tool-policy.ts";

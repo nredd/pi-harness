@@ -5,12 +5,12 @@ import {
   findAvailableImplementationModel,
   type ImplementationModelOverride,
   snapshotAvailableImplementationModels,
-} from "./implementation-models.js";
-import { deferPlanEdit, editPlanThenReopen, type PlanEditOption } from "./plan-edit.js";
-import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
-import { chooseReadyPlanAction } from "./ready-plan-chooser.js";
-import { IMPLEMENTATION_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.js";
-import type { ImplementationRuntimeSelection } from "./state.js";
+} from "./implementation-models.ts";
+import { deferPlanEdit, editPlanThenReopen, type PlanEditOption } from "./plan-edit.ts";
+import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.ts";
+import { chooseReadyPlanAction } from "./ready-plan-chooser.ts";
+import { IMPLEMENTATION_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.ts";
+import type { ImplementationRuntimeSelection } from "./state.ts";
 
 const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = {
   off: "No reasoning",

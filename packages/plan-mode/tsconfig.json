@@ -1,11 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // nredd/pi-harness#873: `.js` import specifiers, unchecked indexed access and parameter properties go with the rewrite
+    // nredd/pi-harness#943 tracks removing the upstream indexed-access and parameter-property exceptions.
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noUncheckedIndexedAccess": false,
     "erasableSyntaxOnly": false
   },
-  "include": ["src", "test", "*.ts"]
+  "include": ["src", "tests", "*.ts"]
 }

@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
+import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.ts";
 
 interface ActiveImplementationMenuOptions {
   statusText: string;

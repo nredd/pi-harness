@@ -1,16 +1,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { findAvailableImplementationModel, snapshotAvailableImplementationModels } from "./implementation-models.js";
-import type { FreshPlanModel } from "./plan-action-menus.js";
-import type { PlanExportDestination } from "./plan-export.js";
+import { findAvailableImplementationModel, snapshotAvailableImplementationModels } from "./implementation-models.ts";
+import type { FreshPlanModel } from "./plan-action-menus.ts";
+import type { PlanExportDestination } from "./plan-export.ts";
 import {
   configuredImplementationModel,
   configuredImplementationThinkingLevel,
   type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
-} from "./settings.js";
-import type { ImplementationRuntimeSelection, PlanModeState } from "./state.js";
+} from "./settings.ts";
+import type { ImplementationRuntimeSelection, PlanModeState } from "./state.ts";
 
-type InteractiveUi = typeof import("./interactive-ui.js");
+type InteractiveUi = typeof import("./interactive-ui.ts");
 
 interface MenuLifecycle {
   signal: AbortSignal;

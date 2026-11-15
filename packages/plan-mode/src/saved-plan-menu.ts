@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { deferPlanEdit, type PlanEditOption } from "./plan-edit.js";
-import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
+import { deferPlanEdit, type PlanEditOption } from "./plan-edit.ts";
+import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.ts";
 
 interface SavedPlanMenuOptions extends PlanEditOption {
   statusText: string;

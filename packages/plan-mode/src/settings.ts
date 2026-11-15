@@ -4,9 +4,9 @@ import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
-import { normalizePlanModelTier, PLAN_MODEL_TIER_REQUIRED, type PlanModelTier } from "./plan-model.js";
-import type { SafeSubcommands } from "./tool-policy.js";
+import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.ts";
+import { normalizePlanModelTier, PLAN_MODEL_TIER_REQUIRED, type PlanModelTier } from "./plan-model.ts";
+import type { SafeSubcommands } from "./tool-policy.ts";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
 const LEGACY_PLAN_MODE_SETTINGS_FILE = "plan-mode.json";

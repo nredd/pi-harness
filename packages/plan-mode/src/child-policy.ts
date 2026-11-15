@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
-import type { PlanModeSettings } from "./settings.js";
+import type { PlanModeSettings } from "./settings.ts";
 import {
   classifyPlanModeTool,
   decideBlockedCommand,
@@ -9,7 +9,7 @@ import {
   readCommand,
   type ShellPolicyOptions,
   SSH_EXEC_TOOL_NAME,
-} from "./tool-policy.js";
+} from "./tool-policy.ts";
 
 /**
  * Channel a subagent host asks on, right before it runs a child, whether that child must plan too.

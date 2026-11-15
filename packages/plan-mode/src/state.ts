@@ -2,21 +2,21 @@ import {
   normalizePlanModeCompletion,
   PLAN_MODE_COMPLETE_TOOL_NAME,
   planFromCompletionDetails,
-} from "./completion-tool.js";
-import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
-import { PLAN_EDIT_SOURCE } from "./plan-edit.js";
+} from "./completion-tool.ts";
+import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.ts";
+import { PLAN_EDIT_SOURCE } from "./plan-edit.ts";
 import {
   IMPLEMENTATION_PLAN_RETENTIONS,
   type ImplementationPlanRetention,
   PLAN_MODE_THINKING_LEVELS,
   type PlanModeFixedThinkingLevel,
-} from "./settings.js";
+} from "./settings.ts";
 
-export type { ImplementationModelOverride } from "./implementation-models.js";
+export type { ImplementationModelOverride } from "./implementation-models.ts";
 export {
   isPendingImplementationModelIdentifier,
   MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
-} from "./implementation-models.js";
+} from "./implementation-models.ts";
 
 export type PlanCompletionSource =
   | typeof PLAN_MODE_COMPLETE_TOOL_NAME

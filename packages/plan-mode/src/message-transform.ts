@@ -1,6 +1,6 @@
-import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
-import { PLAN_MESSAGE_TYPE } from "./presentation.js";
-import type { ActiveImplementationPlan } from "./state.js";
+import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.ts";
+import { PLAN_MESSAGE_TYPE } from "./presentation.ts";
+import type { ActiveImplementationPlan } from "./state.ts";
 
 const PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 export const PLAN_IMPLEMENTATION_CONTEXT_MESSAGE_TYPE = "plan-mode-implementation-context";

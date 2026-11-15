@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionContext, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_PLAN_EXPORT_PATH } from "./settings.js";
-import type { PlanModeState } from "./state.js";
+import { DEFAULT_PLAN_EXPORT_PATH } from "./settings.ts";
+import type { PlanModeState } from "./state.ts";
 
 export { DEFAULT_PLAN_EXPORT_PATH };
 

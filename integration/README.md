@@ -60,7 +60,7 @@ Excluded scenario files (paths below are relative to `scenarios/`; the seven `st
 | `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
 | `installer/test_installer.py` | Real one-shot installer against a published `stack/<sha>` (network, real `gh`/npm, throwaway HOMEs); runs in `.github/workflows/installer.yml` and `make installer`, never in `stack` |
 
-The last two non-boundary Python functions are removed: `test_gate_error_forbids_plain_text_and_points_to_finalize` merges into `packages/plan-mode/test/decline-session.test.ts` / `ready-plan reply blocks completion with actionable headless guidance` at `v0.59.3-nredd.1`, which asserts the blocked second completion and all five exact strings; the fleet/Plan round-trip runs in `inprocess/fleet-plan.test.ts` on real factories, raw input, VirtualTerminal and one injected clock. The ledger now includes the previously omitted gate-guidance function.
+The last two non-boundary Python functions are removed: `test_gate_error_forbids_plain_text_and_points_to_finalize` merges into `packages/plan-mode/tests/decline-session.test.ts` / `ready-plan reply blocks completion with actionable headless guidance` at `v0.59.3-nredd.1`, which asserts the blocked second completion and all five exact strings; the fleet/Plan round-trip runs in `inprocess/fleet-plan.test.ts` on real factories, raw input, VirtualTerminal and one injected clock. The ledger now includes the previously omitted gate-guidance function.
 
 The goal/quota/loop ports in #33 remain native; their three deleted Python files are not restored or listed as exclusions. The rebased subagents/Plan ports remove 23 more functions; the final `no-router` fork receipt also removes the router wrapper, shell runner and unused faux helpers.
 

@@ -1,7 +1,7 @@
 import {
   type ImplementationModelOverride,
   MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
-} from "./implementation-models.js";
+} from "./implementation-models.ts";
 
 /** Provider of the subscription router's `router/<tier>` virtual models. */
 export const PLAN_MODEL_ROUTER_PROVIDER = "router";

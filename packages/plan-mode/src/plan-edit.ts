@@ -1,4 +1,4 @@
-import { normalizePlanModeCompletion } from "./completion-tool.js";
+import { normalizePlanModeCompletion } from "./completion-tool.ts";
 
 /** Completion source recorded when the user replaces a ready or saved plan in their editor. */
 export const PLAN_EDIT_SOURCE = "user_edit";

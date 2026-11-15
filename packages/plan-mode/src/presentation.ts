@@ -7,8 +7,8 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Markdown, stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
-import { planTitle } from "./completion-tool.js";
-import type { PlanModeState } from "./state.js";
+import { planTitle } from "./completion-tool.ts";
+import type { PlanModeState } from "./state.ts";
 
 const STATUS_KEY = "plan-mode";
 

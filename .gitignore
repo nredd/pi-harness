@@ -16,4 +16,5 @@ scripts/coverage/
 benchmarks/comparison/coverage/
 /coverage/summary.json
 packages/*/dist/
+packages/plan-mode/.pi-plan-mode-*
 packages/*/*.tgz

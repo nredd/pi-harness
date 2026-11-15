@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { buildPlanModePrompt } from "./prompt.js";
+import { buildPlanModePrompt } from "./prompt.ts";
 
 export const MODE_CONTRACT_MESSAGE_TYPE = "plan-mode-transition";
 export const MODE_CONTRACT_VERSION = 1;

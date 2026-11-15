@@ -1,9 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ImplementationModelOverride } from "./implementation-models.js";
-import type { FreshPlanModel } from "./plan-action-menus.js";
-import { type PlanModelTier, planModelTarget } from "./plan-model.js";
-import type { PlanModeFixedThinkingLevel, PlanModeSettings } from "./settings.js";
-import type { PlanModelSwitch, PlanModeState } from "./state.js";
+import type { ImplementationModelOverride } from "./implementation-models.ts";
+import type { FreshPlanModel } from "./plan-action-menus.ts";
+import { type PlanModelTier, planModelTarget } from "./plan-model.ts";
+import type { PlanModeFixedThinkingLevel, PlanModeSettings } from "./settings.ts";
+import type { PlanModelSwitch, PlanModeState } from "./state.ts";
 
 type PiModel = Parameters<ExtensionAPI["setModel"]>[0];
 

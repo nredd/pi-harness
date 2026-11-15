@@ -1,5 +1,5 @@
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
-import { planModeToolAvailability } from "./tool-availability.js";
+import { planModeToolAvailability } from "./tool-availability.ts";
 import {
   canSelectToolInPlanMode,
   classifyPlanModeTool,
@@ -7,7 +7,7 @@ import {
   isDefaultAdmittedExtensionTool,
   isPlanSshExecTool,
   SAFE_BUILTIN_PLAN_TOOLS,
-} from "./tool-policy.js";
+} from "./tool-policy.ts";
 
 export function toolNameFromLegacyKey(key: string, tools: ToolInfo[]) {
   const directName = tools.find((tool) => tool.name === key)?.name;

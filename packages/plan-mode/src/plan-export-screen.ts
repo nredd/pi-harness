@@ -1,4 +1,4 @@
-import type { PlanExportDestination } from "./plan-export.js";
+import type { PlanExportDestination } from "./plan-export.ts";
 
 export type PlanExportDestinationProvider = () => PlanExportDestination;
 
