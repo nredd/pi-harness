@@ -41,7 +41,7 @@ it("falls back to killing the leader when signalling the group fails for another
 		throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
 	});
 	try {
-		const result = await runTree("sh", ["-c", "sleep 5"], { timeoutMs: 50 });
+		const result = await runTree("sh", ["-c", "exec sleep 5"], { timeoutMs: 50 });
 		expect(result).toMatchObject({ timedOut: true, signal: "SIGKILL" });
 	} finally {
 		kill.mockRestore();
@@ -49,6 +49,6 @@ it("falls back to killing the leader when signalling the group fails for another
 });
 
 it("kills only the leader where there are no process groups (win32 path)", async () => {
-	const result = await runTree("sh", ["-c", "sleep 5"], { timeoutMs: 50, platform: "win32" });
+	const result = await runTree("sh", ["-c", "exec sleep 5"], { timeoutMs: 50, platform: "win32" });
 	expect(result).toMatchObject({ timedOut: true, signal: "SIGKILL" });
 });
