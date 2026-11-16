@@ -13,35 +13,35 @@
  * session file stores does not depend on the code that draws it.
  */
 
-import type { WorkflowMeta } from "./meta.js";
-import type { WorkflowEntry, WorkflowRunStatus } from "./progress.js";
-import type { WorkflowTask } from "./task.js";
+import type { WorkflowMeta } from "./meta.ts";
+import type { WorkflowEntry, WorkflowRunStatus } from "./progress.ts";
+import type { WorkflowTask } from "./task.ts";
 
 /** `customType` of the session entry a flag-launched workflow renders through. */
 export const WORKFLOW_ENTRY_TYPE = "subagents:workflow";
 
 /** The persisted snapshot of a settled run. */
 export interface WorkflowEntryData {
-  name: string;
-  status: WorkflowRunStatus;
-  startTime: number;
-  endTime?: number;
-  progress: WorkflowEntry[];
-  agentCount: number;
-  totalTokens: number;
-  meta?: WorkflowMeta;
+	name: string;
+	status: WorkflowRunStatus;
+	startTime: number;
+	endTime?: number;
+	progress: WorkflowEntry[];
+	agentCount: number;
+	totalTokens: number;
+	meta?: WorkflowMeta;
 }
 
 /** Snapshot a settled task for {@link WORKFLOW_ENTRY_TYPE}. */
 export function workflowEntryData(task: WorkflowTask): WorkflowEntryData {
-  return {
-    name: task.workflowName ?? task.id,
-    status: task.status,
-    startTime: task.startTime,
-    endTime: task.endTime,
-    progress: task.workflowProgress,
-    agentCount: task.agentCount,
-    totalTokens: task.totalTokens,
-    ...(task.meta !== undefined ? { meta: task.meta } : {}),
-  };
+	return {
+		name: task.workflowName ?? task.id,
+		status: task.status,
+		startTime: task.startTime,
+		endTime: task.endTime,
+		progress: task.workflowProgress,
+		agentCount: task.agentCount,
+		totalTokens: task.totalTokens,
+		...(task.meta !== undefined ? { meta: task.meta } : {}),
+	};
 }

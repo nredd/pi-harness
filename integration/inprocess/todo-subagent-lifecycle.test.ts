@@ -1,7 +1,7 @@
 /**
  * The real subagents lifecycle events drive todo's agent-state reducer (#444, #867): a queued resume is
  * tracked without a stale `created` winning, and an RPC spawn's wake eligibility reaches the todo notice.
- * The event-only halves stay in `packages/subagents/test/lifecycle-identity.test.ts`.
+ * The event-only halves stay in `packages/subagents/tests/lifecycle-identity.test.ts`.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,9 +18,9 @@ vi.mock("../../packages/subagents/src/agent-runner.ts", async () => {
 
 import { resumeAgent, runAgent } from "../../packages/subagents/src/agent-runner.ts";
 import { registerAgents } from "../../packages/subagents/src/agent-types.ts";
-import { bootPi, ctx, flush, startSession } from "../../packages/subagents/test/helpers/boot-extension.ts";
-import subagentsExtension from "../../packages/subagents/test/helpers/home-extension.ts";
-import { runnerResolution } from "../../packages/subagents/test/helpers/runner-resolution.ts";
+import { bootPi, ctx, flush, startSession } from "../../packages/subagents/tests/fixtures/boot-extension.ts";
+import subagentsExtension from "../../packages/subagents/tests/fixtures/home-extension.ts";
+import { runnerResolution } from "../../packages/subagents/tests/fixtures/runner-resolution.ts";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
 const MANAGER = Symbol.for("pi-subagents:manager");

@@ -608,8 +608,6 @@ INERT_BY_DECISION = {
     "packages/computer-use/.github/workflows/docs.yml",
     "packages/computer-use/.github/workflows/npm-audit.yml",
     "packages/computer-use/.github/workflows/publish-npm.yml",
-    "packages/subagents/.github/FUNDING.yml",
-    "packages/subagents/.github/workflows/ci.yml",
 }
 
 

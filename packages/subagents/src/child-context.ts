@@ -13,11 +13,11 @@ const childSessionContext = globals[contextKey] ?? new AsyncLocalStorage<boolean
 globals[contextKey] = childSessionContext;
 
 export function inChildSessionContext(): boolean {
-  return childSessionContext.getStore() === true;
+	return childSessionContext.getStore() === true;
 }
 
 export function runInChildSessionContext<T>(fn: () => Promise<T>): Promise<T> {
-  return childSessionContext.run(true, fn);
+	return childSessionContext.run(true, fn);
 }
 
 /**
@@ -27,7 +27,7 @@ export function runInChildSessionContext<T>(fn: () => Promise<T>): Promise<T> {
  * construction-time {@link runInChildSessionContext} has exited.
  */
 export function bindChildResourceLoader<T extends { reload(): Promise<void> }>(loader: T): T {
-  const reload = loader.reload.bind(loader);
-  loader.reload = () => runInChildSessionContext(reload);
-  return loader;
+	const reload = loader.reload.bind(loader);
+	loader.reload = () => runInChildSessionContext(reload);
+	return loader;
 }

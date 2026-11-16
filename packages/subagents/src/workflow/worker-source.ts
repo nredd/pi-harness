@@ -53,18 +53,18 @@
  * No lineOffset is needed (Bun ignores it); only first-line columns need mapping.
  */
 const DETERMINISM_PRELUDE =
-  "const Date = (function () {" +
-  " const RealDate = globalThis.Date;" +
-  " const die = function (what) {" +
-  " throw new Error(what + \" is unavailable in workflow scripts (breaks resume)." +
-  " Stamp results after the workflow returns, or pass timestamps via `args`.\");" +
-  " };" +
-  " RealDate.now = function () { return die(\"Date.now()\"); };" +
-  " Math.random = function () { return die(\"Math.random()\"); };" +
-  " return class WorkflowDate extends RealDate {" +
-  " constructor() { if (arguments.length === 0) die(\"new Date()\"); super(...arguments); }" +
-  " };" +
-  "})();";
+	"const Date = (function () {" +
+	" const RealDate = globalThis.Date;" +
+	" const die = function (what) {" +
+	' throw new Error(what + " is unavailable in workflow scripts (breaks resume).' +
+	' Stamp results after the workflow returns, or pass timestamps via `args`.");' +
+	" };" +
+	' RealDate.now = function () { return die("Date.now()"); };' +
+	' Math.random = function () { return die("Math.random()"); };' +
+	" return class WorkflowDate extends RealDate {" +
+	' constructor() { if (arguments.length === 0) die("new Date()"); super(...arguments); }' +
+	" };" +
+	"})();";
 
 export const WORKER_SOURCE = `"use strict";
 

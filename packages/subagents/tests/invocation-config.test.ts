@@ -1,0 +1,185 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { resolveAgentInvocationConfig, resolveCwdParam } from "../src/invocation-config.ts";
+import type { AgentConfig } from "../src/types.ts";
+
+function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+	return {
+		name: "Explore",
+		description: "Explore",
+		builtinToolNames: ["read"],
+		extensions: false,
+		skills: false,
+		systemPrompt: "Test agent",
+		promptMode: "replace",
+		inheritContext: false,
+		runInBackground: false,
+		isolated: false,
+		...overrides,
+	};
+}
+
+describe("resolveAgentInvocationConfig", () => {
+	it("uses explicit thinking and locks the remaining config fields", () => {
+		const resolved = resolveAgentInvocationConfig(
+			makeConfig({
+				model: "provider/config-model",
+				thinking: "high",
+				maxTurns: 42,
+				inheritContext: false,
+				runInBackground: false,
+				isolated: false,
+				isolation: "worktree",
+			}),
+			{
+				model: "provider/param-model",
+				thinking: "minimal",
+				max_turns: 1,
+				inherit_context: true,
+				run_in_background: true,
+				isolated: true,
+				isolation: "worktree",
+			},
+		);
+
+		expect(resolved.thinking).toBe("minimal");
+		expect(resolved.maxTurns).toBe(42);
+		expect(resolved.inheritContext).toBe(false);
+		expect(resolved.runInBackground).toBe(false);
+		expect(resolved.isolated).toBe(false);
+		expect(resolved.isolation).toBe("worktree");
+	});
+
+	it("uses tool-call params when no agent config is available", () => {
+		const resolved = resolveAgentInvocationConfig(undefined, {
+			model: "provider/param-model",
+			thinking: "minimal",
+			max_turns: 3,
+			inherit_context: true,
+			run_in_background: true,
+			isolated: true,
+			isolation: "worktree",
+		});
+
+		expect(resolved.thinking).toBe("minimal");
+		expect(resolved.maxTurns).toBe(3);
+		expect(resolved.inheritContext).toBe(true);
+		expect(resolved.runInBackground).toBe(true);
+		expect(resolved.isolated).toBe(true);
+		expect(resolved.isolation).toBe("worktree");
+	});
+
+	it("lets parent fill in booleans when config leaves them undefined", () => {
+		const resolved = resolveAgentInvocationConfig(
+			makeConfig({
+				inheritContext: undefined,
+				runInBackground: undefined,
+				isolated: undefined,
+			}),
+			{
+				inherit_context: true,
+				run_in_background: true,
+				isolated: true,
+			},
+		);
+
+		expect(resolved.inheritContext).toBe(true);
+		expect(resolved.runInBackground).toBe(true);
+		expect(resolved.isolated).toBe(true);
+	});
+
+	it("defaults booleans to false when neither config nor params set them", () => {
+		const resolved = resolveAgentInvocationConfig(
+			makeConfig({
+				inheritContext: undefined,
+				runInBackground: undefined,
+				isolated: undefined,
+			}),
+			{},
+		);
+
+		expect(resolved.inheritContext).toBe(false);
+		expect(resolved.runInBackground).toBe(false);
+		expect(resolved.isolated).toBe(false);
+	});
+
+	// "off" exists so a model that cannot bring itself to omit an optional field
+	// has a legal way to say no (#231). It is an input spelling only — the
+	// resolver collapses it to undefined so no consumer downstream grows a branch.
+	it('collapses a param isolation of "off" to undefined', () => {
+		const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: undefined }), { isolation: "off" });
+		expect(resolved.isolation).toBeUndefined();
+	});
+
+	// Agent config outranks tool-call params, so "off" in frontmatter is the only
+	// way to veto a caller's worktree — before #231 no value could do this.
+	it('lets a config isolation of "off" veto a param "worktree"', () => {
+		const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "off" }), { isolation: "worktree" });
+		expect(resolved.isolation).toBeUndefined();
+	});
+
+	it('still honours a param "worktree" when the config leaves isolation unset', () => {
+		const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: undefined }), { isolation: "worktree" });
+		expect(resolved.isolation).toBe("worktree");
+	});
+
+	it("drops worktree isolation when the project disallows it", () => {
+		const resolved = resolveAgentInvocationConfig(
+			makeConfig({ isolation: "worktree" }),
+			{ isolation: "worktree" },
+			{ worktreeAllowed: false },
+		);
+		expect(resolved.isolation).toBeUndefined();
+	});
+
+	it("keeps worktree isolation when the project allows it", () => {
+		const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "worktree" }), {}, { worktreeAllowed: true });
+		expect(resolved.isolation).toBe("worktree");
+	});
+});
+
+describe("resolveAgentInvocationConfig — thinking precedence", () => {
+	it("lets an explicit thinking parameter override an agent default", () => {
+		const resolved = resolveAgentInvocationConfig(makeConfig({ model: "provider/config-model", thinking: "low" }), {
+			model: "provider/param-model",
+			thinking: "max",
+		});
+
+		expect(resolved.thinking).toBe("max");
+	});
+
+	it("uses the agent thinking default when the caller omits it", () => {
+		const resolved = resolveAgentInvocationConfig(makeConfig({ thinking: "low" }), { model: "provider/param-model" });
+
+		expect(resolved.thinking).toBe("low");
+	});
+
+	it("uses a caller thinking level when the agent leaves it unset", () => {
+		expect(
+			resolveAgentInvocationConfig(makeConfig(), { model: "provider/param-model", thinking: "max" }).thinking,
+		).toBe("max");
+	});
+});
+
+describe("resolveCwdParam", () => {
+	it('is unset when omitted or blank (models fill optional params with "")', () => {
+		expect(resolveCwdParam(undefined, "/session")).toBeUndefined();
+		expect(resolveCwdParam("", "/session")).toBeUndefined();
+		expect(resolveCwdParam("  ", "/session")).toBeUndefined();
+	});
+
+	it("expands ~ and ~/ to the home directory", () => {
+		expect(resolveCwdParam("~", "/session")).toBe(homedir());
+		expect(resolveCwdParam("~/code/repo", "/session")).toBe(join(homedir(), "code", "repo"));
+	});
+
+	it("keeps an absolute path and resolves a relative one against the session cwd", () => {
+		expect(resolveCwdParam("/abs/repo/", "/session")).toBe("/abs/repo");
+		expect(resolveCwdParam("../other/pkg", "/session/here")).toBe("/session/other/pkg");
+	});
+
+	it("does not expand ~user (only the caller's own home)", () => {
+		expect(resolveCwdParam("~bob/x", "/session")).toBe("/session/~bob/x");
+	});
+});

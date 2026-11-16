@@ -45,18 +45,19 @@ const RESERVED_HANDLES: ReadonlySet<string> = new Set(["main"]);
 
 /** Whether `@handle` names the main conversation rather than any subagent. */
 export function isReservedHandle(handle: string): boolean {
-  return RESERVED_HANDLES.has(handle.toLowerCase());
+	return RESERVED_HANDLES.has(handle.toLowerCase());
 }
 
 /** Slug of an agent type or name, restricted to the `[\w-]` the grammar allows. */
 export function handleBase(type: string): string {
-  const slug = type.toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_HANDLE_LENGTH)
-    // The slice can land mid-run and leave the trailing hyphen back.
-    .replace(/-+$/, "");
-  return slug || "agent";
+	const slug = type
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, MAX_HANDLE_LENGTH)
+		// The slice can land mid-run and leave the trailing hyphen back.
+		.replace(/-+$/, "");
+	return slug || "agent";
 }
 
 /**
@@ -65,13 +66,13 @@ export function handleBase(type: string): string {
  * handles and model-supplied aliases alike, so the two can never collide.
  */
 export function assignHandle(base: string, taken: ReadonlySet<string>): string {
-  let candidate = base;
-  let n = 1;
-  while (taken.has(candidate) || RESERVED_HANDLES.has(candidate)) {
-    n++;
-    candidate = `${base}-${n}`;
-  }
-  return candidate;
+	let candidate = base;
+	let n = 1;
+	while (taken.has(candidate) || RESERVED_HANDLES.has(candidate)) {
+		n++;
+		candidate = `${base}-${n}`;
+	}
+	return candidate;
 }
 
 /**
@@ -81,11 +82,11 @@ export function assignHandle(base: string, taken: ReadonlySet<string>): string {
  * exactly the handle its instances would be given.
  */
 export function resolveHandleToType(handle: string, types: readonly string[]): string | undefined {
-  const wanted = handle.toLowerCase();
-  // A type slugging to a reserved name is unaddressable rather than shadowing
-  // it — `assignHandle` refuses that name too, so its instances never hold one.
-  if (RESERVED_HANDLES.has(wanted)) return undefined;
-  return types.find(type => handleBase(type) === wanted);
+	const wanted = handle.toLowerCase();
+	// A type slugging to a reserved name is unaddressable rather than shadowing
+	// it — `assignHandle` refuses that name too, so its instances never hold one.
+	if (RESERVED_HANDLES.has(wanted)) return undefined;
+	return types.find((type) => handleBase(type) === wanted);
 }
 
 /**
@@ -96,8 +97,8 @@ export function resolveHandleToType(handle: string, types: readonly string[]): s
  * Returns undefined when the prefix is absent or is the whole handle.
  */
 export function stripAgentPrefix(handle: string): string | undefined {
-  const rest = /^agent-(.+)$/i.exec(handle)?.[1];
-  return rest || undefined;
+	const rest = /^agent-(.+)$/i.exec(handle)?.[1];
+	return rest || undefined;
 }
 
 /**
@@ -107,8 +108,8 @@ export function stripAgentPrefix(handle: string): string | undefined {
  * the model.
  */
 export function describeMention(message: string): string {
-  const oneLine = (message.split("\n", 1)[0] as string).replace(/\s+/g, " ").trim();
-  return oneLine.length > 40 ? `${oneLine.slice(0, 39).trimEnd()}…` : oneLine;
+	const oneLine = (message.split("\n", 1)[0] as string).replace(/\s+/g, " ").trim();
+	return oneLine.length > 40 ? `${oneLine.slice(0, 39).trimEnd()}…` : oneLine;
 }
 
 /**
@@ -126,7 +127,7 @@ export function describeMention(message: string): string {
  * `subagent_type` values is the tool spec rather than a separate attachment.
  */
 export function agentMentionReminder(type: string): string {
-  return `<system-reminder>\nThe user has expressed a desire to invoke the agent "${type}". Please invoke the agent appropriately, passing in the required context to it. \n</system-reminder>`;
+	return `<system-reminder>\nThe user has expressed a desire to invoke the agent "${type}". Please invoke the agent appropriately, passing in the required context to it. \n</system-reminder>`;
 }
 
 /**
@@ -134,8 +135,8 @@ export function agentMentionReminder(type: string): string {
  * a bare handle, a leading file path, or a mention that isn't at the start.
  */
 export function parseMention(text: string): { handle: string; message: string } | null {
-  const match = MENTION_SEND.exec(text);
-  if (!match) return null;
-  const message = (match[2] as string).trim();
-  return message ? { handle: match[1] as string, message } : null;
+	const match = MENTION_SEND.exec(text);
+	if (!match) return null;
+	const message = (match[2] as string).trim();
+	return message ? { handle: match[1] as string, message } : null;
 }

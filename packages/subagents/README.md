@@ -4,12 +4,9 @@
 
 A [pi](https://pi.dev) extension that brings **Claude Code-style autonomous sub-agents and workflow orchestration** to pi. Spawn specialized agents that run in isolated sessions — each with its own tools, system prompt, model, and thinking level. Run them in the background (the default) or block on them, steer them mid-run, resume completed sessions, and define your own custom agent types. When the orchestration shouldn't be improvised, hand a deterministic JavaScript script to the `SubagentWorkflow` tool — `agent()`, `parallel()`, `pipeline()` — and scripts written for Claude Code's `Workflow` tool run here unchanged.
 
-<img width="600" alt="pi-subagents screenshot" src="https://github.com/tintinweb/pi-subagents/raw/master/media/screenshot.png" />
 
 
-https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 
-<img width="600" alt="pi-color-badges-white" src="https://github.com/user-attachments/assets/555dcae4-333e-4ff0-b420-7b3369c018a4" />
 
 
 ## Features
@@ -120,7 +117,7 @@ hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted fa
 
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`, the same full suite on Bun 1.4.4 through
 `scripts/run-vitest.ts bun` (no native `bun test` subset). The four session scenario
-files (`test/{session-scenarios,fleet-session,viewer-session,worktree-isolation-e2e}.test.ts`) run under
+files (`tests/{session-scenarios,fleet-session,viewer-session}.test.ts` and `tests/scenarios/worktree-isolation-e2e.test.ts`) run under
 both engines on core `v1.3.0-nredd.10` release tarballs. They use exported `createHarness`
 and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, one injected extension
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
@@ -1094,7 +1091,7 @@ Custom agents live in .pi/agents/ or {{agentDir}}/agents/.
 
 Placeholders: `{{typeList}}` (full per-agent descriptions), `{{compactTypeList}}` (first sentence each), `{{agentDir}}`, `{{isolationGuideline}}` and `{{scheduleGuideline}}` (each expands with its own leading newline + `- ` bullet when the matching feature is on — place them directly after your last rule line; empty when [worktree isolation](#turning-worktrees-off) / scheduling is off). Unknown placeholders are left verbatim with a stderr warning; a missing or empty file falls back to `"full"` with a warning. Note the usual trust umbrella: a project-level file shapes the orchestrator's prompt, same as project agents and extensions do.
 
-**Starting point:** copy [`examples/agent-tool-description.md`](examples/agent-tool-description.md) — it reproduces the default full description exactly (a CI test keeps it in sync), so you can trim from a known-good baseline instead of writing from scratch.
+**Starting point:** copy [`examples/agent-tool-description.md`](#package-layout-and-development) — it reproduces the default full description exactly (a CI test keeps it in sync), so you can trim from a known-good baseline instead of writing from scratch.
 
 **Example — global defaults for a beefy machine:**
 
@@ -1366,10 +1363,13 @@ This is useful for creating agents that inherit extension tools but should not h
 
 ```
 examples/
-  workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
+  workflows/          # Runnable examples, executed by tests/workflow/workflow-examples.test.ts
   agent-tool-description.md
-test/                 # Full Vitest suite; four session scenario files also run under Bun
-  helpers/scenario-session.ts # Exported core host, child/provider barriers and isolated homes
+tests/                # Full Vitest suite under Node and Bun
+  fixtures/scenario-session.ts # Exported core host, child/provider barriers and isolated homes
+  scenarios/          # Real-host suites
+  ui/                 # UI behavior
+  workflow/           # Workflow behavior
 src/
   index.ts            # Extension entry: tool/command registration, /agents menu, rendering
   types.ts            # Type definitions (AgentConfig, AgentRecord, etc.)
@@ -1860,7 +1860,7 @@ can include host file paths and user-controlled captured stacks; these bounds ar
 not sanitization or credential isolation. Host frames are retained for error and
 cause context.
 
-To reproduce the offset bug, run `test/workflow-runtime.test.ts`'s
+To reproduce the offset bug, run `tests/workflow/workflow-runtime.test.ts`'s
 `reports line numbers that match the script the author wrote` case under Node
 and Bun. The old wrapper inserted a newline and relied on `vm.Script.lineOffset`
 to undo it; Bun ignored the offset and reported `workflow.js:4:23` instead of
@@ -1925,7 +1925,7 @@ The sandbox is a determinism and accident boundary, not a defence against a deli
 
 ### Coming from Claude Code
 
-This is a port of Claude Code's `Workflow` tool down to its state model, so **a script written for Claude Code runs here unchanged.** `test/workflow-claude-code-compat.test.ts` runs the canonical `review-changes` example from that tool's own description, verbatim.
+This is a port of Claude Code's `Workflow` tool down to its state model, so **a script written for Claude Code runs here unchanged.** `tests/workflow/workflow-claude-code-compat.test.ts` runs the canonical `review-changes` example from that tool's own description, verbatim.
 
 Identical: `agent()`, `pipeline()`, `parallel()`, `workflow()`, `phase()`, `log()`, `args`, `budget`; the `meta` block; `schema` returning a validated object; one-level `workflow()` nesting; the determinism throws.
 
@@ -1940,7 +1940,7 @@ Additions on this side: `gate`, `resume`, `effort`, journal-backed `resumeFromRu
 
 ### Examples
 
-Every file below is executed by `test/workflow-examples.test.ts` against a stub host on each CI run, so none of them can silently rot.
+Every file below is executed by `tests/workflow/workflow-examples.test.ts` against a stub host on each CI run, so none of them can silently rot.
 
 | File | Demonstrates | Runs as-is? |
 |---|---|---|
@@ -2216,7 +2216,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 
 Four things that are not obvious from the tables:
 
-- **Nothing is required at runtime.** `description` is non-optional in TypeScript and never validated. A spawn with no `options` at all is legal and is what "returns agent id on success" in `test/cross-extension-rpc.test.ts` pins.
+- **Nothing is required at runtime.** `description` is non-optional in TypeScript and never validated. A spawn with no `options` at all is legal and is what "returns agent id on success" in `tests/cross-extension-rpc.test.ts` pins.
 - **`bypassQueue` is not stripped.** Its own doc comment scopes it to the scheduler and the `/agents` generator, but a bus caller can set it and skip the `maxConcurrent` check.
 - **`structuredOutput` is documented "set only by the workflow host"** (its field comment on `SpawnOptions`) and is also not stripped.
 - **`signal` and the `on*` callbacks are function values.** They work only because the bus is in-process. A caller that genuinely serializes its payload cannot use them, and they arrive as `undefined` rather than failing.
@@ -2362,10 +2362,10 @@ This document has no test of its own, so it is worth knowing which claims are ac
 
 | Test | Level | Pins |
 |---|---|---|
-| `test/cross-extension-rpc.test.ts` | Mocked `SpawnCapable` | Envelope shape, per-channel error strings (including steer's), model resolution and scope enforcement |
-| `test/rpc-lifecycle-gating.test.ts` | Real extension factory | Nothing wired at factory time, everything once at `session_start`, live widget activity for RPC spawns ([#142](https://github.com/tintinweb/pi-subagents/issues/142)/[#181](https://github.com/tintinweb/pi-subagents/pull/181)), and a queued spawn's `signal`: aborting it emits one `failed` `stopped`, an already-aborted one emits nothing ([#526](https://github.com/nredd/pi-harness/issues/526)) |
-| `test/rpc-result-consumption.test.ts` | Real delivery path | The notification firing, and not firing, around `consume` |
-| `test/model-selection-paths.test.ts` | Real entry paths, manager and Pi registry; child execution stubbed | RPC/Agent/nested/scheduled/direct-mention/workflow parity for precedence, aliases, virtual selections, parent fallback and scope; live resume retains the original selection |
+| `tests/cross-extension-rpc.test.ts` | Mocked `SpawnCapable` | Envelope shape, per-channel error strings (including steer's), model resolution and scope enforcement |
+| `tests/rpc-lifecycle-gating.test.ts` | Real extension factory | Nothing wired at factory time, everything once at `session_start`, live widget activity for RPC spawns ([#142](https://github.com/tintinweb/pi-subagents/issues/142)/[#181](https://github.com/tintinweb/pi-subagents/pull/181)), and a queued spawn's `signal`: aborting it emits one `failed` `stopped`, an already-aborted one emits nothing ([#526](https://github.com/nredd/pi-harness/issues/526)) |
+| `tests/rpc-result-consumption.test.ts` | Real delivery path | The notification firing, and not firing, around `consume` |
+| `tests/model-selection-paths.test.ts` | Real entry paths, manager and Pi registry; child execution stubbed | RPC/Agent/nested/scheduled/direct-mention/workflow parity for precedence, aliases, virtual selections, parent fallback and scope; live resume retains the original selection |
 
 Not pinned anywhere, so treat them as descriptions rather than contracts: the `SpawnOptions.cwd` error strings, `subagents:ready`'s `{}` payload, consume's handle resolution, and its missing `workflowId` check.
 
@@ -2380,3 +2380,433 @@ If what you want is many coordinated agents rather than one, hand a script to [`
 ## License
 
 MIT — [tintinweb](https://github.com/tintinweb)
+
+## Package layout and development
+
+Tests live in `tests/`, grouped by UI, workflow and real-host scenarios. Non-test helpers, child programs and data live in `tests/fixtures/`. Benchmarks remain opt-in. Runtime source stays in `src/`; `dist/` is generated by `npm run build` and never committed. Test launcher invocations are unchanged.
+
+Formatting and linting use the root `biome.json`. Four scoped rules retain the former package config's existing exceptions rather than its disabled style group: `noExplicitAny` for erased SDK doubles and heterogeneous registries, `noControlCharactersInRegex` for terminal escape matching, `noEmptyInterface` for inherited marker interfaces, and `noNonNullAssertion` for bounded indexed lookups and established fixture preconditions. All other shared rules and the shared formatter apply.
+
+`npm run typecheck` includes all TypeScript tests and fixtures with unchecked indexed access and erasable syntax enforced. The JavaScript build entry opts into TypeScript checking too. Indexed fixture lookups make their existing setup/bounds assumptions explicit; malformed-input probes retain their original runtime inputs. The recording hook map deliberately erases SDK event signatures because it stores every hook and wiring probes pass only the fields that hook reads. Real-host suites retain the complete SDK boundary.
+
+`npm run bench` retains `JITI_FS_CACHE=false vitest bench`; append `-- --run` for a bounded, non-watch run. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. `npm run bench:ab -- <ref>` retains its existing command through the moved `tests/fixtures/ab.mjs`; its existing baseline-comparison machinery is not redesigned here. The inherited `bench:ab` script-name layout waiver is retained to preserve that entry point; all structural package waivers are removed.
+
+`prepublishOnly` is removed because publishing is owned by the monorepo release workflow, not a package-local shortcut: `scripts/release_descriptors.py` runs this workspace's `check`, and `scripts/npm_release.py` packs once and exercises those bytes through stock Pi before `.github/workflows/publish.yml` publishes the verified tarball. `prepack` still builds local tarballs. Use the release workflow, not direct `npm publish`, for publication.
+
+The following upstream policies and template are retained verbatim for provenance. Their old file paths, standalone-repository commands and contribution conventions are historical; the root repository development and security policies take precedence.
+
+<details>
+<summary>Carried .pi/agents/auditor.md</summary>
+
+```markdown
+---
+description: Security Code Reviewer
+tools: read, grep, find, bash
+model: claude-haiku-4-5
+thinking: off
+max_turns: 10
+---
+
+You are a lightweight security auditor. When asked to review code, scan for:
+- Hardcoded secrets or credentials
+- Injection flaws
+- Overly broad file permissions
+
+Report findings with file paths and short remediation notes. Be concise.
+```
+
+</details>
+
+<details>
+<summary>Carried AGENTS.md</summary>
+
+# Development Rules
+
+## Conversational Style
+
+- Keep answers short and concise
+- No emojis in issues, PR comments, or code
+- No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
+- Technical prose only, be direct
+- When the user asks a question, answer it first before making edits or running implementation commands.
+- When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
+
+## Code Quality
+
+- Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
+- No `any` unless absolutely necessary.
+- Inline single-line helpers that have only one call site.
+- Check `node_modules` for external API types (`@earendil-works/pi-*`, `typebox`, etc.); don't guess.
+- **No inline imports** (`await import()`, `import("pkg").Type`, dynamic type imports). Top-level imports only.
+- Never remove or downgrade code to fix type errors from outdated deps; upgrade the dep instead.
+- Match the surrounding code style — it is enforced by biome (`biome.json`).
+- Always ask before removing functionality or code that appears intentional.
+- Do not preserve backward compatibility unless the user asks for it.
+- This is a pi extension. Respect the Claude Code-compatible tool names, calling conventions, and UI patterns the extension deliberately mirrors; don't diverge from them without a stated reason.
+- When reviewing a diff, favor solutions that are elegant, not overengineered — flag needless abstraction, layering, or defensive code that the change doesn't warrant.
+
+## Documentation
+
+Read the file that covers a surface before changing its behavior; update it in the same change.
+
+| File | Covers |
+|---|---|
+| `README.md` | User-facing reference: features, install, tool parameter tables, commands, settings and defaults, the event table, the RPC channel list, and the `src/` file map (`## Architecture`). Source of truth for defaults and setting names. |
+| `CONTRIBUTING.md` | Contributor guidelines and quality bar. |
+| `SECURITY.md` | Vulnerability reporting. |
+
+`README.md` holds the reference tables and the long-form guides (workflows, packages, RPC). Renaming an event, an RPC channel, a reply-envelope field, or a workflow global is a docs change too.
+
+Cite code by symbol or quoted string (`spawnTopLevel` in `src/index.ts`), never by line number: line numbers go stale on any edit above them.
+
+## Commands
+
+- After code changes (not docs), run the full check suite and fix all errors and warnings:
+  ```bash
+  npm run check       # lint + typecheck + test (what CI runs)
+  ```
+  The steps individually, when you need to isolate a failure:
+  ```bash
+  npm run lint        # biome
+  npm run typecheck   # tsc --noEmit
+  npm run test        # vitest run
+  ```
+- `npm run lint:fix` auto-fixes most style issues.
+- `npm run test` runs the whole suite, including `*-e2e.test.ts` files. To iterate on a single file, run it directly: `npx vitest run test/<file>.test.ts`.
+- If you create or modify a test file, run it and iterate on the test or implementation until it passes.
+- `npm run build` regenerates the esbuild runtime bundle `dist/` from `src/` (`scripts/build-runtime.mjs`, #577). `dist/` is gitignored build output: never commit it. `npm run check` and `make install-owned` build it, and `prepack` builds it for publish. The shared builder is root `scripts/runtime-builder.mjs`.
+- `npm run bench` runs the benchmarks in `test/perf/*.bench.ts` (absolute timings, ~1 min). Opt-in: it is not part of the check suite, and `npm run test` never picks bench files up. `npm run bench:ab -- <ref>` benchmarks the working tree against another commit and prints the delta — use it for a PR's `## Performance` section. The `*.perf.test.ts` guards beside them assert operation counts, not time, and DO run in the normal suite.
+- For ad-hoc scripts, write them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
+
+## Git
+
+- **Never commit.** The user commits manually. At most, suggest a concise commit message as text.
+- **Never push**, tag, or create branches unless the user explicitly asks.
+- Never run history- or worktree-destroying commands: `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, `git commit --no-verify`, or any force push.
+- Leave the working tree as the user left it — don't stage, stash, or revert files you didn't change.
+
+## Issues and PRs
+
+See `CONTRIBUTING.md` for the contributor guidelines and quality bar.
+
+### Filing PRs
+
+Write the body to a temp file and pass `--body-file` (`gh pr create`, `gh pr edit`); never multi-line markdown via `--body`. Create or edit a PR only when the user asks.
+
+- One logical change per PR. Title in conventional-commit form (`fix(ui): ...`), imperative, no trailing period.
+- Self-review the diff before filing; drop unrelated refactors and leftover debug code.
+- Write for a reviewer who will not read the whole diff: what changed, then what it costs.
+- Technical prose, no emojis, no marketing.
+- Every claim checkable — from the diff, or from a command you actually ran. Never quote a benchmark, test count, or "no change in output" you did not measure.
+- State what the change does *not* do: deliberate omissions, known gaps, untested surfaces.
+
+**Relations** — get the verbs right, and note `States as of opening.`
+
+- `Closes #N` only if the PR fully resolves N. Otherwise name the part delivered and say N stays open.
+- A merge does not auto-close another PR: say **supersedes**, credit the author (`thanks @user`), and say what of theirs was left out and why.
+- Name PRs touching the same lines; say whether it is a design conflict or just a rebase.
+
+**Sections**, in this order. Omit one only when it is genuinely empty, and say so:
+
+| Section | Content |
+|---|---|
+| Lead-in (no heading) | What this closes, supersedes, or partly addresses. |
+| `## Summary` | The problem and why it matters — not how it is fixed. Enumerate distinct failure modes. |
+| `## What changed` | The design: the one idea, then its consequences. Name files/symbols only where they help. |
+| `## Related work` | Table: number, title, state, relation to this PR. |
+| `## Behavior and compatibility` | Side effects, breaking changes (or an explicit "none", with reasoning), defaults, settings, migration. |
+| `## Performance` | Numbers with the method that produced them. "No measurable change" only if measured. |
+| `## Testing` | Commands and results, new coverage, and what is **not** covered. |
+
+Add sections a change needs; use fenced `text` blocks or screenshots for UI changes.
+
+Testing section: paste real results (`npm run lint`, `npm run typecheck`, `npm run build`, `npm run test` with pass/skip/file counts), not "tests pass". Mutation-check every new assertion — break the source line, confirm red, restore — and say what you broke.
+
+### Reviewing PRs
+
+- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
+- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
+- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
+
+### Posting issue and PR comments
+
+- Write the comment to a temp file and post with `gh issue/pr comment --body-file` (never multi-line markdown via `--body`).
+- Keep comments concise, technical, and in the user's tone.
+
+## Changelog
+
+Location: `CHANGELOG.md` (single file, [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format).
+
+- All new entries go under `## [Unreleased]`, in the right subsection (`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security`, `### Refactored`). Read the section first and append to existing subsections; never duplicate them.
+- One bullet per issue/PR. Never combine separate issues or pull requests into a single entry, even when they touch the same or similar components. (A PR together with the issue it closes or that diagnosed it is one change — one bullet citing both.)
+- Breaking changes are not a separate subsection. Call them out with a `> **⚠️ Breaking: …**` blockquote at the top of the version section, and/or a bold `**BREAKING:**` bullet under `### Changed`, with a migration note.
+- Entries are concise — a bold lead-in stating what changed, then a sentence or two on why it changed and anything a user must do about it. Aim for 2–4 sentences; a genuinely intricate change may run longer, but length is never the goal. Do not match the density of older entries, several of which are far too long.
+- Cut what the reader doesn't need: narration of the investigation, alternatives considered and rejected, restatements of the diff, and detail recoverable from the code or the linked issue. Name a file or symbol only when it helps someone find the change.
+- Released version sections (e.g. `## [0.12.0]`) are immutable; never modify them.
+- Attribute external contributions: `... ([#456](https://github.com/tintinweb/pi-subagents/pull/456) — thanks [@username](https://github.com/username))`.
+
+## Releasing
+
+**Versioning** (all releases are `0.x`, no major bumps):
+
+- `minor` (`0.x.0`) — a notable new feature, or any breaking change.
+- `patch` (`0.x.y`) — bug fixes and smaller additions.
+
+Before a release:
+
+- Update `CHANGELOG.md` — move the `## [Unreleased]` entries under a new `## [X.Y.Z]` version section, and add a fresh empty `## [Unreleased]` for the next cycle.
+- Update `README.md` if user-facing behavior changed (features list, settings, usage), including its workflow, package and RPC guides.
+- Run the full check suite plus the e2e tests, and fix anything that fails:
+  ```bash
+  npm run check                    # lint + typecheck + test
+  npm run test:e2e                 # faux/scripted e2e — no network, no keys
+  npm run build
+  ```
+- For a real pre-publish smoke test, run the **live** e2e against an actual model:
+  ```bash
+  PI_E2E_LIVE=1 npm run test:e2e   # uses your local `pi` login; optional PI_PROVIDER / PI_MODEL
+  ```
+  `PI_E2E_LIVE=1` swaps the scripted faux suite for the live one (the faux suite is `skipIf(LIVE)`).
+  (`prepublishOnly` runs lint + typecheck + test + build; the live e2e is the smoke test to run by hand before publishing.)
+- Inspect the publish tarball with `npm pack --dry-run` and eyeball the output: the version is right, `dist/` (pi loads `pi.extensions: ./dist/index.ts`, the prebuilt bundle), `src/`, `README.md`, `CHANGELOG.md` and `LICENSE` are present, and nothing stray slipped past `.npmignore`. Read-only; it writes no tarball. `prepublishOnly` builds but never checks what actually ships.
+
+**Never publish.** The user runs `npm version` / `npm publish` and any tagging manually. Do not run those commands unless the user explicitly asks.
+
+## User Override
+
+If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
+
+</details>
+
+<details>
+<summary>Carried CONTRIBUTING.md</summary>
+
+# Contributing to @tintinweb/pi-subagents
+
+This guide exists to save both sides time.
+
+## Philosophy
+
+`pi-subagents` is a [pi](https://pi.dev) extension, and it tries to stay focused:
+spawn and orchestrate autonomous sub-agents that feel native to pi, and do that
+well. Features that don't serve that goal, or that bolt on unrelated complexity,
+are likely to be declined. When in doubt, open an issue and discuss the idea
+before writing the code.
+
+The extension deliberately mirrors Claude Code's tool names, calling
+conventions, and UI patterns. Changes should respect that compatibility unless
+there's a good reason to diverge.
+
+## The One Rule
+
+**You must understand your code.** If you cannot explain what your changes do and
+how they interact with the rest of the system, the PR will be closed.
+
+Using AI to write code is fine. Submitting AI-generated slop without
+understanding it is not.
+
+## Filing Issues
+
+Keep issues short, concrete, and worth reading.
+
+- Keep it concise. If it does not fit on one screen, it is too long.
+- Write in your own voice. If you used an LLM to draft it, review and shape it
+  yourself before posting.
+- State the bug or request clearly, and explain why it matters.
+- For bugs, include a minimal repro: pi version, this extension's version, your
+  agent/config, the steps, and the actual vs. expected behavior.
+- If you want to implement the change yourself, say so.
+
+For security issues, do **not** open a public issue — see [SECURITY.md](SECURITY.md).
+
+## Before Submitting a PR
+
+For anything beyond a trivial fix, open an issue first so we can agree on the
+approach before you invest the time.
+
+Make sure the full check suite passes locally:
+
+```bash
+npm run lint        # biome
+npm run typecheck   # tsc --noEmit
+npm run test        # vitest
+npm run build       # tsc
+```
+
+All four must pass. `npm run lint:fix` will auto-fix most style issues, and
+`npm run test:e2e` runs the end-to-end suite if your change touches that surface.
+
+If your change touches a render path or the spawn path, `npm run bench` prints
+absolute timings and `npm run bench:ab -- master` compares them against master.
+Neither is required to pass; both are opt-in, and neither runs in CI.
+
+Other guidelines:
+
+- Keep PRs focused — one logical change per PR. Unrelated refactors make review
+  harder and are likely to be split out or declined.
+- Add or update tests for behavior you change.
+- Use `hermeticDir` from `test/helpers/boot-extension.ts` for extension wiring
+  fixtures. Its roots are canonical paths, matching `process.cwd()` and project
+  discovery even when the OS temp directory contains symlinks (macOS `/var`).
+- Use the injected `FakeClock` for scheduler deadlines and dispatch instead of
+  short wall-time budgets (`test/config-model-fallback-spawn.test.ts`).
+- Match the surrounding code style (enforced by biome).
+- Do not edit `CHANGELOG.md`. Changelog entries are added by the maintainer.
+- Update the README when you add or change user-facing behavior.
+
+## Questions?
+
+Open an [issue](https://github.com/tintinweb/pi-subagents/issues) — questions and
+discussion are welcome.
+
+</details>
+
+<details>
+<summary>Carried SECURITY.md</summary>
+
+# Security Policy
+
+This document explains the security model behind `@tintinweb/pi-subagents` and
+where the boundaries are.
+
+`pi-subagents` is a [pi](https://pi.dev) extension. It spawns and orchestrates
+autonomous sub-agents that run locally within the same security boundary as the
+user running pi, and inherit pi's trust model. It is the responsibility of the
+user to monitor those agents' operations or to contain them within a container,
+virtual machine, or other sandbox solution.
+
+Sub-agents run with the local user account's privileges and can use the tools
+they are granted (reading and writing files, running commands, network access,
+etc.). They treat the local user account and files writable by that account as
+inside the same trust boundary as the pi process itself. If an attacker can
+modify files under the user's home directory, workspace, shell startup files,
+environment, pi configuration, or this extension's configuration, they can
+generally influence pi, its sub-agents, or other local developer tools. Reports
+that depend on such prior local write access are not security vulnerabilities
+unless they demonstrate how `pi-subagents` grants that write access or crosses an
+operating-system privilege boundary.
+
+`pi-subagents` relies on the user only loading trustworthy agent definitions
+(`.pi/agents/*.md`, `.agents/agents/*.md`, and global agents), skills, and
+tools, and only using pi within trusted repositories. Files like `AGENTS.md`,
+custom agent frontmatter/system prompts, preloaded skills, or instructions
+embedded in repository content and comments can be used to prompt-inject the
+coding agent and its sub-agents trivially, and this cannot be protected against.
+
+## Reporting a Vulnerability
+
+If you believe you found a security vulnerability in `pi-subagents`, please
+report it privately by opening a draft advisory through
+[GitHub Security Advisories](https://github.com/tintinweb/pi-subagents/security/advisories/new)
+for this repository.
+
+Please include:
+
+- A description of the issue and its impact
+- Steps to reproduce, proof of concept, or relevant logs
+- Affected version, commit, or configuration
+- Any known mitigations
+
+Do not open a public issue for security-sensitive reports. Reports will be
+reviewed and disclosure coordinated as appropriate.
+
+## Scope
+
+Security issues in the published npm package and the code in this repository are
+in scope — for example, a flaw in `pi-subagents` that crosses an
+operating-system privilege boundary, or that causes the extension to bypass a
+tool restriction, denylist, or agent boundary it claims to enforce.
+
+## Out Of Scope
+
+- Local code execution or sandboxing behavior (sub-agents intentionally do not
+  have a sandbox and run with the user's privileges)
+- Behavior of pi itself, or of other pi extensions, skills, or tools installed by
+  the user (report those to their respective projects)
+- Risks from working in untrusted repositories
+- Risks from installing or loading untrusted agent definitions, skills,
+  extensions, packages, or tools
+- Issues caused by non-trustworthy MITM proxies
+- Public internet exposure of a pi installation
+- Prompt injection attacks (including via `AGENTS.md`, agent frontmatter, custom
+  system prompts, preloaded skills, repository content, or context inheritance)
+- Exposed secrets that are third-party/user-controlled credentials
+- Reports requiring the ability to create, modify, delete, or replace files,
+  directories, symlinks, environment variables, shell configuration, or other
+  user-controlled local state on the target machine. This includes `.pi/agents/`,
+  `.agents/agents/`, agent and extension configuration, persistent agent memory,
+  workspace files, `AGENTS.md`, skills, dotfiles, and files synchronized through NFS, roaming
+  profiles, or dotfile managers, unless the report shows how `pi-subagents`
+  itself grants that access.
+- Issues caused by intentionally weakened user configuration
+- Resource/DOS claims that require trusted local input/config
+- Reports about malicious model output
+- User-approved or user-initiated local actions presented as vulnerabilities
+
+## Notes for Reporters
+
+The most useful reports show a current, reproducible security boundary bypass
+with demonstrated impact. Reports that only show expected local-agent behavior,
+prompt injection, or a malicious trusted agent definition/skill are not security
+vulnerabilities under this model.
+
+For example, a report showing that malicious contents written to a trusted agent
+definition or extension configuration cause a sub-agent to execute commands, load
+attacker-controlled tools, or send credentials to an attacker-controlled endpoint
+is out of scope.
+
+When possible, include the exact affected path, package version or commit SHA,
+configuration, and a proof of concept against the latest release or latest
+`master`. For dependency reports, include evidence that the shipped dependency is
+affected and that the issue is reachable through `pi-subagents`.
+
+</details>
+
+<details>
+<summary>Carried examples/agent-tool-description.md</summary>
+
+Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
+
+Available agent types and the tools they have access to:
+{{typeList}}
+
+Custom agents can be defined in .pi/agents/<name>.md (project) or {{agentDir}}/agents/<name>.md (global) — they are picked up automatically. Project-level agents override global ones. Creating a .md file with the same name as a default agent overrides it.
+
+When using the Agent tool, specify a subagent_type parameter to select which agent type to use.
+
+## When not to use
+
+If the target is already known, use a direct tool — `read` for a known path, `grep`/`find` for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that match an available agent type.
+
+## Usage notes
+
+- Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
+- When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently. If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple Agent tool use content blocks.
+- When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
+- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
+- Agents run in the background by default. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
+- **Foreground vs background**: Pass `run_in_background: false` only when your very next action depends on the agent's result and nothing else could usefully happen while it runs — e.g., a research agent whose finding gates the edit you're about to make. Otherwise let it run in the background (the default) — this includes fire-and-forget work, independent investigations, and anything where the user might hand you something else in the meantime. Wanting the result "next" is not enough on its own.
+- **Don't race**: after launching a background agent, you know nothing about its results. Never fabricate or predict them in any format — not as prose, summary, or structured output. The completion notification arrives in a later turn; it is never something you write yourself. If the user asks before it lands, say the agent is still running — give status, not a guess.
+- Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
+- Use steer_subagent to message an agent: it steers a running agent mid-run and resumes a finished one in the background, like resume.
+- Use stop_subagent to end an agent or workflow you no longer need, e.g. once a sibling has answered. A steer asking it to stop is read only after its current tool call and can be ignored.
+- Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
+- If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
+- Use model to select a configured tier (e.g. "@cheap"), an exact "provider/modelId", or a fuzzy tool-call input (e.g. "haiku").
+- Use thinking to control extended thinking level.
+- Use inherit_context if the agent needs the parent conversation history.{{isolationGuideline}}{{scheduleGuideline}}
+
+## Writing the prompt
+
+Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
+- Explain what you're trying to accomplish and why.
+- Describe what you've already learned or ruled out.
+- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
+- If you need a short response, say so ("report in under 200 words").
+- Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
+
+Terse command-style prompts produce shallow, generic work.
+
+**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
+
+</details>

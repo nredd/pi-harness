@@ -73,10 +73,10 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
     "packages/plan-mode/tests/child-policy.test.ts": frozenset({"u"}),
     "packages/subagents/README.md": frozenset({"me"}),
     "packages/subagents/src/output-file.ts": frozenset({"user"}),
-    "packages/subagents/test/manager-registry-guard.test.ts": frozenset({"victim"}),
-    "packages/subagents/test/output-file-path.test.ts": frozenset({"user"}),
-    "packages/subagents/test/output-file.test.ts": frozenset({"foo", "user"}),
-    "packages/subagents/test/transcript-root-hardening.test.ts": frozenset({"u"}),
+    "packages/subagents/tests/manager-registry-guard.test.ts": frozenset({"victim"}),
+    "packages/subagents/tests/output-file-path.test.ts": frozenset({"user"}),
+    "packages/subagents/tests/output-file.test.ts": frozenset({"foo", "user"}),
+    "packages/subagents/tests/transcript-root-hardening.test.ts": frozenset({"u"}),
     # Synthetic private addresses the WSL2 smoke harness feeds through the script under test.
     "scripts/tests/test_wsl2_workflow.py": frozenset(
         {ip(172, 20, 0, 1), ip(172, 20, 0, 2), ip(172, 20, 0, 9)}

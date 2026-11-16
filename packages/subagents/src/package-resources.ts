@@ -56,15 +56,15 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { normalizeHomePath, resolveAgentDir } from "./home-paths.js";
+import { normalizeHomePath, resolveAgentDir } from "./home-paths.ts";
 
 /** Resource kinds a package may declare. Agents are `.md`, workflows are `.js`. */
 export type PackageResourceKind = "agents" | "workflows";
 
 /** File extension scanned for each kind, mirroring the local roots for each. */
 const KIND_EXTENSION: Record<PackageResourceKind, string> = {
-  agents: ".md",
-  workflows: ".js",
+	agents: ".md",
+	workflows: ".js",
 };
 
 /**
@@ -77,23 +77,23 @@ export const MAX_PACKAGE_RESOURCE_BYTES = 1_048_576;
 
 /** One installed pi package that declared something we understand. */
 export interface PiPackage {
-  /** The settings source string, e.g. `npm:@foo/bar@1.0.0` or an absolute path. */
-  source: string;
-  /** `package.json` `name`, when the manifest could be read. */
-  name?: string;
-  /** Unscoped, lowercased short name (`@scope/foo` becomes `foo`) for allowlist matching. */
-  shortName?: string;
-  /** Which settings scope configured it. */
-  scope: "user" | "project";
-  /** Absolute path of the installed package root. */
-  root: string;
-  /**
-   * What its manifest declared. Carried here rather than re-read downstream:
-   * `listPiPackages` has to parse the manifest anyway to know whether the
-   * package declares anything at all, and reading it twice would leave two
-   * places that could disagree about what a package said.
-   */
-  declared: DeclaredEntries;
+	/** The settings source string, e.g. `npm:@foo/bar@1.0.0` or an absolute path. */
+	source: string;
+	/** `package.json` `name`, when the manifest could be read. */
+	name?: string;
+	/** Unscoped, lowercased short name (`@scope/foo` becomes `foo`) for allowlist matching. */
+	shortName?: string;
+	/** Which settings scope configured it. */
+	scope: "user" | "project";
+	/** Absolute path of the installed package root. */
+	root: string;
+	/**
+	 * What its manifest declared. Carried here rather than re-read downstream:
+	 * `listPiPackages` has to parse the manifest anyway to know whether the
+	 * package declares anything at all, and reading it twice would leave two
+	 * places that could disagree about what a package said.
+	 */
+	declared: DeclaredEntries;
 }
 
 /**
@@ -104,17 +104,17 @@ export interface PiPackage {
 export type PackageGate = boolean | string[] | undefined;
 
 export interface PackageDiscoveryOptions {
-  /** Home directory for user settings and installed resources, resolved at call time. */
-  homeDir?: string;
-  /**
-   * Pi's project-trust state for `cwd`, from `ctx.isProjectTrusted()`. When
-   * false, `.pi/settings.json` is not read — so a package configured only by an
-   * untrusted project is invisible to us, exactly as it is to pi. Omitted falls
-   * back to the session state set by {@link setProjectTrusted}.
-   */
-  projectTrusted?: boolean;
-  /** Gate override. Omitted falls back to the session state for the kind. */
-  gate?: PackageGate;
+	/** Home directory for user settings and installed resources, resolved at call time. */
+	homeDir?: string;
+	/**
+	 * Pi's project-trust state for `cwd`, from `ctx.isProjectTrusted()`. When
+	 * false, `.pi/settings.json` is not read — so a package configured only by an
+	 * untrusted project is invisible to us, exactly as it is to pi. Omitted falls
+	 * back to the session state set by {@link setProjectTrusted}.
+	 */
+	projectTrusted?: boolean;
+	/** Gate override. Omitted falls back to the session state for the kind. */
+	gate?: PackageGate;
 }
 
 // ---- Session state ----
@@ -142,22 +142,22 @@ let projectTrustedState = false;
 
 /** Apply the `packageAgents` setting. Drops the cache, since roots may change. */
 export function setPackageAgentsGate(gate: PackageGate): void {
-  agentsGate = gate;
-  invalidatePackageCache();
+	agentsGate = gate;
+	invalidatePackageCache();
 }
 
 /** Apply the `packageWorkflows` setting. Drops the cache, since roots may change. */
 export function setPackageWorkflowsGate(gate: PackageGate): void {
-  workflowsGate = gate;
-  invalidatePackageCache();
+	workflowsGate = gate;
+	invalidatePackageCache();
 }
 
 export function getPackageAgentsGate(): PackageGate {
-  return agentsGate;
+	return agentsGate;
 }
 
 export function getPackageWorkflowsGate(): PackageGate {
-  return workflowsGate;
+	return workflowsGate;
 }
 
 /**
@@ -167,9 +167,9 @@ export function getPackageWorkflowsGate(): PackageGate {
  * and forked session, and it has its own reason to invalidate.
  */
 export function setProjectTrusted(trusted: boolean): void {
-  if (projectTrustedState === trusted) return;
-  projectTrustedState = trusted;
-  invalidatePackageCache();
+	if (projectTrustedState === trusted) return;
+	projectTrustedState = trusted;
+	invalidatePackageCache();
 }
 
 /**
@@ -177,40 +177,40 @@ export function setProjectTrusted(trusted: boolean): void {
  * for project-supplied agent files reads this, so a missing answer fails closed.
  */
 export function isProjectTrusted(): boolean {
-  return projectTrustedState;
+	return projectTrustedState;
 }
 
 /** Reset every session-scoped value. Tests only — the extension never un-loads. */
 export function resetPackageState(): void {
-  agentsGate = undefined;
-  workflowsGate = undefined;
-  projectTrustedState = false;
-  invalidatePackageCache();
+	agentsGate = undefined;
+	workflowsGate = undefined;
+	projectTrustedState = false;
+	invalidatePackageCache();
 }
 
 /** What a package declared, after normalising the accepted spellings. */
 export interface DeclaredEntries {
-  agents?: string[];
-  workflows?: string[];
+	agents?: string[];
+	workflows?: string[];
 }
 
 /** Absolute paths a declaration resolved to, split by what the loader needs. */
 export interface ResolvedResourcePaths {
-  dirs: string[];
-  files: string[];
-  /**
-   * Canonical paths of `!` entries. Kept separate from `dirs`/`files` rather
-   * than subtracted from them because an exclusion usually names a file *inside*
-   * an included directory, which is not enumerated until load time.
-   */
-  excluded: ReadonlySet<string>;
+	dirs: string[];
+	files: string[];
+	/**
+	 * Canonical paths of `!` entries. Kept separate from `dirs`/`files` rather
+	 * than subtracted from them because an exclusion usually names a file *inside*
+	 * an included directory, which is not enumerated until load time.
+	 */
+	excluded: ReadonlySet<string>;
 }
 
 // ---- Manifest reading ----
 
 /** A string array, or undefined for anything else. Mirrors pi's `readPiManifest` strictness. */
 function stringArray(val: unknown): string[] | undefined {
-  return Array.isArray(val) && val.every(e => typeof e === "string") ? (val as string[]) : undefined;
+	return Array.isArray(val) && val.every((e) => typeof e === "string") ? (val as string[]) : undefined;
 }
 
 /**
@@ -219,14 +219,14 @@ function stringArray(val: unknown): string[] | undefined {
  * shorthand was worth having, and the shape the other fork's docs show.
  */
 function normalizeDeclaration(val: unknown): DeclaredEntries | undefined {
-  const asArray = stringArray(val);
-  if (asArray) return { agents: asArray };
-  if (!val || typeof val !== "object" || Array.isArray(val)) return undefined;
-  const obj = val as Record<string, unknown>;
-  const agents = stringArray(obj.agents);
-  const workflows = stringArray(obj.workflows);
-  if (!agents && !workflows) return undefined;
-  return { agents, workflows };
+	const asArray = stringArray(val);
+	if (asArray) return { agents: asArray };
+	if (!val || typeof val !== "object" || Array.isArray(val)) return undefined;
+	const obj = val as Record<string, unknown>;
+	const agents = stringArray(obj.agents);
+	const workflows = stringArray(obj.workflows);
+	if (!agents && !workflows) return undefined;
+	return { agents, workflows };
 }
 
 /**
@@ -237,30 +237,30 @@ function normalizeDeclaration(val: unknown): DeclaredEntries | undefined {
  * writes both almost certainly means them to be identical anyway.
  */
 export function readSubagentManifest(pkg: unknown): DeclaredEntries | undefined {
-  if (!pkg || typeof pkg !== "object") return undefined;
-  const obj = pkg as Record<string, unknown>;
-  const piKey = obj.pi;
-  if (piKey && typeof piKey === "object" && !Array.isArray(piKey)) {
-    const nested = normalizeDeclaration((piKey as Record<string, unknown>).subagents);
-    if (nested) return nested;
-  }
-  return normalizeDeclaration(obj["pi-subagents"]);
+	if (!pkg || typeof pkg !== "object") return undefined;
+	const obj = pkg as Record<string, unknown>;
+	const piKey = obj.pi;
+	if (piKey && typeof piKey === "object" && !Array.isArray(piKey)) {
+		const nested = normalizeDeclaration((piKey as Record<string, unknown>).subagents);
+		if (nested) return nested;
+	}
+	return normalizeDeclaration(obj["pi-subagents"]);
 }
 
 /** Parse `<root>/package.json`, or undefined when it is missing or malformed. */
 function readPackageJson(root: string): Record<string, unknown> | undefined {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** `@scope/foo` becomes `foo`, lowercased. The name a user types in an allowlist. */
 export function unscopedShortName(name: string): string {
-  const short = name.startsWith("@") ? name.slice(name.indexOf("/") + 1) : name;
-  return short.toLowerCase();
+	const short = name.startsWith("@") ? name.slice(name.indexOf("/") + 1) : name;
+	return short.toLowerCase();
 }
 
 // ---- Path resolution ----
@@ -275,13 +275,13 @@ export function unscopedShortName(name: string): string {
  * existing ancestor and re-appending the rest keeps both sides comparable.
  */
 function realOrSelf(path: string): string {
-  const abs = resolve(path);
-  try {
-    return realpathSync(abs);
-  } catch {
-    const parent = dirname(abs);
-    return parent === abs ? abs : join(realOrSelf(parent), basename(abs));
-  }
+	const abs = resolve(path);
+	try {
+		return realpathSync(abs);
+	} catch {
+		const parent = dirname(abs);
+		return parent === abs ? abs : join(realOrSelf(parent), basename(abs));
+	}
 }
 
 /**
@@ -295,8 +295,8 @@ function realOrSelf(path: string): string {
  * symlink (`/var` → `/private/var` on macOS) still matches itself.
  */
 function isInside(root: string, candidate: string): boolean {
-  const rel = relative(realOrSelf(root), realOrSelf(candidate));
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+	const rel = relative(realOrSelf(root), realOrSelf(candidate));
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /**
@@ -309,9 +309,9 @@ function isInside(root: string, candidate: string): boolean {
  * answer. A directory or a file path covers the declared use cases.
  */
 function expandEntry(root: string, entry: string): string | undefined {
-  const target = resolve(root, entry);
-  if (!isInside(root, target) || !existsSync(target)) return undefined;
-  return target;
+	const target = resolve(root, entry);
+	if (!isInside(root, target) || !existsSync(target)) return undefined;
+	return target;
 }
 
 /**
@@ -326,50 +326,50 @@ function expandEntry(root: string, entry: string): string | undefined {
  * glob negation, and globs are not supported here for the reason above.
  */
 export function resolveDeclaredPaths(
-  root: string,
-  entries: string[] | undefined,
-  kind: PackageResourceKind,
+	root: string,
+	entries: string[] | undefined,
+	kind: PackageResourceKind,
 ): ResolvedResourcePaths {
-  const dirs: string[] = [];
-  const files: string[] = [];
-  const excluded = new Set<string>();
-  if (!entries) return { dirs, files, excluded };
+	const dirs: string[] = [];
+	const files: string[] = [];
+	const excluded = new Set<string>();
+	if (!entries) return { dirs, files, excluded };
 
-  // Exclusions are collected first and stored canonically, so `!./agents/wip.md`
-  // matches the same file however the loader spelled its way to it. They do not
-  // have to exist: a package may exclude a path it ships conditionally.
-  for (const entry of entries) {
-    if (!entry.startsWith("!")) continue;
-    const target = resolve(root, entry.slice(1));
-    if (isInside(root, target)) excluded.add(realOrSelf(target));
-  }
+	// Exclusions are collected first and stored canonically, so `!./agents/wip.md`
+	// matches the same file however the loader spelled its way to it. They do not
+	// have to exist: a package may exclude a path it ships conditionally.
+	for (const entry of entries) {
+		if (!entry.startsWith("!")) continue;
+		const target = resolve(root, entry.slice(1));
+		if (isInside(root, target)) excluded.add(realOrSelf(target));
+	}
 
-  const ext = KIND_EXTENSION[kind];
-  for (const entry of entries) {
-    if (entry.startsWith("!")) continue;
-    const path = expandEntry(root, entry);
-    if (!path || excluded.has(realOrSelf(path))) continue;
-    let stat: ReturnType<typeof statSync>;
-    try {
-      stat = statSync(path);
-    } catch {
-      continue;
-    }
-    if (stat.isDirectory()) {
-      if (!dirs.includes(path)) dirs.push(path);
-    } else if (stat.isFile() && path.endsWith(ext) && !files.includes(path)) {
-      files.push(path);
-    }
-  }
-  return { dirs, files, excluded };
+	const ext = KIND_EXTENSION[kind];
+	for (const entry of entries) {
+		if (entry.startsWith("!")) continue;
+		const path = expandEntry(root, entry);
+		if (!path || excluded.has(realOrSelf(path))) continue;
+		let stat: ReturnType<typeof statSync>;
+		try {
+			stat = statSync(path);
+		} catch {
+			continue;
+		}
+		if (stat.isDirectory()) {
+			if (!dirs.includes(path)) dirs.push(path);
+		} else if (stat.isFile() && path.endsWith(ext) && !files.includes(path)) {
+			files.push(path);
+		}
+	}
+	return { dirs, files, excluded };
 }
 
 // ---- Package enumeration ----
 
 interface ConfiguredPackageRow {
-  source: string;
-  scope: "user" | "project";
-  installedPath?: string;
+	source: string;
+	scope: "user" | "project";
+	installedPath?: string;
 }
 
 /**
@@ -380,28 +380,32 @@ interface ConfiguredPackageRow {
  * of failing activation.
  */
 function configuredPackages(cwd: string, projectTrusted: boolean, homeDir?: string): ConfiguredPackageRow[] {
-  try {
-    if (typeof DefaultPackageManager !== "function") return [];
-    const agentDir = resolveAgentDir(homeDir);
-    const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
-    const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
-    if (typeof manager.listConfiguredPackages !== "function") return [];
-    if (homeDir === undefined) return manager.listConfiguredPackages();
-    // Pi's enumerator expands local package sources through its own ambient
-    // home. Reuse its public installed-path resolver with normalized inputs,
-    // preserving the original source for package-gate matching and diagnostics.
-    const rows: ConfiguredPackageRow[] = [];
-    for (const scope of ["user", "project"] as const) {
-      const settings = scope === "user" ? settingsManager.getGlobalSettings() : settingsManager.getProjectSettings();
-      for (const pkg of settings.packages ?? []) {
-        const source = typeof pkg === "string" ? pkg : pkg.source;
-        rows.push({ source, scope, installedPath: manager.getInstalledPath(normalizeHomePath(source, homeDir), scope) });
-      }
-    }
-    return rows;
-  } catch {
-    return [];
-  }
+	try {
+		if (typeof DefaultPackageManager !== "function") return [];
+		const agentDir = resolveAgentDir(homeDir);
+		const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+		const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+		if (typeof manager.listConfiguredPackages !== "function") return [];
+		if (homeDir === undefined) return manager.listConfiguredPackages();
+		// Pi's enumerator expands local package sources through its own ambient
+		// home. Reuse its public installed-path resolver with normalized inputs,
+		// preserving the original source for package-gate matching and diagnostics.
+		const rows: ConfiguredPackageRow[] = [];
+		for (const scope of ["user", "project"] as const) {
+			const settings = scope === "user" ? settingsManager.getGlobalSettings() : settingsManager.getProjectSettings();
+			for (const pkg of settings.packages ?? []) {
+				const source = typeof pkg === "string" ? pkg : pkg.source;
+				rows.push({
+					source,
+					scope,
+					installedPath: manager.getInstalledPath(normalizeHomePath(source, homeDir), scope),
+				});
+			}
+		}
+		return rows;
+	} catch {
+		return [];
+	}
 }
 
 /**
@@ -410,26 +414,26 @@ function configuredPackages(cwd: string, projectTrusted: boolean, homeDir?: stri
  * a package listed in both scopes is one package on disk.
  */
 export function listPiPackages(cwd: string, projectTrusted = false, homeDir?: string): PiPackage[] {
-  const seen = new Set<string>();
-  const out: PiPackage[] = [];
-  for (const entry of configuredPackages(cwd, projectTrusted, homeDir)) {
-    const root = entry.installedPath;
-    if (!root || seen.has(root)) continue;
-    const manifest = readPackageJson(root);
-    const declared = manifest ? readSubagentManifest(manifest) : undefined;
-    if (!manifest || !declared) continue;
-    seen.add(root);
-    const name = typeof manifest.name === "string" ? manifest.name : undefined;
-    out.push({
-      source: entry.source,
-      name,
-      shortName: name ? unscopedShortName(name) : undefined,
-      scope: entry.scope,
-      root,
-      declared,
-    });
-  }
-  return out;
+	const seen = new Set<string>();
+	const out: PiPackage[] = [];
+	for (const entry of configuredPackages(cwd, projectTrusted, homeDir)) {
+		const root = entry.installedPath;
+		if (!root || seen.has(root)) continue;
+		const manifest = readPackageJson(root);
+		const declared = manifest ? readSubagentManifest(manifest) : undefined;
+		if (!manifest || !declared) continue;
+		seen.add(root);
+		const name = typeof manifest.name === "string" ? manifest.name : undefined;
+		out.push({
+			source: entry.source,
+			name,
+			shortName: name ? unscopedShortName(name) : undefined,
+			scope: entry.scope,
+			root,
+			declared,
+		});
+	}
+	return out;
 }
 
 /**
@@ -439,23 +443,23 @@ export function listPiPackages(cwd: string, projectTrusted = false, homeDir?: st
  * they happen to have in front of them.
  */
 export function packageAllowed(pkg: PiPackage, gate: PackageGate): boolean {
-  if (gate === false) return false;
-  if (gate === undefined || gate === true) return true;
-  const candidates = new Set(
-    [pkg.shortName, pkg.name?.toLowerCase(), pkg.source.toLowerCase()].filter(
-      (v): v is string => typeof v === "string",
-    ),
-  );
-  return gate.some(allowed => candidates.has(allowed.trim().toLowerCase()));
+	if (gate === false) return false;
+	if (gate === undefined || gate === true) return true;
+	const candidates = new Set(
+		[pkg.shortName, pkg.name?.toLowerCase(), pkg.source.toLowerCase()].filter(
+			(v): v is string => typeof v === "string",
+		),
+	);
+	return gate.some((allowed) => candidates.has(allowed.trim().toLowerCase()));
 }
 
 // ---- Caching ----
 
 /** An admitted package's install root and the name to show for it. */
 interface PackageOwner {
-  /** Normalized, so it compares against a normalized candidate path. */
-  root: string;
-  name: string;
+	/** Normalized, so it compares against a normalized candidate path. */
+	root: string;
+	name: string;
 }
 
 /**
@@ -471,81 +475,81 @@ interface PackageOwner {
  * settings change must not be served a stale allowlist.
  */
 interface CacheEntry {
-  agents: ResolvedResourcePaths;
-  workflows: ResolvedResourcePaths;
-  /**
-   * Every package the gate admitted, longest root first, so a path can be
-   * traced back to the package that contributed it. Recorded during the scan
-   * that already enumerated them rather than re-derived later: a second pass
-   * would re-read pi's settings and every manifest, and could disagree with
-   * this entry about which packages the gate let through.
-   */
-  owners: PackageOwner[];
+	agents: ResolvedResourcePaths;
+	workflows: ResolvedResourcePaths;
+	/**
+	 * Every package the gate admitted, longest root first, so a path can be
+	 * traced back to the package that contributed it. Recorded during the scan
+	 * that already enumerated them rather than re-derived later: a second pass
+	 * would re-read pi's settings and every manifest, and could disagree with
+	 * this entry about which packages the gate let through.
+	 */
+	owners: PackageOwner[];
 }
 
 /** A resolved-paths value with nothing in it. Fresh each call — callers get copies. */
 function emptyPaths(): ResolvedResourcePaths {
-  return { dirs: [], files: [], excluded: new Set() };
+	return { dirs: [], files: [], excluded: new Set() };
 }
 
 /** A whole cache entry with nothing in it, for a gate that admits no package. */
 function emptyEntry(): CacheEntry {
-  return { agents: emptyPaths(), workflows: emptyPaths(), owners: [] };
+	return { agents: emptyPaths(), workflows: emptyPaths(), owners: [] };
 }
 const cache = new Map<string, CacheEntry>();
 
 /** Drop the memoized package scan. Called on `/reload` and after settings changes. */
 export function invalidatePackageCache(): void {
-  cache.clear();
+	cache.clear();
 }
 
 function scan(cwd: string, projectTrusted: boolean, gate: PackageGate, homeDir?: string): CacheEntry {
-  const entry = emptyEntry();
-  for (const pkg of listPiPackages(cwd, projectTrusted, homeDir)) {
-    if (!packageAllowed(pkg, gate)) continue;
-    // The root is normalized here, not at lookup time: the declared paths below
-    // go through `resolve(root, entry)`, so a root that arrived with a trailing
-    // separator would never prefix-match the very paths it produced.
-    //
-    // `name` is absent only when the manifest had no usable `name` string; the
-    // settings source (`npm:@foo/bar@1.0.0`) is the last resort, which is what
-    // pi itself falls back to when it labels a package-provided resource.
-    entry.owners.push({ root: resolve(pkg.root), name: pkg.name ?? pkg.shortName ?? pkg.source });
-    for (const kind of ["agents", "workflows"] as const) {
-      const resolvedPaths = resolveDeclaredPaths(pkg.root, pkg.declared[kind], kind);
-      entry[kind].dirs.push(...resolvedPaths.dirs);
-      entry[kind].files.push(...resolvedPaths.files);
-      // One flat set across packages: an exclusion is an absolute path, so it
-      // can only ever match inside the package that wrote it.
-      for (const path of resolvedPaths.excluded) (entry[kind].excluded as Set<string>).add(path);
-    }
-  }
-  // Longest root first, so a package installed inside another's `node_modules`
-  // claims its own files rather than losing them to its host.
-  entry.owners.sort((a, b) => b.root.length - a.root.length);
-  return entry;
+	const entry = emptyEntry();
+	for (const pkg of listPiPackages(cwd, projectTrusted, homeDir)) {
+		if (!packageAllowed(pkg, gate)) continue;
+		// The root is normalized here, not at lookup time: the declared paths below
+		// go through `resolve(root, entry)`, so a root that arrived with a trailing
+		// separator would never prefix-match the very paths it produced.
+		//
+		// `name` is absent only when the manifest had no usable `name` string; the
+		// settings source (`npm:@foo/bar@1.0.0`) is the last resort, which is what
+		// pi itself falls back to when it labels a package-provided resource.
+		entry.owners.push({ root: resolve(pkg.root), name: pkg.name ?? pkg.shortName ?? pkg.source });
+		for (const kind of ["agents", "workflows"] as const) {
+			const resolvedPaths = resolveDeclaredPaths(pkg.root, pkg.declared[kind], kind);
+			entry[kind].dirs.push(...resolvedPaths.dirs);
+			entry[kind].files.push(...resolvedPaths.files);
+			// One flat set across packages: an exclusion is an absolute path, so it
+			// can only ever match inside the package that wrote it.
+			for (const path of resolvedPaths.excluded) (entry[kind].excluded as Set<string>).add(path);
+		}
+	}
+	// Longest root first, so a package installed inside another's `node_modules`
+	// claims its own files rather than losing them to its host.
+	entry.owners.sort((a, b) => b.root.length - a.root.length);
+	return entry;
 }
 
 function cacheEntryFor(cwd: string, kind: PackageResourceKind, opts: PackageDiscoveryOptions): CacheEntry {
-  const gate = opts.gate ?? (kind === "agents" ? agentsGate : workflowsGate);
-  // An empty allowlist matches nothing, like `false` — see `sanitizePackageGate`
-  // in settings.ts for why an empty array is kept rather than dropped.
-  if (gate === false || (Array.isArray(gate) && gate.length === 0)) return emptyEntry();
-  const projectTrusted = opts.projectTrusted ?? projectTrustedState;
-  // `\u0000` written as an escape, not a raw byte: a literal NUL makes this
-  // whole file read as binary to grep, ripgrep and git, which silently drops
-  // it from search results.
-  const key = `${cwd}\u0000${opts.homeDir ?? ""}\u0000${resolveAgentDir(opts.homeDir)}\u0000${projectTrusted ? 1 : 0}\u0000${JSON.stringify(gate ?? true)}`;
-  let hit = cache.get(key);
-  if (!hit) {
-    hit = scan(cwd, projectTrusted, gate, opts.homeDir);
-    cache.set(key, hit);
-  }
-  return hit;
+	const gate = opts.gate ?? (kind === "agents" ? agentsGate : workflowsGate);
+	// An empty allowlist matches nothing, like `false` — see `sanitizePackageGate`
+	// in settings.ts for why an empty array is kept rather than dropped.
+	if (gate === false || (Array.isArray(gate) && gate.length === 0)) return emptyEntry();
+	const projectTrusted = opts.projectTrusted ?? projectTrustedState;
+	// `\u0000` written as an escape, not a raw byte: a literal NUL makes this
+	// whole file read as binary to grep, ripgrep and git, which silently drops
+	// it from search results.
+	const key = `${cwd}\u0000${opts.homeDir ?? ""}\u0000${resolveAgentDir(opts.homeDir)}\u0000${projectTrusted ? 1 : 0}\u0000${JSON.stringify(gate ?? true)}`;
+	let hit = cache.get(key);
+	if (!hit) {
+		hit = scan(cwd, projectTrusted, gate, opts.homeDir);
+		cache.set(key, hit);
+	}
+	return hit;
 }
 
 function resolved(cwd: string, kind: PackageResourceKind, opts: PackageDiscoveryOptions): ResolvedResourcePaths {
-  return cacheEntryFor(cwd, kind, opts)[kind];
+	return cacheEntryFor(cwd, kind, opts)[kind];
 }
 
 /**
@@ -564,15 +568,13 @@ function resolved(cwd: string, kind: PackageResourceKind, opts: PackageDiscovery
  * `…/node_modules/foo-bar`.
  */
 export function packageNameForPath(
-  path: string,
-  cwd: string,
-  kind: PackageResourceKind = "agents",
-  opts: PackageDiscoveryOptions = {},
+	path: string,
+	cwd: string,
+	kind: PackageResourceKind = "agents",
+	opts: PackageDiscoveryOptions = {},
 ): string | undefined {
-  const abs = resolve(path);
-  return cacheEntryFor(cwd, kind, opts).owners.find(
-    o => abs === o.root || abs.startsWith(o.root + sep),
-  )?.name;
+	const abs = resolve(path);
+	return cacheEntryFor(cwd, kind, opts).owners.find((o) => abs === o.root || abs.startsWith(o.root + sep))?.name;
 }
 
 /**
@@ -580,14 +582,14 @@ export function packageNameForPath(
  * Fed to `loadCustomAgents` ahead of the global and project roots.
  */
 export function packageAgentDirs(cwd: string, opts: PackageDiscoveryOptions = {}): string[] {
-  // A copy: the cache holds this array for the rest of the session, so a caller
-  // that sorted or spliced it would corrupt every later load.
-  return [...resolved(cwd, "agents", opts).dirs];
+	// A copy: the cache holds this array for the rest of the session, so a caller
+	// that sorted or spliced it would corrupt every later load.
+	return [...resolved(cwd, "agents", opts).dirs];
 }
 
 /** Individually declared agent `.md` files (a manifest entry naming a file, not a directory). */
 export function packageAgentFiles(cwd: string, opts: PackageDiscoveryOptions = {}): string[] {
-  return [...resolved(cwd, "agents", opts).files];
+	return [...resolved(cwd, "agents", opts).files];
 }
 
 /**
@@ -598,13 +600,13 @@ export function packageAgentFiles(cwd: string, opts: PackageDiscoveryOptions = {
  * directory that is not enumerated until the loader reads it.
  */
 export function isPackageResourceExcluded(
-  path: string,
-  cwd: string,
-  kind: PackageResourceKind,
-  opts: PackageDiscoveryOptions = {},
+	path: string,
+	cwd: string,
+	kind: PackageResourceKind,
+	opts: PackageDiscoveryOptions = {},
 ): boolean {
-  const excluded = resolved(cwd, kind, opts).excluded;
-  return excluded.size > 0 && excluded.has(realOrSelf(path));
+	const excluded = resolved(cwd, kind, opts).excluded;
+	return excluded.size > 0 && excluded.has(realOrSelf(path));
 }
 
 /**
@@ -612,7 +614,7 @@ export function isPackageResourceExcluded(
  * `savedWorkflowRoots` so a name resolves there last.
  */
 export function packageWorkflowDirs(cwd: string, opts: PackageDiscoveryOptions = {}): string[] {
-  return [...resolved(cwd, "workflows", opts).dirs];
+	return [...resolved(cwd, "workflows", opts).dirs];
 }
 
 /**
@@ -621,7 +623,7 @@ export function packageWorkflowDirs(cwd: string, opts: PackageDiscoveryOptions =
  * A name lookup wants a directory, and a declared *file* has none — but standing
  * its parent directory in as a root would make every sibling `.js` resolvable,
  * so `workflows: ["./one.js"]` would quietly offer the package's other scripts
- * too, and `["./index.js"]` would offer everything at the package root. That is
+ * too, and `["./index.ts"]` would offer everything at the package root. That is
  * the opposite of the rule the whole feature rests on, that a package only
  * contributes what it names. An exact map keeps the declaration honest, and
  * matches how a declared agent file is already handled.
@@ -630,10 +632,10 @@ export function packageWorkflowDirs(cwd: string, opts: PackageDiscoveryOptions =
  * is not displaced by a file entry from a package resolved after it.
  */
 export function packageWorkflowFiles(cwd: string, opts: PackageDiscoveryOptions = {}): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const path of resolved(cwd, "workflows", opts).files) {
-    const name = basename(path, KIND_EXTENSION.workflows);
-    if (!out.has(name)) out.set(name, path);
-  }
-  return out;
+	const out = new Map<string, string>();
+	for (const path of resolved(cwd, "workflows", opts).files) {
+		const name = basename(path, KIND_EXTENSION.workflows);
+		if (!out.has(name)) out.set(name, path);
+	}
+	return out;
 }

@@ -1,18 +1,18 @@
 /**
  * Model resolution: exact match ("provider/modelId") with fuzzy fallback for tool inputs.
  */
-import { exactTierModel } from "./model-tiers.js";
+import { exactTierModel } from "./model-tiers.ts";
 
 export interface ModelEntry {
-  id: string;
-  name: string;
-  provider: string;
+	id: string;
+	name: string;
+	provider: string;
 }
 
 export interface ModelRegistry {
-  find(provider: string, modelId: string): any;
-  getAll(): any[];
-  getAvailable?(): any[];
+	find(provider: string, modelId: string): any;
+	getAll(): any[];
+	getAvailable?(): any[];
 }
 
 /** Logical model aliases supplied only by trusted global machine configuration. */
@@ -24,9 +24,9 @@ let modelAliases = new Map<string, string[]>();
  * available registry at dispatch time.
  */
 export function setModelAliases(aliases: Record<string, string[]> | undefined): void {
-  modelAliases = new Map(
-    Object.entries(aliases ?? {}).map(([alias, candidates]) => [alias.toLowerCase(), [...candidates]]),
-  );
+	modelAliases = new Map(
+		Object.entries(aliases ?? {}).map(([alias, candidates]) => [alias.toLowerCase(), [...candidates]]),
+	);
 }
 
 /**
@@ -38,12 +38,12 @@ let agentModels = new Map<string, string>();
 
 /** Replace the configured per-agent model map. Keys are matched case-insensitively. */
 export function setAgentModels(models: Record<string, string> | undefined): void {
-  agentModels = new Map(Object.entries(models ?? {}).map(([type, model]) => [type.toLowerCase(), model]));
+	agentModels = new Map(Object.entries(models ?? {}).map(([type, model]) => [type.toLowerCase(), model]));
 }
 
 /** A snapshot for the shared selection policy; callers cannot mutate configuration. */
 export function getAgentModels(): ReadonlyMap<string, string> {
-  return new Map(agentModels);
+	return new Map(agentModels);
 }
 
 /**
@@ -53,20 +53,20 @@ export function getAgentModels(): ReadonlyMap<string, string> {
  * unresolved dispatch passes its config root only for its diagnostic.
  */
 export type ModelScopeProvider = (
-  registry: ModelRegistry,
-  context?: { cwd: string; homeDir?: string },
+	registry: ModelRegistry,
+	context?: { cwd: string; homeDir?: string },
 ) => ReadonlySet<string> | undefined;
 
 let modelScopeProvider: ModelScopeProvider | undefined;
 
 /** Install (or clear) the enabled-model scope used to rank fuzzy matches. */
 export function setModelScopeProvider(provider: ModelScopeProvider | undefined): void {
-  modelScopeProvider = provider;
+	modelScopeProvider = provider;
 }
 
 /** A copy for diagnostics and tests; callers cannot mutate resolver state. */
 export function getModelAliases(): ReadonlyMap<string, readonly string[]> {
-  return new Map([...modelAliases].map(([alias, candidates]) => [alias, [...candidates]]));
+	return new Map([...modelAliases].map(([alias, candidates]) => [alias, [...candidates]]));
 }
 
 /**
@@ -78,13 +78,14 @@ export function getModelAliases(): ReadonlyMap<string, readonly string[]> {
  * and `agent-manager.ts` relabels it from the live session afterwards — the two
  * must agree or the label would visibly change the moment the session starts.
  */
-export function describeModel(
-  model: { provider: string; id: string; name?: string },
-): { modelName: string; modelId: string } {
-  return {
-    modelName: (model.name ?? model.id).replace(/^Claude\s+/i, "").toLowerCase(),
-    modelId: `${model.provider}/${model.id}`,
-  };
+export function describeModel(model: { provider: string; id: string; name?: string }): {
+	modelName: string;
+	modelId: string;
+} {
+	return {
+		modelName: (model.name ?? model.id).replace(/^Claude\s+/i, "").toLowerCase(),
+		modelId: `${model.provider}/${model.id}`,
+	};
 }
 
 /**
@@ -93,19 +94,19 @@ export function describeModel(
  * the `AgentRecord` by the shared spawn path; every surface reads it from there.
  */
 export interface ModelFallback {
-  /** The configured input that failed to resolve. */
-  input: string;
-  /** Further configured inputs that also failed (e.g. a stored job model AND an `agentModels` override). */
-  also?: string[];
-  /** `provider/id` of the model actually used; absent when the session default (a parent with no model) ran. */
-  used?: string;
-  /** Whose model `used` is: the parent's (default) or the agent's own configured model (`agentModels` / definition `model:`), which took over from an unresolved stored model. */
-  via?: "parent" | "agent";
+	/** The configured input that failed to resolve. */
+	input: string;
+	/** Further configured inputs that also failed (e.g. a stored job model AND an `agentModels` override). */
+	also?: string[];
+	/** `provider/id` of the model actually used; absent when the session default (a parent with no model) ran. */
+	used?: string;
+	/** Whose model `used` is: the parent's (default) or the agent's own configured model (`agentModels` / definition `model:`), which took over from an unresolved stored model. */
+	via?: "parent" | "agent";
 }
 
 /** The fallback outcome for `input` when the spawn ran on `parent`. */
 export function modelFallbackTo(input: string, parent: { provider: string; id: string } | undefined): ModelFallback {
-  return parent ? { input, used: `${parent.provider}/${parent.id}` } : { input };
+	return parent ? { input, used: `${parent.provider}/${parent.id}` } : { input };
 }
 
 /**
@@ -113,12 +114,13 @@ export function modelFallbackTo(input: string, parent: { provider: string; id: s
  * note. Empty string when there was none, so callers can concatenate it blindly.
  */
 export function modelFallbackNote(fallback: ModelFallback | undefined): string {
-  if (!fallback) return "";
-  const whose = fallback.via === "agent" ? "the agent's own model" : "parent model";
-  const used = fallback.used ? `${whose} ${fallback.used}` : "the session default model";
-  const inputs = [fallback.input, ...(fallback.also ?? [])];
-  const named = inputs.length === 1 ? `model "${inputs[0]}" did` : `models ${inputs.map(i => `"${i}"`).join(", ")} did`;
-  return `Note: configured ${named} not resolve; running on ${used}.`;
+	if (!fallback) return "";
+	const whose = fallback.via === "agent" ? "the agent's own model" : "parent model";
+	const used = fallback.used ? `${whose} ${fallback.used}` : "the session default model";
+	const inputs = [fallback.input, ...(fallback.also ?? [])];
+	const named =
+		inputs.length === 1 ? `model "${inputs[0]}" did` : `models ${inputs.map((i) => `"${i}"`).join(", ")} did`;
+	return `Note: configured ${named} not resolve; running on ${used}.`;
 }
 
 /** API id pi gives virtual catalog entries such as `router/default`; they never reach a provider. */
@@ -126,16 +128,16 @@ const VIRTUAL_MODEL_API = "pi-virtual";
 
 /** Whether `model` is a virtual (router) selection rather than a physical model. */
 export function isVirtualModel(model: { api?: string } | undefined): boolean {
-  return model?.api === VIRTUAL_MODEL_API;
+	return model?.api === VIRTUAL_MODEL_API;
 }
 
 /** The pre-response label of a virtual selection: no physical model has answered yet. */
 export function describeVirtualModel(model: { provider: string; id: string; name?: string }): {
-  modelName: string;
-  modelId: string;
+	modelName: string;
+	modelId: string;
 } {
-  const described = describeModel(model);
-  return { ...described, modelName: `${described.modelName} (routing)` };
+	const described = describeModel(model);
+	return { ...described, modelName: `${described.modelName} (routing)` };
 }
 
 /**
@@ -148,12 +150,12 @@ export function describeVirtualModel(model: { provider: string; id: string; name
  * is optional: without it the id stands in.
  */
 export function describePhysicalModel(
-  message: { api?: string; provider?: string; model?: string } | undefined,
-  registry?: { find?(provider: string, modelId: string): { name?: string } | undefined },
+	message: { api?: string; provider?: string; model?: string } | undefined,
+	registry?: { find?(provider: string, modelId: string): { name?: string } | undefined },
 ): { modelName: string; modelId: string } | undefined {
-  if (!message?.provider || !message.model || isVirtualModel(message)) return undefined;
-  const found = registry?.find?.(message.provider, message.model);
-  return describeModel({ provider: message.provider, id: message.model, name: found?.name });
+	if (!message?.provider || !message.model || isVirtualModel(message)) return undefined;
+	const found = registry?.find?.(message.provider, message.model);
+	return describeModel({ provider: message.provider, id: message.model, name: found?.name });
 }
 
 /** Parsed `[major, minor]` of a model id, or undefined when the family has no known scheme. */
@@ -168,18 +170,19 @@ export type ModelVersion = readonly [major: number, minor: number];
  * read as one. Dots and dashes are interchangeable between the parts.
  */
 export function parseModelVersion(id: string): ModelVersion | undefined {
-  const bare = id.slice(id.lastIndexOf("/") + 1).toLowerCase();
-  const claude = /^claude-[a-z]+-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?(?:-|$)/.exec(bare)
-    ?? /^claude-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?-[a-z]/.exec(bare);
-  const match = claude ?? /^gpt-(\d+)(?:[.-](\d{1,2})(?!\d))?(?:-|$)/.exec(bare);
-  if (!match) return undefined;
-  return [Number(match[1]), Number(match[2] ?? 0)];
+	const bare = id.slice(id.lastIndexOf("/") + 1).toLowerCase();
+	const claude =
+		/^claude-[a-z]+-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?(?:-|$)/.exec(bare) ??
+		/^claude-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?-[a-z]/.exec(bare);
+	const match = claude ?? /^gpt-(\d+)(?:[.-](\d{1,2})(?!\d))?(?:-|$)/.exec(bare);
+	if (!match) return undefined;
+	return [Number(match[1]), Number(match[2] ?? 0)];
 }
 
 /** Descending version order; an unversioned model sorts after every versioned one. */
 function compareVersionsDesc(a: ModelVersion | undefined, b: ModelVersion | undefined): number {
-  if (a && b) return b[0] - a[0] || b[1] - a[1];
-  return a ? -1 : b ? 1 : 0;
+	if (a && b) return b[0] - a[0] || b[1] - a[1];
+	return a ? -1 : b ? 1 : 0;
 }
 
 /**
@@ -188,19 +191,19 @@ function compareVersionsDesc(a: ModelVersion | undefined, b: ModelVersion | unde
  * Returns the Model on success, or an error message string on failure.
  */
 export function resolveModel(
-  input: string,
-  registry: ModelRegistry,
-  context?: { cwd: string; homeDir?: string },
+	input: string,
+	registry: ModelRegistry,
+	context?: { cwd: string; homeDir?: string },
 ): any | string {
-  const aliasCandidates = modelAliases.get(input.trim().toLowerCase());
-  if (aliasCandidates) {
-    for (const candidate of aliasCandidates) {
-      const resolved = exactTierModel(candidate, registry);
-      if (resolved) return resolved;
-    }
-    return `Model alias "${input}" has no available candidate.\n\nCandidates:\n${aliasCandidates.map(candidate => `  ${candidate}`).join("\n")}`;
-  }
-  return resolveCanonicalModel(input, registry, context);
+	const aliasCandidates = modelAliases.get(input.trim().toLowerCase());
+	if (aliasCandidates) {
+		for (const candidate of aliasCandidates) {
+			const resolved = exactTierModel(candidate, registry);
+			if (resolved) return resolved;
+		}
+		return `Model alias "${input}" has no available candidate.\n\nCandidates:\n${aliasCandidates.map((candidate) => `  ${candidate}`).join("\n")}`;
+	}
+	return resolveCanonicalModel(input, registry, context);
 }
 
 /**
@@ -210,124 +213,143 @@ export function resolveModel(
  * the user has enabled, not whichever id happens to be shortest.
  */
 function scopedCandidates<T extends { entry: ModelEntry }>(
-  candidates: T[],
-  registry: ModelRegistry,
-  context?: { cwd: string; homeDir?: string },
+	candidates: T[],
+	registry: ModelRegistry,
+	context?: { cwd: string; homeDir?: string },
 ): T[] {
-  const scope = modelScopeProvider?.(registry, context);
-  const scoped = scope ? candidates.filter(candidate => scope.has(`${candidate.entry.provider}/${candidate.entry.id}`.toLowerCase())) : [];
-  return scoped.length > 0 ? scoped : candidates;
+	const scope = modelScopeProvider?.(registry, context);
+	const scoped = scope
+		? candidates.filter((candidate) => scope.has(`${candidate.entry.provider}/${candidate.entry.id}`.toLowerCase()))
+		: [];
+	return scoped.length > 0 ? scoped : candidates;
 }
 
 /** Stable tie-breaker independent of registry insertion order and locale. */
 function compareModelIdentity(a: ModelEntry, b: ModelEntry): number {
-  const left = `${a.provider}/${a.id}`;
-  const right = `${b.provider}/${b.id}`;
-  return Number(left > right) - Number(left < right);
+	const left = `${a.provider}/${a.id}`;
+	const right = `${b.provider}/${b.id}`;
+	return Number(left > right) - Number(left < right);
 }
 
 function rankFuzzy(
-  matches: { entry: ModelEntry; score: number }[],
-  registry: ModelRegistry,
-  context?: { cwd: string; homeDir?: string },
+	matches: { entry: ModelEntry; score: number }[],
+	registry: ModelRegistry,
+	context?: { cwd: string; homeDir?: string },
 ): ModelEntry | undefined {
-  const ranked = scopedCandidates(matches, registry, context)
-    .map(c => ({ ...c, version: parseModelVersion(c.entry.id) }))
-    .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score || compareModelIdentity(a.entry, b.entry));
-  return ranked[0]?.entry;
+	const ranked = scopedCandidates(matches, registry, context)
+		.map((c) => ({ ...c, version: parseModelVersion(c.entry.id) }))
+		.sort(
+			(a, b) =>
+				compareVersionsDesc(a.version, b.version) || b.score - a.score || compareModelIdentity(a.entry, b.entry),
+		);
+	return ranked[0]?.entry;
 }
 
 /** Numeric runs stay ordered and contiguous: `5-5` cannot reuse the `5` in `4-5`. */
 function versionRuns(value: string): string[] {
-  return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map(match => match[1]!.replace(/\s+/g, "-"));
+	return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map((match) =>
+		match[1]!.replace(/\s+/g, "-"),
+	);
 }
 
 /** Resolve an exact or fuzzy provider/model request without consulting aliases. */
 function resolveCanonicalModel(
-  input: string,
-  registry: ModelRegistry,
-  context?: { cwd: string; homeDir?: string },
+	input: string,
+	registry: ModelRegistry,
+	context?: { cwd: string; homeDir?: string },
 ): any | string {
-  // Available models (those with auth configured)
-  const all = (registry.getAvailable?.() ?? registry.getAll()) as ModelEntry[];
-  const availableSet = new Set(all.map(m => `${m.provider}/${m.id}`.toLowerCase()));
+	// Available models (those with auth configured)
+	const all = (registry.getAvailable?.() ?? registry.getAll()) as ModelEntry[];
+	const availableSet = new Set(all.map((m) => `${m.provider}/${m.id}`.toLowerCase()));
 
-  // 1. Exact match: "provider/modelId" — only if available (has auth)
-  const slashIdx = input.indexOf("/");
-  if (slashIdx !== -1) {
-    const provider = input.slice(0, slashIdx);
-    const modelId = input.slice(slashIdx + 1);
-    if (availableSet.has(input.toLowerCase())) {
-      const found = registry.find(provider, modelId);
-      if (found) return found;
-    }
-  }
+	// 1. Exact match: "provider/modelId" — only if available (has auth)
+	const slashIdx = input.indexOf("/");
+	if (slashIdx !== -1) {
+		const provider = input.slice(0, slashIdx);
+		const modelId = input.slice(slashIdx + 1);
+		if (availableSet.has(input.toLowerCase())) {
+			const found = registry.find(provider, modelId);
+			if (found) return found;
+		}
+	}
 
-  // 2. Fuzzy match against available models. Normalize separators so cosmetic
-  // punctuation differences still match — e.g. "claude-haiku-4.5" and
-  // "claude-haiku-4-5" (dot vs dash in the version) resolve to the same model.
-  const normalize = (s: string) => s.toLowerCase().replace(/\./g, "-");
-  const query = normalize(input);
-  const requestedVersions = versionRuns(query.slice(slashIdx + 1));
+	// 2. Fuzzy match against available models. Normalize separators so cosmetic
+	// punctuation differences still match — e.g. "claude-haiku-4.5" and
+	// "claude-haiku-4-5" (dot vs dash in the version) resolve to the same model.
+	const normalize = (s: string) => s.toLowerCase().replace(/\./g, "-");
+	const query = normalize(input);
+	const requestedVersions = versionRuns(query.slice(slashIdx + 1));
 
-  // Score each model: prefer exact id match > id contains > name contains > provider+id contains
-  const matches: { entry: ModelEntry; score: number }[] = [];
+	// Score each model: prefer exact id match > id contains > name contains > provider+id contains
+	const matches: { entry: ModelEntry; score: number }[] = [];
 
-  for (const m of all) {
-    const id = normalize(m.id);
-    const name = normalize(m.name);
-    const full = normalize(`${m.provider}/${m.id}`);
-    const idVersions = versionRuns(id);
-    const versions = idVersions.length > 0 ? idVersions : versionRuns(name);
-    // Filter before scope/ranking, including substring and name matches. A
-    // major-only input can select a newer minor, but never another major or
-    // a minor token masquerading as the requested major.
-    if (!requestedVersions.every(requested => versions.some(version => version === requested || version.startsWith(`${requested}-`)))) continue;
+	for (const m of all) {
+		const id = normalize(m.id);
+		const name = normalize(m.name);
+		const full = normalize(`${m.provider}/${m.id}`);
+		const idVersions = versionRuns(id);
+		const versions = idVersions.length > 0 ? idVersions : versionRuns(name);
+		// Filter before scope/ranking, including substring and name matches. A
+		// major-only input can select a newer minor, but never another major or
+		// a minor token masquerading as the requested major.
+		if (
+			!requestedVersions.every((requested) =>
+				versions.some((version) => version === requested || version.startsWith(`${requested}-`)),
+			)
+		)
+			continue;
 
-    let score = 0;
-    if (id === query || full === query) {
-      score = 100; // exact
-    } else if (id.includes(query) || full.includes(query)) {
-      score = 60 + (query.length / id.length) * 30; // substring, prefer tighter matches
-    } else if (name.includes(query)) {
-      score = 40 + (query.length / name.length) * 20;
-    } else if (
-      // A trailing date-stamp token (e.g. "20251001") is optional, so a
-      // date-pinned config like "claude-haiku-4-5-20251001" still matches an
-      // undated registry id like "claude-haiku-4-5".
-      query
-        .split(/[\s\-/]+/)
-        .every(part => /^\d{8}$/.test(part) || id.includes(part) || name.includes(part) || m.provider.toLowerCase().includes(part))
-    ) {
-      score = 20; // all parts present somewhere
-    }
+		let score = 0;
+		if (id === query || full === query) {
+			score = 100; // exact
+		} else if (id.includes(query) || full.includes(query)) {
+			score = 60 + (query.length / id.length) * 30; // substring, prefer tighter matches
+		} else if (name.includes(query)) {
+			score = 40 + (query.length / name.length) * 20;
+		} else if (
+			// A trailing date-stamp token (e.g. "20251001") is optional, so a
+			// date-pinned config like "claude-haiku-4-5-20251001" still matches an
+			// undated registry id like "claude-haiku-4-5".
+			query
+				.split(/[\s\-/]+/)
+				.every(
+					(part) =>
+						/^\d{8}$/.test(part) || id.includes(part) || name.includes(part) || m.provider.toLowerCase().includes(part),
+				)
+		) {
+			score = 20; // all parts present somewhere
+		}
 
-    if (score >= 20) matches.push({ entry: m, score });
-  }
+		if (score >= 20) matches.push({ entry: m, score });
+	}
 
-  // An exact id (or provider/id) is the caller naming a model, not describing
-  // one: it wins outright, whatever the scope or any newer sibling.
-  const exact = matches.filter(c => c.score === 100);
-  const exactBest = exact.sort((a, b) => compareModelIdentity(a.entry, b.entry))[0];
-  const bestMatch = exactBest ? exactBest.entry : rankFuzzy(matches, registry, context);
-  if (bestMatch) {
-    const found = registry.find(bestMatch.provider, bestMatch.id);
-    if (found) return found;
-  }
+	// An exact id (or provider/id) is the caller naming a model, not describing
+	// one: it wins outright, whatever the scope or any newer sibling.
+	const exact = matches.filter((c) => c.score === 100);
+	const exactBest = exact.sort((a, b) => compareModelIdentity(a.entry, b.entry))[0];
+	const bestMatch = exactBest ? exactBest.entry : rankFuzzy(matches, registry, context);
+	if (bestMatch) {
+		const found = registry.find(bestMatch.provider, bestMatch.id);
+		if (found) return found;
+	}
 
-  // 3. Provider fallback: a "provider/modelId" query that didn't match under the
-  // named provider (exact or fuzzy above) retries against all providers. The
-  // named provider is preferred when present; this only kicks in when it isn't,
-  // so the same model from another provider beats falling back to "inherit".
-  if (slashIdx !== -1) {
-    const bare = resolveCanonicalModel(input.slice(slashIdx + 1), registry, context);
-    if (typeof bare !== "string") return bare;
-  }
+	// 3. Provider fallback: a "provider/modelId" query that didn't match under the
+	// named provider (exact or fuzzy above) retries against all providers. The
+	// named provider is preferred when present; this only kicks in when it isn't,
+	// so the same model from another provider beats falling back to "inherit".
+	if (slashIdx !== -1) {
+		const bare = resolveCanonicalModel(input.slice(slashIdx + 1), registry, context);
+		if (typeof bare !== "string") return bare;
+	}
 
-  // 4. No match — list available models
-  const modelList = scopedCandidates(all.map(entry => ({ entry })), registry, context)
-    .map(({ entry }) => `  ${entry.provider}/${entry.id}`)
-    .sort()
-    .join("\n");
-  return `Model not found: "${input}".\n\nAvailable models:\n${modelList}`;
+	// 4. No match — list available models
+	const modelList = scopedCandidates(
+		all.map((entry) => ({ entry })),
+		registry,
+		context,
+	)
+		.map(({ entry }) => `  ${entry.provider}/${entry.id}`)
+		.sort()
+		.join("\n");
+	return `Model not found: "${input}".\n\nAvailable models:\n${modelList}`;
 }

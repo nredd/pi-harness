@@ -1,0 +1,125 @@
+/** Synthetic #330 diagnosis: distinguish activation reload, terminal stop and process-state loss. */
+import { existsSync, readFileSync, statSync, utimesSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
+import { afterEach, expect, it } from "vitest";
+import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
+
+let fixture: ScenarioSession;
+afterEach(async () => {
+	await fixture?.dispose();
+	Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+});
+
+it("#330: a fresh stopped child retains its output across a fresh parent activation", { timeout: 30_000 }, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true });
+	const hold = fixture.heldTool();
+	const child = fixture.physical("kid", "child", [
+		fauxAssistantMessage([{ type: "text", text: "SYNTHETIC PROGRESS 330" }, fauxToolCall("hold", {})], {
+			stopReason: "toolUse",
+		}),
+		answer("SHOULD NOT EXECUTE"),
+	]);
+	const manager = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: manager } });
+	h.setResponses([toolCalls(spawn("restart probe")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	await hold.entered;
+	const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
+	if (!id) throw new Error("No actual Agent receipt");
+	const record = fixture.record(id);
+	const output = record.outputFile;
+	if (!output) throw new Error("No actual output path");
+	expect(record.status).toBe("running");
+	expect(existsSync(output)).toBe(true);
+
+	// The real stop tool aborts the run, then the outstanding tool is allowed to settle.
+	h.setResponses([toolCalls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOP REQUESTED")]);
+	await h.session.prompt("stop");
+	hold.release();
+	await record.promise;
+	expect(record.status).toBe("stopped");
+	expect(record.result).toContain("SYNTHETIC PROGRESS 330");
+	const persisted = readFileSync(output, "utf8");
+	expect(persisted).toContain("SYNTHETIC PROGRESS 330");
+	expect(persisted).not.toContain("SHOULD NOT EXECUTE");
+	expect(child.state.callCount).toBe(1);
+
+	// Malformed custom history must not turn session startup into a failure.
+	manager.appendCustomEntry("subagents:record", null);
+	// A saved run that left no result text still answers with its metadata alone.
+	manager.appendCustomEntry("subagents:record", {
+		id: "synthetic-empty",
+		type: "general-purpose",
+		description: "no result",
+		status: "completed",
+	});
+	const parentFile = manager.getSessionFile();
+	if (!parentFile) throw new Error("Parent was not persisted");
+	expect(manager.getBranch().some((entry) => entry.type === "custom" && entry.customType === "subagents:record")).toBe(
+		true,
+	);
+	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	h.cleanup();
+	expect(Reflect.has(globalThis, Symbol.for("pi-subagents:manager"))).toBe(false);
+	expect(readFileSync(output, "utf8")).toBe(persisted);
+
+	// Fresh extension + manager, same saved parent: no old registry or detached survivor is retained.
+	// #900: the saved note still points at this transcript, so reopening keeps it past retention.
+	const tasksDir = dirname(output);
+	const stale = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+	for (const path of [output, tasksDir, dirname(tasksDir)]) utimesSync(path, stale, stale);
+	const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	await new Promise((resolve) => setImmediate(resolve));
+	await new Promise((resolve) => setImmediate(resolve));
+	expect(existsSync(output)).toBe(true);
+	expect(Date.now() - statSync(dirname(tasksDir)).mtimeMs).toBeLessThan(60 * 1000);
+	reopened.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("LOOKED UP")]);
+	await reopened.session.prompt("lookup");
+	const recovered = outcomes(reopened, "get_subagent_result")[0]?.text ?? "";
+	expect(recovered).not.toContain("Agent not found");
+	expect(recovered).toContain("last recorded status: stopped, recovered from saved parent session");
+	expect(recovered).toContain(`transcript: ${output}`);
+	expect(recovered).toContain("SYNTHETIC PROGRESS 330"); // the saved result text comes back with the branch (#372)
+	reopened.setResponses([
+		toolCalls({ name: "get_subagent_result", args: { agent_id: "synthetic-empty" } }),
+		answer("LOOKED UP EMPTY"),
+	]);
+	await reopened.session.prompt("lookup empty");
+	expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toMatch(
+		/^Agent "synthetic-empty" \(no result\) last recorded status: completed, recovered from saved parent session[^\n]*$/,
+	);
+	expect(readFileSync(output, "utf8")).toBe(persisted);
+	expect(child.state.callCount).toBe(1);
+	reopened.setResponses([
+		toolCalls({ name: "stop_subagent", args: { agent_id: id } }),
+		toolCalls({
+			name: "Agent",
+			args: {
+				resume: id,
+				subagent_type: "general-purpose",
+				description: "manual recovery",
+				prompt: "continue",
+				run_in_background: true,
+			},
+		}),
+		toolCalls({ name: "steer_subagent", args: { agent_id: id, message: "continue manually" } }),
+		answer("CHECKED HISTORICAL CONTROLS"),
+	]);
+	await reopened.session.prompt("historical controls");
+	const stop = outcomes(reopened, "stop_subagent")[0];
+	expect(stop?.isError).toBe(true);
+	expect(stop?.text).toContain("last recorded status: stopped");
+	expect(stop?.text).toContain("this historical entry cannot stop work");
+	expect(stop?.text).not.toContain("is not running (status:");
+	const resume = outcomes(reopened, "Agent")[0]?.text;
+	expect(resume).toContain("only historical metadata is available");
+	expect(resume).not.toContain("no saved session is left");
+	const steer = outcomes(reopened, "steer_subagent")[0]?.text;
+	expect(steer).toContain("only historical metadata is available");
+	expect(steer).toContain("last recorded status: stopped");
+	expect(steer).not.toContain("does not resume a stopped agent");
+	expect(child.state.callCount).toBe(1);
+});

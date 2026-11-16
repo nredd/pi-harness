@@ -32,21 +32,21 @@
  */
 
 import { stripTerminalSequences, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { WorkflowEntryData } from "../workflow/entry.js";
-import type { WorkflowMeta } from "../workflow/meta.js";
+import type { WorkflowEntryData } from "../workflow/entry.ts";
+import type { WorkflowMeta } from "../workflow/meta.ts";
 import {
-  buildPhaseGroups,
-  collapse,
-  formatDuration,
-  header,
-  sizeWarning,
-  stats,
-  type WorkflowAgentEntry,
-  type WorkflowEntry,
-  type WorkflowRunStatus,
-} from "../workflow/progress.js";
-import { formatCompactTokens, type Theme } from "./agent-widget.js";
-import { fallbackFlagText, hasFallback } from "./fallback-flag.js";
+	buildPhaseGroups,
+	collapse,
+	formatDuration,
+	header,
+	sizeWarning,
+	stats,
+	type WorkflowAgentEntry,
+	type WorkflowEntry,
+	type WorkflowRunStatus,
+} from "../workflow/progress.ts";
+import { formatCompactTokens, type Theme } from "./agent-widget.ts";
+import { fallbackFlagText, hasFallback } from "./fallback-flag.ts";
 
 /**
  * Header re-render cadence. Claude Code ticks the workflow clock once a second,
@@ -66,40 +66,40 @@ const DEFAULT_WIDTH = 80;
  * ------------------------------------------------------------------------- */
 
 export interface WorkflowGlyphs {
-  /** Tool-title pointer, matching the Agent tool's `▸`. */
-  pointer: string;
-  tick: string;
-  cross: string;
-  /** Running/queued. A static glyph, hence no spinner inline. */
-  running: string;
-  /** First and subsequent phase groups. */
-  groupTop: string;
-  /** A group that is neither the first nor the last. */
-  groupMid: string;
-  /** The last phase group. */
-  groupBottom: string;
-  /** Continuation rail under a non-final group. */
-  vertical: string;
-  branch: string;
-  lastBranch: string;
-  /** Log-line prefix, matching the Agent tool's result lines. */
-  log: string;
-  warning: string;
+	/** Tool-title pointer, matching the Agent tool's `▸`. */
+	pointer: string;
+	tick: string;
+	cross: string;
+	/** Running/queued. A static glyph, hence no spinner inline. */
+	running: string;
+	/** First and subsequent phase groups. */
+	groupTop: string;
+	/** A group that is neither the first nor the last. */
+	groupMid: string;
+	/** The last phase group. */
+	groupBottom: string;
+	/** Continuation rail under a non-final group. */
+	vertical: string;
+	branch: string;
+	lastBranch: string;
+	/** Log-line prefix, matching the Agent tool's result lines. */
+	log: string;
+	warning: string;
 }
 
 export const UNICODE_GLYPHS: WorkflowGlyphs = {
-  pointer: "▸",
-  tick: "✔",
-  cross: "✘",
-  running: "⟳",
-  groupTop: "╭─",
-  groupMid: "├─",
-  groupBottom: "╰─",
-  vertical: "│",
-  branch: "├─",
-  lastBranch: "└─",
-  log: "⎿",
-  warning: "⚠",
+	pointer: "▸",
+	tick: "✔",
+	cross: "✘",
+	running: "⟳",
+	groupTop: "╭─",
+	groupMid: "├─",
+	groupBottom: "╰─",
+	vertical: "│",
+	branch: "├─",
+	lastBranch: "└─",
+	log: "⎿",
+	warning: "⚠",
 };
 
 /**
@@ -108,18 +108,18 @@ export const UNICODE_GLYPHS: WorkflowGlyphs = {
  * either way.
  */
 export const ASCII_GLYPHS: WorkflowGlyphs = {
-  pointer: ">",
-  tick: "√",
-  cross: "×",
-  running: "*",
-  groupTop: ",-",
-  groupMid: "|-",
-  groupBottom: "`-",
-  vertical: "|",
-  branch: "|-",
-  lastBranch: "`-",
-  log: "\\",
-  warning: "!",
+	pointer: ">",
+	tick: "√",
+	cross: "×",
+	running: "*",
+	groupTop: ",-",
+	groupMid: "|-",
+	groupBottom: "`-",
+	vertical: "|",
+	branch: "|-",
+	lastBranch: "`-",
+	log: "\\",
+	warning: "!",
 };
 
 /* ------------------------------------------------------------------------- *
@@ -138,46 +138,46 @@ export const ASCII_GLYPHS: WorkflowGlyphs = {
 export type WorkflowCardColor = "success" | "error" | "warning" | "dim" | "muted" | "toolTitle" | "accent";
 
 export interface WorkflowCardSegment {
-  text: string;
-  color?: WorkflowCardColor;
-  bold?: boolean;
+	text: string;
+	color?: WorkflowCardColor;
+	bold?: boolean;
 }
 
 export type WorkflowCardLine = WorkflowCardSegment[];
 
 /** The subset of the task record the card reads. */
 export interface WorkflowCardTask {
-  status: WorkflowRunStatus;
-  workflowName?: string;
-  summary?: string;
-  description?: string;
-  startTime: number;
-  endTime?: number;
-  totalPausedMs?: number;
+	status: WorkflowRunStatus;
+	workflowName?: string;
+	summary?: string;
+	description?: string;
+	startTime: number;
+	endTime?: number;
+	totalPausedMs?: number;
 }
 
 export interface WorkflowCardInput {
-  progress: readonly WorkflowEntry[];
-  task: WorkflowCardTask;
-  meta?: WorkflowMeta;
-  /** Agents the runtime has scheduled, which can exceed those that have reported. */
-  agentCount?: number;
-  /** Total tokens for the size warning; summed from the entries when omitted. */
-  totalTokens?: number;
-  agentCap?: number;
-  tokenCap?: number;
-  now?: number;
-  width?: number;
-  /** Swap in the ASCII glyph tier for terminals without unicode. */
-  ascii?: boolean;
-  /**
-   * Lead with `▸ SubagentWorkflow`.
-   *
-   * True where the card stands alone — the session entry a flag-launched run
-   * writes, which has no tool call above it to say what it is. False as a tool
-   * result, where the call line directly above already does.
-   */
-  showToolTitle?: boolean;
+	progress: readonly WorkflowEntry[];
+	task: WorkflowCardTask;
+	meta?: WorkflowMeta;
+	/** Agents the runtime has scheduled, which can exceed those that have reported. */
+	agentCount?: number;
+	/** Total tokens for the size warning; summed from the entries when omitted. */
+	totalTokens?: number;
+	agentCap?: number;
+	tokenCap?: number;
+	now?: number;
+	width?: number;
+	/** Swap in the ASCII glyph tier for terminals without unicode. */
+	ascii?: boolean;
+	/**
+	 * Lead with `▸ SubagentWorkflow`.
+	 *
+	 * True where the card stands alone — the session entry a flag-launched run
+	 * writes, which has no tool call above it to say what it is. False as a tool
+	 * result, where the call line directly above already does.
+	 */
+	showToolTitle?: boolean;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -189,16 +189,13 @@ export interface WorkflowCardInput {
  * would just be noise, so it only shows when the run actually has two models in
  * play.
  */
-export function formatModel(
-  entry: WorkflowAgentEntry,
-  opts?: { canonical?: boolean },
-): string | undefined {
-  const { fallbackModel } = entry;
-  // `canonical` is for surfaces with the width for `provider/model-id`; the
-  // tight rows take the short label. Chosen here rather than by the caller
-  // swapping fields, which would leave `fallbackModel` in the other spelling.
-  const model = opts?.canonical ? entry.modelId ?? entry.model : entry.model;
-  return model && fallbackModel && model !== fallbackModel ? `${model}→${fallbackModel}` : model ?? fallbackModel;
+export function formatModel(entry: WorkflowAgentEntry, opts?: { canonical?: boolean }): string | undefined {
+	const { fallbackModel } = entry;
+	// `canonical` is for surfaces with the width for `provider/model-id`; the
+	// tight rows take the short label. Chosen here rather than by the caller
+	// swapping fields, which would leave `fallbackModel` in the other spelling.
+	const model = opts?.canonical ? (entry.modelId ?? entry.model) : entry.model;
+	return model && fallbackModel && model !== fallbackModel ? `${model}→${fallbackModel}` : (model ?? fallbackModel);
 }
 
 /**
@@ -209,11 +206,11 @@ export function formatModel(
  * pi clamped is worth saying so about even when the model is unremarkable.
  */
 export function formatThinking(entry: WorkflowAgentEntry): string | undefined {
-  const { thinking, requestedThinking } = entry;
-  if (!thinking) return undefined;
-  return requestedThinking !== undefined && requestedThinking !== thinking
-    ? `thinking: ${thinking} (asked ${requestedThinking})`
-    : `thinking: ${thinking}`;
+	const { thinking, requestedThinking } = entry;
+	if (!thinking) return undefined;
+	return requestedThinking !== undefined && requestedThinking !== thinking
+		? `thinking: ${thinking} (asked ${requestedThinking})`
+		: `thinking: ${thinking}`;
 }
 
 /**
@@ -230,14 +227,14 @@ export const REPLAYED_ANNOTATION = "from resume journal";
  * than rendering a placeholder.
  */
 export function agentStatSegments(entry: WorkflowAgentEntry): string[] {
-  const parts: string[] = [];
-  if (entry.agentType) parts.push(entry.agentType);
-  const model = formatModel(entry);
-  if (model) parts.push(model);
-  if (entry.tokens) parts.push(formatCompactTokens(entry.tokens));
-  if (entry.toolCalls) parts.push(`${entry.toolCalls} tool call${entry.toolCalls === 1 ? "" : "s"}`);
-  if (entry.durationMs) parts.push(formatDuration(entry.durationMs));
-  return parts;
+	const parts: string[] = [];
+	if (entry.agentType) parts.push(entry.agentType);
+	const model = formatModel(entry);
+	if (model) parts.push(model);
+	if (entry.tokens) parts.push(formatCompactTokens(entry.tokens));
+	if (entry.toolCalls) parts.push(`${entry.toolCalls} tool call${entry.toolCalls === 1 ? "" : "s"}`);
+	if (entry.durationMs) parts.push(formatDuration(entry.durationMs));
+	return parts;
 }
 
 /**
@@ -245,9 +242,9 @@ export function agentStatSegments(entry: WorkflowAgentEntry): string[] {
  * `blocked` are not distinguished here; that is the dialog's job.
  */
 function rowGlyph(entry: WorkflowAgentEntry, glyphs: WorkflowGlyphs): WorkflowCardSegment {
-  if (entry.state === "done") return { text: glyphs.tick, color: "success" };
-  if (entry.state === "error") return { text: glyphs.cross, color: "error" };
-  return { text: glyphs.running };
+	if (entry.state === "done") return { text: glyphs.tick, color: "success" };
+	if (entry.state === "error") return { text: glyphs.cross, color: "error" };
+	return { text: glyphs.running };
 }
 
 /* ------------------------------------------------------------------------- *
@@ -256,24 +253,24 @@ function rowGlyph(entry: WorkflowAgentEntry, glyphs: WorkflowGlyphs): WorkflowCa
 
 /** Trim a line to `width`, cutting inside whichever segment crosses the edge. */
 export function clampLine(line: WorkflowCardLine, width: number): WorkflowCardLine {
-  const clamped: WorkflowCardLine = [];
-  let used = 0;
-  for (const segment of line) {
-    const segmentWidth = visibleWidth(segment.text);
-    if (used + segmentWidth <= width) {
-      clamped.push(segment);
-      used += segmentWidth;
-      continue;
-    }
-    const room = width - used;
-    // truncateToWidth wraps its ellipsis in resets, which would leak escape
-    // codes into a layout that is supposed to be plain text until it is themed.
-    if (room > 0) {
-      clamped.push({ ...segment, text: stripTerminalSequences(truncateToWidth(segment.text, room, "…")) });
-    }
-    return clamped;
-  }
-  return clamped;
+	const clamped: WorkflowCardLine = [];
+	let used = 0;
+	for (const segment of line) {
+		const segmentWidth = visibleWidth(segment.text);
+		if (used + segmentWidth <= width) {
+			clamped.push(segment);
+			used += segmentWidth;
+			continue;
+		}
+		const room = width - used;
+		// truncateToWidth wraps its ellipsis in resets, which would leak escape
+		// codes into a layout that is supposed to be plain text until it is themed.
+		if (room > 0) {
+			clamped.push({ ...segment, text: stripTerminalSequences(truncateToWidth(segment.text, room, "…")) });
+		}
+		return clamped;
+	}
+	return clamped;
 }
 
 const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum + visibleWidth(s.text), 0);
@@ -285,123 +282,119 @@ const lineWidth = (line: WorkflowCardLine) => line.reduce((sum, s) => sum + visi
  * warning — comes from `progress.ts`; what happens here is purely arrangement.
  */
 export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[] {
-  const glyphs = input.ascii ? ASCII_GLYPHS : UNICODE_GLYPHS;
-  const width = Math.max(1, input.width ?? DEFAULT_WIDTH);
-  const now = input.now ?? Date.now();
+	const glyphs = input.ascii ? ASCII_GLYPHS : UNICODE_GLYPHS;
+	const width = Math.max(1, input.width ?? DEFAULT_WIDTH);
+	const now = input.now ?? Date.now();
 
-  const groups = buildPhaseGroups(input.progress, input.meta?.phases);
-  const { agents, logs } = collapse(input.progress);
-  const totals = stats(input.progress, input.agentCount ?? 0);
-  const head = header(input.task, input.meta, groups, input.agentCount ?? 0, now);
+	const groups = buildPhaseGroups(input.progress, input.meta?.phases);
+	const { agents, logs } = collapse(input.progress);
+	const totals = stats(input.progress, input.agentCount ?? 0);
+	const head = header(input.task, input.meta, groups, input.agentCount ?? 0, now);
 
-  const lines: WorkflowCardLine[] = [];
+	const lines: WorkflowCardLine[] = [];
 
-  // ---- Header: `<name>` with the stats flush right ----
-  // The tool name appears only when nothing above the card already carries it.
-  // As a tool result there is a `▸ SubagentWorkflow …` call line directly above,
-  // and repeating it put two near-identical pointer lines back to back.
-  const left: WorkflowCardLine = input.showToolTitle
-    ? [
-        { text: `${glyphs.pointer} `, color: "toolTitle" },
-        { text: "SubagentWorkflow", color: "toolTitle", bold: true },
-        { text: "  " },
-        { text: head.name, color: "muted" },
-      ]
-    : [{ text: "  " }, { text: head.name, color: "toolTitle", bold: true }];
-  const statsWidth = visibleWidth(head.stats);
-  const clampedLeft = clampLine(left, Math.max(0, width - statsWidth - 1));
-  const gap = Math.max(1, width - lineWidth(clampedLeft) - statsWidth);
-  lines.push([...clampedLeft, { text: " ".repeat(gap) }, { text: head.stats, color: "dim" }]);
+	// ---- Header: `<name>` with the stats flush right ----
+	// The tool name appears only when nothing above the card already carries it.
+	// As a tool result there is a `▸ SubagentWorkflow …` call line directly above,
+	// and repeating it put two near-identical pointer lines back to back.
+	const left: WorkflowCardLine = input.showToolTitle
+		? [
+				{ text: `${glyphs.pointer} `, color: "toolTitle" },
+				{ text: "SubagentWorkflow", color: "toolTitle", bold: true },
+				{ text: "  " },
+				{ text: head.name, color: "muted" },
+			]
+		: [{ text: "  " }, { text: head.name, color: "toolTitle", bold: true }];
+	const statsWidth = visibleWidth(head.stats);
+	const clampedLeft = clampLine(left, Math.max(0, width - statsWidth - 1));
+	const gap = Math.max(1, width - lineWidth(clampedLeft) - statsWidth);
+	lines.push([...clampedLeft, { text: " ".repeat(gap) }, { text: head.stats, color: "dim" }]);
 
-  if (head.subtext) lines.push(clampLine([{ text: `  ${head.subtext}`, color: "dim" }], width));
+	if (head.subtext) lines.push(clampLine([{ text: `  ${head.subtext}`, color: "dim" }], width));
 
-  // ---- Phase tree ----
-  // Stats line up in one column across the whole card, not per group, so the
-  // eye can scan them; a label past the cap just pushes its own stats along.
-  const labelColumn = Math.min(
-    LABEL_COLUMN_MAX,
-    Math.max(0, ...groups.flatMap(group => group.agents.map(a => visibleWidth(a.label)))),
-  );
+	// ---- Phase tree ----
+	// Stats line up in one column across the whole card, not per group, so the
+	// eye can scan them; a label past the cap just pushes its own stats along.
+	const labelColumn = Math.min(
+		LABEL_COLUMN_MAX,
+		Math.max(0, ...groups.flatMap((group) => group.agents.map((a) => visibleWidth(a.label)))),
+	);
 
-  groups.forEach((group, groupIndex) => {
-    const lastGroup = groupIndex === groups.length - 1;
-    lines.push(
-      clampLine(
-        [
-          { text: "  " },
-          // One box, not a stack of them: only the first group opens it and
-          // only the last closes it. Everything between branches off the side,
-          // or three phases read as three half-drawn boxes.
-          {
-            text: `${
-              lastGroup ? glyphs.groupBottom
-              : groupIndex === 0 ? glyphs.groupTop
-              : glyphs.groupMid
-            } `,
-            color: "dim",
-          },
-          { text: group.title },
-        ],
-        width,
-      ),
-    );
+	groups.forEach((group, groupIndex) => {
+		const lastGroup = groupIndex === groups.length - 1;
+		lines.push(
+			clampLine(
+				[
+					{ text: "  " },
+					// One box, not a stack of them: only the first group opens it and
+					// only the last closes it. Everything between branches off the side,
+					// or three phases read as three half-drawn boxes.
+					{
+						text: `${lastGroup ? glyphs.groupBottom : groupIndex === 0 ? glyphs.groupTop : glyphs.groupMid} `,
+						color: "dim",
+					},
+					{ text: group.title },
+				],
+				width,
+			),
+		);
 
-    const rail = lastGroup ? "  " : `${glyphs.vertical} `;
-    group.agents.forEach((entry, agentIndex) => {
-      const lastAgent = agentIndex === group.agents.length - 1;
-      const flag = entry.modelTier || hasFallback(entry) ? fallbackFlagText(1, entry) : "";
-      const segments: WorkflowCardLine = [
-        { text: "  " },
-        { text: rail, color: "dim" },
-        { text: `${lastAgent ? glyphs.lastBranch : glyphs.branch} `, color: "dim" },
-        rowGlyph(entry, glyphs),
-        { text: " " },
-        // Leading, ahead of the label: the row is clamped from the right.
-        ...(flag ? [{ text: `${flag} `, color: hasFallback(entry) ? "warning" as const : "dim" as const }] : []),
-      ];
+		const rail = lastGroup ? "  " : `${glyphs.vertical} `;
+		group.agents.forEach((entry, agentIndex) => {
+			const lastAgent = agentIndex === group.agents.length - 1;
+			const flag = entry.modelTier || hasFallback(entry) ? fallbackFlagText(1, entry) : "";
+			const segments: WorkflowCardLine = [
+				{ text: "  " },
+				{ text: rail, color: "dim" },
+				{ text: `${lastAgent ? glyphs.lastBranch : glyphs.branch} `, color: "dim" },
+				rowGlyph(entry, glyphs),
+				{ text: " " },
+				// Leading, ahead of the label: the row is clamped from the right.
+				...(flag ? [{ text: `${flag} `, color: hasFallback(entry) ? ("warning" as const) : ("dim" as const) }] : []),
+			];
 
-      // Prepended rather than folded into `agentStatSegments`, which is the
-      // ported stat tail in its recovered order. A replayed agent otherwise
-      // renders as a tick with no tokens and no duration — indistinguishable
-      // from one that somehow did the work for free.
-      const statParts = entry.cached
-        ? [REPLAYED_ANNOTATION, ...agentStatSegments(entry)]
-        : agentStatSegments(entry);
-      const pad = Math.max(0, labelColumn - visibleWidth(entry.label) - (flag ? visibleWidth(flag) + 1 : 0));
-      segments.push({ text: statParts.length > 0 ? entry.label + " ".repeat(pad) : entry.label });
-      for (const part of statParts) {
-        segments.push({ text: " · ", color: "dim" }, { text: part, color: "dim" });
-      }
-      lines.push(clampLine(segments, width));
-    });
-  });
+			// Prepended rather than folded into `agentStatSegments`, which is the
+			// ported stat tail in its recovered order. A replayed agent otherwise
+			// renders as a tick with no tokens and no duration — indistinguishable
+			// from one that somehow did the work for free.
+			const statParts = entry.cached ? [REPLAYED_ANNOTATION, ...agentStatSegments(entry)] : agentStatSegments(entry);
+			const pad = Math.max(0, labelColumn - visibleWidth(entry.label) - (flag ? visibleWidth(flag) + 1 : 0));
+			segments.push({ text: statParts.length > 0 ? entry.label + " ".repeat(pad) : entry.label });
+			for (const part of statParts) {
+				segments.push({ text: " · ", color: "dim" }, { text: part, color: "dim" });
+			}
+			lines.push(clampLine(segments, width));
+		});
+	});
 
-  // ---- log() output, below the tree ----
-  for (const message of logs) {
-    const [first, ...rest] = message.split("\n");
-    lines.push(clampLine([{ text: `  ${glyphs.log}  ${first}`, color: "dim" }], width));
-    for (const continuation of rest) {
-      lines.push(clampLine([{ text: `     ${continuation}`, color: "dim" }], width));
-    }
-  }
+	// ---- log() output, below the tree ----
+	for (const message of logs) {
+		const [first, ...rest] = message.split("\n");
+		lines.push(clampLine([{ text: `  ${glyphs.log}  ${first}`, color: "dim" }], width));
+		for (const continuation of rest) {
+			lines.push(clampLine([{ text: `     ${continuation}`, color: "dim" }], width));
+		}
+	}
 
-  // ---- Size warning ----
-  const totalTokens =
-    input.totalTokens ?? agents.reduce((sum, entry) => sum + (entry.tokens ?? 0), 0);
-  const warning = sizeWarning({
-    scheduledAgents: Math.max(input.agentCount ?? 0, totals.total),
-    startedAgents: totals.started,
-    totalTokens,
-    agentCap: input.agentCap,
-    tokenCap: input.tokenCap,
-  });
-  if (warning) {
-    lines.push(
-      clampLine([{ text: `  ${glyphs.warning} Large workflow · /agents → Workflows to stop`, color: "warning" }], width),
-    );
-  }
+	// ---- Size warning ----
+	const totalTokens = input.totalTokens ?? agents.reduce((sum, entry) => sum + (entry.tokens ?? 0), 0);
+	const warning = sizeWarning({
+		scheduledAgents: Math.max(input.agentCount ?? 0, totals.total),
+		startedAgents: totals.started,
+		totalTokens,
+		agentCap: input.agentCap,
+		tokenCap: input.tokenCap,
+	});
+	if (warning) {
+		lines.push(
+			clampLine(
+				[{ text: `  ${glyphs.warning} Large workflow · /agents → Workflows to stop`, color: "warning" }],
+				width,
+			),
+		);
+	}
 
-  return lines;
+	return lines;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -410,24 +403,24 @@ export function layoutWorkflowCard(input: WorkflowCardInput): WorkflowCardLine[]
 
 /** The card as plain text — what the layout tests assert against. */
 export function plainWorkflowCardLines(lines: readonly WorkflowCardLine[]): string[] {
-  return lines.map(line => line.map(segment => segment.text).join(""));
+	return lines.map((line) => line.map((segment) => segment.text).join(""));
 }
 
 /** Apply the theme. Nothing here changes the layout, only its colours. */
 export function styleWorkflowCardLines(lines: readonly WorkflowCardLine[], theme: Theme): string[] {
-  return lines.map(line =>
-    line
-      .map(segment => {
-        const text = segment.bold ? theme.bold(segment.text) : segment.text;
-        return segment.color ? theme.fg(segment.color, text) : text;
-      })
-      .join(""),
-  );
+	return lines.map((line) =>
+		line
+			.map((segment) => {
+				const text = segment.bold ? theme.bold(segment.text) : segment.text;
+				return segment.color ? theme.fg(segment.color, text) : text;
+			})
+			.join(""),
+	);
 }
 
 /** The card as a component, for a tool result or a session entry renderer. */
 export function renderWorkflowCard(input: WorkflowCardInput, theme: Theme): Text {
-  return new Text(styleWorkflowCardLines(layoutWorkflowCard(input), theme).join("\n"), 0, 0);
+	return new Text(styleWorkflowCardLines(layoutWorkflowCard(input), theme).join("\n"), 0, 0);
 }
 
 /**
@@ -439,21 +432,21 @@ export function renderWorkflowCard(input: WorkflowCardInput, theme: Theme): Text
  * pi's renderer contract wants for "nothing to draw".
  */
 export function renderWorkflowEntryCard(data: WorkflowEntryData | undefined, theme: Theme): Text | undefined {
-  if (!data) return undefined;
-  return renderWorkflowCard(
-    {
-      progress: data.progress,
-      task: {
-        status: data.status,
-        workflowName: data.name,
-        startTime: data.startTime,
-        endTime: data.endTime,
-      },
-      meta: data.meta,
-      agentCount: data.agentCount,
-      totalTokens: data.totalTokens,
-      showToolTitle: true,
-    },
-    theme,
-  );
+	if (!data) return undefined;
+	return renderWorkflowCard(
+		{
+			progress: data.progress,
+			task: {
+				status: data.status,
+				workflowName: data.name,
+				startTime: data.startTime,
+				endTime: data.endTime,
+			},
+			meta: data.meta,
+			agentCount: data.agentCount,
+			totalTokens: data.totalTokens,
+			showToolTitle: true,
+		},
+		theme,
+	);
 }

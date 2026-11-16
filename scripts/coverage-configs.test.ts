@@ -321,20 +321,20 @@ const RESOLVED: Record<string, unknown> = {
 	"packages/subagents/vitest.config.ts": {
 		test: {
 			maxWorkers: 2,
-			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/test/helpers/tmp-root-setup.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/tests/fixtures/tmp-root-setup.ts"],
 			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
 		},
 		resolve: { dedupe: ["@earendil-works/pi-ai"] },
 	},
 	"packages/subagents/vitest.runtime-build.config.ts": {
-		test: { maxWorkers: 1, fileParallelism: false, include: ["test/runtime-scripts.test.ts"], testTimeout: 15000 },
+		test: { maxWorkers: 1, fileParallelism: false, include: ["tests/runtime-scripts.test.ts"], testTimeout: 15000 },
 	},
 	"packages/subagents/vitest.workflow-examples.config.ts": {
 		test: {
 			env: { PI_WORKFLOW_EXAMPLE_COVERAGE: "1" },
-			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/test/helpers/tmp-root-setup.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/tests/fixtures/tmp-root-setup.ts"],
 			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
-			include: ["test/workflow-examples.test.ts"],
+			include: ["tests/workflow/workflow-examples.test.ts"],
 		},
 		resolve: { dedupe: ["@earendil-works/pi-ai"] },
 	},

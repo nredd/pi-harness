@@ -7,5 +7,5 @@
 
 /** The message of `error` when it is an `Error`, else `String(error)`. */
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+	return error instanceof Error ? error.message : String(error);
 }

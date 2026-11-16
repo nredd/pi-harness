@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Refactored
+- Consolidate the package test tree under `tests/` and `tests/fixtures/`, retain inherited policies and the Agent template in the README, and typecheck the complete test tree against the shared strict baseline ([#875](https://github.com/nredd/pi-harness/issues/875)). Keep the `vitest bench` and `bench:ab` entry points; a fixture adapter uses Vitest 5's native test-context benchmark API.
+
 > **⚠️ Breaking: subagent transcripts, saved workflow scripts and journals leave the per-user temp dir, on macOS too** ([#900](https://github.com/nredd/pi-harness/issues/900)). They now live under `$XDG_STATE_HOME/pi-subagents` (default `~/.local/state/pi-subagents`). Set `PI_SUBAGENTS_TRANSCRIPT_DIR` to pick another root (an existing dir is used as is and never pruned until you create a `.pi-subagents-root` file in it; pruning removes 30-day-idle pi-shaped session dirs only). Anything reading `<tmpdir>/pi-subagents-<uid>` must read the new one, and old files are not migrated.
 ### Changed
 - **Compile on cores without `homeDir`.** `homeDir` forwarded to the package manager and resource loader is typed locally, so the package compiles on cores that do not declare it (upstream 1.5 ignores it at runtime) ([#918](https://github.com/nredd/pi-harness/issues/918))

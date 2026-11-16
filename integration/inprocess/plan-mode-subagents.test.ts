@@ -18,7 +18,7 @@ import {
 	planSteerRefusal,
 } from "../../packages/subagents/src/plan-mode-children.ts";
 import type { AgentRecord } from "../../packages/subagents/src/types.ts";
-import { answer, ScenarioSession, spawn } from "../../packages/subagents/test/helpers/scenario-session.ts";
+import { answer, ScenarioSession, spawn } from "../../packages/subagents/tests/fixtures/scenario-session.ts";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());

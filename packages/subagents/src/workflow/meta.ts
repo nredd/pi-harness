@@ -22,40 +22,40 @@ import { createContext, Script } from "node:vm";
 
 /** A phase declared up front, so the UI can show it before any agent runs. */
 export interface WorkflowPhaseMeta {
-  title: string;
-  detail?: string;
-  /** Set when a phase pins a model; display-only, the runtime does not read it. */
-  model?: string;
+	title: string;
+	detail?: string;
+	/** Set when a phase pins a model; display-only, the runtime does not read it. */
+	model?: string;
 }
 
 export interface WorkflowMeta {
-  name: string;
-  description: string;
-  /** Shown in the saved-workflow listing. Not used by the runtime. */
-  whenToUse?: string;
-  phases?: WorkflowPhaseMeta[];
+	name: string;
+	description: string;
+	/** Shown in the saved-workflow listing. Not used by the runtime. */
+	whenToUse?: string;
+	phases?: WorkflowPhaseMeta[];
 }
 
 export interface MetaExtraction {
-  meta: WorkflowMeta;
-  /** Byte offset immediately after the validated meta object literal. */
-  metaEnd: number;
-  /**
-   * The script with the leading `export ` stripped, so `const meta = {...}`
-   * compiles inside the vm. Byte offsets after the keyword are untouched, which
-   * keeps stack-trace line numbers aligned with what the author wrote.
-   */
-  body: string;
+	meta: WorkflowMeta;
+	/** Byte offset immediately after the validated meta object literal. */
+	metaEnd: number;
+	/**
+	 * The script with the leading `export ` stripped, so `const meta = {...}`
+	 * compiles inside the vm. Byte offsets after the keyword are untouched, which
+	 * keeps stack-trace line numbers aligned with what the author wrote.
+	 */
+	body: string;
 }
 
 export class WorkflowMetaError extends Error {}
 
 export interface ExtractMetaOptions {
-  /**
-   * Wall-clock bound on evaluating the `meta` fragment. Tests inject a small
-   * value to prove the runaway guard; production uses {@link META_EVAL_TIMEOUT_MS}.
-   */
-  evalTimeoutMs?: number;
+	/**
+	 * Wall-clock bound on evaluating the `meta` fragment. Tests inject a small
+	 * value to prove the runaway guard; production uses {@link META_EVAL_TIMEOUT_MS}.
+	 */
+	evalTimeoutMs?: number;
 }
 
 /**
@@ -67,7 +67,7 @@ export interface ExtractMetaOptions {
 const META_EVAL_TIMEOUT_MS = 1000;
 
 const PURE_LITERAL_HINT =
-  "The `meta` object must be a PURE LITERAL — no variables, function calls, spreads, or template interpolation.";
+	"The `meta` object must be a PURE LITERAL — no variables, function calls, spreads, or template interpolation.";
 
 /** Matches `export const meta =` allowing arbitrary inner whitespace. */
 const META_DECLARATION = /(^|[\r\n])[ \t]*export[ \t\r\n]+const[ \t\r\n]+meta[ \t\r\n]*=/;
@@ -82,18 +82,18 @@ const META_DECLARATION = /(^|[\r\n])[ \t]*export[ \t\r\n]+const[ \t\r\n]+meta[ \
  * workflows nor produce a parser error when named.
  */
 export function hasMetaDeclaration(source: string): boolean {
-  return META_DECLARATION.test(source);
+	return META_DECLARATION.test(source);
 }
 
 interface ScanResult {
-  /** Index of the literal's closing brace, or -1 when braces never balance. */
-  end: number;
-  /**
-   * True when a `${` substitution opened inside a template literal. Reported
-   * separately because such a fragment can still *evaluate* — `` `a${1+1}b` ``
-   * needs no globals — so the impure-literal check below cannot catch it.
-   */
-  sawInterpolation: boolean;
+	/** Index of the literal's closing brace, or -1 when braces never balance. */
+	end: number;
+	/**
+	 * True when a `${` substitution opened inside a template literal. Reported
+	 * separately because such a fragment can still *evaluate* — `` `a${1+1}b` ``
+	 * needs no globals — so the impure-literal check below cannot catch it.
+	 */
+	sawInterpolation: boolean;
 }
 
 /**
@@ -103,77 +103,119 @@ interface ScanResult {
  * not move the depth counter.
  */
 function scanObjectLiteral(source: string, open: number): ScanResult {
-  let depth = 0;
-  let i = open;
-  let sawInterpolation = false;
-  // What we are currently inside of. "code" means brace counting is live.
-  let mode: "code" | "line-comment" | "block-comment" | "single" | "double" | "template" | "regex" = "code";
-  // Template literals nest: `${ {a:1} }` re-enters code, and the closing brace
-  // of that substitution must not be read as the object's. One depth per level.
-  const templateStack: number[] = [];
+	let depth = 0;
+	let i = open;
+	let sawInterpolation = false;
+	// What we are currently inside of. "code" means brace counting is live.
+	let mode: "code" | "line-comment" | "block-comment" | "single" | "double" | "template" | "regex" = "code";
+	// Template literals nest: `${ {a:1} }` re-enters code, and the closing brace
+	// of that substitution must not be read as the object's. One depth per level.
+	const templateStack: number[] = [];
 
-  while (i < source.length) {
-    const c = source[i];
-    const next = source[i + 1];
+	while (i < source.length) {
+		const c = source[i];
+		const next = source[i + 1];
 
-    if (mode === "line-comment") {
-      if (c === "\n") mode = "code";
-      i++;
-      continue;
-    }
-    if (mode === "block-comment") {
-      if (c === "*" && next === "/") { mode = "code"; i += 2; continue; }
-      i++;
-      continue;
-    }
-    if (mode === "single" || mode === "double" || mode === "regex") {
-      if (c === "\\") { i += 2; continue; }
-      if (mode === "single" && c === "'") mode = "code";
-      else if (mode === "double" && c === '"') mode = "code";
-      else if (mode === "regex" && c === "/") mode = "code";
-      // An unterminated regex/string can't run past a newline; bail to code so a
-      // misdetected regex (see below) cannot swallow the rest of the literal.
-      else if (c === "\n" && mode !== "double") mode = "code";
-      i++;
-      continue;
-    }
-    if (mode === "template") {
-      if (c === "\\") { i += 2; continue; }
-      if (c === "`") { mode = "code"; i++; continue; }
-      if (c === "$" && next === "{") {
-        sawInterpolation = true;
-        templateStack.push(depth);
-        depth++;
-        mode = "code";
-        i += 2;
-        continue;
-      }
-      i++;
-      continue;
-    }
+		if (mode === "line-comment") {
+			if (c === "\n") mode = "code";
+			i++;
+			continue;
+		}
+		if (mode === "block-comment") {
+			if (c === "*" && next === "/") {
+				mode = "code";
+				i += 2;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		if (mode === "single" || mode === "double" || mode === "regex") {
+			if (c === "\\") {
+				i += 2;
+				continue;
+			}
+			if (mode === "single" && c === "'") mode = "code";
+			else if (mode === "double" && c === '"') mode = "code";
+			else if (mode === "regex" && c === "/") mode = "code";
+			// An unterminated regex/string can't run past a newline; bail to code so a
+			// misdetected regex (see below) cannot swallow the rest of the literal.
+			else if (c === "\n" && mode !== "double") mode = "code";
+			i++;
+			continue;
+		}
+		if (mode === "template") {
+			if (c === "\\") {
+				i += 2;
+				continue;
+			}
+			if (c === "`") {
+				mode = "code";
+				i++;
+				continue;
+			}
+			if (c === "$" && next === "{") {
+				sawInterpolation = true;
+				templateStack.push(depth);
+				depth++;
+				mode = "code";
+				i += 2;
+				continue;
+			}
+			i++;
+			continue;
+		}
 
-    // mode === "code"
-    if (c === "/" && next === "/") { mode = "line-comment"; i += 2; continue; }
-    if (c === "/" && next === "*") { mode = "block-comment"; i += 2; continue; }
-    if (c === "'") { mode = "single"; i++; continue; }
-    if (c === '"') { mode = "double"; i++; continue; }
-    if (c === "`") { mode = "template"; i++; continue; }
-    if (c === "/" && isRegexPosition(source, i)) { mode = "regex"; i++; continue; }
-    if (c === "{") { depth++; i++; continue; }
-    if (c === "}") {
-      depth--;
-      i++;
-      if (templateStack.length > 0 && depth === templateStack[templateStack.length - 1]) {
-        templateStack.pop();
-        mode = "template";
-        continue;
-      }
-      if (depth === 0) return { end: i, sawInterpolation };
-      continue;
-    }
-    i++;
-  }
-  return { end: -1, sawInterpolation };
+		// mode === "code"
+		if (c === "/" && next === "/") {
+			mode = "line-comment";
+			i += 2;
+			continue;
+		}
+		if (c === "/" && next === "*") {
+			mode = "block-comment";
+			i += 2;
+			continue;
+		}
+		if (c === "'") {
+			mode = "single";
+			i++;
+			continue;
+		}
+		if (c === '"') {
+			mode = "double";
+			i++;
+			continue;
+		}
+		if (c === "`") {
+			mode = "template";
+			i++;
+			continue;
+		}
+		if (c === "/" && isRegexPosition(source, i)) {
+			mode = "regex";
+			i++;
+			continue;
+		}
+		if (c === "{") {
+			depth++;
+			i++;
+			continue;
+		}
+		if (c === "}") {
+			depth--;
+			i++;
+			if (templateStack.length > 0 && depth === templateStack[templateStack.length - 1]) {
+				templateStack.pop();
+				mode = "template";
+				continue;
+			}
+			if (depth === 0) return { end: i, sawInterpolation };
+			continue;
+		}
+		i++;
+	}
+	return { end: -1, sawInterpolation };
 }
 
 /**
@@ -186,38 +228,38 @@ function scanObjectLiteral(source: string, open: number): ScanResult {
  * containing division is already not a pure literal.
  */
 function isRegexPosition(source: string, i: number): boolean {
-  let j = i - 1;
-  // Never runs off the front: the scan starts at the literal's `{`, so the
-  // walk back always stops on it or something after it.
-  while (/\s/.test(source[j])) j--;
-  const prev = source[j];
-  // Identifier/number/closer before `/` means division.
-  return !/[\w$)\]]/.test(prev);
+	let j = i - 1;
+	// Never runs off the front: the scan starts at the literal's `{`, so the
+	// walk back always stops on it or something after it.
+	while (/\s/.test(source[j]!)) j--;
+	const prev = source[j]!;
+	// Identifier/number/closer before `/` means division.
+	return !/[\w$)\]]/.test(prev);
 }
 
 function fail(message: string): never {
-  throw new WorkflowMetaError(message);
+	throw new WorkflowMetaError(message);
 }
 
 function assertPhases(value: unknown): WorkflowPhaseMeta[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) fail("`meta.phases` must be an array of { title, detail?, model? } objects.");
-  return value.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      fail(`\`meta.phases[${index}]\` must be an object with a \`title\`.`);
-    }
-    const { title, detail, model } = entry as Record<string, unknown>;
-    if (typeof title !== "string" || title.trim() === "") {
-      fail(`\`meta.phases[${index}].title\` must be a non-empty string.`);
-    }
-    if (detail !== undefined && typeof detail !== "string") {
-      fail(`\`meta.phases[${index}].detail\` must be a string.`);
-    }
-    if (model !== undefined && typeof model !== "string") {
-      fail(`\`meta.phases[${index}].model\` must be a string.`);
-    }
-    return { title, ...(detail !== undefined ? { detail } : {}), ...(model !== undefined ? { model } : {}) };
-  });
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) fail("`meta.phases` must be an array of { title, detail?, model? } objects.");
+	return value.map((entry, index) => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+			fail(`\`meta.phases[${index}]\` must be an object with a \`title\`.`);
+		}
+		const { title, detail, model } = entry as Record<string, unknown>;
+		if (typeof title !== "string" || title.trim() === "") {
+			fail(`\`meta.phases[${index}].title\` must be a non-empty string.`);
+		}
+		if (detail !== undefined && typeof detail !== "string") {
+			fail(`\`meta.phases[${index}].detail\` must be a string.`);
+		}
+		if (model !== undefined && typeof model !== "string") {
+			fail(`\`meta.phases[${index}].model\` must be a string.`);
+		}
+		return { title, ...(detail !== undefined ? { detail } : {}), ...(model !== undefined ? { model } : {}) };
+	});
 }
 
 /**
@@ -227,83 +269,80 @@ function assertPhases(value: unknown): WorkflowPhaseMeta[] | undefined {
  * rejection — these messages are shown verbatim to whoever wrote the script.
  */
 export function extractMeta(source: string, options: ExtractMetaOptions = {}): MetaExtraction {
-  const timeoutMs = options.evalTimeoutMs ?? META_EVAL_TIMEOUT_MS;
-  const declaration = META_DECLARATION.exec(source);
-  if (!declaration) {
-    fail(
-      "A workflow script must begin with `export const meta = { name, description }`.\n" +
-      PURE_LITERAL_HINT,
-    );
-  }
+	const timeoutMs = options.evalTimeoutMs ?? META_EVAL_TIMEOUT_MS;
+	const declaration = META_DECLARATION.exec(source);
+	if (!declaration) {
+		fail(`A workflow script must begin with \`export const meta = { name, description }\`.\n${PURE_LITERAL_HINT}`);
+	}
 
-  const open = source.indexOf("{", declaration.index + declaration[0].length);
-  if (open === -1) fail("`export const meta` must be assigned an object literal.\n" + PURE_LITERAL_HINT);
+	const open = source.indexOf("{", declaration.index + declaration[0].length);
+	if (open === -1) fail(`\`export const meta\` must be assigned an object literal.\n${PURE_LITERAL_HINT}`);
 
-  const { end: close, sawInterpolation } = scanObjectLiteral(source, open);
-  if (close === -1) fail("`meta` object literal is never closed — check for an unbalanced `{`.");
+	const { end: close, sawInterpolation } = scanObjectLiteral(source, open);
+	if (close === -1) fail("`meta` object literal is never closed — check for an unbalanced `{`.");
 
-  // Caught here rather than by evaluation: a self-contained substitution such as
-  // `` `a${1 + 1}b` `` resolves without touching a single global, so it would
-  // sail through the empty-context check below and silently produce "a2b".
-  if (sawInterpolation) {
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: quoting the syntax being rejected
-    fail("`meta` must not use template interpolation (`${...}`).\n" + PURE_LITERAL_HINT);
-  }
+	// Caught here rather than by evaluation: a self-contained substitution such as
+	// `` `a${1 + 1}b` `` resolves without touching a single global, so it would
+	// sail through the empty-context check below and silently produce "a2b".
+	if (sawInterpolation) {
+		fail(`\`meta\` must not use template interpolation (\`\${...}\`).\n${PURE_LITERAL_HINT}`);
+	}
 
-  const fragment = source.slice(open, close);
-  let value: unknown;
-  try {
-    // Empty context: a pure literal needs no globals, so anything reaching for
-    // one (a variable, a helper call) throws here and is reported as impure.
-    //
-    // The timeout is not belt-and-braces. An IIFE needs no globals either, so
-    // `name: (() => { while (true); })()` is evaluable — and this runs on the
-    // host thread, before the script ever reaches the worker. Without a bound it
-    // would wedge pi itself. `timeout` only governs synchronous execution, which
-    // is all a literal can contain.
-    value = new Script(`(${fragment})`, { filename: "workflow-meta.js" })
-      .runInContext(createContext({}), { timeout: timeoutMs });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (/timed out|Script execution/i.test(detail)) {
-      fail(
-        `\`meta\` did not finish evaluating within ${timeoutMs}ms — it must be a literal, not a computation.\n` +
-        PURE_LITERAL_HINT,
-      );
-    }
-    fail(`\`meta\` could not be evaluated: ${detail}\n${PURE_LITERAL_HINT}`);
-  }
+	const fragment = source.slice(open, close);
+	let value: unknown;
+	try {
+		// Empty context: a pure literal needs no globals, so anything reaching for
+		// one (a variable, a helper call) throws here and is reported as impure.
+		//
+		// The timeout is not belt-and-braces. An IIFE needs no globals either, so
+		// `name: (() => { while (true); })()` is evaluable — and this runs on the
+		// host thread, before the script ever reaches the worker. Without a bound it
+		// would wedge pi itself. `timeout` only governs synchronous execution, which
+		// is all a literal can contain.
+		value = new Script(`(${fragment})`, { filename: "workflow-meta.js" }).runInContext(createContext({}), {
+			timeout: timeoutMs,
+		});
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		if (/timed out|Script execution/i.test(detail)) {
+			fail(
+				`\`meta\` did not finish evaluating within ${timeoutMs}ms — it must be a literal, not a computation.\n` +
+					PURE_LITERAL_HINT,
+			);
+		}
+		fail(`\`meta\` could not be evaluated: ${detail}\n${PURE_LITERAL_HINT}`);
+	}
 
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    fail("`meta` must be an object literal.\n" + PURE_LITERAL_HINT);
-  }
-  const raw = value as Record<string, unknown>;
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		fail(`\`meta\` must be an object literal.\n${PURE_LITERAL_HINT}`);
+	}
+	const raw = value as Record<string, unknown>;
 
-  if (typeof raw.name !== "string" || raw.name.trim() === "") {
-    fail("`meta.name` is required and must be a non-empty string.");
-  }
-  if (typeof raw.description !== "string" || raw.description.trim() === "") {
-    fail("`meta.description` is required and must be a non-empty string.");
-  }
-  if (raw.whenToUse !== undefined && typeof raw.whenToUse !== "string") {
-    fail("`meta.whenToUse` must be a string.");
-  }
-  const phases = assertPhases(raw.phases);
+	if (typeof raw.name !== "string" || raw.name.trim() === "") {
+		fail("`meta.name` is required and must be a non-empty string.");
+	}
+	if (typeof raw.description !== "string" || raw.description.trim() === "") {
+		fail("`meta.description` is required and must be a non-empty string.");
+	}
+	if (raw.whenToUse !== undefined && typeof raw.whenToUse !== "string") {
+		fail("`meta.whenToUse` must be a string.");
+	}
+	const phases = assertPhases(raw.phases);
 
-  const meta: WorkflowMeta = {
-    name: raw.name,
-    description: raw.description,
-    ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
-    ...(phases !== undefined ? { phases } : {}),
-  };
+	const meta: WorkflowMeta = {
+		name: raw.name,
+		description: raw.description,
+		...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
+		...(phases !== undefined ? { phases } : {}),
+	};
 
-  // Strip only the `export ` keyword. Replacing it with spaces rather than
-  // deleting it keeps every subsequent offset — and therefore every reported
-  // line and column — identical to the source the author wrote.
-  const exportAt = source.indexOf("export", declaration.index);
-  const body = `${source.slice(0, exportAt)}${" ".repeat(6)}${source.slice(exportAt + 6)}`;
+	// Strip only the `export ` keyword. Replacing it with spaces rather than
+	// deleting it keeps every subsequent offset — and therefore every reported
+	// line and column — identical to the source the author wrote.
+	const exportAt = source.indexOf("export", declaration.index);
+	const body = `${source.slice(0, exportAt)}${" ".repeat(6)}${source.slice(exportAt + 6)}`;
 
-  return { meta, metaEnd: close, body };
+	return { meta, metaEnd: close, body };
 }
 
 /**
@@ -319,22 +358,22 @@ const workflowNames = new Map<string, string>();
 
 /** The label a `SubagentWorkflow` call renders under, from whichever field it carries. */
 export function workflowCallName(args: { script?: string; scriptPath?: string; name?: string }): string {
-  const source = args.script;
-  if (source === undefined || source === "") {
-    // A path-only call would need a synchronous file read per rebuild to do
-    // better than this, and the file name is what the author will recognize.
-    if (args.scriptPath !== undefined) return args.scriptPath.replace(/^[\s\S]*[/\\]/, "");
-    // A saved workflow is already named by the caller; no read needed at all.
-    return args.name !== undefined && args.name !== "" ? args.name : "workflow";
-  }
-  const cached = workflowNames.get(source);
-  if (cached !== undefined) return cached;
-  let name = "workflow";
-  try {
-    name = extractMeta(source).meta.name;
-  } catch {
-    // An invalid script still gets a call line; `execute` reports why.
-  }
-  workflowNames.set(source, name);
-  return name;
+	const source = args.script;
+	if (source === undefined || source === "") {
+		// A path-only call would need a synchronous file read per rebuild to do
+		// better than this, and the file name is what the author will recognize.
+		if (args.scriptPath !== undefined) return args.scriptPath.replace(/^[\s\S]*[/\\]/, "");
+		// A saved workflow is already named by the caller; no read needed at all.
+		return args.name !== undefined && args.name !== "" ? args.name : "workflow";
+	}
+	const cached = workflowNames.get(source);
+	if (cached !== undefined) return cached;
+	let name = "workflow";
+	try {
+		name = extractMeta(source).meta.name;
+	} catch {
+		// An invalid script still gets a call line; `execute` reports why.
+	}
+	workflowNames.set(source, name);
+	return name;
 }
