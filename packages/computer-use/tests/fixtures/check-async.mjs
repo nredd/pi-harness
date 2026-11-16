@@ -43,11 +43,7 @@ export function deferred() {
  * @returns {Promise<T>} The observable operation's result.
  * @throws {Error} If the deadline expires; propagates the operation's rejection unchanged.
  */
-export async function within(
-	promise,
-	label,
-	timeoutMs = DEFAULT_CHECK_TIMEOUT_MS,
-) {
+export async function within(promise, label, timeoutMs = DEFAULT_CHECK_TIMEOUT_MS) {
 	let timer;
 	try {
 		return await Promise.race([
@@ -119,10 +115,7 @@ async function waitForCheckGroup(pgid, label, timeoutMs) {
 			// proof of quiescence: keep probing to ESRCH, or fail at the same deadline.
 			if (error.code !== "EPERM") throw error;
 		}
-		if (Date.now() >= deadline)
-			throw new Error(
-				`Timed out waiting for ${label}: process group ${pgid} remains`,
-			);
+		if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}: process group ${pgid} remains`);
 		await new Promise(
 			/** @returns {NodeJS.Timeout} Schedules the next bounded group probe. @throws {never} No errors. */
 			(resolve) => setTimeout(resolve, COMMAND_GROUP_POLL_MS),
@@ -146,17 +139,9 @@ export async function stopCheckChild(child, closed, label, group = false) {
 	// A detached group is probe-only; direct children need only stream cleanup.
 	if (child.exitCode != null || child.signalCode != null) {
 		try {
-			await within(
-				closed,
-				`${label} completed child streams`,
-				COMMAND_KILL_WAIT_MS,
-			);
+			await within(closed, `${label} completed child streams`, COMMAND_KILL_WAIT_MS);
 			if (group && child.pid !== undefined)
-				await waitForCheckGroup(
-					child.pid,
-					`${label} completed group`,
-					COMMAND_KILL_WAIT_MS,
-				);
+				await waitForCheckGroup(child.pid, `${label} completed group`, COMMAND_KILL_WAIT_MS);
 		} finally {
 			// Inherited pipes must not outlive the cap even when signalling is unsafe.
 			child.stdout?.destroy();
@@ -178,13 +163,11 @@ export async function stopCheckChild(child, closed, label, group = false) {
 				} catch (error) {
 					if (error.code !== "ESRCH") throw error;
 					// A spawn-time deadline may precede setsid; stop the owned leader too.
-					if (group && child.exitCode === null && child.signalCode === null)
-						child.kill(signal);
+					if (group && child.exitCode === null && child.signalCode === null) child.kill(signal);
 				}
 			}
 			await within(closed, `${label} to close after ${signal}`, waitMs);
-			if (group && child.pid !== undefined)
-				await waitForCheckGroup(child.pid, `${label} after ${signal}`, waitMs);
+			if (group && child.pid !== undefined) await waitForCheckGroup(child.pid, `${label} after ${signal}`, waitMs);
 			return;
 		} catch (error) {
 			failures.push(error);
@@ -193,10 +176,7 @@ export async function stopCheckChild(child, closed, label, group = false) {
 	child.stdout?.destroy();
 	child.stderr?.destroy();
 	child.unref();
-	throw new AggregateError(
-		failures,
-		`${label}: subprocess did not close after bounded TERM/KILL cleanup`,
-	);
+	throw new AggregateError(failures, `${label}: subprocess did not close after bounded TERM/KILL cleanup`);
 }
 
 /**
@@ -244,15 +224,11 @@ export async function runCheckCommand(
 			const capture = (stream, chunk) => {
 				const bytes = Buffer.byteLength(chunk);
 				const available = Math.max(0, maxBuffer - sizes[stream]);
-				const kept =
-					bytes <= available
-						? chunk
-						: Buffer.from(chunk).subarray(0, available).toString("utf8");
+				const kept = bytes <= available ? chunk : Buffer.from(chunk).subarray(0, available).toString("utf8");
 				if (stream === "stdout") stdout += kept;
 				else stderr += kept;
 				sizes[stream] += bytes;
-				if (sizes[stream] > maxBuffer)
-					reject(new Error(`${stream} exceeded ${maxBuffer} bytes`));
+				if (sizes[stream] > maxBuffer) reject(new Error(`${stream} exceeded ${maxBuffer} bytes`));
 			};
 			child.stdout?.setEncoding("utf8").on(
 				"data",

@@ -12,7 +12,9 @@ const HELPER_SETUP_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
 
 export const WINDOWS_HELPER_PROTOCOL_VERSION = 4;
-export const WINDOWS_HELPER_PATH = process.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH || path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe");
+export const WINDOWS_HELPER_PATH =
+	process.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH ||
+	path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe");
 
 interface Pending<T> {
 	resolve(value: T): void;
@@ -26,21 +28,50 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {
-	try { await access(filePath, fsConstants.X_OK); return true; } catch { return false; }
+	try {
+		await access(filePath, fsConstants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
-async function runProcess(command: string, args: string[], timeoutMs: number, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<void> {
+async function runProcess(
+	command: string,
+	args: string[],
+	timeoutMs: number,
+	signal?: AbortSignal,
+	env?: NodeJS.ProcessEnv,
+): Promise<void> {
 	if (signal?.aborted) throw new Error("Operation aborted.");
 	await new Promise<void>((resolve, reject) => {
 		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env });
 		let stdout = "";
 		let stderr = "";
-		const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); };
-		const timer = setTimeout(() => { child.kill("SIGTERM"); cleanup(); reject(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`)); }, timeoutMs);
-		const onAbort = () => { child.kill("SIGTERM"); cleanup(); reject(new Error("Operation aborted.")); };
-		child.stdout.on("data", (chunk) => { stdout += String(chunk); });
-		child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-		child.on("error", (error) => { cleanup(); reject(error); });
+		const cleanup = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+		};
+		const timer = setTimeout(() => {
+			child.kill("SIGTERM");
+			cleanup();
+			reject(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
+		}, timeoutMs);
+		const onAbort = () => {
+			child.kill("SIGTERM");
+			cleanup();
+			reject(new Error("Operation aborted."));
+		};
+		child.stdout.on("data", (chunk) => {
+			stdout += String(chunk);
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr += String(chunk);
+		});
+		child.on("error", (error) => {
+			cleanup();
+			reject(error);
+		});
 		child.on("close", (code) => {
 			cleanup();
 			if (code === 0) return resolve();
@@ -77,9 +108,16 @@ export class WindowsHelperClient {
 	async ensureInstalled(signal?: AbortSignal): Promise<void> {
 		if ((await isExecutable(WINDOWS_HELPER_PATH)) && this.installChecked) return;
 		// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
-		await runProcess(process.execPath, [SETUP_HELPER_SCRIPT, "--platform", "windows", "--runtime"], HELPER_SETUP_TIMEOUT_MS, signal, { ...process.env, ELECTRON_RUN_AS_NODE: "1", BUN_BE_BUN: "1" });
+		await runProcess(
+			process.execPath,
+			[SETUP_HELPER_SCRIPT, "--platform", "windows", "--runtime"],
+			HELPER_SETUP_TIMEOUT_MS,
+			signal,
+			{ ...process.env, ELECTRON_RUN_AS_NODE: "1", BUN_BE_BUN: "1" },
+		);
 		this.installChecked = true;
-		if (!(await isExecutable(WINDOWS_HELPER_PATH))) throw new Error(`Failed to install Windows helper at ${WINDOWS_HELPER_PATH}.`);
+		if (!(await isExecutable(WINDOWS_HELPER_PATH)))
+			throw new Error(`Failed to install Windows helper at ${WINDOWS_HELPER_PATH}.`);
 	}
 
 	private async process(signal?: AbortSignal): Promise<ChildProcessWithoutNullStreams> {
@@ -91,9 +129,15 @@ export class WindowsHelperClient {
 		child.stdin.setDefaultEncoding("utf8");
 		// Each child frames its own lines, so a dead child's partial output cannot corrupt its successor's replies.
 		let buffer = "";
-		child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });
-		child.on("exit", () => { if (this.child === child) this.child = undefined; });
-		child.on("error", () => { if (this.child === child) this.child = undefined; });
+		child.stdout.on("data", (chunk: string) => {
+			buffer = this.onStdout(buffer, chunk);
+		});
+		child.on("exit", () => {
+			if (this.child === child) this.child = undefined;
+		});
+		child.on("error", () => {
+			if (this.child === child) this.child = undefined;
+		});
 		// `close` fires after stdout drained, so replies already written are delivered first.
 		child.on("close", () => this.rejectPending(child));
 		this.child = child;
@@ -122,13 +166,21 @@ export class WindowsHelperClient {
 			buffer = buffer.slice(newline + 1);
 			if (!line) continue;
 			let parsed: any;
-			try { parsed = JSON.parse(line); } catch { continue; }
+			try {
+				parsed = JSON.parse(line);
+			} catch {
+				continue;
+			}
 			const pending = this.pending.get(parsed.id);
 			if (!pending) continue;
 			this.pending.delete(parsed.id);
 			clearTimeout(pending.timer);
 			if (parsed.protocolVersion !== WINDOWS_HELPER_PROTOCOL_VERSION) {
-				pending.reject(new Error(`Windows helper protocol mismatch: expected ${WINDOWS_HELPER_PROTOCOL_VERSION}, got ${parsed.protocolVersion ?? "unknown"}. Restart Pi to use the installed helper.`));
+				pending.reject(
+					new Error(
+						`Windows helper protocol mismatch: expected ${WINDOWS_HELPER_PROTOCOL_VERSION}, got ${parsed.protocolVersion ?? "unknown"}. Restart Pi to use the installed helper.`,
+					),
+				);
 			} else if (parsed.ok === true) {
 				pending.resolve(parsed.result);
 			} else {
@@ -139,7 +191,11 @@ export class WindowsHelperClient {
 		}
 	}
 
-	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
+	async command<T>(
+		cmd: string,
+		args: Record<string, unknown> = {},
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<T> {
 		const signal = options?.signal;
 		// A signal that is already aborted never fires again: refuse before installing, spawning or sending.
 		throwIfAborted(signal);
@@ -155,15 +211,32 @@ export class WindowsHelperClient {
 				clearTimeout(timer);
 				signal?.removeEventListener("abort", onAbort);
 			};
-			const fail = (error: Error) => { cleanup(); reject(error); };
+			const fail = (error: Error) => {
+				cleanup();
+				reject(error);
+			};
 			const onAbort = () => fail(new Error("Operation aborted."));
-			const timer = setTimeout(() => fail(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)), timeoutMs);
-			this.pending.set(id, { resolve: (value) => { cleanup(); resolve(value as T); }, reject: fail, timer, child });
+			const timer = setTimeout(
+				() => fail(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)),
+				timeoutMs,
+			);
+			this.pending.set(id, {
+				resolve: (value) => {
+					cleanup();
+					resolve(value as T);
+				},
+				reject: fail,
+				timer,
+				child,
+			});
 			signal?.addEventListener("abort", onAbort, { once: true });
 			try {
-				child.stdin.write(`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
-					if (error) fail(error);
-				});
+				child.stdin.write(
+					`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`,
+					(error) => {
+						if (error) fail(error);
+					},
+				);
 			} catch (error) {
 				fail(error instanceof Error ? error : new Error(String(error)));
 			}

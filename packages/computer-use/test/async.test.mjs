@@ -101,9 +101,7 @@ process.send("entered");
 					closed.then(
 						/** @returns {never} Never returns. @throws {Error} If exit precedes acknowledgment. */
 						() => {
-							throw new Error(
-								"Observer fixture closed before entry acknowledgment",
-							);
+							throw new Error("Observer fixture closed before entry acknowledgment");
 						},
 					),
 				]),
@@ -142,10 +140,7 @@ process.send("entered");
 				);
 			}
 		})();
-		assert.equal(
-			await within(observed, "post-registration wrapper marker"),
-			child.pid,
-		);
+		assert.equal(await within(observed, "post-registration wrapper marker"), child.pid);
 		child.kill("SIGKILL");
 		await within(closed, "observer fixture to close");
 	} finally {
@@ -157,9 +152,7 @@ process.send("entered");
 
 /** @returns {Promise<void>} Verifies missing-handler deadline diagnostics. @throws {Error} On fixture or assertion failure. */
 async function verifyMissingHandlers() {
-	const dir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "pi-signal-observer-missing-"),
-	);
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-signal-observer-missing-"));
 	const observer = path.join(dir, "observer.mjs");
 	const marker = path.join(dir, "wrapper.pid");
 	let child;
@@ -202,10 +195,7 @@ async function verifyMissingHandlers() {
 			),
 			1,
 		);
-		assert.match(
-			stderr,
-			/Timed out observing wrapper signal-handler registration: SIGTERM, SIGINT, SIGHUP, exit/,
-		);
+		assert.match(stderr, /Timed out observing wrapper signal-handler registration: SIGTERM, SIGINT, SIGHUP, exit/);
 		assert.equal(
 			await fs.stat(marker).then(
 				/** @returns {boolean} Records an existing marker. @throws {never} No errors. */
@@ -257,11 +247,10 @@ async function verifyCommandCapture() {
 		/buffer control.*stdout exceeded 4 bytes/s,
 	);
 	await assert.rejects(
-		runCheckCommand(
-			process.execPath,
-			["-e", 'process.stderr.write("failure detail"); process.exitCode = 7;'],
-			{ label: "nonzero control", timeoutMs: DEFAULT_CHECK_TIMEOUT_MS },
-		),
+		runCheckCommand(process.execPath, ["-e", 'process.stderr.write("failure detail"); process.exitCode = 7;'], {
+			label: "nonzero control",
+			timeoutMs: DEFAULT_CHECK_TIMEOUT_MS,
+		}),
 		/** @returns {boolean} Accepts preserved stderr. @throws {Error} On diagnostic mismatch. */
 		(error) => {
 			assert.match(error.message, /nonzero control/);
@@ -383,10 +372,7 @@ async function verifyRedirectedDescendant() {
 	const { child, closed, ready } = spawnRedirectedFixture();
 	let reaped = false;
 	try {
-		const descendant = await within(
-			ready,
-			"redirected descendant handler readiness",
-		);
+		const descendant = await within(ready, "redirected descendant handler readiness");
 		assert.ok(Number.isInteger(descendant) && descendant > 0);
 		await stopCheckChild(child, closed, "redirected descendant control", true);
 		assert.throws(
@@ -490,11 +476,7 @@ async function verifyCompletedGroupProbes(context) {
 		/** @returns {boolean} First observes a possibly recycled group. @throws {Error} On non-probe signals, then ESRCH on the next probe. */
 		(pid, signal) => {
 			calls.push([pid, signal]);
-			assert.equal(
-				signal,
-				0,
-				"a completed session must never signal a possibly recycled group",
-			);
+			assert.equal(signal, 0, "a completed session must never signal a possibly recycled group");
 			if (calls.length === 1) return true;
 			throw Object.assign(new Error("group gone"), { code: "ESRCH" });
 		},
@@ -604,11 +586,7 @@ async function verifyMissingStreamClosure() {
 		},
 	};
 	await assert.rejects(
-		stopCheckChild(
-			child,
-			Promise.reject(new Error("close failed")),
-			"failed close control",
-		),
+		stopCheckChild(child, Promise.reject(new Error("close failed")), "failed close control"),
 		AggregateError,
 	);
 	assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
@@ -694,35 +672,16 @@ async function verifyCleanupAggregation() {
 	);
 }
 
-test(
-	"deferred readiness resolves through a bounded completion wait",
-	verifyDeferredReadiness,
-);
-test(
-	"completion watchdog preserves rejection and reports missing readiness context",
-	verifyCompletionWatchdog,
-);
-test(
-	"signal observer waits for registration in the actual wrapper process",
-	verifySignalObserverReadiness,
-);
-test(
-	"signal observer fails contextually when wrapper handlers never register",
-	verifyMissingHandlers,
-);
-test(
-	"bounded check commands capture streams and contextual nonzero failures",
-	verifyCommandCapture,
-);
-test(
-	"command deadline closes its real child and reports operation context",
-	verifyCommandDeadline,
-);
+test("deferred readiness resolves through a bounded completion wait", verifyDeferredReadiness);
+test("completion watchdog preserves rejection and reports missing readiness context", verifyCompletionWatchdog);
+test("signal observer waits for registration in the actual wrapper process", verifySignalObserverReadiness);
+test("signal observer fails contextually when wrapper handlers never register", verifyMissingHandlers);
+test("bounded check commands capture streams and contextual nonzero failures", verifyCommandCapture);
+test("command deadline closes its real child and reports operation context", verifyCommandDeadline);
 test.skipIf(process.platform === "win32")(
 	"group cleanup kills a redirected TERM-ignoring descendant after its leader closes",
 	{
-		timeout:
-			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+		timeout: COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
 	},
 	verifyRedirectedDescendant,
 );
@@ -730,31 +689,15 @@ test.skipIf(process.platform === "win32")(
 	"failure cleanup kills a TERM-ignoring descendant after its leader died",
 	verifyLeakedDescendantCleanup,
 );
-test(
-	"completed fixtures never signal their former PID",
-	verifyCompletedChildCleanup,
-);
-test(
-	"failed fixtures never signal their former PID",
-	verifyFailedChildCleanup,
-);
-test(
-	"completed detached sessions only probe their former group",
-	verifyCompletedGroupProbes,
-);
-test(
-	"completed group cleanup bounds inherited stream lifetime",
-	verifyCompletedStreamLifetime,
-);
+test("completed fixtures never signal their former PID", verifyCompletedChildCleanup);
+test("failed fixtures never signal their former PID", verifyFailedChildCleanup);
+test("completed detached sessions only probe their former group", verifyCompletedGroupProbes);
+test("completed group cleanup bounds inherited stream lifetime", verifyCompletedStreamLifetime);
 test(
 	"failed and missing close attempts keep cleanup bounded",
 	{
-		timeout:
-			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
+		timeout: COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
 	},
 	verifyMissingStreamClosure,
 );
-test(
-	"cleanup attempts every action and retains primary plus cleanup errors",
-	verifyCleanupAggregation,
-);
+test("cleanup attempts every action and retains primary plus cleanup errors", verifyCleanupAggregation);

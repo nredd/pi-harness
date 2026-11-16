@@ -69,7 +69,10 @@ function uniqueRegions(regions: NoteRegion[]): NoteRegion[] {
 	return output;
 }
 
-function frontierRegions(outline: Outline, topLevels: Array<{ node: OutlineNode; key: string; label: string }>): NoteRegion[] {
+function frontierRegions(
+	outline: Outline,
+	topLevels: Array<{ node: OutlineNode; key: string; label: string }>,
+): NoteRegion[] {
 	const output: NoteRegion[] = [];
 	for (const node of outline.nodes) {
 		if (node.scrollExtent && node.scrollExtent.seen < node.scrollExtent.total) {
@@ -134,7 +137,12 @@ export function noteFromLook(prev: WindowNote | undefined, outline: Outline, win
 	};
 }
 
-export function noteAfterAct(prev: WindowNote | undefined, targetRef: string | undefined, outline: Outline, refreshOutcome: NoteRefreshOutcome): WindowNote {
+export function noteAfterAct(
+	prev: WindowNote | undefined,
+	targetRef: string | undefined,
+	outline: Outline,
+	refreshOutcome: NoteRefreshOutcome,
+): WindowNote {
 	const note = noteFromLook(prev, outline, refreshOutcome.window);
 	if (targetRef) {
 		const target = nodeByRef(outline, targetRef);
@@ -180,13 +188,16 @@ export function noteRegionKeyForRef(outline: Outline, ref: string): string | und
 export function renderNote(note: WindowNote | undefined): string {
 	if (!note) return "";
 	const looked = note.lastLookId ? "looked just now" : "not looked";
-	const lines = [`note ${note.windowRef} ${JSON.stringify(note.title.slice(0, 512))} (pairing ${note.pairing}, ${looked})`];
+	const lines = [
+		`note ${note.windowRef} ${JSON.stringify(note.title.slice(0, 512))} (pairing ${note.pairing}, ${looked})`,
+	];
 	const visible = note.regions.slice(0, 64);
 	for (const region of visible) {
 		const detail = region.detail ? `   (${region.detail.slice(0, 256)})` : "";
 		lines.push(`  ${region.label.slice(0, 512).padEnd(14, " ")} ${region.status}${detail}`);
 	}
-	if (note.regions.length > visible.length) lines.push(`  … ${note.regions.length - visible.length} more note regions; use search_ui or expand_ui`);
+	if (note.regions.length > visible.length)
+		lines.push(`  … ${note.regions.length - visible.length} more note regions; use search_ui or expand_ui`);
 	const encoded = new TextEncoder().encode(lines.join("\n"));
 	if (encoded.byteLength <= 8 * 1024) return new TextDecoder().decode(encoded);
 	let end = 8 * 1024;

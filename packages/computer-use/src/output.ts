@@ -44,14 +44,24 @@ function storeOutput(value: string): StoredOutput {
 	const ref = `@o${nextOutputId++}`;
 	const filePath = path.join(outputDirectory, `${ref.slice(2)}.txt`);
 	writeFileSync(filePath, stored, { mode: 0o600 });
-	const entry: StoredOutput = { ref, filePath, storedBytes: stored.byteLength, totalBytes: encoded.byteLength, complete: stored.byteLength === encoded.byteLength };
+	const entry: StoredOutput = {
+		ref,
+		filePath,
+		storedBytes: stored.byteLength,
+		totalBytes: encoded.byteLength,
+		complete: stored.byteLength === encoded.byteLength,
+	};
 	outputs.set(entry.ref, entry);
 	outputBytes += entry.storedBytes;
 	while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) {
 		const [oldestRef, oldest] = outputs.entries().next().value!;
 		outputs.delete(oldestRef);
 		outputBytes -= oldest.storedBytes;
-		try { unlinkSync(oldest.filePath); } catch { /* already removed */ }
+		try {
+			unlinkSync(oldest.filePath);
+		} catch {
+			/* already removed */
+		}
 	}
 	return entry;
 }
@@ -65,7 +75,9 @@ function refinementFor(tool: string): string {
 }
 
 export function applyOutputEnvelope<T>(tool: string, result: AgentToolResult<T>): AgentToolResult<T> {
-	const textParts = result.content.filter((part): part is Extract<(typeof result.content)[number], { type: "text" }> => part.type === "text");
+	const textParts = result.content.filter(
+		(part): part is Extract<(typeof result.content)[number], { type: "text" }> => part.type === "text",
+	);
 	const combined = textParts.map((part) => part.text).join("\n");
 	const bytes = new TextEncoder().encode(combined).byteLength;
 	const lines = combined === "" ? 0 : combined.split("\n").length;
@@ -90,22 +102,37 @@ export function boundToolError(tool: string, error: unknown): Error {
 	const message = error instanceof Error ? error.message : String(error);
 	const bytes = new TextEncoder().encode(message).byteLength;
 	const lines = message.split("\n").length;
-	if (bytes <= MODEL_TEXT_MAX_BYTES && lines <= MODEL_TEXT_MAX_LINES) return error instanceof Error ? error : new Error(message);
+	if (bytes <= MODEL_TEXT_MAX_BYTES && lines <= MODEL_TEXT_MAX_LINES)
+		return error instanceof Error ? error : new Error(message);
 	const entry = storeOutput(message);
 	const preview = boundedPrefix(message, MODEL_PREVIEW_BYTES, MODEL_TEXT_MAX_LINES - 4);
 	const returnedBytes = new TextEncoder().encode(preview).byteLength;
 	const storageNote = entry.complete ? "" : `; only the first ${entry.storedBytes} bytes were stored`;
-	return new Error(`${preview}\n\nerror truncated: returned ${returnedBytes} of ${entry.totalBytes} utf-8 bytes\nrefine: ${refinementFor(tool)}\ncontinue: read_text({ ref: "${entry.ref}", offset: ${returnedBytes} })${storageNote}`);
+	return new Error(
+		`${preview}\n\nerror truncated: returned ${returnedBytes} of ${entry.totalBytes} utf-8 bytes\nrefine: ${refinementFor(tool)}\ncontinue: read_text({ ref: "${entry.ref}", offset: ${returnedBytes} })${storageNote}`,
+	);
 }
 
-export function readStoredOutput(ref: string, offsetValue: unknown): { text: string; offset: number; limit: number; totalBytes: number; hasMore: boolean; complete: boolean } | undefined {
+export function readStoredOutput(
+	ref: string,
+	offsetValue: unknown,
+):
+	| { text: string; offset: number; limit: number; totalBytes: number; hasMore: boolean; complete: boolean }
+	| undefined {
 	const entry = outputs.get(ref);
 	if (!entry) return undefined;
-	let offset = Math.min(entry.storedBytes, Math.max(0, Math.trunc(typeof offsetValue === "number" && Number.isFinite(offsetValue) ? offsetValue : 0)));
+	let offset = Math.min(
+		entry.storedBytes,
+		Math.max(0, Math.trunc(typeof offsetValue === "number" && Number.isFinite(offsetValue) ? offsetValue : 0)),
+	);
 	const requestedBytes = Math.min(entry.storedBytes - offset, OUTPUT_PAGE_BYTES + 4);
 	const buffer = new Uint8Array(Math.max(0, requestedBytes));
 	const fd = openSync(entry.filePath, "r");
-	try { if (buffer.byteLength > 0) readSync(fd, buffer, 0, buffer.byteLength, offset); } finally { closeSync(fd); }
+	try {
+		if (buffer.byteLength > 0) readSync(fd, buffer, 0, buffer.byteLength, offset);
+	} finally {
+		closeSync(fd);
+	}
 	let start = 0;
 	while (start < buffer.byteLength && (buffer[start] & 0xc0) === 0x80) start += 1;
 	offset += start;
@@ -124,7 +151,11 @@ export function readStoredOutput(ref: string, offsetValue: unknown): { text: str
 export function clearStoredOutputs(): void {
 	outputs.clear();
 	if (outputDirectory) {
-		try { rmSync(outputDirectory, { recursive: true, force: true }); } catch { /* best-effort session cleanup */ }
+		try {
+			rmSync(outputDirectory, { recursive: true, force: true });
+		} catch {
+			/* best-effort session cleanup */
+		}
 	}
 	outputDirectory = undefined;
 	outputBytes = 0;

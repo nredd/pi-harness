@@ -5,9 +5,7 @@ import { test } from "vitest";
 
 test("unpaired act roots and physical transaction lease", async () => {
 	const { currentPlatformBackend } = await import("../src/platform/index.ts");
-	const { executeFind, executeObserve, executeAct } = await import(
-		"../src/bridge.ts"
-	);
+	const { executeFind, executeObserve, executeAct } = await import("../src/bridge.ts");
 	const { parseLookResponse } = await import("../src/outline.ts");
 	const { withDesktopLock } = await import("../src/desktop.ts");
 
@@ -181,27 +179,13 @@ test("unpaired act roots and physical transaction lease", async () => {
 	observeCalls.length = 0;
 	const result = await call(executeAct, {
 		stateId,
-		actions: [
-			{ action: "press", ref: text(observed).match(/(@e\d+) button/)[1] },
-		],
+		actions: [{ action: "press", ref: text(observed).match(/(@e\d+) button/)[1] }],
 	});
-	assert.notEqual(
-		result.details?.status,
-		"post_action_observation_failed",
-		text(result),
-	);
+	assert.notEqual(result.details?.status, "post_action_observation_failed", text(result));
 	assert.match(text(result), /Executed 1 checked UI action/);
 	const successor = observeCalls.at(-1);
-	assert.equal(
-		successor.includeImage,
-		false,
-		"unpaired successor must be semantic",
-	);
-	assert.equal(
-		successor.target.windowId,
-		undefined,
-		"windowId 0 must not be sent",
-	);
+	assert.equal(successor.includeImage, false, "unpaired successor must be semantic");
+	assert.equal(successor.target.windowId, undefined, "windowId 0 must not be sent");
 	assert.equal(successor.target.windowRef, "ax:dlg");
 	// Root delta refs: the ref shown for a new dialog must be the one find_roots issues for it, even when the
 	// dialog has a real windowId (helper deltas carry helper-native refs, a different namespace).
@@ -265,21 +249,13 @@ test("unpaired act roots and physical transaction lease", async () => {
 	const second_state = text(second).match(/stateId ([0-9a-f-]{36})/)[1];
 	const acted = await call(executeAct, {
 		stateId: second_state,
-		actions: [
-			{ action: "press", ref: text(second).match(/(@e\d+) button/)[1] },
-		],
+		actions: [{ action: "press", ref: text(second).match(/(@e\d+) button/)[1] }],
 	});
-	const deltaRef = text(acted).match(
-		/New root: dialog "Confirm"[^\n]*\((@r\d+)\)/,
-	)?.[1];
+	const deltaRef = text(acted).match(/New root: dialog "Confirm"[^\n]*\((@r\d+)\)/)?.[1];
 	assert.ok(deltaRef, `delta line missing an @r ref:\n${text(acted)}`);
 	const refreshed = await call(executeFind, { app: "App" });
 	const findRef = text(refreshed).match(/(@r\d+) dialog App[^\n]*Confirm/)?.[1];
-	assert.equal(
-		deltaRef,
-		findRef,
-		"delta ref and find_roots ref must name the same root with one @r ref",
-	);
+	assert.equal(deltaRef, findRef, "delta ref and find_roots ref must name the same root with one @r ref");
 	assert.doesNotMatch(text(acted), /Unknown App/);
 
 	// Validation precedes the write epoch (upstream #112): a rejected batch delivers nothing and leaves
@@ -293,7 +269,11 @@ test("unpaired act roots and physical transaction lease", async () => {
 	 */
 	currentPlatformBackend.actBatch = async (request) => {
 		delivered.push(request);
-		return { outcome: "worked", performed: { delivery: "pid", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked" }] };
+		return {
+			outcome: "worked",
+			performed: { delivery: "pid", transaction: true, actionCount: 1 },
+			steps: [{ outcome: "worked" }],
+		};
 	};
 	currentPlatformBackend.act = async (request) => {
 		delivered.push(request);
@@ -303,7 +283,13 @@ test("unpaired act roots and physical transaction lease", async () => {
 	const freshState = text(fresh).match(/stateId ([0-9a-f-]{36})/)[1];
 	const freshButton = text(fresh).match(/(@e\d+) button/)[1];
 	await assert.rejects(
-		call(executeAct, { stateId: freshState, actions: [{ action: "press", ref: freshButton }, { action: "keypress", keys: ["return"] }] }),
+		call(executeAct, {
+			stateId: freshState,
+			actions: [
+				{ action: "press", ref: freshButton },
+				{ action: "keypress", keys: ["return"] },
+			],
+		}),
 		/keypress|ref|coordinates|focus/i,
 	);
 	assert.equal(delivered.length, 0, "invalid batch must not deliver its valid prefix");
@@ -325,7 +311,13 @@ test("unpaired act roots and physical transaction lease", async () => {
 		loadComputerUseConfig(process.cwd());
 		Object.defineProperty(process, "platform", { value: "darwin" });
 		await assert.rejects(
-			call(executeAct, { stateId: strictState, actions: [{ action: "press", ref: strictButton }, { action: "keypress", ref: strictButton, keys: ["return"] }] }),
+			call(executeAct, {
+				stateId: strictState,
+				actions: [
+					{ action: "press", ref: strictButton },
+					{ action: "keypress", ref: strictButton, keys: ["return"] },
+				],
+			}),
 			/strict headless/,
 		);
 		assert.equal(delivered.length, 0, "strict headless rejection must not deliver the earlier step");
@@ -397,11 +389,7 @@ test("unpaired act roots and physical transaction lease", async () => {
 		}).then(() => "done"),
 		"background act to complete without the desktop lock",
 	);
-	assert.equal(
-		background,
-		"done",
-		"a background act must not wait for the desktop lock",
-	);
+	assert.equal(background, "done", "a background act must not wait for the desktop lock");
 	assert.ok(!policies.includes("foreground"));
 	needForeground = true;
 	policies.length = 0;
@@ -421,21 +409,11 @@ test("unpaired act roots and physical transaction lease", async () => {
 		/** @returns {NodeJS.Timeout} Bounds observation of forbidden foreground work. @throws {never} No errors. */
 		(resolve) => setTimeout(resolve, FOREGROUND_BLOCKED_WINDOW_MS),
 	);
-	assert.equal(
-		foregroundDone,
-		false,
-		"a foreground act must wait for the desktop lock",
-	);
-	assert.ok(
-		!policies.includes("foreground"),
-		"foreground delivery must not start while the lock is held",
-	);
+	assert.equal(foregroundDone, false, "a foreground act must wait for the desktop lock");
+	assert.ok(!policies.includes("foreground"), "foreground delivery must not start while the lock is held");
 	release();
 	await held;
-	await within(
-		foreground,
-		"foreground act to complete after desktop lock release",
-	);
+	await within(foreground, "foreground act to complete after desktop lock release");
 	assert.ok(policies.includes("foreground"));
 
 	// Once a transaction goes physical it keeps the lock to the end: a desktop_input queued during step 1 runs

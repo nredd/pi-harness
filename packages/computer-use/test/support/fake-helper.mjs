@@ -22,7 +22,10 @@ import { PassThrough } from "node:stream";
 /** Success reply carrying `result`. */
 export const ok = (result = {}) => ({ kind: "reply", body: { ok: true, result } });
 /** Error reply with `message` and optional `code` (e.g. `"permission_denied"`). */
-export const fail = (message, code) => ({ kind: "reply", body: { ok: false, error: code === undefined ? { message } : { message, code } } });
+export const fail = (message, code) => ({
+	kind: "reply",
+	body: { ok: false, error: code === undefined ? { message } : { message, code } },
+});
 /** Reply with an arbitrary extra body, e.g. a missing `ok` or a bare `{ ok: false }`. */
 export const body = (value) => ({ kind: "reply", body: value });
 /** Write `text` verbatim (add your own newline). */
@@ -61,7 +64,13 @@ export function defaultDiagnostics(protocolVersion, overrides = {}) {
  * Protocol engine, transport-free. `handleLine(line, io)` parses one request line and plays the scripted
  * action through `io = { write(text), end(), sleep(ms) }`. `requests` records every parsed request.
  */
-export function createHelperEngine({ profile = "flat", protocolVersion = 7, handlers = {}, diagnostics = {}, platform = "Windows" } = {}) {
+export function createHelperEngine({
+	profile = "flat",
+	protocolVersion = 7,
+	handlers = {},
+	diagnostics = {},
+	platform = "Windows",
+} = {}) {
 	const queues = new Map();
 	const engine = {
 		profile,
@@ -87,13 +96,21 @@ export function createHelperEngine({ profile = "flat", protocolVersion = 7, hand
 				request = JSON.parse(trimmed);
 			} catch (error) {
 				// Swift answers id "invalid"; Rust echoes the id it can extract, else "unknown".
-				await invalid(profile === "envelope" ? `Invalid request: ${error.message}` : "Input was not valid JSON", profile === "envelope" ? "unknown" : "invalid");
+				await invalid(
+					profile === "envelope" ? `Invalid request: ${error.message}` : "Input was not valid JSON",
+					profile === "envelope" ? "unknown" : "invalid",
+				);
 				return;
 			}
 			const isObject = request !== null && typeof request === "object" && !Array.isArray(request);
 			if (profile === "flat") {
 				if (!isObject) return await invalid("Request must be a JSON object", "invalid");
-				const parsed = { id: typeof request.id === "string" ? request.id : "invalid", cmd: request.cmd, args: omit(request, ["id", "cmd"]), raw: request };
+				const parsed = {
+					id: typeof request.id === "string" ? request.id : "invalid",
+					cmd: request.cmd,
+					args: omit(request, ["id", "cmd"]),
+					raw: request,
+				};
 				engine.requests.push(parsed);
 				await play(await resolve(parsed), io, parsed.id);
 				return;
@@ -102,11 +119,18 @@ export function createHelperEngine({ profile = "flat", protocolVersion = 7, hand
 			const id = isObject && typeof request.id === "string" ? request.id : "unknown";
 			const missing = ["protocolVersion", "id", "cmd", "args"].find((key) => !isObject || !(key in request));
 			if (missing) return await invalid(`Invalid request: missing field \`${missing}\``, id);
-			if (typeof request.protocolVersion !== "number" || typeof request.id !== "string" || typeof request.cmd !== "string") {
+			if (
+				typeof request.protocolVersion !== "number" ||
+				typeof request.id !== "string" ||
+				typeof request.cmd !== "string"
+			) {
 				return await invalid("Invalid request: invalid type", id);
 			}
 			if (request.protocolVersion !== protocolVersion) {
-				return await invalid(`Unsupported ${engine.platform} helper protocol ${request.protocolVersion}; expected ${protocolVersion}. Restart Pi to use the installed helper.`, id);
+				return await invalid(
+					`Unsupported ${engine.platform} helper protocol ${request.protocolVersion}; expected ${protocolVersion}. Restart Pi to use the installed helper.`,
+					id,
+				);
 			}
 			const parsed = { id, cmd: request.cmd, args: request.args, raw: request };
 			engine.requests.push(parsed);
@@ -121,7 +145,10 @@ export function createHelperEngine({ profile = "flat", protocolVersion = 7, hand
 			// Real helpers reply, then exit ~0.2 s later (bridge.swift `shutdown`); relaunch is the test's job.
 			if (request.cmd === "shutdown") return exitAfter(200, ok({ shuttingDown: true }));
 			// Swift: `unknown_command`; both Rust helpers: `unsupported_command`. Same message text.
-			return fail(`Unknown command '${request.cmd}'`, profile === "envelope" ? "unsupported_command" : "unknown_command");
+			return fail(
+				`Unknown command '${request.cmd}'`,
+				profile === "envelope" ? "unsupported_command" : "unknown_command",
+			);
 		}
 		if (Array.isArray(handler)) {
 			const index = queues.get(request.cmd) ?? 0;
@@ -277,10 +304,11 @@ export async function startFakeHelper({ socketPath, ...engineOptions }) {
 	};
 	engine.onExit = () => {
 		void fake.stop().then(() => {
-			if (fake.relaunch) setTimeout(() => {
-				Object.assign(engine.diagnostics, fake.relaunch.diagnostics);
-				void fake.start();
-			}, fake.relaunch.delayMs);
+			if (fake.relaunch)
+				setTimeout(() => {
+					Object.assign(engine.diagnostics, fake.relaunch.diagnostics);
+					void fake.start();
+				}, fake.relaunch.delayMs);
 		});
 	};
 	await fake.start();

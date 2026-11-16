@@ -64,7 +64,11 @@ test("macOS observe target identity and daemon age", async () => {
 	assert.equal(helperPredatesBinary(1_000_000, 1_000_500), false, "sub-second skew is not stale");
 	assert.equal(helperPredatesBinary(Number.NaN, 5), false);
 	const helperSource = readFileSync(new URL("../src/platform/macos/helper.ts", import.meta.url), "utf8");
-	assert.match(helperSource, /const \{ ctimeMs \} = await stat\(HELPER_APP_EXECUTABLE_PATH\)/, "binary freshness must use ctime, not preserved mtime");
+	assert.match(
+		helperSource,
+		/const \{ ctimeMs \} = await stat\(HELPER_APP_EXECUTABLE_PATH\)/,
+		"binary freshness must use ctime, not preserved mtime",
+	);
 	assert.match(helperSource, /helperPredatesBinary\(Date\.now\(\) - seconds \* 1_000, ctimeMs\)/);
 
 	console.log("macos observe target checks passed");

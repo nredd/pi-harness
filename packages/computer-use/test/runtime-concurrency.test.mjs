@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
-import {
-	canRetryInForeground,
-	outcomeAfterCheck,
-	outcomeAfterObservedValues,
-	prepareAction,
-} from "../src/actions.ts";
+import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction } from "../src/actions.ts";
 import { nodeByRef, parseLookResponse } from "../src/outline.ts";
-import {
-	ResourceScheduler,
-	StaleResourceStateError,
-	StateStore,
-} from "../src/runtime.ts";
+import { ResourceScheduler, StaleResourceStateError, StateStore } from "../src/runtime.ts";
 import { changesBetween, stabilizeRefs } from "../src/view.ts";
 import { test } from "vitest";
 
@@ -21,11 +12,7 @@ test("runtime concurrency and isolation", async () => {
 	const first = states.create("pid:1", 0, { label: "first" });
 	states.create("pid:2", 0, { label: "second" });
 	states.create("pid:3", 0, { label: "third" });
-	assert.equal(
-		states.get(first.stateId),
-		undefined,
-		"bounded state store did not evict oldest state",
-	);
+	assert.equal(states.get(first.stateId), undefined, "bounded state store did not evict oldest state");
 
 	const MILLISECONDS_PER_SECOND = 1000;
 
@@ -79,15 +66,8 @@ test("runtime concurrency and isolation", async () => {
 		baseLook.parsedOutline.wireRefToRef.get("editor"),
 		"successor state did not preserve a confidently matched ref",
 	);
-	const successorDiff = changesBetween(
-		baseLook.parsedOutline,
-		nextLook.parsedOutline,
-	);
-	assert.equal(
-		successorDiff.useFullView,
-		false,
-		"small successor change unexpectedly required a full view",
-	);
+	const successorDiff = changesBetween(baseLook.parsedOutline, nextLook.parsedOutline);
+	assert.equal(successorDiff.useFullView, false, "small successor change unexpectedly required a full view");
 	assert(
 		successorDiff.changes.some(
 			(change) =>
@@ -99,9 +79,7 @@ test("runtime concurrency and isolation", async () => {
 	);
 	assert(
 		successorDiff.changes.some(
-			(change) =>
-				change.type === "added" &&
-				change.ref === nextLook.parsedOutline.wireRefToRef.get("inserted"),
+			(change) => change.type === "added" && change.ref === nextLook.parsedOutline.wireRefToRef.get("inserted"),
 		),
 		"successor diff omitted the added node",
 	);
@@ -117,24 +95,19 @@ test("runtime concurrency and isolation", async () => {
 		},
 	]);
 	stabilizeRefs(baseLook.parsedOutline, regeneratedLook.parsedOutline);
-	const regeneratedEditor = regeneratedLook.parsedOutline.nodes.find(
-		(node) => node.wireRef === "editor-new",
-	);
+	const regeneratedEditor = regeneratedLook.parsedOutline.nodes.find((node) => node.wireRef === "editor-new");
 	assert.equal(
 		regeneratedEditor?.ref,
 		baseLook.parsedOutline.wireRefToRef.get("editor"),
 		"structurally stable nodes did not retain refs when native refs regenerated",
 	);
 	assert.equal(
-		changesBetween(baseLook.parsedOutline, regeneratedLook.parsedOutline)
-			.useFullView,
+		changesBetween(baseLook.parsedOutline, regeneratedLook.parsedOutline).useFullView,
 		false,
 		"regenerated native refs forced an unnecessary full view",
 	);
 
-	const editor = nextLook.parsedOutline.nodes.find(
-		(node) => node.wireRef === "editor",
-	);
+	const editor = nextLook.parsedOutline.nodes.find((node) => node.wireRef === "editor");
 	assert(editor, "editor fixture was not parsed");
 	const actionEnv = {
 		headless: false,
@@ -160,16 +133,8 @@ test("runtime concurrency and isolation", async () => {
 		 */
 		validatePoint: () => undefined,
 	};
-	const preparedClick = prepareAction(
-		{ action: "click", ref: editor.ref },
-		{ currentFocus: false },
-		actionEnv,
-	);
-	assert.equal(
-		preparedClick.establishesFocus,
-		true,
-		"editable semantic clicks should establish transaction focus",
-	);
+	const preparedClick = prepareAction({ action: "click", ref: editor.ref }, { currentFocus: false }, actionEnv);
+	assert.equal(preparedClick.establishesFocus, true, "editable semantic clicks should establish transaction focus");
 	assert(
 		"x" in preparedClick.target,
 		"text-input clicks should use their observed center to establish deterministic focus",
@@ -199,21 +164,9 @@ test("runtime concurrency and isolation", async () => {
 			node: () => pictureTarget,
 		},
 	);
-	assert.equal(
-		pictureClick.needsForeground,
-		true,
-		"picture-only clicks should use foreground pointer delivery",
-	);
-	const preparedType = prepareAction(
-		{ action: "typeText", text: "hello" },
-		{ currentFocus: true },
-		actionEnv,
-	);
-	assert.equal(
-		preparedType.usesCurrentFocus,
-		true,
-		"focused typing did not preserve click-established focus",
-	);
+	assert.equal(pictureClick.needsForeground, true, "picture-only clicks should use foreground pointer delivery");
+	const preparedType = prepareAction({ action: "typeText", text: "hello" }, { currentFocus: true }, actionEnv);
+	assert.equal(preparedType.usesCurrentFocus, true, "focused typing did not preserve click-established focus");
 	assert.equal(
 		canRetryInForeground(preparedType, "didnt", false),
 		true,
@@ -234,26 +187,14 @@ test("runtime concurrency and isolation", async () => {
 		"unknown",
 		"preexisting evidence incorrectly proved the request worked",
 	);
+	assert.equal(outcomeAfterCheck("worked", "failed"), "didnt", "failed verification did not override delivery success");
 	assert.equal(
-		outcomeAfterCheck("worked", "failed"),
-		"didnt",
-		"failed verification did not override delivery success",
-	);
-	assert.equal(
-		outcomeAfterObservedValues(
-			"didnt",
-			[{ action: "setText", ref: "@e1", text: "saved" }],
-			() => "saved",
-		),
+		outcomeAfterObservedValues("didnt", [{ action: "setText", ref: "@e1", text: "saved" }], () => "saved"),
 		"worked",
 		"resulting state did not override stale immediate setText evidence",
 	);
 	assert.equal(
-		outcomeAfterObservedValues(
-			"didnt",
-			[{ action: "setText", ref: "@e1", text: "saved" }],
-			() => "old",
-		),
+		outcomeAfterObservedValues("didnt", [{ action: "setText", ref: "@e1", text: "saved" }], () => "old"),
 		"didnt",
 		"mismatched resulting value incorrectly proved setText worked",
 	);
@@ -272,18 +213,12 @@ test("runtime concurrency and isolation", async () => {
 		await Promise.resolve();
 		active -= 1;
 	};
-	await Promise.all([
-		scheduler.read("pid:1", work),
-		scheduler.read("pid:2", work),
-	]);
+	await Promise.all([scheduler.read("pid:1", work), scheduler.read("pid:2", work)]);
 	assert.equal(peak, 2, "different resources did not overlap");
 
 	active = 0;
 	peak = 0;
-	await Promise.all([
-		scheduler.read("pid:3", work),
-		scheduler.read("pid:3", work),
-	]);
+	await Promise.all([scheduler.read("pid:3", work), scheduler.read("pid:3", work)]);
 	assert.equal(peak, 1, "same-resource operations overlapped");
 
 	await scheduler.write("pid:4", 0, async () => undefined);

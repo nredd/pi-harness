@@ -36,7 +36,13 @@ const { effectiveBlockedBundleIds, getComputerUseConfig } = await import("../src
 const { wslProbe } = await import("../src/platform/linux/wsl.ts");
 
 const signal = new AbortController().signal;
-const diagnostics = (over = {}) => ({ protocolVersion: 4, architectureVersion: 1, invariants: [...REQUIRED_PLATFORM_INVARIANTS], accessibility: true, ...over });
+const diagnostics = (over = {}) => ({
+	protocolVersion: 4,
+	architectureVersion: 1,
+	invariants: [...REQUIRED_PLATFORM_INVARIANTS],
+	accessibility: true,
+	...over,
+});
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -77,16 +83,54 @@ describe("macOS backend", () => {
 	});
 
 	test("listRoots parses full payloads", async () => {
-		fakes.macos.command.mockResolvedValueOnce({ roots: [{
-			kind: "sheet", rootRef: "r1", windowRef: "w1", windowId: 5.7, pid: 9.2, appName: "App", bundleId: "b.id", title: "T",
-			role: "AXWindow", subrole: "AXDialog", framePoints: { x: "1", y: 2, w: 30, h: 40 }, scaleFactor: 2, zOrder: 3.9,
-			isMinimized: true, isOnscreen: "true", isMain: 1, isFocused: true, isModal: true, metadata: { k: 1 },
-		}] });
-		assert.deepEqual(await macosBackend.listRoots({}), [{
-			kind: "sheet", rootRef: "r1", windowRef: "w1", windowId: 5, pid: 9, appName: "App", bundleId: "b.id", title: "T",
-			role: "AXWindow", subrole: "AXDialog", framePoints: { x: 1, y: 2, w: 30, h: 40 }, scaleFactor: 2, zOrder: 3,
-			isMinimized: true, isOnscreen: true, isMain: true, isFocused: true, isModal: true, metadata: { k: 1 },
-		}]);
+		fakes.macos.command.mockResolvedValueOnce({
+			roots: [
+				{
+					kind: "sheet",
+					rootRef: "r1",
+					windowRef: "w1",
+					windowId: 5.7,
+					pid: 9.2,
+					appName: "App",
+					bundleId: "b.id",
+					title: "T",
+					role: "AXWindow",
+					subrole: "AXDialog",
+					framePoints: { x: "1", y: 2, w: 30, h: 40 },
+					scaleFactor: 2,
+					zOrder: 3.9,
+					isMinimized: true,
+					isOnscreen: "true",
+					isMain: 1,
+					isFocused: true,
+					isModal: true,
+					metadata: { k: 1 },
+				},
+			],
+		});
+		assert.deepEqual(await macosBackend.listRoots({}), [
+			{
+				kind: "sheet",
+				rootRef: "r1",
+				windowRef: "w1",
+				windowId: 5,
+				pid: 9,
+				appName: "App",
+				bundleId: "b.id",
+				title: "T",
+				role: "AXWindow",
+				subrole: "AXDialog",
+				framePoints: { x: 1, y: 2, w: 30, h: 40 },
+				scaleFactor: 2,
+				zOrder: 3,
+				isMinimized: true,
+				isOnscreen: true,
+				isMain: true,
+				isFocused: true,
+				isModal: true,
+				metadata: { k: 1 },
+			},
+		]);
 	});
 
 	test("listRoots defaults malformed and partial payloads", async () => {
@@ -98,9 +142,25 @@ describe("macOS backend", () => {
 		const roots = await macosBackend.listRoots({});
 		assert.equal(roots.length, 3);
 		assert.deepEqual(roots[0], {
-			kind: "window", rootRef: "only-window", windowRef: "only-window", windowId: undefined, pid: undefined, appName: undefined,
-			bundleId: undefined, title: "", role: undefined, subrole: undefined, framePoints: { x: 0, y: 0, w: 1, h: 1 }, scaleFactor: 1,
-			zOrder: 0, isMinimized: false, isOnscreen: false, isMain: false, isFocused: false, isModal: false, metadata: {},
+			kind: "window",
+			rootRef: "only-window",
+			windowRef: "only-window",
+			windowId: undefined,
+			pid: undefined,
+			appName: undefined,
+			bundleId: undefined,
+			title: "",
+			role: undefined,
+			subrole: undefined,
+			framePoints: { x: 0, y: 0, w: 1, h: 1 },
+			scaleFactor: 1,
+			zOrder: 0,
+			isMinimized: false,
+			isOnscreen: false,
+			isMain: false,
+			isFocused: false,
+			isModal: false,
+			metadata: {},
 		});
 		assert.equal(roots[1].rootRef, "only-root");
 		assert.equal(roots[1].windowRef, "only-root");
@@ -125,11 +185,29 @@ describe("macOS backend", () => {
 	});
 
 	test("getFrontmost normalizes the helper reply and rejects a missing pid", async () => {
-		fakes.macos.command.mockResolvedValueOnce({ pid: 7.5, appName: "Pages", bundleId: "b", windowTitle: "Doc", windowId: 3.9 });
-		assert.deepEqual(await macosBackend.getFrontmost(signal), { appName: "Pages", bundleId: "b", pid: 7, windowTitle: "Doc", windowId: 3 });
+		fakes.macos.command.mockResolvedValueOnce({
+			pid: 7.5,
+			appName: "Pages",
+			bundleId: "b",
+			windowTitle: "Doc",
+			windowId: 3.9,
+		});
+		assert.deepEqual(await macosBackend.getFrontmost(signal), {
+			appName: "Pages",
+			bundleId: "b",
+			pid: 7,
+			windowTitle: "Doc",
+			windowId: 3,
+		});
 		assert.deepEqual(lastCall(fakes.macos), ["getFrontmost", {}, { signal }]);
 		fakes.macos.command.mockResolvedValueOnce({ pid: 8, windowId: "nope" });
-		assert.deepEqual(await macosBackend.getFrontmost(), { appName: "Unknown App", bundleId: undefined, pid: 8, windowTitle: undefined, windowId: undefined });
+		assert.deepEqual(await macosBackend.getFrontmost(), {
+			appName: "Unknown App",
+			bundleId: undefined,
+			pid: 8,
+			windowTitle: undefined,
+			windowId: undefined,
+		});
 		for (const bad of [{ pid: 0 }, { pid: -1 }, {}, undefined]) {
 			fakes.macos.command.mockResolvedValueOnce(bad);
 			await rejectsWith(macosBackend.getFrontmost(), /No frontmost app was available/);
@@ -137,7 +215,11 @@ describe("macOS backend", () => {
 	});
 
 	test("normalizeTarget emits windowId only when positive and prefers windowRef over rootRef", () => {
-		assert.deepEqual(normalizeTarget({ pid: 1, windowId: 4.9, rootRef: "r", windowRef: "w" }), { pid: 1, windowId: 4, windowRef: "w" });
+		assert.deepEqual(normalizeTarget({ pid: 1, windowId: 4.9, rootRef: "r", windowRef: "w" }), {
+			pid: 1,
+			windowId: 4,
+			windowRef: "w",
+		});
 		assert.deepEqual(normalizeTarget({ pid: 1, windowId: 0, rootRef: "r" }), { pid: 1, windowRef: "r" });
 		assert.deepEqual(normalizeTarget({ pid: 1, windowId: Number.NaN }), { pid: 1 });
 	});
@@ -149,9 +231,31 @@ describe("macOS backend", () => {
 		assert.deepEqual(lastCall(fakes.macos), ["focusWindow", { pid: 1, windowRef: "r" }, { signal }]);
 
 		fakes.macos.command.mockResolvedValueOnce({ lookId: "L1" });
-		const look = await macosBackend.observe({ target: { pid: 1, rootRef: "r" }, baseLookId: "b", maxDimension: 9, readText: "auto", scopeRef: "s", includeImage: false }, options);
+		const look = await macosBackend.observe(
+			{
+				target: { pid: 1, rootRef: "r" },
+				baseLookId: "b",
+				maxDimension: 9,
+				readText: "auto",
+				scopeRef: "s",
+				includeImage: false,
+			},
+			options,
+		);
 		assert.equal(look.lookId, "L1");
-		assert.deepEqual(lastCall(fakes.macos), ["look", { baseLookId: "b", pid: 1, windowRef: "r", maxDimension: 9, readText: "auto", scopeRef: "s", includeImage: false }, options]);
+		assert.deepEqual(lastCall(fakes.macos), [
+			"look",
+			{
+				baseLookId: "b",
+				pid: 1,
+				windowRef: "r",
+				maxDimension: 9,
+				readText: "auto",
+				scopeRef: "s",
+				includeImage: false,
+			},
+			options,
+		]);
 
 		const plain = { target: { pid: 1 }, action: "click" };
 		const focus = { target: { focus: { pid: 2 } }, params: { x: 1 } };
@@ -195,8 +299,17 @@ describe("Windows backend", () => {
 
 	test("classifies browsers from process names", () => {
 		const table = [
-			["chrome.exe", "chrome"], ["Chromium", "chrome"], ["msedge.EXE", "edge"], ["edge", "edge"], ["brave", "brave"], ["brave-browser", "brave"],
-			["firefox.exe", "firefox"], ["vivaldi", "vivaldi"], ["opera", "opera"], ["opera_gx.exe", "opera"], ["notepad.exe", false],
+			["chrome.exe", "chrome"],
+			["Chromium", "chrome"],
+			["msedge.EXE", "edge"],
+			["edge", "edge"],
+			["brave", "brave"],
+			["brave-browser", "brave"],
+			["firefox.exe", "firefox"],
+			["vivaldi", "vivaldi"],
+			["opera", "opera"],
+			["opera_gx.exe", "opera"],
+			["notepad.exe", false],
 		];
 		for (const [name, kind] of table) {
 			assert.equal(backend.isBrowserApp(name), kind !== false, name);
@@ -205,17 +318,52 @@ describe("Windows backend", () => {
 	});
 
 	test("listRoots parses payload variants and filters by title", async () => {
-		fakes.windows.command.mockResolvedValue({ roots: [
-			{ kind: "dialog", ref: "ref1", processName: "Word.exe", pid: 4.4, bounds: { x: 1, y: 2, width: 30, height: 40 }, title: " Report ", isFocused: true, scaleFactor: 1.5, metadata: { a: 1 } },
-			{ kind: "sheet", windowRef: "w2", framePoints: { x: 5, y: 6, w: 7, h: 8 }, isOnscreen: false, isMain: false, isFocused: true },
-			null,
-		] });
+		fakes.windows.command.mockResolvedValue({
+			roots: [
+				{
+					kind: "dialog",
+					ref: "ref1",
+					processName: "Word.exe",
+					pid: 4.4,
+					bounds: { x: 1, y: 2, width: 30, height: 40 },
+					title: " Report ",
+					isFocused: true,
+					scaleFactor: 1.5,
+					metadata: { a: 1 },
+				},
+				{
+					kind: "sheet",
+					windowRef: "w2",
+					framePoints: { x: 5, y: 6, w: 7, h: 8 },
+					isOnscreen: false,
+					isMain: false,
+					isFocused: true,
+				},
+				null,
+			],
+		});
 		const roots = await backend.listRoots({ pid: 9.7 }, signal);
 		assert.deepEqual(lastCall(fakes.windows), ["listRoots", { pid: 9 }, { signal }]);
 		assert.deepEqual(roots[0], {
-			kind: "dialog", rootRef: "ref1", windowRef: "ref1", windowId: undefined, pid: 4, appName: "Word.exe", bundleId: undefined, title: " Report ",
-			role: undefined, subrole: undefined, zOrder: 0, framePoints: { x: 1, y: 2, w: 30, h: 40 }, scaleFactor: 1.5, isOnscreen: true,
-			isFocused: true, isMinimized: false, isMain: true, isModal: false, metadata: { a: 1 },
+			kind: "dialog",
+			rootRef: "ref1",
+			windowRef: "ref1",
+			windowId: undefined,
+			pid: 4,
+			appName: "Word.exe",
+			bundleId: undefined,
+			title: " Report ",
+			role: undefined,
+			subrole: undefined,
+			zOrder: 0,
+			framePoints: { x: 1, y: 2, w: 30, h: 40 },
+			scaleFactor: 1.5,
+			isOnscreen: true,
+			isFocused: true,
+			isMinimized: false,
+			isMain: true,
+			isModal: false,
+			metadata: { a: 1 },
 		});
 		assert.equal(roots[1].kind, "window");
 		assert.equal(roots[1].isOnscreen, false);
@@ -224,7 +372,10 @@ describe("Windows backend", () => {
 		assert.equal(roots[1].windowRef, "w2");
 		assert.equal(roots[2].kind, "window");
 		assert.deepEqual(roots[2].framePoints, { x: 0, y: 0, w: 1, h: 1 });
-		assert.deepEqual((await backend.listRoots({ title: "REPORT" })).map((r) => r.rootRef), ["ref1"]);
+		assert.deepEqual(
+			(await backend.listRoots({ title: "REPORT" })).map((r) => r.rootRef),
+			["ref1"],
+		);
 		assert.equal((await backend.listRoots({ title: "  " })).length, 3);
 		assert.equal((await backend.listRoots({ title: "absent" })).length, 0);
 		assert.deepEqual(lastCall(fakes.windows)[1], {});
@@ -250,7 +401,14 @@ describe("Windows backend", () => {
 			{ appName: "Unknown", bundleId: undefined, pid: 2, isFrontmost: true },
 		]);
 		assert.deepEqual(lastCall(fakes.windows), ["listRoots", {}, { signal }]);
-		assert.deepEqual(await backend.getFrontmost(), { appName: "Unknown", bundleId: undefined, pid: 2, windowTitle: "t2", windowId: 8, rootRef: "r2" });
+		assert.deepEqual(await backend.getFrontmost(), {
+			appName: "Unknown",
+			bundleId: undefined,
+			pid: 2,
+			windowTitle: "t2",
+			windowId: 8,
+			rootRef: "r2",
+		});
 		fakes.windows.command.mockResolvedValue([{ pid: 3, appName: "First", title: "x" }]);
 		assert.equal((await backend.getFrontmost()).appName, "First");
 		for (const roots of [[], [{ title: "no pid" }]]) {
@@ -281,9 +439,16 @@ describe("Windows backend", () => {
 		assert.equal(fakes.windows.dispose.mock.calls.length, 1);
 		await backend.focusWindow({ pid: 1 }, signal);
 		assert.deepEqual(lastCall(fakes.windows), ["focusWindow", { pid: 1 }, { signal }]);
-		const look = await backend.observe({ target: { pid: 1 }, baseLookId: "b", maxDimension: 9, readText: "never", scopeRef: "s", includeImage: true }, options);
+		const look = await backend.observe(
+			{ target: { pid: 1 }, baseLookId: "b", maxDimension: 9, readText: "never", scopeRef: "s", includeImage: true },
+			options,
+		);
 		assert.equal(look.lookId, "W1");
-		assert.deepEqual(lastCall(fakes.windows), ["look", { pid: 1, baseLookId: "b", maxDimension: 9, readText: "never", scopeRef: "s", includeImage: true }, options]);
+		assert.deepEqual(lastCall(fakes.windows), [
+			"look",
+			{ pid: 1, baseLookId: "b", maxDimension: 9, readText: "never", scopeRef: "s", includeImage: true },
+			options,
+		]);
 		const plain = { target: { pid: 1 }, action: "click" };
 		const focus = { target: { focus: { pid: 2 } }, params: { y: 1 } };
 		await backend.act(plain, options);
@@ -291,13 +456,21 @@ describe("Windows backend", () => {
 		await backend.act(focus);
 		assert.deepEqual(lastCall(fakes.windows)[1], { target: { pid: 2 }, params: { y: 1, preserveFocus: true } });
 		await backend.actBatch([plain, focus], options);
-		assert.deepEqual(lastCall(fakes.windows), ["actBatch", { actions: [plain, { target: { pid: 2 }, params: { y: 1, preserveFocus: true } }] }, options]);
+		assert.deepEqual(lastCall(fakes.windows), [
+			"actBatch",
+			{ actions: [plain, { target: { pid: 2 }, params: { y: 1, preserveFocus: true } }] },
+			options,
+		]);
 		await backend.readText({ rootRef: "r" }, options);
 		assert.deepEqual(lastCall(fakes.windows), ["uiaReadText", { rootRef: "r" }, options]);
 		await backend.waitFor({ rootRef: "r" }, options);
 		assert.deepEqual(lastCall(fakes.windows), ["uiaWaitFor", { rootRef: "r" }, options]);
 		assert.equal(await backend.openBrowserLocation({ appName: "chrome" }, "https://x.test", signal), true);
-		assert.deepEqual(lastCall(fakes.windows), ["openBrowserLocation", { appName: "chrome", url: "https://x.test" }, { signal, timeoutMs: 10_000 }]);
+		assert.deepEqual(lastCall(fakes.windows), [
+			"openBrowserLocation",
+			{ appName: "chrome", url: "https://x.test" },
+			{ signal, timeoutMs: 10_000 },
+		]);
 	});
 });
 
@@ -311,7 +484,15 @@ describe("Linux backend", () => {
 	});
 
 	test("classifies browsers from process and desktop names", () => {
-		const chromium = ["chrome", "/usr/bin/google-chrome-stable", "chromium-browser.desktop", "microsoft-edge", "brave", "vivaldi-stable", "opera"];
+		const chromium = [
+			"chrome",
+			"/usr/bin/google-chrome-stable",
+			"chromium-browser.desktop",
+			"microsoft-edge",
+			"brave",
+			"vivaldi-stable",
+			"opera",
+		];
 		for (const name of chromium) {
 			assert.equal(backend.isBrowserApp(name), true, name);
 			assert.equal(backend.isChromeFamilyApp(name), true, name);
@@ -324,11 +505,21 @@ describe("Linux backend", () => {
 	});
 
 	test("listRoots parses payload variants, filters by title and hints on empty", async () => {
-		fakes.linux.command.mockResolvedValue({ roots: [
-			{ kind: "sheet", desktopId: "org.gnome.Gedit", processName: "gedit", pid: 3, title: "Notes", bounds: { x: 1, y: 2, width: 3, height: 4 }, isFocused: true },
-			{ kind: "nope", ref: "r2", isOnscreen: false },
-			null,
-		] });
+		fakes.linux.command.mockResolvedValue({
+			roots: [
+				{
+					kind: "sheet",
+					desktopId: "org.gnome.Gedit",
+					processName: "gedit",
+					pid: 3,
+					title: "Notes",
+					bounds: { x: 1, y: 2, width: 3, height: 4 },
+					isFocused: true,
+				},
+				{ kind: "nope", ref: "r2", isOnscreen: false },
+				null,
+			],
+		});
 		const roots = await backend.listRoots({ pid: 1.2 }, signal);
 		assert.deepEqual(lastCall(fakes.linux), ["listRoots", { pid: 1 }, { signal }]);
 		assert.equal(roots[0].kind, "sheet");
@@ -340,7 +531,10 @@ describe("Linux backend", () => {
 		assert.equal(roots[1].rootRef, "r2");
 		assert.equal(roots[1].isOnscreen, false);
 		assert.equal(roots[1].zOrder, 1);
-		assert.deepEqual((await backend.listRoots({ title: "note" })).map((r) => r.rootRef), [undefined]);
+		assert.deepEqual(
+			(await backend.listRoots({ title: "note" })).map((r) => r.rootRef),
+			[undefined],
+		);
 		assert.equal((await backend.listRoots({ title: "  " })).length, 3);
 		assert.deepEqual(lastCall(fakes.linux)[1], {});
 		for (const kind of ["menu", "dialog", "popover"]) {
@@ -355,12 +549,24 @@ describe("Linux backend", () => {
 	});
 
 	test("listApps dedupes by pid and getFrontmost explains empty and pid-less roots", async () => {
-		fakes.linux.command.mockResolvedValue([{ pid: 1, appName: "A" }, { pid: 1 }, { pid: 2, isFocused: true, title: "t", windowId: 4, rootRef: "r" }, { title: "none" }]);
+		fakes.linux.command.mockResolvedValue([
+			{ pid: 1, appName: "A" },
+			{ pid: 1 },
+			{ pid: 2, isFocused: true, title: "t", windowId: 4, rootRef: "r" },
+			{ title: "none" },
+		]);
 		assert.deepEqual(await backend.listApps(signal), [
 			{ appName: "A", bundleId: undefined, pid: 1, isFrontmost: false },
 			{ appName: "Unknown", bundleId: undefined, pid: 2, isFrontmost: true },
 		]);
-		assert.deepEqual(await backend.getFrontmost(), { appName: "Unknown", bundleId: undefined, pid: 2, windowTitle: "t", windowId: 4, rootRef: "r" });
+		assert.deepEqual(await backend.getFrontmost(), {
+			appName: "Unknown",
+			bundleId: undefined,
+			pid: 2,
+			windowTitle: "t",
+			windowId: 4,
+			rootRef: "r",
+		});
 		fakes.linux.command.mockResolvedValue([{ pid: 5, appName: "First" }]);
 		assert.equal((await backend.getFrontmost()).appName, "First");
 		fakes.linux.command.mockResolvedValue([{ title: "no pid" }]);
@@ -399,9 +605,16 @@ describe("Linux backend", () => {
 		assert.equal(fakes.resetLinux.mock.calls.length, 1);
 		await backend.focusWindow({ pid: 1 }, signal);
 		assert.deepEqual(lastCall(fakes.linux), ["focusWindow", { pid: 1 }, { signal }]);
-		const look = await backend.observe({ target: { pid: 1 }, baseLookId: "b", maxDimension: 9, readText: "always", scopeRef: "s", includeImage: false }, options);
+		const look = await backend.observe(
+			{ target: { pid: 1 }, baseLookId: "b", maxDimension: 9, readText: "always", scopeRef: "s", includeImage: false },
+			options,
+		);
 		assert.equal(look.lookId, "X1");
-		assert.deepEqual(lastCall(fakes.linux), ["look", { pid: 1, baseLookId: "b", maxDimension: 9, readText: "always", scopeRef: "s", includeImage: false }, options]);
+		assert.deepEqual(lastCall(fakes.linux), [
+			"look",
+			{ pid: 1, baseLookId: "b", maxDimension: 9, readText: "always", scopeRef: "s", includeImage: false },
+			options,
+		]);
 		const plain = { target: { pid: 1 }, action: "click" };
 		const focus = { target: { focus: { pid: 2 } }, params: { y: 1 } };
 		await backend.act(plain, options);
@@ -409,13 +622,21 @@ describe("Linux backend", () => {
 		await backend.act(focus);
 		assert.deepEqual(lastCall(fakes.linux)[1], { target: { pid: 2 }, params: { y: 1, preserveFocus: true } });
 		await backend.actBatch([plain, focus], options);
-		assert.deepEqual(lastCall(fakes.linux), ["actBatch", { actions: [plain, { target: { pid: 2 }, params: { y: 1, preserveFocus: true } }] }, options]);
+		assert.deepEqual(lastCall(fakes.linux), [
+			"actBatch",
+			{ actions: [plain, { target: { pid: 2 }, params: { y: 1, preserveFocus: true } }] },
+			options,
+		]);
 		await backend.readText({ rootRef: "r" }, options);
 		assert.deepEqual(lastCall(fakes.linux), ["atspiReadText", { rootRef: "r" }, options]);
 		await backend.waitFor({ rootRef: "r" }, options);
 		assert.deepEqual(lastCall(fakes.linux), ["atspiWaitFor", { rootRef: "r" }, options]);
 		assert.equal(await backend.openBrowserLocation({ appName: "firefox" }, "https://x.test", signal), true);
-		assert.deepEqual(lastCall(fakes.linux), ["openBrowserLocation", { appName: "firefox", url: "https://x.test" }, { signal, timeoutMs: 10_000 }]);
+		assert.deepEqual(lastCall(fakes.linux), [
+			"openBrowserLocation",
+			{ appName: "firefox", url: "https://x.test" },
+			{ signal, timeoutMs: 10_000 },
+		]);
 	});
 });
 
@@ -442,9 +663,10 @@ describe("platform facade", () => {
 		await backend.actBatch([]);
 		await backend.readText({});
 		await backend.waitFor({});
-		assert.deepEqual(fakes.macos.command.mock.calls.map(([command]) => command), [
-			"listApps", "listRoots", "getFrontmost", "focusWindow", "look", "act", "actBatch", "axReadText", "axWaitFor",
-		]);
+		assert.deepEqual(
+			fakes.macos.command.mock.calls.map(([command]) => command),
+			["listApps", "listRoots", "getFrontmost", "focusWindow", "look", "act", "actBatch", "axReadText", "axWaitFor"],
+		);
 		assert.equal(backend.isBrowserApp("Safari"), true);
 		assert.equal(backend.isChromeFamilyApp("Safari"), false);
 		assert.equal(backend.isChromeFamilyApp("Google Chrome"), true);
@@ -455,7 +677,18 @@ describe("platform facade", () => {
 		const backend = platformBackendForRuntime("freebsd");
 		assert.equal(backend.name, "linux");
 		const message = /does not support platform 'freebsd' yet\./;
-		for (const method of ["ensureReady", "listApps", "listRoots", "getFrontmost", "focusWindow", "observe", "act", "readText", "waitFor", "openBrowserLocation"]) {
+		for (const method of [
+			"ensureReady",
+			"listApps",
+			"listRoots",
+			"getFrontmost",
+			"focusWindow",
+			"observe",
+			"act",
+			"readText",
+			"waitFor",
+			"openBrowserLocation",
+		]) {
 			await rejectsWith(backend[method](), message);
 		}
 		assert.throws(() => backend.isBrowserApp("x"), message);

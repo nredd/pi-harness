@@ -32,11 +32,18 @@ async function client(url) {
 		socket.onopen = resolve;
 		socket.onerror = () => reject(new Error("upgrade failed"));
 	});
-	return { socket, next: () => (queue.length ? Promise.resolve(queue.shift()) : new Promise((resolve) => waiters.push(resolve))) };
+	return {
+		socket,
+		next: () => (queue.length ? Promise.resolve(queue.shift()) : new Promise((resolve) => waiters.push(resolve))),
+	};
 }
 
 describe("fake CDP framing", () => {
-	test.each([[5, 2], [200, 4], [70_000, 10]])("a %i byte payload uses a %i byte header and round-trips", (size, header) => {
+	test.each([
+		[5, 2],
+		[200, 4],
+		[70_000, 10],
+	])("a %i byte payload uses a %i byte header and round-trips", (size, header) => {
 		const frame = websocketFrame("x".repeat(size));
 		assert.equal(frame.length, size + header);
 		const { frames, rest } = parseFrames(frame);
@@ -61,7 +68,15 @@ describe("fake CDP framing", () => {
 		const request = JSON.stringify({ id: 2, method: "Echo", params: { v: 1 } });
 		fake.handle("Echo", (params) => params);
 		const connection = fake.connections[0];
-		connection.socket.emit("data", Buffer.concat([Buffer.from([0x01, 5]), Buffer.from(request.slice(0, 5)), Buffer.from([0x80, request.length - 5]), Buffer.from(request.slice(5))]));
+		connection.socket.emit(
+			"data",
+			Buffer.concat([
+				Buffer.from([0x01, 5]),
+				Buffer.from(request.slice(0, 5)),
+				Buffer.from([0x80, request.length - 5]),
+				Buffer.from(request.slice(5)),
+			]),
+		);
 		assert.deepEqual((await next()).result, { v: 1 });
 	});
 });
@@ -71,14 +86,30 @@ describe("fake CDP control frames", () => {
 		const fake = await startFakeCdp();
 		fakes.push(fake);
 		const socket = await new Promise((resolve, reject) => {
-			const request = http.request({ port: fake.port, host: "127.0.0.1", path: "/devtools/page/fake", headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" } });
+			const request = http.request({
+				port: fake.port,
+				host: "127.0.0.1",
+				path: "/devtools/page/fake",
+				headers: {
+					Connection: "Upgrade",
+					Upgrade: "websocket",
+					"Sec-WebSocket-Version": "13",
+					"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+				},
+			});
 			request.on("upgrade", (_response, upgraded) => resolve(upgraded));
 			request.on("error", reject);
 			request.end();
 		});
 		const mask = Buffer.from([1, 2, 3, 4]);
 		const payload = Buffer.from("beat");
-		socket.write(Buffer.concat([Buffer.from([0x89, 0x80 | payload.length]), mask, Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]))]));
+		socket.write(
+			Buffer.concat([
+				Buffer.from([0x89, 0x80 | payload.length]),
+				mask,
+				Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4])),
+			]),
+		);
 		const reply = await new Promise((resolve) => socket.once("data", resolve));
 		socket.destroy();
 		const [frame] = parseFrames(reply).frames;

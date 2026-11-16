@@ -5,7 +5,32 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
-const uiNode = (ref, title, fields = {}) => ({ ref, wireRef: `w${ref}`, role: "AXGroup", subrole: "", identifier: `id-${ref}`, title, description: "An element description", value: "", actions: ["AXPress"], canPress: true, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: { x: 1, y: 2, w: 30, h: 40 }, focused: false, offscreen: false, pictureOnly: false, truncated: false, text: [], children: [], ...fields });
+const uiNode = (ref, title, fields = {}) => ({
+	ref,
+	wireRef: `w${ref}`,
+	role: "AXGroup",
+	subrole: "",
+	identifier: `id-${ref}`,
+	title,
+	description: "An element description",
+	value: "",
+	actions: ["AXPress"],
+	canPress: true,
+	canFocus: false,
+	canSetValue: false,
+	canScroll: false,
+	canIncrement: false,
+	canDecrement: false,
+	isTextInput: false,
+	rect: { x: 1, y: 2, w: 30, h: 40 },
+	focused: false,
+	offscreen: false,
+	pictureOnly: false,
+	truncated: false,
+	text: [],
+	children: [],
+	...fields,
+});
 
 /** Deep synthetic tree: `fan ** depth` leaves, like a browser or IDE window. */
 function outlineOf(depth, fan, lookId = "look") {
@@ -26,8 +51,19 @@ function outlineOf(depth, fan, lookId = "look") {
 	return { lookId, root, nodes, refToWireRef: new Map(), wireRefToRef: new Map() };
 }
 
-const capture = (outline, stateId) => ({ target: { appName: "App", pid: 7, windowTitle: "Doc", windowId: 5 }, capture: { stateId, width: 800, height: 600, scaleFactor: 2, timestamp: 1000 }, look: { lookId: outline.lookId }, outline, activation: {} });
-const branchOf = (...details) => ({ sessionManager: { getBranch: () => details.map((d) => ({ type: "message", message: { role: "toolResult", toolName: "observe_ui", details: d } })) } });
+const capture = (outline, stateId) => ({
+	target: { appName: "App", pid: 7, windowTitle: "Doc", windowId: 5 },
+	capture: { stateId, width: 800, height: 600, scaleFactor: 2, timestamp: 1000 },
+	look: { lookId: outline.lookId },
+	outline,
+	activation: {},
+});
+const branchOf = (...details) => ({
+	sessionManager: {
+		getBranch: () =>
+			details.map((d) => ({ type: "message", message: { role: "toolResult", toolName: "observe_ui", details: d } })),
+	},
+});
 
 async function modules() {
 	const store = await import("../src/outline-store.ts");
@@ -90,7 +126,9 @@ test("unreadable or mismatched entries load as missing", async () => {
 test("tool results keep only stateId and lookId; the outline goes to the store", async () => {
 	const { testing, loadStoredOutline } = await modules();
 	const outline = outlineOf(4, 7);
-	const result = await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(outline, "S-big"), {}, undefined, "never"));
+	const result = await testing.runInOperation(() =>
+		testing.buildToolResult("observe_ui", "Observed.", capture(outline, "S-big"), {}, undefined, "never"),
+	);
 	const bytes = JSON.stringify(result.details).length;
 	assert.equal(result.details.outline, undefined);
 	assert.equal(result.details.capture.stateId, "S-big");
@@ -103,7 +141,9 @@ test("tool results keep only stateId and lookId; the outline goes to the store",
 test("restore reads a new-format session from the store", async () => {
 	const { testing, reconstructStateFromBranch } = await modules();
 	const outline = outlineOf(2, 3, "look-new");
-	const result = await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(outline, "S-new"), {}, undefined, "never"));
+	const result = await testing.runInOperation(() =>
+		testing.buildToolResult("observe_ui", "Observed.", capture(outline, "S-new"), {}, undefined, "never"),
+	);
 	reconstructStateFromBranch(branchOf(JSON.parse(JSON.stringify(result.details))));
 	const restored = testing.savedState("S-new");
 	assert.equal(restored?.value.kind, "desktop");
@@ -115,35 +155,72 @@ test("restore reads a new-format session from the store", async () => {
 test("restore still reads sessions that embed the full outline", async () => {
 	const { testing, reconstructStateFromBranch, outlineStoreDir, serializeOutline } = await modules();
 	const outline = outlineOf(2, 3, "look-old");
-	const result = await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(outline, "S-old"), {}, undefined, "never"));
+	const result = await testing.runInOperation(() =>
+		testing.buildToolResult("observe_ui", "Observed.", capture(outline, "S-old"), {}, undefined, "never"),
+	);
 	fs.rmSync(outlineStoreDir(), { recursive: true, force: true });
-	const legacy = { ...JSON.parse(JSON.stringify(result.details)), outline: JSON.parse(JSON.stringify(serializeOutline(outline))) };
+	const legacy = {
+		...JSON.parse(JSON.stringify(result.details)),
+		outline: JSON.parse(JSON.stringify(serializeOutline(outline))),
+	};
 	reconstructStateFromBranch(branchOf(legacy));
 	assert.equal(testing.savedState("S-old")?.value.outline.lookId, "look-old");
 });
 
 test("restore with an evicted store entry skips the state instead of throwing", async () => {
 	const { testing, reconstructStateFromBranch, outlineStoreDir } = await modules();
-	const result = await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(outlineOf(1, 2), "S-gone"), {}, undefined, "never"));
+	const result = await testing.runInOperation(() =>
+		testing.buildToolResult("observe_ui", "Observed.", capture(outlineOf(1, 2), "S-gone"), {}, undefined, "never"),
+	);
 	fs.rmSync(outlineStoreDir(), { recursive: true, force: true });
 	assert.doesNotThrow(() => reconstructStateFromBranch(branchOf(JSON.parse(JSON.stringify(result.details)))));
-	assert.equal(testing.savedState("S-gone"), undefined, "the state is unavailable, so tools report the stale-state error");
+	assert.equal(
+		testing.savedState("S-gone"),
+		undefined,
+		"the state is unavailable, so tools report the stale-state error",
+	);
 	const { executeSearchUi } = await import("../src/bridge.ts");
-	await assert.rejects(() => executeSearchUi("call", { stateId: "S-gone", text: "x" }, undefined, undefined, {}), /State 'S-gone' is unavailable or was evicted/);
+	await assert.rejects(
+		() => executeSearchUi("call", { stateId: "S-gone", text: "x" }, undefined, undefined, {}),
+		/State 'S-gone' is unavailable or was evicted/,
+	);
 });
 
 test("an evicted newest state does not fall back to an older inline one", async () => {
 	const { testing, reconstructStateFromBranch, outlineStoreDir, serializeOutline } = await modules();
 	const older = outlineOf(1, 2, "look-older");
 	const legacy = {
-		...JSON.parse(JSON.stringify((await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(older, "S-older"), {}, undefined, "never"))).details)),
+		...JSON.parse(
+			JSON.stringify(
+				(
+					await testing.runInOperation(() =>
+						testing.buildToolResult("observe_ui", "Observed.", capture(older, "S-older"), {}, undefined, "never"),
+					)
+				).details,
+			),
+		),
 		outline: JSON.parse(JSON.stringify(serializeOutline(older))),
 	};
-	const newer = (await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(outlineOf(1, 3, "look-newer"), "S-newer"), {}, undefined, "never"))).details;
+	const newer = (
+		await testing.runInOperation(() =>
+			testing.buildToolResult(
+				"observe_ui",
+				"Observed.",
+				capture(outlineOf(1, 3, "look-newer"), "S-newer"),
+				{},
+				undefined,
+				"never",
+			),
+		)
+	).details;
 	fs.rmSync(outlineStoreDir(), { recursive: true, force: true });
 	reconstructStateFromBranch(branchOf(legacy, JSON.parse(JSON.stringify(newer))));
 	assert.equal(testing.savedState("S-newer"), undefined);
-	assert.equal(testing.savedState("S-older"), undefined, "the older legacy state must not be restored in place of the evicted newest one");
+	assert.equal(
+		testing.savedState("S-older"),
+		undefined,
+		"the older legacy state must not be restored in place of the evicted newest one",
+	);
 });
 
 test("a failed write removes its temporary file", async () => {
@@ -159,7 +236,10 @@ test("a failed write removes its temporary file", async () => {
 		fs.mkdirSync(`${dir}/${blocked}`);
 		fs.writeFileSync(`${dir}/${blocked}/keep`, "x");
 		assert.doesNotThrow(() => saveStoredOutline("w", outline));
-		assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
+		assert.deepEqual(
+			fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")),
+			[],
+		);
 		fs.rmSync(`${dir}/${blocked}`, { recursive: true });
 		assert.ok(loadStoredOutline("w"), "the earlier entry survives the failed write");
 	} finally {

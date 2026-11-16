@@ -12,14 +12,16 @@ import net from "node:net";
 import path from "node:path";
 import { startFakeCdp } from "./fake-cdp.mjs";
 
-if (process.env.FAKE_BROWSER_IGNORE_SIGTERM === "1") process.on("SIGTERM", () => {
-	if (process.env.FAKE_BROWSER_SIGTERM_LOG) fs.writeFileSync(process.env.FAKE_BROWSER_SIGTERM_LOG, "SIGTERM");
-});
+if (process.env.FAKE_BROWSER_IGNORE_SIGTERM === "1")
+	process.on("SIGTERM", () => {
+		if (process.env.FAKE_BROWSER_SIGTERM_LOG) fs.writeFileSync(process.env.FAKE_BROWSER_SIGTERM_LOG, "SIGTERM");
+	});
 const arg = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const port = Number(arg("remote-debugging-port"));
 const profile = arg("user-data-dir");
 if (process.env.FAKE_BROWSER_LOG) fs.writeFileSync(process.env.FAKE_BROWSER_LOG, JSON.stringify({ port, profile }));
-if (process.env.FAKE_BROWSER_LAUNCHES) fs.appendFileSync(process.env.FAKE_BROWSER_LAUNCHES, `${JSON.stringify({ port, profile })}\n`);
+if (process.env.FAKE_BROWSER_LAUNCHES)
+	fs.appendFileSync(process.env.FAKE_BROWSER_LAUNCHES, `${JSON.stringify({ port, profile })}\n`);
 try {
 	fs.writeFileSync(path.join(profile, "Local State"), "{}");
 } catch (error) {

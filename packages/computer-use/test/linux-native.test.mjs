@@ -54,17 +54,8 @@ const NATIVE_CHECKS_TIMEOUT_MS =
 	COMMAND_KILL_WAIT_MS;
 const ARM64_CASE_TIMEOUT_MS = ARM64_CHECK_TIMEOUT_MS + COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS;
 
-const rootDir = path.resolve(
-	path.dirname(fileURLToPath(import.meta.url)),
-	"..",
-);
-const crateManifest = path.join(
-	rootDir,
-	"native",
-	"linux",
-	"bridge-rs",
-	"Cargo.toml",
-);
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const crateManifest = path.join(rootDir, "native", "linux", "bridge-rs", "Cargo.toml");
 
 /**
  * Start the real setup CLI with optional test-only signal-registration observation.
@@ -135,23 +126,10 @@ function startSetup(packageDir, env, extraArgs = [], observer) {
  * @throws {Error} If setup cannot spawn or close before its deadline.
  * @throws {AggregateError} If setup and its bounded cancellation cleanup both fail.
  */
-async function runSetup(
-	packageDir,
-	env,
-	extraArgs = [],
-	timeoutMs = SETUP_COMPLETION_TIMEOUT_MS,
-) {
-	const { child, done, closed, capture } = startSetup(
-		packageDir,
-		env,
-		extraArgs,
-	);
+async function runSetup(packageDir, env, extraArgs = [], timeoutMs = SETUP_COMPLETION_TIMEOUT_MS) {
+	const { child, done, closed, capture } = startSetup(packageDir, env, extraArgs);
 	try {
-		return await within(
-			done,
-			`Linux setup ${extraArgs.join(" ")} in ${packageDir} to close`,
-			timeoutMs,
-		);
+		return await within(done, `Linux setup ${extraArgs.join(" ")} in ${packageDir} to close`, timeoutMs);
 	} catch (error) {
 		const failure = new Error(`${error.message}\n${capture.output}`, {
 			cause: error,
@@ -159,10 +137,7 @@ async function runSetup(
 		try {
 			await stopCheckChild(child, closed, "timed-out Linux setup");
 		} catch (cleanupError) {
-			throw new AggregateError(
-				[failure, cleanupError],
-				"Linux setup completion and bounded cleanup failed",
-			);
+			throw new AggregateError([failure, cleanupError], "Linux setup completion and bounded cleanup failed");
 		}
 		throw failure;
 	}
@@ -175,10 +150,7 @@ async function runSetup(
  * @throws {Error} If no valid PID becomes observable before the readiness deadline.
  */
 async function waitForReadyPid(file) {
-	for (
-		const deadline = Date.now() + READINESS_TIMEOUT_MS;
-		Date.now() < deadline;
-	) {
+	for (const deadline = Date.now() + READINESS_TIMEOUT_MS; Date.now() < deadline; ) {
 		const pid = Number(
 			await fs.readFile(file, "utf8").catch(
 				/** @returns {string} Missing markers are unready. @throws {never} No errors. */
@@ -191,9 +163,7 @@ async function waitForReadyPid(file) {
 			(resolve) => setTimeout(resolve, POLL_INTERVAL_MS),
 		);
 	}
-	throw new Error(
-		`Timed out waiting for compiler/setup fixture signal readiness: ${file}`,
-	);
+	throw new Error(`Timed out waiting for compiler/setup fixture signal readiness: ${file}`);
 }
 
 /**
@@ -225,9 +195,7 @@ describe.skipIf(process.platform !== "linux")(
 		test(
 			"locked crate tests, packed-source setup contract and helper diagnostics",
 			async () => {
-				const work = await fs.mkdtemp(
-					path.join(os.tmpdir(), "pi-computer-use-linux-native-"),
-				);
+				const work = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-native-"));
 				const archName = { x64: "x86_64", arm64: "aarch64" }[process.arch];
 				assert.ok(archName, `unsupported host architecture ${process.arch}`);
 
@@ -236,14 +204,7 @@ describe.skipIf(process.platform !== "linux")(
 					// 1. Crate unit/integration tests, built outside the source tree.
 					await runCheckCommand(
 						"cargo",
-						[
-							"test",
-							"--locked",
-							"--manifest-path",
-							crateManifest,
-							"--target-dir",
-							path.join(work, "test-target"),
-						],
+						["test", "--locked", "--manifest-path", crateManifest, "--target-dir", path.join(work, "test-target")],
 						{
 							label: "locked native cargo tests",
 							timeoutMs: CARGO_TEST_TIMEOUT_MS,
@@ -302,23 +263,14 @@ describe.skipIf(process.platform !== "linux")(
 						};
 						const result = await runSetup(packageDir, env, ["--allow-build"]);
 						assert.equal(result.code, 0, result.output);
-						const argv = (
-							await fs.readFile(path.join(work, "cargo-argv"), "utf8")
-						).trim();
-						const targetDir = path.join(
-							cache,
-							"pi-computer-use",
-							"linux-bridge-target",
-						);
+						const argv = (await fs.readFile(path.join(work, "cargo-argv"), "utf8")).trim();
+						const targetDir = path.join(cache, "pi-computer-use", "linux-bridge-target");
 						assert.match(
 							argv,
 							/^build --locked --release --manifest-path \S+native\/linux\/bridge-rs\/Cargo\.toml --target-dir /,
 						);
 						assert.ok(argv.endsWith(`--target-dir ${targetDir}`), argv);
-						assert.ok(
-							(await fs.stat(helper)).mode & 0o100,
-							"helper installed executable",
-						);
+						assert.ok((await fs.stat(helper)).mode & 0o100, "helper installed executable");
 					}
 					{
 						const empty = path.join(work, "empty-bin");
@@ -328,11 +280,7 @@ describe.skipIf(process.platform !== "linux")(
 							{
 								...base,
 								XDG_CACHE_HOME: path.join(work, "c2"),
-								PI_COMPUTER_USE_LINUX_HELPER_PATH: path.join(
-									work,
-									"never",
-									"linux-bridge",
-								),
+								PI_COMPUTER_USE_LINUX_HELPER_PATH: path.join(work, "never", "linux-bridge"),
 								PATH: empty,
 							},
 							["--allow-build"],
@@ -372,11 +320,7 @@ describe.skipIf(process.platform !== "linux")(
 						const env = {
 							...base,
 							XDG_CACHE_HOME: path.join(work, "c3"),
-							PI_COMPUTER_USE_LINUX_HELPER_PATH: path.join(
-								work,
-								"slow",
-								"linux-bridge",
-							),
+							PI_COMPUTER_USE_LINUX_HELPER_PATH: path.join(work, "slow", "linux-bridge"),
 							PATH: `${fakeBin}:/usr/bin:/bin`,
 						};
 						const setupReady = path.join(work, "setup-ready.pid");
@@ -399,28 +343,19 @@ describe.skipIf(process.platform !== "linux")(
 									done.then(
 										/** @returns {never} Never returns. @throws {Error} If setup exits before readiness. */
 										(result) => {
-											throw new Error(
-												`Packed setup closed before wrapper readiness: ${result.output}`,
-											);
+											throw new Error(`Packed setup closed before wrapper readiness: ${result.output}`);
 										},
 									),
 								]),
 							]).catch(
 								/** @returns {never} Never returns. @throws {Error} Enriches every readiness failure with capture. */
 								(error) => {
-									throw new Error(
-										`Packed setup readiness: ${error.message}\n${capture.output}`,
-										{
-											cause: error,
-										},
-									);
+									throw new Error(`Packed setup readiness: ${error.message}\n${capture.output}`, {
+										cause: error,
+									});
 								},
 							);
-							assert.equal(
-								wrapperPid,
-								setupChild.pid,
-								"packed setup handlers must be live before TERM",
-							);
+							assert.equal(wrapperPid, setupChild.pid, "packed setup handlers must be live before TERM");
 							process.kill(compilerPid, 0); // compiler child alive after its TERM disposition is ready
 							setupChild.kill("SIGTERM");
 							const finished = await within(
@@ -430,10 +365,7 @@ describe.skipIf(process.platform !== "linux")(
 							);
 							assert.equal(finished.code, 143, finished.output);
 							let alive = true;
-							for (
-								const deadline = Date.now() + COMPILER_EXIT_TIMEOUT_MS;
-								alive && Date.now() < deadline;
-							) {
+							for (const deadline = Date.now() + COMPILER_EXIT_TIMEOUT_MS; alive && Date.now() < deadline; ) {
 								try {
 									process.kill(compilerPid, 0);
 									await new Promise(
@@ -445,11 +377,7 @@ describe.skipIf(process.platform !== "linux")(
 									alive = false;
 								}
 							}
-							assert.equal(
-								alive,
-								false,
-								"SIGTERM to setup must reap the compiler process group",
-							);
+							assert.equal(alive, false, "SIGTERM to setup must reap the compiler process group");
 							compilerReaped = true;
 						} catch (error) {
 							fixtureFailure = error;
@@ -463,9 +391,7 @@ describe.skipIf(process.platform !== "linux")(
 										stopCheckChild(
 											setupChild,
 											closed,
-											compilerReaped
-												? "completed packed setup fixture"
-												: "failed packed setup fixture",
+											compilerReaped ? "completed packed setup fixture" : "failed packed setup fixture",
 										),
 								],
 								fixtureFailure,
@@ -489,24 +415,14 @@ describe.skipIf(process.platform !== "linux")(
 					);
 					assert.equal(real.code, 0, real.output);
 					assert.ok(
-						await fs.stat(
-							path.join(
-								cache,
-								"pi-computer-use",
-								"linux-bridge-target",
-								"release",
-								"linux-bridge",
-							),
-						),
+						await fs.stat(path.join(cache, "pi-computer-use", "linux-bridge-target", "release", "linux-bridge")),
 						"built into the user cache",
 					);
 					assert.equal(
-						await fs
-							.stat(path.join(packageDir, "native", "linux", "bridge-rs", "target"))
-							.then(
-								() => true,
-								() => false,
-							),
+						await fs.stat(path.join(packageDir, "native", "linux", "bridge-rs", "target")).then(
+							() => true,
+							() => false,
+						),
 						false,
 						"no target/ inside the package",
 					);
@@ -518,11 +434,7 @@ describe.skipIf(process.platform !== "linux")(
 						setupHelperScript: failingSetup,
 					});
 					try {
-						const diagnostics = await client.command(
-							"diagnostics",
-							{},
-							{ timeoutMs: DIAGNOSTICS_TIMEOUT_MS },
-						);
+						const diagnostics = await client.command("diagnostics", {}, { timeoutMs: DIAGNOSTICS_TIMEOUT_MS });
 						assert.equal(diagnostics.protocolVersion, 4);
 						assert.equal(diagnostics.os, "linux");
 						assert.equal(diagnostics.arch, archName);
@@ -530,9 +442,7 @@ describe.skipIf(process.platform !== "linux")(
 					} finally {
 						client.dispose();
 					}
-					console.log(
-						`packed-source build and helper diagnostics passed (${archName}, headless)`,
-					);
+					console.log(`packed-source build and helper diagnostics passed (${archName}, headless)`);
 
 					console.log("Linux native checks passed");
 				} catch (error) {
@@ -562,9 +472,7 @@ describe.skipIf(process.platform !== "linux")(
 		test.skipIf(process.env.PI_CU_LINUX_ARM64_CHECK !== "1")(
 			"aarch64-unknown-linux-gnu cargo check --locked (compile-only; ARM64 runtime NOT RUN)",
 			async () => {
-				const work = await fs.mkdtemp(
-					path.join(os.tmpdir(), "pi-computer-use-linux-arm64-"),
-				);
+				const work = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-arm64-"));
 				try {
 					await runCheckCommand(
 						"cargo",

@@ -8,21 +8,14 @@ import { fileURLToPath } from "node:url";
 import { finishCheckCleanup, stopCheckChild, within } from "./check-async.mjs";
 
 if (process.env.PI_CU_LIVE !== "1") {
-	throw new Error(
-		"Live Linux E2E is disabled. Set PI_CU_LIVE=1 to run it explicitly.",
-	);
+	throw new Error("Live Linux E2E is disabled. Set PI_CU_LIVE=1 to run it explicitly.");
 }
-if (process.platform !== "linux")
-	throw new Error("Live Linux E2E requires Linux.");
+if (process.platform !== "linux") throw new Error("Live Linux E2E requires Linux.");
 
 // Budget the complete desktop scenario, including startup, tool calls and inner teardown.
 const LIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
-const packageDir = path.resolve(
-	path.dirname(fileURLToPath(import.meta.url)),
-	"../..",
-
-);
+const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const child = spawn(
 	"dbus-run-session",
@@ -59,19 +52,13 @@ const exited = new Promise(
 			"exit",
 			/** @returns Settles the session outcome. @throws No errors; signal exits reject the promise. */
 			(code, signal) =>
-				signal
-					? reject(new Error(`Live Linux E2E session exited on ${signal}.`))
-					: resolve(code ?? 1),
+				signal ? reject(new Error(`Live Linux E2E session exited on ${signal}.`)) : resolve(code ?? 1),
 		);
 	},
 );
 let sessionFailure;
 try {
-	process.exitCode = await within(
-		exited,
-		"live Linux E2E D-Bus session",
-		LIVE_SESSION_TIMEOUT_MS,
-	);
+	process.exitCode = await within(exited, "live Linux E2E D-Bus session", LIVE_SESSION_TIMEOUT_MS);
 } catch (error) {
 	sessionFailure = error;
 	throw error;

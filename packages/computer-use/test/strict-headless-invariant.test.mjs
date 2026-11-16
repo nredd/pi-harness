@@ -17,7 +17,9 @@ test("INV-strict-headless TS rejection mirrors the native keyboard-input rejecti
 	assert(nativeActions.size > 0, "no keyboard-input rejection branches parsed from bridge.swift");
 	const allNativeActions = new Set([...swift.matchAll(/action == "(\w+)"/g)].map((match) => match[1]));
 	const tsActions = new Set(
-		[...allNativeActions, ...nativeActions].filter((action) => strictHeadlessRejection({ action }, true, "darwin") !== undefined),
+		[...allNativeActions, ...nativeActions].filter(
+			(action) => strictHeadlessRejection({ action }, true, "darwin") !== undefined,
+		),
 	);
 	assert(
 		[...nativeActions].sort().join() === [...tsActions].sort().join(),

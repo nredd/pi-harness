@@ -62,7 +62,8 @@ async function flush(tab) {
  * @returns {object[]} Params of every `method` command, oldest first.
  * @throws {never} Pure filter.
  */
-const paramsOf = (fake, method) => fake.commands.filter((command) => command.method === method).map((command) => command.params);
+const paramsOf = (fake, method) =>
+	fake.commands.filter((command) => command.method === method).map((command) => command.params);
 
 /**
  * Script the node/window commands every backend-node action needs.
@@ -105,7 +106,13 @@ afterEach(async () => {
 });
 
 describe("CDP enablement", () => {
-	test.each([["unset", undefined], ["empty", ""], ["not numeric", "9222x"], ["zero", "0"], ["out of range", "70000"]])("port %s keeps CDP inert", async (_name, value) => {
+	test.each([
+		["unset", undefined],
+		["empty", ""],
+		["not numeric", "9222x"],
+		["zero", "0"],
+		["out of range", "70000"],
+	])("port %s keeps CDP inert", async (_name, value) => {
 		const fake = await fakeBrowser();
 		vi.stubEnv("PI_COMPUTER_USE_CDP_PORT", value);
 		assert.equal(await cdpTabForWindow("Fake"), undefined);
@@ -131,11 +138,32 @@ describe("target discovery", () => {
 				{ id: "no-url", type: "page", title: "No url", webSocketDebuggerUrl: `${own}no-url` },
 				{ id: "worker", type: "service_worker", title: "Worker", webSocketDebuggerUrl: `${own}worker` },
 				{ id: "no-socket", type: "page", title: "Detached" },
-				{ id: "foreign-port", type: "page", title: "Foreign", webSocketDebuggerUrl: `ws://127.0.0.1:${fake.port + 1}/devtools/page/x` },
-				{ id: "foreign-host", type: "page", title: "Remote", webSocketDebuggerUrl: `ws://example.test:${fake.port}/devtools/page/x` },
-				{ id: "http", type: "page", title: "Http", webSocketDebuggerUrl: `http://127.0.0.1:${fake.port}/devtools/page/x` },
+				{
+					id: "foreign-port",
+					type: "page",
+					title: "Foreign",
+					webSocketDebuggerUrl: `ws://127.0.0.1:${fake.port + 1}/devtools/page/x`,
+				},
+				{
+					id: "foreign-host",
+					type: "page",
+					title: "Remote",
+					webSocketDebuggerUrl: `ws://example.test:${fake.port}/devtools/page/x`,
+				},
+				{
+					id: "http",
+					type: "page",
+					title: "Http",
+					webSocketDebuggerUrl: `http://127.0.0.1:${fake.port}/devtools/page/x`,
+				},
 				{ id: "garbage", type: "page", title: "Garbage", webSocketDebuggerUrl: "not a url" },
-				{ id: "ipv6", type: "page", title: "Loopback v6", url: "about:blank", webSocketDebuggerUrl: `ws://[::1]:${fake.port}/devtools/page/ipv6` },
+				{
+					id: "ipv6",
+					type: "page",
+					title: "Loopback v6",
+					url: "about:blank",
+					webSocketDebuggerUrl: `ws://[::1]:${fake.port}/devtools/page/ipv6`,
+				},
 			]),
 		);
 		assert.deepEqual(await listCdpPageContexts(), [
@@ -147,9 +175,18 @@ describe("target discovery", () => {
 
 	test("follows target list changes between calls", async () => {
 		const fake = await fakeBrowser({ id: "a", title: "A" });
-		assert.deepEqual((await listCdpPageContexts()).map((page) => page.targetId), ["a"]);
-		fake.setTargets([{ id: "b", title: "B" }, { id: "c", title: "C" }]);
-		assert.deepEqual((await listCdpPageContexts()).map((page) => page.targetId), ["b", "c"]);
+		assert.deepEqual(
+			(await listCdpPageContexts()).map((page) => page.targetId),
+			["a"],
+		);
+		fake.setTargets([
+			{ id: "b", title: "B" },
+			{ id: "c", title: "C" },
+		]);
+		assert.deepEqual(
+			(await listCdpPageContexts()).map((page) => page.targetId),
+			["b", "c"],
+		);
 		fake.setTargets([]);
 		assert.deepEqual(await listCdpPageContexts(), []);
 	});
@@ -175,7 +212,10 @@ describe("connection lifecycle", () => {
 		await assert.rejects(cdpEvaluateForContext("browser:fake", "1"), /Timed out connecting to CDP target/);
 	});
 
-	test.each([["with a message", cdpError("Runtime is gone"), /CDP error: Runtime is gone/], ["without one", { __rawError: true }, /CDP error: unknown/]])("an `error` reply to the enable handshake %s aborts and closes the socket", async (_name, reply, expected) => {
+	test.each([
+		["with a message", cdpError("Runtime is gone"), /CDP error: Runtime is gone/],
+		["without one", { __rawError: true }, /CDP error: unknown/],
+	])("an `error` reply to the enable handshake %s aborts and closes the socket", async (_name, reply, expected) => {
 		const fake = await fakeBrowser();
 		fake.handle("Runtime.enable", (_params, ctx) => {
 			if (reply.__rawError) {
@@ -203,7 +243,9 @@ describe("connection lifecycle", () => {
 	test("protocol `error` replies reject only their own command", async () => {
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
-		fake.handle("Runtime.evaluate", (params) => (params.expression === "boom" ? cdpError("Cannot evaluate", -32601) : { result: { value: "fine" } }));
+		fake.handle("Runtime.evaluate", (params) =>
+			params.expression === "boom" ? cdpError("Cannot evaluate", -32601) : { result: { value: "fine" } },
+		);
 		const [bad, good] = await Promise.allSettled([tab.evaluate("boom"), tab.evaluate("ok")]);
 		assert.equal(bad.status, "rejected");
 		assert.match(bad.reason.message, /CDP error: Cannot evaluate/);
@@ -279,7 +321,10 @@ describe("connection lifecycle", () => {
 		await fake.connections[0].waitForRequest("Runtime.evaluate");
 		tab.close();
 		const outcome = await Promise.race([
-			pending.then(() => "resolved", (error) => error.message),
+			pending.then(
+				() => "resolved",
+				(error) => error.message,
+			),
 			new Promise((resolve) => realSetTimeout(resolve, 1_000, "still pending")),
 		]);
 		assert.equal(outcome, "CDP connection closed.");
@@ -307,7 +352,9 @@ describe("connection lifecycle", () => {
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
 		fake.connections[0].sendFrame(9, "hi");
-		await vi.waitFor(() => assert(fake.connections[0].received.some((frame) => frame.opcode === 10 && frame.payload.toString() === "hi")));
+		await vi.waitFor(() =>
+			assert(fake.connections[0].received.some((frame) => frame.opcode === 10 && frame.payload.toString() === "hi")),
+		);
 		tab.close();
 		await vi.waitFor(() => assert.equal(fake.connections[0].closed, true));
 		assert(fake.connections[0].received.some((frame) => frame.opcode === 8));
@@ -319,11 +366,16 @@ describe("events", () => {
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
 		const connection = fake.connections[0];
-		connection.emit("Runtime.consoleAPICalled", { type: "warning", args: [{ value: 7 }, { description: "Error: shaped" }, {}, null] });
+		connection.emit("Runtime.consoleAPICalled", {
+			type: "warning",
+			args: [{ value: 7 }, { description: "Error: shaped" }, {}, null],
+		});
 		connection.emit("Runtime.consoleAPICalled", { args: [{ value: "defaults to log" }] });
 		connection.emit("Runtime.consoleAPICalled", { type: "log" });
 		connection.emit("Runtime.consoleAPICalled", { type: "log", args: [{}] });
-		connection.emit("Runtime.exceptionThrown", { exceptionDetails: { exception: { description: "TypeError: x" }, text: "ignored" } });
+		connection.emit("Runtime.exceptionThrown", {
+			exceptionDetails: { exception: { description: "TypeError: x" }, text: "ignored" },
+		});
 		connection.emit("Runtime.exceptionThrown", { exceptionDetails: { text: "Uncaught" } });
 		connection.emit("Runtime.exceptionThrown", {});
 		await flush(tab);
@@ -340,7 +392,8 @@ describe("events", () => {
 	test("the console buffer keeps only the newest 20 entries", async () => {
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
-		for (let index = 0; index < 25; index += 1) fake.connections[0].emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: `m${index}` }] });
+		for (let index = 0; index < 25; index += 1)
+			fake.connections[0].emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: `m${index}` }] });
 		await flush(tab);
 		const entries = tab.drainConsole();
 		assert.equal(entries.length, 20);
@@ -368,7 +421,10 @@ describe("events", () => {
 	test("the connect handshake enables the Runtime and Page domains in order", async () => {
 		const fake = await fakeBrowser();
 		await connectedTab();
-		assert.deepEqual(fake.commands.map((command) => command.method), ["Runtime.enable", "Page.enable"]);
+		assert.deepEqual(
+			fake.commands.map((command) => command.method),
+			["Runtime.enable", "Page.enable"],
+		);
 	});
 });
 
@@ -396,7 +452,9 @@ describe("navigation", () => {
 	test("closing the tab releases a navigation that is waiting for load", async () => {
 		const fake = await fakeBrowser();
 		fake.handle("Page.navigate", (_params, ctx) => {
-			setImmediate(() => ctx.connection.emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "replied" }] }));
+			setImmediate(() =>
+				ctx.connection.emit("Runtime.consoleAPICalled", { type: "log", args: [{ value: "replied" }] }),
+			);
 			return {};
 		});
 		const tab = await connectedTab();
@@ -457,15 +515,24 @@ describe("page actions", () => {
 		resolvableNodes(fake);
 		assert.equal(await cdpScrollForContext("browser:fake", 0, 120, 9), true);
 		assert.equal(await cdpScrollForContext("browser:fake", 5, -10), true);
-		assert.deepEqual(paramsOf(fake, "Runtime.callFunctionOn").map((call) => call.arguments), [[{ value: 0 }, { value: 120 }]]);
-		assert.deepEqual(paramsOf(fake, "Runtime.evaluate").map((call) => call.expression), ["window.scrollBy(5, -10)"]);
+		assert.deepEqual(
+			paramsOf(fake, "Runtime.callFunctionOn").map((call) => call.arguments),
+			[[{ value: 0 }, { value: 120 }]],
+		);
+		assert.deepEqual(
+			paramsOf(fake, "Runtime.evaluate").map((call) => call.expression),
+			["window.scrollBy(5, -10)"],
+		);
 	});
 
 	test("a node id of zero scrolls the window rather than a node", async () => {
 		const fake = await fakeBrowser();
 		await cdpScrollForContext("browser:fake", 1, 2, 0);
 		assert.equal(paramsOf(fake, "DOM.resolveNode").length, 0);
-		assert.deepEqual(paramsOf(fake, "Runtime.evaluate").map((call) => call.expression), ["window.scrollBy(1, 2)"]);
+		assert.deepEqual(
+			paramsOf(fake, "Runtime.evaluate").map((call) => call.expression),
+			["window.scrollBy(1, 2)"],
+		);
 	});
 
 	test("typing into the focused element inserts text", async () => {
@@ -479,7 +546,12 @@ describe("page actions", () => {
 		assert.equal(await cdpKeypressForContext("browser:fake", ["Cmd", "Shift", "a"]), true);
 		assert.equal(await cdpKeypressForContext("browser:fake", ["b", "Enter"]), true);
 		assert.equal(await cdpKeypressForContext("browser:fake", ["ctrl"]), true);
-		const events = paramsOf(fake, "Input.dispatchKeyEvent").map(({ type, key, text, modifiers }) => ({ type, key, text, modifiers }));
+		const events = paramsOf(fake, "Input.dispatchKeyEvent").map(({ type, key, text, modifiers }) => ({
+			type,
+			key,
+			text,
+			modifiers,
+		}));
 		assert.deepEqual(events, [
 			{ type: "keyDown", key: "a", text: undefined, modifiers: 12 },
 			{ type: "keyUp", key: "a", text: undefined, modifiers: 12 },
@@ -492,8 +564,11 @@ describe("page actions", () => {
 
 	test("every modifier alias maps to its CDP bit", async () => {
 		const fake = await fakeBrowser();
-		for (const alias of ["alt", "option", "control", "ctrl", "meta", "command", "cmd", "shift"]) await cdpKeypressForContext("browser:fake", [alias, "x"]);
-		const bits = paramsOf(fake, "Input.dispatchKeyEvent").filter((event) => event.type === "keyDown").map((event) => event.modifiers);
+		for (const alias of ["alt", "option", "control", "ctrl", "meta", "command", "cmd", "shift"])
+			await cdpKeypressForContext("browser:fake", [alias, "x"]);
+		const bits = paramsOf(fake, "Input.dispatchKeyEvent")
+			.filter((event) => event.type === "keyDown")
+			.map((event) => event.modifiers);
 		assert.deepEqual(bits, [1, 1, 2, 2, 4, 4, 4, 8]);
 	});
 
@@ -511,13 +586,23 @@ describe("page actions", () => {
 
 	test("drag presses at the start, moves through the path, releases at the end", async () => {
 		const fake = await fakeBrowser();
-		assert.equal(await cdpDragForContext("browser:fake", [{ x: 1, y: 1 }, { x: 5, y: 5 }, { x: 9, y: 9 }]), true);
-		assert.deepEqual(paramsOf(fake, "Input.dispatchMouseEvent").map(({ type, x, y, buttons }) => ({ type, x, y, buttons })), [
-			{ type: "mousePressed", x: 1, y: 1, buttons: undefined },
-			{ type: "mouseMoved", x: 5, y: 5, buttons: 1 },
-			{ type: "mouseMoved", x: 9, y: 9, buttons: 1 },
-			{ type: "mouseReleased", x: 9, y: 9, buttons: undefined },
-		]);
+		assert.equal(
+			await cdpDragForContext("browser:fake", [
+				{ x: 1, y: 1 },
+				{ x: 5, y: 5 },
+				{ x: 9, y: 9 },
+			]),
+			true,
+		);
+		assert.deepEqual(
+			paramsOf(fake, "Input.dispatchMouseEvent").map(({ type, x, y, buttons }) => ({ type, x, y, buttons })),
+			[
+				{ type: "mousePressed", x: 1, y: 1, buttons: undefined },
+				{ type: "mouseMoved", x: 5, y: 5, buttons: 1 },
+				{ type: "mouseMoved", x: 9, y: 9, buttons: 1 },
+				{ type: "mouseReleased", x: 9, y: 9, buttons: undefined },
+			],
+		);
 	});
 
 	test("a drag with fewer than two points is refused before any input", async () => {
@@ -534,7 +619,14 @@ describe("page actions", () => {
 		["typeFocused", (id) => cdpTypeFocusedForContext(id, "x")],
 		["keypress", (id) => cdpKeypressForContext(id, ["a"])],
 		["mouse", (id) => cdpMouseForContext(id, 1, 1, "mousePressed")],
-		["drag", (id) => cdpDragForContext(id, [{ x: 0, y: 0 }, { x: 1, y: 1 }])],
+		[
+			"drag",
+			(id) =>
+				cdpDragForContext(id, [
+					{ x: 0, y: 0 },
+					{ x: 1, y: 1 },
+				]),
+		],
 		["navigate", (id) => cdpNavigateContext(id, "https://example.test/")],
 		["evaluate", (id) => cdpEvaluateForContext(id, "1")],
 	])("%s reports no result for non-browser, unknown or detached contexts and never connects", async (name, run) => {
@@ -552,11 +644,27 @@ describe("page actions", () => {
 		["typeFocused", (id) => cdpTypeFocusedForContext(id, "x")],
 		["keypress", (id) => cdpKeypressForContext(id, ["a"])],
 		["mouse", (id) => cdpMouseForContext(id, 1, 1, "mousePressed")],
-		["drag", (id) => cdpDragForContext(id, [{ x: 0, y: 0 }, { x: 1, y: 1 }])],
+		[
+			"drag",
+			(id) =>
+				cdpDragForContext(id, [
+					{ x: 0, y: 0 },
+					{ x: 1, y: 1 },
+				]),
+		],
 		["navigate", (id) => cdpNavigateContext(id, "https://example.test/")],
 	])("%s propagates a protocol error and still closes its connection", async (_name, run) => {
 		const fake = await fakeBrowser();
-		for (const method of ["DOM.resolveNode", "Runtime.callFunctionOn", "Runtime.evaluate", "Input.insertText", "Input.dispatchKeyEvent", "Input.dispatchMouseEvent", "Page.navigate"]) fake.handle(method, () => cdpError(`${method} refused`));
+		for (const method of [
+			"DOM.resolveNode",
+			"Runtime.callFunctionOn",
+			"Runtime.evaluate",
+			"Input.insertText",
+			"Input.dispatchKeyEvent",
+			"Input.dispatchMouseEvent",
+			"Page.navigate",
+		])
+			fake.handle(method, () => cdpError(`${method} refused`));
 		await assert.rejects(run("browser:fake"), /CDP error: \S+ refused/);
 		await vi.waitFor(() => assert.equal(fake.connections[0].closed, true));
 	});
@@ -574,7 +682,9 @@ describe("evaluate", () => {
 		const fake = await fakeBrowser();
 		fake.handle("Runtime.evaluate", () => ({ result: { type: "number", value: 3 } }));
 		assert.deepEqual(await cdpEvaluateForContext("browser:fake", "1 + 2"), { contextId: "browser:fake", value: 3 });
-		assert.deepEqual(paramsOf(fake, "Runtime.evaluate"), [{ expression: "1 + 2", returnByValue: true, timeout: 5000, awaitPromise: true }]);
+		assert.deepEqual(paramsOf(fake, "Runtime.evaluate"), [
+			{ expression: "1 + 2", returnByValue: true, timeout: 5000, awaitPromise: true },
+		]);
 		await vi.waitFor(() => assert.equal(fake.connections[0].closed, true));
 	});
 
@@ -585,8 +695,14 @@ describe("evaluate", () => {
 				? { result: { type: "object", subtype: "error" }, exceptionDetails: { text: "Uncaught" } }
 				: { result: { type: "number", unserializableValue: "NaN" } },
 		);
-		assert.deepEqual(await cdpEvaluateForContext("browser:fake", "throw"), { contextId: "browser:fake", value: undefined });
-		assert.deepEqual(await cdpEvaluateForContext("browser:fake", "0/0"), { contextId: "browser:fake", value: undefined });
+		assert.deepEqual(await cdpEvaluateForContext("browser:fake", "throw"), {
+			contextId: "browser:fake",
+			value: undefined,
+		});
+		assert.deepEqual(await cdpEvaluateForContext("browser:fake", "0/0"), {
+			contextId: "browser:fake",
+			value: undefined,
+		});
 	});
 
 	test("a protocol error rejects and the connection is still closed", async () => {
@@ -638,19 +754,32 @@ describe("tab lookup by window", () => {
 		const fake = await fakeBrowser({ title: "Only" });
 		assert.equal((await connectedTab("Something else entirely")).targetId, "fake");
 		disconnectCdp();
-		fake.setTargets([{ id: "a", title: "A" }, { id: "b", title: "B" }]);
+		fake.setTargets([
+			{ id: "a", title: "A" },
+			{ id: "b", title: "B" },
+		]);
 		assert.equal(await cdpTabForWindow("Neither"), undefined);
 		assert.equal(await cdpTabForWindow(""), undefined);
 	});
 
 	test("an untitled tab never matches a window title", async () => {
-		await fakeBrowser({ targets: [{ id: "blank", title: "" }, { id: "docs", title: "Docs" }] });
+		await fakeBrowser({
+			targets: [
+				{ id: "blank", title: "" },
+				{ id: "docs", title: "Docs" },
+			],
+		});
 		assert.equal(await cdpTabForWindow("Mail"), undefined);
 		assert.equal((await cdpTabForWindow("Docs"))?.targetId, "docs");
 	});
 
 	test("an exact title beats prefix matches", async () => {
-		const fake = await fakeBrowser({ targets: [{ id: "prefix", title: "Report 2025" }, { id: "exact", title: "Report" }] });
+		const fake = await fakeBrowser({
+			targets: [
+				{ id: "prefix", title: "Report 2025" },
+				{ id: "exact", title: "Report" },
+			],
+		});
 		const tab = await cdpTabForWindow("Report");
 		assert.equal(tab?.targetId, "exact");
 		assert.equal(fake.upgraded.length, 1);
@@ -706,11 +835,16 @@ describe("same-titled tabs", () => {
 			const bounds = byTarget[params.targetId]?.bounds;
 			return bounds ? { windowId: 1, bounds } : {};
 		});
-		fake.handle("Runtime.evaluate", (_params, ctx) => ({ result: { value: byTarget[ctx.targetId]?.visible ? "visible" : "hidden" } }));
+		fake.handle("Runtime.evaluate", (_params, ctx) => ({
+			result: { value: byTarget[ctx.targetId]?.visible ? "visible" : "hidden" },
+		}));
 	}
 
 	// Two tabs with identical titles, and a window frame matching `frame` (here) or far from it (there).
-	const twins = [{ id: "one", title: "Same" }, { id: "two", title: "Same" }];
+	const twins = [
+		{ id: "one", title: "Same" },
+		{ id: "two", title: "Same" },
+	];
 	const here = { left: 100, top: 100, width: 800, height: 600 };
 	const there = { left: 1500, top: 100, width: 800, height: 600 };
 
@@ -722,10 +856,18 @@ describe("same-titled tabs", () => {
 
 	test("within the window the visible tab wins; a hidden in-frame tab is the fallback", async () => {
 		const fake = await fakeBrowser({ targets: [...twins, { id: "three", title: "Same" }] });
-		scriptWindows(fake, { one: { bounds: here, visible: false }, two: { bounds: here, visible: true }, three: { bounds: here, visible: false } });
+		scriptWindows(fake, {
+			one: { bounds: here, visible: false },
+			two: { bounds: here, visible: true },
+			three: { bounds: here, visible: false },
+		});
 		assert.equal((await cdpTabForWindow("Same", frame))?.targetId, "two");
 		disconnectCdp();
-		scriptWindows(fake, { one: { bounds: here, visible: false }, two: { bounds: there, visible: true }, three: { bounds: here, visible: false } });
+		scriptWindows(fake, {
+			one: { bounds: here, visible: false },
+			two: { bounds: there, visible: true },
+			three: { bounds: here, visible: false },
+		});
 		assert.equal((await cdpTabForWindow("Same", frame))?.targetId, "one");
 	});
 
@@ -745,7 +887,12 @@ describe("same-titled tabs", () => {
 	});
 
 	test("several prefix matches and no exact title are all candidates", async () => {
-		const fake = await fakeBrowser({ targets: [{ id: "one", title: "Same A" }, { id: "two", title: "Same B" }] });
+		const fake = await fakeBrowser({
+			targets: [
+				{ id: "one", title: "Same A" },
+				{ id: "two", title: "Same B" },
+			],
+		});
 		scriptWindows(fake, { two: { visible: true } });
 		assert.equal((await cdpTabForWindow("Same"))?.targetId, "two");
 	});
@@ -758,7 +905,10 @@ describe("same-titled tabs", () => {
 
 	test("an unreachable candidate is skipped", async () => {
 		const fake = await fakeBrowser();
-		fake.setTargets([{ id: "dead", title: "Same", webSocketDebuggerUrl: `ws://127.0.0.1:${fake.port}/devtools/missing/dead` }, { id: "two", title: "Same" }]);
+		fake.setTargets([
+			{ id: "dead", title: "Same", webSocketDebuggerUrl: `ws://127.0.0.1:${fake.port}/devtools/missing/dead` },
+			{ id: "two", title: "Same" },
+		]);
 		scriptWindows(fake, { two: { visible: true } });
 		assert.equal((await cdpTabForWindow("Same"))?.targetId, "two");
 	});
@@ -778,7 +928,11 @@ describe("same-titled tabs", () => {
 		scriptWindows(fake, { solo: { bounds: here, visible: true } });
 		const tab = await cdpTabForWindow("Solo", frame);
 		scriptWindows(fake, { solo: { bounds: there, visible: true } });
-		assert.equal(await cdpTabForWindow("Solo", frame), tab, "same target is re-selected and its open connection reused");
+		assert.equal(
+			await cdpTabForWindow("Solo", frame),
+			tab,
+			"same target is re-selected and its open connection reused",
+		);
 		assert.equal(fake.upgraded.length, 1);
 		assert.equal(fake.listRequests, 2);
 	});
@@ -801,7 +955,14 @@ describe("same-titled tabs", () => {
 		scriptWindows(fake, { solo: { bounds: bounds(100, 100), visible: true } });
 		const tab = await cdpTabForWindow("Solo", frame);
 		assert(tab);
-		for (const [left, top, cached] of [[150, 100, true], [151, 100, false], [100, 150, true], [100, 151, false], [50, 100, true], [49, 100, false]]) {
+		for (const [left, top, cached] of [
+			[150, 100, true],
+			[151, 100, false],
+			[100, 150, true],
+			[100, 151, false],
+			[50, 100, true],
+			[49, 100, false],
+		]) {
 			scriptWindows(fake, { solo: { bounds: bounds(left, top), visible: true } });
 			const listed = fake.listRequests;
 			assert.equal(await cdpTabForWindow("Solo", frame), tab);
@@ -833,7 +994,12 @@ describe("snapshots", () => {
 	 * @returns {object} AX node.
 	 * @throws {never} Pure constructor.
 	 */
-	const ax = (nodeId, role, name, extra = {}) => ({ nodeId, role: { type: "role", value: role }, name: { type: "computedString", value: name }, ...extra });
+	const ax = (nodeId, role, name, extra = {}) => ({
+		nodeId,
+		role: { type: "role", value: role },
+		name: { type: "computedString", value: name },
+		...extra,
+	});
 
 	test("returns no snapshot for unknown or detached contexts", async () => {
 		const fake = await fakeBrowser({ targets: [{ id: "detached", webSocketDebuggerUrl: null }] });
@@ -845,7 +1011,9 @@ describe("snapshots", () => {
 
 	test("a page without a url snapshots with an empty url", async () => {
 		const fake = await fakeBrowser();
-		fake.discoveryBody(JSON.stringify([{ id: "fake", type: "page", title: "Bare", webSocketDebuggerUrl: fake.url("page/fake") }]));
+		fake.discoveryBody(
+			JSON.stringify([{ id: "fake", type: "page", title: "Bare", webSocketDebuggerUrl: fake.url("page/fake") }]),
+		);
 		assert.equal((await cdpSnapshotForContext("browser:fake"))?.url, "");
 	});
 
@@ -854,7 +1022,12 @@ describe("snapshots", () => {
 		script(fake, "Hello page", [
 			ax("1", "RootWebArea", "Form", { childIds: ["2", "3", "4", "5", "9"], backendDOMNodeId: 1 }),
 			ax("2", "button", "Save", { parentId: "1", backendDOMNodeId: 11.9 }),
-			ax("3", "textbox", "Email", { parentId: "1", backendDOMNodeId: 12, value: { type: "string", value: " a@b.c " }, description: { value: "work" } }),
+			ax("3", "textbox", "Email", {
+				parentId: "1",
+				backendDOMNodeId: 12,
+				value: { type: "string", value: " a@b.c " },
+				description: { value: "work" },
+			}),
 			ax("4", "button", "No backend node", { parentId: "1" }),
 			ax("5", "button", "", { parentId: "1", backendDOMNodeId: 14 }),
 			ax("6", "StaticText", "plain", { parentId: "1", backendDOMNodeId: 15 }),
@@ -867,11 +1040,23 @@ describe("snapshots", () => {
 		assert.equal(snapshot.url, "https://example.test/form");
 		assert.equal(snapshot.text, "Hello page");
 		assert.deepEqual(snapshot.diagnostics, { cdp: "connected", targetCount: 2 });
-		assert.deepEqual(snapshot.targets.map(({ role, name, value, actions, backendNodeId }) => ({ role, name, value, actions, backendNodeId })), [
-			{ role: "button", name: "Save", value: undefined, actions: ["click"], backendNodeId: 11 },
-			{ role: "textbox", name: "Email", value: "a@b.c", actions: ["click", "set_text"], backendNodeId: 12 },
-		]);
-		assert(snapshot.targets.every((target) => target.source === "browser_ax" && !target.ref.startsWith("cdp:")), "wire refs are mapped to model refs");
+		assert.deepEqual(
+			snapshot.targets.map(({ role, name, value, actions, backendNodeId }) => ({
+				role,
+				name,
+				value,
+				actions,
+				backendNodeId,
+			})),
+			[
+				{ role: "button", name: "Save", value: undefined, actions: ["click"], backendNodeId: 11 },
+				{ role: "textbox", name: "Email", value: "a@b.c", actions: ["click", "set_text"], backendNodeId: 12 },
+			],
+		);
+		assert(
+			snapshot.targets.every((target) => target.source === "browser_ax" && !target.ref.startsWith("cdp:")),
+			"wire refs are mapped to model refs",
+		);
 		assert.match(JSON.stringify(snapshot.outline), /Save/);
 		await vi.waitFor(() => assert.equal(fake.connections[0].closed, true));
 	});
@@ -893,15 +1078,34 @@ describe("snapshots", () => {
 
 	test("every interactive role is classified and others are not", async () => {
 		const fake = await fakeBrowser();
-		const roles = ["button", "Link", "checkbox", "radio", "menuitem", "tab", "textbox", "searchbox", "combobox", "listbox", "slider", "spinbutton", "heading", "", "paragraph"];
-		script(fake, "", roles.map((role, index) => ax(String(index + 1), role, `n${index}`, { backendDOMNodeId: index + 1 })));
+		const roles = [
+			"button",
+			"Link",
+			"checkbox",
+			"radio",
+			"menuitem",
+			"tab",
+			"textbox",
+			"searchbox",
+			"combobox",
+			"listbox",
+			"slider",
+			"spinbutton",
+			"heading",
+			"",
+			"paragraph",
+		];
+		script(
+			fake,
+			"",
+			roles.map((role, index) => ax(String(index + 1), role, `n${index}`, { backendDOMNodeId: index + 1 })),
+		);
 		const snapshot = await cdpSnapshotForContext("browser:fake");
 		assert(snapshot);
-		assert.deepEqual(snapshot.targets.map((target) => target.actions.join("+")), [
-			...Array(6).fill("click"),
-			...Array(3).fill("click+set_text"),
-			...Array(3).fill("click"),
-		]);
+		assert.deepEqual(
+			snapshot.targets.map((target) => target.actions.join("+")),
+			[...Array(6).fill("click"), ...Array(3).fill("click+set_text"), ...Array(3).fill("click")],
+		);
 	});
 
 	test("a failing text or tree query degrades to empty rather than failing the snapshot", async () => {
@@ -914,7 +1118,12 @@ describe("snapshots", () => {
 		assert.deepEqual(snapshot.targets, []);
 	});
 
-	test.each([[null, ""], [undefined, ""], [42, "42"], [{ nested: true }, "[object Object]"]])("page text %j is coerced to %j", async (value, expected) => {
+	test.each([
+		[null, ""],
+		[undefined, ""],
+		[42, "42"],
+		[{ nested: true }, "[object Object]"],
+	])("page text %j is coerced to %j", async (value, expected) => {
 		const fake = await fakeBrowser();
 		script(fake, value, [{ nodeId: "1", role: { value: "document" }, name: { value: "" } }]);
 		assert.equal((await cdpSnapshotForContext("browser:fake"))?.text, expected);

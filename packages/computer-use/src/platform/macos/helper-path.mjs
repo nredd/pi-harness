@@ -18,14 +18,16 @@ export function resolveMacosHelperAppPath(options = {}) {
 	const homeDir = options.homeDir ?? os.homedir();
 	const systemHelperAppPath = options.systemHelperAppPath ?? SYSTEM_HELPER_APP_PATH;
 	const fileExists = options.fileExists ?? existsSync;
-	const directoryIsWritable = options.directoryIsWritable ?? ((directoryPath) => {
-		try {
-			accessSync(directoryPath, fsConstants.W_OK);
-			return true;
-		} catch {
-			return false;
-		}
-	});
+	const directoryIsWritable =
+		options.directoryIsWritable ??
+		((directoryPath) => {
+			try {
+				accessSync(directoryPath, fsConstants.W_OK);
+				return true;
+			} catch {
+				return false;
+			}
+		});
 
 	if (fileExists(systemHelperAppPath) && directoryIsWritable(path.dirname(systemHelperAppPath))) {
 		return systemHelperAppPath;

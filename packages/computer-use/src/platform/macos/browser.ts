@@ -60,9 +60,14 @@ function escapeAppleScriptString(value: string): string {
 function appendBrowserJavaScriptAppleEventsHint(error: Error): Error {
 	const hint = [
 		"Browser JavaScript Apple Events are disabled for the target browser.",
-		"Ask the user to enable \"Allow JavaScript from Apple Events\" in the browser's developer menu, then retry the browser action.",
+		'Ask the user to enable "Allow JavaScript from Apple Events" in the browser\'s developer menu, then retry the browser action.',
 	].join(" ");
-	if (!/not allowed to send javascript commands|executing javascript through applescript is turned off|allow javascript from apple events|enable javascript from apple events/i.test(error.message) || error.message.includes(hint)) {
+	if (
+		!/not allowed to send javascript commands|executing javascript through applescript is turned off|allow javascript from apple events|enable javascript from apple events/i.test(
+			error.message,
+		) ||
+		error.message.includes(hint)
+	) {
 		return error;
 	}
 	const enhanced = new Error(`${error.message}\n\n${hint}`);
@@ -78,7 +83,10 @@ export function isChromeFamilyApp(appName: string, bundleId?: string): boolean {
 	return CHROME_FAMILY_BUNDLE_IDS.has(bundleId ?? "") || CHROME_FAMILY_APP_NAMES.has(normalizeText(appName));
 }
 
-function scriptForBrowserOpenLocation(target: { appName: string; bundleId?: string }, url: string): string[] | undefined {
+function scriptForBrowserOpenLocation(
+	target: { appName: string; bundleId?: string },
+	url: string,
+): string[] | undefined {
 	const appTarget = target.bundleId
 		? `application id "${escapeAppleScriptString(target.bundleId)}"`
 		: `application "${escapeAppleScriptString(target.appName)}"`;

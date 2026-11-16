@@ -41,7 +41,11 @@ process.stdout.write(JSON.stringify({ profile, existsAfterShutdown: fs.existsSyn
  * @throws {Error} If the child fails, times out or prints no report.
  */
 async function runChild(script, mode) {
-	const child = spawn(process.execPath, ["--import", "tsx", script, mode], { cwd: PACKAGE_DIR, stdio: ["ignore", "pipe", "inherit"], timeout: CHILD_TIMEOUT_MS });
+	const child = spawn(process.execPath, ["--import", "tsx", script, mode], {
+		cwd: PACKAGE_DIR,
+		stdio: ["ignore", "pipe", "inherit"],
+		timeout: CHILD_TIMEOUT_MS,
+	});
 	let stdout = "";
 	child.stdout.on("data", (chunk) => {
 		stdout += chunk;
@@ -118,7 +122,17 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		log = path.join(scratch, "argv.json");
-		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "FAKE_BROWSER_SIGTERM_LOG", "FAKE_BROWSER_NO_CDP", "FAKE_BROWSER_LAUNCHES", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
+		for (const name of [
+			"TMPDIR",
+			"FAKE_BROWSER_LOG",
+			"FAKE_BROWSER_IGNORE_SIGTERM",
+			"FAKE_BROWSER_SIGTERM_LOG",
+			"FAKE_BROWSER_NO_CDP",
+			"FAKE_BROWSER_LAUNCHES",
+			"PI_COMPUTER_USE_CHROME_EXECUTABLE",
+			"PI_COMPUTER_USE_CDP_PORT",
+		])
+			saved[name] = process.env[name];
 		process.env.TMPDIR = tmp;
 		process.env.FAKE_BROWSER_LOG = log;
 		process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = FAKE_BROWSER;
@@ -146,7 +160,9 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const createServer = net.createServer.bind(net);
 		vi.spyOn(net, "createServer").mockImplementation((...args) => {
 			const server = createServer(...args);
-			server.once("listening", () => fs.mkdirSync(path.join(tmp, `pi-chrome-cdp-${server.address().port}`), { mode: 0o555 }));
+			server.once("listening", () =>
+				fs.mkdirSync(path.join(tmp, `pi-chrome-cdp-${server.address().port}`), { mode: 0o555 }),
+			);
 			return server;
 		});
 		const result = await testing.performLaunchBrowser({});
@@ -156,7 +172,10 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const { port, profile } = JSON.parse(fs.readFileSync(log, "utf8"));
 		const legacy = path.join(tmp, `pi-chrome-cdp-${port}`);
 		assert(fs.existsSync(legacy), "the chosen port's legacy profile dir was not squatted");
-		assert.throws(() => fs.accessSync(legacy, fs.constants.W_OK), "squatted legacy profile dir is writable, so this run proves nothing (root?)");
+		assert.throws(
+			() => fs.accessSync(legacy, fs.constants.W_OK),
+			"squatted legacy profile dir is writable, so this run proves nothing (root?)",
+		);
 		assert.equal(path.dirname(profile), tmp, "profile dir is not under os.tmpdir()");
 		assert.match(path.basename(profile), /^pi-chrome-cdp-[^/]+$/);
 		assert.notEqual(profile, legacy, "launch_browser reused the fixed shared-temp profile name");
@@ -240,7 +259,11 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const controller = new AbortController();
 		controller.abort();
 		await assert.rejects(testing.performLaunchBrowser({}, controller.signal), /aborted/);
-		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], "aborted launch returned before removing the profile dir");
+		assert.deepEqual(
+			fs.readdirSync(tmp).filter((entry) => !before.has(entry)),
+			[],
+			"aborted launch returned before removing the profile dir",
+		);
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "aborted launch left its CDP port configured");
 	});
 
@@ -254,9 +277,17 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 
 			await testing.performLaunchBrowser({});
 			const { port } = JSON.parse(fs.readFileSync(log, "utf8"));
-			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, String(port), "launch did not point CDP at the managed browser");
+			assert.equal(
+				process.env.PI_COMPUTER_USE_CDP_PORT,
+				String(port),
+				"launch did not point CDP at the managed browser",
+			);
 			await shutdownComputerUseSession();
-			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, "9222", "session shutdown did not restore the user's CDP port");
+			assert.equal(
+				process.env.PI_COMPUTER_USE_CDP_PORT,
+				"9222",
+				"session shutdown did not restore the user's CDP port",
+			);
 		} finally {
 			delete process.env.PI_COMPUTER_USE_CDP_PORT;
 		}
@@ -310,8 +341,14 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		// does not exercise it.
 		const before = new Set(fs.readdirSync(tmp));
 		// The URL passes the scheme check, but `spawn` rejects the NUL byte synchronously.
-		await assert.rejects(testing.performLaunchBrowser({ url: "http://example.test/\0" }), { code: "ERR_INVALID_ARG_VALUE" });
-		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], "failed spawn left a profile dir behind");
+		await assert.rejects(testing.performLaunchBrowser({ url: "http://example.test/\0" }), {
+			code: "ERR_INVALID_ARG_VALUE",
+		});
+		assert.deepEqual(
+			fs.readdirSync(tmp).filter((entry) => !before.has(entry)),
+			[],
+			"failed spawn left a profile dir behind",
+		);
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "failed spawn left a CDP port configured");
 	});
 
@@ -321,7 +358,14 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	 * @returns {{ port: number, profile: string }[]} One entry per started browser.
 	 */
 	function launched(launches) {
-		return fs.existsSync(launches) ? fs.readFileSync(launches, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+		return fs.existsSync(launches)
+			? fs
+					.readFileSync(launches, "utf8")
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line))
+			: [];
 	}
 
 	/**
@@ -335,7 +379,11 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	 * @throws {import('node:assert').AssertionError} If a browser or a profile dir survived.
 	 */
 	async function assertAllGone(before, browsers, when) {
-		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], `${when} left a profile dir behind`);
+		assert.deepEqual(
+			fs.readdirSync(tmp).filter((entry) => !before.has(entry)),
+			[],
+			`${when} left a profile dir behind`,
+		);
 		for (const { port, profile } of browsers) {
 			assert(!fs.existsSync(profile), `${when} left profile ${profile} behind`);
 			assert.equal(await portListening(port), false, `${when} left the browser on port ${port} running`);
@@ -365,7 +413,11 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		assert.equal(await cdpAnswers(live.port), true, "the winning launch's browser is not serving CDP");
 		const liveEntries = fs.readdirSync(tmp).filter((entry) => !before.has(entry));
 		assert.deepEqual(liveEntries, [path.basename(live.profile)], "concurrent launches left more than one profile dir");
-		await assertAllGone(new Set([...before, ...liveEntries]), browsers.filter((entry) => entry !== live), "a concurrent relaunch");
+		await assertAllGone(
+			new Set([...before, ...liveEntries]),
+			browsers.filter((entry) => entry !== live),
+			"a concurrent relaunch",
+		);
 		await shutdownComputerUseSession();
 		await assertAllGone(before, browsers, "session shutdown");
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
@@ -437,7 +489,10 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		try {
 			await within(shutdownDone.promise, "shutdown after tool readiness", 10_000);
 			assert.equal(portProbes, 1, "shutdown overtook the admitted tool launch");
-			assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), []);
+			assert.deepEqual(
+				fs.readdirSync(tmp).filter((entry) => !before.has(entry)),
+				[],
+			);
 			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined);
 		} finally {
 			controller.abort();
@@ -497,9 +552,17 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 			// The relaunch spends the bridge's 5s SIGTERM grace period stopping the first browser.
 			relaunch = testing.performLaunchBrowser({}, controller.signal);
 			await waitUntil(() => fs.existsSync(termLog), "first browser did not receive SIGTERM", 5_000);
-			assert.equal(await portListening(first.port), true, "the relaunch stopped the first browser before shutdown was called");
+			assert.equal(
+				await portListening(first.port),
+				true,
+				"the relaunch stopped the first browser before shutdown was called",
+			);
 			await shutdownComputerUseSession();
-			assert.equal(await portListening(first.port), false, "session shutdown returned while the relaunch was still stopping the first browser");
+			assert.equal(
+				await portListening(first.port),
+				false,
+				"session shutdown returned while the relaunch was still stopping the first browser",
+			);
 			await assertAllGone(before, launched(launches), "session shutdown during a relaunch");
 			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
 		} finally {
@@ -538,7 +601,11 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 			vi.restoreAllMocks();
 		}
 		await assertAllGone(before, launched(launches), "the launch that raced shutdown");
-		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "the launch that raced shutdown left a CDP port configured");
+		assert.equal(
+			process.env.PI_COMPUTER_USE_CDP_PORT,
+			undefined,
+			"the launch that raced shutdown left a CDP port configured",
+		);
 	});
 
 	test("a Pi process that quits right after shutdown leaves no profile dir behind", async () => {

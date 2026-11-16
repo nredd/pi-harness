@@ -23,19 +23,66 @@ import { getComputerUseConfig, getLoadedComputerUseConfig, loadComputerUseConfig
 const stateId = Type.String({ description: "Required state id owning every @e ref used by this operation" });
 const point = { x: Type.Number(), y: Type.Number() };
 const mouseButton = Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("right"), Type.Literal("middle")]));
-const clickByRef = Type.Object({ action: Type.Literal("click"), ref: Type.String(), button: mouseButton, clickCount: Type.Optional(Type.Number({ minimum: 1, maximum: 3 })) });
-const clickByPoint = Type.Object({ action: Type.Literal("click"), ...point, button: mouseButton, clickCount: Type.Optional(Type.Number({ minimum: 1, maximum: 3 })) });
+const clickByRef = Type.Object({
+	action: Type.Literal("click"),
+	ref: Type.String(),
+	button: mouseButton,
+	clickCount: Type.Optional(Type.Number({ minimum: 1, maximum: 3 })),
+});
+const clickByPoint = Type.Object({
+	action: Type.Literal("click"),
+	...point,
+	button: mouseButton,
+	clickCount: Type.Optional(Type.Number({ minimum: 1, maximum: 3 })),
+});
 const uiAction = Type.Union([
 	Type.Object({ action: Type.Literal("press"), ref: Type.String({ description: "Actionable outline ref" }) }),
 	clickByRef,
 	clickByPoint,
-	Type.Object({ action: Type.Literal("setText"), ref: Type.String({ description: "Editable outline ref" }), text: Type.String() }),
-	Type.Object({ action: Type.Literal("typeText"), ref: Type.Optional(Type.String({ description: "Omit after a click to type into the focus established by that click" })), text: Type.String() }),
-	Type.Object({ action: Type.Literal("paste"), ref: Type.Optional(Type.String({ description: "Omit after a click to paste into the focus established by that click" })), text: Type.String({ minLength: 1, description: "Inserted through the pasteboard; the previous clipboard is restored (macOS)" }) }),
-	Type.Object({ action: Type.Literal("keypress"), ref: Type.Optional(Type.String({ description: "Omit to send keys to the focused control" })), keys: Type.Array(Type.String(), { minItems: 1 }) }),
-	Type.Object({ action: Type.Literal("secondaryAction"), ref: Type.String({ description: "Outline ref whose actions list includes name" }), name: Type.String({ description: "Advertised accessibility action, e.g. AXShowMenu (macOS)" }) }),
-	Type.Object({ action: Type.Literal("selectText"), ref: Type.String({ description: "Text element ref" }), start: Type.Integer({ minimum: 0, description: "UTF-16 offset where the selection starts" }), length: Type.Optional(Type.Integer({ minimum: 0, description: "UTF-16 length; 0 or omitted places the caret" })) }),
-	Type.Object({ action: Type.Literal("scroll"), ref: Type.Optional(Type.String()), scrollX: Type.Optional(Type.Number()), scrollY: Type.Optional(Type.Number()) }),
+	Type.Object({
+		action: Type.Literal("setText"),
+		ref: Type.String({ description: "Editable outline ref" }),
+		text: Type.String(),
+	}),
+	Type.Object({
+		action: Type.Literal("typeText"),
+		ref: Type.Optional(
+			Type.String({ description: "Omit after a click to type into the focus established by that click" }),
+		),
+		text: Type.String(),
+	}),
+	Type.Object({
+		action: Type.Literal("paste"),
+		ref: Type.Optional(
+			Type.String({ description: "Omit after a click to paste into the focus established by that click" }),
+		),
+		text: Type.String({
+			minLength: 1,
+			description: "Inserted through the pasteboard; the previous clipboard is restored (macOS)",
+		}),
+	}),
+	Type.Object({
+		action: Type.Literal("keypress"),
+		ref: Type.Optional(Type.String({ description: "Omit to send keys to the focused control" })),
+		keys: Type.Array(Type.String(), { minItems: 1 }),
+	}),
+	Type.Object({
+		action: Type.Literal("secondaryAction"),
+		ref: Type.String({ description: "Outline ref whose actions list includes name" }),
+		name: Type.String({ description: "Advertised accessibility action, e.g. AXShowMenu (macOS)" }),
+	}),
+	Type.Object({
+		action: Type.Literal("selectText"),
+		ref: Type.String({ description: "Text element ref" }),
+		start: Type.Integer({ minimum: 0, description: "UTF-16 offset where the selection starts" }),
+		length: Type.Optional(Type.Integer({ minimum: 0, description: "UTF-16 length; 0 or omitted places the caret" })),
+	}),
+	Type.Object({
+		action: Type.Literal("scroll"),
+		ref: Type.Optional(Type.String()),
+		scrollX: Type.Optional(Type.Number()),
+		scrollY: Type.Optional(Type.Number()),
+	}),
 	Type.Object({ action: Type.Literal("drag"), path: Type.Array(Type.Object(point), { minItems: 2 }) }),
 	Type.Object({ action: Type.Literal("moveMouse"), ...point }),
 ]);
@@ -46,7 +93,11 @@ const conditionProperties = {
 	text: Type.Optional(Type.String({ description: "Text that must match", maxLength: 512 })),
 	role: Type.Optional(Type.String({ description: "Exact normalized role", maxLength: 128 })),
 	value: Type.Optional(Type.String({ description: "Exact normalized value; normally pair with ref" })),
-	until: Type.Optional(Type.Union([Type.Literal("present"), Type.Literal("absent")], { description: "Desired condition, default present" })),
+	until: Type.Optional(
+		Type.Union([Type.Literal("present"), Type.Literal("absent")], {
+			description: "Desired condition, default present",
+		}),
+	),
 	timeoutMs: Type.Optional(Type.Number({ description: "Maximum wait, default 10000ms", minimum: 100, maximum: 60000 })),
 };
 
@@ -60,7 +111,19 @@ const findTool = defineTool({
 		app: Type.Optional(Type.String({ description: "Exact normalized app name", maxLength: 256 })),
 		bundleId: Type.Optional(Type.String({ description: "Exact bundle id" })),
 		pid: Type.Optional(Type.Integer({ minimum: 1, description: "Exact positive process id" })),
-		kind: Type.Optional(Type.Union([Type.Literal("window"), Type.Literal("menu"), Type.Literal("sheet"), Type.Literal("popover"), Type.Literal("dialog"), Type.Literal("browser_page")], { description: "Exact root kind" })),
+		kind: Type.Optional(
+			Type.Union(
+				[
+					Type.Literal("window"),
+					Type.Literal("menu"),
+					Type.Literal("sheet"),
+					Type.Literal("popover"),
+					Type.Literal("dialog"),
+					Type.Literal("browser_page"),
+				],
+				{ description: "Exact root kind" },
+			),
+		),
 	}),
 	execute: executeFind,
 });
@@ -68,7 +131,8 @@ const findTool = defineTool({
 const observeTool = defineTool({
 	name: "observe_ui",
 	label: "Observe UI",
-	description: "Capture the current/frontmost root or one exact @r root and return a compact list of actionable @e controls plus stateId.",
+	description:
+		"Capture the current/frontmost root or one exact @r root and return a compact list of actionable @e controls plus stateId.",
 	promptSnippet: "Primary UI observation tool. Follow with search_ui, expand_ui, inspect_ui, or act_ui.",
 	promptGuidelines: [
 		"Use mode=semantic to skip OCR and images, visual to force them, and fused for automatic selection.",
@@ -77,8 +141,16 @@ const observeTool = defineTool({
 	],
 	parameters: Type.Object({
 		root: Type.Optional(Type.String({ description: "Exact @r ref issued by find_roots" })),
-		mode: Type.Optional(Type.Union([Type.Literal("semantic"), Type.Literal("visual"), Type.Literal("fused")], { description: "Observation mode, default fused" })),
-		detail: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("outline")], { description: "compact (default) lists actionable refs; outline returns the folded tree" })),
+		mode: Type.Optional(
+			Type.Union([Type.Literal("semantic"), Type.Literal("visual"), Type.Literal("fused")], {
+				description: "Observation mode, default fused",
+			}),
+		),
+		detail: Type.Optional(
+			Type.Union([Type.Literal("compact"), Type.Literal("outline")], {
+				description: "compact (default) lists actionable refs; outline returns the folded tree",
+			}),
+		),
 	}),
 	execute: executeObserve,
 });
@@ -86,8 +158,10 @@ const observeTool = defineTool({
 const searchUiTool = defineTool({
 	name: "search_ui",
 	label: "Search UI",
-	description: "Return a bounded, deterministically ranked search of the cached outline. At least one predicate is required.",
-	promptSnippet: "Find targets not shown in the compact observe_ui output; refine broad searches instead of paging matches.",
+	description:
+		"Return a bounded, deterministically ranked search of the cached outline. At least one predicate is required.",
+	promptSnippet:
+		"Find targets not shown in the compact observe_ui output; refine broad searches instead of paging matches.",
 	parameters: Type.Object({
 		text: Type.Optional(Type.String({ description: "Human-readable text or label", maxLength: 256 })),
 		role: Type.Optional(Type.String({ description: "Exact normalized role, e.g. button", maxLength: 128 })),
@@ -102,7 +176,11 @@ const expandUiTool = defineTool({
 	label: "Expand UI",
 	description: "Unfold bounded local outline context for one @e ref; use the root ref for full structure.",
 	promptSnippet: "Expand a specific ref instead of dumping unrelated UI.",
-	parameters: Type.Object({ ref: Type.String(), depth: Type.Optional(Type.Number({ minimum: 1, maximum: 8, description: "Subtree depth, default 3" })), stateId }),
+	parameters: Type.Object({
+		ref: Type.String(),
+		depth: Type.Optional(Type.Number({ minimum: 1, maximum: 8, description: "Subtree depth, default 3" })),
+		stateId,
+	}),
 	execute: executeExpandUi,
 });
 
@@ -120,8 +198,14 @@ const actTool = defineTool({
 	label: "Act",
 	description: "Perform one or more precisely targeted checked actions and return the successor state.",
 	promptSnippet: "Pass dependent click/type steps together and use expect for observable completion.",
-	promptGuidelines: ["After clicking an editable region, omit ref from typeText/keypress so input follows the established focus."],
-	parameters: Type.Object({ stateId, expect: Type.Optional(Type.Object(conditionProperties)), actions: Type.Array(uiAction, { minItems: 1, maxItems: 20 }) }),
+	promptGuidelines: [
+		"After clicking an editable region, omit ref from typeText/keypress so input follows the established focus.",
+	],
+	parameters: Type.Object({
+		stateId,
+		expect: Type.Optional(Type.Object(conditionProperties)),
+		actions: Type.Array(uiAction, { minItems: 1, maxItems: 20 }),
+	}),
 	execute: executeAct,
 });
 
@@ -130,7 +214,11 @@ const readTextTool = defineTool({
 	label: "Read Text",
 	description: "Read a fixed-size page from an @e UI ref or immutable @o truncated-output ref.",
 	promptSnippet: "Use @e with its stateId; @o continuation refs don't need stateId.",
-	parameters: Type.Object({ ref: Type.String(), offset: Type.Optional(Type.Number({ minimum: 0 })), stateId: Type.Optional(stateId) }),
+	parameters: Type.Object({
+		ref: Type.String(),
+		offset: Type.Optional(Type.Number({ minimum: 0 })),
+		stateId: Type.Optional(stateId),
+	}),
 	execute: executeReadText,
 });
 
@@ -171,7 +259,19 @@ const evaluateBrowserTool = defineTool({
 	execute: executeEvaluateBrowser,
 });
 
-export const COMPUTER_USE_TOOLS = [findTool, observeTool, searchUiTool, expandUiTool, inspectUiTool, actTool, readTextTool, waitForTool, launchBrowserTool, navigateBrowserTool, evaluateBrowserTool];
+export const COMPUTER_USE_TOOLS = [
+	findTool,
+	observeTool,
+	searchUiTool,
+	expandUiTool,
+	inspectUiTool,
+	actTool,
+	readTextTool,
+	waitForTool,
+	launchBrowserTool,
+	navigateBrowserTool,
+	evaluateBrowserTool,
+];
 const COMPUTER_USE_TOOL_NAMES = new Set(COMPUTER_USE_TOOLS.map((tool) => tool.name));
 
 function formatConfigStatus(): string {
@@ -187,7 +287,10 @@ function formatConfigStatus(): string {
 		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),
 		"",
 		"Sources:",
-		...loaded.sources.map((source) => `- ${source.path}: ${source.error ? `error: ${source.error}` : source.exists ? "loaded" : "not found"}`),
+		...loaded.sources.map(
+			(source) =>
+				`- ${source.path}: ${source.error ? `error: ${source.error}` : source.exists ? "loaded" : "not found"}`,
+		),
 		`- env overrides: ${Object.keys(loaded.env).join(", ") || "none"}`,
 	].join("\n");
 }
@@ -195,19 +298,42 @@ function formatConfigStatus(): string {
 const desktopScreenshotTool = defineTool({
 	name: "desktop_screenshot",
 	label: "Desktop Screenshot",
-	description: "Capture a whole display (all apps, menu bar, cursor). Coordinates for desktop_input are global points; the result states the image-to-point mapping.",
-	promptSnippet: "Use for anything outside one app window; screenshot, act with desktop_input, screenshot again to verify.",
-	parameters: Type.Object({ display: Type.Optional(Type.Integer({ minimum: 0, description: "Display index, 0 is the main display" })), maxDimension: Type.Optional(Type.Integer({ minimum: 200, maximum: 4000 })) }),
+	description:
+		"Capture a whole display (all apps, menu bar, cursor). Coordinates for desktop_input are global points; the result states the image-to-point mapping.",
+	promptSnippet:
+		"Use for anything outside one app window; screenshot, act with desktop_input, screenshot again to verify.",
+	parameters: Type.Object({
+		display: Type.Optional(Type.Integer({ minimum: 0, description: "Display index, 0 is the main display" })),
+		maxDimension: Type.Optional(Type.Integer({ minimum: 200, maximum: 4000 })),
+	}),
 	execute: executeDesktopScreenshot,
 });
 
 const desktopInputTool = defineTool({
 	name: "desktop_input",
 	label: "Desktop Input",
-	description: "Physical mouse and keyboard input in global screen points, like a person at the keys. Moves the real cursor; keys and text go to the FRONTMOST app, so call activateApp first. Also reads/writes clipboard text.",
-	promptSnippet: "activateApp before typing or keys (input goes to the frontmost app); verify with desktop_screenshot; prefer act_ui for ref-targetable app controls.",
+	description:
+		"Physical mouse and keyboard input in global screen points, like a person at the keys. Moves the real cursor; keys and text go to the FRONTMOST app, so call activateApp first. Also reads/writes clipboard text.",
+	promptSnippet:
+		"activateApp before typing or keys (input goes to the frontmost app); verify with desktop_screenshot; prefer act_ui for ref-targetable app controls.",
 	parameters: Type.Object({
-		action: Type.Union([Type.Literal("moveMouse"), Type.Literal("click"), Type.Literal("scroll"), Type.Literal("drag"), Type.Literal("typeText"), Type.Literal("keypress"), Type.Literal("activateApp"), Type.Literal("readClipboard"), Type.Literal("writeClipboard")], { description: "moveMouse/click/scroll need x,y; drag needs path; typeText/writeClipboard need text; keypress needs keys; activateApp needs app (launches it if not running); readClipboard returns clipboard text" }),
+		action: Type.Union(
+			[
+				Type.Literal("moveMouse"),
+				Type.Literal("click"),
+				Type.Literal("scroll"),
+				Type.Literal("drag"),
+				Type.Literal("typeText"),
+				Type.Literal("keypress"),
+				Type.Literal("activateApp"),
+				Type.Literal("readClipboard"),
+				Type.Literal("writeClipboard"),
+			],
+			{
+				description:
+					"moveMouse/click/scroll need x,y; drag needs path; typeText/writeClipboard need text; keypress needs keys; activateApp needs app (launches it if not running); readClipboard returns clipboard text",
+			},
+		),
 		x: Type.Optional(Type.Number({ description: "Global point x" })),
 		y: Type.Optional(Type.Number({ description: "Global point y (negative above the main display is valid)" })),
 		button: mouseButton,
@@ -243,25 +369,41 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 		loadComputerUseConfig(ctx.cwd);
 		reconstructStateFromBranch(ctx);
 		if (!ctx.hasUI) return;
-		try { await ensureComputerUseSetup(ctx); } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning"); }
+		try {
+			await ensureComputerUseSetup(ctx);
+		} catch (error) {
+			ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
+		}
 	});
 
 	pi.on("tool_execution_start", async (event) => {
 		const config = getComputerUseConfig();
-		if (process.platform !== "darwin" || config.headless || !config.activity_glow || !COMPUTER_USE_TOOL_NAMES.has(event.toolName)) return;
+		if (
+			process.platform !== "darwin" ||
+			config.headless ||
+			!config.activity_glow ||
+			!COMPUTER_USE_TOOL_NAMES.has(event.toolName)
+		)
+			return;
 		activityGlowActive = true;
-		try { await setComputerUseActivity(true); } catch {}
+		try {
+			await setComputerUseActivity(true);
+		} catch {}
 	});
 
 	pi.on("agent_end", async () => {
 		if (!activityGlowActive) return;
 		activityGlowActive = false;
-		try { await setComputerUseActivity(false); } catch {}
+		try {
+			await setComputerUseActivity(false);
+		} catch {}
 	});
 
 	pi.on("session_shutdown", async () => {
 		activityGlowActive = false;
-		try { await setComputerUseActivity(false); } catch {}
+		try {
+			await setComputerUseActivity(false);
+		} catch {}
 		await shutdownComputerUseSession();
 	});
 }

@@ -13,7 +13,9 @@ export const REQUIRED_PLATFORM_INVARIANTS = [
 
 export function assertPlatformArchitecture(platform: string, diagnostics: PlatformDiagnostics): void {
 	if (diagnostics.architectureVersion !== PLATFORM_ARCHITECTURE_VERSION) {
-		throw new Error(`${platform} helper architecture mismatch: expected ${PLATFORM_ARCHITECTURE_VERSION}, got ${diagnostics.architectureVersion ?? "unknown"}. Rebuild and restart the helper.`);
+		throw new Error(
+			`${platform} helper architecture mismatch: expected ${PLATFORM_ARCHITECTURE_VERSION}, got ${diagnostics.architectureVersion ?? "unknown"}. Rebuild and restart the helper.`,
+		);
 	}
 	const reported = new Set(diagnostics.invariants ?? []);
 	const missing = REQUIRED_PLATFORM_INVARIANTS.filter((invariant) => !reported.has(invariant));

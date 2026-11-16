@@ -5,7 +5,13 @@ import { serializeOutline } from "../src/outline.ts";
 import { REQUIRED_PLATFORM_INVARIANTS, assertPlatformArchitecture } from "../src/platform/architecture.ts";
 import { ResourceScheduler, StaleResourceStateError, StateStore } from "../src/runtime.ts";
 import { SavedStates } from "../src/state.ts";
-import { MODEL_TEXT_MAX_BYTES, applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput } from "../src/output.ts";
+import {
+	MODEL_TEXT_MAX_BYTES,
+	applyOutputEnvelope,
+	boundToolError,
+	clearStoredOutputs,
+	readStoredOutput,
+} from "../src/output.ts";
 import { outlineNode as n, outlineOf } from "./support/outline-nodes.mjs";
 
 describe("StateStore", () => {
@@ -60,16 +66,28 @@ describe("ResourceScheduler", () => {
 		assert.deepEqual(await scheduler.readAt("w", 3, async (epoch) => epoch), { value: 3, epoch: 3 });
 		const stale = await scheduler.readAt("w", 2, async () => "never").catch((error) => error);
 		assert.ok(stale instanceof StaleResourceStateError);
-		assert.deepEqual([stale.name, stale.resourceKey, stale.expectedEpoch, stale.actualEpoch], ["StaleResourceStateError", "w", 2, 3]);
+		assert.deepEqual(
+			[stale.name, stale.resourceKey, stale.expectedEpoch, stale.actualEpoch],
+			["StaleResourceStateError", "w", 2, 3],
+		);
 		assert.equal(stale.message, "State is stale for w: expected epoch 2, current epoch 3.");
 	});
 
 	test("a write bumps the epoch before it runs, even when it fails, and invalidates its base", async () => {
 		const scheduler = new ResourceScheduler();
 		const seen = [];
-		await assert.rejects(scheduler.write("w", 0, async (next) => { seen.push([next, scheduler.epoch("w")]); throw new Error("partial effect"); }), /partial effect/);
+		await assert.rejects(
+			scheduler.write("w", 0, async (next) => {
+				seen.push([next, scheduler.epoch("w")]);
+				throw new Error("partial effect");
+			}),
+			/partial effect/,
+		);
 		assert.deepEqual(seen, [[1, 1]]);
-		await assert.rejects(scheduler.write("w", 0, async () => "again"), StaleResourceStateError);
+		await assert.rejects(
+			scheduler.write("w", 0, async () => "again"),
+			StaleResourceStateError,
+		);
 		assert.deepEqual(await scheduler.write("w", 1, async (next) => next), { value: 2, epoch: 2 });
 	});
 
@@ -77,10 +95,20 @@ describe("ResourceScheduler", () => {
 		const scheduler = new ResourceScheduler();
 		const log = [];
 		let openGate;
-		const gate = new Promise((resolve) => { openGate = resolve; });
-		const first = scheduler.read("w", async () => { log.push("first:start"); await gate; log.push("first:end"); });
-		const second = scheduler.read("w", async () => { log.push("second"); });
-		await scheduler.read("other", async () => { log.push("other"); });
+		const gate = new Promise((resolve) => {
+			openGate = resolve;
+		});
+		const first = scheduler.read("w", async () => {
+			log.push("first:start");
+			await gate;
+			log.push("first:end");
+		});
+		const second = scheduler.read("w", async () => {
+			log.push("second");
+		});
+		await scheduler.read("other", async () => {
+			log.push("other");
+		});
 		assert.deepEqual(log, ["first:start", "other"]);
 		openGate();
 		await Promise.all([first, second]);
@@ -89,7 +117,9 @@ describe("ResourceScheduler", () => {
 
 	test("a failed operation does not block its successors", async () => {
 		const scheduler = new ResourceScheduler();
-		const failed = scheduler.read("w", async () => { throw new Error("boom"); });
+		const failed = scheduler.read("w", async () => {
+			throw new Error("boom");
+		});
 		const after = scheduler.read("w", async () => "ok");
 		await assert.rejects(failed, /boom/);
 		assert.equal((await after).value, "ok");
@@ -99,11 +129,17 @@ describe("ResourceScheduler", () => {
 		for (const method of ["drain", "close"]) {
 			const scheduler = new ResourceScheduler();
 			let openGate;
-			const gate = new Promise((resolve) => { openGate = resolve; });
-			const running = scheduler.read("w", async () => { await gate; });
+			const gate = new Promise((resolve) => {
+				openGate = resolve;
+			});
+			const running = scheduler.read("w", async () => {
+				await gate;
+			});
 			const queued = scheduler.read("w", async () => undefined);
 			let settled = false;
-			const waiting = scheduler[method]().then(() => { settled = true; });
+			const waiting = scheduler[method]().then(() => {
+				settled = true;
+			});
 			await new Promise((resolve) => setImmediate(resolve));
 			assert.equal(settled, false, `${method} returned while work was pending`);
 			openGate();
@@ -117,7 +153,11 @@ describe("ResourceScheduler", () => {
 		const scheduler = new ResourceScheduler();
 		await scheduler.read("w", async () => undefined);
 		await scheduler.close();
-		for (const call of [() => scheduler.read("w", async () => 1), () => scheduler.readAt("w", 0, async () => 1), () => scheduler.write("w", 0, async () => 1)]) {
+		for (const call of [
+			() => scheduler.read("w", async () => 1),
+			() => scheduler.readAt("w", 0, async () => 1),
+			() => scheduler.write("w", 0, async () => 1),
+		]) {
 			await assert.rejects(call(), /Computer-use session is shutting down\./);
 		}
 	});
@@ -125,11 +165,25 @@ describe("ResourceScheduler", () => {
 
 describe("SavedStates", () => {
 	const record = (value, over = {}) => ({ stateId: "s1", resourceKey: "pid:7", epoch: 2, value, ...over });
-	const outline = () => serializeOutline(outlineOf(n("@e0", { wireRef: "w0", role: "AXWindow", children: [n("@e1", { wireRef: "w1" })] })));
+	const outline = () =>
+		serializeOutline(outlineOf(n("@e0", { wireRef: "w0", role: "AXWindow", children: [n("@e1", { wireRef: "w1" })] })));
 	const desktopState = (over = {}) => ({
 		currentTarget: { appName: "App", pid: 7, windowTitle: "Main", windowId: 3, windowRef: "@r1" },
 		currentCapture: { stateId: "s1", width: 10, height: 20, scaleFactor: 2, timestamp: 5 },
-		currentLook: { lookId: "look9", capturedAt: 1, window: { windowId: 3, framePoints: { x: 0, y: 0, w: 1, h: 1 }, scaleFactor: 2, isModal: false, role: "AXWindow", subrole: "" }, outline: undefined, timings: { look: 4 } },
+		currentLook: {
+			lookId: "look9",
+			capturedAt: 1,
+			window: {
+				windowId: 3,
+				framePoints: { x: 0, y: 0, w: 1, h: 1 },
+				scaleFactor: 2,
+				isModal: false,
+				role: "AXWindow",
+				subrole: "",
+			},
+			outline: undefined,
+			timings: { look: 4 },
+		},
 		currentOutline: outlineOf(n("@e0", { wireRef: "w0", role: "AXWindow", children: [n("@e1", { wireRef: "w1" })] })),
 		currentImageMode: "fused",
 		...over,
@@ -139,7 +193,10 @@ describe("SavedStates", () => {
 		const states = new SavedStates();
 		assert.throws(() => states.current(), /Computer-use operation state is unavailable\./);
 		const scope = { currentFocus: true };
-		assert.equal(states.operations.run(scope, () => states.current()), scope);
+		assert.equal(
+			states.operations.run(scope, () => states.current()),
+			scope,
+		);
 	});
 
 	test("an unknown state hydrates to nothing", () => assert.deepEqual(new SavedStates().hydrate(undefined), {}));
@@ -147,7 +204,10 @@ describe("SavedStates", () => {
 	test("a desktop state round-trips through the store, including optional note, image and read text", () => {
 		const states = new SavedStates();
 		const look = { image: { jpegBase64: "x", width: 1, height: 2 }, readText: { text: "t" } };
-		const original = desktopState({ currentLook: { ...desktopState().currentLook, ...look }, currentNote: { windowRef: "@r1", title: "Main", pairing: "exact", regions: [] } });
+		const original = desktopState({
+			currentLook: { ...desktopState().currentLook, ...look },
+			currentNote: { windowRef: "@r1", title: "Main", pairing: "exact", regions: [] },
+		});
 		states.saveDesktop(original, "pid:7", 2);
 		const hydrated = states.hydrate(states.get("s1"));
 		assert.equal(states.store.size, 1);
@@ -160,7 +220,10 @@ describe("SavedStates", () => {
 		assert.deepEqual(hydrated.currentNote, original.currentNote);
 		assert.notEqual(hydrated.currentNote, original.currentNote, "the note is cloned");
 		assert.deepEqual([hydrated.resourceKey, hydrated.epoch], ["pid:7", 2]);
-		assert.deepEqual(hydrated.currentOutline.nodes.map((node) => node.ref), ["@e0", "@e1"]);
+		assert.deepEqual(
+			hydrated.currentOutline.nodes.map((node) => node.ref),
+			["@e0", "@e1"],
+		);
 		assert.equal(hydrated.currentLook.parsedOutline, hydrated.currentOutline);
 	});
 
@@ -168,17 +231,23 @@ describe("SavedStates", () => {
 		const states = new SavedStates();
 		states.saveDesktop(desktopState(), "pid:7", 2);
 		const stored = states.get("s1");
-		assert.deepEqual([stored.value.note, stored.value.look.image, stored.value.look.readText], [undefined, undefined, undefined]);
+		assert.deepEqual(
+			[stored.value.note, stored.value.look.image, stored.value.look.readText],
+			[undefined, undefined, undefined],
+		);
 		assert.equal(states.hydrate(stored).currentNote, undefined);
 		states.clear();
 		assert.equal(states.get("s1"), undefined);
 	});
 
-	test.each(["currentTarget", "currentCapture", "currentLook", "currentOutline"])("saveDesktop skips a state missing %s", (missing) => {
-		const states = new SavedStates();
-		states.saveDesktop(desktopState({ [missing]: undefined }), "pid:7", 2);
-		assert.equal(states.store.size, 0);
-	});
+	test.each(["currentTarget", "currentCapture", "currentLook", "currentOutline"])(
+		"saveDesktop skips a state missing %s",
+		(missing) => {
+			const states = new SavedStates();
+			states.saveDesktop(desktopState({ [missing]: undefined }), "pid:7", 2);
+			assert.equal(states.store.size, 0);
+		},
+	);
 
 	test("a browser state hydrates a synthetic look and its snapshot identity", () => {
 		const states = new SavedStates();
@@ -187,28 +256,54 @@ describe("SavedStates", () => {
 		states.set(stored);
 		const hydrated = states.hydrate(states.get("s1"));
 		assert.deepEqual(hydrated.currentCapture, { stateId: "s1", width: 0, height: 0, scaleFactor: 1, timestamp: 5000 });
-		assert.deepEqual([hydrated.currentLook.lookId, hydrated.currentLook.capturedAt, hydrated.currentLook.window.role], ["snap1", 5, "document"]);
-		assert.deepEqual([hydrated.browserSnapshot, hydrated.contextId, hydrated.resourceKey, hydrated.epoch], [snapshot, "ctx1", "pid:7", 2]);
+		assert.deepEqual(
+			[hydrated.currentLook.lookId, hydrated.currentLook.capturedAt, hydrated.currentLook.window.role],
+			["snap1", 5, "document"],
+		);
+		assert.deepEqual(
+			[hydrated.browserSnapshot, hydrated.contextId, hydrated.resourceKey, hydrated.epoch],
+			[snapshot, "ctx1", "pid:7", 2],
+		);
 		assert.equal(hydrated.currentOutline.root.ref, "@e0");
 	});
 });
 
 describe("assertPlatformArchitecture", () => {
 	test("accepts a helper reporting the version and every invariant", () => {
-		assert.doesNotThrow(() => assertPlatformArchitecture("Linux", { architectureVersion: 1, invariants: [...REQUIRED_PLATFORM_INVARIANTS, "extra"] }));
+		assert.doesNotThrow(() =>
+			assertPlatformArchitecture("Linux", {
+				architectureVersion: 1,
+				invariants: [...REQUIRED_PLATFORM_INVARIANTS, "extra"],
+			}),
+		);
 	});
 
 	test("rejects a different or missing version", () => {
-		assert.throws(() => assertPlatformArchitecture("Linux", { architectureVersion: 2, invariants: [] }), /Linux helper architecture mismatch: expected 1, got 2\. Rebuild and restart the helper\./);
-		assert.throws(() => assertPlatformArchitecture("macOS", {}), /macOS helper architecture mismatch: expected 1, got unknown\./);
+		assert.throws(
+			() => assertPlatformArchitecture("Linux", { architectureVersion: 2, invariants: [] }),
+			/Linux helper architecture mismatch: expected 1, got 2\. Rebuild and restart the helper\./,
+		);
+		assert.throws(
+			() => assertPlatformArchitecture("macOS", {}),
+			/macOS helper architecture mismatch: expected 1, got unknown\./,
+		);
 	});
 
 	test("lists missing invariants, or all of them when none are reported", () => {
 		assert.throws(
-			() => assertPlatformArchitecture("Windows", { architectureVersion: 1, invariants: REQUIRED_PLATFORM_INVARIANTS.filter((name) => name !== "multi-root-forest" && name !== "concurrent-requests") }),
+			() =>
+				assertPlatformArchitecture("Windows", {
+					architectureVersion: 1,
+					invariants: REQUIRED_PLATFORM_INVARIANTS.filter(
+						(name) => name !== "multi-root-forest" && name !== "concurrent-requests",
+					),
+				}),
 			/Windows helper does not satisfy the shared computer-use contract: multi-root-forest, concurrent-requests\.$/,
 		);
-		assert.throws(() => assertPlatformArchitecture("Windows", { architectureVersion: 1 }), new RegExp(`contract: ${REQUIRED_PLATFORM_INVARIANTS.join(", ")}\\.$`));
+		assert.throws(
+			() => assertPlatformArchitecture("Windows", { architectureVersion: 1 }),
+			new RegExp(`contract: ${REQUIRED_PLATFORM_INVARIANTS.join(", ")}\\.$`),
+		);
 	});
 });
 
@@ -233,7 +328,10 @@ describe("bounded output store", () => {
 		["act_ui", "request a smaller or more focused result"],
 	])("%s truncation names its refinement", (tool, refinement) => {
 		const image = { type: "image", data: "i", mimeType: "image/png" };
-		const out = applyOutputEnvelope(tool, { content: [{ type: "text", text: "x".repeat(MODEL_TEXT_MAX_BYTES + 1) }, image], details: { keep: 1 } });
+		const out = applyOutputEnvelope(tool, {
+			content: [{ type: "text", text: "x".repeat(MODEL_TEXT_MAX_BYTES + 1) }, image],
+			details: { keep: 1 },
+		});
 		assert.match(textOf(out), new RegExp(`\\nrefine: ${refinement}\\n`));
 		assert.deepEqual(out.content[1], image, "images survive");
 		assert.deepEqual(out.details, { keep: 1 });
@@ -253,7 +351,10 @@ describe("bounded output store", () => {
 		const ref = "@o1";
 		assert.match(textOf(out), /output truncated: returned 16384 of 60000 utf-8 bytes/);
 		const page = readStoredOutput(ref, 16_384);
-		assert.deepEqual([page.offset, page.limit, page.totalBytes, page.hasMore, page.complete], [16_384, 16_384, 60_000, true, true]);
+		assert.deepEqual(
+			[page.offset, page.limit, page.totalBytes, page.hasMore, page.complete],
+			[16_384, 16_384, 60_000, true, true],
+		);
 		assert.equal(page.text, "é".repeat(8192));
 		const mid = readStoredOutput(ref, 16_385);
 		assert.equal(mid.offset, 16_386, "a mid-character offset skips to the next character");
@@ -308,7 +409,10 @@ describe("boundToolError", () => {
 
 	test("large errors are previewed and stored for read_text", () => {
 		const bounded = boundToolError("search_ui", new Error("z".repeat(MODEL_TEXT_MAX_BYTES + 1)));
-		assert.match(bounded.message, /\n\nerror truncated: returned 16384 of 49153 utf-8 bytes\nrefine: use a more selective text, role, or capability predicate\ncontinue: read_text\(\{ ref: "@o1", offset: 16384 \}\)$/);
+		assert.match(
+			bounded.message,
+			/\n\nerror truncated: returned 16384 of 49153 utf-8 bytes\nrefine: use a more selective text, role, or capability predicate\ncontinue: read_text\(\{ ref: "@o1", offset: 16384 \}\)$/,
+		);
 		assert.equal(readStoredOutput("@o1", 0).complete, true);
 		const lines = boundToolError("act_ui", "l\n".repeat(2500));
 		assert.match(lines.message, /error truncated: returned 3991 of 5000/);

@@ -53,13 +53,26 @@ function harness({ cargoOutput, fail } = {}) {
 			const manifest = args[args.indexOf("--manifest-path") + 1];
 			const crateDir = path.dirname(manifest);
 			const target = args.includes("--target") ? args[args.indexOf("--target") + 1] : undefined;
-			const release = target ? path.join(crateDir, "target", target, "release") : path.join(crateDir, "target", "release");
+			const release = target
+				? path.join(crateDir, "target", target, "release")
+				: path.join(crateDir, "target", "release");
 			const name = manifest.includes("windows") ? "windows-bridge.exe" : "linux-bridge";
 			const content = typeof cargoOutput === "function" ? cargoOutput(target) : cargoOutput;
-			if (content !== null) write(path.join(release, name), content ?? (manifest.includes("windows") ? "MZ-pe" : elf(0x3e)));
+			if (content !== null)
+				write(path.join(release, name), content ?? (manifest.includes("windows") ? "MZ-pe" : elf(0x3e)));
 		}
 	};
-	const deps = (extra = {}) => ({ run: fakeRun, rootDir, tmpdir, cwd, env: {}, log: (line) => log.push(line), platform: "darwin", arch: "arm64", ...extra });
+	const deps = (extra = {}) => ({
+		run: fakeRun,
+		rootDir,
+		tmpdir,
+		cwd,
+		env: {},
+		log: (line) => log.push(line),
+		platform: "darwin",
+		arch: "arm64",
+		...extra,
+	});
 	return { calls, log, deps };
 }
 
@@ -79,11 +92,27 @@ test("macOS arm64 build compiles with swiftc, chmods and ad-hoc signs", async ()
 	for (const framework of ["ApplicationServices", "AppKit", "ScreenCaptureKit", "Foundation", "SwiftUI"]) {
 		assert.equal(swift[swift.indexOf(framework) - 1], "-framework");
 	}
-	const sources = swift.filter((arg) => arg.endsWith(".swift")).map((arg) => path.relative(path.join(rootDir, "native", "macos"), arg));
-	assert.deepEqual(sources, ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]);
+	const sources = swift
+		.filter((arg) => arg.endsWith(".swift"))
+		.map((arg) => path.relative(path.join(rootDir, "native", "macos"), arg));
+	assert.deepEqual(sources, [
+		"activity_glow.swift",
+		"agent_cursor.swift",
+		"agent_cursor_motion.swift",
+		"bridge.swift",
+		"helper_entry.swift",
+	]);
 	assert.equal(swift.at(-2), "-o");
 	assert.equal(swift.at(-1), mac("arm64", "bridge"));
-	assert.deepEqual(h.calls[1][1], ["--force", "-i", "com.injaneity.pi-computer-use", "--timestamp=none", "--sign", "-", mac("arm64", "bridge")]);
+	assert.deepEqual(h.calls[1][1], [
+		"--force",
+		"-i",
+		"com.injaneity.pi-computer-use",
+		"--timestamp=none",
+		"--sign",
+		"-",
+		mac("arm64", "bridge"),
+	]);
 	assert.equal(statSync(mac("arm64", "bridge")).mode & 0o777, 0o755);
 	assert.deepEqual(h.log, ["Building native helper for arm64...", `Built helper at ${mac("arm64", "bridge")}`]);
 	assert.deepEqual(readdirSync(tmpdir), [], "swift module cache is removed");
@@ -101,14 +130,46 @@ test("x64 and --platform darwin on a foreign host honour --output relative to cw
 test("codesign flags come from arguments, then environment, then defaults", async () => {
 	const h = harness();
 	await main(
-		["--arch", "x64", "--sign-identity", "Dev ID", "--sign-identifier", "com.example.cli", "--hardened-runtime", "--timestamp"],
+		[
+			"--arch",
+			"x64",
+			"--sign-identity",
+			"Dev ID",
+			"--sign-identifier",
+			"com.example.cli",
+			"--hardened-runtime",
+			"--timestamp",
+		],
 		h.deps({ env: { PI_COMPUTER_USE_CODESIGN_IDENTITY: "env-id", PI_COMPUTER_USE_CODESIGN_IDENTIFIER: "env.ident" } }),
 	);
-	assert.deepEqual(h.calls[1][1], ["--force", "-i", "com.example.cli", "--options", "runtime", "--timestamp", "--sign", "Dev ID", mac("x64", "bridge")]);
+	assert.deepEqual(h.calls[1][1], [
+		"--force",
+		"-i",
+		"com.example.cli",
+		"--options",
+		"runtime",
+		"--timestamp",
+		"--sign",
+		"Dev ID",
+		mac("x64", "bridge"),
+	]);
 
 	const env = harness();
-	await main(["--arch", "x64"], env.deps({ env: { PI_COMPUTER_USE_CODESIGN_IDENTITY: "env-id", PI_COMPUTER_USE_CODESIGN_IDENTIFIER: "env.ident" } }));
-	assert.deepEqual(env.calls[1][1], ["--force", "-i", "env.ident", "--timestamp=none", "--sign", "env-id", mac("x64", "bridge")]);
+	await main(
+		["--arch", "x64"],
+		env.deps({
+			env: { PI_COMPUTER_USE_CODESIGN_IDENTITY: "env-id", PI_COMPUTER_USE_CODESIGN_IDENTIFIER: "env.ident" },
+		}),
+	);
+	assert.deepEqual(env.calls[1][1], [
+		"--force",
+		"-i",
+		"env.ident",
+		"--timestamp=none",
+		"--sign",
+		"env-id",
+		mac("x64", "bridge"),
+	]);
 });
 
 test("signing is skipped by --no-sign and PI_COMPUTER_USE_NO_SIGN=1", async () => {
@@ -116,7 +177,11 @@ test("signing is skipped by --no-sign and PI_COMPUTER_USE_NO_SIGN=1", async () =
 	await main(["--no-sign"], flag.deps());
 	const env = harness();
 	await main([], env.deps({ env: { PI_COMPUTER_USE_NO_SIGN: "1" } }));
-	for (const h of [flag, env]) assert.deepEqual(h.calls.map(([command]) => command), ["xcrun"]);
+	for (const h of [flag, env])
+		assert.deepEqual(
+			h.calls.map(([command]) => command),
+			["xcrun"],
+		);
 });
 
 test("a failing swiftc still removes the module cache and skips signing", async () => {
@@ -138,7 +203,9 @@ test("--arch all builds both macOS slices and rejects --output", async () => {
 		h.calls.map(([, args]) => args.at(-1)),
 		[mac("x64", "bridge"), mac("arm64", "bridge")],
 	);
-	await expect(main(["--arch", "all", "--output", "x"], h.deps())).rejects.toThrow(/--output is not supported with --arch all/);
+	await expect(main(["--arch", "all", "--output", "x"], h.deps())).rejects.toThrow(
+		/--output is not supported with --arch all/,
+	);
 });
 
 test("--arch universal builds both slices, lipo-merges and signs", async () => {
@@ -165,7 +232,9 @@ test("a failing lipo aborts the universal build", async () => {
 });
 
 test("unsupported architectures are rejected", async () => {
-	await expect(main(["--arch", "ppc"], harness().deps())).rejects.toThrow("Unsupported architecture 'ppc'. Supported: arm64, x64, universal, all.");
+	await expect(main(["--arch", "ppc"], harness().deps())).rejects.toThrow(
+		"Unsupported architecture 'ppc'. Supported: arm64, x64, universal, all.",
+	);
 });
 
 test("a flag without a value is ignored and defaults apply", async () => {
@@ -178,7 +247,10 @@ test("unsupported host platforms skip with guidance", async () => {
 	const h = harness();
 	await main([], h.deps({ platform: "freebsd" }));
 	assert.deepEqual(h.calls, []);
-	assert.match(h.log[0], /Skipping native build: unsupported platform "freebsd"\. Use --platform windows or --platform linux/);
+	assert.match(
+		h.log[0],
+		/Skipping native build: unsupported platform "freebsd"\. Use --platform windows or --platform linux/,
+	);
 });
 
 const win = (...parts) => path.join(rootDir, "native", "windows", "bridge-rs", ...parts);
@@ -195,18 +267,27 @@ test("Windows host builds with cargo, validates the PE header and copies to preb
 
 test("--platform windows from a non-Windows host needs a Windows target triple", async () => {
 	const refused = harness();
-	await expect(main(["--platform", "windows"], refused.deps())).rejects.toThrow(/Refusing to label a host binary as Windows/);
+	await expect(main(["--platform", "windows"], refused.deps())).rejects.toThrow(
+		/Refusing to label a host binary as Windows/,
+	);
 	assert.deepEqual(refused.calls, []);
-	await expect(main(["--platform", "windows", "--target", "x86_64-unknown-linux-gnu"], refused.deps())).rejects.toThrow(/Refusing/);
+	await expect(main(["--platform", "windows", "--target", "x86_64-unknown-linux-gnu"], refused.deps())).rejects.toThrow(
+		/Refusing/,
+	);
 
 	const h = harness();
-	await main(["--platform", "windows", "--target", "x86_64-pc-windows-msvc", "--output", "dist/windows-bridge.exe"], h.deps());
+	await main(
+		["--platform", "windows", "--target", "x86_64-pc-windows-msvc", "--output", "dist/windows-bridge.exe"],
+		h.deps(),
+	);
 	assert.deepEqual(h.calls[0][1].slice(-2), ["--target", "x86_64-pc-windows-msvc"]);
 	assert.ok(existsSync(path.join(cwd, "dist", "windows-bridge.exe")));
 });
 
 test("a non-PE cargo output is rejected and a missing one fails", async () => {
-	await expect(main(["--platform", "windows"], harness({ cargoOutput: "ELF!" }).deps({ platform: "win32" }))).rejects.toThrow(/not a Windows PE executable/);
+	await expect(
+		main(["--platform", "windows"], harness({ cargoOutput: "ELF!" }).deps({ platform: "win32" })),
+	).rejects.toThrow(/not a Windows PE executable/);
 	rmSync(path.join(rootDir, "native"), { recursive: true, force: true });
 	await expect(main([], harness({ cargoOutput: null }).deps({ platform: "win32" }))).rejects.toThrow(/ENOENT/);
 });
@@ -247,9 +328,15 @@ test("Linux --arch all builds x64 then arm64 and rejects --output and universal"
 		[X64_TRIPLE, ARM_TRIPLE],
 	);
 	assert.ok(existsSync(linuxOut("x64")) && existsSync(linuxOut("arm64")));
-	await expect(main(["--arch", "all", "--output", "o"], h.deps({ platform: "linux" }))).rejects.toThrow(/--output is not supported with --arch all/);
-	await expect(main(["--arch", "universal"], h.deps({ platform: "linux" }))).rejects.toThrow(/Linux does not support --arch universal/);
-	await expect(main(["--arch", "mips"], h.deps({ platform: "linux" }))).rejects.toThrow(/Unsupported architecture 'mips'/);
+	await expect(main(["--arch", "all", "--output", "o"], h.deps({ platform: "linux" }))).rejects.toThrow(
+		/--output is not supported with --arch all/,
+	);
+	await expect(main(["--arch", "universal"], h.deps({ platform: "linux" }))).rejects.toThrow(
+		/Linux does not support --arch universal/,
+	);
+	await expect(main(["--arch", "mips"], h.deps({ platform: "linux" }))).rejects.toThrow(
+		/Unsupported architecture 'mips'/,
+	);
 });
 
 test("Linux rejects non-Linux targets, non-ELF output, truncated output and arch mismatches", async () => {

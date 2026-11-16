@@ -1,4 +1,11 @@
-import { serializeOutlineNode, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type SerializedOutlineNode } from "./outline.ts";
+import {
+	serializeOutlineNode,
+	type Outline,
+	type OutlineChange,
+	type OutlineDiff,
+	type OutlineNode,
+	type SerializedOutlineNode,
+} from "./outline.ts";
 
 function numericRef(ref: string): number {
 	const match = /^@e(\d+)$/.exec(ref);
@@ -22,7 +29,9 @@ function rebuildIndexes(outline: Outline): void {
 }
 
 function structuralToken(node: OutlineNode): string {
-	return [node.role, node.subrole, node.identifier, node.title, node.description].map((value) => value.trim().toLowerCase()).join("|");
+	return [node.role, node.subrole, node.identifier, node.title, node.description]
+		.map((value) => value.trim().toLowerCase())
+		.join("|");
 }
 
 function structuralKey(node: OutlineNode): string {
@@ -73,7 +82,14 @@ function comparable(node: OutlineNode): Omit<SerializedOutlineNode, "children"> 
 	const { children: _children, ...fields } = serializeOutlineNode(node);
 	return {
 		...fields,
-		rect: fields.rect ? { x: Math.round(fields.rect.x), y: Math.round(fields.rect.y), w: Math.round(fields.rect.w), h: Math.round(fields.rect.h) } : undefined,
+		rect: fields.rect
+			? {
+					x: Math.round(fields.rect.x),
+					y: Math.round(fields.rect.y),
+					w: Math.round(fields.rect.w),
+					h: Math.round(fields.rect.h),
+				}
+			: undefined,
 		text: fields.text.map((item) => ({ string: item.string, confidence: Math.round(item.confidence * 100) / 100 })),
 	};
 }
@@ -84,7 +100,8 @@ function changedFields(base: OutlineNode, next: OutlineNode): Partial<Omit<Seria
 	const fields: Partial<Omit<SerializedOutlineNode, "children">> = {};
 	for (const key of Object.keys(after) as Array<keyof typeof after>) {
 		if (key === "ref" || key === "wireRef") continue;
-		if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) (fields as Record<string, unknown>)[key] = after[key];
+		if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+			(fields as Record<string, unknown>)[key] = after[key];
 	}
 	return fields;
 }
@@ -101,21 +118,35 @@ function refPath(node: OutlineNode): string[] {
 
 export function changesBetween(base: Outline, next: Outline): OutlineDiff {
 	if (base.root.role !== next.root.role || base.root.subrole !== next.root.subrole) {
-		return { changes: [], changedNodeCount: next.nodes.length, fullNodeCount: next.nodes.length, useFullView: true, reason: "root_replaced" };
+		return {
+			changes: [],
+			changedNodeCount: next.nodes.length,
+			fullNodeCount: next.nodes.length,
+			useFullView: true,
+			reason: "root_replaced",
+		};
 	}
 	const before = new Map(base.nodes.map((node) => [node.ref, node]));
 	const after = new Map(next.nodes.map((node) => [node.ref, node]));
 	const changes: OutlineChange[] = [];
 	for (const node of next.nodes) {
 		const previous = before.get(node.ref);
-		if (!previous) changes.push({ type: "added", ref: node.ref, parent: node.parent?.ref, node: { ...serializeOutlineNode(node), children: [] } });
+		if (!previous)
+			changes.push({
+				type: "added",
+				ref: node.ref,
+				parent: node.parent?.ref,
+				node: { ...serializeOutlineNode(node), children: [] },
+			});
 		else {
 			const fields = changedFields(previous, node);
 			if (Object.keys(fields).length > 0) changes.push({ type: "updated", ref: node.ref, path: refPath(node), fields });
 		}
 	}
-	for (const node of base.nodes) if (!after.has(node.ref)) changes.push({ type: "removed", ref: node.ref, parent: node.parent?.ref });
-	const identityConfidence = next.nodes.length === 0 ? 1 : next.nodes.filter((node) => before.has(node.ref)).length / next.nodes.length;
+	for (const node of base.nodes)
+		if (!after.has(node.ref)) changes.push({ type: "removed", ref: node.ref, parent: node.parent?.ref });
+	const identityConfidence =
+		next.nodes.length === 0 ? 1 : next.nodes.filter((node) => before.has(node.ref)).length / next.nodes.length;
 	const changeRatio = changes.length / Math.max(1, Math.max(base.nodes.length, next.nodes.length));
 	const identityLow = next.nodes.length > 8 && identityConfidence < 0.4;
 	const overBudget = changes.length > 100 || (changes.length > 20 && changeRatio > 0.65);
@@ -129,18 +160,38 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
 }
 
 function label(node: SerializedOutlineNode): string {
-	return node.title || node.description || node.value || node.identifier || node.text.map((item) => item.string).join(" ").trim() || node.role || "node";
+	return (
+		node.title ||
+		node.description ||
+		node.value ||
+		node.identifier ||
+		node.text
+			.map((item) => item.string)
+			.join(" ")
+			.trim() ||
+		node.role ||
+		"node"
+	);
 }
 
 export function renderChanges(changes: OutlineChange[]): string {
-	return changes.map((change) => {
-		if (change.type === "added") return `+ ${change.ref}${change.parent ? ` under ${change.parent}` : ""} ${JSON.stringify(label(change.node))}`;
-		if (change.type === "removed") return `- ${change.ref}${change.parent ? ` from ${change.parent}` : ""}`;
-		const fields = Object.entries(change.fields).filter(([key]) => !["rect", "text", "actions"].includes(key)).slice(0, 6).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(", ");
-		const supplemental = [
-			change.fields.text ? `text=${JSON.stringify(change.fields.text.map((item) => item.string))}` : undefined,
-			change.fields.actions ? `actions=${JSON.stringify(change.fields.actions)}` : undefined,
-		].filter(Boolean).join(", ");
-		return `~ ${change.ref} (${change.path.join(" > ")}) ${[fields, supplemental].filter(Boolean).join(", ") || "changed"}`;
-	}).join("\n");
+	return changes
+		.map((change) => {
+			if (change.type === "added")
+				return `+ ${change.ref}${change.parent ? ` under ${change.parent}` : ""} ${JSON.stringify(label(change.node))}`;
+			if (change.type === "removed") return `- ${change.ref}${change.parent ? ` from ${change.parent}` : ""}`;
+			const fields = Object.entries(change.fields)
+				.filter(([key]) => !["rect", "text", "actions"].includes(key))
+				.slice(0, 6)
+				.map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+				.join(", ");
+			const supplemental = [
+				change.fields.text ? `text=${JSON.stringify(change.fields.text.map((item) => item.string))}` : undefined,
+				change.fields.actions ? `actions=${JSON.stringify(change.fields.actions)}` : undefined,
+			]
+				.filter(Boolean)
+				.join(", ");
+			return `~ ${change.ref} (${change.path.join(" > ")}) ${[fields, supplemental].filter(Boolean).join(", ") || "changed"}`;
+		})
+		.join("\n");
 }
