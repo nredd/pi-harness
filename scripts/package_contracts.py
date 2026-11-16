@@ -1994,6 +1994,28 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 # --- tarball audit --------------------------------------------------------------------------------
 
 
+def parse_pack_report(stdout: str, contract: PackageContract) -> NpmPackEntry:
+    """Validate the single-package report shared by preview and real npm packs.
+
+    Parameters:
+        stdout (str): Captured `npm pack --json` output.
+        contract (PackageContract): Package named in failure diagnostics.
+
+    Returns:
+        NpmPackEntry: The single validated report entry.
+
+    Raises:
+        ContractError: If npm does not report exactly one valid package.
+    """
+    try:
+        (entry,) = TypeAdapter(list[NpmPackEntry]).validate_json(stdout)
+    except (ValidationError, ValueError) as e:
+        raise ContractError(
+            f"Unparseable `npm pack --json` output for '{contract.name}': {stdout[:500]}"
+        ) from e
+    return entry
+
+
 def pack(
     contract: PackageContract, dest: Path, sandbox: Sandbox, package_dir: Path | None = None
 ) -> PackedArtifact:
@@ -2012,6 +2034,23 @@ def pack(
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
+    # Reject omitted existing contract files before expensive builds. Absent generated outputs
+    # are checked only against the real post-build tarball, never required by this preflight.
+    preview = run(
+        [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--dry-run"],
+        env=sandbox.env(),
+        cwd=package_dir,
+        timeout=NPM_TIMEOUT_S,
+    )
+    preview_files = {item.path for item in parse_pack_report(preview.stdout, contract).files}
+    omitted = [
+        name for name in contract.packed_files if (package_dir / name).is_file() and name not in preview_files
+    ]
+    if omitted:
+        raise ContractError(
+            f"Packed files for '{contract.name}':\n"
+            + "\n".join(f"missing required file '{name}'" for name in omitted)
+        )
     # `--ignore-scripts` skips `prepack`. Remove old outputs so deleted sources cannot survive a build.
     dist = package_dir / "dist"
     if dist.exists():
@@ -2028,12 +2067,7 @@ def pack(
         cwd=package_dir,
         timeout=NPM_TIMEOUT_S,
     )
-    try:
-        (report,) = TypeAdapter(list[NpmPackEntry]).validate_json(done.stdout)
-    except (ValidationError, ValueError) as e:
-        raise ContractError(
-            f"Unparseable `npm pack --json` output for '{contract.name}': {done.stdout[:500]}"
-        ) from e
+    report = parse_pack_report(done.stdout, contract)
     path = dest / report.filename
     data = path.read_bytes()
     digest = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()

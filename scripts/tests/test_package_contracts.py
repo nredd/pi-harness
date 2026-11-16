@@ -1540,6 +1540,26 @@ def _build_fixture(tmp_path: Path, build: str) -> Path:
     return source
 
 
+def test_pack_rejects_omitted_source_before_build(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """Reject an existing contracted source before invoking an expensive or failing build.
+
+    Parameters:
+        tmp_path (Path): Disposable package parent.
+        sandbox (pc.Sandbox): Scrubbed npm environment.
+
+    Returns:
+        None: The canonical payload diagnostic wins over the build failure.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(97)"')
+    manifest = json.loads((source / "package.json").read_text())
+    manifest["files"].append("!src/index.ts")
+    (source / "package.json").write_text(json.dumps(manifest))
+    with pytest.raises(pc.ContractError, match=r"missing required file 'src/index\.ts'") as failure:
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "Packed files" in str(failure.value)
+    assert not list((tmp_path / "out").iterdir())
+
+
 def test_pack_builds_before_packing(tmp_path: Path, sandbox: pc.Sandbox) -> None:
     """`--ignore-scripts` skips `prepack`, so `pack` itself must build the gitignored `dist/`.
 
