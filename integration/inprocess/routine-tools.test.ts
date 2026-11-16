@@ -13,7 +13,7 @@ import { createDevTools } from "../../packages/dev-tools/src/index.ts";
 import { runTools } from "../../packages/dev-tools/tests/fixtures/session.ts";
 import { defaultConfig } from "../../packages/session-kit/src/config.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { configFor } from "../../packages/session-kit/test/fixtures/session.ts";
+import { configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
 import { jsonFile } from "./agents-support.ts";
 import { complete, GoalStack, goalStates, outcomes, tool } from "./goal-support.ts";

@@ -96,8 +96,8 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 		// The launcher owns the coverage arguments; launcher.test.ts pins them.
 		if (directory === "packages/session-kit") {
 			expect(manifest.scripts["test:bun"]).toBe(
-				"node ../../scripts/run-vitest.ts bun --exclude test/scenarios/home-injection.test.ts && " +
-					"node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
+				"node ../../scripts/run-vitest.ts bun --exclude tests/scenarios/home-injection.test.ts && " +
+					"node ../../scripts/run-vitest.ts bun tests/scenarios/home-injection.test.ts --coverage.enabled=false",
 			);
 		} else {
 			expect(manifest.scripts["test:bun"]).toBe("node ../../scripts/run-vitest.ts bun");

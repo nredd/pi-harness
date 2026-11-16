@@ -50,7 +50,7 @@ test("direct build script invocation publishes the generated runtime", async () 
 	const builder = await loadBuilder();
 	await builder.buildRuntime();
 	const built = await readFile(indexPath, "utf8");
-	const previousArgv = process.argv[1];
+	const previousArgv = process.argv[1]!;
 	try {
 		process.argv[1] = fileURLToPath(scriptUrl);
 		await import(`${scriptUrl}?direct-invocation=${crypto.randomUUID()}`);

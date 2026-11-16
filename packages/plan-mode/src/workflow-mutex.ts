@@ -16,7 +16,10 @@ export class WorkflowMutex {
 	private readonly heldGroups = new Map<string, WorkflowMutexOwner>();
 	private generation = 0;
 
-	constructor(private readonly pi: Pick<ExtensionAPI, "events">) {
+	private readonly pi: Pick<ExtensionAPI, "events">;
+
+	constructor(pi: Pick<ExtensionAPI, "events">) {
+		this.pi = pi;
 		pi.events.on(WORKFLOW_MUTEX_CHANNEL, (payload) => {
 			this.answer(payload);
 		});

@@ -457,7 +457,6 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     [
         "check-docs-platform",
         "check-docs",
-        "check-package-assets",
         "check-sync-ledger",
         "check-sync-reverts",
         "check-upstream-sync",

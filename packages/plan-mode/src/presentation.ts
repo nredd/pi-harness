@@ -130,7 +130,7 @@ export function planMessageParts(message: Pick<PlanMessage, "content" | "details
 					.join("\n");
 	const match = /^\*\*(?<title>[^*\n]+)\*\*\n+(?<plan>[\s\S]*)$/u.exec(text.trim());
 	if (match?.groups) {
-		return { version: PLAN_MESSAGE_VERSION, title: match.groups.title.trim(), plan: match.groups.plan.trim() };
+		return { version: PLAN_MESSAGE_VERSION, title: match.groups.title!.trim(), plan: match.groups.plan!.trim() };
 	}
 	return { version: PLAN_MESSAGE_VERSION, title: "Plan", plan: text.trim() };
 }

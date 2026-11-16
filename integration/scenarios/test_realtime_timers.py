@@ -1,7 +1,7 @@
 """Real wall-clock `/loop` tick and footer usage poll on the selected runtime, no timer scaling (#14).
 
 The compiled Bun standalone once failed real-time `/loop` ticks and footer quota polls. In-process
-tests (`packages/session-kit/test/loop.test.ts` with a fake clock) never run the runtime's own
+tests (`packages/session-kit/tests/loop/state.test.ts` with a fake clock) never run the runtime's own
 timers, so this drives the installed stack in a real terminal: the loop's `setInterval` must fire
 once on the runtime behind `PI_BIN` (Node bundle or `--runtime bun-standalone`).
 
