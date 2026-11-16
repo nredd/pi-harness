@@ -128,7 +128,7 @@ describe("lifecycle event identity", () => {
     );
     const first = await spawn("Auth Audit");
     await flush();
-    const id = /Agent ID: (\S+)/.exec(first.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
+    const id = /Agent ID: (\S+)/.exec(first.content.map((c: { text?: string }) => c.text ?? "").join(""))![1]!;
     const stale = eventsNamed(pi, "subagents:created").find((e: { id: string }) => e.id === id);
     expect(stale).toMatchObject({ id, name: "auth-audit" });
     await spawn("Blocker");
@@ -240,7 +240,7 @@ describe("lifecycle event identity", () => {
     await spawn("Blocker");
     const queued = await spawn("Auth Audit");
     await flush();
-    const id = /Agent ID: (\S+)/.exec(queued.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
+    const id = /Agent ID: (\S+)/.exec(queued.content.map((c: { text?: string }) => c.text ?? "").join(""))![1]!;
     expect(manager.getRecord(id).status).toBe("queued");
     expect(eventsNamed(pi, "subagents:created").map((e: { id: string }) => e.id)).toContain(id);
 

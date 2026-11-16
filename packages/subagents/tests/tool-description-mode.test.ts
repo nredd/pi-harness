@@ -255,7 +255,7 @@ describe("toolDescriptionMode", () => {
 
   it("the shipped example template renders byte-identical to the full description", async () => {
     // The inline README template must reproduce the full description exactly.
-    const example = readFileSync(EXAMPLE_TEMPLATE, "utf-8").split("<summary>Carried examples/agent-tool-description.md</summary>\n\n")[1].split("\n</details>")[0];
+    const example = readFileSync(EXAMPLE_TEMPLATE, "utf-8").split("<summary>Carried examples/agent-tool-description.md</summary>\n\n")[1]!.split("\n</details>")[0]!;
     const tools = setup({ toolDescriptionMode: "custom" }, () => {
       writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), example);
     });

@@ -179,7 +179,7 @@ describe("transcript", () => {
     );
     await flush();
 
-    const file = /Output file: (\S+)/.exec(textOf(started))![1];
+    const file = /Output file: (\S+)/.exec(textOf(started))![1]!;
     const lines = readFileSync(file, "utf-8").trim().split("\n").map(l => JSON.parse(l));
     const entry = lines.find(l => l.type === "model-fallback");
     expect(entry?.modelFallback).toEqual(FALLBACK);
@@ -256,7 +256,7 @@ describe("background resume transcript", () => {
       "tc", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: true }, undefined, undefined, ctx(),
     );
     await flush();
-    const file = /Output file: (\S+)/.exec(textOf(first))![1];
+    const file = /Output file: (\S+)/.exec(textOf(first))![1]!;
     // Transcripts were off for the first run in the scenario: the resume creates a fresh file.
     rmSync(file);
     expect(existsSync(file)).toBe(false);

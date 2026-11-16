@@ -367,8 +367,8 @@ export function retainReferencedTranscripts(transcripts: Iterable<string>, paren
     const parts = rel.split(sep);
     // <encoded-cwd>/<session>/tasks/<file>
     if (rel.startsWith("..") || isAbsolute(rel) || parts.length !== 4 || parts[2] !== "tasks") continue;
-    ids.add(parts[1]);
-    touch(join(root, parts[0], parts[1]));
+    ids.add(parts[1]!);
+    touch(join(root, parts[0]!, parts[1]!));
   }
   return [...ids];
 }
@@ -481,7 +481,7 @@ export function streamToOutputFile(
       writtenCount = prompt + 1;
     }
     while (writtenCount < messages.length) {
-      const msg = messages[writtenCount++];
+      const msg = messages[writtenCount++]!;
       // Pi's prompt and tool-loadout records; a Claude Code transcript has no
       // such entry.
       if (msg.role === "system") continue;

@@ -127,7 +127,7 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
       expect(observed).toHaveLength(2);
       expect(observed[0]).toMatchObject({ event: "start", workflow: { sourceInfo: { source: "cli" } } });
       expect(observed[1]).toMatchObject({ event: "start", manager: run.manager, workflow: { sourceInfo: { source: "sdk" } } });
-      const result = agentToolResults(run.parentSession)[0];
+      const result = agentToolResults(run.parentSession)[0]!;
       expect(result).toContain("Agent started in background");
       const id = /Agent ID: (\S+)/.exec(result)?.[1];
       expect(typeof id).toBe("string");

@@ -189,36 +189,49 @@ export class ConversationViewer implements Component, Focusable {
    */
   private readonly markdownCache = new WeakMap<object, { md: Markdown; text: string; failed?: boolean }>();
 
-  constructor(
-    private tui: TUI,
-    private session: AgentSession,
-    private record: AgentRecord,
-    private activity: AgentActivity | undefined,
-    private theme: Theme,
-    private done: (result: undefined) => void,
+    private tui: TUI;
+  private session: AgentSession;
+  private record: AgentRecord;
+  private activity: AgentActivity | undefined;
+  private theme: Theme;
+  private done: (result: undefined) => void;
+  private onStop?: () => void;
+  private onSteer?: (message: string) => void;
+  private showCost: boolean;
+  private viewerMarkdown?: () => ViewerMarkdownMode;
+  private onMarkdownMode?: (mode: ViewerMarkdownMode) => void;
+  private onBackground?: ViewerBackgroundAction;
+  private readonly clock: Clock;
+constructor(
+    tui: TUI,
+    session: AgentSession,
+    record: AgentRecord,
+    activity: AgentActivity | undefined,
+    theme: Theme,
+    done: (result: undefined) => void,
     /** Abort the agent shown here. Omitted → no stop affordance (e.g. read-only history). */
-    private onStop?: () => void,
+    onStop?: () => void,
     /** User keybindings from `ctx.ui.custom()`. Omitted → hardcoded defaults. */
     keybindings?: ViewerKeybindings,
     /** Send a steering message to the agent. Omitted → no compose affordance. */
-    private onSteer?: (message: string) => void,
+    onSteer?: (message: string) => void,
     /**
      * Whether the header shows an estimated cost after the token count. Read
      * once, at construction: the overlay is opened from a menu, so the setting
      * cannot change while it is on screen.
      */
-    private showCost = false,
+    showCost = false,
     /**
      * The current `viewerMarkdown` setting. Read live rather than captured,
      * unlike `showCost`: `m` changes it while the overlay is on screen.
      * Omitted → `assistant`.
      */
-    private viewerMarkdown?: () => ViewerMarkdownMode,
+    viewerMarkdown?: () => ViewerMarkdownMode,
     /**
      * Persist a mode chosen with `m`, so the key and `/agents → Settings` mean
      * the same thing. Omitted → `m` still cycles, viewer-locally.
      */
-    private onMarkdownMode?: (mode: ViewerMarkdownMode) => void,
+    onMarkdownMode?: (mode: ViewerMarkdownMode) => void,
     /** Pi's fullscreen scrollbar preference, captured when the observer opens. */
     scrollbarMode: ScrollViewScrollbar = "auto",
     /**
@@ -226,9 +239,23 @@ export class ConversationViewer implements Component, Focusable {
      * false the instant the handoff lands or the run ends. Omitted → no `b`
      * affordance (history views).
      */
-    private onBackground?: ViewerBackgroundAction,
-    private readonly clock: Clock = realClock,
+    onBackground?: ViewerBackgroundAction,
+    clock: Clock = realClock,
   ) {
+    this.tui = tui;
+    this.session = session;
+    this.record = record;
+    this.activity = activity;
+    this.theme = theme;
+    this.done = done;
+    this.onStop = onStop;
+    this.onSteer = onSteer;
+    this.showCost = showCost;
+    this.viewerMarkdown = viewerMarkdown;
+    this.onMarkdownMode = onMarkdownMode;
+    this.onBackground = onBackground;
+    this.clock = clock;
+
     this.fullscreen = tui.mode === "fullscreen";
     this.markdownTheme = resolveMarkdownTheme(theme);
     this.keys = createViewerKeys(keybindings);
@@ -321,7 +348,7 @@ export class ConversationViewer implements Component, Focusable {
     // (a diff, an indented log, a `#`-commented script) is one key from verbatim.
     if (matchesKey(data, "m")) {
       this.stopArmed = false;
-      const next = MARKDOWN_MODES[(MARKDOWN_MODES.indexOf(this.markdownMode()) + 1) % MARKDOWN_MODES.length];
+      const next = MARKDOWN_MODES[(MARKDOWN_MODES.indexOf(this.markdownMode()) + 1) % MARKDOWN_MODES.length]!;
       this.markdownModeOverride = next;
       this.onMarkdownMode?.(next);
       this.tui.requestRender();
@@ -547,7 +574,7 @@ export class ConversationViewer implements Component, Focusable {
       // Composer row: the Input renders its own `> ` prompt and cursor.
       this.composer.focused = this.focused;
       // Input always renders exactly one row.
-      lines.push(row(this.composer.render(innerW)[0]));
+      lines.push(row(this.composer.render(innerW)[0]!));
       footerActions.push({ label: "Enter send", key: "\r" }, { label: "Esc cancel", key: "\x1b" });
       const composeHint = th.fg("dim", "Enter send · Esc cancel");
       const composeLeft = th.fg("accent", "✎ steer");

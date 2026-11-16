@@ -525,6 +525,13 @@ for (const producer of PRODUCERS) {
 	});
 }
 
+test("subagents benchmarks are explicit, unmeasured tinybench cases", async () => {
+	vi.stubEnv("PI_SUBAGENTS_BENCH", "1");
+	const { default: config } = await import("../packages/subagents/vitest.config.ts");
+	assert.deepEqual(config.test?.include, ["tests/*.bench.ts"]);
+	assert.equal(config.test?.coverage?.enabled, false);
+});
+
 test("subagents runtime verification pins the complete script at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "subagents-runtime-tooling");
 	assert.ok(producer);

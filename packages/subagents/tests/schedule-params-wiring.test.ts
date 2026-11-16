@@ -62,7 +62,7 @@ async function scheduleAndReadBack(
   const jobs = store.list();
   await lifecycle.get("session_shutdown")?.();
   expect(jobs, `expected one persisted job, reply was: ${reply}`).toHaveLength(1);
-  return { job: jobs[0], reply, restore: hermetic.restore };
+  return { job: jobs[0]!, reply, restore: hermetic.restore };
 }
 
 describe("Agent tool → persisted scheduled job", () => {

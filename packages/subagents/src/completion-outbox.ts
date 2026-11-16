@@ -53,16 +53,25 @@ export class CompletionOutbox {
   private items: OutboxItem[] = [];
   private timer: TimerHandle | undefined;
 
-  constructor(
+    private send: (message: OutboxMessage) => void;
+  private parentRunning: () => boolean;
+  private clock: Clock;
+  private allot: ResultAllotment;
+constructor(
     /** Delivers one message as a steer that triggers a turn when the parent is idle. */
-    private send: (message: OutboxMessage) => void,
+    send: (message: OutboxMessage) => void,
     /** Whether the parent has a run in flight, so a `turn_end` is coming. */
-    private parentRunning: () => boolean,
+    parentRunning: () => boolean,
     /** Shared with the scheduler by hosts that control time in-process. */
-    private clock: Clock = realClock,
+    clock: Clock = realClock,
     /** Splits a batch's result budget; by default nothing is allotted and each item keeps its own cap. */
-    private allot: ResultAllotment = () => ({}),
-  ) {}
+    allot: ResultAllotment = () => ({}),
+  ) {
+    this.send = send;
+    this.parentRunning = parentRunning;
+    this.clock = clock;
+    this.allot = allot;
+}
 
   /** A newer completion of the same agent (a resume) replaces its pending one. */
   add(item: OutboxItem): void {
@@ -131,13 +140,13 @@ export class CompletionOutbox {
 
 /** One message stays as it was built; several become one message with every agent's details. */
 function combine(messages: OutboxMessage[]): OutboxMessage {
-  if (messages.length === 1) return messages[0];
+  if (messages.length === 1) return messages[0]!;
   const [first, ...rest] = messages.flatMap(({ details: { others, ...own } }) => [own, ...(others ?? [])]);
   const delivered = messages.flatMap(m => m.delivered ?? []);
   const noticed = messages.flatMap(m => m.noticed ?? []);
   return {
     content: `${messages.length} background tasks finished.\n\n${messages.map(m => m.content).join("\n\n")}`,
-    details: { ...first, others: rest },
+    details: { ...first!, others: rest },
     ...(delivered.length > 0 ? { delivered } : {}),
     ...(noticed.length > 0 ? { noticed } : {}),
   };

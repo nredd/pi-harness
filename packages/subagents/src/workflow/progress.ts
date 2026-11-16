@@ -515,11 +515,11 @@ export function gerund(word: string): string {
   // Short consonant-vowel-consonant words double the final consonant: run →
   // running. `w`, `x` and `y` never double.
   // GERUND_CANDIDATE guarantees at least three letters, so every index exists.
-  const last = lower[lower.length - 1];
+  const last = lower[lower.length - 1]!;
   if (
     lower.length <= 4 &&
-    !VOWELS.includes(lower[lower.length - 3]) &&
-    VOWELS.includes(lower[lower.length - 2]) &&
+    !VOWELS.includes(lower[lower.length - 3]!) &&
+    VOWELS.includes(lower[lower.length - 2]!) &&
     !VOWELS.includes(last) &&
     !"wxy".includes(last)
   ) {
@@ -548,7 +548,7 @@ export function footerPhaseLabel(input: {
   const titles = input.titles.map(gerund);
   if (titles.length === 0) return "";
   if (titles.length === 1) {
-    return `${truncate(titles[0], FOOTER_TITLE_WIDTH)} (${input.positionStart}/${input.totalPhases})`;
+    return `${truncate(titles[0]!, FOOTER_TITLE_WIDTH)} (${input.positionStart}/${input.totalPhases})`;
   }
   return titles.map(t => truncate(t, FOOTER_TITLE_WIDTH)).join(" & ");
 }

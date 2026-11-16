@@ -42,7 +42,7 @@ async function boot(settings: Record<string, unknown> = {}) {
   const signal = new AbortController().signal;
   const parentCtx = ctx();
   Object.defineProperty(parentCtx, "signal", { get: () => signal });
-  await booted.lifecycle.get("session_start")({ type: "session_start" }, parentCtx);
+  await booted.lifecycle.get("session_start")!({ type: "session_start" }, parentCtx);
   return { ...booted, parentCtx };
 }
 
@@ -52,13 +52,13 @@ function runs(outcomes: Record<string, { text: string; failure?: string; aborted
   vi.mocked(runAgent).mockImplementation((_c: any, _t: any, prompt: any) =>
     new Promise<any>(resolve => {
       finishers.set(prompt, () => resolve({
-        responseText: outcomes[prompt].text, failure: outcomes[prompt].failure,
-        session: { dispose: vi.fn(), messages: [] }, aborted: outcomes[prompt].aborted ?? false, steered: false,
+        responseText: outcomes[prompt]!.text, failure: outcomes[prompt]!.failure,
+        session: { dispose: vi.fn(), messages: [] }, aborted: outcomes[prompt]!.aborted ?? false, steered: false,
       }));
     }) as any,
   );
   vi.mocked(resumeAgent).mockImplementation((_s: any, prompt: string) =>
-    new Promise(resolve => { finishers.set(prompt, () => resolve({ text: outcomes[prompt].text })); }) as any,
+    new Promise(resolve => { finishers.set(prompt, () => resolve({ text: outcomes[prompt]!.text })); }) as any,
   );
   return { settle: (...prompts: string[]) => { for (const p of prompts) finishers.get(p)!(); } };
 }

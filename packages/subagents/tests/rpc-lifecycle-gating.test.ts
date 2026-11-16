@@ -102,7 +102,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     const { pi, lifecycle, busHandlers } = bootPi();
     subagentsExtension(pi);
 
-    await lifecycle.get("session_start")({}, ctx());
+    await lifecycle.get("session_start")!({}, ctx());
 
     // Readiness broadcast once, all five channels now live.
     expect(readyEmits(pi), "subagents:ready fires once bound").toHaveLength(1);
@@ -135,7 +135,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     const { pi, lifecycle, busHandlers } = bootPi();
     subagentsExtension(pi);
 
-    await lifecycle.get("session_start")({}, ctx());
+    await lifecycle.get("session_start")!({}, ctx());
 
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any); // never resolves
     try {
@@ -158,7 +158,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
       expect(steerReply![1]).toEqual({ success: true });
       expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "also fix the lint" });
     } finally {
-      await lifecycle.get("session_shutdown")();
+      await lifecycle.get("session_shutdown")!();
     }
   });
 
@@ -167,7 +167,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ maxConcurrent: 1, schedulingEnabled: false }));
     const { pi, tools, lifecycle, busHandlers } = bootPi();
     subagentsExtension(pi);
-    await lifecycle.get("session_start")({}, ctx());
+    await lifecycle.get("session_start")!({}, ctx());
     const sessionSteer = vi.fn(async () => {});
     const session = { steer: sessionSteer, subscribe: () => () => {}, dispose: vi.fn(), messages: [] } as never;
     let finishBlocker!: () => void;
@@ -194,7 +194,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
       expect(sessionSteer.mock.calls).toEqual([["RPC correction"], ["tool correction"]]);
       expect(steered()).toHaveLength(2);
     } finally {
-      await lifecycle.get("session_shutdown")();
+      await lifecycle.get("session_shutdown")!();
     }
   });
 
@@ -203,7 +203,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     const activeCtx = ctx(true);
     subagentsExtension(pi);
 
-    await lifecycle.get("session_start")({}, activeCtx);
+    await lifecycle.get("session_start")!({}, activeCtx);
 
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any); // keep agent running
     try {
@@ -223,7 +223,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
         expect(activeCtx.ui.setStatus).toHaveBeenCalledWith("subagents", "1 running agent");
       });
     } finally {
-      await lifecycle.get("session_shutdown")();
+      await lifecycle.get("session_shutdown")!();
     }
   });
 
@@ -242,10 +242,10 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     });
     subagentsExtension(pi);
 
-    await lifecycle.get("session_start")({}, extensionCtx);
+    await lifecycle.get("session_start")!({}, extensionCtx);
     // TaskExecute runs inside a root tool call, so the extension already has
     // the UI context before pi-tasks sends its cross-extension spawn request.
-    await lifecycle.get("tool_execution_start")({}, extensionCtx);
+    await lifecycle.get("tool_execution_start")!({}, extensionCtx);
     await busHandlers.get("subagents:rpc:spawn")!({
       requestId: "req-activity",
       type: "general-purpose",
@@ -268,8 +268,8 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     const { pi, lifecycle } = bootPi();
     subagentsExtension(pi);
 
-    await lifecycle.get("session_start")({}, ctx());
-    await lifecycle.get("session_start")({}, ctx());
+    await lifecycle.get("session_start")!({}, ctx());
+    await lifecycle.get("session_start")!({}, ctx());
 
     expect(readyEmits(pi), "subagents:ready emitted exactly once across two session_starts").toHaveLength(1);
     for (const channel of RPC_CHANNELS) {
@@ -314,7 +314,7 @@ describe("issue #526: RPC spawn signal aborts while queued", () => {
   async function saturated() {
     const booted = bootPi();
     subagentsExtension(booted.pi);
-    await booted.lifecycle.get("session_start")({}, ctx());
+    await booted.lifecycle.get("session_start")!({}, ctx());
     await spawnOver(booted, "blocker", undefined);
     return booted;
   }
@@ -348,11 +348,11 @@ describe("issue #526: RPC spawn signal aborts while queued", () => {
       expect(recordOf(id).status).toBe("stopped");
       const events = eventsFor(booted.pi, id);
       expect(events.map(([name]) => name)).toEqual(["subagents:failed"]);
-      expect(events[0][1]).toMatchObject({ id, status: "stopped" });
-      expect(typeof events[0][1].settleSeq).toBe("number");
+      expect(events[0]![1]).toMatchObject({ id, status: "stopped" });
+      expect(typeof events[0]![1].settleSeq).toBe("number");
       expect(runAgent).toHaveBeenCalledTimes(1);
     } finally {
-      await booted.lifecycle.get("session_shutdown")();
+      await booted.lifecycle.get("session_shutdown")!();
     }
   });
 
@@ -365,7 +365,7 @@ describe("issue #526: RPC spawn signal aborts while queued", () => {
       expect(eventsFor(booted.pi, id)).toEqual([]);
       expect(runAgent).toHaveBeenCalledTimes(1);
     } finally {
-      await booted.lifecycle.get("session_shutdown")();
+      await booted.lifecycle.get("session_shutdown")!();
     }
   });
 });

@@ -171,7 +171,7 @@ describe("Agent tool result — effective model", () => {
       ctx(),
     );
 
-    const streamed = onUpdate.mock.calls[0][0];
+    const streamed = onUpdate.mock.calls[0]![0];
     expect(streamed.details.modelName).toBe("opus 4.6");
     expect(tool.renderResult(streamed, { expanded: true, isPartial: true }, theme, { isError: false })
       .render(200).join("\n")).toContain("opus 4.6");

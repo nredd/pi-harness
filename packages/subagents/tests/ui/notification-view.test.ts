@@ -52,7 +52,7 @@ describe("collapsed notice", () => {
   it("truncates a long first line instead of wrapping it, so core can fold on it", () => {
     const lines = render(details({ description: "x".repeat(300) }), false, true, 60);
     expect(lines).toHaveLength(1);
-    expect(lines[0].length).toBeLessThanOrEqual(60 + 20); // allows for the ellipsis reset codes
+    expect(lines[0]!.length).toBeLessThanOrEqual(60 + 20); // allows for the ellipsis reset codes
   });
 });
 

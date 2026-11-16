@@ -189,8 +189,8 @@ function isRegexPosition(source: string, i: number): boolean {
   let j = i - 1;
   // Never runs off the front: the scan starts at the literal's `{`, so the
   // walk back always stops on it or something after it.
-  while (/\s/.test(source[j])) j--;
-  const prev = source[j];
+  while (/\s/.test(source[j]!)) j--;
+  const prev = source[j]!;
   // Identifier/number/closer before `/` means division.
   return !/[\w$)\]]/.test(prev);
 }

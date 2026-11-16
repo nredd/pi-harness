@@ -186,7 +186,7 @@ function mentionItems(roster: MentionTarget[], line: string, cursorCol: number):
   const match = MENTION_TRIGGER.exec(line.slice(0, cursorCol));
   if (!match) return null;
 
-  const typed = match[2].toLowerCase();
+  const typed = match[2]!.toLowerCase();
   const items: AutocompleteItem[] = [];
   for (const target of roster) {
     if (!target.handle.toLowerCase().startsWith(typed)) continue;

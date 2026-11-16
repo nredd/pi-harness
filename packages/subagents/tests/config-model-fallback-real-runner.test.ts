@@ -172,7 +172,7 @@ describe("real runAgent honors and discloses an unavailable agentModels override
         subagent_type: "scout", prompt: "go", ...(model ? { model } : {}),
       });
       if (refused) {
-        await vi.waitFor(() => expect(scheduler.list()[0].lastStatus).toBe("error"), { timeout: 3000 });
+        await vi.waitFor(() => expect(scheduler.list()[0]!.lastStatus).toBe("error"), { timeout: 3000 });
         return undefined;
       }
       await vi.waitFor(() => expect(mgr.listAgents()).toHaveLength(1), { timeout: 3000 });
@@ -198,7 +198,7 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 
       expect(record).toBeUndefined();
       expect(mgr.listAgents()).toEqual([]);
-      expect(scheduler.list()[0].lastStatus).toBe("error");
+      expect(scheduler.list()[0]!.lastStatus).toBe("error");
     });
   });
 });

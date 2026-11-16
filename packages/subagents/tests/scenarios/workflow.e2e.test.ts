@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxText, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { createCodemodeExtension } from "@earendil-works/pi-coding-agent";
+import { text } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import { encodeCwd, transcriptRoot } from "../../src/output-file.ts";
 import { readJournal } from "../../src/workflow/journal.ts";
@@ -159,7 +160,7 @@ describe("Workflow end to end", () => {
       );
       expect(await waitFor(() => notifications().length > 0)).toBe(true);
       expect(notifications()).toHaveLength(1);
-      const notice = notifications()[0].content;
+      const notice = text(notifications()[0]!);
       expect(notice).toContain(`${stop ? 0 : items.length}/${items.length} agents`);
       if (stop) {
         await run.manager?.waitForAll();
@@ -235,7 +236,7 @@ describe("Workflow end to end", () => {
       // if a real run writes it — both agents, keyed and answered, on disk.
       const journals = journalsFor(cwd);
       expect(journals, "a real run must leave a journal beside its script").toHaveLength(1);
-      const recorded = readJournal(journals[0]);
+      const recorded = readJournal(journals[0]!);
       expect(recorded).toHaveLength(2);
       expect(recorded.every(entry => entry.ok && entry.key.length > 0)).toBe(true);
       expect(recorded.map(entry => entry.index)).toEqual([0, 1]);
@@ -317,11 +318,11 @@ describe("Workflow end to end", () => {
       // counter — which is the whole claim of same-worker nesting.
       const journals = journalsFor(cwd);
       expect(journals).toHaveLength(1);
-      const recorded = readJournal(journals[0]);
+      const recorded = readJournal(journals[0]!);
       expect(recorded).toHaveLength(1);
-      expect(recorded[0].index).toBe(0);
+      expect(recorded[0]!.index).toBe(0);
       // And the recorded answer is the validated payload, not prose.
-      expect(JSON.parse(String(recorded[0].text))).toEqual({ files: ["a.ts", "b.ts"] });
+      expect(JSON.parse(String(recorded[0]!.text))).toEqual({ files: ["a.ts", "b.ts"] });
     } finally {
       await run.dispose?.();
     }

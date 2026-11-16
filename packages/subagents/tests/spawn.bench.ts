@@ -17,7 +17,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, bench, describe, vi } from "vitest";
+import { afterAll, describe, vi } from "vitest";
+import { bench } from "./fixtures/benchmark.ts";
 
 vi.mock("../src/agent-runner.ts", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");

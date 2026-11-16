@@ -18,9 +18,10 @@
  * disposed in `teardown` and reported 33 million renders per second — it was
  * measuring an unregistered widget returning an empty array.
  */
-import { afterAll, bench, describe } from "vitest";
+import { afterAll, describe } from "vitest";
 import { AgentWidget } from "../src/ui/agent-widget.ts";
 import { FleetList } from "../src/ui/fleet-list.ts";
+import { bench } from "./fixtures/benchmark.ts";
 import { makeFleet, mountFleet, mountWidget } from "./fixtures/perf-fixtures.ts";
 
 /** Fleet sizes: one agent, a normal fan-out, and a pathological one. */

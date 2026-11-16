@@ -1,7 +1,8 @@
 /** Ports of integration/test_subagents.py and router run.sh/no-router on the real core host. */
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AssistantMessageEventStream, type FauxResponseStep, getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
 import { answer, notices, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
@@ -152,7 +153,7 @@ it("resume reopens an evicted agent's conversation (#330)", () => withZeroConsum
   const next = resumed.match(/Agent ID: (\S+)/)?.[1];
   expect(next).toBeTruthy();
   await completed;
-  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: next, wait: true } }), answer("PARENT DONE")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: next!, wait: true } }), answer("PARENT DONE")]);
   await h.session.prompt("fetch");
   // The child's second turn saw its first prompt, so this is the same conversation, not a fresh agent.
   expect(outcomes(h, "get_subagent_result").at(-1)?.text).toContain("USERS work | MORE 330");
@@ -292,11 +293,8 @@ it.each(["throw", "reject"] as const)("held stream terminates a %s response with
     ...transport,
     streamSimple: () => {
       if (failure === "throw") throw new Error("REJECTED CHILD RESPONSE");
-      const inner = new class extends AssistantMessageEventStream {
-        override async result(): Promise<ReturnType<typeof answer>> {
-          throw new Error("REJECTED CHILD RESPONSE");
-        }
-      }();
+      const inner = createAssistantMessageEventStream();
+      inner.result = async () => { throw new Error("REJECTED CHILD RESPONSE"); };
       inner.end(answer(""));
       return inner;
     },

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
-import { toolCalls } from "@nredd/pi-test-lib/faux";
+import { text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, staleCtxOutcome } from "../src/agent-runner.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
@@ -35,7 +35,7 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
       route: async (_request, ctx) => {
         void ctx.session?.sessionManager;
         if (routeBroken.on) throw new Error("This extension ctx is stale after session replacement or reload. Do not use a captured pi.");
-        return { model: getModel() as never };
+        return { thinkingLevel: "off", model: getModel() as never };
       },
     });
   };
@@ -59,7 +59,7 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   h.setResponses([toolCalls(spawn("probe child", { model: virtual ? "vroute/default" : "fauxphys/physical" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await hold.entered;
-  const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").map(text).join("\n").match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
   return { h, hold, record: fixture.record(id), executions: () => executions };
 }

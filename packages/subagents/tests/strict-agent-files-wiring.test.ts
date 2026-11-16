@@ -120,7 +120,7 @@ describe("strictAgentFiles gates session startup", () => {
     subagentsExtension(pi);
 
     await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
-    expect(String(warn.mock.calls.find(c => String(c[0]).includes("Skipping agent file"))?.[0])).toContain("Skipping agent file");
+    expect(String(warn.mock.calls.find((c: unknown[]) => String(c[0]).includes("Skipping agent file"))?.[0])).toContain("Skipping agent file");
   });
 
   it("is a startup decision: a later reload of the same file does not throw", async () => {

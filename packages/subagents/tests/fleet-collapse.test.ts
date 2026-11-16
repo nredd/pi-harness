@@ -13,7 +13,7 @@ const theme = {
 };
 const NOW = Date.parse("2020-01-01T00:00:00.000Z");
 const record = (id: number, status: AgentRecord["status"] = "running"): AgentRecord => ({
-  id: `a${id}`, type: "general-purpose", description: "調査 🧠 \x1b[31mlong description\x1b[39m".repeat(20),
+  depth: 0, id: `a${id}`, type: "general-purpose", description: "調査 🧠 \x1b[31mlong description\x1b[39m".repeat(20),
   status, startedAt: NOW - 1000, completedAt: status === "running" || status === "queued" ? undefined : NOW,
   toolUses: 0, lifetimeUsage: { input: 100, output: 0, cacheWrite: 0, cost: 0.25 }, compactionCount: 0,
 });
@@ -72,8 +72,8 @@ describe("collapsed fleet", () => {
     ["steered", "1 done"], ["error", "1 failed"], ["aborted", "1 failed"], ["stopped", "1 stopped"],
   ] as const)("counts %s including session-less/waiting records", (state, label) => {
     const h = setup([record(1, state)]);
-    expect(stripTerminalSequences(h.render()[0])).toContain(label);
-    if (state === "error" || state === "aborted") expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    expect(stripTerminalSequences(h.render()[0]!)).toContain(label);
+    if (state === "error" || state === "aborted") expect(stripTerminalSequences(h.render()[0]!)).toMatch(/^\[1 failed\]/);
     h.fleet.dispose();
   });
 
@@ -84,7 +84,7 @@ describe("collapsed fleet", () => {
     h.fleet.setWorkflowSource(() => [workflow(state)], () => {});
     h.fleet.update();
     const label = state === "running" ? "running" : state === "paused" ? "paused" : state === "completed" ? "done" : "failed";
-    const text = stripTerminalSequences(h.render()[0]);
+    const text = stripTerminalSequences(h.render()[0]!);
     expect(text).toContain(`1 ${label}`);
     expect(text).not.toContain("2 running");
     expect(text).not.toContain("~$"); // child usage belongs to the workflow, not an independent agent
@@ -96,7 +96,7 @@ describe("collapsed fleet", () => {
     // what picks the row up once the session binds, so it must stay armed.
     const agents = [record(1, status)];
     const h = setup(agents);
-    expect(agents[0].session).toBeUndefined();
+    expect(agents[0]!.session).toBeUndefined();
     expect(h.clock.pending).toBe(1);
     agents.length = 0;
     h.clock.advance(200);
@@ -109,7 +109,7 @@ describe("collapsed fleet", () => {
     let parked = 2;
     h.fleet.setParkedSource(() => parked);
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[2 parked\]/);
+    expect(stripTerminalSequences(h.render()[0]!)).toMatch(/^\[2 parked\]/);
     expect(h.render()).toHaveLength(1);
     h.fleet.toggleCollapse(); // no openable rows: still one summary
     expect(h.render()).toHaveLength(1);
@@ -121,13 +121,13 @@ describe("collapsed fleet", () => {
 
   it("totals mixed states and cost, with leading fallback independent of model display", () => {
     const agents = [record(1), record(2, "queued"), record(3, "completed"), record(4, "error"), record(5, "stopped"), record(6, "aborted")];
-    agents[0].modelFallback = { input: "missing", used: "test/child" };
+    agents[0]!.modelFallback = { input: "missing", used: "test/child" };
     const text = stripTerminalSequences(renderFleetSummary(agents, [], 2, true, 250, theme));
     expect(text).toBe("[2 failed, 2 parked, 1 fallback] agents: 1 running, 1 queued, 2 failed, 1 stopped, 1 done, 2 parked · ~$1.50 · ctrl+shift+a to expand");
     expect(renderFleetSummary(agents, [], 0, false, 250, theme)).not.toContain("~$");
     expect(renderFleetSummary([record(1)], [], 0, true, 250, theme)).toContain("~$0.25");
-    agents[0].lifetimeUsage.cost = 0;
-    expect(renderFleetSummary([agents[0]], [], 0, true, 250, theme)).not.toContain("~$");
+    agents[0]!.lifetimeUsage.cost = 0;
+    expect(renderFleetSummary([agents[0]!], [], 0, true, 250, theme)).not.toContain("~$");
   });
 
   it("counts only the switched tier and failed agent in a mixed collapsed fleet at 20, 40 and 80 columns", () => {
@@ -145,10 +145,10 @@ describe("collapsed fleet", () => {
       for (const width of [20, 40, 80]) {
         const lines = h.render(width);
         expect(lines).toHaveLength(1);
-        const text = stripTerminalSequences(lines[0]);
+        const text = stripTerminalSequences(lines[0]!);
         expect(text.match(/^\[[^\]]+\]/)?.[0]).toBe(width === 20 ? "[E1 F1]" : "[1 failed, 1 fallback]");
         expect(text).not.toContain("[fb]");
-        expect(visibleWidth(lines[0])).toBeLessThanOrEqual(width);
+        expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(width);
       }
       // Removing the actual alerts leaves the routed tier neutral, not a fallback.
       const neutral = stripTerminalSequences(renderFleetSummary([healthy], [], 0, false, 80, theme));
@@ -161,7 +161,7 @@ describe("collapsed fleet", () => {
 
   it("keeps failure/parked/blocked/fallback counts ahead of truncation at every width 20..80", () => {
     const agents = [record(1, "error"), record(2)];
-    agents[1].modelFallback = { input: "missing", used: "test/child" };
+    agents[1]!.modelFallback = { input: "missing", used: "test/child" };
     for (let width = 20; width <= 80; width++) {
       const line = renderFleetSummary(agents, [workflow("paused")], 2, true, width, theme);
       const text = stripTerminalSequences(line);
@@ -177,15 +177,15 @@ describe("collapsed fleet", () => {
     const failed = { ...record(1, status), completedAt: NOW - 60_000 };
     const agents = [failed, record(2)];
     const h = setup(agents);
-    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    expect(stripTerminalSequences(h.render()[0]!)).toMatch(/^\[1 failed\]/);
     agents.shift(); // simulate manager TTL eviction: UI must not forget an outstanding failure
     h.clock.advance(10_000);
-    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    expect(stripTerminalSequences(h.render()[0]!)).toMatch(/^\[1 failed\]/);
     markConsumed(failed, h.clock.now());
     h.fleet.acknowledgeFailure(failed.id); // semantic consume edge, even after manager eviction
     h.clock.advance(200);
-    expect(stripTerminalSequences(h.render()[0])).not.toContain("failed");
-    expect(stripTerminalSequences(h.render()[0])).toContain("1 running");
+    expect(stripTerminalSequences(h.render()[0]!)).not.toContain("failed");
+    expect(stripTerminalSequences(h.render()[0]!)).toContain("1 running");
     h.fleet.dispose();
   });
 
@@ -193,7 +193,7 @@ describe("collapsed fleet", () => {
     const failed = { ...record(1, "error"), completedAt: NOW - 60_000, error: "STARTUP FAILED" };
     const h = setup([failed]);
     h.clock.advance(5_000);
-    expect(stripTerminalSequences(h.render()[0])).toMatch(/^\[1 failed\]/);
+    expect(stripTerminalSequences(h.render()[0]!)).toMatch(/^\[1 failed\]/);
     h.fleet.handleKey("\x1b[B"); // enter the list
     h.fleet.handleKey("\x1b[B"); // failed row, even without a session
     h.fleet.handleKey("\r");
@@ -324,17 +324,17 @@ describe("collapsed fleet", () => {
     const count = MAX_FLEET_ALERT_DETAILS + 2;
     const agents = Array.from({ length: count }, (_, i) => record(i, "error"));
     const h = setup(agents);
-    expect(stripTerminalSequences(h.render()[0])).toContain(`[${count} failed]`);
+    expect(stripTerminalSequences(h.render()[0]!)).toContain(`[${count} failed]`);
     for (let width = 20; width <= 80; width++) {
-      const line = h.render(width)[0];
+      const line = h.render(width)[0]!;
       expect(visibleWidth(line)).toBeLessThanOrEqual(width);
       expect(stripTerminalSequences(line)).toMatch(/^\[(?:E99\+|130 failed)\]/);
     }
     agents.length = 0; // all records evicted, no retained sessions/results
     h.fleet.toggleCollapse();
-    expect(stripTerminalSequences(h.render()[0])).toContain(`[${count} failed]`);
+    expect(stripTerminalSequences(h.render()[0]!)).toContain(`[${count} failed]`);
     h.fleet.acknowledgeFailure(`a${count - 1}`); // overflow id, not one of the retained rows
-    expect(stripTerminalSequences(h.render()[0])).toContain(`[${count - 1} failed]`);
+    expect(stripTerminalSequences(h.render()[0]!)).toContain(`[${count - 1} failed]`);
     h.fleet.dispose();
   });
 
@@ -344,17 +344,17 @@ describe("collapsed fleet", () => {
     h.fleet.restoreSession(() => branch, data => branch.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }));
     h.fleet.ingestFailure(record(2, "error")); // explicit terminal ingress between ticks, no record in manager
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).toContain("1 failed");
+    expect(stripTerminalSequences(h.render()[0]!)).toContain("1 failed");
     h.fleet.restoreSession(() => branch, data => branch.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }));
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).toContain("1 failed");
+    expect(stripTerminalSequences(h.render()[0]!)).toContain("1 failed");
     h.fleet.acknowledgeFailure("a2");
     h.fleet.restoreSession(() => branch, () => {});
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).not.toContain("failed");
+    expect(stripTerminalSequences(h.render()[0]!)).not.toContain("failed");
     h.fleet.restoreSession([], () => {}); // another session cannot inherit old identities
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).not.toContain("failed");
+    expect(stripTerminalSequences(h.render()[0]!)).not.toContain("failed");
     h.fleet.dispose();
   });
 
@@ -365,7 +365,7 @@ describe("collapsed fleet", () => {
     h.fleet.restoreSession(() => branch, persist);
     h.fleet.ingestFailure({ id: "wf_old", type: "workflow", description: "old audit", status: "failed", completedAt: NOW });
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).toContain("1 failed");
+    expect(stripTerminalSequences(h.render()[0]!)).toContain("1 failed");
     h.fleet.handleKey("\x1b[B"); h.fleet.handleKey("\x1b[B"); h.fleet.handleKey("\r");
     expect(h.ui.notify).toHaveBeenCalledWith("workflow: old audit (failed).", "error");
     expect(h.render()).toEqual([]);
@@ -381,16 +381,16 @@ describe("collapsed fleet", () => {
     const run = workflow("failed");
     h.fleet.setWorkflowSource(() => [run], () => {});
     h.fleet.update();
-    expect(stripTerminalSequences(h.render()[0])).toContain("[2 failed]");
-    agents[0].status = "running";
+    expect(stripTerminalSequences(h.render()[0]!)).toContain("[2 failed]");
+    agents[0]!.status = "running";
     run.status = "running";
     h.fleet.update();
-    const text = stripTerminalSequences(h.render()[0]);
+    const text = stripTerminalSequences(h.render()[0]!);
     expect(text).toContain("[2 failed]");
     expect(text).toContain("2 running");
-    h.fleet.acknowledgeFailure(agents[0].id);
+    h.fleet.acknowledgeFailure(agents[0]!.id);
     h.fleet.acknowledgeFailure(run.id);
-    expect(stripTerminalSequences(h.render()[0])).not.toContain("failed");
+    expect(stripTerminalSequences(h.render()[0]!)).not.toContain("failed");
     h.fleet.dispose();
   });
 

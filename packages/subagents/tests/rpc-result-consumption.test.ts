@@ -83,8 +83,8 @@ describe("subagents:rpc:consume", () => {
   async function boot() {
     const booted = bootPi({}, { deliverEvents: true });
     subagentsExtension(booted.pi);
-    await booted.lifecycle.get("session_start")({}, ctx());
-    shutdown = () => booted.lifecycle.get("session_shutdown")();
+    await booted.lifecycle.get("session_start")!({}, ctx());
+    shutdown = () => booted.lifecycle.get("session_shutdown")!();
     return booted;
   }
 

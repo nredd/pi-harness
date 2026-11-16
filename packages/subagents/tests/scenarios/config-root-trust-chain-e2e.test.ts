@@ -80,7 +80,7 @@ describe("config-root trust survives nested spawns after a custom-cwd spawn (fau
       if (index >= 0) {
         const inner = agentResult(context);
         if (inner !== undefined) return inner;
-        reached.push(CHAIN[index]);
+        reached.push(CHAIN[index]!);
         return agentCall({
           subagent_type: CHAIN[index + 1],
           description: "relay",

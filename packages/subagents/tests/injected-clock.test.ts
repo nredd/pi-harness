@@ -47,8 +47,8 @@ it("preserves native timer references and clears the original handles", () => {
   const once = realClock.setTimeout(() => {}, 3_600_000);
   const repeat = realClock.setInterval(() => {}, 3_600_000);
   cleanup.push(() => { once.cancel(); repeat.cancel(); });
-  const nativeOnce = timeout.mock.results[0].value;
-  const nativeRepeat = interval.mock.results[0].value;
+  const nativeOnce = timeout.mock.results[0]!.value;
+  const nativeRepeat = interval.mock.results[0]!.value;
   expect(nativeOnce.hasRef()).toBe(true);
   expect(nativeRepeat.hasRef()).toBe(true);
   nativeOnce.unref();
@@ -74,7 +74,7 @@ it("releases the idle outbox hold only after 200 fake milliseconds", () => {
   expect(send).not.toHaveBeenCalled();
   clock.advance(1);
   expect(send).toHaveBeenCalledTimes(1);
-  expect(send.mock.calls[0][0].content).toBe("child done");
+  expect(send.mock.calls[0]![0].content).toBe("child done");
   expect(clock.pending).toBe(0);
   outbox.add({ ids: ["other"], build: () => { throw new Error("disposed items must not build"); } });
   outbox.dispose();

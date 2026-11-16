@@ -85,8 +85,7 @@ async function startChild(fails: number, responses: ReturnType<typeof answer>[])
   await h.session.prompt("go");
   const id = h.session.messages.slice(before)
     .filter(m => m.role === "toolResult" && m.toolName === "Agent")
-    .flatMap(m => m.content)
-    .find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+    .map(text).join("\n").match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
   return { h, key, keys, prompts, completed, record: fixture.record(id) };
 }

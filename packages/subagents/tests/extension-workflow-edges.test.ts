@@ -49,7 +49,7 @@ describe("resuming a settled workflow", () => {
   it("re-runs its own script and replays the agent calls its journal recorded", async () => {
     const b = boot();
     const first = await b.tools.get("SubagentWorkflow").execute("tc-1", { script: oneAgent }, undefined, undefined, workflowCtx());
-    const runId = /Task ID: (\S+)/.exec(textOf(first))![1];
+    const runId = /Task ID: (\S+)/.exec(textOf(first))![1]!;
     await awaitSettled(b, runId);
     expect(runAgent).toHaveBeenCalledTimes(1);
 
@@ -57,7 +57,7 @@ describe("resuming a settled workflow", () => {
     const resumed = await b.tools.get("SubagentWorkflow").execute("tc-2", { resumeFromRunId: runId }, undefined, undefined, workflowCtx());
 
     const text = textOf(resumed);
-    const resumedId = /Task ID: (\S+)/.exec(text)![1];
+    const resumedId = /Task ID: (\S+)/.exec(text)![1]!;
     expect(text).toContain(`Resuming ${runId}: 1 recorded call(s) available to replay.`);
     await awaitSettled(b, resumedId);
     // Replayed from the journal: the second run paid for nothing.
@@ -80,7 +80,7 @@ describe("a workflow whose script cannot be persisted", () => {
       expect(text).toContain('Workflow "edge" started in the background.');
       expect(text).not.toContain("Script: ");
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not persist workflow script"));
-      await awaitSettled(b, /Task ID: (\S+)/.exec(text)![1]);
+      await awaitSettled(b, /Task ID: (\S+)/.exec(text)![1]!);
       expect(runAgent).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllEnvs();

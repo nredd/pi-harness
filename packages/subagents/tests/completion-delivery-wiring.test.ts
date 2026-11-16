@@ -54,7 +54,7 @@ async function boot(settings: Record<string, unknown> = {}, events?: unknown) {
   const signal = new AbortController().signal;
   const parentCtx = ctx();
   Object.defineProperty(parentCtx, "signal", { get: () => (parent.running ? signal : undefined) });
-  await booted.lifecycle.get("session_start")({ type: "session_start" }, parentCtx);
+  await booted.lifecycle.get("session_start")!({ type: "session_start" }, parentCtx);
   return { ...booted, parent, parentCtx };
 }
 
@@ -69,7 +69,7 @@ function controllableRuns() {
     }) as any,
   );
   vi.mocked(resumeAgent).mockImplementation((_s: any, prompt: string) =>
-    new Promise(resolve => { finishers.set(prompt, () => resolve({ text: `${prompt} done` })); }),
+    new Promise(resolve => { finishers.set(prompt, () => resolve({ text: `${prompt} done`, aborted: false, steered: false })); }),
   );
   return { settle: (prompt: string) => finishers.get(prompt)!() };
 }
@@ -81,7 +81,7 @@ const spawn = (b: BootedPi, parentCtx: any, prompt: string, extra: Record<string
     undefined, undefined, parentCtx,
   );
 
-const agentIdOf = (result: any): string => /Agent ID: (\S+)/.exec(result.content[0].text)![1];
+const agentIdOf = (result: any): string => /Agent ID: (\S+)/.exec(result.content[0].text)![1]!;
 
 const turnEnd = (b: BootedPi, stopReason = "toolUse") =>
   b.lifecycle.get("turn_end")?.({ type: "turn_end", message: { role: "assistant", stopReason } });
@@ -115,7 +115,7 @@ describe("completion delivery to a running parent", () => {
 
     runs.settle("alpha");
     await vi.advanceTimersByTimeAsync(0);
-    b.lifecycle.get("agent_end")({ type: "agent_end", messages: [] });
+    b.lifecycle.get("agent_end")!({ type: "agent_end", messages: [] });
     await vi.advanceTimersByTimeAsync(200);
 
     expect(sentContents(b)).toEqual([expect.stringContaining("alpha done")]);
@@ -127,7 +127,7 @@ describe("completion delivery to a running parent", () => {
     const b = await boot();
     await spawn(b, b.parentCtx, "alpha");
     turnEnd(b, "stop");
-    b.lifecycle.get("agent_end")({ type: "agent_end", messages: [] });
+    b.lifecycle.get("agent_end")!({ type: "agent_end", messages: [] });
 
     runs.settle("alpha"); // lands while a later agent_end listener still holds the run open
     await vi.advanceTimersByTimeAsync(0);
@@ -147,7 +147,7 @@ describe("completion delivery to a running parent", () => {
     runs.settle("alpha");
     await vi.advanceTimersByTimeAsync(0);
 
-    await b.lifecycle.get("session_shutdown")();
+    await b.lifecycle.get("session_shutdown")!();
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(b.pi.sendMessage).not.toHaveBeenCalled();
@@ -166,7 +166,7 @@ describe("completion delivery to a running parent", () => {
     expect(b.pi.sendMessage).not.toHaveBeenCalled();
 
     b.parent.running = false;
-    b.lifecycle.get("agent_end")({ type: "agent_end", messages: [] });
+    b.lifecycle.get("agent_end")!({ type: "agent_end", messages: [] });
     await vi.advanceTimersByTimeAsync(200);
     expect(b.pi.sendMessage).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: expect.stringContaining("alpha done") }),
@@ -460,7 +460,7 @@ describe("settling with owned agents still running", () => {
     controllableRuns();
     const b = await boot({ agentMentions: "direct" });
     b.parent.running = false;
-    const handled = await b.lifecycle.get("input")({ type: "input", text: "@general-purpose look around", source: "interactive" }, b.parentCtx);
+    const handled = await b.lifecycle.get("input")!({ type: "input", text: "@general-purpose look around", source: "interactive" }, b.parentCtx);
     expect(handled).toEqual({ action: "handled" });
     expect(notices(b.parentCtx)).toContainEqual(["Started @general-purpose", "info"]);
     b.parentCtx.ui.notify.mockClear();

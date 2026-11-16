@@ -53,7 +53,7 @@ function completedRun() {
     session: { dispose: vi.fn() },
     aborted: false,
     steered: false,
-  } as Awaited<ReturnType<typeof runAgent>>;
+  } as unknown as Awaited<ReturnType<typeof runAgent>>;
 }
 
 async function spawnBackground(

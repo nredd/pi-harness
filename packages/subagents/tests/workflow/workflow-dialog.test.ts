@@ -95,8 +95,8 @@ function cells(lines: string[]): { left: string; right: string }[] {
   const rows: { left: string; right: string }[] = [];
   for (const line of lines) {
     const parts = line.split(new RegExp(BORDER.source, "g"));
-    if (parts.length === 4 && parts[0].trim() === "" && parts[3].trim() === "") {
-      rows.push({ left: parts[1], right: parts[2] });
+    if (parts.length === 4 && parts[0]!.trim() === "" && parts[3]!.trim() === "") {
+      rows.push({ left: parts[1]!, right: parts[2]! });
     }
   }
   return rows;
@@ -105,7 +105,7 @@ function cells(lines: string[]): { left: string; right: string }[] {
 /** Drop the padding rows the frame adds below the content. */
 const trimTrailing = (rows: string[]): string[] => {
   const out = [...rows];
-  while (out.length > 0 && out[out.length - 1].trim() === "") out.pop();
+  while (out.length > 0 && out[out.length - 1]!.trim() === "") out.pop();
   return out;
 };
 
@@ -118,7 +118,7 @@ function paneTitles(lines: string[]): { left: string; right: string } {
     const match = bare(line).match(/^[╭+](.*?)[┬+](.*)[╮+]$/);
     if (match) {
       const strip = (part: string) => part.replace(/[─-]+\s*$/, "").trim();
-      return { left: strip(match[1]), right: strip(match[2]) };
+      return { left: strip(match[1]!), right: strip(match[2]!) };
     }
   }
   throw new Error(`no frame in:\n${lines.join("\n")}`);
@@ -390,7 +390,7 @@ describe("sub-status annotations", () => {
     // The agent type and the tool-call count are the detail pane's, not the
     // row's — the row carries why it looks the way it does, then the model and
     // the token count, and nothing that would push those off a narrow pane.
-    expect(rows[0].trim()).toBe("❯ ◌ retry-me · throttled · attempt 2 · waiting 8s");
+    expect(rows[0]!.trim()).toBe("❯ ◌ retry-me · throttled · attempt 2 · waiting 8s");
   });
 });
 

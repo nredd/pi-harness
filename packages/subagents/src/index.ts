@@ -568,8 +568,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     (chars) => {
       if (notificationResultChars === 0) return {};
       const ids = Object.keys(chars);
-      const shares = fairShares(ids.map(id => chars[id]), notificationResultChars);
-      return Object.fromEntries(ids.map((id, i) => [id, shares[i]]));
+      const shares = fairShares(ids.map(id => chars[id]!), notificationResultChars);
+      return Object.fromEntries(ids.map((id, i) => [id, shares[i]!]));
     },
   );
 
@@ -655,7 +655,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
               : `${unread.length} agent(s) finished`;
 
             const [first, ...rest] = unread;
-            const details = first.details;
+            const details = first!.details;
             if (rest.length > 0) details.others = rest.map(m => m.details);
             return {
               content: `Background agent group completed: ${label}\n\n${notifications}${trailer}`,
@@ -1806,7 +1806,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     turnGroupSpawns = [];
     // One spawn is no group: it reports like any single completion.
     if (ids.length < 2) {
-      const record = ids.length === 1 ? manager.getRecord(ids[0]) : undefined;
+      const record = ids.length === 1 ? manager.getRecord(ids[0]!) : undefined;
       if (record?.completedAt != null && !record.resultConsumed) sendIndividualNudge(record);
       return;
     }
@@ -4971,8 +4971,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
           }
 
           // Enter on numeric field → close and prompt for typed input
-          if (matchesKey(data, Key.enter) && NUMERIC_IDS.has(items[currentIndex].id)) {
-            done(items[currentIndex].id);
+          if (matchesKey(data, Key.enter) && NUMERIC_IDS.has(items[currentIndex]!.id)) {
+            done(items[currentIndex]!.id);
             return;
           }
           list.handleInput?.(data);

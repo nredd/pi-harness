@@ -98,7 +98,7 @@ describe("scheduler at fire time", () => {
     });
     expect(clock.pending).toBe(1);
     clock.advance(49);
-    expect(scheduler.list()[0].lastStatus).toBeUndefined();
+    expect(scheduler.list()[0]!.lastStatus).toBeUndefined();
     expect(manager.listAgents()).toEqual([]);
     expect(runAgent).not.toHaveBeenCalled();
     clock.advance(1);
@@ -146,9 +146,9 @@ describe("scheduler at fire time", () => {
 
     expect(record).toBeUndefined();
     expect(runAgent).not.toHaveBeenCalled();
-    expect(scheduler.list()[0].lastStatus).toBe("error");
+    expect(scheduler.list()[0]!.lastStatus).toBe("error");
     expect(emit).toHaveBeenCalledWith("subagents:scheduled", {
-      type: "error", jobId: scheduler.list()[0].id, error: expect.stringContaining("Model not found: \"claude-haiku-4-5\""),
+      type: "error", jobId: scheduler.list()[0]!.id, error: expect.stringContaining("Model not found: \"claude-haiku-4-5\""),
     });
   });
 
@@ -168,10 +168,10 @@ describe("scheduler at fire time", () => {
     expect(record.status).toBe("completed");
     expect(record.modelFallback).toBeUndefined();
     expect(runAgent).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAgent).mock.calls[0][3]).toMatchObject({ model: PARENT });
+    expect(vi.mocked(runAgent).mock.calls[0]![3]).toMatchObject({ model: PARENT });
     expect(scheduler.list()[0]).toMatchObject({ lastStatus: "success", runCount: 1 });
     expect(emit).toHaveBeenCalledWith("subagents:scheduled", {
-      type: "fired", jobId: scheduler.list()[0].id, agentId: record.id, name: "job",
+      type: "fired", jobId: scheduler.list()[0]!.id, agentId: record.id, name: "job",
     });
   });
 
@@ -201,7 +201,7 @@ describe("scheduler at fire time", () => {
 
     expect(record).toBeUndefined();
     expect(runAgent).not.toHaveBeenCalled();
-    expect(scheduler.list()[0].lastStatus).toBe("error");
+    expect(scheduler.list()[0]!.lastStatus).toBe("error");
   });
 });
 

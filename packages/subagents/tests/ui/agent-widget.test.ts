@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../../src/agent-types.ts";
-import type { WidgetMode } from "../../src/types.ts";
+import type { AgentRecord, WidgetMode } from "../../src/types.ts";
 import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, formatTokens } from "../../src/ui/agent-widget.ts";
 
 describe("formatSessionTokens", () => {
@@ -57,9 +57,10 @@ describe("AgentWidget", () => {
   function makeRecord(
     id: string,
     opts: { isBackground?: boolean; parentAgentId?: string; workflowId?: string } = {},
-  ) {
+  ): AgentRecord {
     return {
       id,
+      depth: 0,
       type: "general-purpose",
       description: `${id} description`,
       status: "running",
@@ -196,7 +197,7 @@ describe("AgentWidget", () => {
 
   it("discloses a level the run did not honor", () => {
     const record = makeRecord("bg", { isBackground: true });
-    record.invocation = { modelName: "haiku 4.5", thinking: "high", requestedThinking: "max" };
+    record.invocation = { modelName: "haiku 4.5", modelId: "anthropic/claude-haiku-4-5", thinking: "high", requestedThinking: "max" };
     const manager = { listAgents: () => [record] };
 
     expect(renderLines(manager, "bg", () => "background", true))
@@ -370,7 +371,7 @@ describe("AgentWidget cost display", () => {
       () => showCost,
     );
     let factory: any;
-    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: unknown) => { factory = c; } } as any);
     widget.update();
     return factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
   }
@@ -407,7 +408,7 @@ describe("AgentWidget cost display", () => {
       { listAgents: () => [finished] } as any, new Map(), () => "all", () => true,
     );
     let factory: any;
-    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: unknown) => { factory = c; } } as any);
     widget.update();
     const out = factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
 
@@ -428,7 +429,7 @@ describe("AgentWidget cost display", () => {
       { listAgents: () => [running] } as any, new Map(), () => "all", () => true,
     );
     let factory: any;
-    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: unknown) => { factory = c; } } as any);
     widget.update();
     const out = factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
 
@@ -447,7 +448,7 @@ describe("AgentWidget cost display", () => {
     } as AgentActivity]]);
     const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
     let factory: any;
-    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: unknown) => { factory = c; } } as any);
     widget.update();
     expect(factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n"))
       .not.toContain("$");
@@ -487,7 +488,7 @@ describe("AgentWidget overflow accounting", () => {
     } as AgentActivity]));
     const widget = new AgentWidget({ listAgents: () => agents } as any, activity, () => "all");
     let factory: any;
-    widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: unknown) => { factory = c; } } as any);
     widget.update();
     if (!factory) return [];
     return factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render();

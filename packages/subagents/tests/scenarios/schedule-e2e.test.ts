@@ -225,8 +225,8 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     scheduler.stop();
     const reloadedStore = new ScheduleStore(join(tmp, "schedules.json"));
     expect(reloadedStore.list()).toHaveLength(1);
-    expect(reloadedStore.list()[0].id).toBe(job.id);
-    expect(reloadedStore.list()[0].name).toBe("persistent");
+    expect(reloadedStore.list()[0]!.id).toBe(job.id);
+    expect(reloadedStore.list()[0]!.name).toBe("persistent");
   });
 
   it("on-disk file shape: version=1 plus jobs array", async () => {

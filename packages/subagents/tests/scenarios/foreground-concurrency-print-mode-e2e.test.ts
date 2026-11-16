@@ -107,7 +107,7 @@ describe.skipIf(LIVE)("maxConcurrentForeground e2e (real pi agent loop)", () => 
     expect(maxInFlight).toBe(1);
     // Strictly serialized: the first child ends before the second begins.
     expect(order).toHaveLength(4);
-    expect(order[1]).toBe(order[0].replace("start:", "end:"));
+    expect(order[1]).toBe(order[0]!.replace("start:", "end:"));
 
     // Serialization must not cost anyone their result — each call still returns
     // its own agent's output to the parent.

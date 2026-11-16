@@ -66,9 +66,9 @@ describe("the StructuredOutput tool", () => {
     const result = await call(tool, { line: 0 });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/did not match the required schema/);
+    expect(result.content[0]!.text).toMatch(/did not match the required schema/);
     // The reason has to reach the model, or the retry is a guess.
-    expect(result.content[0].text).toContain("file");
+    expect(result.content[0]!.text).toContain("file");
     expect(capture.json).toBeUndefined();
     expect(capture.called).toBe(true);
     expect(capture.lastError).toBeDefined();

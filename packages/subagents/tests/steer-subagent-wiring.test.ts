@@ -73,7 +73,7 @@ async function spawnBackground(tools: Map<string, any>, prompt = "go"): Promise<
     undefined,
     ctx(),
   );
-  return /Agent ID: (\S+)/.exec(textOf(r))![1];
+  return /Agent ID: (\S+)/.exec(textOf(r))![1]!;
 }
 
 const steer = (tools: Map<string, any>, agent_id: string, message: string) =>

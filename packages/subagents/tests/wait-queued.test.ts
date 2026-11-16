@@ -68,7 +68,7 @@ async function spawnBackground(tools: Map<string, any>): Promise<{ id: string; q
     ctx(),
   );
   const id = /Agent ID: (\S+)/.exec(textOf(r))![1];
-  return { id, queued: textOf(r).includes("queued in background") };
+  return { id: id!, queued: textOf(r).includes("queued in background") };
 }
 
 describe("get_subagent_result wait:true on a queued agent", () => {
@@ -95,7 +95,7 @@ describe("get_subagent_result wait:true on a queued agent", () => {
     let settled = false;
     void waitPromise.then(() => { settled = true; });
     for (let i = 0; i < 40 && !settled; i++) {
-      while (resolvers.length > 0) resolvers.shift()!();
+      while (resolvers.length > 0) resolvers.shift()!(undefined);
       await flush();
       await new Promise((r) => setTimeout(r, 100)); // outlive one 250ms poll tick
     }
@@ -194,7 +194,7 @@ describe("get_subagent_result wait:true on a queued agent", () => {
 
     let completedResult: any;
     for (let i = 0; i < 40 && !completedResult; i++) {
-      while (resolvers.length > 0) resolvers.shift()!();
+      while (resolvers.length > 0) resolvers.shift()!(undefined);
       await flush();
       const result = await tools
         .get("get_subagent_result")

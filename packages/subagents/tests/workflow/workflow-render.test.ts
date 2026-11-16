@@ -79,7 +79,7 @@ describe("inline glyph mapping", () => {
       ],
     });
 
-    const row = treeRows(lines)[1];
+    const row = treeRows(lines)[1]!;
     // Ahead of the stat tail, so the row reads "why" before "how much".
     expect(row).toContain("from resume journal");
     expect(row.indexOf("from resume journal")).toBeLessThan(row.indexOf("general-purpose"));
@@ -170,8 +170,8 @@ describe("tree branches", () => {
 
   it("hangs rows off a │ rail under a non-final group and off blanks under the final one", () => {
     const rows = treeRows(card({ progress }));
-    expect(rows[1].startsWith("│")).toBe(true);
-    expect(rows[4].startsWith("│")).toBe(false);
+    expect(rows[1]!.startsWith("│")).toBe(true);
+    expect(rows[4]!.startsWith("│")).toBe(false);
   });
 
   it("collapses unphased agents into a single Agents group", () => {
@@ -277,7 +277,7 @@ describe("stat segments", () => {
         ],
       }),
     );
-    expect(rows[1].trimEnd()).toBe("  └─ ✔ review:bugs · Explore · haiku · 18.4k · 12 tool calls · 42s");
+    expect(rows[1]!.trimEnd()).toBe("  └─ ✔ review:bugs · Explore · haiku · 18.4k · 12 tool calls · 42s");
   });
 
   it("aligns stats into one column across groups", () => {
@@ -377,8 +377,8 @@ describe("header", () => {
 
   it("right-aligns the stats to the card width", () => {
     const lines = card({ progress: sevenAgents, width: 60 });
-    expect(visibleWidth(lines[0])).toBe(60);
-    expect(lines[0].endsWith("3/7 agents · 1s")).toBe(true);
+    expect(visibleWidth(lines[0]!)).toBe(60);
+    expect(lines[0]!.endsWith("3/7 agents · 1s")).toBe(true);
   });
 });
 
@@ -435,7 +435,7 @@ describe("width", () => {
     });
     expect(lines[0]).toContain("0/1 agent · 1s");
     expect(lines[0]).toContain("…");
-    expect(visibleWidth(lines[0])).toBe(34);
+    expect(visibleWidth(lines[0]!)).toBe(34);
   });
 
   it("counts wide characters rather than code points", () => {

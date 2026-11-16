@@ -245,7 +245,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
           });
         }
         if (toolResults(ctx, "get_subagent_result").length === 0) {
-          const id = agents[0].match(/Agent ID: ([^\s]+)/)?.[1];
+          const id = agents[0]!.match(/Agent ID: ([^\s]+)/)?.[1];
           if (!id) throw new Error(`No background agent ID in: ${agents[0]}`);
           return toolCall(
             "get_subagent_result",
@@ -290,7 +290,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
               run_in_background: true,
             });
           }
-          refusal = agents[0];
+          refusal = agents[0]!;
           return "DELEGATOR_DONE";
         }
         if (toolResults(ctx, "Agent").length === 0) {

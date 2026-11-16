@@ -30,7 +30,7 @@ function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScroll
     const lines = render();
     const y = lines.findIndex(line => line.includes(label));
     expect(y).toBeGreaterThanOrEqual(0);
-    return mouse({ type: "press", button: "left", x: lines[y].indexOf(label), y });
+    return mouse({ type: "press", button: "left", x: lines[y]!.indexOf(label), y });
   };
   const emit: AgentSessionEventListener = event => listener(event);
   return { viewer, tui, terminal, messages, render, mouse, click, done, stop, steer, unsubscribe, emit };
@@ -94,10 +94,10 @@ describe("fullscreen conversation observer", () => {
   it("covers every cell without a frame, including after resize and while composing", () => {
     const { render, terminal, viewer } = setup();
     for (const [rows, columns] of [[20, 100], [35, 70], [4, 12], [1, 1]]) {
-      terminal.rows = rows;
-      terminal.columns = columns;
+      terminal.rows = rows!;
+      terminal.columns = columns!;
       const lines = render();
-      expect(lines).toHaveLength(rows);
+      expect(lines).toHaveLength(rows!);
       expect(lines.every(line => visibleWidth(line) === columns)).toBe(true);
       expect(lines.join("\n")).not.toMatch(/[╭╮╰╯]/);
     }
@@ -111,16 +111,16 @@ describe("fullscreen conversation observer", () => {
   it("keeps the bottom divider pinned around the jump control while scrolled up", () => {
     const { render, terminal, viewer, mouse } = setup();
     try {
-      expect(render()[terminal.rows - 2].trim()).toMatch(/^─+$/);
+      expect(render()[terminal.rows - 2]!.trim()).toMatch(/^─+$/);
       mouse({ wheelDelta: -30 });
-      expect(render()[terminal.rows - 2].trim()).toMatch(/^─+\[ ↓ Jump to latest message · Ctrl\+End \]─+$/);
+      expect(render()[terminal.rows - 2]!.trim()).toMatch(/^─+\[ ↓ Jump to latest message · Ctrl\+End \]─+$/);
       viewer.handleInput("\r");
-      expect(render()[terminal.rows - 3].trim()).toMatch(/^─+\[ ↓ Jump to latest message · Ctrl\+End \]─+$/);
+      expect(render()[terminal.rows - 3]!.trim()).toMatch(/^─+\[ ↓ Jump to latest message · Ctrl\+End \]─+$/);
       terminal.rows = 30;
       terminal.columns = 80;
-      expect(render()[terminal.rows - 3].trim()).toMatch(/^─+\[ ↓ Jump to latest message · Ctrl\+End \]─+$/);
+      expect(render()[terminal.rows - 3]!.trim()).toMatch(/^─+\[ ↓ Jump to latest message · Ctrl\+End \]─+$/);
       viewer.handleInput("\x1b[1;5F");
-      expect(render()[terminal.rows - 3].trim()).toMatch(/^─+$/);
+      expect(render()[terminal.rows - 3]!.trim()).toMatch(/^─+$/);
     } finally {
       viewer.dispose();
     }
@@ -132,11 +132,11 @@ describe("fullscreen conversation observer", () => {
     expect(mouse({ wheelDelta: -5 })).toMatchObject({ handled: true });
     const paused = firstRow(render());
     expect(paused).not.toBe(bottom);
-    messages[0].content += "\nrow-100";
+    messages[0]!.content += "\nrow-100";
     expect(firstRow(render())).toBe(paused);
     mouse({ wheelDelta: 1000 });
     expect(render().join("\n")).toContain("row-100");
-    messages[0].content += "\nrow-101";
+    messages[0]!.content += "\nrow-101";
     expect(render().join("\n")).toContain("row-101");
     mouse({ wheelDelta: -1000 });
     expect(render().join("\n")).toContain("row-000");
@@ -251,7 +251,7 @@ describe("fullscreen conversation observer", () => {
   it("always shows a full-height thumb when the conversation fits", () => {
     const { render, messages, viewer } = setup(20, 100, undefined, "always");
     try {
-      messages[0].content = "short";
+      messages[0]!.content = "short";
       expect(render().filter(line => line.endsWith("┃"))).toHaveLength(16);
     } finally {
       viewer.dispose();
@@ -261,7 +261,7 @@ describe("fullscreen conversation observer", () => {
   it.each(["auto", "hidden"] as const)("does not reserve a content column in %s mode", (mode) => {
     const { render, messages, viewer } = setup(20, 100, undefined, mode);
     try {
-      messages[0].content = "x".repeat(99);
+      messages[0]!.content = "x".repeat(99);
       expect(render()).toContain(` ${"x".repeat(99)}`);
     } finally {
       viewer.dispose();
@@ -402,7 +402,7 @@ describe("observer input isolation in Pi's fullscreen renderer", () => {
       start: (onInput) => { input = onInput; },
       stop: vi.fn(), drainInput: async () => {}, write: vi.fn(),
       moveBy: vi.fn(), hideCursor: vi.fn(), showCursor: vi.fn(), clearLine: vi.fn(),
-      clearFromCursor: vi.fn(), clearScreen: vi.fn(), setTitle: vi.fn(), setProgress: vi.fn(),
+      clearFromCursor: vi.fn(), clearScreen: vi.fn(), setTitle: vi.fn(), setProgress: vi.fn(), setProgramStatus: vi.fn(),
     };
     const openUrl = vi.fn();
     const copySelection = vi.fn(async () => true);

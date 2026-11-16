@@ -14,7 +14,7 @@ const item = (id: string): OutboxItem => ({ ids: [id], build: () => message(id) 
 
 describe("CompletionOutbox", () => {
   let running: boolean;
-  let send: ReturnType<typeof vi.fn>;
+  let send: ReturnType<typeof vi.fn<ConstructorParameters<typeof CompletionOutbox>[0]>>;
   let outbox: CompletionOutbox;
 
   beforeEach(() => {
@@ -46,7 +46,7 @@ describe("CompletionOutbox", () => {
       vi.advanceTimersByTime(NOTIFICATION_HOLD_MS - 150);
 
       expect(send).toHaveBeenCalledOnce();
-      expect(send.mock.calls[0][0].content).toBe("2 background tasks finished.\n\n<done a>\n\n<done b>");
+      expect(send.mock.calls[0]![0].content).toBe("2 background tasks finished.\n\n<done a>\n\n<done b>");
     });
   });
 
@@ -104,7 +104,7 @@ describe("CompletionOutbox", () => {
     });
 
     it("builds a group's notification from the members still unread", () => {
-      const build = vi.fn((ids: readonly string[]) => ({ content: ids.join(","), details: details(ids[0]) }));
+      const build = vi.fn((ids: readonly string[]) => ({ content: ids.join(","), details: details(ids[0]!) }));
       outbox.add({ ids: ["a", "b"], build });
       outbox.cancel("a");
       vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
@@ -134,7 +134,7 @@ describe("CompletionOutbox", () => {
     outbox.add({ ids: ["a", "b"], build: () => ({ content: "<group>", details: details("a", [details("b")]) }) });
     outbox.add(item("c"));
     vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
-    expect(send.mock.calls[0][0].details).toEqual({ ...details("a"), others: [details("b"), details("c")] });
+    expect(send.mock.calls[0]![0].details).toEqual({ ...details("a"), others: [details("b"), details("c")] });
   });
 
   it("survives a send that throws on a stale context", () => {
@@ -168,7 +168,7 @@ describe("CompletionOutbox", () => {
       vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
 
       expect(allot).toHaveBeenCalledExactlyOnceWith({ a: 100, b: 100 });
-      const [sent] = send.mock.calls[0];
+      const [sent] = send.mock.calls[0]!;
       expect(sent.content).toBe("3 background tasks finished.\n\n<done a@7>\n\n<done b@7>\n\n<done c>");
       expect(sent.delivered).toEqual(["a", "b"]);
     });
@@ -179,8 +179,8 @@ describe("CompletionOutbox", () => {
       outbox.add(noticing("b"));
       outbox.add(item("c"));
       vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
-      expect(send.mock.calls[0][0].noticed).toEqual(["a", "b"]);
-      expect(send.mock.calls[0][0]).not.toHaveProperty("delivered");
+      expect(send.mock.calls[0]![0].noticed).toEqual(["a", "b"]);
+      expect(send.mock.calls[0]![0]).not.toHaveProperty("delivered");
     });
 
     it("allots nothing by default, and a coalesced message without whole results has no delivered list", () => {
@@ -189,7 +189,7 @@ describe("CompletionOutbox", () => {
       outbox.add(item("b"));
       vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
       expect(build).toHaveBeenCalledExactlyOnceWith(["a"], {});
-      expect(send.mock.calls[0][0]).not.toHaveProperty("delivered");
+      expect(send.mock.calls[0]![0]).not.toHaveProperty("delivered");
     });
   });
 

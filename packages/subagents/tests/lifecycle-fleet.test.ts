@@ -79,7 +79,7 @@ describe("fleet overlay lifecycle", () => {
     f.fleet.setWorkflowSource(() => [workflow], open);
     try {
       f.open();
-      await expect(open.mock.results[0].value).rejects.toThrow("inspector failed");
+      await expect(open.mock.results[0]!.value).rejects.toThrow("inspector failed");
       expect(f.fleet.handleKey("\x1b[A")).toEqual({ consume: true });
       expect(f.custom).not.toHaveBeenCalled();
       // A rejected inspection must retain the unread alert even after its runtime disappears.

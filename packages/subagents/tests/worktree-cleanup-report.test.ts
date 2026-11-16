@@ -80,9 +80,9 @@ describe("worktree cleanup reporting", () => {
     release(wt);
     await manager.awaitStartup(id);
     expect(seen).toHaveLength(1);
-    expect(seen[0].status).toBe("stopped");
-    expect(seen[0].result).toContain(wt.path);
-    expect(seen[0].error).toContain("commit failed");
+    expect(seen[0]!.status).toBe("stopped");
+    expect(seen[0]!.result).toContain(wt.path);
+    expect(seen[0]!.error).toContain("commit failed");
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 });

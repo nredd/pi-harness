@@ -20,8 +20,9 @@
  * A regression that breaks cache identity would leave "warm" looking like
  * "cold" here while every other test stays green.
  */
-import { bench, describe } from "vitest";
+import { describe } from "vitest";
 import { ConversationViewer } from "../src/ui/conversation-viewer.ts";
+import { bench } from "./fixtures/benchmark.ts";
 import { makeSession, mountViewer } from "./fixtures/perf-fixtures.ts";
 
 const SIZES = [50, 500, 5000];
@@ -66,7 +67,7 @@ describe("ConversationViewer.render — cold cache (first frame)", () => {
   const SAMPLES = { 50: 40, 500: 12 } as Record<number, number>;
 
   for (const n of [50, 500]) {
-    const iterations = SAMPLES[n];
+    const iterations = SAMPLES[n]!;
     const pool = Array.from({ length: iterations + WARMUP }, () =>
       mountViewer(ConversationViewer, makeSession(n)),
     );

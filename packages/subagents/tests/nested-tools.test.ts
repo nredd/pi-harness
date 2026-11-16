@@ -134,8 +134,8 @@ describe("nested type availability (#331, #333)", () => {
   it("describes an empty list in words, not as a `none` type", () => {
     const [agent] = tools(["ghost"]);
 
-    expect(agent.parameters.properties.subagent_type.description).toContain("no agent types are currently available");
-    expect(agent.parameters.properties.subagent_type.description).not.toMatch(/Available: none/);
+    expect((agent!.parameters as unknown as { properties: { subagent_type: { description: string } } }).properties.subagent_type.description).toContain("no agent types are currently available");
+    expect((agent!.parameters as unknown as { properties: { subagent_type: { description: string } } }).properties.subagent_type.description).not.toMatch(/Available: none/);
   });
 
   it("never advertises `none` as a type once the last agent vanishes mid-session", async () => {
@@ -194,7 +194,7 @@ describe("child-safe nested Agent tools", () => {
 
   it("hides project agent files from the nested registry when the parent's project is untrusted", async () => {
     const [agent] = tools("all", 1, 2, cwd, false);
-    expect(agent.parameters.properties.subagent_type.description).not.toContain("scout");
+    expect((agent!.parameters as unknown as { properties: { subagent_type: { description: string } } }).properties.subagent_type.description).not.toContain("scout");
 
     const result = await execute(agent, { subagent_type: "scout", description: "scout it", prompt: "Go" });
 
@@ -205,7 +205,7 @@ describe("child-safe nested Agent tools", () => {
 
   it("offers project agent files when the parent's project is trusted", () => {
     const [agent] = tools("all", 1, 2, cwd, true);
-    expect(agent.parameters.properties.subagent_type.description).toContain("scout");
+    expect((agent!.parameters as unknown as { properties: { subagent_type: { description: string } } }).properties.subagent_type.description).toContain("scout");
   });
 
   it("decides on the captured parent trust, not on the session state", async () => {
@@ -450,7 +450,7 @@ describe("child-safe nested Agent tools", () => {
       const result = await execute(stop, { agent_id: id });
       expect(result).toMatchObject({ isError: true, content: [{ text: `Running nested agent not found or not owned by this parent: "${id}".` }] });
     }
-    expect(manager.abort.mock.calls).toEqual([["mine", "parent"], ["waiting", "parent"]]);
+    expect(vi.mocked(manager.abort).mock.calls).toEqual([["mine", "parent"], ["waiting", "parent"]]);
     expect(records.get("foreign").status).toBe("running");
   });
 
@@ -477,7 +477,7 @@ describe("child-safe nested Agent tools", () => {
   it("refuses to resume a child that is still running, naming why", async () => {
     const [agent] = tools(["scout"]);
     await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
-    manager.getRecord("child-1").status = "running";
+    manager.getRecord("child-1")!.status = "running";
 
     const result = await execute(agent, { resume: "child-1", subagent_type: "scout", description: "again", prompt: "Again" });
 
@@ -532,7 +532,7 @@ describe("child-safe nested Agent tools", () => {
     records.set(record.id, record);
 
     const controller = new AbortController();
-    const outcome = getResult
+    const outcome = getResult!
       .execute("call-abort", { agent_id: record.id, wait: true }, controller.signal, undefined, ctx())
       .then(() => "resolved", (e: unknown) => (e instanceof Error ? e.name : String(e)));
 
@@ -777,13 +777,13 @@ describe("child-safe nested Agent tools", () => {
     // silently misroute the grandchild's cwd, conversation, and model.
     const [agent] = tools();
     const executionCtx = ctx();
-    await agent.execute("call-1", {
+    await agent!.execute("call-1", {
       subagent_type: "scout",
       description: "ctx check",
       prompt: "Do work",
     } as any, undefined, undefined, executionCtx);
 
-    expect(spawnAndWait.mock.calls[0][1]).toBe(executionCtx);
+    expect(spawnAndWait.mock.calls[0]![1]).toBe(executionCtx);
   });
 });
 

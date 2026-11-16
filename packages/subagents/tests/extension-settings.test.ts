@@ -1,7 +1,6 @@
 /** Persist settings by keyboard-driving the real registered settings component. */
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
@@ -14,7 +13,7 @@ type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: strin
 const rows = ["maxConcurrent", "maxConcurrentForeground", "defaultMaxTurns", "graceTurns", "maxSubagentDepth", "notificationResultChars", "defaultJoinMode", "backgroundByDefault", "schedulingEnabled", "workflowsEnabled", "packageAgents", "packageWorkflows", "scopeModels", "strictAgentFiles", "disableDefaultAgents", "fallbackSubagent", "outputTranscript", "worktreeIsolation", "reportUsage", "showCost", "showModel", "viewerMarkdown", "fleetView", "agentMentions", "rememberAgents", "widgetMode", "toolDescriptionMode"];
 let env: Hermetic;
 let boot: BootedPi;
-let context: ExtensionCommandContext;
+let context: ReturnType<typeof ctx>;
 let scripts: (string | { selectedDescription: string })[][];
 let inputs: (string | undefined)[];
 const notify = vi.fn();
@@ -169,7 +168,7 @@ describe("settings callbacks", () => {
   it("cycles mentions through disabled/model and fallback through strict refusal", async () => {
     selectRow("agentMentions", 3);
     // All rows share one real settings component; navigate back to fallback.
-    const keys = scripts[0];
+    const keys = scripts[0]!;
     const distance = rows.indexOf("agentMentions") - rows.indexOf("fallbackSubagent");
     keys.splice(keys.length - 1, 0, ...Array<string>(distance).fill("\u001b[A"),
       { selectedDescription: "Agent used when subagent_type is unknown" }, "\r", "\r", "\r");

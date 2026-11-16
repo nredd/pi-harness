@@ -73,8 +73,8 @@ describe("resource filesystem races", () => {
     const cwd = join(root, "project");
     const agentDir = join(root, "agent");
     for (const [name, content] of [["review", "GLOBAL"], ["other", "OTHER"]]) {
-      fs.mkdirSync(join(agentDir, "skills", name), { recursive: true });
-      fs.writeFileSync(join(agentDir, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n${content}\n`);
+      fs.mkdirSync(join(agentDir, "skills", name!), { recursive: true });
+      fs.writeFileSync(join(agentDir, "skills", name!, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n${content}\n`);
     }
     // The rejected project alias is what makes the loader canonicalize every candidate.
     fs.mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });

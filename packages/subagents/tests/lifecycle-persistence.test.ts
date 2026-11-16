@@ -75,8 +75,8 @@ describe("private persistence boundaries", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(readEnterpriseLocalManifest(root)).toBeUndefined();
     expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0][0]).toContain("Ignoring invalid");
-    expect(warn.mock.calls[0][0]).not.toContain(JSON.stringify(manifest));
+    expect(warn.mock.calls[0]![0]).toContain("Ignoring invalid");
+    expect(warn.mock.calls[0]![0]).not.toContain(JSON.stringify(manifest));
   });
 
   it("reports bounded lock contention without overwriting the owner or backing file", () => {

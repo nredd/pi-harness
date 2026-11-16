@@ -274,7 +274,7 @@ describe("index scheduler and file errors", () => {
     writeFileSync(join(dir, "broken-tools.md"), "---\ndescription: Broken tools\ntools:\n  toString: not-callable\n---\nPrivate prompt.");
     await expect(bind().then(() => "bound")).rejects.toThrow(TypeError);
     expect(provider.state.callCount).toBe(0);
-    const bound = bindings[0];
+    const bound = bindings[0]!;
     expect(bound.boot.pi.events.emit).not.toHaveBeenCalledWith("subagents:ready", expect.anything());
     rmSync(join(dir, "broken-tools.md"));
     await startSession(bound.boot.lifecycle, true, bound.context);

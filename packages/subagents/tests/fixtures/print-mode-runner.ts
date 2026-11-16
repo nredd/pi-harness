@@ -629,7 +629,7 @@ export function toolCallsNamed(
 function lastAssistantText(session: AgentSession): string {
   const messages = session.messages;
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
+    const msg = messages[i]!;
     if (msg.role !== "assistant") continue;
     const text = msg.content
       .map((b) => ((b as { type?: string; text?: string }).type === "text" ? (b as { text?: string }).text ?? "" : ""))

@@ -41,6 +41,7 @@ function registerColoredReviewer(color = "purple"): void {
 function makeRecord(): AgentRecord {
   return {
     id: "review-1",
+    depth: 0,
     type: TYPE,
     description: "Review this change",
     status: "running",
@@ -61,7 +62,6 @@ function makeActivity(): AgentActivity {
     toolUses: 0,
     responseText: "",
     turnCount: 1,
-    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
   };
 }
 

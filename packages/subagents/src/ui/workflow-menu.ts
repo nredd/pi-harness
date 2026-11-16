@@ -174,7 +174,7 @@ export async function showWorkflowsMenu(
     return;
   }
   if (tasks.length === 1) {
-    await showWorkflowDialog(ctx, tasks[0], deps);
+    await showWorkflowDialog(ctx, tasks[0]!, deps);
     return;
   }
   // More than one: pick first. Newest at the top, since that is almost
@@ -189,5 +189,5 @@ export async function showWorkflowsMenu(
   );
   const picked = await ctx.ui.select("Workflows", labels);
   const index = picked !== undefined ? labels.indexOf(picked) : -1;
-  if (index >= 0) await showWorkflowDialog(ctx, tasks[index], deps);
+  if (index >= 0) await showWorkflowDialog(ctx, tasks[index]!, deps);
 }

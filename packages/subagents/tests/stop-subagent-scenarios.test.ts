@@ -45,7 +45,7 @@ async function heldChild(marker: string) {
 }
 
 /** One parent turn calling `tool`; returns its settled result. */
-async function callOnce(h: Harness, name: string, args: Record<string, unknown>) {
+async function callOnce(h: Harness, name: string, args: Parameters<typeof toolCalls>[0]["args"]) {
   h.setResponses([toolCalls({ name, args }), answer("DONE")]);
   await h.session.prompt(name);
   const outcome = outcomes(h, name).at(-1);

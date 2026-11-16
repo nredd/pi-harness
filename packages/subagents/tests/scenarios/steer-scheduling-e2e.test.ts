@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { text } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentCall, type PrintModeRun, runPrintMode } from "../fixtures/print-mode-runner.ts";
 
@@ -18,9 +20,7 @@ function parentHasCompletion(context: Context): boolean {
   return context.messages.some(
     (message) =>
       message.role === "user" &&
-      message.content.some(
-        (block) => block.type === "text" && block.text.includes(COMPLETION_MARKER),
-      ),
+      text(message).includes(COMPLETION_MARKER),
   );
 }
 
@@ -87,10 +87,7 @@ describe("background completion steering scheduling", () => {
     let parentModelCalls = 0;
     let childModelCalls = 0;
     const completionVisibleByParentCall: boolean[] = [];
-    let currentParentSession: {
-      isStreaming: boolean;
-      messages: Array<{ role: string; content: unknown }>;
-    } | undefined;
+    let currentParentSession: AgentSession | undefined;
 
     const runPromise = runPrintMode({
       cwd,
@@ -205,8 +202,7 @@ describe("background completion steering scheduling", () => {
         }
         completionMessagesAtSecondCall ??= context.messages.flatMap((message) =>
           message.role === "user"
-            ? message.content.flatMap((block) =>
-              block.type === "text" && block.text.includes(COMPLETION_MARKER) ? [block.text] : [])
+            ? (text(message).includes(COMPLETION_MARKER) ? [text(message)] : [])
             : []);
         return "done";
       },

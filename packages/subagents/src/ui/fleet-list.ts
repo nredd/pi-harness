@@ -284,50 +284,73 @@ export class FleetList {
    */
   private viewingWorkflowId: string | undefined;
 
-  constructor(
-    private manager: AgentManager,
-    private agentActivity: Map<string, AgentActivity>,
+    private manager: AgentManager;
+  private agentActivity: Map<string, AgentActivity>;
+  private showCost: () => boolean;
+  private viewerMarkdown?: () => ViewerMarkdownMode;
+  private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
+  private scrollbarMode: () => ScrollViewScrollbar;
+  private backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
+  private showModel: () => boolean;
+  private detachedSource: () => readonly RunningDetached[];
+  private readonly clock: Clock;
+  private readonly options: { sessionFor?: (record: AgentRecord) => AgentRecord["session"] };
+constructor(
+    manager: AgentManager,
+    agentActivity: Map<string, AgentActivity>,
     /**
      * Read live at render time. Whether each row shows an estimated cost after
      * its token count. Defaults to off — the extension supplies the user's
      * `showCost` setting.
      */
-    private showCost: () => boolean = () => false,
+    showCost: () => boolean = () => false,
     /**
      * The user's `viewerMarkdown` setting, for a conversation overlay opened
      * from here. Read live rather than captured, because the viewer's `m` key
      * changes it while the overlay is up. Omitted → the viewer's own default.
      */
-    private viewerMarkdown?: () => ViewerMarkdownMode,
+    viewerMarkdown?: () => ViewerMarkdownMode,
     /**
      * Persist a mode chosen with `m` in that overlay, so the key means the same
      * thing here as it does from `/agents` — one setting, not one per entry
      * point. Omitted → `m` still cycles, viewer-locally.
      */
-    private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
-    private scrollbarMode: () => ScrollViewScrollbar = () => "auto",
+    onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
+    scrollbarMode: () => ScrollViewScrollbar = () => "auto",
     /**
      * The viewer's `b` for this row's run, supplied by the extension: only it
      * knows which runs have a tool call waiting to be released, and it owns the
      * widget this list shares with. Omitted → no `b` affordance.
      */
-    private backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction,
+    backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction,
     /**
      * Read live at render time. Whether each row names the model and thinking
      * level it runs at. Defaults to off — the extension supplies the user's
      * `showModel` setting, which until now only the widget honoured.
      */
-    private showModel: () => boolean = () => false,
+    showModel: () => boolean = () => false,
     /**
      * Agents still running in an orphaned manager (the instance before a
      * `/reload`, `/new`, ...). Listed with this session's own and opened,
      * stopped and steered through the orphan's manager. Omitted -> none.
      */
-    private detachedSource: () => readonly RunningDetached[] = () => [],
-    private readonly clock: Clock = realClock,
+    detachedSource: () => readonly RunningDetached[] = () => [],
+    clock: Clock = realClock,
     /** @internal Host/test session lookup; a session can disappear after roster construction. */
-    private readonly options: { sessionFor?: (record: AgentRecord) => AgentRecord["session"] } = {},
-  ) {}
+    options: { sessionFor?: (record: AgentRecord) => AgentRecord["session"] } = {},
+  ) {
+    this.manager = manager;
+    this.agentActivity = agentActivity;
+    this.showCost = showCost;
+    this.viewerMarkdown = viewerMarkdown;
+    this.onViewerMarkdown = onViewerMarkdown;
+    this.scrollbarMode = scrollbarMode;
+    this.backgroundAction = backgroundAction;
+    this.showModel = showModel;
+    this.detachedSource = detachedSource;
+    this.clock = clock;
+    this.options = options;
+}
 
   /** UI-only disclosure; never claims a dialog's key or touches running work. */
   toggleCollapse(): void {
@@ -876,14 +899,14 @@ export class FleetList {
       return flag ? visibleWidth(flag) + 1 : 0;
     }));
     const colWidths = this.fitColumns(
-      TAIL_SLOTS.map((_, i) => Math.max(0, ...[...cells.values()].map(c => visibleWidth(c[i])))),
+      TAIL_SLOTS.map((_, i) => Math.max(0, ...[...cells.values()].map(c => visibleWidth(c[i]!)))),
       width - flagWidth,
     );
     if (start > 0) {
       lines.push(this.renderOverflow(`↑ ${start} more: ${summarizeHidden(rows.slice(0, start))}`, width, theme));
     }
     for (let a = start; a < start + visible; a++) {
-      const row = rows[a];
+      const row = rows[a]!;
       lines.push(
         row.kind === "workflow" ?
           this.renderWorkflowRow(a + 1, sel, row.workflow, width, theme)
@@ -1006,7 +1029,7 @@ export class FleetList {
     let stats = TAIL_SLOTS.map((slot, i) => {
       if (colWidths[i] === 0) return undefined;
       // `tailCells` fills every slot, with "" where a row has no value.
-      const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i]));
+      const pad = " ".repeat(colWidths[i]! - visibleWidth(cells[i]!));
       return slot.padEnd ? cells[i] + pad : pad + cells[i];
     }).filter((c): c is string => c !== undefined).join(" · ");
     let flag = fallbackFlag(theme, record);

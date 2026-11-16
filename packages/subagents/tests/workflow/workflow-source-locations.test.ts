@@ -60,7 +60,7 @@ describe("authored workflow source locations", () => {
         });
         expect(result.status).toBe("completed");
         const expected = location(script, nested ? "workflow:locations.js" : "workflow.js");
-        const frame = String(result.value).split("\n")[1].replace(/\)$/, "");
+        const frame = String(result.value).split("\n")[1]!.replace(/\)$/, "");
         expect(frame.slice(-expected.length)).toBe(expected);
         // A shifted source line MUST NOT be accepted by this assertion.
         const [file, line, column] = expected.split(/:(?=\d+(?::\d+)?$)/);
@@ -110,8 +110,8 @@ describe("authored workflow source locations", () => {
     expect(result.status).toBe("completed");
     expect(result.value).toMatchObject({ same: true, typed: true, cause: "cause" });
     const value = result.value as { stack: string; causeStack: string };
-    expect(value.stack.split("\n")[1].trim()).toMatch(/^at .*\bworkflow:locations\.js:3:15\)?$/);
-    expect(value.causeStack.split("\n")[1].trim()).toMatch(/^at .*\bworkflow:locations\.js:2:15\)?$/);
+    expect(value.stack.split("\n")[1]!.trim()).toMatch(/^at .*\bworkflow:locations\.js:3:15\)?$/);
+    expect(value.causeStack.split("\n")[1]!.trim()).toMatch(/^at .*\bworkflow:locations\.js:2:15\)?$/);
   });
 
   it("leaves message text and explicitly captured unrelated stacks untouched", async () => {
@@ -127,10 +127,10 @@ describe("authored workflow source locations", () => {
     const result = await runWorkflow({ script, host: hostFor(script) });
     expect(result.error).toBe("outer");
     const lines = result.errorStack!.split("\n");
-    expect(lines[1].trim()).toMatch(/^at .*\bworkflow\.js:3:7\)?$/);
+    expect(lines[1]!.trim()).toMatch(/^at .*\bworkflow\.js:3:7\)?$/);
     const causeAt = lines.indexOf("Caused by: RangeError: inner");
     expect(causeAt).toBeGreaterThan(1);
-    expect(lines[causeAt + 1].trim()).toMatch(/^at .*\bworkflow\.js:2:15\)?$/);
+    expect(lines[causeAt + 1]!.trim()).toMatch(/^at .*\bworkflow\.js:2:15\)?$/);
     const task = createWorkflowTask({ id: "wf_cause", script });
     completeWorkflowTask(task, result);
     expect(workflowResultText(task)).toBe(result.errorStack);
@@ -183,7 +183,7 @@ describe("authored workflow source locations", () => {
     }
     const result = await workerWithScript(ExternalScript, "return external().stack;");
     expect(result.type).toBe("complete");
-    const firstFrame = (JSON.parse(result.resultJson!) as string).split("\n")[1];
+    const firstFrame = (JSON.parse(result.resultJson!) as string).split("\n")[1]!;
     const expected = `unrelated.js:1:${external.indexOf("new TypeError") + 1}`;
     expect(firstFrame.replace(/\)$/, "").slice(-expected.length)).toBe(expected);
   });

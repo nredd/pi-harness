@@ -205,7 +205,7 @@ describe("AgentManager.rememberTombstone", () => {
 
   it("marks the note of an entry it could not keep, and keeps the rest for the session", () => {
     const manager = new AgentManager(() => {});
-    manager.rememberEvicted({ id: "n", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 });
+    manager.rememberEvicted({ id: "n", type: "general-purpose", description: "d", status: "completed" as const, evictedAfterMin: 0 });
     manager.rememberTombstone(entry("k", "gp"));
     manager.rememberTombstone(entry("n", "gp"));
     expect(manager.getEvictedNote("n")?.nameTaken).toBe("gp");
@@ -292,10 +292,10 @@ describe("session switch with a running background agent", () => {
   it("does not abort on /new, and a later return to the session receives the result", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
 
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "new" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "new" }, ctx(sessionFile));
     expect(agent.signal()?.aborted ?? false).toBe(false);
 
     agent.finish();
@@ -305,7 +305,7 @@ describe("session switch with a running background agent", () => {
 
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
     const [msg, opts] = back.pi.sendMessage.mock.calls[0];
@@ -314,23 +314,23 @@ describe("session switch with a running background agent", () => {
     expect(msg.content).toContain(agent.id);
     expect(opts).toEqual({ deliverAs: "steer", triggerTurn: true });
     expect(back.pi.appendEntry).toHaveBeenCalledWith("subagents:record", expect.objectContaining({ id: agent.id, status: "completed" }));
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("keeps the model fallback on the spooled history record and the notice details", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     setAgentModels({ "general-purpose": "ghost-model" });
     const agent = await spawnRunning(first.tools);
 
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "new" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "new" }, ctx(sessionFile));
     agent.finish();
     await flush();
 
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     expect(back.pi.appendEntry).toHaveBeenCalledWith(
       "subagents:record",
@@ -338,18 +338,18 @@ describe("session switch with a running background agent", () => {
     );
     const [msg] = back.pi.sendMessage.mock.calls[0];
     expect(msg.details.modelNote).toContain('"ghost-model" did not resolve');
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
     setAgentModels(undefined);
   });
 
   it("publishes the running agent for the next instance until it settles", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
     expect(listRunningDetached(sessionFile)).toEqual([]);
 
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
     expect(listRunningDetached(sessionFile).map((d) => d.record.id)).toEqual([agent.id]);
 
     agent.finish();
@@ -360,19 +360,19 @@ describe("session switch with a running background agent", () => {
   it("lets the reopened session read and steer a survivor by id, handle and name (#330)", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit");
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
     // Proves the survivor existed, with a handle, before the lookups below assert on it.
     const [survivor] = listRunningDetached(sessionFile);
-    expect(survivor.record.id).toBe(agent.id);
-    const { handle, alias } = survivor.record;
+    expect(survivor!.record.id).toBe(agent.id);
+    const { handle, alias } = survivor!.record;
     expect(handle).toBeTruthy();
     expect(alias).toBe("auth-audit");
 
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     for (const ref of [agent.id, handle!, alias!]) {
       const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: ref }, undefined, undefined, ctx(sessionFile));
       expect(got.content[0].text).not.toContain("Agent not found");
@@ -385,21 +385,21 @@ describe("session switch with a running background agent", () => {
 
     agent.finish();
     await flush();
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("keeps a survivor that settled while detached answerable by id after its result is delivered (#330)", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
     agent.finish();
     await flush();
 
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     // The notice names this id; its orphaned record is gone, so the fresh manager has never heard of it.
     expect(back.pi.sendMessage.mock.calls[0][0].content).toContain(agent.id);
@@ -410,7 +410,7 @@ describe("session switch with a running background agent", () => {
       expect(got.content[0].text).toContain(agent.id);
       expect(got.content[0].text).toContain("completed");
     }
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("steer after a detached finish reopens the survivor's saved session (#330)", async () => {
@@ -418,15 +418,15 @@ describe("session switch with a running background agent", () => {
     writeFileSync(saved, "");
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit", saved);
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
     agent.finish();
     await flush();
 
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     vi.mocked(runAgent).mockClear();
     vi.mocked(runAgent).mockImplementation((() => new Promise(() => {})) as any);
@@ -436,26 +436,26 @@ describe("session switch with a running background agent", () => {
     expect(got.content[0].text).toContain("Agent resumed in background");
     expect(got.content[0].text).toContain(`Session file: ${saved}`);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runAgent).mock.calls[0][3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    expect(vi.mocked(runAgent).mock.calls[0]![3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("a survivor with no saved session says so plainly after a detached finish (#330)", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
     agent.finish();
     await flush();
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     const got = await back.tools.get("steer_subagent").execute("s", { agent_id: agent.id, message: "more" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).toContain(`Cannot resume agent "${agent.id}": no saved session is left to reopen.`);
     expect(got.content[0].text).not.toContain("Agent not found");
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("says why when a delivered survivor's name already belongs to another conversation (#330)", async () => {
@@ -465,19 +465,19 @@ describe("session switch with a running background agent", () => {
       id,
       content: `<task-notification>${id}</task-notification>`,
       details: { id },
-      evicted: [{ id, type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 }],
+      evicted: [{ id, type: "general-purpose", description: "d", status: "completed" as const, evictedAfterMin: 0 }],
       tombstones: [{ id, handle: "gp", type: "general-purpose", description: "d", sessionFile: saved, completedAt: 1 }],
     });
     spoolDetached(sessionFile, result("first-1"));
     spoolDetached(sessionFile, result("second-1"));
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     const got = await back.tools.get("steer_subagent").execute("s", { agent_id: "second-1", message: "more" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).toContain('Cannot resume agent "second-1": its name "gp" now belongs to another agent');
     expect(got.content[0].text).not.toContain("no saved session is left");
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("names the session to reopen when the per-session tombstone bound dropped a conversation (#372)", async () => {
@@ -488,16 +488,16 @@ describe("session switch with a running background agent", () => {
       id: "bound-delivery",
       content: "<task-notification>bound</task-notification>",
       details: { id: "b0" },
-      evicted: [{ id: "b0", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 }],
+      evicted: [{ id: "b0", type: "general-purpose", description: "d", status: "completed" as const, evictedAfterMin: 0 }],
       tombstones: Array.from({ length: MAX_TOMBSTONES + 1 }, (_, i) => mk(i)),
     });
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     const got = await back.tools.get("steer_subagent").execute("s", { agent_id: "b0", message: "more" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).toContain(`Cannot resume agent "b0": dropped by the per-session tombstone bound; reopen ${saved} manually.`);
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("still delivers a spooled result written without an eviction note", async () => {
@@ -508,31 +508,31 @@ describe("session switch with a running background agent", () => {
       content: "<task-notification>legacy</task-notification>",
       details: { id: "legacy-1" },
     });
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
     expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
     const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: "legacy-1" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).toContain("Agent not found");
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it("delivers immediately when the agent finishes while its session is open again", async () => {
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
-    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "resume" }, ctx(sessionFile));
+    await first.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "resume" }, ctx(sessionFile));
 
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     expect(back.pi.sendMessage).not.toHaveBeenCalled();
 
     agent.finish();
     await flush();
     await new Promise(resolve => setTimeout(resolve, 250));
     expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
-    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
   it.each(["smart", "group"])("transfers held %s completions once, without repeating their history", async (joinMode) => {
@@ -542,7 +542,7 @@ describe("session switch with a running background agent", () => {
     subagentsExtension(first.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
-    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, parent);
     // Every spawn in this turn is still waiting for the parent's boundary.
     const agent = await spawnRunning(first.tools, parent);
     agent.finish();
@@ -550,17 +550,17 @@ describe("session switch with a running background agent", () => {
     expect(first.pi.sendMessage).not.toHaveBeenCalled();
 
     await first.lifecycle.get("session_before_switch")?.();
-    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    await first.lifecycle.get("session_shutdown")!({ reason: "reload" });
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     await vi.advanceTimersByTimeAsync(200);
     expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
     expect(back.pi.sendMessage.mock.calls[0][0].content).toContain("FINDINGS");
     expect(back.pi.appendEntry).not.toHaveBeenCalledWith("subagents:record", expect.anything());
     await vi.advanceTimersByTimeAsync(1000);
     expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
-    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+    await back.lifecycle.get("session_shutdown")!({ reason: "quit" });
   });
 
   it("keeps every agent in a held notice answerable after the switch (#330)", async () => {
@@ -569,7 +569,7 @@ describe("session switch with a running background agent", () => {
     subagentsExtension(first.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
-    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, parent);
     const one = await spawnRunning(first.tools, parent);
     const two = await spawnRunning(first.tools, parent);
     one.finish();
@@ -578,16 +578,16 @@ describe("session switch with a running background agent", () => {
     expect(first.pi.sendMessage).not.toHaveBeenCalled();
 
     await first.lifecycle.get("session_before_switch")?.();
-    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    await first.lifecycle.get("session_shutdown")!({ reason: "reload" });
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     for (const { id } of [one, two]) {
       const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: id }, undefined, undefined, ctx(sessionFile));
       expect(got.content[0].text).not.toContain("Agent not found");
       expect(got.content[0].text).toContain(id);
     }
-    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+    await back.lifecycle.get("session_shutdown")!({ reason: "quit" });
   });
 
   it("a held notice's agent with a saved session reopens on steer after the switch (#330)", async () => {
@@ -598,29 +598,29 @@ describe("session switch with a running background agent", () => {
     subagentsExtension(first.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
-    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, parent);
     const one = await spawnRunning(first.tools, parent, undefined, saved);
     one.finish();
     await flush();
     await first.lifecycle.get("session_before_switch")?.();
-    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    await first.lifecycle.get("session_shutdown")!({ reason: "reload" });
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     vi.mocked(runAgent).mockClear();
     vi.mocked(runAgent).mockImplementation((() => new Promise(() => {})) as any);
     const got = await back.tools.get("steer_subagent").execute("s", { agent_id: one.id, message: "more" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).not.toContain("Cannot resume");
     expect(got.content[0].text).toContain(`Session file: ${saved}`);
-    expect(vi.mocked(runAgent).mock.calls[0][3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
-    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+    expect(vi.mocked(runAgent).mock.calls[0]![3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
+    await back.lifecycle.get("session_shutdown")!({ reason: "quit" });
   });
 
   it.each(["consumed", "delivered"])("does not replay a result already %s before a switch", async (handled) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
     agent.finish();
     await flush();
@@ -630,55 +630,55 @@ describe("session switch with a running background agent", () => {
       await vi.advanceTimersByTimeAsync(200);
       expect(first.pi.sendMessage).toHaveBeenCalledOnce();
     }
-    await first.lifecycle.get("session_shutdown")({ reason: "new" });
+    await first.lifecycle.get("session_shutdown")!({ reason: "new" });
     const back = bootPi();
     subagentsExtension(back.pi);
-    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await back.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     await vi.advanceTimersByTimeAsync(1000);
     expect(back.pi.sendMessage).not.toHaveBeenCalled();
-    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+    await back.lifecycle.get("session_shutdown")!({ reason: "quit" });
   });
 
   it("holds a detached result for the reopened parent's boundary and coalesces completions", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const first = bootPi();
     subagentsExtension(first.pi);
-    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const one = await spawnRunning(first.tools);
     const two = await spawnRunning(first.tools);
-    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    await first.lifecycle.get("session_shutdown")!({ reason: "reload" });
     const back = bootPi();
     subagentsExtension(back.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
-    await back.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    await back.lifecycle.get("session_start")!({ type: "session_start" }, parent);
     one.finish();
     two.finish();
     await flush();
     await vi.advanceTimersByTimeAsync(1000);
     expect(back.pi.sendMessage).not.toHaveBeenCalled();
-    back.lifecycle.get("turn_end")({ type: "turn_end", message: { role: "assistant", stopReason: "toolUse" } });
+    back.lifecycle.get("turn_end")!({ type: "turn_end", message: { role: "assistant", stopReason: "toolUse" } });
     expect(back.pi.sendMessage).toHaveBeenCalledOnce();
     const details = back.pi.sendMessage.mock.calls[0][0].details;
     expect([details.id, ...details.others.map((other: any) => other.id)].sort()).toEqual([one.id, two.id].sort());
-    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+    await back.lifecycle.get("session_shutdown")!({ reason: "quit" });
   });
 
   it("still aborts on quit", async () => {
     const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
-    await lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    await lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(tools);
-    await lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+    await lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
     expect(agent.signal()?.aborted).toBe(true);
   });
 
   it("still aborts when the session has no file to hand results back to", async () => {
     const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
-    await lifecycle.get("session_start")({ type: "session_start" }, ctx(undefined));
+    await lifecycle.get("session_start")!({ type: "session_start" }, ctx(undefined));
     const agent = await spawnRunning(tools);
-    await lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "new" }, ctx(undefined));
+    await lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "new" }, ctx(undefined));
     expect(agent.signal()?.aborted).toBe(true);
   });
 });

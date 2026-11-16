@@ -734,18 +734,23 @@ export class AgentManager {
   /** Number of currently running foreground (blocking) agents. */
   private runningForeground = 0;
 
-  constructor(
+    private readonly clock: Clock;
+  private readonly homeDir?: string;
+constructor(
     onComplete?: OnAgentComplete,
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
     onStart?: OnAgentStart,
     onCompact?: OnAgentCompact,
     onUsage?: OnAgentUsage,
     onSteered?: OnAgentSteered,
-    private readonly clock: Clock = realClock,
-    private readonly homeDir?: string,
+    clock: Clock = realClock,
+    homeDir?: string,
     onQueuedStop?: OnAgentQueuedStop,
     onReaped?: OnAgentReaped,
   ) {
+    this.clock = clock;
+    this.homeDir = homeDir;
+
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onQueuedStop = guardObserver("queued stop", onQueuedStop);

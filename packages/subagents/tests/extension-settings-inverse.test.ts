@@ -1,7 +1,6 @@
 /** The settings dialog opened over the opposite of `index-coverage-settings`' defaults: every toggle reads its other value. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
@@ -14,7 +13,7 @@ type Component = { render(width: number): string[]; handleInput(data: string): v
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Component;
 let env: Hermetic;
 let boot: BootedPi;
-let context: ExtensionCommandContext;
+let context: ReturnType<typeof ctx>;
 const notify = vi.fn();
 
 beforeEach(async () => {
@@ -41,7 +40,7 @@ function rowValues(lines: string[]): Map<string, string> {
   const values = new Map<string, string>();
   for (const line of lines.map(stripTerminalSequences)) {
     const match = /^\W*(\S.*?\S)\s{2,}(\S+)\s*$/.exec(line);
-    if (match) values.set(match[1], match[2]);
+    if (match) values.set(match[1]!, match[2]!);
   }
   return values;
 }

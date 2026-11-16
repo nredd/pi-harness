@@ -13,6 +13,8 @@ import type { AgentRecord } from "../src/types.ts";
 function makeRecord(id: string, overrides: Partial<AgentRecord> = {}): AgentRecord {
   return {
     id,
+    compactionCount: 0,
+    depth: 0,
     type: "general-purpose",
     description: "test",
     status: "completed",
@@ -70,7 +72,7 @@ describe("GroupJoinManager", () => {
     expect(mgr.onAgentComplete(makeRecord("b", { result: "B" }))).toBe("delivered");
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    const [records, partial] = deliver.mock.calls[0];
+    const [records, partial] = deliver.mock.calls[0]!;
     expect(records.map((r: AgentRecord) => r.id).sort()).toEqual(["a", "b"]);
     expect(partial).toBe(false);
 
@@ -88,7 +90,7 @@ describe("GroupJoinManager", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    const [records, partial] = deliver.mock.calls[0];
+    const [records, partial] = deliver.mock.calls[0]!;
     expect(records.map((r: AgentRecord) => r.id)).toEqual(["a"]);
     expect(partial).toBe(true);
 
@@ -115,8 +117,8 @@ describe("GroupJoinManager", () => {
     vi.advanceTimersByTime(1);
     expect(deliver).toHaveBeenCalledTimes(2);
 
-    expect(deliver.mock.calls[1][0].map((r: AgentRecord) => r.id)).toEqual(["b"]);
-    expect(deliver.mock.calls[1][1]).toBe(true);
+    expect(deliver.mock.calls[1]![0].map((r: AgentRecord) => r.id)).toEqual(["b"]);
+    expect(deliver.mock.calls[1]![1]).toBe(true);
     expect(mgr.isGrouped("c")).toBe(true); // 'c' is the remaining straggler now
   });
 
@@ -133,8 +135,8 @@ describe("GroupJoinManager", () => {
     expect(mgr.onAgentComplete(makeRecord("c"))).toBe("delivered");
 
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliver.mock.calls[1][0].map((r: AgentRecord) => r.id).sort()).toEqual(["b", "c"]);
-    expect(deliver.mock.calls[1][1]).toBe(false);
+    expect(deliver.mock.calls[1]![0].map((r: AgentRecord) => r.id).sort()).toEqual(["b", "c"]);
+    expect(deliver.mock.calls[1]![1]).toBe(false);
   });
 
   it("returns 'pass' for late completions arriving after a group is already delivered", () => {

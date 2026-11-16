@@ -86,7 +86,7 @@ function ansiTheme() {
 
 function assertAllLinesFit(lines: string[], width: number) {
   for (let i = 0; i < lines.length; i++) {
-    const vw = visibleWidth(lines[i]);
+    const vw = visibleWidth(lines[i]!);
     expect(vw, `line ${i} exceeds width (${vw} > ${width}): ${JSON.stringify(lines[i])}`).toBeLessThanOrEqual(width);
   }
 }
@@ -500,7 +500,7 @@ describe("ConversationViewer", () => {
         ansiTheme(), vi.fn(), vi.fn(), undefined, vi.fn(),
       );
       const lines = viewer.render(80);
-      const footer = strip(lines[lines.length - 2]);
+      const footer = strip(lines[lines.length - 2]!);
 
       expect(footer).toContain("Enter steer");
       expect(footer).toContain("x stop");
@@ -575,7 +575,7 @@ describe("ConversationViewer", () => {
 
       // An append-only delta keeps the unsafe prefix, so it must stay literal
       // without retrying the recursive parser on every streamed update.
-      messages[0].content[0].text += "\nmore";
+      messages[0]!.content[0]!.text += "\nmore";
       expect(strip(viewer.render(80).join("\n"))).toContain("more");
       expect(markdownRenderCalls).toBe(1);
 
@@ -585,7 +585,7 @@ describe("ConversationViewer", () => {
 
       // Replacing the failed content can remove the unsafe prefix, so it gets
       // one fresh Markdown attempt instead of staying literal forever.
-      messages[0].content[0].text = "## safe";
+      messages[0]!.content[0]!.text = "## safe";
       const replaced = strip(viewer.render(80).join("\n"));
       expect(markdownRenderCalls).toBe(2);
       expect(replaced).toContain("safe");
@@ -604,7 +604,7 @@ describe("ConversationViewer", () => {
       };
 
       const before = elided();
-      msg.content[0].text += "row\n".repeat(1000);
+      msg.content[0]!.text += "row\n".repeat(1000);
       const after = elided();
 
       expect(before).toBeGreaterThan(0);
@@ -665,7 +665,7 @@ describe("ConversationViewer", () => {
       const viewer = viewerFor(messages);
       expect(strip(viewer.render(80).join("\n"))).toContain("One");
 
-      messages[0].content[0].text = "# Two";
+      messages[0]!.content[0]!.text = "# Two";
       const out = strip(viewer.render(80).join("\n"));
 
       expect(out).toContain("Two");

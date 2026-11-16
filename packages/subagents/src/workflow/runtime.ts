@@ -417,7 +417,10 @@ class Semaphore {
   private active = 0;
   private readonly waiters: (() => void)[] = [];
 
-  constructor(private readonly limit: number) {}
+    private readonly limit: number;
+constructor(limit: number) {
+    this.limit = limit;
+}
 
   acquire(): Promise<void> {
     if (this.active < this.limit) {
@@ -482,7 +485,7 @@ const preview = (text: string) =>
 
 /** First line of the prompt, trimmed — the fallback display name for an agent. */
 function derivedLabel(prompt: string): string {
-  const line = prompt.split("\n", 1)[0].trim();
+  const line = prompt.split("\n", 1)[0]!.trim();
   return line.length <= 60 ? line || "agent" : `${line.slice(0, 59)}…`;
 }
 

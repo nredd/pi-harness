@@ -73,7 +73,7 @@ beforeEach(() => {
   gate = new Promise<void>(resolve => { release = resolve; });
   vi.mocked(runAgent).mockImplementation(async () => {
     await gate;
-    return { responseText: "done", session: { dispose: vi.fn() }, aborted: false, steered: false } as Awaited<ReturnType<typeof runAgent>>;
+    return { responseText: "done", session: { dispose: vi.fn() }, aborted: false, steered: false } as unknown as Awaited<ReturnType<typeof runAgent>>;
   });
 });
 afterEach(() => {
@@ -194,9 +194,9 @@ describe("a detached result in preview mode", () => {
     await manager.waitForAll();
 
     const [spooled] = drainDetached(sessionFile);
-    expect(spooled.id).toBe(id);
-    expect(spooled.content).toContain("done");
-    expect(spooled.notice).toBeUndefined();
+    expect(spooled!.id).toBe(id);
+    expect(spooled!.content).toContain("done");
+    expect(spooled!.notice).toBeUndefined();
   });
 });
 

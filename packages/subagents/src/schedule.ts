@@ -153,7 +153,10 @@ export class SubagentScheduler {
   private ctx: ExtensionContext | undefined;
   private manager: AgentManager | undefined;
 
-  constructor(private readonly options: SubagentSchedulerOptions = {}) {
+    private readonly options: SubagentSchedulerOptions;
+constructor(options: SubagentSchedulerOptions = {}) {
+    this.options = options;
+
     this.clock = options.clock ?? realClock;
   }
 
@@ -724,12 +727,12 @@ export class SubagentScheduler {
   static detectSchedule(s: string, now = Date.now()): { type: "cron" | "once" | "interval"; intervalMs?: number; normalized: string; until?: string } {
     const bounded = s.trim().match(/^(.*\S)\s+until\s+(\S+)$/i);
     if (bounded) {
-      const base = SubagentScheduler.detectSchedule(bounded[1], now);
+      const base = SubagentScheduler.detectSchedule(bounded[1]!, now);
       if (base.until !== undefined) throw new Error(`Invalid schedule "${s}". Only one "until" is allowed.`);
       if (base.type === "once") throw new Error(`Invalid schedule "${s}". "until" only applies to cron or interval schedules.`);
-      const deadline = SubagentScheduler.parseRelativeTime(bounded[2], now) ?? bounded[2];
+      const deadline = SubagentScheduler.parseRelativeTime(bounded[2]!, now) ?? bounded[2]!;
       const until = new Date(deadline);
-      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline) || Number.isNaN(until.getTime())) {
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline!) || Number.isNaN(until.getTime())) {
         throw new Error(`Invalid deadline "${bounded[2]}" in "${s}". Use an ISO timestamp or "+10m"-style relative time.`);
       }
       if (until.getTime() <= now) throw new Error(`Deadline ${until.toISOString()} is in the past.`);
@@ -785,7 +788,7 @@ export class SubagentScheduler {
   static parseRelativeTime(s: string, now = Date.now()): string | null {
     const m = s.match(/^\+(\d+)(s|m|h|d)$/);
     if (!m) return null;
-    const ms = parseInt(m[1], 10) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+    const ms = parseInt(m[1]!, 10) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
     return new Date(now + ms).toISOString();
   }
 
@@ -793,6 +796,6 @@ export class SubagentScheduler {
   static parseInterval(s: string): number | null {
     const m = s.match(/^(\d+)(s|m|h|d)$/);
     if (!m) return null;
-    return parseInt(m[1], 10) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
+    return parseInt(m[1]!, 10) * { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "s" | "m" | "h" | "d"];
   }
 }

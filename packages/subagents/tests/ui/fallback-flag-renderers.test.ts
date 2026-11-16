@@ -149,7 +149,7 @@ it("workflow cards use the actual tier flag ahead of long labels, not a healthy 
 });
 
 it("keeps a routed response without an admission label healthy across every renderer", () => {
-  const routedWithoutAdmission: TierDisclosure = { ...TIER_FLAGS[0]!.modelTier, answered: "fixture/fast" };
+  const routedWithoutAdmission: TierDisclosure = { ...(TIER_FLAGS[0]!.modelTier as Extract<TierDisclosure, { kind: "routed" }>), answered: "fixture/fast" };
   const switched: TierDisclosure = { ...routedWithoutAdmission, admitted: "fixture/fast", answered: "fixture/safer" };
   expect(hasFallback({ modelTier: routedWithoutAdmission })).toBe(false);
   expect(hasFallback({ modelTier: switched })).toBe(true);

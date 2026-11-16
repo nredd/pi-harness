@@ -114,7 +114,7 @@ async function spawnBackground(tools: Map<string, any>, subagent_type = "Explore
     undefined,
     ctx(),
   );
-  return /Agent ID: (\S+)/.exec(textOf(r))![1];
+  return /Agent ID: (\S+)/.exec(textOf(r))![1]!;
 }
 
 const send = (lifecycle: Map<string, any>, text: string, source = "interactive") =>
@@ -130,7 +130,7 @@ describe("messaging a running agent", () => {
     await flush();
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore also check the RPC path", source: "interactive" },
       uiCtx,
     );
@@ -191,7 +191,7 @@ describe("messaging a finished agent", () => {
     await flush();
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore anything else?", source: "interactive" },
       uiCtx,
     );
@@ -296,8 +296,8 @@ describe("stacking the suggestion provider on pi's", () => {
     const first = uiCtx("tui");
     const second = uiCtx("tui");
 
-    await lifecycle.get("session_start")({ type: "session_start" }, first);
-    await lifecycle.get("session_start")({ type: "session_start" }, second);
+    await lifecycle.get("session_start")!({ type: "session_start" }, first);
+    await lifecycle.get("session_start")!({ type: "session_start" }, second);
 
     expect(first.ui.addAutocompleteProvider).toHaveBeenCalledTimes(1);
     expect(second.ui.addAutocompleteProvider).not.toHaveBeenCalled();
@@ -308,7 +308,7 @@ describe("stacking the suggestion provider on pi's", () => {
     const { lifecycle } = boot();
     const rpc = uiCtx("rpc");
 
-    await lifecycle.get("session_start")({ type: "session_start" }, rpc);
+    await lifecycle.get("session_start")!({ type: "session_start" }, rpc);
 
     expect(rpc.ui.addAutocompleteProvider).not.toHaveBeenCalled();
 
@@ -319,7 +319,7 @@ describe("stacking the suggestion provider on pi's", () => {
     heldRun(fakeSession());
     const tui = uiCtx("tui");
 
-    await lifecycle.get("session_start")({ type: "session_start" }, tui);
+    await lifecycle.get("session_start")!({ type: "session_start" }, tui);
     await spawnBackground(tools);
     await flush();
 
@@ -410,7 +410,7 @@ describe("resolving which agent a handle means", () => {
     const id = await spawnBackground(tools);
     await flush();
     managerRegistry().getRecord(id).resultConsumed = true;
-    await lifecycle.get("session_before_switch")();
+    await lifecycle.get("session_before_switch")!();
     expect(managerRegistry().getRecord(id)).toBeUndefined();
 
     vi.mocked(resumeAgent).mockClear();
@@ -431,7 +431,7 @@ describe("mentioning an agent that has never run", () => {
     heldRun(fakeSession());
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore find every retry marker", source: "interactive" },
       uiCtx,
     );
@@ -455,7 +455,7 @@ describe("mentioning an agent that has never run", () => {
 
     await send(lifecycle, "@explore go");
 
-    const opts = vi.mocked(runAgent).mock.calls[0][3] as any;
+    const opts = vi.mocked(runAgent).mock.calls[0]![3] as any;
     expect(opts.model).toBeUndefined();
     expect(opts.thinkingLevel).toBeUndefined();
     expect(opts.maxTurns).toBeUndefined();
@@ -479,9 +479,9 @@ describe("mentioning an agent that has never run", () => {
           setWidget: vi.fn((key: string, content: any) => { if (key === "agents" && content) factory = content; }),
         },
       });
-      await lifecycle.get("session_start")({}, uiCtx);
+      await lifecycle.get("session_start")!({}, uiCtx);
 
-      await lifecycle.get("input")({ type: "input", text: "@explore go", source: "interactive" }, uiCtx);
+      await lifecycle.get("input")!({ type: "input", text: "@explore go", source: "interactive" }, uiCtx);
       await flush();
 
       const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
@@ -502,7 +502,7 @@ describe("mentioning an agent that has never run", () => {
 
     await send(lifecycle, "@explore go");
 
-    const opts = vi.mocked(runAgent).mock.calls[0][3] as any;
+    const opts = vi.mocked(runAgent).mock.calls[0]![3] as any;
     expect(opts.onToolActivity).toBeTypeOf("function");
     expect(opts.onTurnEnd).toBeTypeOf("function");
     expect(opts.onSessionCreated).toBeTypeOf("function");
@@ -514,7 +514,7 @@ describe("mentioning an agent that has never run", () => {
 
     await send(lifecycle, "@explore go");
     const record = (globalThis as any)[Symbol.for("pi-subagents:manager")]
-      .getRecord(vi.mocked(runAgent).mock.calls[0][3].agentId);
+      .getRecord(vi.mocked(runAgent).mock.calls[0]![3].agentId);
 
     expect(record.isBackground).toBe(true);
     expect(record.description).toBe("go");
@@ -544,7 +544,7 @@ describe("mentioning an agent that has never run", () => {
     });
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore go", source: "interactive" },
       uiCtx,
     );
@@ -617,7 +617,7 @@ describe("letting a clone of the conversation start the agent", () => {
     const refreshed = b.tools.get("Agent");
     expect(refreshed).not.toBe(activation);
     expect(refreshed.description).toContain("ROGUE project only");
-    const handed = vi.mocked(runMentionClone).mock.calls[0][0].agentTool;
+    const handed = vi.mocked(runMentionClone).mock.calls[0]![0].agentTool;
     expect(handed).toBe(refreshed);
   });
 
@@ -643,7 +643,7 @@ describe("letting a clone of the conversation start the agent", () => {
     cloneReturns({ spawned: true });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
+    await lifecycle.get("input")!(
       { type: "input", text: "@explore find the flaky test", source: "interactive" },
       uiCtx,
     );
@@ -661,7 +661,7 @@ describe("letting a clone of the conversation start the agent", () => {
     cloneReturns({ spawned: false, error: "no session file" });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
+    await lifecycle.get("input")!(
       { type: "input", text: "@explore find the flaky test", source: "interactive" },
       uiCtx,
     );
@@ -682,7 +682,7 @@ describe("letting a clone of the conversation start the agent", () => {
     cloneReturns({ spawned: false, error: "no session file" });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
+    await lifecycle.get("input")!(
       { type: "input", text: "@explore find the flaky test", source: "interactive" },
       uiCtx,
     );
@@ -736,7 +736,7 @@ describe("letting a clone of the conversation start the agent", () => {
     const { lifecycle } = boot();
     cloneReturns({ spawned: true });
 
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore find the flaky test", source: "interactive" },
       ctx({ mode: "print" }),
     );
@@ -754,7 +754,7 @@ describe("letting a clone of the conversation start the agent", () => {
     await spawnBackground(tools);
     await flush();
 
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore also check the RPC path", source: "interactive" },
       ctx({ mode: "print" }),
     );
@@ -836,7 +836,7 @@ describe("input that is not a mention", () => {
     const { lifecycle } = bootDirect();
     heldRun(fakeSession());
 
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore go", source: "interactive" },
       ctx({ mode: "print" }),
     );
@@ -854,7 +854,7 @@ describe("input that is not a mention", () => {
     await spawnBackground(tools);
     await flush();
 
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore also check this", source: "rpc" },
       ctx({ mode: "rpc" }),
     );
@@ -913,7 +913,7 @@ describe("input that is not a mention", () => {
       },
     });
 
-    await lifecycle.get("session_start")({ type: "session_start" }, tui);
+    await lifecycle.get("session_start")!({ type: "session_start" }, tui);
     await spawnBackground(tools);
     await flush();
 
@@ -941,7 +941,7 @@ describe("@main — the escape hatch", () => {
     const { lifecycle } = boot();
     const images = [{ type: "image", data: "x" }] as any;
 
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@main look at this", source: "interactive", images },
       ctx(),
     );
@@ -1066,7 +1066,7 @@ describe("resuming an evicted agent by name", () => {
     vi.mocked(runAgent).mockClear();
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore anything else?", source: "interactive" },
       uiCtx,
     );
@@ -1096,7 +1096,7 @@ describe("resuming an evicted agent by name", () => {
     await flush();
 
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    const resumedId = (vi.mocked(runAgent).mock.calls[0][3] as any).agentId;
+    const resumedId = (vi.mocked(runAgent).mock.calls[0]![3] as any).agentId;
     expect(manager.getRecord(resumedId).handle).toBe("explore");
   });
 
@@ -1132,7 +1132,7 @@ describe("resuming an evicted agent by name", () => {
     await send(lifecycle, "@explore anything else?");
     await flush();
     const uiCtx = ctx();
-    await lifecycle.get("input")(
+    await lifecycle.get("input")!(
       { type: "input", text: "@explore and one more thing", source: "interactive" },
       uiCtx,
     );
@@ -1152,7 +1152,7 @@ describe("resuming an evicted agent by name", () => {
       undefined, undefined, ctx(),
     );
     await flush();
-    await evict(/Agent ID: (\S+)/.exec(textOf(spawned))![1]);
+    await evict(/Agent ID: (\S+)/.exec(textOf(spawned))![1]!);
     await flush();
     vi.mocked(runAgent).mockClear();
     heldRun(fakeSession());
@@ -1161,7 +1161,7 @@ describe("resuming an evicted agent by name", () => {
     await flush();
 
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    const resumedId = (vi.mocked(runAgent).mock.calls[0][3] as any).agentId;
+    const resumedId = (vi.mocked(runAgent).mock.calls[0]![3] as any).agentId;
     expect(manager.getRecord(resumedId)).toMatchObject({ handle: "explore", alias: "auth-audit" });
   });
 
@@ -1190,7 +1190,7 @@ describe("resuming an evicted agent by name", () => {
     );
 
     const uiCtx = ctx();
-    await b.lifecycle.get("input")(
+    await b.lifecycle.get("input")!(
       { type: "input", text: "@scout anything else?", source: "interactive" },
       uiCtx,
     );
@@ -1219,13 +1219,13 @@ describe("resuming an evicted agent by name", () => {
     await evict(await spawnBackground(b.tools, "scout"));
     await flush();
     writeFileSync(file, "---\ndescription: scouts\nenabled: false\n---\nbody");
-    await b.lifecycle.get("input")({ type: "input", text: "@scout hi", source: "interactive" }, ctx());
+    await b.lifecycle.get("input")!({ type: "input", text: "@scout hi", source: "interactive" }, ctx());
 
     writeFileSync(file, "---\ndescription: scouts\n---\nbody");
     vi.mocked(runAgent).mockClear();
     heldRun(fakeSession());
     const uiCtx = ctx();
-    await b.lifecycle.get("input")({ type: "input", text: "@scout hi again", source: "interactive" }, uiCtx);
+    await b.lifecycle.get("input")!({ type: "input", text: "@scout hi again", source: "interactive" }, uiCtx);
     await flush();
 
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
@@ -1250,7 +1250,7 @@ describe("resuming an evicted agent by name", () => {
     vi.mocked(runAgent).mockImplementationOnce(() => { throw new Error("Unknown agent type"); });
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
+    await lifecycle.get("input")!(
       { type: "input", text: "@explore anything else?", source: "interactive" },
       uiCtx,
     );
@@ -1284,7 +1284,7 @@ describe("resuming an evicted agent by name", () => {
 
     // runAgent receives the new record's id, which is the only handle a test
     // has on an agent the dispatcher spawned without returning anything.
-    const resumedId = (vi.mocked(runAgent).mock.calls[0][3] as any).agentId;
+    const resumedId = (vi.mocked(runAgent).mock.calls[0]![3] as any).agentId;
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
     expect(manager.getRecord(resumedId).description).toBe("find flaky tests");
   });
@@ -1336,7 +1336,7 @@ describe("resuming an evicted agent by name", () => {
     unlinkSync(sessionPath());
 
     const uiCtx = ctx();
-    const result = await lifecycle.get("input")(
+    const result = await lifecycle.get("input")!(
       { type: "input", text: "@explore anything else?", source: "interactive" },
       uiCtx,
     );
@@ -1361,7 +1361,7 @@ describe("resuming an evicted agent by name", () => {
     heldRun(fakeSession());
 
     const uiCtx = ctx();
-    await lifecycle.get("input")(
+    await lifecycle.get("input")!(
       { type: "input", text: "@explore start over", source: "interactive" },
       uiCtx,
     );

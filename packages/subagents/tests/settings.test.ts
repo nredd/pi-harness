@@ -734,7 +734,7 @@ describe("settings persistence", () => {
       try {
         expect(loadSettings(projectDir)).toEqual({});
         expect(spy).toHaveBeenCalledTimes(1);
-        expect(String(spy.mock.calls[0][0])).toMatch(/Ignoring malformed settings/);
+        expect(String(spy.mock.calls[0]![0])).toMatch(/Ignoring malformed settings/);
       } finally {
         spy.mockRestore();
       }
@@ -756,6 +756,7 @@ describe("settings persistence", () => {
 
     beforeEach(() => {
       appliers = {
+        setWorkflowsEnabled: vi.fn(),
         setMaxConcurrent: vi.fn(),
         setMaxConcurrentForeground: vi.fn(),
         setBudgetPolicy: vi.fn(),
@@ -1034,6 +1035,7 @@ describe("settings persistence", () => {
 
     beforeEach(() => {
       appliers = {
+        setWorkflowsEnabled: vi.fn(),
         setMaxConcurrent: vi.fn(),
         setMaxConcurrentForeground: vi.fn(),
         setBudgetPolicy: vi.fn(),

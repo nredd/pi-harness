@@ -44,8 +44,8 @@ describe("collapse", () => {
     ];
     const { agents } = collapse(progress);
     expect(agents).toHaveLength(1);
-    expect(agents[0].state).toBe("done");
-    expect(agents[0].resultPreview).toBe("ok");
+    expect(agents[0]!.state).toBe("done");
+    expect(agents[0]!.resultPreview).toBe("ok");
   });
 
   it("orders agents by index regardless of arrival order", () => {
@@ -118,15 +118,15 @@ describe("buildPhaseGroups", () => {
 
   it("falls back to `Phase N` when no title was emitted", () => {
     const groups = buildPhaseGroups([agentEntry({ index: 0, phaseIndex: 3 })]);
-    expect(groups[0].title).toBe("Phase 3");
+    expect(groups[0]!.title).toBe("Phase 3");
   });
 
   it("collapses into a single `Agents` group when no agent has a phase", () => {
     // A script that never calls phase(): still one level of tree.
     const groups = buildPhaseGroups([unphasedEntry(0), unphasedEntry(1)]);
     expect(groups).toHaveLength(1);
-    expect(groups[0].title).toBe("Agents");
-    expect(groups[0].totalCount).toBe(2);
+    expect(groups[0]!.title).toBe("Agents");
+    expect(groups[0]!.totalCount).toBe(2);
   });
 
   it("still shows un-phased agents when meta declared phases", () => {
@@ -134,7 +134,7 @@ describe("buildPhaseGroups", () => {
     // would vanish from the tree.
     const groups = buildPhaseGroups([unphasedEntry(0)], [{ title: "Scan" }]);
     expect(groups.map(g => g.title)).toEqual(["Scan", "Agents"]);
-    expect(groups[1].totalCount).toBe(1);
+    expect(groups[1]!.totalCount).toBe(1);
   });
 
   it("orders groups by phase index, not first appearance", () => {
@@ -165,7 +165,7 @@ describe("buildPhaseGroups", () => {
         [{ title: "Review" }],
       );
       expect(groups).toHaveLength(1);
-      expect(groups[0].totalCount).toBe(1);
+      expect(groups[0]!.totalCount).toBe(1);
     });
 
     it("matches when the observed title is a prefix of the declared one", () => {
@@ -174,7 +174,7 @@ describe("buildPhaseGroups", () => {
         [{ title: "Review changed files" }],
       );
       expect(groups).toHaveLength(1);
-      expect(groups[0].totalCount).toBe(1);
+      expect(groups[0]!.totalCount).toBe(1);
     });
 
     it("matches case- and whitespace-insensitively", () => {
@@ -182,7 +182,7 @@ describe("buildPhaseGroups", () => {
         [{ type: "workflow_phase", index: 0, title: "  scan  " }, agentEntry({ index: 0 })],
         [{ title: "Scan" }],
       );
-      expect(groups[0].totalCount).toBe(1);
+      expect(groups[0]!.totalCount).toBe(1);
     });
 
     it("consumes each observed group at most once", () => {
@@ -193,8 +193,8 @@ describe("buildPhaseGroups", () => {
         [{ title: "Scan" }, { title: "Sc" }],
       );
       expect(groups.map(g => g.status)).toEqual(["running", "not-started"]);
-      expect(groups[0].totalCount).toBe(1);
-      expect(groups[1].totalCount).toBe(0);
+      expect(groups[0]!.totalCount).toBe(1);
+      expect(groups[1]!.totalCount).toBe(0);
     });
 
     it("appends an undeclared phase after the declared ones", () => {
@@ -217,8 +217,8 @@ describe("buildPhaseGroups", () => {
         agentEntry({ index: 0, state: "done" }),
         agentEntry({ index: 1, state: "done" }),
       ]);
-      expect(groups[0].status).toBe("done");
-      expect(groups[0].doneCount).toBe(2);
+      expect(groups[0]!.status).toBe("done");
+      expect(groups[0]!.doneCount).toBe(2);
     });
 
     it("is failed when any agent errored, even if the rest are done", () => {
@@ -226,7 +226,7 @@ describe("buildPhaseGroups", () => {
         agentEntry({ index: 0, state: "done" }),
         agentEntry({ index: 1, state: "error" }),
       ]);
-      expect(groups[0].status).toBe("failed");
+      expect(groups[0]!.status).toBe("failed");
     });
 
     it("is running while any agent is still live", () => {
@@ -234,7 +234,7 @@ describe("buildPhaseGroups", () => {
         agentEntry({ index: 0, state: "done" }),
         agentEntry({ index: 1, state: "progress" }),
       ]);
-      expect(groups[0].status).toBe("running");
+      expect(groups[0]!.status).toBe("running");
     });
 
     it("sums tokens across agents", () => {
@@ -242,7 +242,7 @@ describe("buildPhaseGroups", () => {
         agentEntry({ index: 0, tokens: 100 }),
         agentEntry({ index: 1, tokens: 250 }),
       ]);
-      expect(groups[0].tokens).toBe(350);
+      expect(groups[0]!.tokens).toBe(350);
     });
 
     it("measures phase duration as wall clock, not the sum of overlapping agents", () => {
@@ -250,12 +250,12 @@ describe("buildPhaseGroups", () => {
         agentEntry({ index: 0, startedAt: 1000, lastProgressAt: 3000 }),
         agentEntry({ index: 1, startedAt: 1500, lastProgressAt: 4000 }),
       ]);
-      expect(groups[0].durationMs).toBe(3000); // 4000 - 1000, not 2000 + 2500
+      expect(groups[0]!.durationMs).toBe(3000); // 4000 - 1000, not 2000 + 2500
     });
 
     it("reports zero duration when nothing started", () => {
       const groups = buildPhaseGroups([agentEntry({ index: 0, queuedAt: 5 })]);
-      expect(groups[0].durationMs).toBe(0);
+      expect(groups[0]!.durationMs).toBe(0);
     });
   });
 });
@@ -280,7 +280,7 @@ describe("stats", () => {
       done: 15, failedCount: 0, running: false, total: 15, started: 15, complete: true,
     });
     // A retry replaces a terminal state rather than adding another agent.
-    progress.push({ ...queued[0], state: "error" }, { ...queued[0], startedAt: 3 });
+    progress.push({ ...queued[0]!, state: "error" }, { ...queued[0]!, startedAt: 3 });
     expect(stats(progress, 15)).toMatchObject({ done: 14, failedCount: 0, started: 15, total: 15, complete: false });
   });
 

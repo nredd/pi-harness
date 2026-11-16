@@ -1,7 +1,8 @@
 /** #779: a real invalidated extension context poisons a shared route, not its requesting child. */
+
 import { readFileSync } from "node:fs";
 import { createHarness, type Harness } from "@earendil-works/pi-coding-agent/testing";
-import { toolCalls } from "@nredd/pi-test-lib/faux";
+import { text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
@@ -30,7 +31,7 @@ it.each([false, true])("terminates captured-context failure without retrying, in
         // The request context is alive. The extension's captured owner is not.
         expect(ctx.session?.sessionManager).toBeDefined();
         captured.getSystemPrompt();
-        return { model: physical.getModel() };
+        return { thinkingLevel: "off", model: physical.getModel() };
       },
     });
   }] });
@@ -39,7 +40,7 @@ it.each([false, true])("terminates captured-context failure without retrying, in
     h.setResponses([toolCalls(spawn(`attempt ${attempt}`, { model: "captured/default" })), answer("PARENT ALIVE")]);
     await h.session.prompt("launch");
     const result = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").at(-1);
-    const id = result?.content.flatMap(p => p.type === "text" ? [p.text] : []).join("\n").match(/Agent ID: (\S+)/)?.[1];
+    const id = text(result).match(/Agent ID: (\S+)/)?.[1];
     if (!id) throw new Error("No child id");
     const record = fixture.record(id);
     if (record.abortController) controllers.push(record.abortController);

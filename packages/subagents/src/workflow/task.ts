@@ -232,7 +232,7 @@ export function failWorkflowTask(task: WorkflowTask, error: string): void {
 export function workflowResultText(task: WorkflowTask): string {
   if (task.errorStack !== undefined) {
     const stack = task.errorStack.slice(0, 16384);
-    const firstLine = stack.split("\n", 1)[0];
+    const firstLine = stack.split("\n", 1)[0]!;
     const message = task.error;
     if (message === undefined || message === "" || firstLine === message || firstLine.endsWith(`: ${message}`)) return stack;
     return `${message}\n${stack}`;

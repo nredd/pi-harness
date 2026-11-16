@@ -80,12 +80,12 @@ function createGateHost(gate: (command: string) => ExecResult | Promise<ExecResu
       }
       const cwd = options?.cwd ?? "";
       gateRuns.push({
-        command: args[args.length - 1],
+        command: args[args.length - 1]!,
         cwd,
         existed: existsSync(cwd),
         sawChildWork: existsSync(join(cwd, CHILD_FILE)),
       });
-      return await gate(args[args.length - 1]);
+      return await gate(args[args.length - 1]!);
     },
   );
   return { pi: bootPi({}, { overrides: { exec } }).pi, gateRuns, exec };
@@ -159,15 +159,15 @@ describe("gate on an isolated child", () => {
       spawnRequest({ isolation: "worktree", gate: "npm test" }),
     );
 
-    const worktreePath = manager.listAgents()[0].worktree?.path;
+    const worktreePath = manager.listAgents()[0]!.worktree?.path;
     expect(worktreePath).toBeDefined();
     expect(gateRuns).toHaveLength(1);
     // The exact path, not merely "something was set": the whole failure mode is
     // a gate that ran somewhere plausible and wrong.
-    expect(gateRuns[0].cwd).toBe(worktreePath);
-    expect(gateRuns[0].cwd).not.toBe(repo);
-    expect(gateRuns[0].existed).toBe(true);
-    expect(gateRuns[0].sawChildWork).toBe(true);
+    expect(gateRuns[0]!.cwd).toBe(worktreePath);
+    expect(gateRuns[0]!.cwd).not.toBe(repo);
+    expect(gateRuns[0]!.existed).toBe(true);
+    expect(gateRuns[0]!.sawChildWork).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.gate).toEqual({ ok: true, output: "3 passing" });
 
@@ -195,9 +195,9 @@ describe("gate on an isolated child", () => {
     // Exactly one execution: the host ran it in the worktree, so the runtime
     // must not run it again against the session's tree.
     expect(gateRuns).toHaveLength(1);
-    expect(gateRuns[0].cwd).toBe(manager.listAgents()[0].worktree?.path);
-    expect(gateRuns[0].sawChildWork).toBe(true);
-    expect(existsSync(gateRuns[0].cwd)).toBe(false);
+    expect(gateRuns[0]!.cwd).toBe(manager.listAgents()[0]!.worktree?.path);
+    expect(gateRuns[0]!.sawChildWork).toBe(true);
+    expect(existsSync(gateRuns[0]!.cwd)).toBe(false);
   });
 
   it("names the command when a failing gate in a worktree says nothing", async () => {
@@ -239,7 +239,7 @@ describe("gate on an isolated child", () => {
     expect(result.value).toBeNull();
     expect(agentEntries(result.progress).at(-1)?.error).toBe("spawn sh ENOENT");
     expect(gateRuns).toHaveLength(1);
-    expect(existsSync(manager.listAgents()[0].worktree!.path)).toBe(false);
+    expect(existsSync(manager.listAgents()[0]!.worktree!.path)).toBe(false);
   });
 
   it("gates a steered child too — a steer is a finished child, not a failed one", async () => {
@@ -252,11 +252,11 @@ describe("gate on an isolated child", () => {
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "npm test" }));
 
-    expect(manager.listAgents()[0].status).toBe("steered");
+    expect(manager.listAgents()[0]!.status).toBe("steered");
     expect(result.ok).toBe(true);
     expect(gateRuns).toHaveLength(1);
-    expect(gateRuns[0].cwd).toBe(manager.listAgents()[0].worktree?.path);
-    expect(gateRuns[0].sawChildWork).toBe(true);
+    expect(gateRuns[0]!.cwd).toBe(manager.listAgents()[0]!.worktree?.path);
+    expect(gateRuns[0]!.sawChildWork).toBe(true);
   });
 
   it("skips the gate for a child that failed, and reports the child's own failure", async () => {
@@ -275,7 +275,7 @@ describe("gate on an isolated child", () => {
     expect(result).toMatchObject({ ok: false, error: "provider exploded" });
     expect(result.gate).toBeUndefined();
     expect(gateRuns).toEqual([]);
-    expect(existsSync(manager.listAgents()[0].worktree!.path)).toBe(false);
+    expect(existsSync(manager.listAgents()[0]!.worktree!.path)).toBe(false);
   });
 });
 
@@ -308,8 +308,8 @@ describe("gate on a child with no worktree of its own", () => {
     expect(result.value).toBe("done");
     expect(gateRuns).toHaveLength(1);
     // No worktree to verify, so the session's tree is the tree the child edited.
-    expect(gateRuns[0].cwd).toBe(repo);
-    expect(manager.listAgents()[0].worktree).toBeUndefined();
+    expect(gateRuns[0]!.cwd).toBe(repo);
+    expect(manager.listAgents()[0]!.worktree).toBeUndefined();
   });
 });
 
@@ -338,7 +338,7 @@ describe("an isolated child with no gate", () => {
 
     expect(gateRuns).toEqual([]);
     expect(result.ok).toBe(true);
-    const record = manager.listAgents()[0];
+    const record = manager.listAgents()[0]!;
     expect(record.worktreeResult?.hasChanges).toBe(true);
     // The child's file survives the copy's removal, on the branch.
     const branch = record.worktreeResult!.branch!;

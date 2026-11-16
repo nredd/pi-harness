@@ -170,7 +170,7 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     // `fellBackFrom` is "" for a blank request, and `??` does not treat "" as
     // nullish — the job would be stored with an empty type and re-fail forever.
     const { tools, lifecycle } = await boot();
-    await lifecycle.get("session_start")({}, ctx());
+    await lifecycle.get("session_start")!({}, ctx());
 
     const result = await tools.get("Agent").execute(
       "tc-5",

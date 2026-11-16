@@ -46,7 +46,7 @@ async function spawnBackground(tools: Map<string, any>): Promise<string> {
     "tc-spawn", { prompt: "go", description: "find flaky tests", subagent_type: "Explore", run_in_background: true },
     undefined, undefined, ctx(),
   );
-  return /Agent ID: (\S+)/.exec(textOf(r))![1];
+  return /Agent ID: (\S+)/.exec(textOf(r))![1]!;
 }
 
 describe("a live agent addressed by its id", () => {

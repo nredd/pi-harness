@@ -2,8 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "esModuleInterop": true,
-    "noUncheckedIndexedAccess": false,
-    "erasableSyntaxOnly": false
+    "lib": ["ES2023"],
+    "allowJs": true
   },
-  "include": ["src", "*.ts"]
+  "include": ["src", "tests", "scripts", "*.ts"]
 }

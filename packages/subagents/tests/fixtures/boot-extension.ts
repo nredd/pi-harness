@@ -7,7 +7,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createRecordingContext,
   createRecordingPi,
@@ -17,8 +17,13 @@ import {
 } from "@nredd/pi-test-lib/pi";
 import { afterEach, vi } from "vitest";
 
-/** A `pi.on` lifecycle handler as the extension registers them; the map is keyed by event name. */
-export type SessionStartHandler = (event: SessionStartEvent | SessionShutdownEvent, ctx: ExtensionContext) => Promise<void> | void;
+/**
+ * Erased recording view of a `pi.on` handler, keyed by event name. The map also
+ * records input/render/turn hooks, not only session lifecycle events. Wiring
+ * probes intentionally omit fields a particular hook never reads; the real
+ * session suites exercise the SDK's complete event/context contract.
+ */
+export type SessionStartHandler = (event?: any, ctx?: any) => any;
 
 const created: RecordingPi[] = [];
 afterEach(() => {
@@ -154,7 +159,7 @@ export const flush = async () => {
 export async function startSession(
   lifecycle: Map<string, SessionStartHandler>,
   projectTrusted: boolean,
-  overrides: Record<string, unknown> = {},
+  overrides: object = {},
 ): Promise<void> {
   const handler = lifecycle.get("session_start");
   if (!handler) throw new Error("session_start handler was not registered");

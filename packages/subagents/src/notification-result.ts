@@ -108,9 +108,9 @@ export function fairShares(lengths: readonly number[], cap: number): number[] {
   const shares = lengths.map(() => 0);
   let left = cap * NOTIFICATION_BATCH_AGENTS;
   let remaining = lengths.length;
-  const order = lengths.map((_, i) => i).sort((a, b) => lengths[a] - lengths[b]);
+  const order = lengths.map((_, i) => i).sort((a, b) => lengths[a]! - lengths[b]!);
   for (const i of order) {
-    shares[i] = Math.min(lengths[i], cap, Math.floor(left / remaining));
+    shares[i] = Math.min(lengths[i]!, cap, Math.floor(left / remaining));
     left -= shares[i];
     remaining--;
   }

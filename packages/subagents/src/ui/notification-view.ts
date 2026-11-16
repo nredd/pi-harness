@@ -96,10 +96,15 @@ function detailLines(d: NotificationDetails, theme: Theme, showCost: boolean, in
 
 /** First line truncated (core folds on it), the rest wrapped. */
 class NoticeView implements Component {
-  constructor(
-    private readonly first: string,
-    private readonly rest: string[],
-  ) {}
+    private readonly first: string;
+  private readonly rest: string[];
+constructor(
+    first: string,
+    rest: string[],
+  ) {
+    this.first = first;
+    this.rest = rest;
+}
 
   render(width: number): string[] {
     return [truncateToWidth(this.first, width), ...this.rest.flatMap(line => wrapTextWithAnsi(line, width))];

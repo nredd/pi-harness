@@ -6,6 +6,19 @@ import { build } from "esbuild";
 /**
  * Repository-only esbuild runtime builder shared by each package's thin `scripts/build-runtime.mjs`.
  * Not packed. Output is build-only (`dist/` is gitignored), so every consumer builds first.
+ *
+ * @param {object} options Build inputs and optional package-specific validators.
+ * @param {string} options.packageRoot Package directory.
+ * @param {string} options.temporaryPrefix Prefix for disposable build directories.
+ * @param {string} options.banner Generated entry banner.
+ * @param {Record<string, string>} [options.entries] Named source entrypoints, defaulting to `src/index.ts`.
+ * @param {string[]} [options.forbiddenEagerInputs] Source modules that must stay lazy.
+ * @param {string[]} [options.forbiddenEagerExternals] External modules that must stay lazy.
+ * @param {string[]} [options.allowedEagerExternals] Explicit eager external exceptions.
+ * @param {boolean} [options.matchExternalSubpaths] Match external package subpaths too.
+ * @param {boolean} [options.includeDynamicExternals] Validate dynamic external imports too.
+ * @param {(graph: { allInputs: Set<string>, eagerInputs: Set<string>, eagerOutputs: Set<string>, entryPaths: Record<string, string> }) => void} [options.validateGraph] Extra graph validation.
+ * @param {(files: { outputDirectory: string, runtimeFiles: string[] }) => void | Promise<void>} [options.validateFiles] Extra generated-file validation.
  */
 export function createRuntimeBuilder({
 	packageRoot,

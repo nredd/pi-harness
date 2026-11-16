@@ -34,7 +34,7 @@ it("threads the factory clock into scheduling and the idle completion outbox", a
   await b.tools.get("Agent").execute("scheduled", {
     prompt: "later", description: "later", subagent_type: "general-purpose", schedule: "+1s",
   }, undefined, undefined, b.parent);
-  const job = new ScheduleStore(b.storePath).list()[0];
+  const job = new ScheduleStore(b.storePath).list()[0]!;
   expect(job.schedule).toBe("2020-01-01T00:00:01.000Z");
   // Change the persisted type before it fires: the real scheduler must validate it,
   // without making this boundary test depend on a model/provider or a child process.
@@ -73,7 +73,7 @@ it("cancels a pending scheduled admission through the registered session switch"
     prompt: "later", description: "later", subagent_type: "general-purpose", schedule: "1s",
   }, undefined, undefined, b.parent);
   const store = new ScheduleStore(b.storePath);
-  const job = store.list()[0];
+  const job = store.list()[0]!;
   store.update(job.id, { quotaParked: true });
   await b.lifecycle.get("session_before_switch")?.({ type: "session_shutdown", reason: "quit" }, b.parent);
   await b.lifecycle.get("session_start")?.({ type: "session_start", reason: "startup" }, b.parent);
@@ -95,7 +95,7 @@ it("keeps the default export on real time without a clock option", async () => {
     prompt: "later", description: "real", subagent_type: "general-purpose", schedule: "+1h",
   }, undefined, undefined, b.parent);
   const after = Date.now();
-  const job = new ScheduleStore(b.storePath).list()[0];
+  const job = new ScheduleStore(b.storePath).list()[0]!;
   expect(Date.parse(job.createdAt)).toBeGreaterThanOrEqual(before);
   expect(Date.parse(job.createdAt)).toBeLessThanOrEqual(after);
   expect(Date.parse(job.schedule)).toBeGreaterThanOrEqual(before + 3_600_000);

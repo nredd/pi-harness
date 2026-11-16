@@ -211,7 +211,7 @@ describe("gate", () => {
       { host },
     );
 
-    expect(calls[0].gate).toBe("npm test");
+    expect(calls[0]!.gate).toBe("npm test");
     expect(gateCalls).toEqual([]);
     expect(result.value).toBeNull();
     expect(latest(result.progress, 0)?.error).toBe("1 failing");
@@ -245,7 +245,7 @@ describe("gate", () => {
   it("offers nothing to the host for an ungated agent", async () => {
     const { host, calls } = stubHost();
     await run('return await agent("x");', { host });
-    expect(calls[0].gate).toBeUndefined();
+    expect(calls[0]!.gate).toBeUndefined();
   });
 
   it("rejects an empty gate command", async () => {

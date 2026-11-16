@@ -797,7 +797,7 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
     vi.mocked(resumeMock).mockImplementation(async (_session, _prompt, opts: any) => {
       opts.onAssistantUsage?.({ input: 70, output: 30, cacheWrite: 5, cost: 0.007 });
       opts.onCompaction?.({ reason: "overflow", tokensBefore: 999 });
-      return { text: "second" };
+      return { text: "second", aborted: false, steered: false };
     });
 
     await manager.resume(id, "more");
@@ -1434,7 +1434,7 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
       isolation: "worktree",
     }).catch(e => e as Error);
 
-    expect(err.message).toBe(
+    expect((err as Error).message).toBe(
       'Cannot run with isolation: "worktree": /repo has no commits yet; commit at least once. ' +
       "Pass a `cwd` inside a git repo with at least one commit, or omit `isolation`.",
     );
@@ -1986,7 +1986,7 @@ describe("AgentManager — resolved runs with a failed final turn map to error (
 
   it("an external stop still wins over a late failure resolution", async () => {
     manager = new AgentManager();
-    let resolveRun: ((v: unknown) => void) | undefined;
+    let resolveRun: ((v: Awaited<ReturnType<typeof runAgent>>) => void) | undefined;
     const session = mockSession();
     vi.mocked(runAgent).mockImplementation(() => new Promise((r) => { resolveRun = r; }));
 
@@ -2014,6 +2014,7 @@ describe("AgentManager — resolved runs with a failed final turn map to error (
     vi.mocked(resumeMock).mockResolvedValue({
       text: "",
       failure: "retries exhausted on resume",
+      aborted: false, steered: false,
     });
 
     await manager.resume(id, "more");
@@ -2034,6 +2035,7 @@ describe("AgentManager — resolved runs with a failed final turn map to error (
     vi.mocked(resumeMock).mockResolvedValue({
       text: "new partial progress",
       failure: "provider died mid-turn",
+      aborted: false, steered: false,
     });
 
     await manager.resume(id, "more");
@@ -2351,7 +2353,7 @@ describe("AgentManager — waitForAll", () => {
       manager.spawn(mockPi, mockCtx, "X", p, { description: p, isBackground: true }),
     );
     // Only the first can be running; the other two are behind the pool.
-    expect(manager.getRecord(ids[1])?.status).toBe("queued");
+    expect(manager.getRecord(ids[1]!)?.status).toBe("queued");
 
     let settled = false;
     const all = manager.waitForAll().then(() => { settled = true; });
@@ -2485,7 +2487,7 @@ describe("AgentManager — background resume", () => {
     onComplete.mockClear(); // drop the spawn's own completion
 
     // Deferred resumeAgent so we can observe the mid-flight state.
-    let finish!: (v: { text: string; failure?: string }) => void;
+    let finish!: (v: Awaited<ReturnType<typeof resumeAgent>>) => void;
     vi.mocked(resumeAgent).mockImplementation(
       () => new Promise((resolve) => { finish = resolve; }),
     );
@@ -2496,7 +2498,7 @@ describe("AgentManager — background resume", () => {
     expect(record?.promise).toBeDefined();
     expect(onComplete).not.toHaveBeenCalled();
 
-    finish({ text: "second" });
+    finish({ aborted: false, steered: false, text: "second" });
     await record!.promise;
 
     expect(manager.getRecord(id)!.status).toBe("completed");
@@ -2533,7 +2535,7 @@ describe("AgentManager — background resume", () => {
     vi.mocked(resumeAgent).mockImplementation(async (_session, _prompt, opts: any) => {
       opts.onToolActivity?.({ type: "end", toolName: "grep" });
       opts.onAssistantUsage?.({ input: 5, output: 3, cacheWrite: 0, cost: 0 });
-      return { text: "ok" };
+      return { text: "ok", aborted: false, steered: false };
     });
 
     const record = await manager.resume(id, "go", undefined, {

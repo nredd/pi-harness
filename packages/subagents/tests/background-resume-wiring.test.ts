@@ -181,7 +181,7 @@ describe("Agent tool — background resume wiring", () => {
     // Streaming is anchored past the turns the session already carries, so the
     // prior conversation is not re-emitted behind the resumed run.
     expect(streamToOutputFile).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(streamToOutputFile).mock.calls[0][4]).toBe(3);
+    expect(vi.mocked(streamToOutputFile).mock.calls[0]![4]).toBe(3);
 
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
@@ -330,7 +330,7 @@ describe("Agent tool — background resume wiring", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(resumeAgent).toHaveBeenCalledTimes(1);
-    const opts = vi.mocked(resumeAgent).mock.calls[0][2];
+    const opts = vi.mocked(resumeAgent).mock.calls[0]![2];
     expect(opts.maxTurns).toBe(7);
     expect(typeof opts.onTurnEnd).toBe("function");
 
@@ -351,7 +351,7 @@ describe("Agent tool — background resume wiring", () => {
       const result = await tools.get("Agent").execute("resume", {
         prompt: "continue", description: "continue", subagent_type: "general-purpose", resume: id, run_in_background: runInBackground, max_turns: 0,
       }, undefined, undefined, ctx);
-      expect(vi.mocked(resumeAgent).mock.calls[0][2].maxTurns).toBe(0);
+      expect(vi.mocked(resumeAgent).mock.calls[0]![2].maxTurns).toBe(0);
       if (!runInBackground) expect(result.details.maxTurns).toBeUndefined();
     } finally {
       await lifecycle.get("session_shutdown")?.({}, ctx);
@@ -410,7 +410,7 @@ describe("Agent tool — background resume wiring", () => {
     );
 
     expect(resumeAgent).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(resumeAgent).mock.calls[0][2].maxTurns).toBe(7);
+    expect(vi.mocked(resumeAgent).mock.calls[0]![2].maxTurns).toBe(7);
 
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });

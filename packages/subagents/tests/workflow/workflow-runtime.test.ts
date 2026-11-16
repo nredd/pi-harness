@@ -95,8 +95,8 @@ describe("script globals", () => {
     expect(result.meta.name).toBe("probe");
     expect(result.agentCount).toBe(1);
     expect(calls).toHaveLength(1);
-    expect(calls[0].agentType).toBe("general-purpose");
-    expect(calls[0].label).toBe("hello");
+    expect(calls[0]!.agentType).toBe("general-purpose");
+    expect(calls[0]!.label).toBe("hello");
   });
 
   it("carries opts.effort to the spawn request", async () => {
@@ -104,7 +104,7 @@ describe("script globals", () => {
     const result = await run('await agent("deep", { effort: "xhigh" });\nreturn null;', { host });
 
     expect(result.status).toBe("completed");
-    expect(calls[0].effort).toBe("xhigh");
+    expect(calls[0]!.effort).toBe("xhigh");
   });
 
   it("leaves effort unset when the script does not ask for one", async () => {
@@ -113,7 +113,7 @@ describe("script globals", () => {
     const { host, calls } = stubHost();
     await run('await agent("plain");\nreturn null;', { host });
 
-    expect(calls[0].effort).toBeUndefined();
+    expect(calls[0]!.effort).toBeUndefined();
   });
 
   it("rejects an effort level pi does not have", async () => {
@@ -1193,8 +1193,8 @@ describe("structured output", () => {
     const stub = stubHost(() => ({ ok: true, text: '{"findings":[]}' }));
     await run(`return await agent('go', { schema: ${schemaLiteral} });`, { host: stub.host });
 
-    expect(stub.calls[0].schema).toBeDefined();
-    expect(stub.calls[0].schema?.schema).toEqual(FINDINGS);
+    expect(stub.calls[0]!.schema).toBeDefined();
+    expect(stub.calls[0]!.schema?.schema).toEqual(FINDINGS);
   });
 
   it("fails the call when the host returns prose instead", async () => {
@@ -1260,7 +1260,7 @@ describe("structured output", () => {
     });
 
     // Same prompt, different contract — a resume must not replay one as the other.
-    expect(schemad[0].key).not.toBe(plain[0].key);
+    expect(schemad[0]!.key).not.toBe(plain[0]!.key);
   });
 
   it("declines a replayed answer that no longer matches", async () => {
@@ -1273,7 +1273,7 @@ describe("structured output", () => {
       host: stubHost(() => ({ ok: true, text: '{"findings":["old"]}' })).host,
       journal: { append: entry => stale.push(entry) },
     });
-    stale[0] = { ...stale[0], text: "not json at all" };
+    stale[0] = { ...stale[0]!, text: "not json at all" };
 
     const result = await run(`return (await agent('go', { schema: ${schemaLiteral} })).findings[0];`, {
       host: stub.host,
@@ -1384,7 +1384,7 @@ describe("nested workflow()", () => {
     // Distinct indices, or the two would collapse into one group.
     const groups = buildPhaseGroups(result.progress);
     expect(groups.map(group => group.title)).toEqual(["Review", "▸ audit"]);
-    expect(groups[1].agents).toHaveLength(1);
+    expect(groups[1]!.agents).toHaveLength(1);
   });
 
   it("does not let the child's phase leak back to the parent", async () => {

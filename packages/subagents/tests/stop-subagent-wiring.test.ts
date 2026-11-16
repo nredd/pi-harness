@@ -64,7 +64,7 @@ async function spawn(prompt: string, extra: Record<string, unknown> = {}): Promi
     undefined,
     context(),
   );
-  return /Agent ID: (\S+)/.exec(textOf(r))![1];
+  return /Agent ID: (\S+)/.exec(textOf(r))![1]!;
 }
 
 const stop = (agent_id: string) => booted.tools.get("stop_subagent").execute("tc-stop", { agent_id }, undefined, undefined, context());
@@ -279,7 +279,7 @@ describe("/agents -> Stop all running", () => {
     expect(notify).toHaveBeenCalledWith("Stopped 2 agent(s) and 0 workflow(s).", "info");
     for (const id of [running, queued]) expect(recordOf(id)).toMatchObject({ status: "stopped", stoppedBy: undefined });
     // The menu reopens without the entry, and the job is still scheduled.
-    expect(menus[1].some(o => o.startsWith("Stop all running"))).toBe(false);
+    expect(menus[1]!.some(o => o.startsWith("Stop all running"))).toBe(false);
     expect(menus[1]).toContain("Scheduled jobs (1)");
   });
 
@@ -307,7 +307,7 @@ describe("/agents -> Stop all running", () => {
 
     expect(menus[0]).toContain("Stop all running (1)");
     expect(notify).toHaveBeenCalledWith("Stopped 0 agent(s) and 1 workflow(s).", "info");
-    expect(signals[0].aborted).toBe(true);
+    expect(signals[0]!.aborted).toBe(true);
   });
 
   it("stops nothing when the confirmation is declined", async () => {

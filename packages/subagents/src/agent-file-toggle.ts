@@ -131,11 +131,11 @@ function splitFrontmatter(content: string):
   // The BOM stays where it is — it belongs to the file, not the block — so the
   // fence test looks past it and every index below is unaffected.
   const bom = content.startsWith("\uFEFF");
-  const first = (bom ? lines[0].slice(1) : lines[0]).replace(/\r?\n$/, "");
+  const first = (bom ? lines[0]!.slice(1) : lines[0]!).replace(/\r?\n$/, "");
   if (!FENCE.test(first)) return undefined;
   const closeIdx = lines.findIndex((l, i) => i > 0 && FENCE.test(l.replace(/\r?\n$/, "")));
   if (closeIdx === -1) return undefined;
-  return { lines, openIdx: 0, closeIdx, eol: lines[0].endsWith("\r\n") ? "\r\n" : "\n" };
+  return { lines, openIdx: 0, closeIdx, eol: lines[0]!.endsWith("\r\n") ? "\r\n" : "\n" };
 }
 
 /**

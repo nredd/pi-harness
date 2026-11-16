@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

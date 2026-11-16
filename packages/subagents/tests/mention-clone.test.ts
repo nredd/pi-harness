@@ -34,7 +34,10 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
       // `runMentionClone` rebinds `reload`, so keep the underlying spy reachable.
       reloaded = vi.fn(async () => inChildSessionContext());
       reload = this.reloaded;
-      constructor(public options: any) {
+        public options: any;
+constructor(options: any) {
+    this.options = options;
+
         loaders.push(this);
       }
     },
@@ -157,7 +160,7 @@ describe("cloning the conversation", () => {
     await runMentionClone(o);
 
     expect(o.ctx.sessionManager.getBranch).toHaveBeenCalledWith();
-    expect(createAgentSession.mock.calls[0][0].sessionManager).toEqual({
+    expect(createAgentSession.mock.calls[0]![0].sessionManager).toEqual({
       kind: "in-memory-session-manager",
     });
   });
@@ -167,7 +170,7 @@ describe("cloning the conversation", () => {
 
     await runMentionClone(opts());
 
-    expect(createAgentSession.mock.calls[0][0].thinkingLevel).toBe("high");
+    expect(createAgentSession.mock.calls[0]![0].thinkingLevel).toBe("high");
   });
 
   it("omits the level when the session has none, so settings decide", async () => {
@@ -179,7 +182,7 @@ describe("cloning the conversation", () => {
 
     await runMentionClone(o);
 
-    expect(createAgentSession.mock.calls[0][0]).not.toHaveProperty("thinkingLevel");
+    expect(createAgentSession.mock.calls[0]![0]).not.toHaveProperty("thinkingLevel");
   });
 
   it("clones a conversation that has not started yet", async () => {
@@ -214,7 +217,7 @@ describe("cloning the conversation", () => {
 
     expect(loaders).toHaveLength(1);
     expect(loaders[0].reloaded).toHaveBeenCalled();
-    expect(createAgentSession.mock.calls[0][0].resourceLoader).toBe(loaders[0]);
+    expect(createAgentSession.mock.calls[0]![0].resourceLoader).toBe(loaders[0]);
     expect(loaders[0].options.systemPromptOverride("from SYSTEM.md")).toBe("the live system prompt");
   });
 
@@ -248,7 +251,7 @@ describe("cloning the conversation", () => {
 
     await runMentionClone(opts());
 
-    const built = createAgentSession.mock.calls[0][0];
+    const built = createAgentSession.mock.calls[0]![0];
     expect(built.model).toEqual({ id: "main-model" });
     expect(built.thinkingLevel).toBe("high");
     expect(built.modelRuntime).toEqual({ kind: "runtime" });
@@ -261,7 +264,7 @@ describe("cloning the conversation", () => {
 
     await runMentionClone(opts());
 
-    const built = createAgentSession.mock.calls[0][0];
+    const built = createAgentSession.mock.calls[0]![0];
     expect(built.customTools).toHaveLength(1);
     expect(built.customTools[0].name).toBe("Agent");
     expect(visibleTools(built).map((tool: any) => tool.name)).toEqual(["Agent"]);
@@ -278,7 +281,7 @@ describe("cloning the conversation", () => {
 
     const result = await runMentionClone(opts());
 
-    const built = createAgentSession.mock.calls[0][0];
+    const built = createAgentSession.mock.calls[0]![0];
     expect(built.tools).toEqual(["Agent"]);
     expect(built.noTools).toBeUndefined();
     expect(result).toEqual({ spawned: true });

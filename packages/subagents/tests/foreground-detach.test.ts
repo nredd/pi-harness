@@ -77,7 +77,7 @@ const recordFor = (manager: AgentManager, prompt: string) =>
 
 describe("AgentManager.sendToBackground", () => {
   let manager: AgentManager;
-  let onComplete: ReturnType<typeof vi.fn>;
+  let onComplete: ReturnType<typeof vi.fn<NonNullable<ConstructorParameters<typeof AgentManager>[0]>>>;
 
   beforeEach(() => {
     vi.mocked(runAgent).mockClear();

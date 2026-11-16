@@ -3,6 +3,7 @@
  * prompts (structured-output retry, forced final report) must not be sent: each
  * would fail the same way and mask the real outcome.
  */
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it } from "vitest";
 import { compileJsonSchema } from "../src/workflow/json-schema.ts";
 import { runAgent } from "./fixtures/run-selected-agent.ts";
@@ -37,7 +38,7 @@ async function deadRoute() {
 /** Record every prompt text a run sends, via the session the runner reports. */
 function recordPrompts() {
   const sent: string[] = [];
-  const onSessionCreated = (session: { prompt: (text: string, ...rest: unknown[]) => Promise<void> }) => {
+  const onSessionCreated = (session: AgentSession) => {
     const prompt = session.prompt.bind(session);
     session.prompt = (text, ...rest) => { sent.push(text); return prompt(text, ...rest); };
   };

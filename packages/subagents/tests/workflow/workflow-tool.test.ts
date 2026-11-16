@@ -114,7 +114,7 @@ describe("createWorkflowHost — spawn mapping", () => {
     // script's `budget.spent()` and must be output alone, as Claude Code's
     // budget is. Billing a fan-out's re-sent input would swamp it.
     expect(result.outputTokens).toBe(20);
-    const [, , type, prompt, options] = stub.spawnAndWait.mock.calls[0];
+    const [, , type, prompt, options] = stub.spawnAndWait.mock.calls[0]!;
     expect(type).toBe("general-purpose");
     expect(prompt).toBe("do the thing");
     // The label is the child's display description, so the fleet list and the
@@ -135,7 +135,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     await host.spawnAgent(request({ isolation: "worktree" }));
 
-    const options = stub.spawnAndWait.mock.calls[0][4];
+    const options = stub.spawnAndWait.mock.calls[0]![4];
     expect(options.isolation).toBe("worktree");
     expect(options.signal).toBe(controller.signal);
     expect(options.rootSessionId).toBe("root-1");
@@ -149,7 +149,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     const fellBack = await host.spawnAgent(request({ agentType: "no-such-agent" }));
     expect(fellBack.ok).toBe(true);
-    expect(stub.spawnAndWait.mock.calls[0][2]).toBe("general-purpose");
+    expect(stub.spawnAndWait.mock.calls[0]![2]).toBe("general-purpose");
 
     // …and fails closed here too when the project configured strict dispatch.
     setFallbackSubagent(NO_FALLBACK);
@@ -192,7 +192,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     await host.spawnAgent(request({ model: "haiku" }));
 
-    expect(stub.spawnAndWait.mock.calls[0][4].model).toBe(model);
+    expect(stub.spawnAndWait.mock.calls[0]![4].model).toBe(model);
   });
 
   it("stamps its children with the run id and keeps them out of the pool", async () => {
@@ -211,7 +211,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     // The stamp alone: `AgentManager` reads it to keep the child out of the
     // pool (covered in agent-manager.test.ts), so no second opt-out is passed.
-    const options = stub.spawnAndWait.mock.calls[0][4];
+    const options = stub.spawnAndWait.mock.calls[0]![4];
     expect(options.workflowId).toBe("wf_run1");
     expect(options.bypassQueue).toBeUndefined();
   });
@@ -228,7 +228,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     const result = await host.spawnAgent(request({ schema: compilation.compiled }));
 
-    expect(stub.spawnAndWait.mock.calls[0][4].structuredOutput).toBe(compilation.compiled);
+    expect(stub.spawnAndWait.mock.calls[0]![4].structuredOutput).toBe(compilation.compiled);
     expect(result).toMatchObject({ ok: true, text: '{"a":"x"}' });
   });
 
@@ -238,7 +238,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     const result = await host.spawnAgent(request({}));
 
-    expect(stub.spawnAndWait.mock.calls[0][4].structuredOutput).toBeUndefined();
+    expect(stub.spawnAndWait.mock.calls[0]![4].structuredOutput).toBeUndefined();
     expect(result).toMatchObject({ ok: true, text: "here you go" });
   });
 
@@ -250,7 +250,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     await host.spawnAgent(request({}));
 
-    expect(stub.spawnAndWait.mock.calls[0][4].workflowId).toBeUndefined();
+    expect(stub.spawnAndWait.mock.calls[0]![4].workflowId).toBeUndefined();
   });
 
   it("maps opts.effort onto the spawn's thinking level", async () => {
@@ -259,7 +259,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     await host.spawnAgent(request({ effort: "high" }));
 
-    expect(stub.spawnAndWait.mock.calls[0][4].thinkingLevel).toBe("high");
+    expect(stub.spawnAndWait.mock.calls[0]![4].thinkingLevel).toBe("high");
   });
 
   it("leaves thinkingLevel unset when no effort was asked for", async () => {
@@ -270,7 +270,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     await host.spawnAgent(request({}));
 
-    expect(stub.spawnAndWait.mock.calls[0][4].thinkingLevel).toBeUndefined();
+    expect(stub.spawnAndWait.mock.calls[0]![4].thinkingLevel).toBeUndefined();
   });
 
   it("surfaces a strict worktree-isolation failure as a failed agent, not a rejection", async () => {
@@ -393,7 +393,7 @@ describe("createWorkflowHost — scopeModels", () => {
 
     const inScope = await host.spawnAgent(request({ model: "anthropic/allowed-model" }));
     expect(inScope.ok).toBe(true);
-    expect(stub.spawnAndWait.mock.calls[0][4].model).toBe(ALLOWED);
+    expect(stub.spawnAndWait.mock.calls[0]![4].model).toBe(ALLOWED);
   });
 
   it("warns but still spawns when the agent file pinned the out-of-scope model", async () => {
@@ -407,7 +407,7 @@ describe("createWorkflowHost — scopeModels", () => {
 
     expect(result.ok).toBe(true);
     expect(stub.spawnAndWait).toHaveBeenCalledTimes(1);
-    expect(stub.spawnAndWait.mock.calls[0][4].model).toBe(BLOCKED);
+    expect(stub.spawnAndWait.mock.calls[0]![4].model).toBe(BLOCKED);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("out-of-scope model"), "warning");
   });
 
@@ -423,7 +423,7 @@ describe("createWorkflowHost — scopeModels", () => {
     const result = await host.spawnAgent(request());
 
     expect(result.ok).toBe(true);
-    expect(stub.spawnAndWait.mock.calls[0][4].model).toBe(BLOCKED);
+    expect(stub.spawnAndWait.mock.calls[0]![4].model).toBe(BLOCKED);
     expect(notify).toHaveBeenCalledWith(
       expect.stringContaining("anthropic/blocked-model"),
       "warning",
@@ -455,7 +455,7 @@ describe("createWorkflowHost — scopeModels", () => {
     expect(named.ok).toBe(true);
     expect(pinnedAgent.ok).toBe(true);
     expect(stub.spawnAndWait).toHaveBeenCalledTimes(2);
-    expect(stub.spawnAndWait.mock.calls[0][4].model).toBe(BLOCKED);
+    expect(stub.spawnAndWait.mock.calls[0]![4].model).toBe(BLOCKED);
     expect(notify).not.toHaveBeenCalled();
   });
 });
@@ -474,7 +474,7 @@ describe("createWorkflowHost — worktree cwd propagation", () => {
 
   it("reports the directory the child ran in, so a gate verifies that tree", async () => {
     const stub = stubManager(() =>
-      record({ worktree: { path: worktree, branch: "b", baseSha: "sha", workPath: worktree } }),
+      record({ worktree: { path: worktree, branch: "b", baseSha: "sha", repoRoot: worktree, workPath: worktree } }),
     );
     const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
@@ -490,7 +490,7 @@ describe("createWorkflowHost — worktree cwd propagation", () => {
     const gone = join(worktree, "already-removed");
     expect(existsSync(gone)).toBe(false);
     const stub = stubManager(() =>
-      record({ worktree: { path: gone, branch: "b", baseSha: "sha", workPath: gone } }),
+      record({ worktree: { path: gone, branch: "b", baseSha: "sha", repoRoot: worktree, workPath: gone } }),
     );
     const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
@@ -598,14 +598,14 @@ describe("createWorkflowHost — abort, resume and gate", () => {
     const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
     await host.spawnAgent(request({ isolation: "worktree" }));
-    expect(stub.spawnAndWait.mock.calls[0][4].onBeforeWorktreeCleanup).toBeUndefined();
+    expect(stub.spawnAndWait.mock.calls[0]![4].onBeforeWorktreeCleanup).toBeUndefined();
 
     await host.spawnAgent(request({ isolation: "worktree", gate: "npm test" }));
-    expect(stub.spawnAndWait.mock.calls[1][4].onBeforeWorktreeCleanup).toBeInstanceOf(Function);
+    expect(stub.spawnAndWait.mock.calls[1]![4].onBeforeWorktreeCleanup).toBeInstanceOf(Function);
   });
 
   it("runs a gate through pi.exec in the child's own tree", async () => {
-    const exec = vi.fn(async () => execResult({ stdout: "3 passing" }));
+    const exec = vi.fn(async (_command?: string, _args?: string[], _options?: { cwd?: string }) => execResult({ stdout: "3 passing" }));
     const host = createWorkflowHost({
       pi: { exec } as any,
       ctx: ctx({ cwd: "/session" }),
@@ -615,11 +615,11 @@ describe("createWorkflowHost — abort, resume and gate", () => {
     const gate = await host.runGate?.("npm test", { agentId: "wf-agent-0", cwd: "/worktree" });
 
     expect(gate).toEqual({ ok: true, output: "3 passing" });
-    expect(exec.mock.calls[0][2]).toMatchObject({ cwd: "/worktree" });
+    expect(exec.mock.calls[0]![2]).toMatchObject({ cwd: "/worktree" });
   });
 
   it("falls back to the session's cwd when the child had no tree of its own", async () => {
-    const exec = vi.fn(async () => execResult());
+    const exec = vi.fn(async (_command?: string, _args?: string[], _options?: { cwd?: string }) => execResult());
     const host = createWorkflowHost({
       pi: { exec } as any,
       ctx: ctx({ cwd: "/session" }),
@@ -628,18 +628,18 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 
     await host.runGate?.("npm test", { agentId: "wf-agent-0" });
 
-    expect(exec.mock.calls[0][2]).toMatchObject({ cwd: "/session" });
+    expect(exec.mock.calls[0]![2]).toMatchObject({ cwd: "/session" });
   });
 
   it("fails a gate on a non-zero exit and surfaces its output", async () => {
-    const exec = vi.fn(async () => execResult({ code: 1, stderr: "1 failing" }));
+    const exec = vi.fn(async (_command?: string, _args?: string[], _options?: { cwd?: string }) => execResult({ code: 1, stderr: "1 failing" }));
     const host = createWorkflowHost({ pi: { exec } as any, ctx: ctx(), manager: stubManager().manager });
 
     expect(await host.runGate?.("npm test", { agentId: "wf-agent-0" })).toEqual({ ok: false, output: "1 failing" });
   });
 
   it("fails a gate that was killed, which pi.exec reports with exit code 0", async () => {
-    const exec = vi.fn(async () => execResult({ killed: true, code: 0 }));
+    const exec = vi.fn(async (_command?: string, _args?: string[], _options?: { cwd?: string }) => execResult({ killed: true, code: 0 }));
     const host = createWorkflowHost({ pi: { exec } as any, ctx: ctx(), manager: stubManager().manager });
 
     const gate = await host.runGate?.("sleep 999", { agentId: "wf-agent-0" });
@@ -1047,7 +1047,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
 
     await booted.lifecycle.get("session_shutdown")?.({}, workflowCtx());
 
-    const sent = await awaitNotification(startedTaskId(result));
+    const sent = await awaitNotification(startedTaskId(result)!);
     expect(String(sent[0].content)).toContain("<status>Stopped</status>");
   });
 
@@ -1058,7 +1058,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
       undefined, undefined, workflowCtx(),
     );
 
-    const sent = await awaitNotification(startedTaskId(result));
+    const sent = await awaitNotification(startedTaskId(result)!);
     expect(String(sent[0].content)).toContain("<status>Error:");
     expect(sent[0].details).toMatchObject({ status: "error" });
     // The reason has to be the *result* too, not only the status line — that is
@@ -1074,7 +1074,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
       { script: `${inlineScript}return ${JSON.stringify(long)};\n` },
       undefined, undefined, workflowCtx(),
     );
-    const [longMessage] = await awaitNotification(startedTaskId(clipped));
+    const [longMessage] = await awaitNotification(startedTaskId(clipped)!);
     expect(longMessage.details.resultPreview).toBe(`${"a".repeat(499)}b\u2026`);
 
     const whole = await tools.get("SubagentWorkflow").execute(
@@ -1082,7 +1082,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
       { script: `${inlineScript}return ${JSON.stringify(long.slice(0, 500))};\n` },
       undefined, undefined, workflowCtx(),
     );
-    const [shortMessage] = await awaitNotification(startedTaskId(whole));
+    const [shortMessage] = await awaitNotification(startedTaskId(whole)!);
     expect(shortMessage.details.resultPreview).toBe(long.slice(0, 500));
   });
 
@@ -1095,7 +1095,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
       undefined, undefined, workflowCtx(),
     );
 
-    const sent = await awaitNotification(startedTaskId(result));
+    const sent = await awaitNotification(startedTaskId(result)!);
     expect(String(sent[0].content)).toContain("control characters");
     expect(sent[0].details).toMatchObject({ status: "error" });
   });
@@ -1373,7 +1373,7 @@ describe("collisions with another extension", () => {
       },
     });
 
-  const warnings = (context: any) =>
+  const warnings = (context: any): string[] =>
     context.ui.notify.mock.calls.filter((c: any[]) => c[1] === "warning").map((c: any[]) => String(c[0]));
 
   it("warns when another extension already owns the tool name", async () => {

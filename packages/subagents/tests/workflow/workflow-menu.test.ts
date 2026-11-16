@@ -16,7 +16,7 @@ function inspector() {
   task.agentCount = 1;
   const skip = vi.fn(() => false);
   const retry = vi.fn(() => false);
-  task.control = { pause: vi.fn(), resume: vi.fn(), skip, retry };
+  task.control = { isPaused: () => false, pause: vi.fn(), resume: vi.fn(), skip, retry };
   const hidden: boolean[] = [];
   let dialog: WorkflowDialog | undefined;
   const context = ctx({ ui: {
@@ -66,7 +66,7 @@ describe("workflow fleet inspector", () => {
     await openWorkflowFromFleet(f.task.id, f.deps);
     f.dialog().handleInput("c");
     expect(f.hidden).toEqual([true]);
-    await expect(f.viewAgentConversation.mock.results[0].value).rejects.toBe(error);
+    await expect(f.viewAgentConversation.mock.results[0]!.value).rejects.toBe(error);
     expect(f.hidden).toEqual([true, false]);
     expect(f.viewAgentConversation).toHaveBeenCalledWith(f.context, record);
     expect(f.context.ui.notify).toHaveBeenCalledWith("Could not open the conversation: viewer broke", "warning");

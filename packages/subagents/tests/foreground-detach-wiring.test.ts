@@ -163,7 +163,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { pi, tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+    await lifecycle.get("tool_execution_start")!({}, ctx({ ui }));
 
     const first = runAgentTool(tools, "first job");
     const second = runAgentTool(tools, "second job");
@@ -216,7 +216,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+    await lifecycle.get("tool_execution_start")!({}, ctx({ ui }));
 
     // Nothing running: the key is pi's cursor-left.
     expect(press(CTRL_B)).toBe(false);
@@ -241,7 +241,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+    await lifecycle.get("tool_execution_start")!({}, ctx({ ui }));
 
     const execution = runAgentTool(tools, "stopped job");
     await flush();
@@ -306,7 +306,7 @@ describe("Agent tool — foreground run sent to the background", () => {
 
     const execution = runAgentTool(tools, "long job", { onUpdate });
     // The first update goes out before the run exists: nothing to hand off yet.
-    expect(onUpdate.mock.calls[0][0].details.backgroundHint).toBe(false);
+    expect(onUpdate.mock.calls[0]![0].details.backgroundHint).toBe(false);
     await flush();
     // The renderer keys the ctrl+b hint off this.
     await vi.waitFor(() => expect(onUpdate.mock.lastCall?.[0].details.backgroundHint).toBe(true));
@@ -410,7 +410,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { pi, tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+    await lifecycle.get("tool_execution_start")!({}, ctx({ ui }));
 
     const execution = runAgentTool(tools, "long job");
     await flush();
@@ -429,7 +429,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+    await lifecycle.get("tool_execution_start")!({}, ctx({ ui }));
 
     const execution = runAgentTool(tools, "long job");
     await flush();
@@ -448,7 +448,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+    await lifecycle.get("tool_execution_start")!({}, ctx({ ui }));
 
     const execution = runAgentTool(tools, "long job");
     await flush();
@@ -463,7 +463,7 @@ describe("Agent tool — foreground run sent to the background", () => {
     const runs = controllableRuns();
     const { tools, lifecycle } = boot();
     const { ui, press } = terminalUi();
-    await lifecycle.get("session_start")({}, ctx({ hasUI: true, ui }));
+    await lifecycle.get("session_start")!({}, ctx({ hasUI: true, ui }));
 
     const execution = runAgentTool(tools, "long job");
     await flush();

@@ -89,7 +89,7 @@ export class FleetJournal {
     this.collapsed = true;
     const branch = entries();
     for (let i = branch.length - 1; i >= 0; i--) {
-      const entry = branch[i];
+      const entry = branch[i]!;
       if (entry.type !== "custom" || entry.customType !== FLEET_STATE_ENTRY) continue;
       const state = snapshot(entry.data);
       if (!state) continue;
@@ -136,7 +136,7 @@ export class FleetJournal {
   private previous(id: string): FleetSnapshot["transition"] {
     const branch = this.entries();
     for (let i = branch.length - 1; i >= 0; i--) {
-      const entry = branch[i];
+      const entry = branch[i]!;
       if (entry.type !== "custom" || entry.customType !== FLEET_STATE_ENTRY) continue;
       const data = entry.data as FleetSnapshot | undefined;
       if (data?.version === FLEET_STATE_VERSION && data.transition?.alert?.id === id) {

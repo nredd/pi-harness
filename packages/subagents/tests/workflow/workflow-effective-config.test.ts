@@ -99,7 +99,7 @@ describe("the workflow host reports a child's effective configuration", () => {
       ctx: ctx({ modelRegistry: { find: vi.fn(() => haiku), getAvailable: vi.fn(() => [haiku]) } }),
       manager,
     });
-    const reported: unknown[] = [];
+    const reported: Record<string, unknown>[] = [];
 
     // The script asked fuzzily; the row must not keep saying "haiku".
     await host.spawnAgent(spawnRequest({ model: "haiku", onResolved: configCollector(reported) }));

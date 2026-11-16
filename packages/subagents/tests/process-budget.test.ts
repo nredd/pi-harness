@@ -173,21 +173,21 @@ describe("process budget across managers", () => {
       m.spawnAndWait(pi, ctx, "general-purpose", "review", {
         description: "review", depth: 2, parentAgentId: parent, maxSubagentDepth: 2,
       });
-    const c1 = child(a, aIds[0]);
-    const c2 = child(b, bIds[0]);
-    const c3 = child(a, aIds[1]);
+    const c1 = child(a, aIds[0]!);
+    const c2 = child(b, bIds[0]!);
+    const c3 = child(a, aIds[1]!);
     await flush();
     expect(budgetUsage()).toMatchObject({ active: 12, pending: 3 });
 
     // A root finishing frees a root slot: the earliest waiter, a root, takes it.
-    await finish(aIds[2]);
+    await finish(aIds[2]!);
     expect(status(b, bIds).slice(4)).toEqual(["running", "queued"]);
     expect(budgetUsage()).toMatchObject({ active: 12, pending: 2 });
 
     // A child finishing frees a slot the queued root may not take (ten roots
     // hold slots), so the later child passes it: eligible-first FIFO.
     const children = () => [...runs.values()].filter(r => r.options.nestedRuntime.depth === 2);
-    children()[0].finish();
+    children()[0]!.finish();
     await c1;
     await flush();
     expect(budgetUsage()).toMatchObject({ active: 12, pending: 1 });
@@ -200,7 +200,7 @@ describe("process budget across managers", () => {
     expect(status(b, bIds)[5]).toBe("queued");
     expect(budgetUsage()).toMatchObject({ active: 10, pending: 1 });
 
-    await finish(aIds[3]);
+    await finish(aIds[3]!);
     expect(status(b, bIds)[5]).toBe("running");
   });
 
@@ -458,7 +458,7 @@ describe("process budget covers every start path", () => {
     for (let i = 0; i < 4; i++) {
       const live = runningIds();
       expect(live).toHaveLength(1);
-      order.push(live[0]);
+      order.push(live[0]!);
       await finish(m.listAgents().find(r => r.status === "running")!.id);
     }
     expect(order).toEqual(["fg", "wf", "bg", "rpc"]);
@@ -545,14 +545,14 @@ describe("process budget covers every start path", () => {
     await flush();
     const nested = (parent: string, depth: number) =>
       m.spawn(pi, ctx, "general-purpose", "n", { description: "n", depth, parentAgentId: parent });
-    const children = Array.from({ length: 10 }, (_, i) => nested(roots[i % 2], 2));
+    const children = Array.from({ length: 10 }, (_, i) => nested(roots[i % 2]!, 2));
     await flush();
     expect(children.every(id => m.getRecord(id)!.status === "running")).toBe(true);
 
     const lateRoots = [bg(m), bg(m)];
     await flush();
     expect(lateRoots.map(id => m.getRecord(id)!.status)).toEqual(["queued", "queued"]);
-    const grandchild = nested(children[0], 3);
+    const grandchild = nested(children[0]!, 3);
     await flush();
     expect(m.getRecord(grandchild)!.status).toBe("running");
     expect(budgetUsage()).toMatchObject({ active: 13, pending: 2 });
@@ -644,7 +644,7 @@ describe("process budget and resumes", () => {
     await finish(blocker);
     expect(x.status).toBe("running");
     expect(budgetUsage().active).toBe(1);
-    resumes[0]();
+    resumes[0]!();
     await flush();
     expect(x.status).toBe("completed");
     expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
@@ -664,7 +664,7 @@ describe("process budget and resumes", () => {
 
     await finish(blocker);
     expect(resumeAgent).toHaveBeenCalledTimes(1);
-    resumes[0]();
+    resumes[0]!();
     expect((await pending)!.status).toBe("completed");
     expect(budgetUsage()).toMatchObject({ active: 0, pending: 0 });
   });
@@ -742,7 +742,7 @@ describe("process budget and resumes", () => {
     expect(await third).toBeUndefined();
     expect(resumeAgent).toHaveBeenCalledTimes(1);
     expect(budgetUsage().active).toBe(1);
-    resumes[0]();
+    resumes[0]!();
     expect((await first)!.status).toBe("completed");
     expect(budgetUsage().active).toBe(0);
   });
@@ -893,10 +893,10 @@ describe("process budget lease release", () => {
     await flush();
     expect(b.getRecord(waiting)!.status).toBe("queued");
 
-    stillRunning[0].finish();
+    stillRunning[0]!.finish();
     await flush();
     expect(b.getRecord(waiting)!.status).toBe("running");
-    stillRunning[1].finish();
+    stillRunning[1]!.finish();
     await flush();
     expect(budgetUsage()).toMatchObject({ active: 1, pending: 0 });
   });

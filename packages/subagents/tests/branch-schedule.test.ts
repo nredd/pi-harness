@@ -562,7 +562,7 @@ describe("schedule menu rendering", () => {
     const next = { soon: iso(30_000), minutes: iso(5 * 60_000), hours: iso(3 * 3_600_000), days: iso(2 * 86_400_000), garbled: undefined };
     const m = menu(jobs, next, 0);
     await m.run();
-    const labels = m.select.mock.calls[0][1];
+    const labels = m.select.mock.calls[0]![1];
     expect(labels[0]).toMatch(/^1\. ✓ +soon .*next in <1m +last <1m ago/);
     expect(labels[1]).toMatch(/^2\. ✗ +minutes .*next in 5m +last 5m ago/);
     expect(labels[2]).toMatch(/^3\. ! +hours .*next in 3h +last 3h ago/);
@@ -574,7 +574,7 @@ describe("schedule menu rendering", () => {
     const long = job({ name: "long", prompt: "p".repeat(250) });
     const m = menu([long], { long: undefined }, 0);
     await m.run();
-    const details = m.confirm.mock.calls[0][1];
+    const details = m.confirm.mock.calls[0]![1];
     expect(details).toContain(`prompt:    ${"p".repeat(200)}…`);
     expect(details).toContain("next run:  —");
     expect(m.removeJob).not.toHaveBeenCalled();

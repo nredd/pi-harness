@@ -28,10 +28,15 @@ export class GroupJoinManager {
   private groups = new Map<string, AgentGroup>();
   private agentToGroup = new Map<string, string>();
 
-  constructor(
-    private deliverCb: DeliveryCallback,
-    private groupTimeout = DEFAULT_TIMEOUT,
-  ) {}
+    private deliverCb: DeliveryCallback;
+  private groupTimeout: number;
+constructor(
+    deliverCb: DeliveryCallback,
+    groupTimeout = DEFAULT_TIMEOUT,
+  ) {
+    this.deliverCb = deliverCb;
+    this.groupTimeout = groupTimeout;
+}
 
   /** Register a group of agent IDs that should be joined. */
   registerGroup(groupId: string, agentIds: string[]): void {

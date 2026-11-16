@@ -175,7 +175,7 @@ describe("resumed-turn lifecycle", () => {
     });
     const id = f.manager.spawn(pi, ctx, "general-purpose", "first", { description: "first", isBackground: true });
     expect(f.manager.steer(id, "late instruction")).toBe(true);
-    await expect(vi.mocked(child.steer).mock.results[0].value).rejects.toThrow("steer failed");
+    await expect(vi.mocked(child.steer).mock.results[0]!.value).rejects.toThrow("steer failed");
     held.resolve({ responseText: "done", session: child, aborted: false, steered: false });
     await f.manager.getRecord(id)?.promise;
     expect(f.manager.getRecord(id)?.status).toBe("completed");
@@ -190,7 +190,7 @@ describe("resumed-turn lifecycle", () => {
     const held = deferred<Awaited<ReturnType<typeof runAgent>>>();
     vi.mocked(runAgent).mockReturnValueOnce(held.promise);
     const pending = f.manager.spawnAndWait(pi, ctx, "general-purpose", "foreground", { description: "foreground" });
-    const record = f.manager.listAgents()[0];
+    const record = f.manager.listAgents()[0]!;
     expect(f.manager.detach()).toBe(0);
     expect(record.abortController?.signal.aborted).toBe(true);
     expect(record.status).toBe("stopped");
@@ -211,12 +211,12 @@ describe("resumed-turn lifecycle", () => {
     const onAssistantUsage = vi.fn();
     const onCompaction = vi.fn();
     await f.manager.resume(id, "again", controller.signal, { isBackground: true, onToolActivity, onAssistantUsage, onCompaction });
-    const opts = vi.mocked(resumeAgent).mock.calls[0][2];
-    const activity = { type: "end" as const, name: "read", id: "tool" };
+    const opts = vi.mocked(resumeAgent).mock.calls[0]![2];
+    const activity = { type: "end" as const, toolName: "read", id: "tool" };
     const usage = { input: 3, output: 4, cacheWrite: 5, cost: .1 };
     const compact = { reason: "manual" as const, tokensBefore: 99 };
     opts?.onToolActivity?.(activity);
-    opts?.onAssistantUsage?.(usage);
+    opts?.onAssistantUsage?.(usage, {});
     opts?.onCompaction?.(compact);
     expect(record.toolUses).toBe(1);
     expect(record.lifetimeUsage).toMatchObject(usage);
@@ -245,7 +245,7 @@ describe("resumed-turn lifecycle", () => {
     const parent = new AbortController();
     await f.manager.resume(id, "again", parent.signal, { isBackground: true });
     parent.abort();
-    expect(vi.mocked(resumeAgent).mock.calls[0][2]?.signal?.aborted).toBe(true);
+    expect(vi.mocked(resumeAgent).mock.calls[0]![2]?.signal?.aborted).toBe(true);
     held.resolve({ text: "late text", aborted: false, steered: false });
     await record.promise;
     expect(record).toMatchObject({ status: "stopped", result: "late text" });
@@ -292,7 +292,7 @@ describe("workflow host lifecycle", () => {
       const resumed = await host.resumeAgent?.("runtime-id", "again", onResolved);
       expect(onResolved).toHaveBeenCalledWith(expect.objectContaining({ recordId: expect.any(String), modelNote: expect.stringContaining("expired-pin") }));
       expect(resumed).toMatchObject({ ok: true, text: expect.stringContaining("resumed"), modelNote: expect.stringContaining("expired-pin") });
-      const id = f.manager.listAgents()[0].id;
+      const id = f.manager.listAgents()[0]!.id;
       f.manager.clearCompleted();
       expect(await host.resumeAgent?.("runtime-id", "too late")).toEqual({ ok: false, error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.` });
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -313,9 +313,9 @@ describe("eviction records", () => {
       f.clock.advance(600000);
     }
     expect(f.manager.getRecord(newest)).toBeUndefined();
-    expect(f.manager.getEvictedNote(ids[0])).toMatchObject({ id: ids[0], description: "run-0" });
-    expect(f.manager.getEvictedNote(ids[1])).toMatchObject({ id: ids[1], description: "run-1" });
-    expect(f.manager.getEvictedNote(ids[2])).toMatchObject({ id: ids[2], description: "run-2", status: "completed" });
+    expect(f.manager.getEvictedNote(ids[0]!)).toMatchObject({ id: ids[0], description: "run-0" });
+    expect(f.manager.getEvictedNote(ids[1]!)).toMatchObject({ id: ids[1], description: "run-1" });
+    expect(f.manager.getEvictedNote(ids[2]!)).toMatchObject({ id: ids[2], description: "run-2", status: "completed" });
     expect(f.manager.getEvictedNote(newest)).toMatchObject({ id: newest, description: "run-501", status: "completed", evictedAfterMin: 10 });
   });
 });

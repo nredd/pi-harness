@@ -126,7 +126,7 @@ describe("the inspector opens a workflow agent's conversation", () => {
     // Not awaited: the dialog overlay stays open, which is the point.
     void command.handler("", ui.context);
     await vi.waitFor(() => expect(ui.overlays).toHaveLength(1));
-    const dialog = ui.overlays[0].instance;
+    const dialog = ui.overlays[0]!.instance;
 
     // The footer is live, so waiting on it is waiting for the id to travel
     // host → runtime → progress entry → row. Until it lands there is nothing
@@ -137,19 +137,19 @@ describe("the inspector opens a workflow agent's conversation", () => {
     await vi.waitFor(() => expect(ui.overlays).toHaveLength(2));
 
     // A second overlay, on the viewer's own terms — not the dialog reused.
-    expect(ui.overlays[1].options.overlay).toBe(true);
-    expect(ui.overlays[1].instance.constructor.name).toBe("ConversationViewer");
+    expect(ui.overlays[1]!.options.overlay).toBe(true);
+    expect(ui.overlays[1]!.instance.constructor.name).toBe("ConversationViewer");
     // ...with the dialog hidden underneath it: the two frames size themselves
     // to different content, so the taller one's edges would show around the
     // shorter.
     expect(ui.hidden).toEqual([true]);
 
-    ui.overlays[1].close();
+    ui.overlays[1]!.close();
     // And back, so closing the conversation returns to the run it was opened
     // from rather than to an empty screen.
     await vi.waitFor(() => expect(ui.hidden).toEqual([true, false]));
 
-    ui.overlays[0].close();
+    ui.overlays[0]!.close();
   });
 
   it.each([
@@ -165,18 +165,18 @@ describe("the inspector opens a workflow agent's conversation", () => {
 
     void command.handler("", ui.context);
     await vi.waitFor(() => expect(ui.overlays).toHaveLength(1));
-    const dialog = ui.overlays[0].instance;
+    const dialog = ui.overlays[0]!.instance;
     await vi.waitFor(() => expect(dialog.render?.(120).at(-1)).toContain("c convo"));
     dialog.handleInput?.("c");
     await vi.waitFor(() => expect(ui.overlays).toHaveLength(2));
 
-    const viewer = ui.overlays[1].instance;
+    const viewer = ui.overlays[1]!.instance;
     const hasRail = () => (viewer.render?.(120) ?? []).some(line => /[┃│█]$/.test(line));
     expect(hasRail()).toBe(atRest);
     viewer.handleMouse?.({ type: "wheel", button: "none", x: 10, y: 8, wheelDelta: -5 });
     expect(hasRail()).toBe(afterScroll);
 
-    ui.overlays[1].close();
-    ui.overlays[0].close();
+    ui.overlays[1]!.close();
+    ui.overlays[0]!.close();
   });
 });

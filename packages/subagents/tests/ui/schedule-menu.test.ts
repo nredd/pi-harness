@@ -23,9 +23,9 @@ import { showSchedulesMenu } from "../../src/ui/schedule-menu.ts";
 
 /** ctx.ui stub: `select` returns whichever label index we tell it to. */
 function makeCtx(opts: { pick?: (labels: string[]) => string | undefined; confirm?: boolean } = {}) {
-  const notify = vi.fn();
+  const notify = vi.fn((_message?: string, _level?: string) => {});
   const select = vi.fn(async (_title: string, labels: string[]) => opts.pick?.(labels));
-  const confirm = vi.fn(async () => opts.confirm ?? true);
+  const confirm = vi.fn(async (_title?: string, _message?: string) => opts.confirm ?? true);
   return { ctx: { ui: { select, confirm, notify } } as any, select, confirm, notify };
 }
 
@@ -98,7 +98,7 @@ describe("showSchedulesMenu", () => {
       addJob(NAME_B);
       const { ctx, select } = makeCtx({ pick: () => undefined });
       return showSchedulesMenu(ctx, scheduler).then(() => {
-        const labels = select.mock.calls[0][1] as string[];
+        const labels = select.mock.calls[0]![1] as string[];
         expect(new Set(labels).size).toBe(labels.length);
       });
     });
@@ -136,8 +136,8 @@ describe("showSchedulesMenu", () => {
 
       await showSchedulesMenu(ctx, scheduler);
 
-      expect(confirm.mock.calls[0][0]).toContain(NAME_B);
-      expect(confirm.mock.calls[0][0]).not.toContain(NAME_A);
+      expect(confirm.mock.calls[0]![0]).toContain(NAME_B);
+      expect(confirm.mock.calls[0]![0]).not.toContain(NAME_A);
     });
 
     it("shows a deadline job's until in the confirm dialog", async () => {
@@ -149,7 +149,7 @@ describe("showSchedulesMenu", () => {
 
       await showSchedulesMenu(ctx, scheduler);
 
-      expect(confirm.mock.calls[0][1]).toContain("until:     2099-01-01T00:00:00.000Z");
+      expect(confirm.mock.calls[0]![1]).toContain("until:     2099-01-01T00:00:00.000Z");
     });
 
     it("cancels the right job past the single-digit boundary", async () => {
@@ -162,7 +162,7 @@ describe("showSchedulesMenu", () => {
 
       const surviving = scheduler.list().map(j => j.id);
       expect(surviving).toHaveLength(10);
-      expect(surviving).not.toContain(jobs[10].id);
+      expect(surviving).not.toContain(jobs[10]!.id);
     });
   });
 

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
-import { toolCalls } from "@nredd/pi-test-lib/faux";
+import { text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { FLEET_COLLAPSE_KEY, FLEET_DISCLOSURE_SETTLE_MS } from "../src/ui/fleet-list.ts";
 import { FLEET_STATE_ENTRY } from "../src/ui/fleet-state.ts";
@@ -93,8 +93,8 @@ it("renders 12 held children with left-aligned indicators and no blank rows (#85
     expect(main).toBeGreaterThanOrEqual(0);
     const block = lines.slice(main + 1, main + 6);
     for (const line of block) expect(line).toMatch(/^ {2}[↑↓●○] \S/);
-    expect(block[0].startsWith("  ↑ ")).toBe(up);
-    expect(block[4].startsWith("  ↓ ")).toBe(down);
+    expect(block[0]!.startsWith("  ↑ ")).toBe(up);
+    expect(block[4]!.startsWith("  ↓ ")).toBe(down);
     for (const line of block.filter(l => /^ {2}[↑↓] /.test(l))) {
       expect(line).toMatch(/^ {2}[↑↓] \d+ more: \d+ running$/);
     }
@@ -113,7 +113,7 @@ it("renders 12 held children with left-aligned indicators and no blank rows (#85
 
 it("running fleet re-registers after core reload", async () => {
   const { h, host, stream, row } = await start("probe child");
-  const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").map(text).join("\n").match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
   const record = fixture.record(id);
   const oldRunner = h.session.extensionRunner;
@@ -145,7 +145,7 @@ it.each([false, true])("restores explicit collapsed=%s from disk when a fresh ho
   await host.dispose(); // destroys the activation, not just the widget instance
 
   const resumed = await fixture.start({ terminal: true, harness: { sessionManager: SessionManager.open(path) } });
-  const resumedStream = fixture.holdStream(fixture.providers[0]);
+  const resumedStream = fixture.holdStream(fixture.providers[0]!);
   resumed.setResponses([toolCalls(spawn("after resume", { model: "fauxchild/child" })), answer("RESUMED")]);
   await resumed.session.prompt("continue");
   await resumedStream.entered;
@@ -202,7 +202,7 @@ it("quota parking refreshes the one-line fleet without creating a child session"
   await host.settle();
   expect(host.viewport().filter(line => line.trimStart().startsWith("[1 parked] agents:"))).toHaveLength(1);
   expect(host.viewport().join("\n")).not.toMatch(/^\s+[●○] main/m);
-  expect(fixture.providers[0].state.callCount).toBe(0);
+  expect(fixture.providers[0]!.state.callCount).toBe(0);
 });
 
 it("keeps a failed child flagged after linger and clears it only when its result is consumed", async () => {
@@ -217,7 +217,7 @@ it("keeps a failed child flagged after linger and clears it only when its result
   await h.session.prompt("go");
   await failure;
   const result = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
-  const id = result?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  const id = text(result).match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing failed child id");
   const host = fixture.host;
   if (!host) throw new Error("No terminal host");
@@ -239,10 +239,10 @@ it("keeps a failed child flagged after linger and clears it only when its result
 it("reloads unread failures, then honors their acknowledgement on fresh-host disk resume", async () => {
   const { h, host, stream } = await start("durable failure");
   const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
-  const id = tool?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  const id = text(tool).match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing child id");
   const record = fixture.record(id);
-  fixture.providers[0].setResponses([answer("", { stopReason: "error", errorMessage: "DURABLE FAILURE" })]);
+  fixture.providers[0]!.setResponses([answer("", { stopReason: "error", errorMessage: "DURABLE FAILURE" })]);
   stream.release();
   await record.promise;
   host.input(TOGGLE); // collapsed summary after completion
@@ -276,7 +276,7 @@ it("reloads unread failures, then honors their acknowledgement on fresh-host dis
 it("ingests a running detached failure between ticks after reload unregisters its record", async () => {
   const { h, host, stream } = await start("detached failure");
   const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
-  const id = tool?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  const id = text(tool).match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing child id");
   const record = fixture.record(id);
   host.input(TOGGLE);
@@ -284,7 +284,7 @@ it("ingests a running detached failure between ticks after reload unregisters it
   host.input("/reload"); host.input("\r");
   await host.settle();
   expect(record.status).toBe("running");
-  fixture.providers[0].setResponses([answer("", { stopReason: "error", errorMessage: "BETWEEN TICKS" })]);
+  fixture.providers[0]!.setResponses([answer("", { stopReason: "error", errorMessage: "BETWEEN TICKS" })]);
   stream.release();
   await record.promise; // NO clock tick: terminal unregister -> spool -> active sink must ingest directly
   await host.settle();
@@ -309,7 +309,7 @@ it("journals terminal failure before its public lifecycle event and result consu
   await h.session.prompt("go");
   await failure;
   const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
-  const id = tool?.content.find(part => part.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
+  const id = text(tool).match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing headless child id");
   const states = () => h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
   expect(atTerminalEvent).toMatchObject({ data: { transition: { alert: { id, state: "error" }, acknowledged: false } } });
@@ -460,7 +460,7 @@ async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first:
     id: "default",
     name: "vroute default",
     thinkingLevels: ["off", "low", "high"],
-    route: async request => ({ model: models[Math.min(routed++, 1)], thinkingLevel: request.thinkingLevel }),
+    route: async request => ({ model: models[Math.min(routed++, 1)]!, thinkingLevel: request.thinkingLevel }),
   });
   h.setResponses([toolCalls(spawn("probe child", { model: "vroute/default", thinking: "high" })), answer("SPAWNED")]);
   await h.session.prompt("go");

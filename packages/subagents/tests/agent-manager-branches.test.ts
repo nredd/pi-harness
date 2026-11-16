@@ -190,8 +190,8 @@ describe("AgentManager names", () => {
     clock.advance(PAST_RETENTION_MS);
     expect(ids.every(id => manager!.getRecord(id) === undefined)).toBe(true);
     // No cap: the session's lifetime is the bound, so even the earliest-completed survives.
-    expect(manager.resolveMention(ids[100])).toMatchObject({ kind: "tombstone", entry: { id: ids[100] } });
-    expect(manager.resolveMention(ids[99])).toMatchObject({ kind: "tombstone", entry: { id: ids[99] } });
-    expect(manager.resolveMention(ids[0])).toMatchObject({ kind: "tombstone", entry: { id: ids[0] } });
+    expect(manager.resolveMention(ids[100]!)).toMatchObject({ kind: "tombstone", entry: { id: ids[100] } });
+    expect(manager.resolveMention(ids[99]!)).toMatchObject({ kind: "tombstone", entry: { id: ids[99] } });
+    expect(manager.resolveMention(ids[0]!)).toMatchObject({ kind: "tombstone", entry: { id: ids[0] } });
   });
 });

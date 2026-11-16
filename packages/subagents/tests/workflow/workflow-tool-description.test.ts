@@ -35,7 +35,7 @@ const workerSource = readFileSync(
 function stringArray(name: string): string[] {
   const match = workerSource.match(new RegExp(`const ${name} = \\[(.*?)\\];`, "s"));
   if (!match) throw new Error(`could not find ${name} in worker-source.ts`);
-  return [...match[1].matchAll(/"(\w+)"/g)].map(m => m[1]);
+  return [...match[1]!.matchAll(/"(\w+)"/g)].map(m => m[1]!);
 }
 
 const AGENT_OPTIONS = stringArray("AGENT_OPTIONS");
@@ -60,8 +60,8 @@ function documentedAgentOptions(): { keys: Set<string>; efforts: string[]; line:
     if (!literal) continue;
     const body = literal[1] ?? literal[2];
     found.push({
-      keys: new Set([...body.matchAll(/(\w+)\s*:/g)].map(m => m[1])),
-      efforts: [...body.matchAll(/effort:\s*'(\w+)'/g)].map(m => m[1]),
+      keys: new Set([...body!.matchAll(/(\w+)\s*:/g)].map(m => m[1]!)),
+      efforts: [...body!.matchAll(/effort:\s*'(\w+)'/g)].map(m => m[1]!),
       line: description.slice(0, call.index).split("\n").length,
     });
   }
@@ -76,8 +76,8 @@ describe("the agent() contract it documents", () => {
   });
 
   it("documents no option the runtime would reject by name", () => {
-    const named = [...description.matchAll(/opts\.(\w+)/g)].map(m => m[1]);
-    expect([...new Set(named)].filter(name => !AGENT_OPTIONS.includes(name))).toEqual([]);
+    const named = [...description.matchAll(/opts\.(\w+)/g)].map(m => m[1]!);
+    expect([...new Set(named)].filter(name => !AGENT_OPTIONS.includes(name!))).toEqual([]);
   });
 
   it("lists every option resume cannot be combined with", () => {
@@ -100,7 +100,7 @@ describe("the agent() contract it documents", () => {
 
   it("offers every reasoning effort the runtime has, and no other", () => {
     const listed = description.match(/reasoning effort for this agent call \(([^)]*)\)/)?.[1] ?? "";
-    const quoted = [...listed.matchAll(/'(\w+)'/g)].map(m => m[1]);
+    const quoted = [...listed.matchAll(/'(\w+)'/g)].map(m => m[1]!);
     expect(quoted).toEqual(EFFORT_LEVELS);
   });
 });

@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
@@ -20,7 +19,7 @@ import { answer } from "./fixtures/scenario-session.ts";
 
 let env: Hermetic;
 let boot: BootedPi;
-let context: ExtensionCommandContext;
+let context: ReturnType<typeof ctx>;
 let provider: FauxProviderRegistration;
 let clock: FakeClock;
 let selections: (string | undefined)[];
@@ -202,7 +201,7 @@ describe("menu conversation viewer", () => {
       await command();
     } finally { setWorktreeIsolationEnabled(previous); spawnAndWait.mockRestore(); }
     expect(prompts).toHaveLength(1);
-    expect(prompts[0].includes('isolation: <"worktree"')).toBe(enabled);
+    expect(prompts[0]!.includes('isolation: <"worktree"')).toBe(enabled);
   });
 
   it.each([false, true])("cycles and persists markdown with real write failure=%s", async fail => {

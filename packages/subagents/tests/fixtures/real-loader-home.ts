@@ -38,9 +38,9 @@ async function main(): Promise<void> {
   }
   for (const [base, label] of [[ambient, "DECOY"], [home, "INJECTED"]]) {
     const extension = (kind: string) => `import { appendFileSync } from 'node:fs'; export default function(pi) { appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(label + ":" + kind + "\n")}); }`;
-    write(join(base, "extension.ts"), extension("extension"));
-    write(join(base, "package", "package.json"), JSON.stringify({ name: "home-fixture", pi: { extensions: ["./index.ts"] } }));
-    write(join(base, "package", "index.ts"), extension("package"));
+    write(join(base!, "extension.ts"), extension("extension"));
+    write(join(base!, "package", "package.json"), JSON.stringify({ name: "home-fixture", pi: { extensions: ["./index.ts"] } }));
+    write(join(base!, "package", "index.ts"), extension("package"));
   }
   const ambientSkillsDir = join(ambient, ".agents", "skills");
   write(join(ambientSkillsDir, "ambient-skill", "SKILL.md"), "---\nname: ambient-skill\ndescription: #179 fixture\n---\nambient\n");

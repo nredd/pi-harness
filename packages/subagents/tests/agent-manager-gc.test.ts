@@ -112,7 +112,7 @@ describe("AgentManager — record GC", () => {
     expect(emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
     // After dispose() the runner is invalidated and every ctx getter throws, so an
     // emit that landed afterwards would be worse than none.
-    expect(emit.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]);
+    expect(emit.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]!);
   });
 
   describe("reap notice (#330)", () => {
@@ -244,7 +244,7 @@ describe("AgentManager — record GC", () => {
       const resumed = (isAborted = false) => ({ text: isAborted ? "" : "again", aborted: isAborted, steered: false } as any);
       const spawnOpts = (extra: object = {}) => ({ description: "d", isBackground: true, ...extra });
 
-      let reaped: ReturnType<typeof vi.fn>;
+      let reaped: ReturnType<typeof vi.fn<NonNullable<ConstructorParameters<typeof AgentManager>[9]>>>;
       let failStart = false;
 
       beforeEach(() => {

@@ -32,7 +32,7 @@ describe("embedded conversation outcomes", () => {
     const f = fixture(messages, true);
     try {
       expect(f.render()).toContain("before invalidation");
-      messages[0].content = "after invalidation";
+      messages[0]!.content = "after invalidation";
       const after = f.render();
       expect(after).toContain("after invalidation");
       expect(after).not.toContain("before invalidation");
@@ -79,7 +79,7 @@ describe("embedded conversation outcomes", () => {
     expect(f.unsubscribe).toHaveBeenCalledOnce();
     // Deliberately retain the subscribed callback, modeling delivery already in flight.
     // Unsubscription must not be what prevents this stale callback repainting the UI.
-    f.emit({ type: "agent_end", messages: [] });
+    f.emit({ type: "agent_end", messages: [], willRetry: false });
     expect(f.requestRender).toHaveBeenCalledTimes(2);
     f.clock.advance(10000);
     expect(f.clock.pending).toBe(0);

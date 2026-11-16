@@ -2,7 +2,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.ts";
 import { runAgent } from "../src/agent-runner.ts";
@@ -21,7 +21,7 @@ function fixture() {
   const records = new Map([[parent.id, parent], [child.id, child]]);
   const spawnAndWait = vi.fn<NestedAgentManager["spawnAndWait"]>().mockRejectedValue(new Error("worktree copy failed"));
   const manager = { getRecord: (id: string) => records.get(id), spawnAndWait } as unknown as NestedAgentManager;
-  const ctx = { cwd: dir, modelRegistry: { getAll: () => [], getAvailable: () => [] } } as unknown as ExtensionContext;
+  const ctx = { cwd: dir, modelRegistry: { getAll: () => [], getAvailable: () => [] } } as unknown as ExtensionToolContext;
   const tools = createNestedSubagentTools({ homeDir: dir, manager, pi: {} as ExtensionAPI, parentAgentId: parent.id, depth: 1, maxSubagentDepth: 2, allowedSubagents: "all", configCwd: dir, projectTrusted: false });
   const tool = (name: string) => {
     const found = tools.find(candidate => candidate.name === name);

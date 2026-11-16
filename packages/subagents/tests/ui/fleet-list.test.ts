@@ -666,14 +666,14 @@ describe("FleetList rendering", () => {
       h.fleet.update();
       heights.push(h.render(120).length);
     }
-    expect(heights.slice(1).map((height, i) => height - heights[i])).toEqual([1, 1, 1, 1]);
+    expect(heights.slice(1).map((height, i) => height - heights[i]!)).toEqual([1, 1, 1, 1]);
 
     while (agents.length > 1) {
       agents.pop();
       h.fleet.update();
       heights.push(h.render(120).length);
     }
-    expect(heights.slice(5).map((height, i) => heights[i + 4] - height)).toEqual([1, 1, 1, 1]);
+    expect(heights.slice(5).map((height, i) => heights[i + 4]! - height)).toEqual([1, 1, 1, 1]);
   });
 
   it("ends with a blank spacer so the last row clears pi's footer (#351)", () => {
@@ -955,7 +955,7 @@ describe("FleetList re-registration after core disposes it", () => {
     fleet.update();
     expect(registered).toHaveLength(1);
 
-    registered[0].dispose?.();
+    registered[0]!.dispose?.();
     fleet.update();
 
     expect(registered).toHaveLength(2);
@@ -964,11 +964,11 @@ describe("FleetList re-registration after core disposes it", () => {
 
   it("ignores the disposal of a component that was already replaced", () => {
     const { fleet, registered } = setup();
-    registered[0].invalidate();
+    registered[0]!.invalidate();
     fleet.update();
     expect(registered).toHaveLength(2);
 
-    registered[0].dispose?.();
+    registered[0]!.dispose?.();
     fleet.update();
 
     expect(registered).toHaveLength(2);
@@ -1077,7 +1077,7 @@ describe("FleetList model and activity", () => {
       }),
       withModel({
         id: "a2", description: "emoji model and a different long description 🧠", startedAt: now - 59_000,
-        invocation: { modelName: "🧠 opus", modelId: "acme/opus", thinking: "ultrathink" },
+        invocation: { modelName: "🧠 opus", modelId: "acme/opus", thinking: "ultrathink" as NonNullable<AgentRecord["invocation"]>["thinking"] },
         lifetimeUsage: { input: 987_654, output: 0, cacheWrite: 0, cost: 12.34 },
       }),
     ];
@@ -1100,7 +1100,7 @@ describe("FleetList model and activity", () => {
     fleet.toggleCollapse();
     const cellStart = (line: string, text: string) => {
       expect(line).toContain(text);
-      return visibleWidth(line.split(text, 1)[0]);
+      return visibleWidth(line.split(text, 1)[0]!);
     };
     const cellEnd = (line: string, text: string) => cellStart(line, text) + visibleWidth(text);
     for (const width of [60, 80]) {
@@ -1124,24 +1124,24 @@ describe("FleetList model and activity", () => {
       expect(emoji).toContain("...");
       expect(cjk).not.toContain("deliberately long description");
       expect(emoji).not.toContain("different long description");
-      expect(cellEnd(cjk, "think:low")).toBe(cellEnd(emoji, "think:ultrathink"));
-      expect(cellStart(cjk, "tokens")).toBe(cellStart(emoji, "tokens"));
-      expect(cellStart(cjk, "~$0.0042") + visibleWidth("~$0.0042"))
-        .toBe(cellStart(emoji, "~$12.34") + visibleWidth("~$12.34"));
-      expect(visibleWidth(cjk.trimEnd())).toBe(width);
-      expect(visibleWidth(emoji.trimEnd())).toBe(width);
+      expect(cellEnd(cjk!, "think:low")).toBe(cellEnd(emoji!, "think:ultrathink"));
+      expect(cellStart(cjk!, "tokens")).toBe(cellStart(emoji!, "tokens"));
+      expect(cellStart(cjk!, "~$0.0042") + visibleWidth("~$0.0042"))
+        .toBe(cellStart(emoji!, "~$12.34") + visibleWidth("~$12.34"));
+      expect(visibleWidth(cjk!.trimEnd())).toBe(width);
+      expect(visibleWidth(emoji!.trimEnd())).toBe(width);
     }
 
     const lines = factory?.({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, markupFree)
       .render(160).map(plain) ?? [];
     const [a, b] = ["調査", "emoji"].map(description =>
       lines.find(line => line.includes(description))!);
-    expect(cellStart(a, "~$0.0042") + visibleWidth("~$0.0042"))
-      .toBe(cellStart(b, "~$12.34") + visibleWidth("~$12.34"));
-    expect(cellStart(a, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
-      .toBe(cellStart(b, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"));
-    expect(cellEnd(a, "銀河 4.6")).toBe(cellEnd(b, "🧠 opus"));
-    expect(cellEnd(a, "think:low")).toBe(cellEnd(b, "think:ultrathink"));
+    expect(cellStart(a!, "~$0.0042") + visibleWidth("~$0.0042"))
+      .toBe(cellStart(b!, "~$12.34") + visibleWidth("~$12.34"));
+    expect(cellStart(a!, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens"))
+      .toBe(cellStart(b!, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"));
+    expect(cellEnd(a!, "銀河 4.6")).toBe(cellEnd(b!, "🧠 opus"));
+    expect(cellEnd(a!, "think:low")).toBe(cellEnd(b!, "think:ultrathink"));
   });
 
   it("copes with a record that has no invocation yet", () => {
@@ -1251,7 +1251,7 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
 
   it.each([[80, 24], [120, 40]])("keeps leading fallback flags, aliases and aligned state/stats at %ix%i", (columns, rows) => {
     const agents = mixed().slice(1, 3);
-    agents[0].modelFallback = { input: "ghost", used: "anthropic/x" };
+    agents[0]!.modelFallback = { input: "ghost", used: "anthropic/x" };
     for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
     for (const showModel of [false, true]) {
       const lines = renderAt(agents, columns, rows, 1, showModel, { styled: true }).map(plain);
@@ -1260,8 +1260,8 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
       expect(flagged.indexOf("[fallback]")).toBeLessThan(flagged.indexOf("pr-1412:"));
       const agentRows = lines.filter(l => l.includes("▶ running"));
       expect(agentRows).toHaveLength(2);
-      expect(new Set(agentRows.map(l => visibleWidth(l.split("▶ running")[0]))).size).toBe(1);
-      expect(new Set(agentRows.map(l => visibleWidth(l.split("tokens")[0]))).size).toBe(1);
+      expect(new Set(agentRows.map(l => visibleWidth(l.split("▶ running")[0]!))).size).toBe(1);
+      expect(new Set(agentRows.map(l => visibleWidth(l.split("tokens")[0]!))).size).toBe(1);
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
     }
   });
@@ -1269,7 +1269,7 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
   it("reserves a hidden row's fallback flag before fitting columns", () => {
     const agents = mixed();
     for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
-    agents[5].modelFallback = { input: "ghost", used: "anthropic/x" };
+    agents[5]!.modelFallback = { input: "ghost", used: "anthropic/x" };
     const top = renderAt(agents, 75, 24);
     const bottom = renderAt(agents, 75, 24, 7);
     expect(top.join("\n")).not.toContain("[fallback]");
@@ -1337,7 +1337,7 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     const rows = lines.filter(l => /▶ running/.test(l));
     expect(rows).toHaveLength(3);
     // The activity-less Plan row pads the activity slot, so elapsed and tokens still line up.
-    expect(new Set(rows.map(l => visibleWidth(l.split("tokens", 1)[0]))).size).toBe(1);
+    expect(new Set(rows.map(l => visibleWidth(l.split("tokens", 1)[0]!))).size).toBe(1);
     expect(new Set(rows.map(l => l.search(/\d\ds · +↓/))).size).toBe(1);
     expect(new Set(rows.map(l => visibleWidth(l.trimEnd()))).size).toBe(1);
     expect(rows[0]).toContain("think:high");
@@ -1367,7 +1367,7 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     const agents = mixed();
     agents[5] = makeRecord({
       id: "wide", startedAt: NOW - 15_000, description: "Widest cells",
-      invocation: { modelName: "a-very-long-model-name 9.9", modelId: "x/y", thinking: "ultrathink" },
+      invocation: { modelName: "a-very-long-model-name 9.9", modelId: "x/y", thinking: "ultrathink" as NonNullable<AgentRecord["invocation"]>["thinking"] },
       lifetimeUsage: { input: 999_900, output: 0, cacheWrite: 0 },
     });
     const stateAt = (lines: string[]) => lines.find(l => l.includes("▶ running"))!.indexOf("▶ running");
@@ -1437,7 +1437,7 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
       }),
       makeRecord({
         id: "a2", alias: "🧠-audit", description: "emoji model and a different long description", startedAt: NOW - 59_000,
-        invocation: { modelName: "🧠 opus", modelId: "acme/opus", thinking: "ultrathink" },
+        invocation: { modelName: "🧠 opus", modelId: "acme/opus", thinking: "ultrathink" as NonNullable<AgentRecord["invocation"]>["thinking"] },
         lifetimeUsage: { input: 987_654, output: 0, cacheWrite: 0, cost: 12.34 },
       }),
     ];
@@ -1460,8 +1460,8 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
     expect(cjk).toBeDefined();
     expect(emoji).toBeDefined();
     // Both rows end on the same cell and start the state column on the same cell, whatever the glyph widths.
-    expect(visibleWidth(cjk.trimEnd())).toBe(visibleWidth(emoji.trimEnd()));
-    expect(visibleWidth(cjk.split("▶ running")[0])).toBe(visibleWidth(emoji.split("▶ running")[0]));
+    expect(visibleWidth(cjk!.trimEnd())).toBe(visibleWidth(emoji!.trimEnd()));
+    expect(visibleWidth(cjk!.split("▶ running")[0]!)).toBe(visibleWidth(emoji!.split("▶ running")[0]!));
     // The description truncates with an ellipsis; the cost cell never does.
     expect(cjk).toContain("~$0.0042");
     expect(emoji).toContain("~$12.34");
@@ -1792,7 +1792,7 @@ describe("FleetList overflow window (#857)", () => {
       const rows = block(renderSel(12, 6, width));
       expect(rows[0]).toMatch(INDICATOR);
       expect(rows.at(-1)).toMatch(INDICATOR);
-      expect(rows[0].length).toBeLessThan(40);
+      expect(rows[0]!.length).toBeLessThan(40);
     }
   });
 

@@ -403,8 +403,8 @@ Wildcard plus ext.`);
     // `tools: all` previously parsed "all" as a single tool name → allowlist
     // containing the non-existent tool "all" → silent zero-tool agent.
     for (const [name, value] of [["all-lower", "all"], ["all-upper", "ALL"], ["all-mixed", "All"]]) {
-      writeAgent(name, `---\ntools: ${value}\n---\n\nAlias.`);
-      const agent = loadCustomAgents(tmpDir).get(name)!;
+      writeAgent(name!, `---\ntools: ${value}\n---\n\nAlias.`);
+      const agent = loadCustomAgents(tmpDir).get(name!)!;
       expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
       expect(agent.extSelectors).toBeUndefined();
     }

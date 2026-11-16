@@ -182,7 +182,7 @@ function createSession(finalText: string) {
       listeners.push(listener);
       return () => {};
     }),
-    prompt: vi.fn(async () => {
+    prompt: vi.fn(async (_text?: string) => {
       session.messages.push({
         role: "assistant",
         content: [{ type: "text", text: finalText }],
@@ -270,7 +270,7 @@ describe("agent-runner final output capture", () => {
     );
 
     const bindOrder = session.bindExtensions.mock.invocationCallOrder[0];
-    const promptOrder = session.prompt.mock.invocationCallOrder[0];
+    const promptOrder = session.prompt.mock.invocationCallOrder[0]!;
     expect(bindOrder).toBeLessThan(promptOrder);
   });
 
@@ -336,7 +336,7 @@ describe("agent-runner final output capture", () => {
       return {
         nested: vi.mocked(createNestedSubagentTools).mock.lastCall![0].projectTrusted,
         settings: settingsManagerCreate.mock.calls.map((c) => (c as unknown[])[2]),
-        sessionTrusted: createAgentSession.mock.calls[0][0].settingsManager.isProjectTrusted?.(),
+        sessionTrusted: createAgentSession.mock.calls[0]![0].settingsManager.isProjectTrusted?.(),
       };
     }
 
@@ -374,7 +374,7 @@ describe("agent-runner final output capture", () => {
 
     expect(settingsManagerCreate).toHaveBeenCalledWith(expect.any(String), "/mock/agent-dir", { projectTrusted: false });
     // One manager for both, so the loader and the session agree on what loads.
-    const settingsManager = settingsManagerCreate.mock.results[0].value;
+    const settingsManager = settingsManagerCreate.mock.results[0]!.value;
     expect(lastLoaderOpts().settingsManager).toBe(settingsManager);
     expect(createAgentSession).toHaveBeenCalledWith(expect.objectContaining({ settingsManager }));
   });
@@ -394,7 +394,7 @@ describe("agent-runner final output capture", () => {
     // session's tells extensions (pi's MCP reading `<cwd>/.pi/mcp.json`) that
     // its cwd is not a trusted project.
     const loaderManager = lastLoaderOpts().settingsManager;
-    const sessionManager = createAgentSession.mock.calls[0][0].settingsManager;
+    const sessionManager = createAgentSession.mock.calls[0]![0].settingsManager;
     expect(sessionManager).not.toBe(loaderManager);
     expect(sessionManager.isProjectTrusted()).toBe(false);
   });
@@ -477,7 +477,7 @@ describe("agent-runner final output capture", () => {
 
     await runAgent(ctx, "Explore", "Say LEGACY", { pi });
 
-    expect(createAgentSession.mock.calls[0][0]).not.toHaveProperty("modelRuntime");
+    expect(createAgentSession.mock.calls[0]![0]).not.toHaveProperty("modelRuntime");
   });
 
   it("suppresses AGENTS.md/CLAUDE.md/APPEND_SYSTEM.md for subagents", async () => {
@@ -495,7 +495,7 @@ describe("agent-runner final output capture", () => {
       }),
     );
     // The override returns an empty list so any loaded sources are discarded.
-    const ctorArgs = defaultResourceLoaderCtor.mock.calls[0][0];
+    const ctorArgs = defaultResourceLoaderCtor.mock.calls[0]![0];
     expect(ctorArgs.appendSystemPromptOverride(["would-be-loaded"])).toEqual([]);
   });
 
@@ -516,7 +516,7 @@ describe("agent-runner final output capture", () => {
 
     expect(session.setSessionName).toHaveBeenCalledWith("Explore");
     const setOrder = session.setSessionName.mock.invocationCallOrder[0];
-    const bindOrder = session.bindExtensions.mock.invocationCallOrder[0];
+    const bindOrder = session.bindExtensions.mock.invocationCallOrder[0]!;
     expect(setOrder).toBeLessThan(bindOrder);
   });
 
@@ -967,6 +967,7 @@ import { createNestedSubagentTools, hasNestableTypes, type NestedAgentManager } 
 
 /** The runner only forwards the manager to the nested tools, which are mocked, so no method is ever called. */
 const unusedManager: NestedAgentManager = {
+  abort: vi.fn(),
   spawn: vi.fn(),
   awaitStartup: vi.fn(),
   spawnAndWait: vi.fn(),
@@ -1059,7 +1060,7 @@ const STRUCTURED = (() => {
 
 /** One of the tools injected into the session as `customTools`, by name. */
 function customTool(name: string): { execute(id: string, params: unknown): Promise<unknown> } {
-  const opts = createAgentSession.mock.calls[0][0];
+  const opts = createAgentSession.mock.calls[0]![0];
   const tool = ((opts.customTools ?? []) as { name: string }[]).find(t => t.name === name);
   if (!tool) throw new Error(`no customTool named ${name}`);
   return tool as unknown as { execute(id: string, params: unknown): Promise<unknown> };
@@ -1067,18 +1068,18 @@ function customTool(name: string): { execute(id: string, params: unknown): Promi
 
 /** Names of the tools injected into the session as `customTools`. */
 function customToolNames(): string[] {
-  const opts = createAgentSession.mock.calls[0][0];
+  const opts = createAgentSession.mock.calls[0]![0];
   return ((opts.customTools ?? []) as { name: string }[]).map(tool => tool.name);
 }
 
 function lastToolsPassed(): string[] {
-  const opts = createAgentSession.mock.calls[0][0];
+  const opts = createAgentSession.mock.calls[0]![0];
   if (opts.tools) return opts.tools;
   return lastSession?.getActiveToolNames() ?? [];
 }
 
 function lastLoaderOpts(): Record<string, unknown> {
-  return defaultResourceLoaderCtor.mock.calls[0][0];
+  return defaultResourceLoaderCtor.mock.calls[0]![0];
 }
 
 describe("agent-runner session persistence", () => {
@@ -1292,7 +1293,7 @@ describe("agent-runner master tool allowlist", () => {
 
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
-    expect(createAgentSession.mock.calls[0][0].customTools).toEqual([]);
+    expect(createAgentSession.mock.calls[0]![0].customTools).toEqual([]);
   });
 
   it("injects scoped nested tools for an opted-in non-isolated agent", async () => {
@@ -1321,7 +1322,7 @@ describe("agent-runner master tool allowlist", () => {
     expect(lastToolsPassed()).toEqual(expect.arrayContaining([
       "Agent", "get_subagent_result", "steer_subagent", "stop_subagent",
     ]));
-    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(4);
+    expect(createAgentSession.mock.calls[0]![0].customTools).toHaveLength(4);
   });
 
   it("keeps opt-in nested tools active UNDER EXTENSIONS despite the EXCLUDED-name collision", async () => {
@@ -1342,7 +1343,7 @@ describe("agent-runner master tool allowlist", () => {
       nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
     });
 
-    const opts = createAgentSession.mock.calls[0][0];
+    const opts = createAgentSession.mock.calls[0]![0];
     // (a) not denied at the registry gate, and passed as customTools.
     expect(opts.excludeTools ?? []).not.toContain("Agent");
     // Plus the refusing `SubagentWorkflow` stand-in.
@@ -1397,7 +1398,7 @@ describe("agent-runner master tool allowlist", () => {
         nestedRuntime: { manager: {} as any, parentAgentId: "parent", depth: 1 },
       });
 
-      expect(createAgentSession.mock.calls[0][0].excludeTools ?? []).toContain("Agent");
+      expect(createAgentSession.mock.calls[0]![0].excludeTools ?? []).toContain("Agent");
       expect(lastToolsPassed()).not.toContain("Agent");
     });
 
@@ -1537,7 +1538,7 @@ describe("agent-runner master tool allowlist", () => {
       const result = await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
 
       expect(session.prompt).toHaveBeenCalledTimes(2);
-      expect(String(session.prompt.mock.calls[1][0])).toMatch(/Call StructuredOutput now/);
+      expect(String(session.prompt.mock.calls[1]![0])).toMatch(/Call StructuredOutput now/);
       expect(result.structuredJson).toBeUndefined();
       expect(result.structuredRetried).toBe(true);
       // Reported as a failure, not as a completion holding prose the caller
@@ -1583,7 +1584,7 @@ describe("agent-runner master tool allowlist", () => {
 
       await runAgent(ctx, "Explore", "go", { pi, structuredOutput: STRUCTURED });
 
-      const retry = String(session.prompt.mock.calls[1][0]);
+      const retry = String(session.prompt.mock.calls[1]![0]);
       // "you got the shape wrong" and "you never answered" need different
       // corrections; telling it the wrong one sends it hunting.
       expect(retry).toMatch(/did not match the required schema/);
@@ -1803,7 +1804,7 @@ describe("agent-runner master tool allowlist", () => {
 
     // Allowlist unset so async tools (e.g. MCP on session_start) can register;
     // scope is a denylist of this extension's own tools plus `disallowedTools`.
-    const opts = createAgentSession.mock.calls[0][0];
+    const opts = createAgentSession.mock.calls[0]![0];
     expect(opts.tools).toBeUndefined();
     // `SubagentWorkflow` is not denied: the child gets a refusing stand-in.
     expect(new Set(opts.excludeTools)).toEqual(
@@ -1815,9 +1816,9 @@ describe("agent-runner master tool allowlist", () => {
     // included, the denied built-in excluded.
     expect(session.setActiveToolsByName).toHaveBeenCalledTimes(1);
     const setOrder = session.setActiveToolsByName.mock.invocationCallOrder[0];
-    const bindOrder = session.bindExtensions.mock.invocationCallOrder[0];
+    const bindOrder = session.bindExtensions.mock.invocationCallOrder[0]!;
     expect(setOrder).toBeGreaterThan(bindOrder);
-    const activated = new Set(session.setActiveToolsByName.mock.calls[0][0]);
+    const activated = new Set(session.setActiveToolsByName.mock.calls[0]![0]);
     expect(activated.has("mcp")).toBe(true);
     expect(activated.has("read")).toBe(true);
     expect(activated.has("bash")).toBe(false);
@@ -1984,7 +1985,7 @@ describe("agent-runner async extension tool registration", () => {
 
     await runAgent(ctx, "Explore", "go", { pi });
 
-    const opts = createAgentSession.mock.calls[0][0];
+    const opts = createAgentSession.mock.calls[0]![0];
     const stub = opts.customTools.find((t: any) => t.name === "SubagentWorkflow");
     expect(stub).toBeDefined();
     expect(opts.excludeTools).not.toContain("SubagentWorkflow");
@@ -2002,7 +2003,7 @@ describe("agent-runner async extension tool registration", () => {
     withExtensions({ "/ext/ok.ts": ["ok_tool"] });
     createAgentSession.mockResolvedValue({ session: createSession("OK").session });
     await runAgent(ctx, "Explore", "go", { pi });
-    let opts = createAgentSession.mock.calls.at(-1)[0];
+    let opts = createAgentSession.mock.calls.at(-1)![0];
     expect(opts.customTools.map((t: any) => t.name)).not.toContain("SubagentWorkflow");
     expect(opts.excludeTools).toContain("SubagentWorkflow");
 
@@ -2011,7 +2012,7 @@ describe("agent-runner async extension tool registration", () => {
     vi.mocked(getToolNamesForType).mockReturnValueOnce(BUILTINS_7);
     createAgentSession.mockResolvedValue({ session: createSession("OK").session });
     await runAgent(ctx, "Explore", "go", { pi });
-    opts = createAgentSession.mock.calls.at(-1)[0];
+    opts = createAgentSession.mock.calls.at(-1)![0];
     expect(opts.customTools.map((t: any) => t.name)).not.toContain("SubagentWorkflow");
     expect(opts.tools).not.toContain("SubagentWorkflow");
   });
@@ -2064,7 +2065,7 @@ describe("agent-runner async extension tool registration", () => {
 
     // A hard registry gate is the right boundary here: nothing can register
     // asynchronously, so there is no active-set narrowing to maintain.
-    expect(createAgentSession.mock.calls[0][0].tools).toEqual(["read"]);
+    expect(createAgentSession.mock.calls[0]![0].tools).toEqual(["read"]);
     expect(session.setActiveToolsByName).not.toHaveBeenCalled();
     expect(session.agent.beforeToolCall).toBeUndefined();
   });
@@ -3036,7 +3037,7 @@ describe("agent-runner turn limits", () => {
     setGraceTurns(5);
     const { session, result } = await runWithTurns(5, { maxTurns: 5 });
     expect(session.steer).toHaveBeenCalledTimes(1);
-    expect(session.steer.mock.calls[0][0]).toContain("turn limit");
+    expect(session.steer.mock.calls[0]![0]).toContain("turn limit");
     expect(session.abort).not.toHaveBeenCalled();
     expect(result.steered).toBe(true);
   });
@@ -3135,7 +3136,7 @@ describe("agent-runner turn limits", () => {
       const { session, result, toolsDuringPrompt } = await runRunaway({ maxTurns: 5, turns: 7 });
       expect(session.abort).toHaveBeenCalled();
       expect(session.prompt).toHaveBeenCalledTimes(2);
-      expect(session.prompt.mock.calls[1][0]).toContain("final report");
+      expect(session.prompt.mock.calls[1]![0]).toContain("final report");
       expect(toolsDuringPrompt[1]).toEqual([]);
       expect(result.responseText).toBe(REPORT);
       expect(result.responseText).not.toBe(TEASER);
@@ -3303,7 +3304,7 @@ describe("agent-runner turn limits", () => {
       setGraceTurns(5);
       const { session, result } = await resumeWithTurns(5, { maxTurns: 5 });
       expect(session.steer).toHaveBeenCalledTimes(1);
-      expect(session.steer.mock.calls[0][0]).toContain("turn limit");
+      expect(session.steer.mock.calls[0]![0]).toContain("turn limit");
       expect(session.abort).not.toHaveBeenCalled();
       expect(result.steered).toBe(true);
       expect(result.aborted).toBe(false);

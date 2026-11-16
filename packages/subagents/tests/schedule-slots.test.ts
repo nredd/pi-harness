@@ -51,7 +51,10 @@ class NativeRangeClock extends FakeClock {
 
 /** A clock whose first timeout runs `late` ms after it was due, like a callback delayed by load or sleep. */
 class LateClock extends FakeClock {
-  constructor(private late: number, start?: number) { super(start); }
+    private late: number;
+constructor(late: number, start?: number) {
+    super(start);
+    this.late = late; }
   override setTimeout(callback: () => void, ms: number) {
     const lateness = this.late;
     this.late = 0;

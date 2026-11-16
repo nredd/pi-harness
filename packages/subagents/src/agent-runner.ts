@@ -696,7 +696,7 @@ function collectResponseText(session: AgentSession) {
  */
 function getLastAssistantText(session: AgentSession, startIndex: number): string {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
-    const msg = session.messages[i];
+    const msg = session.messages[i]!;
     if (msg.role !== "assistant") continue;
     const text = extractText(msg.content).trim();
     if (text) return text;
@@ -732,7 +732,7 @@ export function forwardModelCall(event: AgentSessionEvent, emit: (event: ModelCa
  */
 function endedWithReport(session: AgentSession, startIndex: number): boolean {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
-    const msg = session.messages[i];
+    const msg = session.messages[i]!;
     if (msg.role !== "assistant") continue;
     const hasToolCall = msg.content.some((c) => c.type === "toolCall");
     const cutOff = msg.stopReason === "aborted" || msg.stopReason === "toolUse" || msg.stopReason === "length";
@@ -797,7 +797,7 @@ async function forceFinalReport(session: AgentSession, startIndex: number, signa
  */
 function finalTurnError(session: AgentSession, startIndex: number): string | undefined {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
-    const msg = session.messages[i];
+    const msg = session.messages[i]!;
     if (msg.role !== "assistant") continue;
     if (msg.stopReason === "error") {
       return (msg as { errorMessage?: string }).errorMessage?.trim() || "provider error with no output";
@@ -824,7 +824,7 @@ function mayFollowUp(session: AgentSession, startIndex: number, signal: AbortSig
 function partialProgress(session: AgentSession, startIndex: number): string {
   const calls: string[] = [];
   for (let i = session.messages.length - 1; i >= startIndex && calls.length < 5; i--) {
-    const msg = session.messages[i];
+    const msg = session.messages[i]!;
     if (msg.role !== "toolResult") continue;
     const name = BUILTIN_TOOL_NAMES.includes(msg.toolName) ? msg.toolName : "other tool";
     calls.unshift(`${name} (${msg.isError ? "failed" : "completed"})`);
@@ -838,7 +838,7 @@ function failureText(session: AgentSession, startIndex: number, text: string, pa
   if (streamed) return laterTool ? `Earlier progress:\n${text}\n\n${partial}` : text;
   let hasLaterResult = false;
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
-    const msg = session.messages[i];
+    const msg = session.messages[i]!;
     if (msg.role === "assistant" && extractText(msg.content).trim() === text) break;
     if (msg.role === "toolResult") hasLaterResult = true;
   }

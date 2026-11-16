@@ -12,7 +12,7 @@
  * Absolute numbers here are nanoseconds and will look irrelevant next to a
  * frame. They are — until one of them stops being O(1).
  */
-import { bench, describe } from "vitest";
+import { describe } from "vitest";
 import {
   buildInvocationTags,
   describeActivity,
@@ -22,6 +22,7 @@ import {
   formatTurns,
 } from "../src/ui/agent-widget.ts";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../src/usage.ts";
+import { bench } from "./fixtures/benchmark.ts";
 import { NOW, perfSession, perfTheme } from "./fixtures/perf-fixtures.ts";
 
 const INVOCATION = {

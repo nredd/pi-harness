@@ -250,7 +250,7 @@ export function compactThinkingTag(tags: readonly string[]): string {
 function truncateLine(text: string, len = 60): string {
   // Trimming the whole text first drops any leading blank lines, so its first
   // line is the first non-blank one (or "" for blank text).
-  const line = text.trim().split("\n")[0].trimEnd();
+  const line = text.trim().split("\n")[0]!.trimEnd();
   if (line.length <= len) return line;
   return line.slice(0, len) + "…";
 }
@@ -315,21 +315,27 @@ export class AgentWidget {
   /** Last status bar text, used to avoid redundant setStatus calls. */
   private lastStatusText: string | undefined;
 
-  constructor(
-    private manager: AgentManager,
-    private agentActivity: Map<string, AgentActivity>,
+    private manager: AgentManager;
+  private agentActivity: Map<string, AgentActivity>;
+  private mode: () => WidgetMode;
+  private showCost: () => boolean;
+  private showModel: () => boolean;
+  private readonly clock: Clock;
+constructor(
+    manager: AgentManager,
+    agentActivity: Map<string, AgentActivity>,
     /**
      * Read live at render time. Selects which agents the widget shows — see
      * `WidgetMode`. Defaults to `"all"` when a caller supplies no policy; the
      * extension supplies one defaulting to `"background"`.
      */
-    private mode: () => WidgetMode = () => "all",
+    mode: () => WidgetMode = () => "all",
     /**
      * Read live at render time, like `mode`. Whether running agents show an
      * estimated cost beside their token count. Defaults to off — the extension
      * supplies the user's `showCost` setting.
      */
-    private showCost: () => boolean = () => false,
+    showCost: () => boolean = () => false,
     /**
      * Read live at render time, like `mode`. Whether running agents name the
      * model driving them and the thinking level it is running at. Defaults to
@@ -337,9 +343,16 @@ export class AgentWidget {
      * row is already dense and the same pair is on the tool result and in the
      * conversation viewer unconditionally.
      */
-    private showModel: () => boolean = () => false,
-    private readonly clock: Clock = realClock,
-  ) {}
+    showModel: () => boolean = () => false,
+    clock: Clock = realClock,
+  ) {
+    this.manager = manager;
+    this.agentActivity = agentActivity;
+    this.mode = mode;
+    this.showCost = showCost;
+    this.showModel = showModel;
+    this.clock = clock;
+}
 
   /**
    * Agents eligible for the widget, per the current `WidgetMode`:
@@ -484,7 +497,7 @@ export class AgentWidget {
     const truncate = (line: string) => truncateToWidth(line, w);
     const headingColor = hasActive ? "accent" : "dim";
     const headingIcon = hasActive ? "●" : "○";
-    const frame = SPINNER[this.widgetFrame % SPINNER.length];
+    const frame = SPINNER[this.widgetFrame % SPINNER.length]!;
 
     // Build sections separately for overflow-aware assembly.
     // Each running agent = 2 lines (header + activity), finished = 1 line, queued = 1 line.
@@ -557,11 +570,11 @@ export class AgentWidget {
       // Something is active or finished (checked above), so the body is never
       // empty and `last` is past the heading.
       const last = lines.length - 1;
-      lines[last] = lines[last].replace("├─", "└─");
+      lines[last] = lines[last]!.replace("├─", "└─");
       // If the last item is a running agent, its header and activity are the
       // last two lines: fix the header's connector and the activity's indent.
       if (runningLines.length > 0 && !queuedLine) {
-        lines[last - 1] = lines[last - 1].replace("├─", "└─");
+        lines[last - 1] = lines[last - 1]!.replace("├─", "└─");
         lines[last] = lines[last].replace("│  ", "   ");
       }
     } else {

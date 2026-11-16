@@ -1,7 +1,6 @@
 /** Drive /agents' registered command and real SettingsList callbacks against private files. */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +14,7 @@ type Dialog = { render(width: number): string[]; invalidate(): void; handleInput
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Dialog;
 let env: Hermetic;
 let boot: BootedPi;
-let context: ExtensionCommandContext;
+let context: ReturnType<typeof ctx>;
 let selections: (string | undefined)[];
 let inputs: (string | undefined)[];
 let edits: (string | undefined)[];
@@ -262,7 +261,7 @@ describe("menu edges", () => {
     });
     await detail("Plan", "Back");
     // Title, then the spacer: no empty legend line between them.
-    expect(titles[0].split("\n")[1]).toBe("");
+    expect(titles[0]!.split("\n")[1]).toBe("");
     expect(titles[0]).toContain("Agent types");
     expect(titles[0]).not.toMatch(/= project|= global|= package|= disabled/);
   });

@@ -29,20 +29,20 @@ async function run(onCompact: () => void, onUsage: () => void, fire: (opts: Reco
 
 describe("observer isolation", () => {
   it("drops a stale-ctx throw from the usage observer", async () => {
-    const { thrown, record } = await run(() => {}, () => { throw new Error(STALE); }, o => o.onAssistantUsage({ input: 1, output: 1, cacheWrite: 0, cost: 0 }));
+    const { thrown, record } = await run(() => {}, () => { throw new Error(STALE); }, o => o.onAssistantUsage!({ input: 1, output: 1, cacheWrite: 0, cost: 0 }));
     expect(thrown).toBeUndefined();
     expect(record.status).toBe("completed");
   });
 
   it("drops a stale-ctx throw from the compaction observer", async () => {
-    const { thrown, record } = await run(() => { throw new Error(STALE); }, () => {}, o => o.onCompaction({ reason: "threshold", tokensBefore: 1 }));
+    const { thrown, record } = await run(() => { throw new Error(STALE); }, () => {}, o => o.onCompaction!({ reason: "threshold", tokensBefore: 1 }));
     expect(thrown).toBeUndefined();
     expect(record.compactionCount).toBe(1);
   });
 
   it("drops a stale-ctx throw silently", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    await run(() => {}, () => { throw new Error(STALE); }, o => o.onAssistantUsage({ input: 1, output: 1, cacheWrite: 0, cost: 0 }));
+    await run(() => {}, () => { throw new Error(STALE); }, o => o.onAssistantUsage!({ input: 1, output: 1, cacheWrite: 0, cost: 0 }));
     expect(log).not.toHaveBeenCalled();
     log.mockRestore();
   });
@@ -50,19 +50,19 @@ describe("observer isolation", () => {
   it("logs a real observer defect once, and does not kill the run", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const { thrown, record } = await run(() => {}, () => { throw new Error("boom"); }, o => {
-      o.onAssistantUsage({ input: 1, output: 1, cacheWrite: 0, cost: 0 });
-      o.onAssistantUsage({ input: 1, output: 1, cacheWrite: 0, cost: 0 });
+      o.onAssistantUsage!({ input: 1, output: 1, cacheWrite: 0, cost: 0 });
+      o.onAssistantUsage!({ input: 1, output: 1, cacheWrite: 0, cost: 0 });
     });
     expect(thrown).toBeUndefined();
     expect(record.status).toBe("completed");
     expect(log).toHaveBeenCalledTimes(1);
-    expect(String(log.mock.calls[0][0])).toContain("usage observer failed");
+    expect(String(log.mock.calls[0]![0])).toContain("usage observer failed");
     log.mockRestore();
   });
 
   it("logs a compaction observer defect too", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { thrown } = await run(() => { throw new Error("boom"); }, () => {}, o => o.onCompaction({ reason: "threshold", tokensBefore: 1 }));
+    const { thrown } = await run(() => { throw new Error("boom"); }, () => {}, o => o.onCompaction!({ reason: "threshold", tokensBefore: 1 }));
     expect(thrown).toBeUndefined();
     expect(log).toHaveBeenCalledTimes(1);
     log.mockRestore();

@@ -22,8 +22,8 @@ export async function exerciseAmbientAccessBypass(ambient: string, bypass: Ambie
       return;
     }
     case "streams": {
-      const reader = new fs.ReadStream(join(ambient, ".agents", "read-stream"));
-      const writer = new fs.WriteStream(join(ambient, ".agents", "write-stream"));
+      const reader = Reflect.construct(fs.ReadStream, [join(ambient, ".agents", "read-stream")]);
+      const writer = Reflect.construct(fs.WriteStream, [join(ambient, ".agents", "write-stream")]);
       reader.destroy();
       writer.destroy();
       return;

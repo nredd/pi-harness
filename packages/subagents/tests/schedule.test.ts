@@ -152,7 +152,7 @@ describe("SubagentScheduler — lifecycle", () => {
   it("updateJob({enabled: false}) unschedules but keeps the record", () => {
     const job = scheduler.addJob({ name: "j1", description: "x", schedule: "1h", subagent_type: "general-purpose", prompt: "p" });
     scheduler.updateJob(job.id, { enabled: false });
-    expect(scheduler.list()[0].enabled).toBe(false);
+    expect(scheduler.list()[0]!.enabled).toBe(false);
     expect(scheduler.getNextRun(job.id)).toBeUndefined();
   });
 
@@ -490,11 +490,11 @@ describe("SubagentScheduler — fire path", () => {
     scheduler.addJob(input);
     await vi.advanceTimersByTimeAsync(150_000);
     expect(manager.spawn).toHaveBeenCalledTimes(2);
-    expect(store.list()[0].enabled).toBe(false);
-    resolvers[0]();
+    expect(store.list()[0]!.enabled).toBe(false);
+    resolvers[0]!();
     await vi.advanceTimersByTimeAsync(0);
     expect(() => scheduler.addJob(input)).toThrow(/already exists/);
-    resolvers[1]();
+    resolvers[1]!();
     await vi.advanceTimersByTimeAsync(0);
     expect(() => scheduler.addJob(input)).not.toThrow();
   });
@@ -598,11 +598,11 @@ describe("SubagentScheduler — fire path", () => {
       await vi.advanceTimersByTimeAsync(150_000);
       expect(manager.spawn).toHaveBeenCalledTimes(2);
       const next = activate();
-      resolvers[1]();
+      resolvers[1]!();
       await vi.advanceTimersByTimeAsync(0);
       expect(() => next.addJob({ ...input, name: "Ovl" })).toThrow(/already exists/);
       expect(new ScheduleStore(path()).get(job.id)?.lastStatus).toBe("running");
-      resolvers[0]();
+      resolvers[0]!();
       await vi.advanceTimersByTimeAsync(0);
       expect(() => next.addJob({ ...input, name: "Ovl" })).not.toThrow();
     });
@@ -800,7 +800,7 @@ describe("SubagentScheduler — fire path", () => {
         expect(after?.lastStatus).toBe("error");
         expect(after?.runOwner).toBeUndefined();
         expect(after?.lastRun).toBeDefined();
-        const held = [...(globalThis as Record<symbol, Map<string, unknown>>)[Symbol.for("pi-subagents:scheduled-runs")].keys()];
+        const held = [...(globalThis as Record<symbol, Map<string, unknown>>)[Symbol.for("pi-subagents:scheduled-runs")]!.keys()];
         expect(held.filter(key => key.includes(job.id))).toEqual([]);
         expect(vi.getTimerCount()).toBe(0);
         expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({ type: "error", error: "registry gone" }));
@@ -1001,7 +1001,7 @@ describe("SubagentScheduler — fire path", () => {
       expect(manager.spawn).toHaveBeenCalledTimes(1);
 
       // The agent ran and ended in error — same shape the real AgentManager produces.
-      const r = [...records.values()][0];
+      const r = [...records.values()][0]!;
       r.status = "error";
       r.resolve();
 
@@ -1019,7 +1019,7 @@ describe("SubagentScheduler — fire path", () => {
       });
 
       vi.advanceTimersByTime(2_000);
-      const r = [...records.values()][0];
+      const r = [...records.values()][0]!;
       r.status = "completed";
       r.resolve();
 
@@ -1074,10 +1074,10 @@ describe("SubagentScheduler — fire path", () => {
 
       vi.advanceTimersByTime(3_000);
       const recs = [...records.values()];
-      recs[0].status = "aborted";
-      recs[0].resolve();
-      recs[1].status = "stopped";
-      recs[1].resolve();
+      recs[0]!.status = "aborted";
+      recs[0]!.resolve();
+      recs[1]!.status = "stopped";
+      recs[1]!.resolve();
 
       await vi.advanceTimersByTimeAsync(0);
 

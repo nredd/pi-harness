@@ -112,10 +112,10 @@ async function invoke(path: Path, model?: string | null) {
     await boot.tools.get("Agent").execute("call", { subagent_type: "scout", description: "test", prompt: "go", run_in_background: false, model }, undefined, undefined, context);
   } else if (path === "nested") {
     const tool = createNestedSubagentTools({ manager, pi: boot.pi, parentAgentId: "owner", depth: 1, maxSubagentDepth: 2,
-      allowedSubagents: "all", configCwd: sandbox.dir, projectTrusted: true })[0];
+      allowedSubagents: "all", configCwd: sandbox.dir, projectTrusted: true })[0]!;
     await tool.execute("nested", { subagent_type: "scout", description: "test", prompt: "go", model }, undefined, undefined, context);
   } else if (path === "scheduled") {
-    scheduler.addJob({ name: "test", description: "test", subagent_type: "scout", prompt: "go", schedule: "+1s", model });
+    scheduler.addJob({ name: "test", description: "test", subagent_type: "scout", prompt: "go", schedule: "+1s", model: model as string | undefined });
     clock.advance(1000);
   } else if (path === "RPC") {
     await new Promise<void>((resolve, reject) => {
@@ -125,11 +125,11 @@ async function invoke(path: Path, model?: string | null) {
   } else if (path === "mention") {
     await boot.lifecycle.get("input")?.({ type: "input", text: "@scout go", source: "interactive" } as never, context);
   } else {
-    await createWorkflowHost({ pi: boot.pi, ctx: context, manager }).spawnAgent({ agentId: "wf-agent-1", agentType: "scout", label: "test", prompt: "go", model });
+    await createWorkflowHost({ pi: boot.pi, ctx: context, manager }).spawnAgent({ index: 0, agentId: "wf-agent-1", agentType: "scout", label: "test", prompt: "go", model: model as string | undefined });
   }
   await flush();
   const invocation = vi.mocked(runner.runAgent).mock.calls.at(-1);
-  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")]!;
   const record = invocation ? manager.getRecord(invocation[3].agentId!) ?? root.getRecord(invocation[3].agentId!) : undefined;
   return { invocation, record };
 }
@@ -233,7 +233,7 @@ describe.each(paths)("%s model selection parity", path => {
     setAgentModels({ scout: ref("typed") });
     await invoke(path, "missing-model").catch(() => {});
     expect(runner.runAgent).not.toHaveBeenCalled();
-    if (path === "scheduled") expect(scheduler.list()[0].lastStatus).toBe("error");
+    if (path === "scheduled") expect(scheduler.list()[0]!.lastStatus).toBe("error");
   });
 
   if (path !== "mention") it("refuses an explicit out-of-scope model", async () => {
@@ -262,7 +262,7 @@ it.each([ref("claude-5-5-sonnet"), "router/default"])("echoes safe resolved iden
   expect(result.details.modelNote).toBeUndefined();
   await flush();
   clock.advance(200);
-  const notices = vi.mocked(boot.pi.sendMessage).mock.calls.map(args => JSON.stringify(args[0]));
+  const notices: string[] = vi.mocked(boot.pi.sendMessage).mock.calls.map((args: unknown[]) => JSON.stringify(args[0]));
   expect(notices.some(notice => notice.includes(expected))).toBe(true);
   expect(notices.join("\n")).not.toContain("fixture-not-a-secret");
 });
@@ -384,8 +384,8 @@ it("reselects quota-parked defaults at fire time instead of freezing the admitte
     subagent_type: "scout", description: "parked", prompt: "go", run_in_background: true,
   }, undefined, undefined, context);
   const [job] = new ScheduleStore(resolveStorePath(sandbox.dir, "s1")).list();
-  expect(job.quotaParked).toBe(true);
-  expect(job.model).toBeUndefined();
+  expect(job!.quotaParked).toBe(true);
+  expect(job!.model).toBeUndefined();
   expect(admissionModels).toEqual(["router/default"]);
   expect(runner.runAgent).not.toHaveBeenCalled();
   refuseStaleParent = true;
@@ -404,8 +404,8 @@ it("keeps an explicit quota-parked alias request and re-resolves it at fire time
     subagent_type: "scout", description: "parked explicit", prompt: "go", model: "portable", run_in_background: true,
   }, undefined, undefined, context);
   const [job] = new ScheduleStore(resolveStorePath(sandbox.dir, "s1")).list();
-  expect(job.quotaParked).toBe(true);
-  expect(job.model).toBe("portable");
+  expect(job!.quotaParked).toBe(true);
+  expect(job!.model).toBe("portable");
   expect(admissionModels).toEqual(["router/default"]);
   expect(runner.runAgent).not.toHaveBeenCalled();
   refuseStaleParent = true;
@@ -424,7 +424,7 @@ it("reopens an unavailable-tier run on a literal model with only current fallbac
   setModelTiers({ cheap: ["missing/model"] }, { onUnavailable: "inherit" });
   setAgentModels({ scout: "@cheap" });
   const { record } = await invoke("Agent");
-  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")]!;
   expect(record?.sessionFile).toBeDefined();
   expect(record?.modelFallback).toEqual({ input: "@cheap", used: ref("parent") });
   expect(record?.modelTier).toMatchObject({ kind: "unavailable", tier: "cheap" });
@@ -447,7 +447,7 @@ it("does not retain unavailable-tier fallback provenance when a reopen request f
   setModelTiers({ cheap: ["missing/model"] }, { onUnavailable: "inherit" });
   setAgentModels({ scout: "@cheap" });
   const { record } = await invoke("Agent");
-  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")]!;
   clock.advance(11 * 60_000);
   setModelTiers({ cheap: ["missing/model"] }, { onUnavailable: "error" });
   await boot.lifecycle.get("input")?.({ type: "input", text: "@scout again", source: "interactive" } as never, context);
@@ -468,7 +468,7 @@ it("keeps the prior tier separate from an evicted mention's new literal selectio
   await boot.lifecycle.get("input")?.({ type: "input", text: "@scout again", source: "interactive" } as never, context);
   await flush();
   const options = vi.mocked(runner.runAgent).mock.calls.at(-1)?.[3];
-  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")];
+  const root = (globalThis as Record<symbol, { getRecord(id: string): ReturnType<AgentManager["getRecord"]> }>)[Symbol.for("pi-subagents:manager")]!;
   expect(options?.resumeSessionFile).toBe(record?.sessionFile);
   expect(root.getRecord(options!.agentId!)?.previousModelTier).toEqual(originalTier);
   expect(root.getRecord(options!.agentId!)?.modelTier).toBeUndefined();

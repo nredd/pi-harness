@@ -90,8 +90,6 @@ describe("output-file streaming across a real compaction (#145)", () => {
       cwd,
       agentDir,
       model,
-      // Registry for pre-0.80.8 Pi, runtime for post — each ignores the other.
-      modelRegistry: backend.modelRegistry as never,
       modelRuntime: backend.modelRuntime as never,
       resourceLoader: loader,
       sessionManager: SessionManager.inMemory(cwd),
@@ -169,7 +167,6 @@ describe("output-file streaming across a real compaction (#145)", () => {
         cwd,
         agentDir,
         model,
-        modelRegistry: backend.modelRegistry as never,
         modelRuntime: backend.modelRuntime as never,
         resourceLoader: loader,
         sessionManager: SessionManager.inMemory(cwd),

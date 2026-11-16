@@ -15,7 +15,7 @@ const RESOURCE_FIELDS = ["extensions", "skills", "prompts", "themes"] as const;
 /** Keep filter modifiers and non-home paths intact; only replace leading home references. */
 function expandSetting(entry: string, homeDir: string, modifiers = true): string {
   const prefix = modifiers && /^[!+-]/.test(entry) ? entry[0] : "";
-  const path = entry.slice(prefix.length);
+  const path = entry.slice(prefix!.length);
   const trimmed = path.trim();
   if (trimmed !== "~" && !trimmed.startsWith("~/") && !(process.platform === "win32" && trimmed.startsWith("~\\"))) return entry;
   return prefix + normalizeHomePath(trimmed, homeDir);

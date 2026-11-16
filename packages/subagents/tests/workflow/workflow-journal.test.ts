@@ -187,7 +187,7 @@ describe("replay", () => {
     const failing = stubHost(() => (attempt++ === 1 ? { ok: false, error: "boom" } : { ok: true, text: "fine" }));
     await run(twoAgents, { host: failing.host, journal: first });
 
-    expect(first.entries[1]).toEqual({ index: 1, key: first.entries[1].key, ok: false });
+    expect(first.entries[1]).toEqual({ index: 1, key: first.entries[1]!.key, ok: false });
 
     const second = stubHost(() => ({ ok: true, text: "retried" }));
     const result = await run(twoAgents, { host: second.host, journal: { entries: first.entries } });
@@ -272,7 +272,7 @@ describe("replay", () => {
     const one = await run(body, { host: resuming, journal: first });
     expect(one.status).toBe("completed");
     expect(one.value).toBe("resumed:follow up");
-    expect(first.entries[1].resumed).toBe(true);
+    expect(first.entries[1]!.resumed).toBe(true);
 
     const two = await run(body, { host: resuming, journal: { entries: first.entries } });
     expect(two.status).toBe("completed");

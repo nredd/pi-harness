@@ -56,7 +56,7 @@ describe("fleet journal", () => {
     expect(h.state.count).toBe(2048);
     const last = h.branch.at(-1)?.data as FleetSnapshot;
     expect(last.overflow).toEqual({ error: 480, aborted: 480, failed: 480, killed: 480 });
-    expect(Object.keys(h.state.alerts[0]).sort()).toEqual(["description", "id", "state", "timestamp", "type"]);
+    expect(Object.keys(h.state.alerts[0]!).sort()).toEqual(["description", "id", "state", "timestamp", "type"]);
     expect(JSON.stringify(last).length).toBeLessThan(22000);
     h.state.acknowledge("a2000");
     h.state.acknowledge("a2000"); // exact-once even outside detail cap

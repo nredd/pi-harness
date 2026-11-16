@@ -35,7 +35,7 @@ async function boot() {
   const signal = new AbortController().signal;
   const parentCtx = ctx();
   Object.defineProperty(parentCtx, "signal", { get: () => signal });
-  await booted.lifecycle.get("session_start")({ type: "session_start" }, parentCtx);
+  await booted.lifecycle.get("session_start")!({ type: "session_start" }, parentCtx);
   return { ...booted, parentCtx };
 }
 

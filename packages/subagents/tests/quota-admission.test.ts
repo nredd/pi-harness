@@ -131,7 +131,7 @@ describe("Agent tool admission", () => {
       expect(reply).toContain("Queued");
       const [job] = jobs();
       // No explicit request: do not freeze today's parent/configured selection.
-      expect(job.model).toBeUndefined();
+      expect(job!.model).toBeUndefined();
       expect(job).toMatchObject({
         scheduleType: "once",
         schedule: new Date(resetAt + QUOTA_RESTART_GRACE_MS).toISOString(),

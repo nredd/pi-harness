@@ -209,7 +209,7 @@ export function dialogRowGlyph(
     case "interrupted":
       return { text: glyphs.queued, color: "dim" };
     case "running":
-      return { text: glyphs.spinner[spinnerFrame % glyphs.spinner.length], color: "dim" };
+      return { text: glyphs.spinner[spinnerFrame % glyphs.spinner.length]!, color: "dim" };
   }
 }
 
@@ -723,7 +723,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
   const digits = String(view.groups.length).length;
   const phases = windowRange(view.clampedPhase, view.groups.length, capacity);
   for (let i = phases.start; i < Math.min(phases.end, view.groups.length); i++) {
-    const group = view.groups[i];
+    const group = view.groups[i]!;
     const selected = i === view.clampedPhase;
     const color: WorkflowCardColor =
       selected ? "accent"
@@ -763,7 +763,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
     for (let i = agents.start; i < Math.min(agents.end, view.visibleAgents.length); i++) {
       agentRows.push(
         agentRow({
-          entry: view.visibleAgents[i],
+          entry: view.visibleAgents[i]!,
           selected: i === view.clampedAgent,
           compact: !inPhases,
           width: agentPaneWidth,
@@ -936,7 +936,7 @@ export function layoutWorkflowDialog(input: WorkflowDialogInput): WorkflowCardLi
  * ------------------------------------------------------------------------- */
 
 const nextFilter = (filter: WorkflowDialogFilter): WorkflowDialogFilter =>
-  WORKFLOW_DIALOG_FILTERS[(WORKFLOW_DIALOG_FILTERS.indexOf(filter) + 1) % WORKFLOW_DIALOG_FILTERS.length];
+  WORKFLOW_DIALOG_FILTERS[(WORKFLOW_DIALOG_FILTERS.indexOf(filter) + 1) % WORKFLOW_DIALOG_FILTERS.length]!;
 
 /**
  * Map a keypress to the next state and, where the key is an action, what the
@@ -1052,14 +1052,25 @@ export class WorkflowDialog implements Component {
   private timer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
 
-  constructor(
-    private tui: TUI,
-    private source: () => WorkflowDialogSource,
-    private theme: Theme,
-    private done: (result: undefined) => void,
-    private actions: WorkflowDialogActions = {},
+    private tui: TUI;
+  private source: () => WorkflowDialogSource;
+  private theme: Theme;
+  private done: (result: undefined) => void;
+  private actions: WorkflowDialogActions;
+constructor(
+    tui: TUI,
+    source: () => WorkflowDialogSource,
+    theme: Theme,
+    done: (result: undefined) => void,
+    actions: WorkflowDialogActions = {},
     initialPhaseIndex = 0,
   ) {
+    this.tui = tui;
+    this.source = source;
+    this.theme = theme;
+    this.done = done;
+    this.actions = actions;
+
     this.state = initialWorkflowDialogState(initialPhaseIndex);
     this.timer = setInterval(() => {
       this.spinnerFrame++;

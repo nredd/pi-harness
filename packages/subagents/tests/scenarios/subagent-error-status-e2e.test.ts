@@ -11,6 +11,7 @@
  */
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { text } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentCall,
@@ -24,7 +25,7 @@ function agentToolResult(session: AgentSession): string {
   const msg = [...session.messages].reverse().find(
     (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
   );
-  return ((msg?.content ?? []) as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
+  return text(msg);
 }
 
 vi.setConfig({ testTimeout: 30_000 });

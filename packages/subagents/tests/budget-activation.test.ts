@@ -30,8 +30,8 @@ it("fails session_start with a restart diagnostic instead of leaving a partial a
   // bind handler instead, with no tools, commands, managers or other handlers.
   expect(() => subagentsExtension(pi as unknown as ExtensionAPI)).not.toThrow();
   expect(pi.on).toHaveBeenCalledTimes(1);
-  expect(pi.on.mock.calls[0][0]).toBe("session_start");
-  const failBind = pi.on.mock.calls[0][1] as () => Promise<void>;
+  expect(pi.on.mock.calls[0]![0]).toBe("session_start");
+  const failBind = pi.on.mock.calls[0]![1] as () => Promise<void>;
   await expect(failBind()).rejects.toBeInstanceOf(ExtensionStartupError);
   await expect(failBind()).rejects.toThrow(/Incompatible process budget.*Restart pi/);
   for (const register of [pi.registerMessageRenderer, pi.registerEntryRenderer, pi.registerFlag, pi.registerTool, pi.registerCommand, pi.events.on, pi.events.emit]) {

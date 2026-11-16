@@ -76,7 +76,7 @@ function statusOf(
     case "queued":
       return { icon: theme.fg("muted", "◦"), text: details.activity ?? "queued" };
     default: {
-      const frame = SPINNER[Math.floor(now / 80) % SPINNER.length];
+      const frame = SPINNER[Math.floor(now / 80) % SPINNER.length]!;
       const text = activity
         ? describeActivity(activity.activeTools, activity.responseText, activity.modelCall, now)
         : (details.status === "background" ? "running in background" : (details.activity ?? "thinking…"));
@@ -187,14 +187,27 @@ export function keepRowTicking(
  * the agent's state now rather than the state when the tool last returned.
  */
 export class AgentResultView implements Component {
-  constructor(
-    private readonly details: AgentDetails,
-    private readonly resultText: string,
-    private readonly expanded: boolean,
-    private readonly live: AgentRowLive,
-    private readonly theme: Theme,
-    private readonly clock: Clock = realClock,
-  ) {}
+    private readonly details: AgentDetails;
+  private readonly resultText: string;
+  private readonly expanded: boolean;
+  private readonly live: AgentRowLive;
+  private readonly theme: Theme;
+  private readonly clock: Clock;
+constructor(
+    details: AgentDetails,
+    resultText: string,
+    expanded: boolean,
+    live: AgentRowLive,
+    theme: Theme,
+    clock: Clock = realClock,
+  ) {
+    this.details = details;
+    this.resultText = resultText;
+    this.expanded = expanded;
+    this.live = live;
+    this.theme = theme;
+    this.clock = clock;
+}
 
   render(width: number): string[] {
     const lines = [agentRowSummary(this.details, this.live, this.theme, this.clock.now(), width)];
@@ -225,11 +238,18 @@ export class AgentResultView implements Component {
 
 /** The call half: `Plan  desc`, and the prompt underneath when expanded. */
 export class AgentCallView implements Component {
-  constructor(
-    private readonly header: string,
-    private readonly prompt: string | undefined,
-    private readonly theme: Theme,
-  ) {}
+    private readonly header: string;
+  private readonly prompt: string | undefined;
+  private readonly theme: Theme;
+constructor(
+    header: string,
+    prompt: string | undefined,
+    theme: Theme,
+  ) {
+    this.header = header;
+    this.prompt = prompt;
+    this.theme = theme;
+}
 
   render(width: number): string[] {
     const lines = [truncateToWidth(this.header, width)];
