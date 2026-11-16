@@ -1,8 +1,5 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-// Vitest 5 removed `vitest bench`; opt-in tinybench cases retain the same mocks and home guard.
-const benchmarking = process.env.PI_SUBAGENTS_BENCH === "1";
-
 export default definePackageConfig("subagents", {
 	// `istanbul`, NOT the `v8` default. v8 under-reports badly on this suite:
 	// `src/env.ts` came out at 54.54% for the full run but 90.9% for
@@ -34,12 +31,11 @@ export default definePackageConfig("subagents", {
 	// affects modules Vite resolves; without inline the runtime stays externalized).
 	test: {
 		maxWorkers: 2,
-		...(benchmarking ? { include: ["tests/*.bench.ts"] } : {}),
 		setupFiles: ["./tests/fixtures/tmp-root-setup.ts"],
 		server: { deps: { inline: [/@earendil-works\/pi-/] } },
 		// Measure on every run, not only under `--coverage`.
 		coverage: {
-			enabled: !benchmarking,
+			enabled: true,
 		},
 	},
 	resolve: { dedupe: ["@earendil-works/pi-ai"] },

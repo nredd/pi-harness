@@ -111,6 +111,7 @@
   "packages/preset: test/footer-cache.test.mjs: test-extension",
   "packages/preset: test/footer-quota.test.mjs: test-extension",
   "packages/preset: test: top-level-entry",
+  "packages/subagents: package.json: script-name bench:ab",
   "packages/todo: .bun-version: dotfile",
   "packages/todo: .gitignore: dotfile",
   "packages/todo: .test-support: dotfile",

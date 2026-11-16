@@ -13,6 +13,9 @@ const CHILD_TIMEOUT_MS = 60_000;
 it("the opt-in live smoke entry point retains its operator-backed Vitest command", () => {
 	const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 	expect(manifest.scripts["test:e2e"]).toBe("JITI_FS_CACHE=false vitest run scenarios --reporter=verbose");
+	expect(manifest.scripts.bench).toBe("JITI_FS_CACHE=false vitest bench");
+	expect(manifest.scripts["bench:ab"]).toBe("node tests/fixtures/ab.mjs");
+	expect(manifest).not.toHaveProperty("type");
 });
 
 it(

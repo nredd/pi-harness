@@ -1,12 +1,8 @@
-import { Bench, type BenchOptions, type Fn } from "tinybench";
-import { it } from "vitest";
+import { type BenchFn, type BenchRunOptions, it } from "vitest";
 
-/** Run an opt-in benchmark with Vitest's module mocks and tinybench's sampling. */
-export function bench(name: string, fn: Fn, options: BenchOptions = {}): void {
-	it(name, async () => {
-		const benchmark = new Bench(options);
-		benchmark.add(name, fn);
-		await benchmark.run();
-		console.table(benchmark.table());
+/** Preserve named benchmark cases using Vitest 5's native test-context benchmark fixture. */
+export function bench(name: string, fn: BenchFn, options: BenchRunOptions = {}): void {
+	it(name, async ({ bench }) => {
+		await bench(name, fn).run(options);
 	}, 0);
 }
