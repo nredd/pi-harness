@@ -649,7 +649,9 @@ export async function exportStats(
 			(diagnostic) =>
 				`pi-stats-scan: ${JSON.stringify({
 					...diagnostic,
-					path: diagnostic.path.slice(0, 1024).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "\ufffd"),
+					path: diagnostic.path
+						.slice(0, 1024)
+						.replace(/[\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "\ufffd"),
 				})}`,
 		);
 		throw new Error(

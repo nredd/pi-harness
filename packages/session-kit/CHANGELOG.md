@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Neutralize the complete Unicode `Bidi_Control` set in local scan paths, including ALM, LRM and RLM; preserve C1 replacement and JSON C0 escaping (#960).
+
 - Report bounded local-only file/physical-line diagnostics for incomplete pi exports, including filesystem and cached-history failures; keep prior publication unchanged (#960, Refs nredd/dotfiles#1).
 
 - Keep `/stats` responsive with OpenCode: cache its scan per session under a stamp of the database plus `-wal`, read a cold or changed database in keyset pages that yield to the event loop, and show `reading <harness>` progress in the loading status. Quota: drop readings reset more than one window ago and hide an expired row beside a live one for the same provider, limit and window (any account); strip control sequences from print-mode quota labels. Models rows no longer take a chart colour from a same-named harness line (part of [#367](https://github.com/nredd/pi-harness/issues/367))

@@ -543,6 +543,25 @@ describe("actual portable bundled CLI", () => {
 		expect(run(artifact, ["export", "--output", repo, "--output", repo]).status).toBe(1);
 		expect(run(artifact, ["unknown"]).status).toBe(1);
 	});
+	it("neutralizes every Unicode Bidi_Control in real filename diagnostics", () => {
+		const controls = "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";
+		const path = join(a, "sessions", `bad${controls}\u009b\n.jsonl`);
+		sessionFile(path, { startMs: at("2026-09-30"), lines: [`${CANARY}{broken`] });
+		const artifact = packedArtifact(join(dir, "packed"));
+		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
+		expect(failed.status).toBe(1);
+		expect(failed.stdout).toBe("");
+		expect(failed.stderr).toContain(
+			JSON.stringify({
+				path: join(a, "sessions", "bad�������������\n.jsonl"),
+				line: 2,
+				reason: "invalid-record",
+			}),
+		);
+		for (const control of controls) expect(failed.stderr).not.toContain(control);
+		expect(failed.stderr).not.toContain(CANARY);
+		expect(failed.stderr.trim().split("\n")).toHaveLength(2);
+	});
 	it("retains published bytes on bounded scan diagnostics, including cached damage and filesystem failures", () => {
 		const path = seed(a);
 		const artifact = packedArtifact(join(dir, "packed"));
