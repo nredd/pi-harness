@@ -10,8 +10,8 @@ import { accessSync, appendFileSync, chmodSync, constants, existsSync, lstatSync
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { type ModelFallback, modelFallbackNote } from "./model-resolver.js";
-import { type TierDisclosure, tierDisclosure, tierNote } from "./model-tiers.js";
+import { type ModelFallback, modelFallbackNote } from "./model-resolver.ts";
+import { type TierDisclosure, tierDisclosure, tierNote } from "./model-tiers.ts";
 
 /**
  * Project/global default for writing a subagent's `.output` transcript; a custom

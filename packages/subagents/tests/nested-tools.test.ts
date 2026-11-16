@@ -1,0 +1,824 @@
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getAvailableTypes, registerAgents, setDefaultsDisabled, setFallbackSubagent } from "../src/agent-types.ts";
+import { loadCustomAgents } from "../src/custom-agents.ts";
+import { setScopeModelsEnabled } from "../src/model-scope.ts";
+import {
+  createNestedSubagentTools,
+  getMaxSubagentDepth,
+  hasNestableTypes,
+  NESTED_BACKGROUND_ERROR,
+  NESTED_WORKFLOW_ERROR,
+  NESTED_WORKFLOW_NO_AGENT_ERROR,
+  type NestedAgentManager,
+  setMaxSubagentDepth,
+} from "../src/nested-tools.ts";
+import { encodeCwd, transcriptRoot } from "../src/output-file.ts";
+import { resetPackageState, setProjectTrusted } from "../src/package-resources.ts";
+
+let cwd: string;
+let manager: NestedAgentManager;
+let records: Map<string, any>;
+let spawn: ReturnType<typeof vi.fn>;
+let spawnAndWait: ReturnType<typeof vi.fn>;
+
+function writeAgent(name: string, extra = "") {
+  const dir = join(cwd, ".pi", "agents");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.md`), `---\ndescription: ${name}\ntools: read\n${extra}---\n${name}\n`);
+}
+
+const MODELS = [
+  { id: "allowed", name: "Allowed", provider: "anthropic" },
+  { id: "blocked", name: "Blocked", provider: "anthropic" },
+];
+
+function ctx(executionCwd = cwd) {
+  return {
+    cwd: executionCwd,
+    model: undefined,
+    modelRegistry: {
+      find: (provider: string, id: string) => ({ provider, id }),
+      getAvailable: () => MODELS,
+      getAll: () => MODELS,
+    },
+  } as any;
+}
+
+function tools(
+  allowedSubagents: "all" | string[] = "all",
+  depth = 1,
+  maxSubagentDepth = 2,
+  configCwd = cwd,
+  projectTrusted = true,
+) {
+  return createNestedSubagentTools({
+    manager,
+    pi: {} as any,
+    parentAgentId: "parent-1",
+    depth,
+    maxSubagentDepth,
+    allowedSubagents,
+    configCwd,
+    projectTrusted,
+  });
+}
+
+async function execute(tool: any, params: Record<string, unknown>, executionCwd = cwd) {
+  return tool.execute("call-1", params, undefined, undefined, ctx(executionCwd));
+}
+
+beforeEach(() => {
+  cwd = mkdtempSync(join(tmpdir(), "nested-tools-test-"));
+  writeAgent("scout");
+  writeAgent("reviewer");
+  registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
+  records = new Map();
+  spawn = vi.fn((_pi, _ctx, type, _prompt, options) => {
+    const id = `child-${records.size + 1}`;
+    records.set(id, { id, type, status: "running", parentAgentId: options.parentAgentId });
+    return id;
+  });
+  spawnAndWait = vi.fn(async (_pi, _ctx, type, _prompt, options) => {
+    const id = `child-${records.size + 1}`;
+    const record = { id, type, status: "completed", result: "done", parentAgentId: options.parentAgentId };
+    records.set(id, record);
+    return { id, record };
+  });
+  manager = {
+    spawn,
+    spawnAndWait,
+    awaitStartup: vi.fn(async () => {}),
+    getRecord: (id: string) => records.get(id),
+    resume: vi.fn(),
+    abort: vi.fn((id: string, by?: string) => {
+      const record = records.get(id);
+      if (record) Object.assign(record, { status: "stopped", stoppedBy: by });
+      return record !== undefined;
+    }),
+  } as any;
+});
+
+afterEach(() => {
+  setScopeModelsEnabled(false);
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+describe("nested type availability (#331, #333)", () => {
+  const opts = () => ({ configCwd: cwd, projectTrusted: true, homeDir: join(cwd, "home") });
+
+  it("is available for `all` and for any listed type that is enabled", () => {
+    expect(hasNestableTypes("all", opts())).toBe(true);
+    expect(hasNestableTypes(["scout"], opts())).toBe(true);
+    expect(hasNestableTypes(["ghost", "Reviewer"], opts())).toBe(true);
+  });
+
+  it("is unavailable when no listed type resolves to an enabled agent", () => {
+    writeAgent("disabled", "enabled: false\n");
+    expect(hasNestableTypes(["ghost"], opts())).toBe(false);
+    expect(hasNestableTypes(["disabled"], opts())).toBe(false);
+  });
+
+  it("is unavailable for `all` when the registry has no enabled agents", () => {
+    for (const name of ["scout", "reviewer"]) unlinkSync(join(cwd, ".pi", "agents", `${name}.md`));
+    setDefaultsDisabled(true);
+    try {
+      expect(hasNestableTypes("all", opts())).toBe(false);
+    } finally {
+      setDefaultsDisabled(false);
+    }
+  });
+
+  it("describes an empty list in words, not as a `none` type", () => {
+    const [agent] = tools(["ghost"]);
+
+    expect(agent.parameters.properties.subagent_type.description).toContain("no agent types are currently available");
+    expect(agent.parameters.properties.subagent_type.description).not.toMatch(/Available: none/);
+  });
+
+  it("never advertises `none` as a type once the last agent vanishes mid-session", async () => {
+    const [agent] = tools(["scout"]);
+    unlinkSync(join(cwd, ".pi", "agents", "scout.md"));
+    const result = await execute(agent, { subagent_type: "none", description: "x", prompt: "y" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("No nested agent types are available");
+    expect(result.content[0].text).not.toMatch(/Allowed: none/);
+  });
+});
+
+describe("child-safe nested Agent tools", () => {
+  it("allows any enabled agent when allowed_subagents is omitted", async () => {
+    const [agent] = tools();
+    const result = await execute(agent, {
+      subagent_type: "reviewer",
+      description: "review evidence",
+      prompt: "Review it",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(spawnAndWait).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), "reviewer", "Review it",
+      expect.objectContaining({
+        depth: 2,
+        parentAgentId: "parent-1",
+        maxSubagentDepth: 2,
+        configCwd: cwd,
+      }),
+    );
+  });
+
+  it("keeps agent discovery rooted in inherited config, not the working directory", async () => {
+    const workCwd = mkdtempSync(join(tmpdir(), "nested-tools-work-"));
+    const workAgentDir = join(workCwd, ".pi", "agents");
+    mkdirSync(workAgentDir, { recursive: true });
+    writeFileSync(join(workAgentDir, "intruder.md"), "---\ndescription: intruder\n---\nintruder\n");
+
+    try {
+      const [agent] = tools();
+      const result = await execute(agent, {
+        subagent_type: "intruder",
+        description: "untrusted agent",
+        prompt: "Do work",
+      }, workCwd);
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Unknown or disabled");
+      expect(spawnAndWait).not.toHaveBeenCalled();
+    } finally {
+      rmSync(workCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("hides project agent files from the nested registry when the parent's project is untrusted", async () => {
+    const [agent] = tools("all", 1, 2, cwd, false);
+    expect(agent.parameters.properties.subagent_type.description).not.toContain("scout");
+
+    const result = await execute(agent, { subagent_type: "scout", description: "scout it", prompt: "Go" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Unknown or disabled");
+    expect(spawnAndWait).not.toHaveBeenCalled();
+  });
+
+  it("offers project agent files when the parent's project is trusted", () => {
+    const [agent] = tools("all", 1, 2, cwd, true);
+    expect(agent.parameters.properties.subagent_type.description).toContain("scout");
+  });
+
+  it("decides on the captured parent trust, not on the session state", async () => {
+    // Session state is process-wide and may say anything; the child's own
+    // decision was made once, by the runner, and travels with its tools.
+    setProjectTrusted(false);
+    try {
+      const [agent] = tools("all", 1, 2, cwd, true);
+      const result = await execute(agent, { subagent_type: "scout", description: "scout it", prompt: "Go" });
+      expect(result.isError).toBe(false);
+    } finally {
+      resetPackageState();
+    }
+  });
+
+  it("hands its config root's trust to the child it spawns, paired with the root", async () => {
+    for (const trusted of [true, false]) {
+      spawnAndWait.mockClear();
+      const [agent] = tools("all", 1, 2, cwd, trusted);
+      // An untrusted root hides `scout`, so use a built-in-free path: spawn only when visible.
+      const result = await execute(agent, { subagent_type: "scout", description: "scout it", prompt: "Go" });
+      if (trusted) {
+        expect(result.isError).toBe(false);
+        expect(spawnAndWait.mock.lastCall![4]).toMatchObject({ configCwd: cwd, configProjectTrusted: true });
+      } else {
+        expect(spawnAndWait).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("enforces a narrow allowlist", async () => {
+    const [limited] = tools(["scout"]);
+    const denied = await execute(limited, {
+      subagent_type: "reviewer",
+      description: "review evidence",
+      prompt: "Review it",
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0].text).toContain("not allowed");
+    expect(spawnAndWait).not.toHaveBeenCalled();
+
+    const allowed = await execute(limited, {
+      subagent_type: "scout",
+      description: "find files",
+      prompt: "Find them",
+    });
+    expect(allowed.isError).toBe(false);
+    expect(spawnAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves nested types without touching the process-global registry", async () => {
+    // A worktree-isolated parent hands its own config root down. Resolving from
+    // it must not swap the registry the main session and every other agent read.
+    const otherCwd = mkdtempSync(join(tmpdir(), "nested-tools-config-"));
+    const otherAgentDir = join(otherCwd, ".pi", "agents");
+    mkdirSync(otherAgentDir, { recursive: true });
+    writeFileSync(join(otherAgentDir, "branch-only.md"), "---\ndescription: branch-only\n---\nbranch-only\n");
+    const before = getAvailableTypes();
+
+    try {
+      const [agent] = tools("all", 1, 2, otherCwd);
+      const result = await execute(agent, {
+        subagent_type: "branch-only",
+        description: "branch agent",
+        prompt: "Do work",
+      });
+
+      // Resolved from the inherited root...
+      expect(result.isError).toBe(false);
+      // ...without leaking it into the shared registry.
+      expect(getAvailableTypes()).toEqual(before);
+      expect(getAvailableTypes()).not.toContain("branch-only");
+    } finally {
+      rmSync(otherCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the scopeModels allowlist to a caller-supplied model", async () => {
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ enabledModels: ["anthropic/allowed"] }),
+    );
+    setScopeModelsEnabled(true);
+    const [agent] = tools();
+
+    const blocked = await execute(agent, {
+      subagent_type: "scout",
+      description: "find files",
+      prompt: "Find them",
+      model: "anthropic/blocked",
+    });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.content[0].text).toContain("Model not in scope");
+    expect(spawnAndWait).not.toHaveBeenCalled();
+
+    const inScope = await execute(agent, {
+      subagent_type: "scout",
+      description: "find files",
+      prompt: "Find them",
+      model: "anthropic/allowed",
+    });
+    expect(inScope.isError).toBe(false);
+  });
+
+  it("queues a steer for an owned child whose session is not ready yet", async () => {
+    const [, , steer] = tools();
+    const record: Record<string, unknown> = {
+      id: "child-1",
+      status: "running",
+      parentAgentId: "parent-1",
+    };
+    records.set("child-1", record);
+
+    const result = await execute(steer, { agent_id: "child-1", message: "focus on tests" });
+
+    expect(result.isError).toBe(false);
+    expect(record.pendingSteers).toEqual(["focus on tests"]);
+  });
+
+  it("appends to the steers already queued for a child without a session", async () => {
+    const [, , steer] = tools();
+    const record: Record<string, unknown> = {
+      id: "child-1", status: "running", parentAgentId: "parent-1", pendingSteers: ["first"],
+    };
+    records.set("child-1", record);
+
+    await execute(steer, { agent_id: "child-1", message: "second" });
+
+    expect(record.pendingSteers).toEqual(["first", "second"]);
+  });
+
+  // #442 made the top-level steer_subagent resume a finished agent; the nested
+  // tool keeps its own contract, where a finished child resumes through Agent.
+  it("still refuses to steer its own finished child", async () => {
+    const [, , steer] = tools();
+    const sessionSteer = vi.fn();
+    records.set("child-1", { id: "child-1", status: "completed", result: "done", parentAgentId: "parent-1", session: { steer: sessionSteer } });
+
+    const result = await execute(steer, { agent_id: "child-1", message: "more" });
+
+    expect(result.isError).toBe(true);
+    expect(sessionSteer).not.toHaveBeenCalled();
+    expect(manager.resume).not.toHaveBeenCalled();
+  });
+
+  it("blocks delegation at the inherited depth cap", async () => {
+    const [agent] = tools("all", 2, 2);
+    const result = await execute(agent, {
+      subagent_type: "scout",
+      description: "find files",
+      prompt: "Find them",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("depth=2, max=2");
+    expect(spawnAndWait).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown or disabled nested agent types instead of falling back", async () => {
+    writeAgent("disabled", "enabled: false\n");
+    registerAgents(loadCustomAgents(cwd));
+    const [agent] = tools();
+
+    for (const subagentType of ["missing", "disabled"]) {
+      const result = await execute(agent, {
+        subagent_type: subagentType,
+        description: "invalid agent",
+        prompt: "Do work",
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Unknown or disabled");
+    }
+  });
+
+  it("refuses a background launch with an explanation and never spawns", async () => {
+    const [agent] = tools(["scout"]);
+    const launched = await execute(agent, {
+      subagent_type: "scout",
+      description: "find files",
+      prompt: "Find them",
+      run_in_background: true,
+    });
+    expect(launched.isError).toBe(true);
+    expect(launched.content[0].text).toBe(NESTED_BACKGROUND_ERROR);
+    expect(launched.content[0].text).toContain("Omit run_in_background");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(spawnAndWait).not.toHaveBeenCalled();
+  });
+
+  it("runs an explicit run_in_background: false, and a background-by-config agent, in the foreground", async () => {
+    writeAgent("bg", "run_in_background: true\n");
+    registerAgents(loadCustomAgents(cwd));
+    const [agent] = tools(["scout", "bg"]);
+    for (const [type, extra] of [["scout", { run_in_background: false }], ["bg", {}]] as const) {
+      spawnAndWait.mockClear();
+      await execute(agent, { subagent_type: type, description: "fg", prompt: "Go", ...extra });
+      expect(spawnAndWait).toHaveBeenCalledTimes(1);
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("ownership-scopes result, resume, and steer", async () => {
+    const [agent, getResult, steer] = tools(["scout"]);
+    records.set("child-1", { id: "child-1", status: "running", result: "mine", parentAgentId: "parent-1" });
+
+    const own = await execute(getResult, { agent_id: "child-1" });
+    expect(own.isError).toBe(false);
+
+    records.set("foreign", {
+      id: "foreign",
+      status: "running",
+      result: "secret",
+      parentAgentId: "other",
+      session: { steer: vi.fn() },
+    });
+    expect((await execute(getResult, { agent_id: "foreign" })).isError).toBe(true);
+    expect((await execute(steer, { agent_id: "foreign", message: "stop" })).isError).toBe(true);
+    expect((await execute(agent, {
+      resume: "foreign",
+      subagent_type: "scout",
+      description: "resume foreign",
+      prompt: "Continue",
+    })).isError).toBe(true);
+    expect(manager.resume).not.toHaveBeenCalled();
+  });
+
+  // #443 — a nested parent may stop its own running or queued child, never a
+  // sibling's, and never one that already finished.
+  it("stops its own running or queued child, and refuses a sibling's or a finished one", async () => {
+    const stop = tools().find(tool => tool.name === "stop_subagent")!;
+    records.set("mine", { id: "mine", status: "running", parentAgentId: "parent-1" });
+    records.set("waiting", { id: "waiting", status: "queued", parentAgentId: "parent-1" });
+    records.set("foreign", { id: "foreign", status: "running", parentAgentId: "other" });
+    records.set("done", { id: "done", status: "completed", parentAgentId: "parent-1" });
+
+    for (const id of ["mine", "waiting"]) {
+      const result = await execute(stop, { agent_id: id });
+      expect(result).toMatchObject({ isError: false, content: [{ text: `Nested agent ${id} stopped.` }] });
+      expect(records.get(id)).toMatchObject({ status: "stopped", stoppedBy: "parent" });
+    }
+    for (const id of ["foreign", "done", "missing"]) {
+      const result = await execute(stop, { agent_id: id });
+      expect(result).toMatchObject({ isError: true, content: [{ text: `Running nested agent not found or not owned by this parent: "${id}".` }] });
+    }
+    expect(manager.abort.mock.calls).toEqual([["mine", "parent"], ["waiting", "parent"]]);
+    expect(records.get("foreign").status).toBe("running");
+  });
+
+  it("words a parent-stopped child as the parent's stop, not the user's", async () => {
+    const [, getResult] = tools();
+    records.set("mine", { id: "mine", status: "stopped", stoppedBy: "parent", result: "partial", parentAgentId: "parent-1" });
+
+    const text = (await execute(getResult, { agent_id: "mine" })).content[0].text;
+
+    expect(text).toContain("stopped by the parent with stop_subagent before completion");
+    expect(text).not.toContain("STOPPED BY THE USER");
+  });
+
+  // #368 — a nested resume carries the caller's turn budget like a spawn does.
+  it("passes max_turns through on a nested resume", async () => {
+    const [agent] = tools(["scout"]);
+    await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
+
+    await execute(agent, { resume: "child-1", subagent_type: "scout", description: "continue", prompt: "Continue", max_turns: 3 });
+
+    expect(manager.resume).toHaveBeenCalledWith("child-1", "Continue", undefined, expect.objectContaining({ maxTurns: 3 }));
+  });
+
+  it("refuses to resume a child that is still running, naming why", async () => {
+    const [agent] = tools(["scout"]);
+    await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
+    manager.getRecord("child-1").status = "running";
+
+    const result = await execute(agent, { resume: "child-1", subagent_type: "scout", description: "again", prompt: "Again" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("is still running");
+    expect(manager.resume).not.toHaveBeenCalled();
+  });
+
+  it("waits for a queued owned child to start and settle", async () => {
+    const [, getResult] = tools();
+    const record = {
+      id: "queued-child",
+      status: "queued",
+      parentAgentId: "parent-1",
+      promise: undefined as Promise<unknown> | undefined,
+      result: undefined as string | undefined,
+    };
+    records.set(record.id, record);
+    setTimeout(() => {
+      record.status = "running";
+      record.promise = Promise.resolve().then(() => {
+        record.status = "completed";
+        record.result = "queued done";
+      });
+    }, 10);
+
+    const result = await execute(getResult, { agent_id: record.id, wait: true });
+
+    expect(result.content[0].text).toBe("queued done");
+  });
+
+  it("returns the child's current state when a queued child starts with no promise to await", async () => {
+    const [, getResult] = tools();
+    const record = { id: "queued-child", status: "queued", parentAgentId: "parent-1" };
+    records.set(record.id, record);
+    setTimeout(() => { record.status = "running"; }, 10);
+
+    const result = await execute(getResult, { agent_id: record.id, wait: true });
+
+    expect(result.content[0].text).toBe("Agent queued-child is running.");
+  });
+
+  it("aborts a nested result wait without aborting the owned child", async () => {
+    const [, getResult] = tools();
+    let settleChild: (() => void) | undefined;
+    const record = {
+      id: "running-child",
+      status: "running",
+      parentAgentId: "parent-1",
+      promise: new Promise<void>(resolve => { settleChild = resolve; }),
+    };
+    records.set(record.id, record);
+
+    const controller = new AbortController();
+    const outcome = getResult
+      .execute("call-abort", { agent_id: record.id, wait: true }, controller.signal, undefined, ctx())
+      .then(() => "resolved", (e: unknown) => (e instanceof Error ? e.name : String(e)));
+
+    controller.abort();
+    const settled = await Promise.race([
+      outcome,
+      new Promise(r => setTimeout(() => r("timed-out"), 100)),
+    ]);
+
+    expect(settled).toBe("AbortError");
+    // The wait was cancelled but the child was never aborted or consumed.
+    expect(record.status).toBe("running");
+    settleChild?.();
+  });
+
+  it("still rejects unknown types when the project configures a fallback", async () => {
+    // The contract nested delegation documents is "rejected rather than falling
+    // back" — a top-level fallback must not hand a nested caller an agent its
+    // allowlist never named.
+    setFallbackSubagent("scout");
+    try {
+      const [agent] = tools(["scout"]);
+      const result = await execute(agent, {
+        subagent_type: "definitely-missing",
+        description: "typo",
+        prompt: "Do work",
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Unknown or disabled nested agent type");
+      expect(spawnAndWait).not.toHaveBeenCalled();
+    } finally {
+      setFallbackSubagent(undefined);
+    }
+  });
+
+  it("hands the branch cap down to the child it spawns", async () => {
+    const [agent] = tools("all", 1, 3);
+    const result = await execute(agent, {
+      subagent_type: "scout",
+      description: "child",
+      prompt: "Do work",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(spawnAndWait).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), "scout", "Do work",
+      expect.objectContaining({ depth: 2, maxSubagentDepth: 3, onPrepare: expect.any(Function) }),
+    );
+  });
+
+  it("flags a truncated child run instead of passing partial output off as complete", async () => {
+    spawnAndWait.mockImplementation(async () => ({
+      id: "child-1",
+      record: { id: "child-1", status: "steered", result: "half an answer", parentAgentId: "parent-1" },
+    }));
+    const [agent] = tools();
+    const result = await execute(agent, {
+      subagent_type: "scout",
+      description: "truncated",
+      prompt: "Do work",
+    });
+
+    expect(result.isError).toBe(false);
+    // Foreground: the whole output is inline and no id came back, so the note
+    // must not invite a get_subagent_result call the parent cannot make (#174).
+    expect(result.content[0].text).toContain("everything the agent produced is above");
+    expect(result.content[0].text).not.toContain("output is partial");
+    // The warning leads, so it can't read as part of the child's own answer.
+    expect(result.content[0].text.indexOf("half an answer")).toBeGreaterThan(0);
+  });
+
+  it("uses the fetchable wording when the parent polls a background child by id", async () => {
+    records.set("child-1", {
+      id: "child-1", status: "aborted", result: "partial work", parentAgentId: "parent-1",
+    });
+    const [, getResult] = tools();
+    const result = await execute(getResult, { agent_id: "child-1" });
+
+    // Here the parent does hold a valid id, so the background wording applies.
+    expect(result.content[0].text).toContain("output may be incomplete");
+    expect(result.content[0].text).not.toContain("everything the agent produced is above");
+  });
+
+  it("keeps a failed child's partial output alongside the error", async () => {
+    spawnAndWait.mockImplementation(async () => ({
+      id: "child-1",
+      record: {
+        id: "child-1", status: "error", error: "provider exploded",
+        result: "got this far", parentAgentId: "parent-1",
+      },
+    }));
+    const [agent] = tools();
+    const result = await execute(agent, {
+      subagent_type: "scout",
+      description: "failing",
+      prompt: "Do work",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("provider exploded");
+    expect(result.content[0].text).toContain("got this far");
+  });
+
+  it("reports a failed child that carries no error text as an unknown error", async () => {
+    spawnAndWait.mockImplementation(async () => ({
+      id: "child-1",
+      record: { id: "child-1", status: "error", parentAgentId: "parent-1" },
+    }));
+    const [agent] = tools();
+    const result = await execute(agent, { subagent_type: "scout", description: "failing", prompt: "Do work" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe("Agent failed: unknown error");
+  });
+
+  it("falls back from a blank result to the error text, then to `No output.`", async () => {
+    const [, getResult] = tools();
+    records.set("with-error", { id: "with-error", status: "completed", result: "  ", error: " late failure ", parentAgentId: "parent-1" });
+    records.set("empty", { id: "empty", status: "completed", result: "", parentAgentId: "parent-1" });
+
+    expect((await execute(getResult, { agent_id: "with-error" })).content[0].text).toBe("late failure");
+    expect((await execute(getResult, { agent_id: "empty" })).content[0].text).toBe("No output.");
+  });
+
+  it("returns the resumed child's outcome when the manager resumes it", async () => {
+    const [agent] = tools(["scout"]);
+    await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
+    (manager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "child-1", type: "scout", status: "completed", result: "resumed answer", parentAgentId: "parent-1",
+    });
+
+    const result = await execute(agent, { resume: "child-1", subagent_type: "scout", description: "continue", prompt: "Continue" });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe("resumed answer");
+  });
+
+  it("tolerates an ancestor record that is gone when folding in spend", async () => {
+    // The parent record was removed (e.g. cleaned up) while its child is still reporting turns.
+    spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onAssistantUsage?.({ input: 1, output: 1, cacheWrite: 0 });
+      return { id: "child-1", record: { id: "child-1", status: "completed", result: "ok", parentAgentId: "parent-1" } };
+    });
+    const [agent] = tools();
+
+    const result = await execute(agent, { subagent_type: "scout", description: "orphan", prompt: "Do work" });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe("ok");
+  });
+
+  it("skips transcript wiring for a child the manager has no record of, and for a session seen before its id", async () => {
+    records.set("parent-1", { id: "parent-1", status: "running", rootSessionId: "root-session" });
+    spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onSessionCreated?.({ subscribe: vi.fn() });
+      options.onPrepare?.("ghost");
+      return { id: "child-1", record: { id: "child-1", status: "completed", result: "ok", parentAgentId: "parent-1" } };
+    });
+    const [agent] = tools();
+
+    const result = await execute(agent, { subagent_type: "scout", description: "ghost", prompt: "Do work" });
+
+    expect(result.isError).toBe(false);
+    expect(records.has("ghost")).toBe(false);
+  });
+
+  it("attributes a nested child's token spend to the owning parent", async () => {
+    const parent = { id: "parent-1", status: "running", lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 } };
+    records.set("parent-1", parent);
+    spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onAssistantUsage?.({ input: 100, output: 20, cacheWrite: 5 });
+      return { id: "child-1", record: { id: "child-1", status: "completed", result: "ok", parentAgentId: "parent-1" } };
+    });
+
+    const [agent] = tools();
+    await execute(agent, {
+      subagent_type: "scout",
+      description: "spender",
+      prompt: "Do work",
+    });
+
+    expect(parent.lifetimeUsage).toEqual({ input: 100, output: 20, cacheWrite: 5 });
+  });
+
+  it("attributes spend up the whole ancestor chain, not just one level", async () => {
+    // A spawn callback fires only for that child's own turns, so a deeper
+    // descendant would otherwise never reach the one record anyone can see.
+    const top = { id: "top", status: "running", lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 } };
+    const middle = {
+      id: "parent-1", status: "running", parentAgentId: "top",
+      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+    };
+    records.set("top", top);
+    records.set("parent-1", middle);
+    spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onAssistantUsage?.({ input: 7, output: 3, cacheWrite: 1 });
+      return { id: "child-1", record: { id: "child-1", status: "completed", result: "ok", parentAgentId: "parent-1" } };
+    });
+
+    const [agent] = tools();
+    await execute(agent, {
+      subagent_type: "scout",
+      description: "deep spender",
+      prompt: "Do work",
+    });
+
+    expect(middle.lifetimeUsage).toEqual({ input: 7, output: 3, cacheWrite: 1 });
+    expect(top.lifetimeUsage).toEqual({ input: 7, output: 3, cacheWrite: 1 });
+  });
+
+  it("files a nested transcript under the root session, honoring output_transcript", async () => {
+    records.set("parent-1", { id: "parent-1", status: "running", rootSessionId: "root-session" });
+    spawnAndWait.mockImplementation(async (_pi, _ctx, type, _prompt, options) => {
+      const record = { id: "child-1", type, status: "completed", result: "done", parentAgentId: options.parentAgentId };
+      records.set("child-1", record);
+      options.onPrepare?.("child-1");
+      return { id: "child-1", record };
+    });
+
+    // Real path construction (not mocked here), so clean up what it writes.
+    const cwdRoot = join(transcriptRoot(), encodeCwd(cwd));
+    try {
+      const [agent] = tools();
+      await execute(agent, { subagent_type: "scout", description: "traced", prompt: "Do work" });
+      expect(records.get("child-1").outputFile).toContain(join("root-session", "tasks", "child-1.output"));
+
+      // The child's own frontmatter still wins.
+      writeAgent("quiet", "output_transcript: false\n");
+      registerAgents(loadCustomAgents(cwd));
+      records.delete("child-1");
+      await execute(agent, { subagent_type: "quiet", description: "untraced", prompt: "Do work" });
+      expect(records.get("child-1").outputFile).toBeUndefined();
+    } finally {
+      rmSync(cwdRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards the execution context to the manager unmodified", async () => {
+    // Each AgentSession builds its own ExtensionRunner, so the ctx handed to
+    // execute is the CHILD's — capturing one at tool-build time instead would
+    // silently misroute the grandchild's cwd, conversation, and model.
+    const [agent] = tools();
+    const executionCtx = ctx();
+    await agent.execute("call-1", {
+      subagent_type: "scout",
+      description: "ctx check",
+      prompt: "Do work",
+    } as any, undefined, undefined, executionCtx);
+
+    expect(spawnAndWait.mock.calls[0][1]).toBe(executionCtx);
+  });
+});
+
+// setMaxSubagentDepth clamps its input, but test/settings.test.ts only asserts
+// the applier SPY was called — the real Math.max(0, Math.floor(n)) never runs
+// there. A hand-edited subagents.json reaches this unfiltered, and losing the
+// clamp is silent in the worst direction: a negative depth makes the
+// `depth >= maxSubagentDepth` check true everywhere, disabling nested
+// delegation project-wide with no error.
+describe("setMaxSubagentDepth clamping", () => {
+  let previous: number;
+  beforeEach(() => { previous = getMaxSubagentDepth(); });
+  afterEach(() => { setMaxSubagentDepth(previous); });
+
+  it("floors a negative depth at 0 rather than storing it", () => {
+    setMaxSubagentDepth(-1);
+    expect(getMaxSubagentDepth()).toBe(0);
+  });
+
+  it("truncates a fractional depth toward zero", () => {
+    setMaxSubagentDepth(2.9);
+    expect(getMaxSubagentDepth()).toBe(2);
+  });
+
+  it("stores a valid depth unchanged", () => {
+    setMaxSubagentDepth(3);
+    expect(getMaxSubagentDepth()).toBe(3);
+  });
+});
+
+describe("workflow refusal messages", () => {
+  it("points at Agent only when the child has it", () => {
+    expect(NESTED_WORKFLOW_ERROR).toContain("call Agent in the foreground");
+    expect(NESTED_WORKFLOW_NO_AGENT_ERROR).not.toMatch(/call Agent/i);
+    expect(NESTED_WORKFLOW_NO_AGENT_ERROR).toContain("no Agent tool");
+    expect(NESTED_WORKFLOW_NO_AGENT_ERROR).toContain("Do the work directly");
+  });
+});

@@ -14,17 +14,17 @@
  */
 
 import { isKeyRelease, isKeyRepeat, Key, matchesKey, type ScrollViewScrollbar, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { hasAgentBadge, renderAgentName } from "../agent-color.js";
-import { type AgentManager, isTopLevelAgent, markConsumed } from "../agent-manager.js";
-import { type Clock, realClock, type TimerHandle } from "../clock.js";
-import type { RunningDetached } from "../detached-results.js";
-import { describeModelCall } from "../model-call.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, buildInvocationTags, compactThinkingTag, fgPreservingNestedStyles, formatCompactTokens, formatCost, type Theme } from "./agent-widget.js";
-import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
-import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
-import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.js";
+import { hasAgentBadge, renderAgentName } from "../agent-color.ts";
+import { type AgentManager, isTopLevelAgent, markConsumed } from "../agent-manager.ts";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
+import type { RunningDetached } from "../detached-results.ts";
+import { describeModelCall } from "../model-call.ts";
+import type { AgentRecord, ViewerMarkdownMode } from "../types.ts";
+import { getLifetimeCost, getLifetimeTotal } from "../usage.ts";
+import { type AgentActivity, buildInvocationTags, compactThinkingTag, fgPreservingNestedStyles, formatCompactTokens, formatCost, type Theme } from "./agent-widget.ts";
+import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.ts";
+import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.ts";
+import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.ts";
 
 /** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
 export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";

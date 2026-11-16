@@ -16,8 +16,8 @@ import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync, rea
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { errorMessage } from "./error-message.js";
-import { QUOTE_PATH_ARGS, unquoteGitPath } from "./git-path.js";
+import { errorMessage } from "./error-message.ts";
+import { QUOTE_PATH_ARGS, unquoteGitPath } from "./git-path.ts";
 
 export interface WorktreeInfo {
   /** Absolute path to the worktree directory (the copied repo's root). */

@@ -21,11 +21,11 @@
 	"files": {
 		"includes": [
 			"src/**/*.ts",
-			"test/**/*.ts",
+			"tests/**/*.ts",
 			"scripts/*.mjs",
 			"vitest.runtime-build.config.ts",
-			"test/fixtures/process-budget-reload.mjs",
-			"test/fixtures/budget-*.mjs"
+			"tests/fixtures/process-budget-reload.mjs",
+			"tests/fixtures/budget-*.mjs"
 		]
 	}
 }

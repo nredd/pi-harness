@@ -10,7 +10,7 @@
  * renderer and fails the ones that do not.
  */
 import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { TierDisclosure } from "../model-tiers.js";
+import type { TierDisclosure } from "../model-tiers.ts";
 
 /** Minimal theme surface, so this module has no dependency on the widgets that use it. */
 interface FlagTheme {

@@ -15,7 +15,7 @@
  * switch is clipped at delivery against the same batch budget as a live one.
  */
 
-import { escapeXml } from "./xml.js";
+import { escapeXml } from "./xml.ts";
 
 /** Default per-agent cap on the result text a completion notice carries. */
 export const DEFAULT_NOTIFICATION_RESULT_CHARS = 16_000;

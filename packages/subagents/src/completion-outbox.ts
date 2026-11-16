@@ -18,8 +18,8 @@
  *   it as soon as the interrupted turn stops.
  */
 
-import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import type { NotificationDetails } from "./types.js";
+import { type Clock, realClock, type TimerHandle } from "./clock.ts";
+import type { NotificationDetails } from "./types.ts";
 
 /** How long an idle parent's notification is held before it is sent. */
 export const NOTIFICATION_HOLD_MS = 200;

@@ -4,12 +4,12 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ModelFallback } from "./model-resolver.js";
-import type { ModelSelection } from "./model-selection.js";
-import type { TierDisclosure } from "./model-tiers.js";
-import type { PlanGate, PlanToolPolicy } from "./plan-mode-children.js";
-import type { BudgetLease } from "./process-budget.js";
-import type { LifetimeUsage } from "./usage.js";
+import type { ModelFallback } from "./model-resolver.ts";
+import type { ModelSelection } from "./model-selection.ts";
+import type { TierDisclosure } from "./model-tiers.ts";
+import type { PlanGate, PlanToolPolicy } from "./plan-mode-children.ts";
+import type { BudgetLease } from "./process-budget.ts";
+import type { LifetimeUsage } from "./usage.ts";
 
 export type { ThinkingLevel };
 

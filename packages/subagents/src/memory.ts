@@ -14,8 +14,8 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { resolveAgentDir } from "./home-paths.js";
-import type { MemoryScope } from "./types.js";
+import { resolveAgentDir } from "./home-paths.ts";
+import type { MemoryScope } from "./types.ts";
 
 /** Maximum lines to read from MEMORY.md */
 const MAX_MEMORY_LINES = 200;

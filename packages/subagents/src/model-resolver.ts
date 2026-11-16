@@ -1,7 +1,7 @@
 /**
  * Model resolution: exact match ("provider/modelId") with fuzzy fallback for tool inputs.
  */
-import { exactTierModel } from "./model-tiers.js";
+import { exactTierModel } from "./model-tiers.ts";
 
 export interface ModelEntry {
   id: string;

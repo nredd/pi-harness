@@ -1,5 +1,5 @@
 /** Read terminal history as lookup diagnostics, never as live agents or executable resume state. */
-import { capRetained, type EvictedNote } from "./agent-manager.js";
+import { capRetained, type EvictedNote } from "./agent-manager.ts";
 
 /** Validate saved custom-entry data before handing it to the eviction-note index. */
 export function savedAgentNote(data: unknown): EvictedNote | undefined {

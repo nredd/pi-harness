@@ -13,9 +13,9 @@
 
 import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { NotificationDetails } from "../types.js";
-import { formatCost, formatMs, formatTokens, formatTurns, type Theme } from "./agent-widget.js";
-import { fallbackFlag, fallbackFlagText, hasFallback } from "./fallback-flag.js";
+import type { NotificationDetails } from "../types.ts";
+import { formatCost, formatMs, formatTokens, formatTurns, type Theme } from "./agent-widget.ts";
+import { fallbackFlag, fallbackFlagText, hasFallback } from "./fallback-flag.ts";
 
 /** Lines of the result preview shown when expanded. */
 const EXPANDED_PREVIEW_LINES = 30;

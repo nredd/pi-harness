@@ -5,17 +5,17 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
-import { errorMessage } from "./error-message.js";
-import { resolveAgentDir } from "./home-paths.js";
+import { BUILTIN_TOOL_NAMES } from "./agent-types.ts";
+import { errorMessage } from "./error-message.ts";
+import { resolveAgentDir } from "./home-paths.ts";
 import {
   isPackageResourceExcluded,
   isProjectTrusted,
   MAX_PACKAGE_RESOURCE_BYTES,
   packageAgentDirs,
   packageAgentFiles,
-} from "./package-resources.js";
-import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./types.js";
+} from "./package-resources.ts";
+import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./types.ts";
 
 /**
  * The one thing a declared `name:` may not contain, matching Claude Code

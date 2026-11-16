@@ -470,7 +470,6 @@ CONTRACTS = (
             "src/mon/model.ts",
             "src/mon/poll.ts",
             "src/mon/source.ts",
-            "src/monitor/README.md",
             "src/monitor/coalescer.ts",
             "src/monitor/index.ts",
             "src/monitor/manager.ts",

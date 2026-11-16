@@ -1,7 +1,7 @@
 /** Exact, provider-neutral model tiers. Router profiles retain ownership of failover. */
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "./model-resolver.js";
-import type { QuotaBlock } from "./quota-admission.js";
+import type { ModelRegistry } from "./model-resolver.ts";
+import type { QuotaBlock } from "./quota-admission.ts";
 
 /** One registered router profile OR an ordered exact physical chain, never both. */
 export type TierBinding =

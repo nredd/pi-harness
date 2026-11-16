@@ -6,23 +6,23 @@
  */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type * as AgentRunner from "../src/agent-runner.js";
+import type * as AgentRunner from "../src/agent-runner.ts";
 
-vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof AgentRunner>("../src/agent-runner.js");
+vi.mock("../src/agent-runner.ts", async () => {
+  const actual = await vi.importActual<typeof AgentRunner>("../src/agent-runner.ts");
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
+import { runAgent } from "../src/agent-runner.ts";
+import subagentsExtension from "../src/index.ts";
 import {
   PLAN_MODE_STATE_QUERY,
   PLAN_PARK_REFUSAL,
   PLAN_SCHEDULE_REFUSAL,
   planSteerRefusal,
-} from "../src/plan-mode-children.js";
-import { ADMIT_CHANNEL } from "../src/quota-admission.js";
-import { bootPi, ctx, flush, hermeticDir, textOf } from "../test/helpers/boot-extension.js";
+} from "../src/plan-mode-children.ts";
+import { ADMIT_CHANNEL } from "../src/quota-admission.ts";
+import { bootPi, ctx, flush, hermeticDir, textOf } from "./fixtures/boot-extension.ts";
 
 type ToolActivity = { type: "start" | "end"; toolName: string };
 

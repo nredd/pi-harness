@@ -21,7 +21,7 @@ import {
 	type PrintModeRun,
 	runPrintMode,
 	toolResultsNamed,
-} from "../../packages/subagents/test/helpers/print-mode-runner.ts";
+} from "../../packages/subagents/tests/fixtures/print-mode-runner.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 

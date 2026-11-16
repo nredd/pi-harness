@@ -56,7 +56,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { normalizeHomePath, resolveAgentDir } from "./home-paths.js";
+import { normalizeHomePath, resolveAgentDir } from "./home-paths.ts";
 
 /** Resource kinds a package may declare. Agents are `.md`, workflows are `.js`. */
 export type PackageResourceKind = "agents" | "workflows";
@@ -621,7 +621,7 @@ export function packageWorkflowDirs(cwd: string, opts: PackageDiscoveryOptions =
  * A name lookup wants a directory, and a declared *file* has none — but standing
  * its parent directory in as a root would make every sibling `.js` resolvable,
  * so `workflows: ["./one.js"]` would quietly offer the package's other scripts
- * too, and `["./index.js"]` would offer everything at the package root. That is
+ * too, and `["./index.ts"]` would offer everything at the package root. That is
  * the opposite of the rule the whole feature rests on, that a package only
  * contributes what it names. An exact map keeps the declaration honest, and
  * matches how a declared agent file is already handled.

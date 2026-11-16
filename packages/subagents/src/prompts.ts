@@ -2,8 +2,8 @@
  * prompts.ts — System prompt builder for agents.
  */
 
-import { PLAN_MODE_CHILD_PROMPT } from "./plan-mode-children.js";
-import type { AgentConfig, EnvInfo } from "./types.js";
+import { PLAN_MODE_CHILD_PROMPT } from "./plan-mode-children.ts";
+import type { AgentConfig, EnvInfo } from "./types.ts";
 
 /** Extra sections to inject into the system prompt (memory, skills, etc.). */
 export interface PromptExtras {

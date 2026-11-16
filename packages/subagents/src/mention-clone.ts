@@ -61,12 +61,12 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
-import { errorMessage } from "./error-message.js";
-import { resolveAgentDir } from "./home-paths.js";
-import { agentMentionReminder } from "./mention.js";
-import { createHomeResourceLoader } from "./resource-loader.js";
-import type { SubagentType } from "./types.js";
+import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.ts";
+import { errorMessage } from "./error-message.ts";
+import { resolveAgentDir } from "./home-paths.ts";
+import { agentMentionReminder } from "./mention.ts";
+import { createHomeResourceLoader } from "./resource-loader.ts";
+import type { SubagentType } from "./types.ts";
 
 export interface MentionCloneOptions {
   /** Home directory for the clone's user resources and settings. */

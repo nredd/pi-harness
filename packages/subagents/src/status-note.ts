@@ -8,7 +8,7 @@
  * through agent-runner).
  */
 
-import type { AgentRecord } from "./types.js";
+import type { AgentRecord } from "./types.ts";
 
 /** Who stopped a `stopped` record: the spawning agent, or (unset) a human. */
 type StoppedBy = AgentRecord["stoppedBy"];

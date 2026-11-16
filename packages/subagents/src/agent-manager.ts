@@ -25,17 +25,17 @@ import { accessSync, constants, opendirSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AssistantMessageInfo, resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
-import { getAgentConfig } from "./agent-types.js";
-import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { errorMessage } from "./error-message.js";
-import { assignHandle, handleBase } from "./mention.js";
-import type { ModelCallEvent } from "./model-call.js";
-import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback } from "./model-resolver.js";
-import { admitModelSelection, describeSelection, type ModelSelection, modelSelectionNote, selectModel } from "./model-selection.js";
-import { type TierDisclosure, tierDisclosure } from "./model-tiers.js";
-import { appendModelFallbackEntry, appendModelTierEntry } from "./output-file.js";
-import { type PlanToolPolicy, queryPlanPolicy } from "./plan-mode-children.js";
+import { type AssistantMessageInfo, resumeAgent, runAgent, type ToolActivity } from "./agent-runner.ts";
+import { getAgentConfig } from "./agent-types.ts";
+import { type Clock, realClock, type TimerHandle } from "./clock.ts";
+import { errorMessage } from "./error-message.ts";
+import { assignHandle, handleBase } from "./mention.ts";
+import type { ModelCallEvent } from "./model-call.ts";
+import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback } from "./model-resolver.ts";
+import { admitModelSelection, describeSelection, type ModelSelection, modelSelectionNote, selectModel } from "./model-selection.ts";
+import { type TierDisclosure, tierDisclosure } from "./model-tiers.ts";
+import { appendModelFallbackEntry, appendModelTierEntry } from "./output-file.ts";
+import { type PlanToolPolicy, queryPlanPolicy } from "./plan-mode-children.ts";
 import {
   assertWithinBudgetDepth,
   BUDGET_QUEUE_FULL_ERROR,
@@ -45,13 +45,13 @@ import {
   pumpBudget,
   releaseBudget,
   tryAcquireBudget,
-} from "./process-budget.js";
-import { describeBlock } from "./quota-admission.js";
-import { isStaleCtxError } from "./stale-ctx.js";
-import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.js";
-import { addUsage, type LifetimeUsage } from "./usage.js";
-import type { CompiledSchema } from "./workflow/json-schema.js";
-import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, type WorktreeCleanupResult, type WorktreeInfo } from "./worktree.js";
+} from "./process-budget.ts";
+import { describeBlock } from "./quota-admission.ts";
+import { isStaleCtxError } from "./stale-ctx.ts";
+import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.ts";
+import { addUsage, type LifetimeUsage } from "./usage.ts";
+import type { CompiledSchema } from "./workflow/json-schema.ts";
+import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, type WorktreeCleanupResult, type WorktreeInfo } from "./worktree.ts";
 
 /**
  * Relabel a record's model from the response that just finished. A virtual

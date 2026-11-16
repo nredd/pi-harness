@@ -32,8 +32,8 @@
  */
 
 import { stripTerminalSequences, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { WorkflowEntryData } from "../workflow/entry.js";
-import type { WorkflowMeta } from "../workflow/meta.js";
+import type { WorkflowEntryData } from "../workflow/entry.ts";
+import type { WorkflowMeta } from "../workflow/meta.ts";
 import {
   buildPhaseGroups,
   collapse,
@@ -44,9 +44,9 @@ import {
   type WorkflowAgentEntry,
   type WorkflowEntry,
   type WorkflowRunStatus,
-} from "../workflow/progress.js";
-import { formatCompactTokens, type Theme } from "./agent-widget.js";
-import { fallbackFlagText, hasFallback } from "./fallback-flag.js";
+} from "../workflow/progress.ts";
+import { formatCompactTokens, type Theme } from "./agent-widget.ts";
+import { fallbackFlagText, hasFallback } from "./fallback-flag.ts";
 
 /**
  * Header re-render cadence. Claude Code ticks the workflow clock once a second,

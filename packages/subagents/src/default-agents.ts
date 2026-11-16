@@ -4,7 +4,7 @@
  * These are always available but can be overridden by user .md files with the same name.
  */
 
-import type { AgentConfig } from "./types.js";
+import type { AgentConfig } from "./types.ts";
 
 /**
  * Tool surface shared by Explore and Plan. `bash` is left out because a prompt cannot

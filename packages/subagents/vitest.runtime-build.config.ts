@@ -7,7 +7,7 @@ export default definePackageConfig("subagents-runtime-tooling", {
   homeGuard: false,
   test: {
     maxWorkers: 1,
-    include: ["test/runtime-scripts.test.ts"],
+    include: ["tests/runtime-scripts.test.ts"],
     testTimeout: 15_000,
     coverage: {
       thresholds: {

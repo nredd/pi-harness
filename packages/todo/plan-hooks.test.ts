@@ -547,7 +547,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 	/**
 	 * A stand-in for pi-subagents' process-wide registry of detached survivors, each registered under
-	 * the session file whose spool it wakes (see `packages/subagents/test/index-coverage-final-lifecycle.test.ts`
+	 * the session file whose spool it wakes (see `packages/subagents/tests/extension-final-lifecycle.test.ts`
 	 * for the real emitter). Like it, an announce request answers for EVERY live survivor: from the
 	 * CURRENT file as `subagents:started`, from any other as `subagents:other_session_survivor`.
 	 */

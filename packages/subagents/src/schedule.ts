@@ -18,14 +18,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
-import type { AgentManager } from "./agent-manager.js";
-import { normalizeMaxTurns } from "./agent-runner.js";
-import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
-import { type Clock, realClock, type TimerHandle } from "./clock.js";
-import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
-import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
-import { type FireSlot, foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.js";
-import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
+import type { AgentManager } from "./agent-manager.ts";
+import { normalizeMaxTurns } from "./agent-runner.ts";
+import { getAgentConfig, resolveSpawnType } from "./agent-types.ts";
+import { type Clock, realClock, type TimerHandle } from "./clock.ts";
+import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.ts";
+import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
+import { type FireSlot, foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.ts";
+import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.ts";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
 export type ScheduleChangeEvent =

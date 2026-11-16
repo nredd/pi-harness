@@ -1,11 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // nredd/pi-harness#875: unchecked indexed access and parameter properties go with the layout move
     "esModuleInterop": true,
     "noUncheckedIndexedAccess": false,
     "erasableSyntaxOnly": false
   },
-  // nredd/pi-harness#875: `test` and `scripts` join once the 334 test type errors (50 files, mostly loose mock shapes) are fixed
   "include": ["src", "*.ts"]
 }

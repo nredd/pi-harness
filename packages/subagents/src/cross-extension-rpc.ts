@@ -13,11 +13,11 @@
  * completion-notification race, and what protocol version 2 does not promise.
  */
 
-import { isTopLevelAgent } from "./agent-manager.js";
-import type { ModelRegistry } from "./model-resolver.js";
-import { selectModel } from "./model-selection.js";
-import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
-import type { AgentRecord } from "./types.js";
+import { isTopLevelAgent } from "./agent-manager.ts";
+import type { ModelRegistry } from "./model-resolver.ts";
+import { selectModel } from "./model-selection.ts";
+import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.ts";
+import type { AgentRecord } from "./types.ts";
 
 /** Minimal event bus interface needed by the RPC handlers. */
 export interface EventBus {

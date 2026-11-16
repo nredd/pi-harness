@@ -13,7 +13,7 @@
  * than imported because either package installs without the other.
  */
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
-import type { AgentRecord } from "./types.js";
+import type { AgentRecord } from "./types.ts";
 
 export const PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
 /** pi-plan-mode asks here whether a compatible gate is installed; answering is the handshake. */

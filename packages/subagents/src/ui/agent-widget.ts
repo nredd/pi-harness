@@ -6,16 +6,16 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { renderAgentName } from "../agent-color.js";
-import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
-import { getConfig } from "../agent-types.js";
-import { type Clock, realClock, type TimerHandle } from "../clock.js";
-import { describeModelCall, type ModelCallState } from "../model-call.js";
-import type { ModelFallback } from "../model-resolver.js";
-import type { TierDisclosure } from "../model-tiers.js";
-import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
-import { fallbackFlag } from "./fallback-flag.js";
+import { renderAgentName } from "../agent-color.ts";
+import { type AgentManager, isTopLevelAgent } from "../agent-manager.ts";
+import { getConfig } from "../agent-types.ts";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
+import { describeModelCall, type ModelCallState } from "../model-call.ts";
+import type { ModelFallback } from "../model-resolver.ts";
+import type { TierDisclosure } from "../model-tiers.ts";
+import type { AgentInvocation, SubagentType, WidgetMode } from "../types.ts";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.ts";
+import { fallbackFlag } from "./fallback-flag.ts";
 
 // ---- Constants ----
 

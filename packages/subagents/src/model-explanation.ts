@@ -1,7 +1,7 @@
 /** Read-only, allowlisted projections of the real dispatch selector. Never admit or route. */
-import { isVirtualModel } from "./model-resolver.js";
-import { hasModelConfigurationError, modelInputBinding, modelInputs, selectModel } from "./model-selection.js";
-import { getModelResolution } from "./model-tiers.js";
+import { isVirtualModel } from "./model-resolver.ts";
+import { hasModelConfigurationError, modelInputBinding, modelInputs, selectModel } from "./model-selection.ts";
+import { getModelResolution } from "./model-tiers.ts";
 
 /** Only model references, not commands, endpoints, diagnostics or model overlays, reach the UI. */
 function safeRef(value: string | undefined): string {

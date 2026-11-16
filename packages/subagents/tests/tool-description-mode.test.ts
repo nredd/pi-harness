@@ -1,0 +1,488 @@
+// End-to-end test for `toolDescriptionMode` (#91): settings file → sanitize →
+// applier → registration-time description pick. Instantiates the real extension
+// with a mock pi (same pattern as print-mode.test.ts) inside a temp cwd, then
+// inspects the registered Agent tool's description.
+
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatToolsSuffix } from "../src/index.ts";
+import { setWorktreeIsolationEnabled } from "../src/worktree.ts";
+import { bootPi, type SessionStartHandler, startSession } from "./fixtures/boot-extension.ts";
+import subagentsExtension from "./fixtures/home-extension.ts";
+
+const EXAMPLE_TEMPLATE = fileURLToPath(new URL("../README.md", import.meta.url));
+
+
+describe("toolDescriptionMode", () => {
+  let tmpDir: string;
+  let hermeticAgentDir: string;
+  let prevCwd: string;
+  let prevAgentDir: string | undefined;
+  let shutdown: (() => Promise<void>) | undefined;
+  let handlers: Map<string, SessionStartHandler>;
+
+  function setup(settings?: Record<string, unknown>, beforeInstantiate?: () => void) {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-"));
+    // Isolate global settings (getAgentDir / ~/.pi) so the dev's real
+    // subagents.json can't leak into the "default is full" assertion.
+    hermeticAgentDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-agentdir-"));
+    prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = hermeticAgentDir;
+    prevCwd = process.cwd();
+    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+    // Package agents are installation-dependent and make the compact type list
+    // vary by runner. This fixture verifies the built-in description contract,
+    // so exclude ambient package agents while retaining explicit local fixtures.
+    writeFileSync(
+      join(tmpDir, ".pi", "subagents.json"),
+      JSON.stringify({ packageAgents: false, ...settings }),
+    );
+    beforeInstantiate?.();
+    process.chdir(tmpDir);
+
+    const made = bootPi();
+    const { pi, tools } = made;
+    handlers = made.handlers;
+    subagentsExtension(pi);
+    shutdown = async () => {
+      await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, { hasUI: false, ui: {} } as never);
+    };
+    return tools;
+  }
+
+  afterEach(async () => {
+    await shutdown?.();
+    shutdown = undefined;
+    // applySettings only applies keys that are PRESENT, so a subagents.json
+    // without `worktreeIsolation` leaves the module singleton wherever the
+    // previous test left it. Reset it so each setup()'s settings decide, and
+    // so the "default" assertions below really test the default.
+    setWorktreeIsolationEnabled(true);
+    process.chdir(prevCwd);
+    if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(hermeticAgentDir, { recursive: true, force: true });
+  });
+
+  it("defaults to the full description", () => {
+    const tools = setup();
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("## Usage notes");
+    expect(desc).toContain("## Writing the prompt");
+    // Full agent descriptions are embedded (a late Explore sentence survives).
+    expect(desc).toContain("very thorough");
+  });
+
+  it("compact mode swaps in the short description with one-line type list", () => {
+    const tools = setup({ toolDescriptionMode: "compact" });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("Launch an autonomous agent");
+    expect(desc).not.toContain("## Usage notes");
+    expect(desc).not.toContain("## Writing the prompt");
+    // Type list keeps every agent but only the first sentence of each description.
+    expect(desc).toContain("- general-purpose:");
+    expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
+    expect(desc).not.toContain("very thorough");
+    // The point of the feature: materially smaller than the full version.
+    // The global agents dir is a per-runner temp path; measure with a fixed one
+    // so the budget does not depend on the runner's tmpdir length.
+    expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1600);
+  });
+
+  it("invalid mode in the settings file is dropped — full description", () => {
+    const tools = setup({ toolDescriptionMode: "tiny" });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("## Usage notes");
+  });
+
+  it("compact keeps every load-bearing contract — fails when a behavior change forgets compact", () => {
+    const tools = setup({ toolDescriptionMode: "compact" });
+    const desc: string = tools.get("Agent").description;
+    // One keyword per behavioral contract the orchestrator must know about.
+    // If you change one of these behaviors, update BOTH descriptions.
+    for (const contract of [
+      "run_in_background",
+      "resume",
+      "steer_subagent",
+      'isolation: "worktree"',
+      ".pi/agents/",
+      "self-contained",
+    ]) {
+      expect(desc).toContain(contract);
+    }
+  });
+
+  // The compact test above pins the prose alone, which is right for compact —
+  // it is the only place that mode states these. `full` is different: several
+  // contracts are stated twice, in the description AND in the param schema, so
+  // pinning prose alone would block a legitimate move of one into the other
+  // while missing the failure that actually matters — a contract that ends up
+  // in neither. Asserting over description + schema is the invariant that
+  // survives either choice. The second test then keeps the schema half honest,
+  // so "it's also in the schema" can never degrade to an empty stub.
+  it("full states every load-bearing contract in the description or the schema", () => {
+    const tool = setup().get("Agent");
+    const visible = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
+    for (const contract of [
+      "run_in_background",
+      "resume",
+      "steer_subagent",
+      "worktree",
+      ".pi/agents/",
+      "self-contained",
+      "model",
+      "thinking",
+      "inherit_context",
+    ]) {
+      expect(visible).toContain(contract);
+    }
+  });
+
+  it("names configured tier keys, never their members, in the guideline and the model param", () => {
+    const members = ["router/frontier", "example-provider/example-flagship-a", "example-provider/example-flagship-b"];
+    const tool = setup(undefined, () => {
+      writeFileSync(
+        join(hermeticAgentDir, "subagents.json"),
+        JSON.stringify({ modelTiers: { frontier: [members[0]], cheap: members.slice(1) } }),
+      );
+    }).get("Agent");
+    const expected = "Configured tiers: @cheap, @frontier. Prefer a tier over a model id.";
+    expect(tool.description).toContain(`- Use model to select a tier. ${expected}`);
+    expect(tool.parameters.properties.model.description).toContain(expected);
+    const visible = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
+    for (const member of members) expect(visible).not.toContain(member);
+    expect(visible).not.toContain('"haiku"');
+  });
+
+  it("keeps the generic model guidance when no tiers are configured", () => {
+    const tool = setup().get("Agent");
+    expect(tool.description).not.toContain("Configured tiers:");
+    expect(tool.description).toContain('a fuzzy tool-call input (e.g. "haiku")');
+    expect(tool.parameters.properties.model.description).toBe(
+      'Optional model override. Accepts a configured tier (e.g. "@cheap"), "provider/modelId", or fuzzy name (e.g. "haiku"). Explicit values win over agentModels and the agent definition.',
+    );
+  });
+
+  it("every strategy param carries a real description of its own", () => {
+    const props = setup().get("Agent").parameters?.properties ?? {};
+    for (const name of ["run_in_background", "model", "thinking", "inherit_context"]) {
+      // Long enough to be an explanation the model can act on, not a bare label.
+      expect(props[name]?.description?.length ?? 0).toBeGreaterThan(40);
+    }
+  });
+
+  it("custom mode renders the project template with placeholders substituted", async () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(
+        join(tmpDir, ".pi", "agent-tool-description.md"),
+        "My agents:\n{{typeList}}\n\nGlobal dir: {{agentDir}}\nUnknown: {{nope}}\nCost: $& stays literal",
+      );
+    });
+    await startSession(handlers, true);
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("My agents:");
+    expect(desc).toContain("- general-purpose:"); // {{typeList}} expanded
+    expect(desc).toContain(`Global dir: ${hermeticAgentDir}`); // {{agentDir}} expanded
+    expect(desc).toContain("Unknown: {{nope}}"); // unknown placeholder left verbatim
+    expect(desc).toContain("Cost: $& stays literal"); // no $-pattern expansion
+    expect(desc).not.toContain("## Usage notes");
+  });
+
+  it("custom mode falls back to the global file when no project file exists", () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(hermeticAgentDir, "agent-tool-description.md"), "GLOBAL CUSTOM\n{{compactTypeList}}");
+    });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("GLOBAL CUSTOM");
+    expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
+  });
+
+  it("{{scheduleGuideline}} expands to the schedule bullet when scheduling is on (default)", async () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{scheduleGuideline}}\nEND");
+    });
+    await startSession(handlers, true);
+    const desc: string = tools.get("Agent").description;
+    // The expansion carries its own leading "\n- " bullet.
+    expect(desc).toContain("RULES:\n- Use `schedule` only when");
+  });
+
+  it("{{scheduleGuideline}} expands to the empty string when scheduling is disabled", async () => {
+    const tools = setup({ toolDescriptionMode: "custom", schedulingEnabled: false }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{scheduleGuideline}}\nEND");
+    });
+    await startSession(handlers, true);
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("RULES:\nEND");
+    expect(desc).not.toContain("schedule");
+  });
+
+  it("{{isolationGuideline}} expands to the isolation bullet when worktrees are on (default)", async () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{isolationGuideline}}\nEND");
+    });
+    await startSession(handlers, true);
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain('RULES:\n- Use isolation: "worktree"');
+  });
+
+  it("{{isolationGuideline}} expands to the empty string when worktree isolation is disabled", async () => {
+    const tools = setup({ toolDescriptionMode: "custom", worktreeIsolation: false }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{isolationGuideline}}\nEND");
+    });
+    await startSession(handlers, true);
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("RULES:\nEND");
+    expect(desc).not.toContain("isolation");
+  });
+
+  it("every documented placeholder is replaced — no {{ }} residue", async () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(
+        join(tmpDir, ".pi", "agent-tool-description.md"),
+        "A {{typeList}} B {{compactTypeList}} C {{agentDir}} D {{scheduleGuideline}} E {{isolationGuideline}} F",
+      );
+    });
+    await startSession(handlers, true);
+    const desc: string = tools.get("Agent").description;
+    expect(desc).not.toContain("{{");
+    expect(desc).not.toContain("}}");
+  });
+
+  it("the shipped example template renders byte-identical to the full description", async () => {
+    // The inline README template must reproduce the full description exactly.
+    const example = readFileSync(EXAMPLE_TEMPLATE, "utf-8").split("<summary>Carried examples/agent-tool-description.md</summary>\n\n")[1].split("\n</details>")[0];
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), example);
+    });
+    await startSession(handlers, true);
+    const customDesc: string = tools.get("Agent").description;
+
+    // Second instance in the same hermetic cwd, flipped to full mode.
+    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ toolDescriptionMode: "full" }));
+    const second = bootPi();
+    subagentsExtension(second.pi);
+    try {
+      expect(customDesc).toBe(second.tools.get("Agent").description);
+    } finally {
+      await second.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, { hasUI: false, ui: {} } as never);
+    }
+  });
+
+  it("custom mode without a file falls back to the full description with a warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const tools = setup({ toolDescriptionMode: "custom" });
+      const desc: string = tools.get("Agent").description;
+      expect(desc).toContain("## Usage notes");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no agent-tool-description.md found"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // README:87 promises that disabling scheduling "removes `schedule` from the
+  // `Agent` tool spec (no LLM-context cost)". Only the {{scheduleGuideline}}
+  // TEXT expansion was tested — nothing asserted the schema itself, so the
+  // parameter could keep costing tokens (and stay callable) while the prose
+  // claimed otherwise.
+  describe("schedulingEnabled gates the schedule parameter", () => {
+    const props = (tools: Map<string, any>) =>
+      Object.keys(tools.get("Agent").parameters?.properties ?? {});
+
+    it("advertises `schedule` by default", () => {
+      expect(props(setup())).toContain("schedule");
+    });
+
+    it("removes `schedule` from the tool schema when scheduling is disabled", () => {
+      const names = props(setup({ schedulingEnabled: false }));
+      expect(names).not.toContain("schedule");
+      // The rest of the parameter surface is untouched — this gates one field,
+      // not the tool.
+      expect(names).toEqual(expect.arrayContaining(["prompt", "description", "subagent_type"]));
+    });
+  });
+
+  // The schema half of `worktreeIsolation: false` shipped without the prose
+  // half: `isolationParam` dropped the field while both descriptions kept
+  // telling the model to pass it. Nothing rejects the undeclared key (TypeBox
+  // sets no additionalProperties: false) and, by design, nothing notes the
+  // downgrade on the result — so the model had every reason to report a
+  // `pi-agent-*` branch that was never created. Schema and prose have to move
+  // together, which is why both are asserted here.
+  describe("worktreeIsolation gates the isolation parameter and its prose", () => {
+    const props = (tools: Map<string, any>) =>
+      Object.keys(tools.get("Agent").parameters?.properties ?? {});
+
+    it("advertises `isolation` in schema and prose by default", () => {
+      const tools = setup();
+      expect(props(tools)).toContain("isolation");
+      expect(tools.get("Agent").description).toContain('Use isolation: "worktree"');
+    });
+
+    it("drops both when worktree isolation is disabled", () => {
+      const tools = setup({ worktreeIsolation: false });
+      const names = props(tools);
+      expect(names).not.toContain("isolation");
+      expect(tools.get("Agent").description).not.toContain("isolation");
+      // One field, not the tool — and the neighbouring gate is unaffected.
+      expect(names).toEqual(expect.arrayContaining(["prompt", "description", "subagent_type", "schedule"]));
+    });
+
+    it("drops the compact description's bullet too", () => {
+      const enabled = setup({ toolDescriptionMode: "compact" });
+      expect(enabled.get("Agent").description).toContain('isolation: "worktree"');
+    });
+
+    it("compact mode says nothing about isolation when disabled", () => {
+      const tools = setup({ toolDescriptionMode: "compact", worktreeIsolation: false });
+      expect(tools.get("Agent").description).not.toContain("isolation");
+      // The bullet above it survives — the gate trims a suffix, not the list.
+      expect(tools.get("Agent").description).toContain("resume continues a previous agent by ID");
+    });
+  });
+
+  for (const mode of ["full", "compact", "custom"] as const) {
+    it(`${mode} discloses every preset shell restriction without mislabeling shell-capable agents`, () => {
+      const tools = setup({ toolDescriptionMode: mode }, () => {
+        mkdirSync(join(hermeticAgentDir, "agents"));
+        for (const name of [
+          "researcher",
+          "architect",
+          "critic",
+          "code-reviewer",
+          "principal-investigator",
+          "general-purpose",
+          "debugger",
+          "verifier",
+        ]) {
+          writeFileSync(
+            join(hermeticAgentDir, "agents", `${name}.md`),
+            readFileSync(new URL(`../../preset/agents/${name}.md`, import.meta.url), "utf8"),
+          );
+        }
+        if (mode === "custom") {
+          writeFileSync(join(hermeticAgentDir, "agent-tool-description.md"), "{{typeList}}\n{{compactTypeList}}");
+        }
+      });
+      const desc: string = tools.get("Agent").description;
+      for (const name of ["researcher", "architect", "critic", "code-reviewer", "principal-investigator"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toContain("no shell/ssh: cannot run commands");
+        expect(line).toContain("no built-in shell: cannot run bash commands");
+      }
+      for (const name of ["Explore", "Plan"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toContain("no built-in shell: cannot run bash commands");
+      }
+      for (const name of ["general-purpose", "debugger", "verifier"]) {
+        const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
+        expect(line).toBeDefined();
+        expect(line).not.toContain("no shell/ssh");
+        expect(line).not.toContain("no built-in shell");
+      }
+    });
+  }
+
+  // The tool description is the only thing the orchestrator LLM knows about an
+  // agent's capabilities before spawning it. `tools: none` and an `ext:`-only
+  // `tools:` both parse to zero built-ins (custom-agents.ts parseToolsField),
+  // and test/fixtures/.pi/agents/tools-none.md pins that the *runtime* really
+  // does drop every built-in. So the description must not claim otherwise —
+  // an agent advertised as having `bash` that cannot run `bash` gets routed
+  // work it can only fail at.
+  describe("tool scope suffix reflects the real built-in set", () => {
+    // Project agent files appear only after `session_start` reports the project
+    // trusted; the activation-time description is global-only.
+    async function withAgent(name: string, frontmatter: string, settings?: Record<string, unknown>) {
+      const extra = frontmatter ? `${frontmatter}\n` : "";
+      const tools = setup(settings, () => {
+        mkdirSync(join(tmpDir, ".pi", "agents"), { recursive: true });
+        writeFileSync(
+          join(tmpDir, ".pi", "agents", `${name}.md`),
+          `---\ndescription: ${name} agent.\n${extra}---\n\nBody.\n`,
+        );
+      });
+      await startSession(handlers, true);
+      return tools;
+    }
+
+    it("`tools: none` never claims the full built-in set", async () => {
+      const tools = await withAgent("quiet", "tools: none");
+      const desc: string = tools.get("Agent").description;
+      expect(desc).not.toContain("- quiet: quiet agent. (Tools: *)");
+    });
+
+    it("`tools: none` says none only when the agent can call nothing at all", async () => {
+      // extensions: false and isolated: true both leave the agent with zero
+      // built-ins AND zero extension tools — the one case "none" is true.
+      for (const fm of ["tools: none\nextensions: false", "tools: none\nisolated: true"]) {
+        const tools = await withAgent("silent", fm);
+        expect(tools.get("Agent").description).toContain("- silent: silent agent. (Tools: none; no built-in shell: cannot run bash commands)");
+      }
+    });
+
+    it("`tools: none` with extensions loaded is not described as having no tools", async () => {
+      // Zero built-ins is not zero tools: test/fixtures/.pi/agents/tools-none.md
+      // pins that such an agent still surfaces alpha_read, alpha_write, beta_tool.
+      // Saying "none" understates it and routes work away from the only agent
+      // that could do it — the mirror of the bug this suffix used to have.
+      const tools = await withAgent("probe", 'tools: none\nextensions: "./ext-alpha.mjs"');
+      const desc: string = tools.get("Agent").description;
+      expect(desc).toContain("- probe: probe agent. (Tools: no built-ins, extension tools only; no built-in shell: cannot run bash commands)");
+      expect(desc).not.toContain("- probe: probe agent. (Tools: *)");
+      expect(desc).not.toContain("- probe: probe agent. (Tools: none)");
+    });
+
+    it("an ext:-only `tools:` is described by what it actually has", async () => {
+      const tools = await withAgent("extonly", 'tools: "ext:probe.mjs"');
+      const desc: string = tools.get("Agent").description;
+      expect(desc).toContain("- extonly: extonly agent. (Tools: no built-ins, extension tools only; no built-in shell: cannot run bash commands)");
+      expect(desc).not.toContain("- extonly: extonly agent. (Tools: *)");
+    });
+
+    it("a config with no `builtinToolNames` (all built-ins) subtracts `disallowedTools` from the full set", () => {
+      // The built-in general-purpose definition omits builtinToolNames; a
+      // programmatic registration can pair that with a denylist.
+      expect(formatToolsSuffix({ name: "denied", description: "denied", systemPrompt: "", promptMode: "append", extensions: true, skills: true, disallowedTools: ["bash", "write"] }))
+        .toBe("read, edit, grep, find, ls + extension tools; no built-in shell: cannot run bash commands");
+    });
+
+    it("compact mode shares the suffix builder and must not diverge", async () => {
+      const tools = await withAgent("quiet", "tools: none\nextensions: false", { toolDescriptionMode: "compact" });
+      const desc: string = tools.get("Agent").description;
+      expect(desc).toContain("- quiet: quiet agent. (Tools: none; no built-in shell: cannot run bash commands)");
+      expect(desc).not.toContain("- quiet: quiet agent. (Tools: *)");
+    });
+
+    it("a narrowed agent with extensions off lists only its built-ins", async () => {
+      const tools = await withAgent("closed", "tools: read, grep\nextensions: false");
+      expect(tools.get("Agent").description).toContain("- closed: closed agent. (Tools: read, grep; no built-in shell: cannot run bash commands)");
+    });
+
+    it("discloses a denied bash even when tools otherwise inherit all built-ins", async () => {
+      const tools = await withAgent("denied", "disallowed_tools: bash");
+      const line = tools.get("Agent").description.split("\n").find((line: string) => line.startsWith("- denied:"));
+      expect(line).toContain("no built-in shell: cannot run bash commands");
+      expect(line).not.toContain("Tools: *");
+    });
+
+    it("an omitted `tools:` still renders as * — absent means all built-ins", async () => {
+      // Guards the fix from over-correcting: undefined (inherit everything,
+      // as the shipped defaults do) is not the same as [] (explicitly zero).
+      const tools = await withAgent("broad", "");
+      const desc: string = tools.get("Agent").description;
+      expect(desc).toContain("- broad: broad agent. (Tools: * + extension tools)");
+    });
+
+    it("a narrowed `tools:` still lists the names it actually has", async () => {
+      const tools = await withAgent("narrow", "tools: read, grep");
+      const desc: string = tools.get("Agent").description;
+      expect(desc).toContain("- narrow: narrow agent. (Tools: read, grep + extension tools; no built-in shell: cannot run bash commands)");
+    });
+  });
+});

@@ -13,11 +13,11 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { EvictedNote } from "./agent-manager.js";
-import type { SUBAGENT_COMPLETED_EVENT, SUBAGENT_FAILED_EVENT } from "./events.js";
-import type { NoticeParts } from "./notification-result.js";
-import type { AgentRecord, AgentTombstone } from "./types.js";
-import type { AgentActivity } from "./ui/agent-widget.js";
+import type { EvictedNote } from "./agent-manager.ts";
+import type { SUBAGENT_COMPLETED_EVENT, SUBAGENT_FAILED_EVENT } from "./events.ts";
+import type { NoticeParts } from "./notification-result.ts";
+import type { AgentRecord, AgentTombstone } from "./types.ts";
+import type { AgentActivity } from "./ui/agent-widget.ts";
 
 /** One finished agent, in the shape `session_start` needs to re-announce it. */
 export interface DetachedResult {

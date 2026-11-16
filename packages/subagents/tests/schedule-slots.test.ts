@@ -5,10 +5,10 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentManager } from "../src/agent-manager.js";
-import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
-import { SubagentScheduler } from "../src/schedule.js";
-import { ScheduleStore } from "../src/schedule-store.js";
+import type { AgentManager } from "../src/agent-manager.ts";
+import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
+import { SubagentScheduler } from "../src/schedule.ts";
+import { ScheduleStore } from "../src/schedule-store.ts";
 
 let dir: string;
 let path: string;

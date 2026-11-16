@@ -17,18 +17,18 @@ import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type Exten
 import { Container, isKeyRelease, Key, matchesKey, type ScrollViewScrollbar, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { nanoid } from "nanoid";
 import { Type } from "typebox";
-import { abortable } from "./abortable.js";
-import { hasAgentBadge, renderAgentName } from "./agent-color.js";
-import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, describeEvictedResult, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
-import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
-import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
-import { inChildSessionContext } from "./child-context.js";
-import { type Clock, realClock } from "./clock.js";
-import { CompletionOutbox, NOTIFICATION_HOLD_MS } from "./completion-outbox.js";
-import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
-import { loadCustomAgents } from "./custom-agents.js";
+import { abortable } from "./abortable.ts";
+import { hasAgentBadge, renderAgentName } from "./agent-color.ts";
+import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.ts";
+import { AgentManager, describeEvicted, describeEvictedResult, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.ts";
+import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.ts";
+import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.ts";
+import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.ts";
+import { inChildSessionContext } from "./child-context.ts";
+import { type Clock, realClock } from "./clock.ts";
+import { CompletionOutbox, NOTIFICATION_HOLD_MS } from "./completion-outbox.ts";
+import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.ts";
+import { loadCustomAgents } from "./custom-agents.ts";
 import {
   type DetachedResult,
   drainDetached,
@@ -38,37 +38,37 @@ import {
   spoolDetached,
   unregisterRunningDetached,
   watchDetached,
-} from "./detached-results.js";
-import { readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
-import { errorMessage } from "./error-message.js";
-import { SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, SUBAGENT_COMPLETED_EVENT, SUBAGENT_CREATED_EVENT, SUBAGENT_FAILED_EVENT, SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT, SUBAGENT_STARTED_EVENT } from "./events.js";
-import { GroupJoinManager } from "./group-join.js";
-import { resolveAgentDir } from "./home-paths.js";
-import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam } from "./invocation-config.js";
-import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
-import { runMentionClone } from "./mention-clone.js";
-import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
-import { explainModel, modelConfigurationWarnings } from "./model-explanation.js";
-import { type ModelFallback, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
-import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
-import { admitModelSelection, describeSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
-import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
-import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
-import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
-import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, retainReferencedTranscripts, schedulePrune, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
-import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
-import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
-import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
-import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
-import { savedAgentNote } from "./saved-agent-record.js";
-import { SubagentScheduler } from "./schedule.js";
-import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
-import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
-import { hostStartupErrorClass } from "./startup-error.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix, resumeHint } from "./status-note.js";
-import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type AgentTombstone, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
-import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
-import { AgentCallView, AgentResultView, type AgentRowLive, keepRowTicking, keepTicking } from "./ui/agent-row.js";
+} from "./detached-results.ts";
+import { readEnabledModels, resolveEnabledModels } from "./enabled-models.ts";
+import { errorMessage } from "./error-message.ts";
+import { SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, SUBAGENT_COMPLETED_EVENT, SUBAGENT_CREATED_EVENT, SUBAGENT_FAILED_EVENT, SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT, SUBAGENT_STARTED_EVENT } from "./events.ts";
+import { GroupJoinManager } from "./group-join.ts";
+import { resolveAgentDir } from "./home-paths.ts";
+import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam } from "./invocation-config.ts";
+import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.ts";
+import { runMentionClone } from "./mention-clone.ts";
+import { applyModelCallEvent, type ModelCallEvent } from "./model-call.ts";
+import { explainModel, modelConfigurationWarnings } from "./model-explanation.ts";
+import { type ModelFallback, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.ts";
+import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.ts";
+import { admitModelSelection, describeSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.ts";
+import { configuredTierNames, tierDisclosure } from "./model-tiers.ts";
+import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.ts";
+import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.ts";
+import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, retainReferencedTranscripts, schedulePrune, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.ts";
+import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.ts";
+import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.ts";
+import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
+import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
+import { savedAgentNote } from "./saved-agent-record.ts";
+import { SubagentScheduler } from "./schedule.ts";
+import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
+import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.ts";
+import { hostStartupErrorClass } from "./startup-error.ts";
+import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix, resumeHint } from "./status-note.ts";
+import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type AgentTombstone, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.ts";
+import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.ts";
+import { AgentCallView, AgentResultView, type AgentRowLive, keepRowTicking, keepTicking } from "./ui/agent-row.ts";
 import {
   type AgentActivity,
   type AgentDetails,
@@ -83,28 +83,28 @@ import {
   getPromptModeLabel,
   SPINNER,
   type UICtx,
-} from "./ui/agent-widget.js";
-import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./ui/conversation-viewer.js";
-import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
-import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "./ui/fleet-state.js";
-import { renderNotification } from "./ui/notification-view.js";
-import { showSchedulesMenu } from "./ui/schedule-menu.js";
-import { selectItem } from "./ui/select-item.js";
-import { renderWorkflowCard, renderWorkflowEntryCard } from "./ui/workflow-card.js";
-import { openWorkflowFromFleet, showWorkflowsMenu, type WorkflowMenuDeps } from "./ui/workflow-menu.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
-import { decideWorkflowCollision, FOREIGN_WORKFLOW_TOOL_NAMES } from "./workflow/collisions.js";
-import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "./workflow/entry.js";
-import { createWorkflowHost } from "./workflow/host.js";
-import { appendJournal, readJournal, type WorkflowJournalEntry } from "./workflow/journal.js";
-import { extractMeta, type WorkflowMeta, workflowCallName } from "./workflow/meta.js";
-import { elapsedMs } from "./workflow/progress.js";
-import { runWorkflow } from "./workflow/runtime.js";
-import { resolveWorkflowScript } from "./workflow/saved.js";
-import { completeWorkflowTask, createWorkflowTask, failWorkflowTask, formatWorkflowNotification, resolveResumeTarget, updateWorkflowProgressBatch, type WorkflowTask, workflowResultText, workflowRunId } from "./workflow/task.js";
-import { fullWorkflowToolDescription } from "./workflow/tool-description.js";
-import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.js";
-import { escapeXml } from "./xml.js";
+} from "./ui/agent-widget.ts";
+import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./ui/conversation-viewer.ts";
+import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.ts";
+import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "./ui/fleet-state.ts";
+import { renderNotification } from "./ui/notification-view.ts";
+import { showSchedulesMenu } from "./ui/schedule-menu.ts";
+import { selectItem } from "./ui/select-item.ts";
+import { renderWorkflowCard, renderWorkflowEntryCard } from "./ui/workflow-card.ts";
+import { openWorkflowFromFleet, showWorkflowsMenu, type WorkflowMenuDeps } from "./ui/workflow-menu.ts";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.ts";
+import { decideWorkflowCollision, FOREIGN_WORKFLOW_TOOL_NAMES } from "./workflow/collisions.ts";
+import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "./workflow/entry.ts";
+import { createWorkflowHost } from "./workflow/host.ts";
+import { appendJournal, readJournal, type WorkflowJournalEntry } from "./workflow/journal.ts";
+import { extractMeta, type WorkflowMeta, workflowCallName } from "./workflow/meta.ts";
+import { elapsedMs } from "./workflow/progress.ts";
+import { runWorkflow } from "./workflow/runtime.ts";
+import { resolveWorkflowScript } from "./workflow/saved.ts";
+import { completeWorkflowTask, createWorkflowTask, failWorkflowTask, formatWorkflowNotification, resolveResumeTarget, updateWorkflowProgressBatch, type WorkflowTask, workflowResultText, workflowRunId } from "./workflow/task.ts";
+import { fullWorkflowToolDescription } from "./workflow/tool-description.ts";
+import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.ts";
+import { escapeXml } from "./xml.ts";
 
 // ---- Shared helpers ----
 
@@ -376,7 +376,7 @@ export { FOREIGN_WORKFLOW_TOOL_NAMES, WORKFLOW_ENTRY_TYPE, type WorkflowEntryDat
 /** Statuses the Agent row has a rendering for. */
 const AGENT_ROW_STATUSES = new Set(["running", "background", "completed", "steered", "aborted", "stopped", "error"]);
 
-export type { Clock, TimerHandle } from "./clock.js";
+export type { Clock, TimerHandle } from "./clock.ts";
 
 /** Optional host dependencies, shared by the scheduler and completion delivery. */
 export interface SubagentsExtensionOptions {

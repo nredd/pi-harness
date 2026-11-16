@@ -31,7 +31,7 @@ export default definePackageConfig("subagents", {
   // affects modules Vite resolves; without inline the runtime stays externalized).
   test: {
     maxWorkers: 2,
-    setupFiles: ["./test/helpers/tmp-root-setup.ts"],
+    setupFiles: ["./tests/fixtures/tmp-root-setup.ts"],
     server: { deps: { inline: [/@earendil-works\/pi-/] } },
     // Measure on every run, not only under `--coverage`.
     coverage: {

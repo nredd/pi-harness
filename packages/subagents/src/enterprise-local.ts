@@ -8,8 +8,8 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { errorMessage } from "./error-message.js";
-import { resolveAgentDir } from "./home-paths.js";
+import { errorMessage } from "./error-message.ts";
+import { resolveAgentDir } from "./home-paths.ts";
 
 const MANIFEST_VERSION = 1;
 const MANIFEST_NAME = "enterprise.local.json";

@@ -13,7 +13,7 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentManager } from "../../packages/subagents/src/agent-manager.ts";
-import { answer, ScenarioSession, spawn } from "../../packages/subagents/test/helpers/scenario-session.ts";
+import { answer, ScenarioSession, spawn } from "../../packages/subagents/tests/fixtures/scenario-session.ts";
 import subscriptionRouter from "../../packages/subscription-router/src/index.ts";
 
 const ROUTER_SOURCE = fileURLToPath(new URL("../../packages/subscription-router/src/index.ts", import.meta.url));

@@ -7,34 +7,34 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { abortable } from "./abortable.js";
+import { abortable } from "./abortable.ts";
 import {
   buildAgentRegistry,
   getAgentConfigIn,
   getAvailableTypesIn,
   resolveEnabledTypeIn,
   resolveTypeIn,
-} from "./agent-types.js";
-import { loadCustomAgents } from "./custom-agents.js";
-import { errorMessage } from "./error-message.js";
-import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
+} from "./agent-types.ts";
+import { loadCustomAgents } from "./custom-agents.ts";
+import { errorMessage } from "./error-message.ts";
+import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.ts";
+import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.ts";
 import {
   createOutputFilePath,
   getOutputTranscriptDefault,
   streamToOutputFile,
   writeInitialEntry,
-} from "./output-file.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+} from "./output-file.ts";
+import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.ts";
 import type {
   AgentConfig,
   AgentInvocation,
   AgentRecord,
   IsolationMode,
   ThinkingLevel,
-} from "./types.js";
-import { addUsage } from "./usage.js";
-import { isWorktreeIsolationEnabled } from "./worktree.js";
+} from "./types.ts";
+import { addUsage } from "./usage.ts";
+import { isWorktreeIsolationEnabled } from "./worktree.ts";
 
 /**
  * Hard ceiling on nesting for every branch: main session = 0, its subagents = 1,

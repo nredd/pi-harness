@@ -1,0 +1,187 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/agent-runner.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+  return { ...actual, runAgent: vi.fn() };
+});
+
+// Only the filesystem side is faked; the transcript default is real module
+// state (both spawn paths read it there), so it must be reset between tests.
+vi.mock("../src/output-file.ts", async () => {
+  const actual = await vi.importActual<typeof import("../src/output-file.ts")>("../src/output-file.ts");
+  return {
+    ...actual,
+    createOutputFilePath: vi.fn(() => "/tmp/fake-subagent.output"),
+    writeInitialEntry: vi.fn((path: string) => path),
+    streamToOutputFile: vi.fn(() => vi.fn()),
+  };
+});
+
+import { runAgent } from "../src/agent-runner.ts";
+import { createOutputFilePath, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "../src/output-file.ts";
+import { bootPi } from "./fixtures/boot-extension.ts";
+import subagentsExtension from "./fixtures/home-extension.ts";
+
+
+function makeCtx(cwd: string) {
+  return {
+    hasUI: false,
+    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+    cwd,
+    model: undefined,
+    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+    sessionManager: { getSessionId: vi.fn(() => "session-1"), getBranch: vi.fn(() => []) },
+    getSystemPrompt: vi.fn(() => "parent"),
+  } as any;
+}
+
+describe("output_transcript agent wiring", () => {
+  let cwd: string;
+  let agentDir: string;
+  let previousCwd: string;
+  let previousAgentDir: string | undefined;
+
+  beforeEach(() => {
+    cwd = mkdtempSync(join(tmpdir(), "pi-output-transcript-cwd-"));
+    agentDir = mkdtempSync(join(tmpdir(), "pi-output-transcript-agent-"));
+    previousCwd = process.cwd();
+    previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
+    mkdirSync(join(agentDir, "agents"), { recursive: true });
+    process.chdir(cwd);
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, options) => {
+      await Promise.resolve();
+      const session = { messages: [], subscribe: vi.fn(() => vi.fn()), dispose: vi.fn() } as any;
+      options.onSessionCreated?.(session);
+      return { responseText: "done", session, aborted: false, steered: false };
+    });
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    if (previousAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(agentDir, { recursive: true, force: true });
+    setOutputTranscriptDefault(true);
+    vi.clearAllMocks();
+  });
+
+  it("creates no transcript when a custom agent sets output_transcript false", async () => {
+    writeFileSync(join(agentDir, "agents", "sensitive.md"), `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\n---\n\nKeep data in memory.`);
+    const { pi, tools, lifecycle } = bootPi();
+    subagentsExtension(pi);
+
+    await tools.get("Agent").execute(
+      "tool-call",
+      { prompt: "process sensitive data", description: "Process sensitive data", subagent_type: "sensitive" },
+      undefined,
+      undefined,
+      makeCtx(cwd),
+    );
+
+    expect(createOutputFilePath).not.toHaveBeenCalled();
+    expect(writeInitialEntry).not.toHaveBeenCalled();
+    expect(streamToOutputFile).not.toHaveBeenCalled();
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+
+  it("also suppresses the background transcript", async () => {
+    writeFileSync(join(agentDir, "agents", "sensitive.md"), `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\nrun_in_background: true\n---\n\nKeep data in memory.`);
+    const { pi, tools, lifecycle } = bootPi();
+    subagentsExtension(pi);
+
+    await tools.get("Agent").execute(
+      "tool-call",
+      { prompt: "process sensitive data", description: "Process sensitive data", subagent_type: "sensitive" },
+      undefined,
+      undefined,
+      makeCtx(cwd),
+    );
+
+    expect(createOutputFilePath).not.toHaveBeenCalled();
+    expect(writeInitialEntry).not.toHaveBeenCalled();
+    expect(streamToOutputFile).not.toHaveBeenCalled();
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+
+  it.each([true, false])("refuses transcript setup errors before starting a child (background=%s)", async (background) => {
+    const { pi, tools, lifecycle } = bootPi();
+    subagentsExtension(pi);
+    for (const failing of [createOutputFilePath, writeInitialEntry]) {
+      vi.mocked(failing).mockImplementationOnce(() => { throw new Error("EPERM spool"); });
+      await expect(tools.get("Agent").execute(
+        "tool-call",
+        { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose", run_in_background: background },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      )).rejects.toThrow("EPERM spool");
+      expect(runAgent).not.toHaveBeenCalled();
+    }
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+
+  it("keeps transcript creation as the default", async () => {
+    const { pi, tools, lifecycle } = bootPi();
+    subagentsExtension(pi);
+
+    await tools.get("Agent").execute(
+      "tool-call",
+      { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose" },
+      undefined,
+      undefined,
+      makeCtx(cwd),
+    );
+
+    expect(createOutputFilePath).toHaveBeenCalledOnce();
+    expect(writeInitialEntry).toHaveBeenCalledOnce();
+    expect(streamToOutputFile).toHaveBeenCalledOnce();
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+
+  it("suppresses the transcript project-wide when subagents.json sets outputTranscript false", async () => {
+    // A plain default agent (no frontmatter) inherits the project default.
+    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, outputTranscript: false }));
+    const { pi, tools, lifecycle } = bootPi();
+    subagentsExtension(pi);
+
+    await tools.get("Agent").execute(
+      "tool-call",
+      { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose" },
+      undefined,
+      undefined,
+      makeCtx(cwd),
+    );
+
+    expect(createOutputFilePath).not.toHaveBeenCalled();
+    expect(writeInitialEntry).not.toHaveBeenCalled();
+    expect(streamToOutputFile).not.toHaveBeenCalled();
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+
+  it("lets agent frontmatter output_transcript true override a project outputTranscript false", async () => {
+    writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, outputTranscript: false }));
+    writeFileSync(join(agentDir, "agents", "audited.md"), `---\ndescription: Always keeps a transcript\noutput_transcript: true\n---\n\nWrite a transcript regardless of the project default.`);
+    const { pi, tools, lifecycle } = bootPi();
+    subagentsExtension(pi);
+
+    await tools.get("Agent").execute(
+      "tool-call",
+      { prompt: "audited work", description: "Do audited work", subagent_type: "audited" },
+      undefined,
+      undefined,
+      makeCtx(cwd),
+    );
+
+    expect(createOutputFilePath).toHaveBeenCalledOnce();
+    expect(writeInitialEntry).toHaveBeenCalledOnce();
+    expect(streamToOutputFile).toHaveBeenCalledOnce();
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+});

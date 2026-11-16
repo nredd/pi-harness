@@ -28,8 +28,8 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { resolveAgentDir } from "./home-paths.js";
-import type { ModelEntry } from "./model-resolver.js";
+import { resolveAgentDir } from "./home-paths.ts";
+import type { ModelEntry } from "./model-resolver.ts";
 
 /** Minimal registry shape — only the methods resolveEnabledModels actually calls. */
 export interface ModelRegistryRef {

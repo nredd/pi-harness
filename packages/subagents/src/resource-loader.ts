@@ -1,6 +1,6 @@
 /** Normalize explicit settings paths before Pi's real package manager resolves them. */
 import { DefaultPackageManager, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { normalizeHomePath } from "./home-paths.js";
+import { normalizeHomePath } from "./home-paths.ts";
 
 /**
  * `homeDir` is a fork-core option (nredd/pi#13). Upstream 1.5 does not declare it and ignores it at runtime, so it is

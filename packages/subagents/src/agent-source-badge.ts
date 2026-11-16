@@ -14,7 +14,7 @@
  * `SettingsList` renders for the highlighted row only.
  */
 
-import type { AgentConfig } from "./types.js";
+import type { AgentConfig } from "./types.ts";
 
 /**
  * The badge column: a two-cell glyph plus a space, so every label starts at the

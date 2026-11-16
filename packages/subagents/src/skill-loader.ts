@@ -4,8 +4,8 @@ import { type Dirent, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileS
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadSkills, type ResolvedResource, SettingsManager, type SettingsManager as SettingsManagerType } from "@earendil-works/pi-coding-agent";
-import { isSymlink, isUnsafeName, safeReadFile } from "./memory.js";
-import { createHomePackageManager } from "./resource-loader.js";
+import { isSymlink, isUnsafeName, safeReadFile } from "./memory.ts";
+import { createHomePackageManager } from "./resource-loader.ts";
 
 /** Discovery is inspect-only: missing sources are never installed or activated. */
 const skipMissingSource = async (): Promise<"skip"> => "skip";

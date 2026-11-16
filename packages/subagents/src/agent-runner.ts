@@ -22,16 +22,16 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.js";
-import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
-import { buildParentContext, extractText } from "./context.js";
-import { DEFAULT_AGENTS } from "./default-agents.js";
-import { detectEnv } from "./env.js";
-import { normalizeHomePath, resolveAgentDir } from "./home-paths.js";
-import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
-import type { ModelCallEvent } from "./model-call.js";
-import type { ModelFallback } from "./model-resolver.js";
-import type { ModelSelection } from "./model-selection.js";
+import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.ts";
+import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.ts";
+import { buildParentContext, extractText } from "./context.ts";
+import { DEFAULT_AGENTS } from "./default-agents.ts";
+import { detectEnv } from "./env.ts";
+import { normalizeHomePath, resolveAgentDir } from "./home-paths.ts";
+import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.ts";
+import type { ModelCallEvent } from "./model-call.ts";
+import type { ModelFallback } from "./model-resolver.ts";
+import type { ModelSelection } from "./model-selection.ts";
 import {
   createNestedSubagentTools,
   getMaxSubagentDepth,
@@ -39,16 +39,16 @@ import {
   NESTED_WORKFLOW_ERROR,
   NESTED_WORKFLOW_NO_AGENT_ERROR,
   type NestedAgentManager,
-} from "./nested-tools.js";
-import { type PlanGate, planGateReason } from "./plan-mode-children.js";
-import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
-import { createHomeResourceLoader } from "./resource-loader.js";
-import { preloadSkills } from "./skill-loader.js";
-import { isStaleCtxError } from "./stale-ctx.js";
-import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
-import type { SubagentType, ThinkingLevel } from "./types.js";
-import type { LifetimeUsage } from "./usage.js";
-import type { CompiledSchema } from "./workflow/json-schema.js";
+} from "./nested-tools.ts";
+import { type PlanGate, planGateReason } from "./plan-mode-children.ts";
+import { buildAgentPrompt, type PromptExtras } from "./prompts.ts";
+import { createHomeResourceLoader } from "./resource-loader.ts";
+import { preloadSkills } from "./skill-loader.ts";
+import { isStaleCtxError } from "./stale-ctx.ts";
+import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.ts";
+import type { SubagentType, ThinkingLevel } from "./types.ts";
+import type { LifetimeUsage } from "./usage.ts";
+import type { CompiledSchema } from "./workflow/json-schema.ts";
 
 /**
  * Tool names registered by THIS extension. Single source of truth so the

@@ -7,15 +7,15 @@
 
 import { type AgentSession, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable, Input, Markdown, type MarkdownOptions, type MarkdownTheme, matchesKey, type OverlayOptions, ScrollView, type ScrollViewScrollbar, stripTerminalSequences, type TUI, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { renderAgentName } from "../agent-color.js";
-import { type Clock, realClock, type TimerHandle } from "../clock.js";
-import { extractText } from "../context.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.js";
-import type { Theme } from "./agent-widget.js";
-import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
-import { fallbackFlag } from "./fallback-flag.js";
-import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
+import { renderAgentName } from "../agent-color.ts";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
+import { extractText } from "../context.ts";
+import type { AgentRecord, ViewerMarkdownMode } from "../types.ts";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../usage.ts";
+import type { Theme } from "./agent-widget.ts";
+import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.ts";
+import { fallbackFlag } from "./fallback-flag.ts";
+import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.ts";
 
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
 const CHROME_LINES_BASE = 6;

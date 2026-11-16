@@ -12,11 +12,11 @@
 
 import { pathToFileURL } from "node:url";
 import { type Component, hyperlink, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { type Clock, realClock, type TimerHandle } from "../clock.js";
-import { formatClock } from "../model-call.js";
-import { modelSelectionNote } from "../model-selection.js";
-import type { AgentRecord } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
+import { type Clock, realClock, type TimerHandle } from "../clock.ts";
+import { formatClock } from "../model-call.ts";
+import { modelSelectionNote } from "../model-selection.ts";
+import type { AgentRecord } from "../types.ts";
+import { getLifetimeCost, getLifetimeTotal } from "../usage.ts";
 import {
   type AgentActivity,
   type AgentDetails,
@@ -26,8 +26,8 @@ import {
   formatTokens,
   SPINNER,
   type Theme,
-} from "./agent-widget.js";
-import { fallbackFlag, withLeadingFlag } from "./fallback-flag.js";
+} from "./agent-widget.ts";
+import { fallbackFlag, withLeadingFlag } from "./fallback-flag.ts";
 
 /** Lines of the result shown when expanded; the rest is one `get_subagent_result` away. */
 const EXPANDED_RESULT_LINES = 50;

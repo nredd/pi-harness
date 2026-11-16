@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { Type } from "typebox";
-import type { AgentConfig, IsolationMode, ThinkingLevel } from "./types.js";
+import type { AgentConfig, IsolationMode, ThinkingLevel } from "./types.ts";
 
 /**
  * The model-facing `isolation` parameter, shared by the `Agent` tool and the

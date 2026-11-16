@@ -12,8 +12,8 @@
  */
 
 import { nanoid } from "nanoid";
-import { type Clock, realClock } from "./clock.js";
-import type { TierAdmission } from "./model-tiers.js";
+import { type Clock, realClock } from "./clock.ts";
+import type { TierAdmission } from "./model-tiers.ts";
 
 export const ADMIT_CHANNEL = "router:rpc:admit";
 

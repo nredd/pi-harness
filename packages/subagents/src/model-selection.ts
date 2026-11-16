@@ -1,10 +1,10 @@
 /** One selection policy for every dispatch, independent of its transport. */
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { type Clock, realClock } from "./clock.js";
-import { describeModel, describeVirtualModel, getAgentModels, getModelAliases, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel } from "./model-resolver.js";
-import { checkModelScope } from "./model-scope.js";
-import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.js";
-import { type AdmissionEvents, admissionOutcome, type QuotaBlock } from "./quota-admission.js";
+import { type Clock, realClock } from "./clock.ts";
+import { describeModel, describeVirtualModel, getAgentModels, getModelAliases, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel } from "./model-resolver.ts";
+import { checkModelScope } from "./model-scope.ts";
+import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.ts";
+import { type AdmissionEvents, admissionOutcome, type QuotaBlock } from "./quota-admission.ts";
 
 /** Exact compatibility pins for user-defined legacy Explore definitions. User aliases win. */
 const LEGACY_MODEL_PINS = new Map([

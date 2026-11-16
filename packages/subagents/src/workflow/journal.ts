@@ -46,7 +46,7 @@
 
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
-import { isTierDisclosure, type TierDisclosure, tierDisclosure } from "../model-tiers.js";
+import { isTierDisclosure, type TierDisclosure, tierDisclosure } from "../model-tiers.ts";
 
 /** One settled agent call, as replayed. */
 export interface WorkflowJournalEntry {

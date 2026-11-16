@@ -8,15 +8,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerAgents } from "../src/agent-types.js";
-import type { PlanGate } from "../src/plan-mode-children.js";
-import type { AgentConfig } from "../src/types.js";
-import { registerFauxProvider } from "../test/helpers/pi-ai.js";
-import { runAgent } from "../test/helpers/run-selected-agent.js";
+import { registerAgents } from "../src/agent-types.ts";
+import type { PlanGate } from "../src/plan-mode-children.ts";
+import type { AgentConfig } from "../src/types.ts";
+import { registerFauxProvider } from "./fixtures/pi-ai.ts";
+import { runAgent } from "./fixtures/run-selected-agent.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
-const ALPHA = fileURLToPath(new URL("../test/fixtures/ext-alpha.mjs", import.meta.url));
+const ALPHA = fileURLToPath(new URL("./fixtures/ext-alpha.mjs", import.meta.url));
 
 /** The two hooks a child session routes tool calls through, as the gate installs them. */
 interface HookedSession {
