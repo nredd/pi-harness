@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../src/index.ts";
 import { runTools, startSession } from "../fixtures/session.ts";

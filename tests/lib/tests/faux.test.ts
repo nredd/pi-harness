@@ -1,8 +1,8 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { createHarness, fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, expect, test } from "vitest";
 import { nextEvent, outcomes, settled, text, toolCall, toolCalls } from "../src/faux.ts";
+import { createHarness, fauxAssistantMessage, type Harness } from "../src/harness.ts";
 
 const factory: ExtensionFactory = (pi) => {
 	pi.registerTool({
