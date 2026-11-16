@@ -8,7 +8,7 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { modelLeaks, modelValues, TIER_REF } from "@nredd/pi-test-lib/model-guard";
 import Schema from "typebox/schema";
 import { test } from "vitest";
-import { frontmatterOf, type Json, manifest, pkgRoot, readJson, readText, walk } from "./support.ts";
+import { frontmatterOf, type Json, manifest, pkgRoot, readJson, readText, walk } from "./fixtures/package.ts";
 
 const AGENTS = [
 	"architect",

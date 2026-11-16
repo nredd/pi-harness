@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "vitest";
-import { manifest, pkgRoot, readText, resourceFiles } from "./support.ts";
+import { manifest, pkgRoot, readText, resourceFiles } from "./fixtures/package.ts";
 
 const SHIPPED_DIRS = ["agents", "extensions", "lib", "licenses", "settings", "skills", "themes"];
 const HOST_PEERS = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"];
@@ -126,7 +126,7 @@ test("README states public publication and keeps the pending work explicit", () 
 		"not a supported release",
 		"npm:@nredd/pi-preset@0.4.0",
 		'"packageAgents": false',
-		"test/footer-render.test.ts",
+		"tests/footer-render.test.ts",
 		"no installer, no profile resolver, no activation path",
 		"No `role:` references are introduced",
 		"**Pending.**",

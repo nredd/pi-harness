@@ -15,7 +15,7 @@ import {
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { manifest, pkgRoot } from "./support.ts";
+import { manifest, pkgRoot } from "./fixtures/package.ts";
 
 const SKILLS = ["code-review", "coding-like-redd", "get-it-merged", "ship-issue"];
 const THEMES = ["belafonte-day", "tokyonight-storm"];
