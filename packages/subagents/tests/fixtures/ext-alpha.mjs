@@ -9,15 +9,15 @@
 import { Type } from "@sinclair/typebox";
 
 export default function (pi) {
-  for (const name of ["alpha_read", "alpha_write"]) {
-    pi.registerTool({
-      name,
-      label: name,
-      description: `Alpha extension tool ${name} (e2e fixture).`,
-      parameters: Type.Object({}),
-      async execute() {
-        return { content: [{ type: "text", text: name }] };
-      },
-    });
-  }
+	for (const name of ["alpha_read", "alpha_write"]) {
+		pi.registerTool({
+			name,
+			label: name,
+			description: `Alpha extension tool ${name} (e2e fixture).`,
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: name }] };
+			},
+		});
+	}
 }

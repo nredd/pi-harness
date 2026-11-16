@@ -9,77 +9,118 @@ import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
 let fixture: ScenarioSession;
 afterEach(async () => {
-  await fixture?.dispose();
-  Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+	await fixture?.dispose();
+	Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
 });
 
-it("preserves a delivered detached note and name conflict when saved history fills the index", { timeout: 30_000 }, async () => {
-  fixture = new ScenarioSession();
-  const sessions = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
-  const h = await fixture.start({ harness: { sessionManager: sessions } });
-  h.setResponses([answer("CREATE PARENT")]);
-  await h.session.prompt("create parent");
-  for (let i = 0; i < 500; i++) sessions.appendCustomEntry("subagents:record", { id: `old-${i}`, type: "general-purpose", description: "older history", status: "completed" });
-  sessions.appendCustomEntry("subagents:record", { id: "delivered", type: "general-purpose", description: "stale historical attempt", status: "stopped" });
-  const parentFile = sessions.getSessionFile();
-  if (!parentFile) throw new Error("No saved parent file");
-  await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-  h.cleanup();
-  const result = (id: string) => ({
-    id, content: "synthetic detached result", details: { id },
-    evicted: [{ id, type: "general-purpose", description: "detached result", status: "completed" as const, evictedAfterMin: 0 }],
-    tombstones: [{ id, handle: "shared", type: "general-purpose", description: "detached result", sessionFile: join(fixture.root, `${id}.jsonl`), completedAt: 1 }],
-    record: { id, type: "general-purpose", description: "detached result", status: "completed" },
-  });
-  spoolDetached(parentFile, result("a-holder"));
-  spoolDetached(parentFile, result("delivered"));
-  const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
-  reopened.setResponses([toolCalls({ name: "steer_subagent", args: { agent_id: "delivered", message: "continue" } }), answer("CHECKED")]);
-  await reopened.session.prompt("inspect delivered");
-  const text = outcomes(reopened, "steer_subagent")[0]?.text ?? "";
-  expect(text).toContain('its name "shared" now belongs to another agent');
-  expect(text).not.toContain("recovered from saved parent session");
+it("preserves a delivered detached note and name conflict when saved history fills the index", {
+	timeout: 30_000,
+}, async () => {
+	fixture = new ScenarioSession();
+	const sessions = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: sessions } });
+	h.setResponses([answer("CREATE PARENT")]);
+	await h.session.prompt("create parent");
+	for (let i = 0; i < 500; i++)
+		sessions.appendCustomEntry("subagents:record", {
+			id: `old-${i}`,
+			type: "general-purpose",
+			description: "older history",
+			status: "completed",
+		});
+	sessions.appendCustomEntry("subagents:record", {
+		id: "delivered",
+		type: "general-purpose",
+		description: "stale historical attempt",
+		status: "stopped",
+	});
+	const parentFile = sessions.getSessionFile();
+	if (!parentFile) throw new Error("No saved parent file");
+	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	h.cleanup();
+	const result = (id: string) => ({
+		id,
+		content: "synthetic detached result",
+		details: { id },
+		evicted: [
+			{ id, type: "general-purpose", description: "detached result", status: "completed" as const, evictedAfterMin: 0 },
+		],
+		tombstones: [
+			{
+				id,
+				handle: "shared",
+				type: "general-purpose",
+				description: "detached result",
+				sessionFile: join(fixture.root, `${id}.jsonl`),
+				completedAt: 1,
+			},
+		],
+		record: { id, type: "general-purpose", description: "detached result", status: "completed" },
+	});
+	spoolDetached(parentFile, result("a-holder"));
+	spoolDetached(parentFile, result("delivered"));
+	const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	reopened.setResponses([
+		toolCalls({ name: "steer_subagent", args: { agent_id: "delivered", message: "continue" } }),
+		answer("CHECKED"),
+	]);
+	await reopened.session.prompt("inspect delivered");
+	const text = outcomes(reopened, "steer_subagent")[0]?.text ?? "";
+	expect(text).toContain('its name "shared" now belongs to another agent');
+	expect(text).not.toContain("recovered from saved parent session");
 });
 
 it("lets actual notes supersede historical duplicates, with no cap on either class (#372)", () => {
-  const manager = new AgentManager(() => {});
-  const note = (id: string, historical: boolean): EvictedNote => ({ id, type: "general-purpose", description: historical ? "historical" : "actual", status: "completed", evictedAfterMin: 0, ...(historical ? { fromSavedSession: true } : {}) });
-  for (let i = 0; i < 500; i++) manager.rememberEvicted(note(`actual-${i}`, false));
-  manager.rememberEvicted(note("historical-late", true));
-  expect(manager.getEvictedNote("historical-late")?.description).toBe("historical");
-  expect(manager.getEvictedNote("actual-0")?.description).toBe("actual");
-  manager.rememberEvicted(note("actual-0", true));
-  expect(manager.getEvictedNote("actual-0")?.description).toBe("actual");
-  const another = new AgentManager(() => {});
-  another.rememberEvicted(note("duplicate", true));
-  another.rememberEvicted(note("duplicate", false));
-  expect(another.getEvictedNote("duplicate")?.description).toBe("actual");
-  another.rememberEvicted(note("duplicate", true));
-  expect(another.getEvictedNote("duplicate")?.description).toBe("actual");
+	const manager = new AgentManager(() => {});
+	const note = (id: string, historical: boolean): EvictedNote => ({
+		id,
+		type: "general-purpose",
+		description: historical ? "historical" : "actual",
+		status: "completed",
+		evictedAfterMin: 0,
+		...(historical ? { fromSavedSession: true } : {}),
+	});
+	for (let i = 0; i < 500; i++) manager.rememberEvicted(note(`actual-${i}`, false));
+	manager.rememberEvicted(note("historical-late", true));
+	expect(manager.getEvictedNote("historical-late")?.description).toBe("historical");
+	expect(manager.getEvictedNote("actual-0")?.description).toBe("actual");
+	manager.rememberEvicted(note("actual-0", true));
+	expect(manager.getEvictedNote("actual-0")?.description).toBe("actual");
+	const another = new AgentManager(() => {});
+	another.rememberEvicted(note("duplicate", true));
+	another.rememberEvicted(note("duplicate", false));
+	expect(another.getEvictedNote("duplicate")?.description).toBe("actual");
+	another.rememberEvicted(note("duplicate", true));
+	expect(another.getEvictedNote("duplicate")?.description).toBe("actual");
 });
 
 it("keeps a live survivor ahead of saved terminal history for that id", { timeout: 30_000 }, async () => {
-  fixture = new ScenarioSession();
-  const hold = fixture.heldTool();
-  const child = fixture.physical("kid", "child", [toolCalls({ name: "hold", args: {} }), answer("LIVE CHILD DONE")]);
-  const sessionManager = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
-  const h = await fixture.start({ harness: { sessionManager } });
-  h.setResponses([toolCalls(spawn("live priority")), answer("SPAWNED")]);
-  await h.session.prompt("spawn");
-  await hold.entered;
-  const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
-  if (!id) throw new Error("No actual Agent receipt");
-  const record = fixture.record(id);
-  // A previous attempt of a resumed id can have terminal history while the new run is live.
-  sessionManager.appendCustomEntry("subagents:record", { id, type: record.type, description: record.description, status: "completed" });
-  await h.session.reload();
-  fixture.restoreProviders(h);
-  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("LOOKED UP")]);
-  await h.session.prompt("lookup");
-  expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("Status: running");
-  expect(outcomes(h, "get_subagent_result")[0]?.text).not.toContain("recovered from saved");
-  expect(child.state.callCount).toBe(1);
-  hold.release();
-  await record.promise;
-  expect(record.status).toBe("completed");
+	fixture = new ScenarioSession();
+	const hold = fixture.heldTool();
+	const child = fixture.physical("kid", "child", [toolCalls({ name: "hold", args: {} }), answer("LIVE CHILD DONE")]);
+	const sessionManager = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager } });
+	h.setResponses([toolCalls(spawn("live priority")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	await hold.entered;
+	const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
+	if (!id) throw new Error("No actual Agent receipt");
+	const record = fixture.record(id);
+	// A previous attempt of a resumed id can have terminal history while the new run is live.
+	sessionManager.appendCustomEntry("subagents:record", {
+		id,
+		type: record.type,
+		description: record.description,
+		status: "completed",
+	});
+	await h.session.reload();
+	fixture.restoreProviders(h);
+	h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("LOOKED UP")]);
+	await h.session.prompt("lookup");
+	expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("Status: running");
+	expect(outcomes(h, "get_subagent_result")[0]?.text).not.toContain("recovered from saved");
+	expect(child.state.callCount).toBe(1);
+	hold.release();
+	await record.promise;
+	expect(record.status).toBe("completed");
 });

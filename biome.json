@@ -51,6 +51,19 @@
   },
   "overrides": [
     {
+      "includes": ["packages/subagents/src/**/*.ts", "packages/subagents/tests/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": { "noNonNullAssertion": "off" },
+          "suspicious": {
+            "noExplicitAny": "off",
+            "noControlCharactersInRegex": "off",
+            "noEmptyInterface": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["packages/subscription-router/tests/fixtures/legacy-oracle/**"],
       "formatter": { "enabled": false },
       "linter": { "enabled": false },

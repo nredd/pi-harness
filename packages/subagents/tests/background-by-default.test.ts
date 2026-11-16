@@ -18,84 +18,85 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn() };
 });
 
 import { runAgent } from "../src/agent-runner.ts";
 import subagentsExtension from "../src/index.ts";
 import { bootPi } from "./fixtures/boot-extension.ts";
 
-
 function ctx() {
-  return {
-    hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
-    cwd: process.cwd(),
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
-    getSystemPrompt: vi.fn(() => "parent"),
-  } as any;
+	return {
+		hasUI: false,
+		ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+		cwd: process.cwd(),
+		model: undefined,
+		modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+		sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
+		getSystemPrompt: vi.fn(() => "parent"),
+	} as any;
 }
 
 const textOf = (r: any): string => r.content[0].text;
 
 const settled = (text: string) =>
-  vi.mocked(runAgent).mockResolvedValue({
-    responseText: text,
-    session: { dispose: vi.fn() } as any,
-    aborted: false,
-    steered: false,
-  } as any);
+	vi.mocked(runAgent).mockResolvedValue({
+		responseText: text,
+		session: { dispose: vi.fn() } as any,
+		aborted: false,
+		steered: false,
+	} as any);
 
 function spawn(tools: Map<string, any>, params: Record<string, unknown> = {}) {
-  return tools.get("Agent").execute(
-    "tc",
-    { prompt: "go", description: "d", subagent_type: "general-purpose", ...params },
-    undefined,
-    undefined,
-    ctx(),
-  );
+	return tools
+		.get("Agent")
+		.execute(
+			"tc",
+			{ prompt: "go", description: "d", subagent_type: "general-purpose", ...params },
+			undefined,
+			undefined,
+			ctx(),
+		);
 }
 
 describe("backgroundByDefault", () => {
-  it("returns an agent ID, not the result, when the call doesn't specify", async () => {
-    const { pi, tools } = bootPi();
-    subagentsExtension(pi);
-    settled("THE-PAYLOAD");
+	it("returns an agent ID, not the result, when the call doesn't specify", async () => {
+		const { pi, tools } = bootPi();
+		subagentsExtension(pi);
+		settled("THE-PAYLOAD");
 
-    const out = textOf(await spawn(tools));
+		const out = textOf(await spawn(tools));
 
-    expect(out).toContain("Agent ID:");
-    // The whole point of backgrounding: the orchestrator does NOT get the
-    // output here — it arrives later as a notification preview.
-    expect(out).not.toContain("THE-PAYLOAD");
-  });
+		expect(out).toContain("Agent ID:");
+		// The whole point of backgrounding: the orchestrator does NOT get the
+		// output here — it arrives later as a notification preview.
+		expect(out).not.toContain("THE-PAYLOAD");
+	});
 
-  it("still blocks and returns the output inline when run_in_background is false", async () => {
-    const { pi, tools } = bootPi();
-    subagentsExtension(pi);
-    settled("THE-PAYLOAD");
+	it("still blocks and returns the output inline when run_in_background is false", async () => {
+		const { pi, tools } = bootPi();
+		subagentsExtension(pi);
+		settled("THE-PAYLOAD");
 
-    const out = textOf(await spawn(tools, { run_in_background: false }));
+		const out = textOf(await spawn(tools, { run_in_background: false }));
 
-    expect(out).toContain("THE-PAYLOAD");
-    expect(out).not.toContain("started in background");
-  });
+		expect(out).toContain("THE-PAYLOAD");
+		expect(out).not.toContain("started in background");
+	});
 
-  it("starts a six-way fan-out concurrently instead of queueing the tail", async () => {
-    // Six is the shape the Agent tool description tells the model to send.
-    // With maxConcurrent at its old 4 this queued two of them.
-    const { pi, tools } = bootPi();
-    subagentsExtension(pi);
-    // Never settles — every agent stays occupying its slot for the whole test.
-    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any);
+	it("starts a six-way fan-out concurrently instead of queueing the tail", async () => {
+		// Six is the shape the Agent tool description tells the model to send.
+		// With maxConcurrent at its old 4 this queued two of them.
+		const { pi, tools } = bootPi();
+		subagentsExtension(pi);
+		// Never settles — every agent stays occupying its slot for the whole test.
+		vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any);
 
-    const outs: string[] = [];
-    for (let i = 0; i < 6; i++) outs.push(textOf(await spawn(tools)));
+		const outs: string[] = [];
+		for (let i = 0; i < 6; i++) outs.push(textOf(await spawn(tools)));
 
-    expect(outs).toHaveLength(6);
-    for (const out of outs) expect(out).not.toContain("queued");
-  });
+		expect(outs).toHaveLength(6);
+		for (const out of outs) expect(out).not.toContain("queued");
+	});
 });

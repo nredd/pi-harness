@@ -13,34 +13,34 @@ import { isolationParam } from "../src/invocation-config.ts";
  * legal value is what lets it comply.
  */
 describe("isolationParam", () => {
-  function schema(enabled: boolean) {
-    const built = isolationParam(enabled);
-    return built.isolation as { anyOf?: { const?: string }[] } | undefined;
-  }
+	function schema(enabled: boolean) {
+		const built = isolationParam(enabled);
+		return built.isolation as { anyOf?: { const?: string }[] } | undefined;
+	}
 
-  it("offers a value meaning 'no isolation', not just 'worktree'", () => {
-    const values = schema(true)?.anyOf?.map(v => v.const);
-    expect(values).toContain("off");
-    expect(values).toContain("worktree");
-  });
+	it("offers a value meaning 'no isolation', not just 'worktree'", () => {
+		const values = schema(true)?.anyOf?.map((v) => v.const);
+		expect(values).toContain("off");
+		expect(values).toContain("worktree");
+	});
 
-  // A model that fills optional fields tends to reach for what it reads first,
-  // so the inert value leads. This is the whole mitigation — if the order flips,
-  // the schema stops steering and the bug is back in practice.
-  it("lists the inert value first", () => {
-    expect(schema(true)?.anyOf?.[0]?.const).toBe("off");
-  });
+	// A model that fills optional fields tends to reach for what it reads first,
+	// so the inert value leads. This is the whole mitigation — if the order flips,
+	// the schema stops steering and the bug is back in practice.
+	it("lists the inert value first", () => {
+		expect(schema(true)?.anyOf?.[0]?.const).toBe("off");
+	});
 
-  it("warns that a worktree cannot see uncommitted work", () => {
-    // The specific trap in #231: the subagent reviewed an empty `git diff
-    // --cached` in a fresh copy and returned nothing, three times.
-    const described = JSON.stringify(schema(true));
-    expect(described).toMatch(/uncommitted or staged/);
-  });
+	it("warns that a worktree cannot see uncommitted work", () => {
+		// The specific trap in #231: the subagent reviewed an empty `git diff
+		// --cached` in a fresh copy and returned nothing, three times.
+		const described = JSON.stringify(schema(true));
+		expect(described).toMatch(/uncommitted or staged/);
+	});
 
-  it("omits the parameter entirely when the project disabled worktrees", () => {
-    // Nothing to pass beats accepting it and quietly downgrading — and it costs
-    // the model no context in disabled mode, as `scheduleParam` already does.
-    expect(isolationParam(false)).toEqual({});
-  });
+	it("omits the parameter entirely when the project disabled worktrees", () => {
+		// Nothing to pass beats accepting it and quietly downgrading — and it costs
+		// the model no context in disabled mode, as `scheduleParam` already does.
+		expect(isolationParam(false)).toEqual({});
+	});
 });

@@ -17,172 +17,173 @@ const PROJECT = "---\ndescription: project reviewer\ntools: read\n---\nProject.\
 const PROJECT_ONLY = "---\ndescription: ROGUE project only\ntools: read\n---\nRogue.\n";
 
 describe("project agent trust, wired through the extension", () => {
-  let env: Hermetic;
-  let booted: BootedPi;
-  const agentDir = () => process.env.PI_CODING_AGENT_DIR as string;
-  const agentTool = () => booted.tools.get("Agent");
-  const typeList = () => String(agentTool()?.description ?? "");
-  const typeParam = () => String(agentTool()?.parameters?.properties?.subagent_type?.description ?? "");
+	let env: Hermetic;
+	let booted: BootedPi;
+	const agentDir = () => process.env.PI_CODING_AGENT_DIR as string;
+	const agentTool = () => booted.tools.get("Agent");
+	const typeList = () => String(agentTool()?.description ?? "");
+	const typeParam = () => String(agentTool()?.parameters?.properties?.subagent_type?.description ?? "");
 
-  beforeEach(() => {
-    resetPackageState();
-  });
+	beforeEach(() => {
+		resetPackageState();
+	});
 
-  afterEach(() => {
-    env?.restore();
-    resetPackageState();
-    vi.restoreAllMocks();
-  });
+	afterEach(() => {
+		env?.restore();
+		resetPackageState();
+		vi.restoreAllMocks();
+	});
 
-  /** A hermetic project with a project `reviewer` shadowing a global one, plus a project-only agent. */
-  function setup(opts: { settings?: Record<string, unknown> } = {}): void {
-    env = hermeticDir({ ...opts, agentFiles: { reviewer: PROJECT, rogue: PROJECT_ONLY } });
-    mkdirSync(join(agentDir(), "agents"), { recursive: true });
-    writeFileSync(join(agentDir(), "agents", "reviewer.md"), GLOBAL);
-  }
+	/** A hermetic project with a project `reviewer` shadowing a global one, plus a project-only agent. */
+	function setup(opts: { settings?: Record<string, unknown> } = {}): void {
+		env = hermeticDir({ ...opts, agentFiles: { reviewer: PROJECT, rogue: PROJECT_ONLY } });
+		mkdirSync(join(agentDir(), "agents"), { recursive: true });
+		writeFileSync(join(agentDir(), "agents", "reviewer.md"), GLOBAL);
+	}
 
-  function activate(): void {
-    booted = bootPi();
-    subagentsExtension(booted.pi);
-  }
+	function activate(): void {
+		booted = bootPi();
+		subagentsExtension(booted.pi);
+	}
 
-  const saveTrust = (trusted: boolean) =>
-    writeFileSync(join(agentDir(), "trust.json"), JSON.stringify({ [process.cwd()]: trusted, [env.dir]: trusted }));
+	const saveTrust = (trusted: boolean) =>
+		writeFileSync(join(agentDir(), "trust.json"), JSON.stringify({ [process.cwd()]: trusted, [env.dir]: trusted }));
 
-  it("loads global agents only at activation, whatever pi persisted", () => {
-    setup();
-    saveTrust(true);
-    writeFileSync(join(agentDir(), "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
-    activate();
+	it("loads global agents only at activation, whatever pi persisted", () => {
+		setup();
+		saveTrust(true);
+		writeFileSync(join(agentDir(), "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+		activate();
 
-    expect(getAgentConfig("reviewer")?.source).toBe("global");
-    expect(getAllTypes()).not.toContain("rogue");
-    expect(typeList()).not.toContain("ROGUE");
-    expect(typeParam()).not.toContain("rogue");
-  });
+		expect(getAgentConfig("reviewer")?.source).toBe("global");
+		expect(getAllTypes()).not.toContain("rogue");
+		expect(typeList()).not.toContain("ROGUE");
+		expect(typeParam()).not.toContain("rogue");
+	});
 
-  it("advertises project agents in description and subagent_type once session_start reports trust", async () => {
-    setup();
-    activate();
-    await startSession(booted.lifecycle, true);
+	it("advertises project agents in description and subagent_type once session_start reports trust", async () => {
+		setup();
+		activate();
+		await startSession(booted.lifecycle, true);
 
-    expect(getAgentConfig("reviewer")?.source).toBe("project");
-    expect(typeList()).toContain("project reviewer");
-    expect(typeList()).toContain("- rogue: ROGUE project only");
-    expect(typeParam()).toContain("rogue");
-  });
+		expect(getAgentConfig("reviewer")?.source).toBe("project");
+		expect(typeList()).toContain("project reviewer");
+		expect(typeList()).toContain("- rogue: ROGUE project only");
+		expect(typeParam()).toContain("rogue");
+	});
 
-  it("trusts the canonical answer over a saved distrust (--approve)", async () => {
-    setup();
-    saveTrust(false);
-    activate();
-    await startSession(booted.lifecycle, true);
+	it("trusts the canonical answer over a saved distrust (--approve)", async () => {
+		setup();
+		saveTrust(false);
+		activate();
+		await startSession(booted.lifecycle, true);
 
-    expect(getAgentConfig("reviewer")?.source).toBe("project");
-    expect(typeList()).toContain("ROGUE project only");
-  });
+		expect(getAgentConfig("reviewer")?.source).toBe("project");
+		expect(typeList()).toContain("ROGUE project only");
+	});
 
-  it("trusts the canonical answer over a saved trust (--noapprove): no stale project metadata", async () => {
-    setup();
-    saveTrust(true);
-    activate();
-    await startSession(booted.lifecycle, false);
+	it("trusts the canonical answer over a saved trust (--noapprove): no stale project metadata", async () => {
+		setup();
+		saveTrust(true);
+		activate();
+		await startSession(booted.lifecycle, false);
 
-    expect(getAgentConfig("reviewer")?.source).toBe("global");
-    expect(getAllTypes()).not.toContain("rogue");
-    expect(typeList()).not.toContain("ROGUE");
-    expect(typeList()).not.toContain("project reviewer");
-    expect(typeParam()).not.toContain("rogue");
-  });
+		expect(getAgentConfig("reviewer")?.source).toBe("global");
+		expect(getAllTypes()).not.toContain("rogue");
+		expect(typeList()).not.toContain("ROGUE");
+		expect(typeList()).not.toContain("project reviewer");
+		expect(typeParam()).not.toContain("rogue");
+	});
 
-  it("treats a session that does not answer as untrusted", async () => {
-    setup();
-    activate();
-    await booted.lifecycle.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx());
+	it("treats a session that does not answer as untrusted", async () => {
+		setup();
+		activate();
+		await booted.lifecycle.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx());
 
-    expect(getAgentConfig("reviewer")?.source).toBe("global");
-    expect(typeList()).not.toContain("ROGUE");
-  });
+		expect(getAgentConfig("reviewer")?.source).toBe("global");
+		expect(typeList()).not.toContain("ROGUE");
+	});
 
-  it("follows a trust change on a later session_start, in both directions", async () => {
-    setup();
-    activate();
-    await startSession(booted.lifecycle, true);
-    expect(typeList()).toContain("ROGUE project only");
+	it("follows a trust change on a later session_start, in both directions", async () => {
+		setup();
+		activate();
+		await startSession(booted.lifecycle, true);
+		expect(typeList()).toContain("ROGUE project only");
 
-    await startSession(booted.lifecycle, false);
-    expect(getAllTypes()).not.toContain("rogue");
-    expect(typeList()).not.toContain("ROGUE");
-    expect(typeParam()).not.toContain("rogue");
+		await startSession(booted.lifecycle, false);
+		expect(getAllTypes()).not.toContain("rogue");
+		expect(typeList()).not.toContain("ROGUE");
+		expect(typeParam()).not.toContain("rogue");
 
-    await startSession(booted.lifecycle, true);
-    expect(typeList()).toContain("ROGUE project only");
-    expect(typeParam()).toContain("rogue");
-  });
+		await startSession(booted.lifecycle, true);
+		expect(typeList()).toContain("ROGUE project only");
+		expect(typeParam()).toContain("rogue");
+	});
 
-  it("re-registers Agent only when the model-visible text changed", async () => {
-    setup();
-    activate();
-    const registered = () => booted.pi.registerTool.mock.calls.filter((c: [{ name: string }]) => c[0].name === "Agent").length;
-    expect(registered()).toBe(1);
+	it("re-registers Agent only when the model-visible text changed", async () => {
+		setup();
+		activate();
+		const registered = () =>
+			booted.pi.registerTool.mock.calls.filter((c: [{ name: string }]) => c[0].name === "Agent").length;
+		expect(registered()).toBe(1);
 
-    await startSession(booted.lifecycle, false);
-    expect(registered()).toBe(1);
-    await startSession(booted.lifecycle, true);
-    expect(registered()).toBe(2);
-    await startSession(booted.lifecycle, true);
-    expect(registered()).toBe(2);
-  });
+		await startSession(booted.lifecycle, false);
+		expect(registered()).toBe(1);
+		await startSession(booted.lifecycle, true);
+		expect(registered()).toBe(2);
+		await startSession(booted.lifecycle, true);
+		expect(registered()).toBe(2);
+	});
 
-  it("keeps non-type parameters intact across a re-registration", async () => {
-    setup();
-    activate();
-    const before = Object.keys(agentTool().parameters.properties).sort();
-    await startSession(booted.lifecycle, true);
+	it("keeps non-type parameters intact across a re-registration", async () => {
+		setup();
+		activate();
+		const before = Object.keys(agentTool().parameters.properties).sort();
+		await startSession(booted.lifecycle, true);
 
-    expect(Object.keys(agentTool().parameters.properties).sort()).toEqual(before);
-    expect(agentTool().parameters.required).toEqual(["prompt", "description", "subagent_type"]);
-    expect(typeof agentTool().execute).toBe("function");
-  });
+		expect(Object.keys(agentTool().parameters.properties).sort()).toEqual(before);
+		expect(agentTool().parameters.required).toEqual(["prompt", "description", "subagent_type"]);
+		expect(typeof agentTool().execute).toBe("function");
+	});
 
-  describe("agent-tool-description.md", () => {
-    const TEMPLATE = (word: string) => `${word}\n{{typeList}}`;
+	describe("agent-tool-description.md", () => {
+		const TEMPLATE = (word: string) => `${word}\n{{typeList}}`;
 
-    function setupCustom(): void {
-      setup({ settings: { toolDescriptionMode: "custom" } });
-      writeFileSync(join(env.dir, ".pi", "agent-tool-description.md"), TEMPLATE("PROJECT TEMPLATE"));
-    }
+		function setupCustom(): void {
+			setup({ settings: { toolDescriptionMode: "custom" } });
+			writeFileSync(join(env.dir, ".pi", "agent-tool-description.md"), TEMPLATE("PROJECT TEMPLATE"));
+		}
 
-    it("is not read from an untrusted project, so it cannot leak project agents", async () => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      setupCustom();
-      activate();
-      await startSession(booted.lifecycle, false);
+		it("is not read from an untrusted project, so it cannot leak project agents", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			setupCustom();
+			activate();
+			await startSession(booted.lifecycle, false);
 
-      expect(typeList()).not.toContain("PROJECT TEMPLATE");
-      expect(typeList()).not.toContain("ROGUE");
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no agent-tool-description.md found"));
-    });
+			expect(typeList()).not.toContain("PROJECT TEMPLATE");
+			expect(typeList()).not.toContain("ROGUE");
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining("no agent-tool-description.md found"));
+		});
 
-    it("is used for a trusted project, with the canonical type list", async () => {
-      setupCustom();
-      activate();
-      expect(typeList()).not.toContain("PROJECT TEMPLATE");
-      await startSession(booted.lifecycle, true);
+		it("is used for a trusted project, with the canonical type list", async () => {
+			setupCustom();
+			activate();
+			expect(typeList()).not.toContain("PROJECT TEMPLATE");
+			await startSession(booted.lifecycle, true);
 
-      expect(typeList()).toContain("PROJECT TEMPLATE");
-      expect(typeList()).toContain("- rogue: ROGUE project only");
-    });
+			expect(typeList()).toContain("PROJECT TEMPLATE");
+			expect(typeList()).toContain("- rogue: ROGUE project only");
+		});
 
-    it("still honours a globally configured template while untrusted", async () => {
-      setupCustom();
-      writeFileSync(join(agentDir(), "agent-tool-description.md"), TEMPLATE("GLOBAL TEMPLATE"));
-      activate();
-      await startSession(booted.lifecycle, false);
+		it("still honours a globally configured template while untrusted", async () => {
+			setupCustom();
+			writeFileSync(join(agentDir(), "agent-tool-description.md"), TEMPLATE("GLOBAL TEMPLATE"));
+			activate();
+			await startSession(booted.lifecycle, false);
 
-      expect(typeList()).toContain("GLOBAL TEMPLATE");
-      expect(typeList()).not.toContain("PROJECT TEMPLATE");
-      expect(typeList()).not.toContain("ROGUE");
-    });
-  });
+			expect(typeList()).toContain("GLOBAL TEMPLATE");
+			expect(typeList()).not.toContain("PROJECT TEMPLATE");
+			expect(typeList()).not.toContain("ROGUE");
+		});
+	});
 });

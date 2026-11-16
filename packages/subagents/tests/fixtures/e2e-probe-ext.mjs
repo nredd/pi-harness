@@ -10,16 +10,16 @@ import { writeFileSync } from "node:fs";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi) {
-  pi.registerTool({
-    name: "e2e_probe",
-    label: "E2E Probe",
-    description: "Writes a marker file. Used only by the end-to-end test.",
-    parameters: Type.Object({
-      marker: Type.String({ description: "Absolute path of the marker file to write." }),
-    }),
-    async execute(_id, params) {
-      writeFileSync(params.marker, "probed");
-      return { content: [{ type: "text", text: `wrote ${params.marker}` }] };
-    },
-  });
+	pi.registerTool({
+		name: "e2e_probe",
+		label: "E2E Probe",
+		description: "Writes a marker file. Used only by the end-to-end test.",
+		parameters: Type.Object({
+			marker: Type.String({ description: "Absolute path of the marker file to write." }),
+		}),
+		async execute(_id, params) {
+			writeFileSync(params.marker, "probed");
+			return { content: [{ type: "text", text: `wrote ${params.marker}` }] };
+		},
+	});
 }

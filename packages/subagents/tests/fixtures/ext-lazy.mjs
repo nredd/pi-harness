@@ -13,15 +13,15 @@
 import { Type } from "@sinclair/typebox";
 
 export default function (pi) {
-  pi.on("session_start", () => {
-    pi.registerTool({
-      name: "lazy_tool",
-      label: "lazy_tool",
-      description: "Lazily-registered extension tool (e2e fixture).",
-      parameters: Type.Object({}),
-      async execute() {
-        return { content: [{ type: "text", text: "lazy_tool" }] };
-      },
-    });
-  });
+	pi.on("session_start", () => {
+		pi.registerTool({
+			name: "lazy_tool",
+			label: "lazy_tool",
+			description: "Lazily-registered extension tool (e2e fixture).",
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "lazy_tool" }] };
+			},
+		});
+	});
 }

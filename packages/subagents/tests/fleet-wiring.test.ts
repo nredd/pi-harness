@@ -15,109 +15,113 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn() };
 });
 
 import { runAgent } from "../src/agent-runner.ts";
 import { bootPi } from "./fixtures/boot-extension.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
 
-
 /** A UI context with the surfaces the widget + fleet touch; setWidget is spied. */
 function uiCtx() {
-  return {
-    setStatus: vi.fn(),
-    setWidget: vi.fn(),
-    notify: vi.fn(),
-    onTerminalInput: vi.fn(() => vi.fn()),
-    getEditorText: vi.fn(() => ""),
-    custom: vi.fn(),
-  };
+	return {
+		setStatus: vi.fn(),
+		setWidget: vi.fn(),
+		notify: vi.fn(),
+		onTerminalInput: vi.fn(() => vi.fn()),
+		getEditorText: vi.fn(() => ""),
+		custom: vi.fn(),
+	};
 }
 
 function ctxWith(ui: ReturnType<typeof uiCtx>) {
-  return {
-    hasUI: true,
-    ui,
-    cwd: process.cwd(),
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
-    getSystemPrompt: () => "parent",
-  } as any;
+	return {
+		hasUI: true,
+		ui,
+		cwd: process.cwd(),
+		model: undefined,
+		modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+		sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+		getSystemPrompt: () => "parent",
+	} as any;
 }
 
 const textOf = (r: any): string => r.content[0].text;
 const flush = async () => {
-  await new Promise((r) => setImmediate(r));
-  await new Promise((r) => setImmediate(r));
+	await new Promise((r) => setImmediate(r));
+	await new Promise((r) => setImmediate(r));
 };
 
 describe("FleetView wiring (real extension lifecycle)", () => {
-  let tmpDir: string;
-  let agentDir: string;
-  let prevCwd: string;
-  let prevAgentDir: string | undefined;
+	let tmpDir: string;
+	let agentDir: string;
+	let prevCwd: string;
+	let prevAgentDir: string | undefined;
 
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "pi-fleet-"));
-    agentDir = mkdtempSync(join(tmpdir(), "pi-fleet-agentdir-"));
-    prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    prevCwd = process.cwd();
-    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    // async join → completion routes straight to sendIndividualNudge (no batch
-    // debounce), so fleet.onAgentFinished fires synchronously on the result.
-    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, defaultJoinMode: "async" }));
-    process.chdir(tmpDir);
-  });
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "pi-fleet-"));
+		agentDir = mkdtempSync(join(tmpdir(), "pi-fleet-agentdir-"));
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		prevCwd = process.cwd();
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		// async join → completion routes straight to sendIndividualNudge (no batch
+		// debounce), so fleet.onAgentFinished fires synchronously on the result.
+		writeFileSync(
+			join(tmpDir, ".pi", "subagents.json"),
+			JSON.stringify({ schedulingEnabled: false, defaultJoinMode: "async" }),
+		);
+		process.chdir(tmpDir);
+	});
 
-  afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    rmSync(tmpDir, { recursive: true, force: true });
-    rmSync(agentDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
+	afterEach(() => {
+		process.chdir(prevCwd);
+		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+		rmSync(tmpDir, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
 
-  it("captures terminal input on tool_execution_start (fleet hooked into the UI)", async () => {
-    const { pi, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const ui = uiCtx();
-    await lifecycle.get("tool_execution_start")?.({}, ctxWith(ui));
-    expect(ui.onTerminalInput).toHaveBeenCalled();
-  });
+	it("captures terminal input on tool_execution_start (fleet hooked into the UI)", async () => {
+		const { pi, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const ui = uiCtx();
+		await lifecycle.get("tool_execution_start")?.({}, ctxWith(ui));
+		expect(ui.onTerminalInput).toHaveBeenCalled();
+	});
 
-  it("registers the belowEditor widget once a spawned agent has a session, then clears it on shutdown", async () => {
-    vi.mocked(runAgent).mockResolvedValue({
-      responseText: "done",
-      session: { dispose: vi.fn() } as any,
-      aborted: false,
-      steered: false,
-    });
+	it("registers the belowEditor widget once a spawned agent has a session, then clears it on shutdown", async () => {
+		vi.mocked(runAgent).mockResolvedValue({
+			responseText: "done",
+			session: { dispose: vi.fn() } as any,
+			aborted: false,
+			steered: false,
+		});
 
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
 
-    const ui = uiCtx();
-    await lifecycle.get("tool_execution_start")?.({}, ctxWith(ui)); // fleet captures THIS ui
+		const ui = uiCtx();
+		await lifecycle.get("tool_execution_start")?.({}, ctxWith(ui)); // fleet captures THIS ui
 
-    const spawn = await tools.get("Agent").execute(
-      "tc",
-      { prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
-      undefined,
-      undefined,
-      ctxWith(uiCtx()),
-    );
-    expect(textOf(spawn)).toMatch(/Agent ID:/);
-    await flush(); // completion → fleet.onAgentFinished → update → widget registers
+		const spawn = await tools
+			.get("Agent")
+			.execute(
+				"tc",
+				{ prompt: "go", description: "live one", subagent_type: "general-purpose", run_in_background: true },
+				undefined,
+				undefined,
+				ctxWith(uiCtx()),
+			);
+		expect(textOf(spawn)).toMatch(/Agent ID:/);
+		await flush(); // completion → fleet.onAgentFinished → update → widget registers
 
-    const fleetRegs = ui.setWidget.mock.calls.filter(c => c[0] === "fleet" && typeof c[1] === "function");
-    expect(fleetRegs.length, "fleet widget should register with a render factory").toBeGreaterThan(0);
+		const fleetRegs = ui.setWidget.mock.calls.filter((c) => c[0] === "fleet" && typeof c[1] === "function");
+		expect(fleetRegs.length, "fleet widget should register with a render factory").toBeGreaterThan(0);
 
-    await lifecycle.get("session_shutdown")?.({}, ctxWith(uiCtx()));
-    expect(ui.setWidget).toHaveBeenCalledWith("fleet", undefined); // dispose cleared it
-  });
+		await lifecycle.get("session_shutdown")?.({}, ctxWith(uiCtx()));
+		expect(ui.setWidget).toHaveBeenCalledWith("fleet", undefined); // dispose cleared it
+	});
 });

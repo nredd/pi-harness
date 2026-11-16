@@ -6,13 +6,13 @@
 import { Type } from "@sinclair/typebox";
 
 export default function (pi) {
-  pi.registerTool({
-    name: "project_git_mutation",
-    label: "Git mutation",
-    description: "Stands in for a project extension tool that mutates the repo.",
-    parameters: Type.Object({}),
-    async execute() {
-      throw new Error("project_git_mutation is an admission fixture and must not run");
-    },
-  });
+	pi.registerTool({
+		name: "project_git_mutation",
+		label: "Git mutation",
+		description: "Stands in for a project extension tool that mutates the repo.",
+		parameters: Type.Object({}),
+		async execute() {
+			throw new Error("project_git_mutation is an admission fixture and must not run");
+		},
+	});
 }

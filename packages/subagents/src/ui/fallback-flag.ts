@@ -14,43 +14,44 @@ import type { TierDisclosure } from "../model-tiers.ts";
 
 /** Minimal theme surface, so this module has no dependency on the widgets that use it. */
 interface FlagTheme {
-  fg(color: string, text: string): string;
+	fg(color: string, text: string): string;
 }
 
 /** Anything that can carry the fallback: a record, details or notice details. */
 export interface FallbackCarrier {
-  modelFallback?: unknown;
-  modelNote?: string;
-  modelTier?: TierDisclosure;
+	modelFallback?: unknown;
+	modelNote?: string;
+	modelTier?: TierDisclosure;
 }
 
 /** Whether this tier's answer differs from the member/profile admitted for it. */
 function switchedWithinTier(tier: TierDisclosure): boolean {
-  if (tier.kind !== "routed" && tier.kind !== "static") return false;
-  const baseline = tier.kind === "routed" ? tier.admitted : tier.member;
-  return baseline !== undefined && tier.answered !== undefined && tier.answered !== baseline;
+	if (tier.kind !== "routed" && tier.kind !== "static") return false;
+	const baseline = tier.kind === "routed" ? tier.admitted : tier.member;
+	return baseline !== undefined && tier.answered !== undefined && tier.answered !== baseline;
 }
 
 /** Whether `carrier` needs an actionable fallback warning, not merely tier identity. */
 export const hasFallback = (carrier: FallbackCarrier | undefined): boolean => {
-  if (carrier?.modelFallback !== undefined) return true;
-  const tier = carrier?.modelTier;
-  if (!tier) return carrier?.modelNote !== undefined;
-  return tier.kind === "unmapped" || tier.kind === "unavailable" || switchedWithinTier(tier);
+	if (carrier?.modelFallback !== undefined) return true;
+	const tier = carrier?.modelTier;
+	if (!tier) return carrier?.modelNote !== undefined;
+	return tier.kind === "unmapped" || tier.kind === "unavailable" || switchedWithinTier(tier);
 };
 
 /** Plain tier identity/outcome flag, or `[fallback]`; group counts retain the same identity. */
 export function fallbackFlagText(count = 1, carrier?: FallbackCarrier): string {
-  const tier = carrier?.modelTier;
-  const suffix = count > 1 ? ` x${count}` : "";
-  return tier ? `[@${tier.tier}${tier.kind !== "routed" && tier.kind !== "static" ? ` ${tier.kind}` : ""}${suffix}]`
-    : `[fallback${suffix}]`;
+	const tier = carrier?.modelTier;
+	const suffix = count > 1 ? ` x${count}` : "";
+	return tier
+		? `[@${tier.tier}${tier.kind !== "routed" && tier.kind !== "static" ? ` ${tier.kind}` : ""}${suffix}]`
+		: `[fallback${suffix}]`;
 }
 
 /** The themed tier identity or actionable fallback flag for `carrier`. */
 export function fallbackFlag(theme: FlagTheme, carrier: FallbackCarrier | undefined, count = 1): string {
-  if (carrier?.modelTier) return theme.fg(hasFallback(carrier) ? "warning" : "dim", fallbackFlagText(count, carrier));
-  return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier)) : "";
+	if (carrier?.modelTier) return theme.fg(hasFallback(carrier) ? "warning" : "dim", fallbackFlagText(count, carrier));
+	return hasFallback(carrier) ? theme.fg("warning", fallbackFlagText(count, carrier)) : "";
 }
 
 /** What a flag degrades to when even it does not fit; plain so it cannot depend on a theme. */
@@ -63,20 +64,18 @@ const MINIMAL_FLAGS = ["[fb]", "!"] as const;
  * A non-finite `maxRows` gets that floor rather than poisoning the slices.
  */
 export function boundedWrappedRows(text: string, width: number, maxRows: number, marker: string): string[] {
-  const rows = wrapTextWithAnsi(text, width);
-  const budget = Number.isFinite(maxRows) ? Math.max(3, Math.trunc(maxRows)) : 3;
-  if (rows.length <= budget) return rows;
+	const rows = wrapTextWithAnsi(text, width);
+	const budget = Number.isFinite(maxRows) ? Math.max(3, Math.trunc(maxRows)) : 3;
+	if (rows.length <= budget) return rows;
 
-  // Reserve a row for the omission marker and favor the final rows: fallback
-  // diagnoses live at the end, while the first row still names the control text.
-  // At least two rows are omitted, so the marker never replaces a single row.
-  const firstCount = Math.max(1, Math.floor((budget - 1) / 2));
-  const lastCount = budget - firstCount - 1;
-  const omitted = rows.length - firstCount - lastCount;
-  const omission = stripTerminalSequences(
-    truncateToWidth(`${marker} ${omitted} more lines`, width, ""),
-  );
-  return [...rows.slice(0, firstCount), omission, ...rows.slice(-lastCount)];
+	// Reserve a row for the omission marker and favor the final rows: fallback
+	// diagnoses live at the end, while the first row still names the control text.
+	// At least two rows are omitted, so the marker never replaces a single row.
+	const firstCount = Math.max(1, Math.floor((budget - 1) / 2));
+	const lastCount = budget - firstCount - 1;
+	const omitted = rows.length - firstCount - lastCount;
+	const omission = stripTerminalSequences(truncateToWidth(`${marker} ${omitted} more lines`, width, ""));
+	return [...rows.slice(0, firstCount), omission, ...rows.slice(-lastCount)];
 }
 
 /**
@@ -92,23 +91,23 @@ export function boundedWrappedRows(text: string, width: number, maxRows: number,
  * caller sizing the flag alone gets just the flag.
  */
 export function withLeadingFlag(
-  prefix: string,
-  flag: string,
-  rest: string | ((inner: number) => string),
-  width: number,
+	prefix: string,
+	flag: string,
+	rest: string | ((inner: number) => string),
+	width: number,
 ): string {
-  const lead = flag ? `${prefix}${flag}${rest === "" ? "" : " "}` : prefix;
-  if (!flag || visibleWidth(lead) <= width) {
-    const inner = Math.max(0, width - visibleWidth(lead));
-    const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
-    return truncateToWidth(lead + body, width);
-  }
-  const flagWidth = visibleWidth(flag);
-  if (flagWidth <= width) {
-    const inner = width - flagWidth - 1;
-    if (inner < 1 || rest === "") return flag;
-    const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
-    return truncateToWidth(`${flag} ${body}`, width);
-  }
-  return MINIMAL_FLAGS.find(m => visibleWidth(m) <= width) ?? "";
+	const lead = flag ? `${prefix}${flag}${rest === "" ? "" : " "}` : prefix;
+	if (!flag || visibleWidth(lead) <= width) {
+		const inner = Math.max(0, width - visibleWidth(lead));
+		const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
+		return truncateToWidth(lead + body, width);
+	}
+	const flagWidth = visibleWidth(flag);
+	if (flagWidth <= width) {
+		const inner = width - flagWidth - 1;
+		if (inner < 1 || rest === "") return flag;
+		const body = typeof rest === "function" ? rest(inner) : truncateToWidth(rest, inner);
+		return truncateToWidth(`${flag} ${body}`, width);
+	}
+	return MINIMAL_FLAGS.find((m) => visibleWidth(m) <= width) ?? "";
 }

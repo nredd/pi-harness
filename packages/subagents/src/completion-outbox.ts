@@ -25,12 +25,12 @@ import type { NotificationDetails } from "./types.ts";
 export const NOTIFICATION_HOLD_MS = 200;
 
 export interface OutboxMessage {
-  content: string;
-  details: NotificationDetails;
-  /** Agents whose whole result the content carries: sending it reads their result. */
-  delivered?: string[];
-  /** Agents whose whole result the content carries, failures included: the parent has seen it, though it stays unread in FleetView. */
-  noticed?: string[];
+	content: string;
+	details: NotificationDetails;
+	/** Agents whose whole result the content carries: sending it reads their result. */
+	delivered?: string[];
+	/** Agents whose whole result the content carries, failures included: the parent has seen it, though it stays unread in FleetView. */
+	noticed?: string[];
 }
 
 /**
@@ -40,114 +40,119 @@ export interface OutboxMessage {
  * and the result length the batch allots each (see `notification-result.ts`).
  */
 export interface OutboxItem {
-  ids: string[];
-  /** Each agent's full result length, for the batch to split its budget by. */
-  resultChars?: Readonly<Record<string, number>>;
-  build(ids: readonly string[], caps: Readonly<Record<string, number>>): OutboxMessage;
+	ids: string[];
+	/** Each agent's full result length, for the batch to split its budget by. */
+	resultChars?: Readonly<Record<string, number>>;
+	build(ids: readonly string[], caps: Readonly<Record<string, number>>): OutboxMessage;
 }
 
 /** Result length per agent of one batch, from each agent's full length. */
 export type ResultAllotment = (chars: Readonly<Record<string, number>>) => Record<string, number>;
 
 export class CompletionOutbox {
-  private items: OutboxItem[] = [];
-  private timer: TimerHandle | undefined;
+	private items: OutboxItem[] = [];
+	private timer: TimerHandle | undefined;
 
-    private send: (message: OutboxMessage) => void;
-  private parentRunning: () => boolean;
-  private clock: Clock;
-  private allot: ResultAllotment;
-constructor(
-    /** Delivers one message as a steer that triggers a turn when the parent is idle. */
-    send: (message: OutboxMessage) => void,
-    /** Whether the parent has a run in flight, so a `turn_end` is coming. */
-    parentRunning: () => boolean,
-    /** Shared with the scheduler by hosts that control time in-process. */
-    clock: Clock = realClock,
-    /** Splits a batch's result budget; by default nothing is allotted and each item keeps its own cap. */
-    allot: ResultAllotment = () => ({}),
-  ) {
-    this.send = send;
-    this.parentRunning = parentRunning;
-    this.clock = clock;
-    this.allot = allot;
-}
+	private send: (message: OutboxMessage) => void;
+	private parentRunning: () => boolean;
+	private clock: Clock;
+	private allot: ResultAllotment;
+	constructor(
+		/** Delivers one message as a steer that triggers a turn when the parent is idle. */
+		send: (message: OutboxMessage) => void,
+		/** Whether the parent has a run in flight, so a `turn_end` is coming. */
+		parentRunning: () => boolean,
+		/** Shared with the scheduler by hosts that control time in-process. */
+		clock: Clock = realClock,
+		/** Splits a batch's result budget; by default nothing is allotted and each item keeps its own cap. */
+		allot: ResultAllotment = () => ({}),
+	) {
+		this.send = send;
+		this.parentRunning = parentRunning;
+		this.clock = clock;
+		this.allot = allot;
+	}
 
-  /** A newer completion of the same agent (a resume) replaces its pending one. */
-  add(item: OutboxItem): void {
-    for (const id of item.ids) this.cancel(id);
-    this.items.push(item);
-    if (!this.parentRunning()) this.arm();
-  }
+	/** A newer completion of the same agent (a resume) replaces its pending one. */
+	add(item: OutboxItem): void {
+		for (const id of item.ids) this.cancel(id);
+		this.items.push(item);
+		if (!this.parentRunning()) this.arm();
+	}
 
-  /** The parent finished a turn: its tool batch is done, the next model call is not. */
-  onTurnEnd(stopReason: string | undefined): void {
-    // An aborted turn ends its run; a failed one may be retried. Either way
-    // what is held waits for the next boundary or the run's end — sent now,
-    // it would sit in a queue pi is about to clear.
-    if (stopReason !== "aborted" && stopReason !== "error") this.flush();
-  }
+	/** The parent finished a turn: its tool batch is done, the next model call is not. */
+	onTurnEnd(stopReason: string | undefined): void {
+		// An aborted turn ends its run; a failed one may be retried. Either way
+		// what is held waits for the next boundary or the run's end — sent now,
+		// it would sit in a queue pi is about to clear.
+		if (stopReason !== "aborted" && stopReason !== "error") this.flush();
+	}
 
-  /** The agent's result was read: it must not also be notified. */
-  cancel(id: string): void {
-    for (const item of this.items) item.ids = item.ids.filter(i => i !== id);
-    this.items = this.items.filter(item => item.ids.length > 0);
-  }
+	/** The agent's result was read: it must not also be notified. */
+	cancel(id: string): void {
+		for (const item of this.items) item.ids = item.ids.filter((i) => i !== id);
+		this.items = this.items.filter((item) => item.ids.length > 0);
+	}
 
-  /**
-   * Completions that landed after the run's last `turn_end` would otherwise wait for the next run.
-   * Called at `agent_end` and again at `agent_settled`: one can land while the ending run is still open.
-   */
-  onAgentEnd(): void {
-    if (this.items.length > 0) this.arm();
-  }
+	/**
+	 * Completions that landed after the run's last `turn_end` would otherwise wait for the next run.
+	 * Called at `agent_end` and again at `agent_settled`: one can land while the ending run is still open.
+	 */
+	onAgentEnd(): void {
+		if (this.items.length > 0) this.arm();
+	}
 
-  dispose(): void {
-    this.timer?.cancel();
-    this.timer = undefined;
-    this.items = [];
-  }
+	dispose(): void {
+		this.timer?.cancel();
+		this.timer = undefined;
+		this.items = [];
+	}
 
-  /** Not reset by later items: the first completion is never pushed back. */
-  private arm(): void {
-    this.timer ??= this.clock.setTimeout(() => {
-      this.timer = undefined;
-      this.flush();
-    }, NOTIFICATION_HOLD_MS);
-  }
+	/** Not reset by later items: the first completion is never pushed back. */
+	private arm(): void {
+		this.timer ??= this.clock.setTimeout(() => {
+			this.timer = undefined;
+			this.flush();
+		}, NOTIFICATION_HOLD_MS);
+	}
 
-  /** Remove held completions for transfer to their session's detached spool. */
-  takePending(): OutboxMessage | undefined {
-    this.timer?.cancel();
-    this.timer = undefined;
-    const items = this.items;
-    this.items = [];
-    const chars: Record<string, number> = {};
-    for (const item of items) for (const id of item.ids) if (item.resultChars?.[id] !== undefined) chars[id] = item.resultChars[id];
-    const caps = this.allot(chars);
-    const messages = items.map(item => item.build(item.ids, caps));
-    return messages.length > 0 ? combine(messages) : undefined;
-  }
+	/** Remove held completions for transfer to their session's detached spool. */
+	takePending(): OutboxMessage | undefined {
+		this.timer?.cancel();
+		this.timer = undefined;
+		const items = this.items;
+		this.items = [];
+		const chars: Record<string, number> = {};
+		for (const item of items)
+			for (const id of item.ids) if (item.resultChars?.[id] !== undefined) chars[id] = item.resultChars[id];
+		const caps = this.allot(chars);
+		const messages = items.map((item) => item.build(item.ids, caps));
+		return messages.length > 0 ? combine(messages) : undefined;
+	}
 
-  private flush(): void {
-    const message = this.takePending();
-    if (!message) return;
-    // A send from a timer can outlive the session it was meant for (pi -p
-    // tearing down): pi throws on the stale context, and nothing is left to tell.
-    try { this.send(message); } catch { /* stale context */ }
-  }
+	private flush(): void {
+		const message = this.takePending();
+		if (!message) return;
+		// A send from a timer can outlive the session it was meant for (pi -p
+		// tearing down): pi throws on the stale context, and nothing is left to tell.
+		try {
+			this.send(message);
+		} catch {
+			/* stale context */
+		}
+	}
 }
 
 /** One message stays as it was built; several become one message with every agent's details. */
 function combine(messages: OutboxMessage[]): OutboxMessage {
-  if (messages.length === 1) return messages[0]!;
-  const [first, ...rest] = messages.flatMap(({ details: { others, ...own } }) => [own, ...(others ?? [])]);
-  const delivered = messages.flatMap(m => m.delivered ?? []);
-  const noticed = messages.flatMap(m => m.noticed ?? []);
-  return {
-    content: `${messages.length} background tasks finished.\n\n${messages.map(m => m.content).join("\n\n")}`,
-    details: { ...first!, others: rest },
-    ...(delivered.length > 0 ? { delivered } : {}),
-    ...(noticed.length > 0 ? { noticed } : {}),
-  };
+	if (messages.length === 1) return messages[0]!;
+	const [first, ...rest] = messages.flatMap(({ details: { others, ...own } }) => [own, ...(others ?? [])]);
+	const delivered = messages.flatMap((m) => m.delivered ?? []);
+	const noticed = messages.flatMap((m) => m.noticed ?? []);
+	return {
+		content: `${messages.length} background tasks finished.\n\n${messages.map((m) => m.content).join("\n\n")}`,
+		details: { ...first!, others: rest },
+		...(delivered.length > 0 ? { delivered } : {}),
+		...(noticed.length > 0 ? { noticed } : {}),
+	};
 }

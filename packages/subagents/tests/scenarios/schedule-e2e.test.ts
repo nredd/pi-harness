@@ -28,33 +28,34 @@ type FakeRecord = { status: string; promise: Promise<string>; resolve: () => voi
  * the test can assert success vs error inference.
  */
 function makeFaithfulManager(initialStatus = "completed") {
-  const records = new Map<string, FakeRecord>();
-  return {
-    records,
-    initialStatus,
-    spawn: vi.fn(function (this: any) {
-      const id = "agent-" + Math.random().toString(36).slice(2, 10);
-      let resolve!: () => void;
-      const promise = new Promise<string>(r => { resolve = () => r(""); });
-      records.set(id, { status: initialStatus, promise, resolve });
-      // Auto-resolve on next tick — mimics a fast-finishing real agent.
-      queueMicrotask(() => records.get(id)?.resolve());
-      return id;
-    }),
-    awaitStartup: vi.fn(async () => {}),
-    getRecord: vi.fn(function (this: any, id: string) {
-      return records.get(id);
-    }),
-  } as any;
+	const records = new Map<string, FakeRecord>();
+	return {
+		records,
+		initialStatus,
+		spawn: vi.fn(function (this: any) {
+			const id = `agent-${Math.random().toString(36).slice(2, 10)}`;
+			let resolve!: () => void;
+			const promise = new Promise<string>((r) => {
+				resolve = () => r("");
+			});
+			records.set(id, { status: initialStatus, promise, resolve });
+			// Auto-resolve on next tick — mimics a fast-finishing real agent.
+			queueMicrotask(() => records.get(id)?.resolve());
+			return id;
+		}),
+		awaitStartup: vi.fn(async () => {}),
+		getRecord: vi.fn(function (this: any, id: string) {
+			return records.get(id);
+		}),
+	} as any;
 }
 
-
 function makeCtx() {
-  return {
-    cwd: "/tmp",
-    modelRegistry: { find: vi.fn(), getAll: () => [], getAvailable: () => [] },
-    sessionManager: { getSessionId: () => "sess-e2e" },
-  } as any;
+	return {
+		cwd: "/tmp",
+		modelRegistry: { find: vi.fn(), getAll: () => [], getAvailable: () => [] },
+		sessionManager: { getSessionId: () => "sess-e2e" },
+	} as any;
 }
 
 /** How far ahead one-shot jobs are scheduled; the stall case outlasts it. */
@@ -66,218 +67,226 @@ const HEADROOM_MS = 100;
  * (CPU starvation under parallel gates) cannot make the job dead on arrival.
  */
 function pinnedClock(): { clock: Clock; isoAfter(ms: number): string } {
-  const base = Date.now();
-  return {
-    clock: { ...realClock, now: () => base },
-    isoAfter: ms => new Date(base + ms).toISOString(),
-  };
+	const base = Date.now();
+	return {
+		clock: { ...realClock, now: () => base },
+		isoAfter: (ms) => new Date(base + ms).toISOString(),
+	};
 }
 
 /** Block the thread, standing in for a starved test process. */
 function stall(ms: number): void {
-  const end = Date.now() + ms;
-  while (Date.now() < end) { /* spin */ }
+	const end = Date.now() + ms;
+	while (Date.now() < end) {
+		/* spin */
+	}
 }
 
 /** Wait for a predicate, polling at 5ms intervals, with a deadline. */
 async function waitFor(predicate: () => boolean, timeoutMs = 1500): Promise<void> {
-  const start = Date.now();
-  while (!predicate()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
-    }
-    await new Promise(r => setTimeout(r, 5));
-  }
+	const start = Date.now();
+	while (!predicate()) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+		}
+		await new Promise((r) => setTimeout(r, 5));
+	}
 }
 
 describe("SubagentScheduler — end-to-end with real timers", () => {
-  let tmp: string;
-  let store: ScheduleStore;
-  let scheduler: SubagentScheduler;
-  let isoAfter: (ms: number) => string;
+	let tmp: string;
+	let store: ScheduleStore;
+	let scheduler: SubagentScheduler;
+	let isoAfter: (ms: number) => string;
 
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "schedule-e2e-"));
-    store = new ScheduleStore(join(tmp, "schedules.json"));
-    const pinned = pinnedClock();
-    isoAfter = pinned.isoAfter;
-    scheduler = new SubagentScheduler({ clock: pinned.clock });
-  });
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "schedule-e2e-"));
+		store = new ScheduleStore(join(tmp, "schedules.json"));
+		const pinned = pinnedClock();
+		isoAfter = pinned.isoAfter;
+		scheduler = new SubagentScheduler({ clock: pinned.clock });
+	});
 
-  afterEach(() => {
-    scheduler.stop();
-    rmSync(tmp, { recursive: true, force: true });
-  });
+	afterEach(() => {
+		scheduler.stop();
+		rmSync(tmp, { recursive: true, force: true });
+	});
 
-  it("one-shot job: real setTimeout fires, agent runs, store reflects success", async () => {
-    const manager = makeFaithfulManager("completed");
-    const pi = bootPi().pi;
-    scheduler.start(pi, makeCtx(), manager, store);
+	it("one-shot job: real setTimeout fires, agent runs, store reflects success", async () => {
+		const manager = makeFaithfulManager("completed");
+		const pi = bootPi().pi;
+		scheduler.start(pi, makeCtx(), manager, store);
 
-    // Fire ~100ms in the future. detectSchedule normalizes "+100ms" — but our
-    // parser only accepts s/m/h/d, so use a near-future ISO timestamp instead.
-    const future = isoAfter(HEADROOM_MS);
-    const job = scheduler.addJob({
-      name: "e2e-once",
-      description: "test",
-      schedule: future,
-      subagent_type: "general-purpose",
-      prompt: "hello",
-    });
-    expect(job.scheduleType).toBe("once");
+		// Fire ~100ms in the future. detectSchedule normalizes "+100ms" — but our
+		// parser only accepts s/m/h/d, so use a near-future ISO timestamp instead.
+		const future = isoAfter(HEADROOM_MS);
+		const job = scheduler.addJob({
+			name: "e2e-once",
+			description: "test",
+			schedule: future,
+			subagent_type: "general-purpose",
+			prompt: "hello",
+		});
+		expect(job.scheduleType).toBe("once");
 
-    // Wait for the spawn to occur (real timer fires) and the finalize promise
-    // chain to settle. Polling, no fake timers.
-    await waitFor(() => manager.spawn.mock.calls.length === 1);
-    await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus === "success");
+		// Wait for the spawn to occur (real timer fires) and the finalize promise
+		// chain to settle. Polling, no fake timers.
+		await waitFor(() => manager.spawn.mock.calls.length === 1);
+		await waitFor(() => scheduler.list().find((j) => j.id === job.id)?.lastStatus === "success");
 
-    const final = scheduler.list().find(j => j.id === job.id)!;
-    expect(final.lastStatus).toBe("success");
-    expect(final.runCount).toBe(1);
-    expect(final.enabled).toBe(false);  // one-shot auto-disabled
-    expect(final.lastRun).toBeDefined();
-  });
+		const final = scheduler.list().find((j) => j.id === job.id)!;
+		expect(final.lastStatus).toBe("success");
+		expect(final.runCount).toBe(1);
+		expect(final.enabled).toBe(false); // one-shot auto-disabled
+		expect(final.lastRun).toBeDefined();
+	});
 
-  // Harness guard, not a scheduler guarantee: with the production clock a target already past at `addJob` is
-  // correctly rejected. This pins that the fixture's frozen `now` keeps test targets valid across a stall.
-  it("pinned clock keeps one-shot targets valid across a test-process stall", async () => {
-    const manager = makeFaithfulManager("completed");
-    scheduler.start(bootPi().pi, makeCtx(), manager, store);
+	// Harness guard, not a scheduler guarantee: with the production clock a target already past at `addJob` is
+	// correctly rejected. This pins that the fixture's frozen `now` keeps test targets valid across a stall.
+	it("pinned clock keeps one-shot targets valid across a test-process stall", async () => {
+		const manager = makeFaithfulManager("completed");
+		scheduler.start(bootPi().pi, makeCtx(), manager, store);
 
-    const future = isoAfter(HEADROOM_MS);
-    stall(HEADROOM_MS * 2.5);  // outlasts the headroom: a wall-clock `now` would call this past
-    const job = scheduler.addJob({
-      name: "e2e-stalled", description: "test", schedule: future,
-      subagent_type: "general-purpose", prompt: "hello",
-    });
+		const future = isoAfter(HEADROOM_MS);
+		stall(HEADROOM_MS * 2.5); // outlasts the headroom: a wall-clock `now` would call this past
+		const job = scheduler.addJob({
+			name: "e2e-stalled",
+			description: "test",
+			schedule: future,
+			subagent_type: "general-purpose",
+			prompt: "hello",
+		});
 
-    await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus === "success");
-    expect(manager.spawn).toHaveBeenCalledTimes(1);
-    // `now` is frozen, so the recorded run time is the pinned base, not real time after the stall.
-    expect(scheduler.list().find(j => j.id === job.id)?.lastRun).toBe(isoAfter(0));
-  });
+		await waitFor(() => scheduler.list().find((j) => j.id === job.id)?.lastStatus === "success");
+		expect(manager.spawn).toHaveBeenCalledTimes(1);
+		// `now` is frozen, so the recorded run time is the pinned base, not real time after the stall.
+		expect(scheduler.list().find((j) => j.id === job.id)?.lastRun).toBe(isoAfter(0));
+	});
 
-  it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
-    const manager = makeFaithfulManager("error");  // Agent terminates with error status
-    const pi = bootPi().pi;
-    scheduler.start(pi, makeCtx(), manager, store);
+	it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
+		const manager = makeFaithfulManager("error"); // Agent terminates with error status
+		const pi = bootPi().pi;
+		scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = isoAfter(HEADROOM_MS);
-    const job = scheduler.addJob({
-      name: "e2e-fail",
-      description: "test",
-      schedule: future,
-      subagent_type: "general-purpose",
-      prompt: "fail",
-    });
+		const future = isoAfter(HEADROOM_MS);
+		const job = scheduler.addJob({
+			name: "e2e-fail",
+			description: "test",
+			schedule: future,
+			subagent_type: "general-purpose",
+			prompt: "fail",
+		});
 
-    await waitFor(() => manager.spawn.mock.calls.length === 1);
-    await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus !== "running");
+		await waitFor(() => manager.spawn.mock.calls.length === 1);
+		await waitFor(() => scheduler.list().find((j) => j.id === job.id)?.lastStatus !== "running");
 
-    expect(scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
-    expect(scheduler.list().find(j => j.id === job.id)?.runCount).toBe(1);
-  });
+		expect(scheduler.list().find((j) => j.id === job.id)?.lastStatus).toBe("error");
+		expect(scheduler.list().find((j) => j.id === job.id)?.runCount).toBe(1);
+	});
 
-  it("interval job: fires repeatedly, runCount grows", async () => {
-    // Slots follow the clock: a frozen `now` would never reach the first one.
-    scheduler = new SubagentScheduler({ clock: realClock });
-    const manager = makeFaithfulManager("completed");
-    const pi = bootPi().pi;
-    scheduler.start(pi, makeCtx(), manager, store);
+	it("interval job: fires repeatedly, runCount grows", async () => {
+		// Slots follow the clock: a frozen `now` would never reach the first one.
+		scheduler = new SubagentScheduler({ clock: realClock });
+		const manager = makeFaithfulManager("completed");
+		const pi = bootPi().pi;
+		scheduler.start(pi, makeCtx(), manager, store);
 
-    // 100ms interval — wait for ~3 fires
-    const job = scheduler.addJob({
-      name: "e2e-interval",
-      description: "test",
-      schedule: "100s",  // Will be too long; override below.
-      subagent_type: "general-purpose",
-      prompt: "tick",
-    });
-    // Replace with a literal 100ms interval — easier than crafting a parseable shorthand for ms.
-    // (parseInterval doesn't accept "ms"; we patch the persisted job and re-arm.)
-    scheduler.updateJob(job.id, { intervalMs: 100, schedule: "100ms" });
+		// 100ms interval — wait for ~3 fires
+		const job = scheduler.addJob({
+			name: "e2e-interval",
+			description: "test",
+			schedule: "100s", // Will be too long; override below.
+			subagent_type: "general-purpose",
+			prompt: "tick",
+		});
+		// Replace with a literal 100ms interval — easier than crafting a parseable shorthand for ms.
+		// (parseInterval doesn't accept "ms"; we patch the persisted job and re-arm.)
+		scheduler.updateJob(job.id, { intervalMs: 100, schedule: "100ms" });
 
-    await waitFor(() => manager.spawn.mock.calls.length >= 3, 2000);
+		await waitFor(() => manager.spawn.mock.calls.length >= 3, 2000);
 
-    const final = scheduler.list().find(j => j.id === job.id)!;
-    expect(final.runCount).toBeGreaterThanOrEqual(3);
-    expect(final.lastStatus).toBe("success");
-    expect(final.enabled).toBe(true);  // intervals don't auto-disable
+		const final = scheduler.list().find((j) => j.id === job.id)!;
+		expect(final.runCount).toBeGreaterThanOrEqual(3);
+		expect(final.lastStatus).toBe("success");
+		expect(final.enabled).toBe(true); // intervals don't auto-disable
 
-    scheduler.removeJob(job.id);
-  });
+		scheduler.removeJob(job.id);
+	});
 
-  it("persistence: schedules survive re-instantiating the store on the same file", async () => {
-    const manager = makeFaithfulManager("completed");
-    const pi = bootPi().pi;
-    scheduler.start(pi, makeCtx(), manager, store);
+	it("persistence: schedules survive re-instantiating the store on the same file", async () => {
+		const manager = makeFaithfulManager("completed");
+		const pi = bootPi().pi;
+		scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = isoAfter(60_000);  // far enough not to fire
-    const job = scheduler.addJob({
-      name: "persistent",
-      description: "x",
-      schedule: future,
-      subagent_type: "general-purpose",
-      prompt: "x",
-    });
+		const future = isoAfter(60_000); // far enough not to fire
+		const job = scheduler.addJob({
+			name: "persistent",
+			description: "x",
+			schedule: future,
+			subagent_type: "general-purpose",
+			prompt: "x",
+		});
 
-    // Tear down the live scheduler; re-load from disk
-    scheduler.stop();
-    const reloadedStore = new ScheduleStore(join(tmp, "schedules.json"));
-    expect(reloadedStore.list()).toHaveLength(1);
-    expect(reloadedStore.list()[0]!.id).toBe(job.id);
-    expect(reloadedStore.list()[0]!.name).toBe("persistent");
-  });
+		// Tear down the live scheduler; re-load from disk
+		scheduler.stop();
+		const reloadedStore = new ScheduleStore(join(tmp, "schedules.json"));
+		expect(reloadedStore.list()).toHaveLength(1);
+		expect(reloadedStore.list()[0]!.id).toBe(job.id);
+		expect(reloadedStore.list()[0]!.name).toBe("persistent");
+	});
 
-  it("on-disk file shape: version=1 plus jobs array", async () => {
-    const manager = makeFaithfulManager("completed");
-    const pi = bootPi().pi;
-    scheduler.start(pi, makeCtx(), manager, store);
+	it("on-disk file shape: version=1 plus jobs array", async () => {
+		const manager = makeFaithfulManager("completed");
+		const pi = bootPi().pi;
+		scheduler.start(pi, makeCtx(), manager, store);
 
-    scheduler.addJob({
-      name: "shape-test",
-      description: "x",
-      schedule: "1h",
-      subagent_type: "general-purpose",
-      prompt: "x",
-    });
+		scheduler.addJob({
+			name: "shape-test",
+			description: "x",
+			schedule: "1h",
+			subagent_type: "general-purpose",
+			prompt: "x",
+		});
 
-    const onDisk = JSON.parse(readFileSync(join(tmp, "schedules.json"), "utf-8"));
-    expect(onDisk.version).toBe(1);
-    expect(onDisk.jobs).toHaveLength(1);
-    expect(onDisk.jobs[0]).toMatchObject({
-      name: "shape-test",
-      schedule: "1h",
-      scheduleType: "interval",
-      enabled: true,
-      runCount: 0,
-    });
-  });
+		const onDisk = JSON.parse(readFileSync(join(tmp, "schedules.json"), "utf-8"));
+		expect(onDisk.version).toBe(1);
+		expect(onDisk.jobs).toHaveLength(1);
+		expect(onDisk.jobs[0]).toMatchObject({
+			name: "shape-test",
+			schedule: "1h",
+			scheduleType: "interval",
+			enabled: true,
+			runCount: 0,
+		});
+	});
 
-  it("subagents:scheduled events fire across the lifecycle", async () => {
-    const manager = makeFaithfulManager("completed");
-    const pi = bootPi().pi;
-    scheduler.start(pi, makeCtx(), manager, store);
+	it("subagents:scheduled events fire across the lifecycle", async () => {
+		const manager = makeFaithfulManager("completed");
+		const pi = bootPi().pi;
+		scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = isoAfter(HEADROOM_MS);
-    const job = scheduler.addJob({
-      name: "events", description: "x", schedule: future,
-      subagent_type: "general-purpose", prompt: "x",
-    });
+		const future = isoAfter(HEADROOM_MS);
+		const job = scheduler.addJob({
+			name: "events",
+			description: "x",
+			schedule: future,
+			subagent_type: "general-purpose",
+			prompt: "x",
+		});
 
-    await waitFor(() => manager.spawn.mock.calls.length === 1);
+		await waitFor(() => manager.spawn.mock.calls.length === 1);
 
-    const eventTypes = pi.events.emit.mock.calls
-      .filter((c: any[]) => c[0] === "subagents:scheduled")
-      .map((c: any[]) => c[1].type);
+		const eventTypes = pi.events.emit.mock.calls
+			.filter((c: any[]) => c[0] === "subagents:scheduled")
+			.map((c: any[]) => c[1].type);
 
-    expect(eventTypes).toContain("added");
-    expect(eventTypes).toContain("fired");
+		expect(eventTypes).toContain("added");
+		expect(eventTypes).toContain("fired");
 
-    scheduler.removeJob(job.id);
-    const after = pi.events.emit.mock.calls
-      .filter((c: any[]) => c[0] === "subagents:scheduled")
-      .map((c: any[]) => c[1].type);
-    expect(after).toContain("removed");
-  });
+		scheduler.removeJob(job.id);
+		const after = pi.events.emit.mock.calls
+			.filter((c: any[]) => c[0] === "subagents:scheduled")
+			.map((c: any[]) => c[1].type);
+		expect(after).toContain("removed");
+	});
 });

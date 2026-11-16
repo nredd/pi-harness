@@ -51,33 +51,33 @@ import { SUBAGENT_TOOL_NAMES } from "../agent-runner.ts";
  * registers, and the match here is exact, so the case has to be listed by hand.
  */
 export const FOREIGN_WORKFLOW_TOOL_NAMES: ReadonlySet<string> = new Set([
-  SUBAGENT_TOOL_NAMES.WORKFLOW,
-  "Workflow",
-  "workflow",
+	SUBAGENT_TOOL_NAMES.WORKFLOW,
+	"Workflow",
+	"workflow",
 ]);
 
 /** The fields of a registered tool this decision reads. */
 export interface RegisteredToolInfo {
-  name: string;
-  description?: string;
-  sourceInfo?: { source?: string };
+	name: string;
+	description?: string;
+	sourceInfo?: { source?: string };
 }
 
 export type WorkflowCollision =
-  /** Nobody else is offering one. Carry on. */
-  | { kind: "none" }
-  /**
-   * A foreign tool took our name, but the user pinned `workflowsEnabled: true`.
-   * Nothing changes — pi has already dropped our registration — but it is worth
-   * reporting, because pi resolved it silently.
-   */
-  | { kind: "report"; message: string }
-  /**
-   * Stand down for this session. `withdraw` is false in case 1, where ours
-   * never reached the registry and there is nothing to take out of the active
-   * set.
-   */
-  | { kind: "standDown"; message: string; withdraw: boolean };
+	/** Nobody else is offering one. Carry on. */
+	| { kind: "none" }
+	/**
+	 * A foreign tool took our name, but the user pinned `workflowsEnabled: true`.
+	 * Nothing changes — pi has already dropped our registration — but it is worth
+	 * reporting, because pi resolved it silently.
+	 */
+	| { kind: "report"; message: string }
+	/**
+	 * Stand down for this session. `withdraw` is false in case 1, where ours
+	 * never reached the registry and there is nothing to take out of the active
+	 * set.
+	 */
+	| { kind: "standDown"; message: string; withdraw: boolean };
 
 /**
  * Decide, from the registered tools alone.
@@ -88,36 +88,36 @@ export type WorkflowCollision =
  * evidence, a choice does not.
  */
 export function decideWorkflowCollision(input: {
-  tools: readonly RegisteredToolInfo[];
-  ownDescription: string;
-  pinned: boolean;
+	tools: readonly RegisteredToolInfo[];
+	ownDescription: string;
+	pinned: boolean;
 }): WorkflowCollision {
-  const foreign = input.tools.find(
-    tool => FOREIGN_WORKFLOW_TOOL_NAMES.has(tool.name) && tool.description !== input.ownDescription,
-  );
-  if (foreign === undefined) return { kind: "none" };
+	const foreign = input.tools.find(
+		(tool) => FOREIGN_WORKFLOW_TOOL_NAMES.has(tool.name) && tool.description !== input.ownDescription,
+	);
+	if (foreign === undefined) return { kind: "none" };
 
-  const source = foreign.sourceInfo?.source ?? "unknown source";
-  const tookOurName = foreign.name === SUBAGENT_TOOL_NAMES.WORKFLOW;
+	const source = foreign.sourceInfo?.source ?? "unknown source";
+	const tookOurName = foreign.name === SUBAGENT_TOOL_NAMES.WORKFLOW;
 
-  if (input.pinned) {
-    if (!tookOurName) return { kind: "none" };
-    return {
-      kind: "report",
-      message:
-        `Another extension (${source}) already registers a "${SUBAGENT_TOOL_NAMES.WORKFLOW}" tool. ` +
-        "Pi keeps the first registration, so this extension's workflow tool is not offered to the " +
-        "model. Disable one of the two.",
-    };
-  }
+	if (input.pinned) {
+		if (!tookOurName) return { kind: "none" };
+		return {
+			kind: "report",
+			message:
+				`Another extension (${source}) already registers a "${SUBAGENT_TOOL_NAMES.WORKFLOW}" tool. ` +
+				"Pi keeps the first registration, so this extension's workflow tool is not offered to the " +
+				"model. Disable one of the two.",
+		};
+	}
 
-  return {
-    kind: "standDown",
-    message:
-      `Another extension (${source}) already provides a "${foreign.name}" tool, so this extension's ` +
-      "workflows are disabled for this session to avoid offering the model two orchestrators. " +
-      'Set `"workflowsEnabled": true` in .pi/subagents.json to keep both.',
-    // Case 1: ours never reached the registry, so there is nothing to withdraw.
-    withdraw: !tookOurName,
-  };
+	return {
+		kind: "standDown",
+		message:
+			`Another extension (${source}) already provides a "${foreign.name}" tool, so this extension's ` +
+			"workflows are disabled for this session to avoid offering the model two orchestrators. " +
+			'Set `"workflowsEnabled": true` in .pi/subagents.json to keep both.',
+		// Case 1: ours never reached the registry, so there is nothing to withdraw.
+		withdraw: !tookOurName,
+	};
 }

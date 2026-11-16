@@ -27,25 +27,24 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn() };
 });
 
 import { runAgent } from "../src/agent-runner.ts";
 import { bootPi } from "./fixtures/boot-extension.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
 
-
 function ctx() {
-  return {
-    hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
-    cwd: process.cwd(),
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
-    getSystemPrompt: vi.fn(() => "parent"),
-  } as any;
+	return {
+		hasUI: false,
+		ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+		cwd: process.cwd(),
+		model: undefined,
+		modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+		sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
+		getSystemPrompt: vi.fn(() => "parent"),
+	} as any;
 }
 
 const textOf = (r: any): string => r.content[0].text;
@@ -60,140 +59,142 @@ const textOf = (r: any): string => r.content[0].text;
  * a foreground id exists, which is the point of test 2.
  */
 async function runForegroundSteeredAgent(tools: Map<string, any>) {
-  vi.mocked(runAgent).mockResolvedValue({
-    responseText: "THE-RESULT-PAYLOAD",
-    session: { dispose: vi.fn() } as any,
-    aborted: false,
-    steered: true,
-  });
-  const res = await tools.get("Agent").execute(
-    "tc-fg",
-    {
-      prompt: "Perform a very thorough read-only codebase exploration.",
-      description: "Locate organization-scope changes",
-      subagent_type: "Explore",
-      max_turns: 20,
-      run_in_background: false,
-    },
-    undefined,
-    undefined,
-    ctx(),
-  );
-  const id = (res as any).details?.agentId as string | undefined;
-  expect(id, "foreground spawn should have produced a record id in details").toBeTruthy();
-  return { res, id: id as string };
+	vi.mocked(runAgent).mockResolvedValue({
+		responseText: "THE-RESULT-PAYLOAD",
+		session: { dispose: vi.fn() } as any,
+		aborted: false,
+		steered: true,
+	});
+	const res = await tools.get("Agent").execute(
+		"tc-fg",
+		{
+			prompt: "Perform a very thorough read-only codebase exploration.",
+			description: "Locate organization-scope changes",
+			subagent_type: "Explore",
+			max_turns: 20,
+			run_in_background: false,
+		},
+		undefined,
+		undefined,
+		ctx(),
+	);
+	const id = (res as any).details?.agentId as string | undefined;
+	expect(id, "foreground spawn should have produced a record id in details").toBeTruthy();
+	return { res, id: id as string };
 }
 
 describe("issue #174: foreground agent that hits max_turns", () => {
-  let tmpDir: string;
-  let agentDir: string;
-  let prevCwd: string;
-  let prevAgentDir: string | undefined;
+	let tmpDir: string;
+	let agentDir: string;
+	let prevCwd: string;
+	let prevAgentDir: string | undefined;
 
-  beforeEach(() => {
-    // Hermetic cwd + global dir, scheduling off — same isolation as
-    // clear-completed-wiring.test.ts, so session_start doesn't spin a
-    // scheduler or touch the dev's filesystem.
-    tmpDir = mkdtempSync(join(tmpdir(), "pi-174-"));
-    agentDir = mkdtempSync(join(tmpdir(), "pi-174-agentdir-"));
-    prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    prevCwd = process.cwd();
-    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
-    process.chdir(tmpDir);
-  });
+	beforeEach(() => {
+		// Hermetic cwd + global dir, scheduling off — same isolation as
+		// clear-completed-wiring.test.ts, so session_start doesn't spin a
+		// scheduler or touch the dev's filesystem.
+		tmpDir = mkdtempSync(join(tmpdir(), "pi-174-"));
+		agentDir = mkdtempSync(join(tmpdir(), "pi-174-agentdir-"));
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		prevCwd = process.cwd();
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
+		process.chdir(tmpDir);
+	});
 
-  afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    rmSync(tmpDir, { recursive: true, force: true });
-    rmSync(agentDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
+	afterEach(() => {
+		process.chdir(prevCwd);
+		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+		rmSync(tmpDir, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
 
-  it("is NOT cleaned up — get_subagent_result with the real id still resolves it", async () => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const { res, id } = await runForegroundSteeredAgent(tools);
+	it("is NOT cleaned up — get_subagent_result with the real id still resolves it", async () => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const { res, id } = await runForegroundSteeredAgent(tools);
 
-    // The inline result is the turn-limit wrap-up the reporter described.
-    expect(textOf(res)).toContain("wrapped up at the turn limit");
+		// The inline result is the turn-limit wrap-up the reporter described.
+		expect(textOf(res)).toContain("wrapped up at the turn limit");
 
-    // No /new, no /resume, no session switch — exactly the reporter's sequence.
-    const read = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
-    const out = textOf(read);
-    expect(out).not.toContain("Agent not found");
-    expect(out).toContain("THE-RESULT-PAYLOAD");
+		// No /new, no /resume, no session switch — exactly the reporter's sequence.
+		const read = await tools
+			.get("get_subagent_result")
+			.execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+		const out = textOf(read);
+		expect(out).not.toContain("Agent not found");
+		expect(out).toContain("THE-RESULT-PAYLOAD");
 
-    await lifecycle.get("session_shutdown")?.({}, ctx());
-  });
+		await lifecycle.get("session_shutdown")?.({}, ctx());
+	});
 
-  it("never hands the model an agent id — the id lives only in renderer details", async () => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const { res, id } = await runForegroundSteeredAgent(tools);
+	it("never hands the model an agent id — the id lives only in renderer details", async () => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const { res, id } = await runForegroundSteeredAgent(tools);
 
-    // `content` is the only thing serialized to the API. If the id isn't here,
-    // the model cannot have obtained it — any id it passes is invented.
-    expect(textOf(res)).not.toContain(id);
-    expect(textOf(res)).not.toMatch(/Agent ID:/);
+		// `content` is the only thing serialized to the API. If the id isn't here,
+		// the model cannot have obtained it — any id it passes is invented.
+		expect(textOf(res)).not.toContain(id);
+		expect(textOf(res)).not.toMatch(/Agent ID:/);
 
-    // An invented id is correctly rejected — this is the reporter's error,
-    // reproduced WITHOUT any record having been cleaned up.
-    const bogus = await tools.get("get_subagent_result").execute(
-      "tc-bogus",
-      { agent_id: "3f1320a7-74ec-422" },
-      undefined,
-      undefined,
-      ctx(),
-    );
-    expect(textOf(bogus)).toContain("Agent not found");
+		// An invented id is correctly rejected — this is the reporter's error,
+		// reproduced WITHOUT any record having been cleaned up.
+		const bogus = await tools
+			.get("get_subagent_result")
+			.execute("tc-bogus", { agent_id: "3f1320a7-74ec-422" }, undefined, undefined, ctx());
+		expect(textOf(bogus)).toContain("Agent not found");
 
-    await lifecycle.get("session_shutdown")?.({}, ctx());
-  });
+		await lifecycle.get("session_shutdown")?.({}, ctx());
+	});
 
-  it("survives a subagent session's OWN activation lifecycle (adversarial: cross-activation eviction)", async () => {
-    // The one mechanism that could produce the reported symptom with no
-    // user-visible session change: a second activation of this extension in the
-    // same process. Child sessions no longer reach it — activation returns early
-    // under `inChildSessionContext()` — but any other in-process activation still
-    // can, and if its session_start / session_shutdown reached the PARENT's
-    // manager, that activation ending would wipe the parent's records.
-    const parent = bootPi();
-    subagentsExtension(parent.pi);
-    await parent.lifecycle.get("session_start")?.({}, ctx());
-    const { id } = await runForegroundSteeredAgent(parent.tools);
+	it("survives a subagent session's OWN activation lifecycle (adversarial: cross-activation eviction)", async () => {
+		// The one mechanism that could produce the reported symptom with no
+		// user-visible session change: a second activation of this extension in the
+		// same process. Child sessions no longer reach it — activation returns early
+		// under `inChildSessionContext()` — but any other in-process activation still
+		// can, and if its session_start / session_shutdown reached the PARENT's
+		// manager, that activation ending would wipe the parent's records.
+		const parent = bootPi();
+		subagentsExtension(parent.pi);
+		await parent.lifecycle.get("session_start")?.({}, ctx());
+		const { id } = await runForegroundSteeredAgent(parent.tools);
 
-    // A child activation runs its full lifecycle, as a subagent session does.
-    const child = bootPi();
-    subagentsExtension(child.pi);
-    await child.lifecycle.get("session_start")?.({}, ctx());
-    await child.lifecycle.get("session_shutdown")?.({}, ctx());
+		// A child activation runs its full lifecycle, as a subagent session does.
+		const child = bootPi();
+		subagentsExtension(child.pi);
+		await child.lifecycle.get("session_start")?.({}, ctx());
+		await child.lifecycle.get("session_shutdown")?.({}, ctx());
 
-    // The parent's record must be untouched — separate manager per activation.
-    const read = await parent.tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
-    const out = textOf(read);
-    expect(out).not.toContain("Agent not found");
-    expect(out).toContain("THE-RESULT-PAYLOAD");
+		// The parent's record must be untouched — separate manager per activation.
+		const read = await parent.tools
+			.get("get_subagent_result")
+			.execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+		const out = textOf(read);
+		expect(out).not.toContain("Agent not found");
+		expect(out).toContain("THE-RESULT-PAYLOAD");
 
-    await parent.lifecycle.get("session_shutdown")?.({}, ctx());
-  });
+		await parent.lifecycle.get("session_shutdown")?.({}, ctx());
+	});
 
-  it("IS evicted by a session switch — its result was already delivered inline", async () => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const { id } = await runForegroundSteeredAgent(tools);
+	it("IS evicted by a session switch — its result was already delivered inline", async () => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const { id } = await runForegroundSteeredAgent(tools);
 
-    // Foreground results count as consumed the moment they're returned inline,
-    // so clearCompleted(true)'s #108 preservation deliberately does not cover
-    // them. This is the ONLY path that makes a foreground id stop resolving.
-    await lifecycle.get("session_before_switch")?.();
+		// Foreground results count as consumed the moment they're returned inline,
+		// so clearCompleted(true)'s #108 preservation deliberately does not cover
+		// them. This is the ONLY path that makes a foreground id stop resolving.
+		await lifecycle.get("session_before_switch")?.();
 
-    const read = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
-    expect(textOf(read)).toContain("Agent not found");
+		const read = await tools
+			.get("get_subagent_result")
+			.execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+		expect(textOf(read)).toContain("Agent not found");
 
-    await lifecycle.get("session_shutdown")?.({}, ctx());
-  });
+		await lifecycle.get("session_shutdown")?.({}, ctx());
+	});
 });

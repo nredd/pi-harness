@@ -16,19 +16,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 let loads = 0;
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
 vi.mock("../src/custom-agents.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/custom-agents.ts")>("../src/custom-agents.ts");
-  return {
-    ...actual,
-    loadCustomAgents: (...args: Parameters<typeof actual.loadCustomAgents>) => {
-      loads++;
-      return actual.loadCustomAgents(...args);
-    },
-  };
+	const actual = await vi.importActual<typeof import("../src/custom-agents.ts")>("../src/custom-agents.ts");
+	return {
+		...actual,
+		loadCustomAgents: (...args: Parameters<typeof actual.loadCustomAgents>) => {
+			loads++;
+			return actual.loadCustomAgents(...args);
+		},
+	};
 });
 
 import { runAgent } from "../src/agent-runner.ts";
@@ -39,77 +39,77 @@ import { bootPi, ctx, flush, type Hermetic, hermeticDir, startSession } from "./
 let hermetic: Hermetic;
 
 beforeEach(() => {
-  loads = 0;
-  vi.mocked(runAgent).mockReset();
-  vi.mocked(runAgent).mockImplementation(async () => ({
-    responseText: "done",
-    session: { dispose: vi.fn() } as any,
-    aborted: false,
-    steered: false,
-  }));
+	loads = 0;
+	vi.mocked(runAgent).mockReset();
+	vi.mocked(runAgent).mockImplementation(async () => ({
+		responseText: "done",
+		session: { dispose: vi.fn() } as any,
+		aborted: false,
+		steered: false,
+	}));
 });
 
 afterEach(() => {
-  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
-  registerAgents(new Map());
-  hermetic?.restore();
+	delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+	registerAgents(new Map());
+	hermetic?.restore();
 });
 
 /** Boot the real extension in a hermetic cwd and hand back its Agent tool. */
 async function bootAgentTool() {
-  hermetic = hermeticDir({
-    agentFiles: {
-      alpha: '---\ndescription: "First fixture agent."\n---\n\nAlpha.\n',
-      beta: '---\ndescription: "Second fixture agent."\n---\n\nBeta.\n',
-    },
-  });
-  const { pi, tools, lifecycle } = bootPi();
-  subagentsExtension(pi);
-  // Project agents load at the first `session_start`, once trust is known, which
-  // also re-registers `Agent`. Fetch the tool only afterwards.
-  await startSession(lifecycle, true);
-  const agent = tools.get("Agent");
-  // Prove both fixtures loaded, so the counters below measure a real sweep.
-  const advertised = `${agent.description}\n${JSON.stringify(agent.parameters)}`;
-  expect(advertised).toContain("alpha");
-  expect(advertised).toContain("beta");
-  return agent;
+	hermetic = hermeticDir({
+		agentFiles: {
+			alpha: '---\ndescription: "First fixture agent."\n---\n\nAlpha.\n',
+			beta: '---\ndescription: "Second fixture agent."\n---\n\nBeta.\n',
+		},
+	});
+	const { pi, tools, lifecycle } = bootPi();
+	subagentsExtension(pi);
+	// Project agents load at the first `session_start`, once trust is known, which
+	// also re-registers `Agent`. Fetch the tool only afterwards.
+	await startSession(lifecycle, true);
+	const agent = tools.get("Agent");
+	// Prove both fixtures loaded, so the counters below measure a real sweep.
+	const advertised = `${agent.description}\n${JSON.stringify(agent.parameters)}`;
+	expect(advertised).toContain("alpha");
+	expect(advertised).toContain("beta");
+	return agent;
 }
 
 describe("one Agent call, one sweep of the agent directories", () => {
-  it("reloads agent files at most once per background spawn", async () => {
-    const agent = await bootAgentTool();
-    loads = 0; // activation legitimately loads once; this counts the call only
+	it("reloads agent files at most once per background spawn", async () => {
+		const agent = await bootAgentTool();
+		loads = 0; // activation legitimately loads once; this counts the call only
 
-    await agent.execute(
-      "tc-1",
-      { subagent_type: "general-purpose", description: "d", prompt: "p", run_in_background: true },
-      undefined,
-      undefined,
-      ctx(),
-    );
-    await flush();
+		await agent.execute(
+			"tc-1",
+			{ subagent_type: "general-purpose", description: "d", prompt: "p", run_in_background: true },
+			undefined,
+			undefined,
+			ctx(),
+		);
+		await flush();
 
-    expect(loads).toBeLessThanOrEqual(1);
-  });
+		expect(loads).toBeLessThanOrEqual(1);
+	});
 
-  it("does not scale the sweep with the number of spawns in flight", async () => {
-    const agent = await bootAgentTool();
-    loads = 0;
+	it("does not scale the sweep with the number of spawns in flight", async () => {
+		const agent = await bootAgentTool();
+		loads = 0;
 
-    for (let i = 0; i < 5; i++) {
-      await agent.execute(
-        `tc-${i}`,
-        { subagent_type: "general-purpose", description: "d", prompt: "p", run_in_background: true },
-        undefined,
-        undefined,
-        ctx(),
-      );
-    }
-    await flush();
+		for (let i = 0; i < 5; i++) {
+			await agent.execute(
+				`tc-${i}`,
+				{ subagent_type: "general-purpose", description: "d", prompt: "p", run_in_background: true },
+				undefined,
+				undefined,
+				ctx(),
+			);
+		}
+		await flush();
 
-    // Five calls, five sweeps at most — not five per call, and not one sweep per
-    // agent already running.
-    expect(loads).toBeLessThanOrEqual(5);
-  });
+		// Five calls, five sweeps at most — not five per call, and not one sweep per
+		// agent already running.
+		expect(loads).toBeLessThanOrEqual(5);
+	});
 });

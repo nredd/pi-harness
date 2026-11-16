@@ -117,7 +117,7 @@ hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted fa
 
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`, the same full suite on Bun 1.4.4 through
 `scripts/run-vitest.ts bun` (no native `bun test` subset). The four session scenario
-files (`test/{session-scenarios,fleet-session,viewer-session,worktree-isolation-e2e}.test.ts`) run under
+files (`tests/{session-scenarios,fleet-session,viewer-session}.test.ts` and `tests/scenarios/worktree-isolation-e2e.test.ts`) run under
 both engines on core `v1.3.0-nredd.10` release tarballs. They use exported `createHarness`
 and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, one injected extension
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
@@ -1363,10 +1363,13 @@ This is useful for creating agents that inherit extension tools but should not h
 
 ```
 examples/
-  workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
+  workflows/          # Runnable examples, executed by tests/workflow/workflow-examples.test.ts
   agent-tool-description.md
-test/                 # Full Vitest suite; four session scenario files also run under Bun
-  helpers/scenario-session.ts # Exported core host, child/provider barriers and isolated homes
+tests/                # Full Vitest suite under Node and Bun
+  fixtures/scenario-session.ts # Exported core host, child/provider barriers and isolated homes
+  scenarios/          # Real-host suites
+  ui/                 # UI behavior
+  workflow/           # Workflow behavior
 src/
   index.ts            # Extension entry: tool/command registration, /agents menu, rendering
   types.ts            # Type definitions (AgentConfig, AgentRecord, etc.)
@@ -1857,7 +1860,7 @@ can include host file paths and user-controlled captured stacks; these bounds ar
 not sanitization or credential isolation. Host frames are retained for error and
 cause context.
 
-To reproduce the offset bug, run `test/workflow-runtime.test.ts`'s
+To reproduce the offset bug, run `tests/workflow/workflow-runtime.test.ts`'s
 `reports line numbers that match the script the author wrote` case under Node
 and Bun. The old wrapper inserted a newline and relied on `vm.Script.lineOffset`
 to undo it; Bun ignored the offset and reported `workflow.js:4:23` instead of
@@ -1922,7 +1925,7 @@ The sandbox is a determinism and accident boundary, not a defence against a deli
 
 ### Coming from Claude Code
 
-This is a port of Claude Code's `Workflow` tool down to its state model, so **a script written for Claude Code runs here unchanged.** `test/workflow-claude-code-compat.test.ts` runs the canonical `review-changes` example from that tool's own description, verbatim.
+This is a port of Claude Code's `Workflow` tool down to its state model, so **a script written for Claude Code runs here unchanged.** `tests/workflow/workflow-claude-code-compat.test.ts` runs the canonical `review-changes` example from that tool's own description, verbatim.
 
 Identical: `agent()`, `pipeline()`, `parallel()`, `workflow()`, `phase()`, `log()`, `args`, `budget`; the `meta` block; `schema` returning a validated object; one-level `workflow()` nesting; the determinism throws.
 
@@ -1937,7 +1940,7 @@ Additions on this side: `gate`, `resume`, `effort`, journal-backed `resumeFromRu
 
 ### Examples
 
-Every file below is executed by `test/workflow-examples.test.ts` against a stub host on each CI run, so none of them can silently rot.
+Every file below is executed by `tests/workflow/workflow-examples.test.ts` against a stub host on each CI run, so none of them can silently rot.
 
 | File | Demonstrates | Runs as-is? |
 |---|---|---|
@@ -2213,7 +2216,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 
 Four things that are not obvious from the tables:
 
-- **Nothing is required at runtime.** `description` is non-optional in TypeScript and never validated. A spawn with no `options` at all is legal and is what "returns agent id on success" in `test/cross-extension-rpc.test.ts` pins.
+- **Nothing is required at runtime.** `description` is non-optional in TypeScript and never validated. A spawn with no `options` at all is legal and is what "returns agent id on success" in `tests/cross-extension-rpc.test.ts` pins.
 - **`bypassQueue` is not stripped.** Its own doc comment scopes it to the scheduler and the `/agents` generator, but a bus caller can set it and skip the `maxConcurrent` check.
 - **`structuredOutput` is documented "set only by the workflow host"** (its field comment on `SpawnOptions`) and is also not stripped.
 - **`signal` and the `on*` callbacks are function values.** They work only because the bus is in-process. A caller that genuinely serializes its payload cannot use them, and they arrive as `undefined` rather than failing.
@@ -2359,10 +2362,10 @@ This document has no test of its own, so it is worth knowing which claims are ac
 
 | Test | Level | Pins |
 |---|---|---|
-| `test/cross-extension-rpc.test.ts` | Mocked `SpawnCapable` | Envelope shape, per-channel error strings (including steer's), model resolution and scope enforcement |
-| `test/rpc-lifecycle-gating.test.ts` | Real extension factory | Nothing wired at factory time, everything once at `session_start`, live widget activity for RPC spawns ([#142](https://github.com/tintinweb/pi-subagents/issues/142)/[#181](https://github.com/tintinweb/pi-subagents/pull/181)), and a queued spawn's `signal`: aborting it emits one `failed` `stopped`, an already-aborted one emits nothing ([#526](https://github.com/nredd/pi-harness/issues/526)) |
-| `test/rpc-result-consumption.test.ts` | Real delivery path | The notification firing, and not firing, around `consume` |
-| `test/model-selection-paths.test.ts` | Real entry paths, manager and Pi registry; child execution stubbed | RPC/Agent/nested/scheduled/direct-mention/workflow parity for precedence, aliases, virtual selections, parent fallback and scope; live resume retains the original selection |
+| `tests/cross-extension-rpc.test.ts` | Mocked `SpawnCapable` | Envelope shape, per-channel error strings (including steer's), model resolution and scope enforcement |
+| `tests/rpc-lifecycle-gating.test.ts` | Real extension factory | Nothing wired at factory time, everything once at `session_start`, live widget activity for RPC spawns ([#142](https://github.com/tintinweb/pi-subagents/issues/142)/[#181](https://github.com/tintinweb/pi-subagents/pull/181)), and a queued spawn's `signal`: aborting it emits one `failed` `stopped`, an already-aborted one emits nothing ([#526](https://github.com/nredd/pi-harness/issues/526)) |
+| `tests/rpc-result-consumption.test.ts` | Real delivery path | The notification firing, and not firing, around `consume` |
+| `tests/model-selection-paths.test.ts` | Real entry paths, manager and Pi registry; child execution stubbed | RPC/Agent/nested/scheduled/direct-mention/workflow parity for precedence, aliases, virtual selections, parent fallback and scope; live resume retains the original selection |
 
 Not pinned anywhere, so treat them as descriptions rather than contracts: the `SpawnOptions.cwd` error strings, `subagents:ready`'s `{}` payload, consume's handle resolution, and its missing `workflowId` check.
 
@@ -2382,11 +2385,35 @@ MIT — [tintinweb](https://github.com/tintinweb)
 
 Tests live in `tests/`, grouped by UI, workflow and real-host scenarios. Non-test helpers, child programs and data live in `tests/fixtures/`. Benchmarks remain opt-in. Runtime source stays in `src/`; `dist/` is generated by `npm run build` and never committed. Test launcher invocations are unchanged.
 
-`npm run typecheck` includes all TypeScript tests and fixtures with unchecked indexed access and erasable syntax enforced. Indexed fixture lookups make their existing setup/bounds assumptions explicit; malformed-input probes retain their original runtime inputs. The recording hook map deliberately erases SDK event signatures because it stores every hook and wiring probes pass only the fields that hook reads. Real-host suites retain the complete SDK boundary.
+Formatting and linting use the root `biome.json`. Four scoped rules retain the former package config's existing exceptions rather than its disabled style group: `noExplicitAny` for erased SDK doubles and heterogeneous registries, `noControlCharactersInRegex` for terminal escape matching, `noEmptyInterface` for inherited marker interfaces, and `noNonNullAssertion` for bounded indexed lookups and established fixture preconditions. All other shared rules and the shared formatter apply.
+
+`npm run typecheck` includes all TypeScript tests and fixtures with unchecked indexed access and erasable syntax enforced. The JavaScript build entry opts into TypeScript checking too. Indexed fixture lookups make their existing setup/bounds assumptions explicit; malformed-input probes retain their original runtime inputs. The recording hook map deliberately erases SDK event signatures because it stores every hook and wiring probes pass only the fields that hook reads. Real-host suites retain the complete SDK boundary.
 
 `npm run bench` opts into `PI_SUBAGENTS_BENCH=1`: Vitest supplies module mocks and lifecycle hooks, while tinybench samples the benchmark bodies and prints their tables. Ordinary test scripts and their Node/Bun launchers are unchanged; benchmark coverage is not a verification signal.
 
 The following upstream policies and template are retained verbatim for provenance. Their old file paths, standalone-repository commands and contribution conventions are historical; the root repository development and security policies take precedence.
+
+<details>
+<summary>Carried .pi/agents/auditor.md</summary>
+
+```markdown
+---
+description: Security Code Reviewer
+tools: read, grep, find, bash
+model: claude-haiku-4-5
+thinking: off
+max_turns: 10
+---
+
+You are a lightweight security auditor. When asked to review code, scan for:
+- Hardcoded secrets or credentials
+- Injection flaws
+- Overly broad file permissions
+
+Report findings with file paths and short remediation notes. Be concise.
+```
+
+</details>
 
 <details>
 <summary>Carried AGENTS.md</summary>

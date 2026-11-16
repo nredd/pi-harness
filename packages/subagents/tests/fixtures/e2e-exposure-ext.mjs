@@ -7,19 +7,19 @@
 import { Type } from "@sinclair/typebox";
 
 const tool = (name, extra) => ({
-  name,
-  label: name,
-  description: name,
-  parameters: Type.Object({}),
-  ...extra,
-  async execute() {
-    return { content: [{ type: "text", text: name }] };
-  },
+	name,
+	label: name,
+	description: name,
+	parameters: Type.Object({}),
+	...extra,
+	async execute() {
+		return { content: [{ type: "text", text: name }] };
+	},
 });
 
 export default function (pi) {
-  pi.registerTool(tool("exposure_direct", {}));
-  pi.registerTool(tool("mcp__probe__codemode_only", { exposure: "codemode" }));
-  pi.registerTool(tool("mcp__probe__deferred", { exposure: "deferred" }));
-  pi.registerTool(tool("exposure_off_by_default", { defaultActive: false }));
+	pi.registerTool(tool("exposure_direct", {}));
+	pi.registerTool(tool("mcp__probe__codemode_only", { exposure: "codemode" }));
+	pi.registerTool(tool("mcp__probe__deferred", { exposure: "deferred" }));
+	pi.registerTool(tool("exposure_off_by_default", { defaultActive: false }));
 }

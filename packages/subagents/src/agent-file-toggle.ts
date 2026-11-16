@@ -44,17 +44,17 @@ export const personalAgentsDir = (homeDir?: string) => join(resolveAgentDir(home
  * isn't reading.
  */
 export function findAgentFile(
-  name: string,
-  cwd: string = process.cwd(),
-  homeDir?: string,
+	name: string,
+	cwd: string = process.cwd(),
+	homeDir?: string,
 ): { path: string; location: AgentFileLocation } | undefined {
-  const projectPath = join(projectAgentsDir(cwd), `${name}.md`);
-  if (existsSync(projectPath)) return { path: projectPath, location: "project" };
-  const workspacePath = join(workspaceAgentsDir(cwd), `${name}.md`);
-  if (existsSync(workspacePath)) return { path: workspacePath, location: "workspace" };
-  const personalPath = join(personalAgentsDir(homeDir), `${name}.md`);
-  if (existsSync(personalPath)) return { path: personalPath, location: "personal" };
-  return undefined;
+	const projectPath = join(projectAgentsDir(cwd), `${name}.md`);
+	if (existsSync(projectPath)) return { path: projectPath, location: "project" };
+	const workspacePath = join(workspaceAgentsDir(cwd), `${name}.md`);
+	if (existsSync(workspacePath)) return { path: workspacePath, location: "workspace" };
+	const personalPath = join(personalAgentsDir(homeDir), `${name}.md`);
+	if (existsSync(personalPath)) return { path: personalPath, location: "personal" };
+	return undefined;
 }
 
 /**
@@ -80,16 +80,16 @@ export function findAgentFile(
  * is the Eject-or-shadow behaviour a not-yet-ejected builtin already gets.
  */
 export function locateAgentFile(
-  name: string,
-  sourcePath: string | undefined,
-  cwd: string = process.cwd(),
-  source?: AgentConfig["source"],
-  homeDir?: string,
+	name: string,
+	sourcePath: string | undefined,
+	cwd: string = process.cwd(),
+	source?: AgentConfig["source"],
+	homeDir?: string,
 ): { path: string; location: AgentFileLocation } | undefined {
-  if (source !== "package" && sourcePath && existsSync(sourcePath)) {
-    return { path: sourcePath, location: classifyAgentDir(sourcePath, cwd) };
-  }
-  return findAgentFile(name, cwd, homeDir);
+	if (source !== "package" && sourcePath && existsSync(sourcePath)) {
+		return { path: sourcePath, location: classifyAgentDir(sourcePath, cwd) };
+	}
+	return findAgentFile(name, cwd, homeDir);
 }
 
 /**
@@ -101,9 +101,9 @@ export function locateAgentFile(
  * because none of the three locations this classifies is where they live.
  */
 function classifyAgentDir(path: string, cwd: string): AgentFileLocation {
-  if (path.startsWith(projectAgentsDir(cwd) + sep)) return "project";
-  if (path.startsWith(workspaceAgentsDir(cwd) + sep)) return "workspace";
-  return "personal";
+	if (path.startsWith(projectAgentsDir(cwd) + sep)) return "project";
+	if (path.startsWith(workspaceAgentsDir(cwd) + sep)) return "workspace";
+	return "personal";
 }
 
 export type DisableOutcome = "disabled" | "already-disabled" | "no-frontmatter";
@@ -124,18 +124,18 @@ const FENCE = /^---[ \t]*$/;
  * endings instead of rewriting CRLF to LF. Returns undefined when there is no
  * usable block.
  */
-function splitFrontmatter(content: string):
-  | { lines: string[]; openIdx: number; closeIdx: number; eol: string }
-  | undefined {
-  const lines = content.split(/(?<=\n)/);
-  // The BOM stays where it is — it belongs to the file, not the block — so the
-  // fence test looks past it and every index below is unaffected.
-  const bom = content.startsWith("\uFEFF");
-  const first = (bom ? lines[0]!.slice(1) : lines[0]!).replace(/\r?\n$/, "");
-  if (!FENCE.test(first)) return undefined;
-  const closeIdx = lines.findIndex((l, i) => i > 0 && FENCE.test(l.replace(/\r?\n$/, "")));
-  if (closeIdx === -1) return undefined;
-  return { lines, openIdx: 0, closeIdx, eol: lines[0]!.endsWith("\r\n") ? "\r\n" : "\n" };
+function splitFrontmatter(
+	content: string,
+): { lines: string[]; openIdx: number; closeIdx: number; eol: string } | undefined {
+	const lines = content.split(/(?<=\n)/);
+	// The BOM stays where it is — it belongs to the file, not the block — so the
+	// fence test looks past it and every index below is unaffected.
+	const bom = content.startsWith("\uFEFF");
+	const first = (bom ? lines[0]!.slice(1) : lines[0]!).replace(/\r?\n$/, "");
+	if (!FENCE.test(first)) return undefined;
+	const closeIdx = lines.findIndex((l, i) => i > 0 && FENCE.test(l.replace(/\r?\n$/, "")));
+	if (closeIdx === -1) return undefined;
+	return { lines, openIdx: 0, closeIdx, eol: lines[0]!.endsWith("\r\n") ? "\r\n" : "\n" };
 }
 
 /**
@@ -150,11 +150,11 @@ function splitFrontmatter(content: string):
  * is no "disabled" state to report.
  */
 export function isDisabledContent(content: string): boolean {
-  try {
-    return parseAgentFrontmatter<Record<string, unknown>>(content).frontmatter.enabled === false;
-  } catch {
-    return false;
-  }
+	try {
+		return parseAgentFrontmatter<Record<string, unknown>>(content).frontmatter.enabled === false;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -164,12 +164,12 @@ export function isDisabledContent(content: string): boolean {
  * honestly instead of unconditionally claiming success.
  */
 export function disableInContent(content: string): { content: string; outcome: DisableOutcome } {
-  const block = splitFrontmatter(content);
-  if (!block) return { content, outcome: "no-frontmatter" };
-  if (isDisabledContent(content)) return { content, outcome: "already-disabled" };
-  const lines = [...block.lines];
-  lines.splice(1, 0, `enabled: false${block.eol}`);
-  return { content: lines.join(""), outcome: "disabled" };
+	const block = splitFrontmatter(content);
+	if (!block) return { content, outcome: "no-frontmatter" };
+	if (isDisabledContent(content)) return { content, outcome: "already-disabled" };
+	const lines = [...block.lines];
+	lines.splice(1, 0, `enabled: false${block.eol}`);
+	return { content: lines.join(""), outcome: "disabled" };
 }
 
 /**
@@ -181,30 +181,30 @@ export function disableInContent(content: string): { content: string; outcome: D
  * reporting "Enabled <name>" for a write that did nothing.
  */
 export function enableInContent(content: string): { content: string; changed: boolean } {
-  const block = splitFrontmatter(content);
-  if (!block) return { content, changed: false };
-  const kept = block.lines.filter(
-    (l, i) => !(i > 0 && i < block.closeIdx && ENABLED_FALSE.test(l.replace(/\r?\n$/, ""))),
-  );
-  if (kept.length === block.lines.length) return { content, changed: false };
-  return { content: kept.join(""), changed: true };
+	const block = splitFrontmatter(content);
+	if (!block) return { content, changed: false };
+	const kept = block.lines.filter(
+		(l, i) => !(i > 0 && i < block.closeIdx && ENABLED_FALSE.test(l.replace(/\r?\n$/, ""))),
+	);
+	if (kept.length === block.lines.length) return { content, changed: false };
+	return { content: kept.join(""), changed: true };
 }
 
 /** Is this the empty stub `/agents` writes when disabling a built-in default? */
 export function isEmptyStub(content: string): boolean {
-  return content.replace(/\r\n/g, "\n").trim() === "---\n---";
+	return content.replace(/\r\n/g, "\n").trim() === "---\n---";
 }
 
 /** The answers `/agents → Create agent → Manual` collects, before serialization. */
 export interface NewAgentInput {
-  description: string;
-  /** Already-resolved `tools:` value ("none", "all", or a CSV of tool names). */
-  tools: string;
-  /** `provider/modelId`, or undefined to inherit the parent's model. */
-  model?: string;
-  /** A pi thinking level, or undefined to inherit. */
-  thinking?: string;
-  systemPrompt: string;
+	description: string;
+	/** Already-resolved `tools:` value ("none", "all", or a CSV of tool names). */
+	tools: string;
+	/** `provider/modelId`, or undefined to inherit the parent's model. */
+	model?: string;
+	/** A pi thinking level, or undefined to inherit. */
+	thinking?: string;
+	systemPrompt: string;
 }
 
 /**
@@ -223,9 +223,9 @@ export interface NewAgentInput {
  * `tools` is a CSV that must stay a bare scalar for the loader's parser.
  */
 export function buildNewAgentFile(input: NewAgentInput): string {
-  const modelLine = input.model ? `\nmodel: ${JSON.stringify(input.model)}` : "";
-  const thinkingLine = input.thinking ? `\nthinking: ${input.thinking}` : "";
-  return `---
+	const modelLine = input.model ? `\nmodel: ${JSON.stringify(input.model)}` : "";
+	const thinkingLine = input.thinking ? `\nthinking: ${input.thinking}` : "";
+	return `---
 description: ${JSON.stringify(input.description)}
 tools: ${input.tools}${modelLine}${thinkingLine}
 prompt_mode: replace
@@ -249,50 +249,50 @@ ${input.systemPrompt}
  * reads back from a `tools:` line carrying just those entries.
  */
 function formatToolsField(tools: string[] | undefined, extSelectors?: string[]): string {
-  const selectors = extSelectors ?? [];
-  if (tools === undefined) return selectors.length > 0 ? ["*", ...selectors].join(", ") : "all";
-  if (tools.length === 0) return selectors.length > 0 ? selectors.join(", ") : "none";
-  return [...tools, ...selectors].join(", ");
+	const selectors = extSelectors ?? [];
+	if (tools === undefined) return selectors.length > 0 ? ["*", ...selectors].join(", ") : "all";
+	if (tools.length === 0) return selectors.length > 0 ? selectors.join(", ") : "none";
+	return [...tools, ...selectors].join(", ");
 }
 
 /** Serialize an AgentConfig to a full .md file (frontmatter + system prompt) for eject. */
 export function serializeAgentFile(cfg: AgentConfig): string {
-  const fmFields: string[] = [];
-  fmFields.push(`description: ${JSON.stringify(cfg.description)}`);
-  if (cfg.displayName) fmFields.push(`display_name: ${cfg.displayName}`);
-  if (cfg.color) fmFields.push(`color: ${JSON.stringify(cfg.color)}`);
-  // Absent means "all built-ins"; an EMPTY list means explicitly zero. Writing
-  // `all` for both would hand a deliberately tool-less agent the whole toolbox
-  // the first time it is ejected.
-  fmFields.push(`tools: ${formatToolsField(cfg.builtinToolNames, cfg.extSelectors)}`);
-  if (cfg.model) fmFields.push(`model: ${cfg.model}`);
-  if (cfg.thinking) fmFields.push(`thinking: ${cfg.thinking}`);
-  if (cfg.maxTurns) fmFields.push(`max_turns: ${cfg.maxTurns}`);
-  if (cfg.allowedSubagents !== undefined) {
-    fmFields.push(`allowed_subagents: ${cfg.allowedSubagents === "all" ? "all" : cfg.allowedSubagents.join(", ")}`);
-  }
-  fmFields.push(`prompt_mode: ${cfg.promptMode}`);
-  if (cfg.extensions === false) fmFields.push("extensions: false");
-  else if (Array.isArray(cfg.extensions)) fmFields.push(`extensions: ${cfg.extensions.join(", ")}`);
-  if (cfg.excludeExtensions?.length) fmFields.push(`exclude_extensions: ${cfg.excludeExtensions.join(", ")}`);
-  if (cfg.skills === false) fmFields.push("skills: false");
-  else if (Array.isArray(cfg.skills)) fmFields.push(`skills: ${cfg.skills.join(", ")}`);
-  if (cfg.disallowedTools?.length) fmFields.push(`disallowed_tools: ${cfg.disallowedTools.join(", ")}`);
-  if (cfg.inheritContext) fmFields.push("inherit_context: true");
-  // Both cases, not just `true`: with `backgroundByDefault` on, omitting the
-  // field means background, so `false` is the only way to pin an agent file to
-  // foreground and is no longer interchangeable with absence. Reachable since
-  // package agents became ejectable — a built-in default omits the field.
-  if (cfg.runInBackground !== undefined) fmFields.push(`run_in_background: ${cfg.runInBackground}`);
-  if (cfg.outputTranscript === false) fmFields.push("output_transcript: false");
-  if (cfg.isolated) fmFields.push("isolated: true");
-  if (cfg.memory) fmFields.push(`memory: ${cfg.memory}`);
-  if (cfg.isolation) fmFields.push(`isolation: ${cfg.isolation}`);
-  // Also only reachable through a package agent: no built-in default sets
-  // either. Omitting them would have the ejected copy silently stop persisting
-  // its session, or write it somewhere else.
-  if (cfg.persistSession !== undefined) fmFields.push(`persist_session: ${cfg.persistSession}`);
-  if (cfg.sessionDir) fmFields.push(`session_dir: ${JSON.stringify(cfg.sessionDir)}`);
+	const fmFields: string[] = [];
+	fmFields.push(`description: ${JSON.stringify(cfg.description)}`);
+	if (cfg.displayName) fmFields.push(`display_name: ${cfg.displayName}`);
+	if (cfg.color) fmFields.push(`color: ${JSON.stringify(cfg.color)}`);
+	// Absent means "all built-ins"; an EMPTY list means explicitly zero. Writing
+	// `all` for both would hand a deliberately tool-less agent the whole toolbox
+	// the first time it is ejected.
+	fmFields.push(`tools: ${formatToolsField(cfg.builtinToolNames, cfg.extSelectors)}`);
+	if (cfg.model) fmFields.push(`model: ${cfg.model}`);
+	if (cfg.thinking) fmFields.push(`thinking: ${cfg.thinking}`);
+	if (cfg.maxTurns) fmFields.push(`max_turns: ${cfg.maxTurns}`);
+	if (cfg.allowedSubagents !== undefined) {
+		fmFields.push(`allowed_subagents: ${cfg.allowedSubagents === "all" ? "all" : cfg.allowedSubagents.join(", ")}`);
+	}
+	fmFields.push(`prompt_mode: ${cfg.promptMode}`);
+	if (cfg.extensions === false) fmFields.push("extensions: false");
+	else if (Array.isArray(cfg.extensions)) fmFields.push(`extensions: ${cfg.extensions.join(", ")}`);
+	if (cfg.excludeExtensions?.length) fmFields.push(`exclude_extensions: ${cfg.excludeExtensions.join(", ")}`);
+	if (cfg.skills === false) fmFields.push("skills: false");
+	else if (Array.isArray(cfg.skills)) fmFields.push(`skills: ${cfg.skills.join(", ")}`);
+	if (cfg.disallowedTools?.length) fmFields.push(`disallowed_tools: ${cfg.disallowedTools.join(", ")}`);
+	if (cfg.inheritContext) fmFields.push("inherit_context: true");
+	// Both cases, not just `true`: with `backgroundByDefault` on, omitting the
+	// field means background, so `false` is the only way to pin an agent file to
+	// foreground and is no longer interchangeable with absence. Reachable since
+	// package agents became ejectable — a built-in default omits the field.
+	if (cfg.runInBackground !== undefined) fmFields.push(`run_in_background: ${cfg.runInBackground}`);
+	if (cfg.outputTranscript === false) fmFields.push("output_transcript: false");
+	if (cfg.isolated) fmFields.push("isolated: true");
+	if (cfg.memory) fmFields.push(`memory: ${cfg.memory}`);
+	if (cfg.isolation) fmFields.push(`isolation: ${cfg.isolation}`);
+	// Also only reachable through a package agent: no built-in default sets
+	// either. Omitting them would have the ejected copy silently stop persisting
+	// its session, or write it somewhere else.
+	if (cfg.persistSession !== undefined) fmFields.push(`persist_session: ${cfg.persistSession}`);
+	if (cfg.sessionDir) fmFields.push(`session_dir: ${JSON.stringify(cfg.sessionDir)}`);
 
-  return `---\n${fmFields.join("\n")}\n---\n\n${cfg.systemPrompt}\n`;
+	return `---\n${fmFields.join("\n")}\n---\n\n${cfg.systemPrompt}\n`;
 }

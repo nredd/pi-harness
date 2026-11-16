@@ -28,21 +28,21 @@ export type LifetimeUsage = { input: number; output: number; cacheWrite: number;
  * events.
  */
 export function getLifetimeTotal(u?: LifetimeUsage): number {
-  return u ? u.input + u.output + u.cacheWrite : 0;
+	return u ? u.input + u.output + u.cacheWrite : 0;
 }
 
 /** Accumulated cost in USD, or 0 when unpriced/undefined. */
 export function getLifetimeCost(u?: LifetimeUsage): number {
-  return u?.cost ?? 0;
+	return u?.cost ?? 0;
 }
 
 /** Add a usage delta into a target accumulator (mutates target). */
 export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
-  into.input += delta.input;
-  into.output += delta.output;
-  into.cacheWrite += delta.cacheWrite;
-  if (delta.cacheRead) into.cacheRead = (into.cacheRead ?? 0) + delta.cacheRead;
-  if (delta.cost) into.cost = (into.cost ?? 0) + delta.cost;
+	into.input += delta.input;
+	into.output += delta.output;
+	into.cacheWrite += delta.cacheWrite;
+	if (delta.cacheRead) into.cacheRead = (into.cacheRead ?? 0) + delta.cacheRead;
+	if (delta.cost) into.cost = (into.cost ?? 0) + delta.cost;
 }
 
 /**
@@ -60,12 +60,12 @@ export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
  * events — carry this, and gain whatever pi adds to `Usage` for free.
  */
 export type ReportedUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
 
 /**
@@ -79,16 +79,16 @@ export type ReportedUsage = {
  * reads nothing else from it, and the per-kind split is not tracked.
  */
 export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
-  const { input, output, cacheWrite, cacheRead = 0, cost = 0 } = u;
-  if (input === 0 && output === 0 && cacheWrite === 0 && cacheRead === 0 && cost === 0) return undefined;
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens: input + output + cacheRead + cacheWrite,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-  };
+	const { input, output, cacheWrite, cacheRead = 0, cost = 0 } = u;
+	if (input === 0 && output === 0 && cacheWrite === 0 && cacheRead === 0 && cost === 0) return undefined;
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		totalTokens: input + output + cacheRead + cacheWrite,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+	};
 }
 
 /**
@@ -106,32 +106,32 @@ export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
  * results are returned or how many agents were running.
  */
 export class PendingUsagePool {
-  private pending: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
-  private dirty = false;
+	private pending: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
+	private dirty = false;
 
-  add(delta: LifetimeUsage): void {
-    addUsage(this.pending, delta);
-    this.dirty = true;
-  }
+	add(delta: LifetimeUsage): void {
+		addUsage(this.pending, delta);
+		this.dirty = true;
+	}
 
-  /**
-   * Take everything accumulated so far as a pi `Usage`, resetting the pool.
-   * Returns undefined when nothing is pending, so callers can leave the tool
-   * result untouched rather than attaching a zero.
-   */
-  drain(): ReportedUsage | undefined {
-    if (!this.dirty) return undefined;
-    const drained = toReportedUsage(this.pending);
-    this.pending = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
-    this.dirty = false;
-    return drained;
-  }
+	/**
+	 * Take everything accumulated so far as a pi `Usage`, resetting the pool.
+	 * Returns undefined when nothing is pending, so callers can leave the tool
+	 * result untouched rather than attaching a zero.
+	 */
+	drain(): ReportedUsage | undefined {
+		if (!this.dirty) return undefined;
+		const drained = toReportedUsage(this.pending);
+		this.pending = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
+		this.dirty = false;
+		return drained;
+	}
 }
 
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
-  tokens: { input: number; output: number; cacheWrite: number };
-  contextUsage?: { percent: number | null };
+	tokens: { input: number; output: number; cacheWrite: number };
+	contextUsage?: { percent: number | null };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
@@ -149,11 +149,13 @@ export type SessionLike = { getSessionStats(): SessionStatsLike };
  * (issue #38).
  */
 export function getSessionTokens(session: SessionLike | undefined): number {
-  if (!session) return 0;
-  try {
-    const t = session.getSessionStats().tokens;
-    return t.input + t.output + t.cacheWrite;
-  } catch { return 0; }
+	if (!session) return 0;
+	try {
+		const t = session.getSessionStats().tokens;
+		return t.input + t.output + t.cacheWrite;
+	} catch {
+		return 0;
+	}
 }
 
 /**
@@ -161,7 +163,10 @@ export function getSessionTokens(session: SessionLike | undefined): number {
  * (no model contextWindow, or post-compaction before the next response).
  */
 export function getSessionContextPercent(session: SessionLike | undefined): number | null {
-  if (!session) return null;
-  try { return session.getSessionStats().contextUsage?.percent ?? null; }
-  catch { return null; }
+	if (!session) return null;
+	try {
+		return session.getSessionStats().contextUsage?.percent ?? null;
+	} catch {
+		return null;
+	}
 }

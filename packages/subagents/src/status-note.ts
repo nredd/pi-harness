@@ -25,18 +25,18 @@ type StoppedBy = AgentRecord["stoppedBy"];
  * intervention that never happened would misreport its own decision back to it.
  */
 export function getStatusNote(status: string, stoppedBy?: StoppedBy): string {
-  switch (status) {
-    case "stopped":
-      return stoppedBy === "parent"
-        ? " (stopped by the parent with stop_subagent before completion — output is partial; the task was NOT finished)"
-        : " (STOPPED BY THE USER before completion — output is partial; the task was NOT finished)";
-    case "aborted":
-      return " (aborted — hit the turn limit before completion; output may be incomplete)";
-    case "steered":
-      return " (wrapped up at the turn limit — output may be partial)";
-    default:
-      return "";
-  }
+	switch (status) {
+		case "stopped":
+			return stoppedBy === "parent"
+				? " (stopped by the parent with stop_subagent before completion — output is partial; the task was NOT finished)"
+				: " (STOPPED BY THE USER before completion — output is partial; the task was NOT finished)";
+		case "aborted":
+			return " (aborted — hit the turn limit before completion; output may be incomplete)";
+		case "steered":
+			return " (wrapped up at the turn limit — output may be partial)";
+		default:
+			return "";
+	}
 }
 
 /**
@@ -74,18 +74,18 @@ export function getStatusNote(status: string, stoppedBy?: StoppedBy): string {
  * Don't add either back without a way to measure it.
  */
 export function getForegroundOutcomeNote(status: string, stoppedBy?: StoppedBy): string {
-  switch (status) {
-    case "stopped":
-      return stoppedBy === "parent"
-        ? " (stopped by the parent with stop_subagent — everything the agent produced is above; the task is unfinished)"
-        : " (STOPPED BY THE USER — everything the agent produced is above; the task is unfinished)";
-    case "aborted":
-      return " (aborted at the turn limit — everything the agent produced is above; the task is unfinished)";
-    case "steered":
-      return " (wrapped up at the turn limit — everything the agent produced is above; the task may be unfinished)";
-    default:
-      return "";
-  }
+	switch (status) {
+		case "stopped":
+			return stoppedBy === "parent"
+				? " (stopped by the parent with stop_subagent — everything the agent produced is above; the task is unfinished)"
+				: " (STOPPED BY THE USER — everything the agent produced is above; the task is unfinished)";
+		case "aborted":
+			return " (aborted at the turn limit — everything the agent produced is above; the task is unfinished)";
+		case "steered":
+			return " (wrapped up at the turn limit — everything the agent produced is above; the task may be unfinished)";
+		default:
+			return "";
+	}
 }
 
 /**
@@ -97,9 +97,7 @@ export function getForegroundOutcomeNote(status: string, stoppedBy?: StoppedBy):
  * session has nothing to resume.
  */
 export function resumeHint(record: Pick<AgentRecord, "id" | "status" | "session">): string {
-  return record.status === "error" && record.session
-    ? `transcript intact; resume agent ${record.id} to continue`
-    : "";
+	return record.status === "error" && record.session ? `transcript intact; resume agent ${record.id} to continue` : "";
 }
 
 /**
@@ -108,6 +106,6 @@ export function resumeHint(record: Pick<AgentRecord, "id" | "status" | "session"
  * the run's own turns, so this is never a stale earlier answer (#144).
  */
 export function partialOutputSuffix(record: AgentRecord): string {
-  const partial = record.result?.trim();
-  return partial ? `\n\nPartial output before the failure:\n${partial}` : "";
+	const partial = record.result?.trim();
+	return partial ? `\n\nPartial output before the failure:\n${partial}` : "";
 }

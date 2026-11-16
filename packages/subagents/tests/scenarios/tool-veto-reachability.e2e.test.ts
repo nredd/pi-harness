@@ -57,101 +57,101 @@ const ALPHA = resolve(fileURLToPath(new URL("../fixtures/ext-alpha.mjs", import.
 /** Registers `beta_tool` — loaded but NOT selected by the `ext:` selector below. */
 const BETA = resolve(fileURLToPath(new URL("../fixtures/ext-beta.mjs", import.meta.url)));
 
-
 describe("tool veto reachability against real pi-mono", () => {
-  let cwd: string;
-  let faux: ReturnType<typeof registerFauxProvider>;
+	let cwd: string;
+	let faux: ReturnType<typeof registerFauxProvider>;
 
-  beforeEach(() => {
-    cwd = mkdtempSync(join(tmpdir(), "subagents-veto-"));
-    faux = registerFauxProvider({
-      provider: "faux",
-      models: [{ id: "faux-1", contextWindow: 200_000 }],
-    });
-  });
-  afterEach(() => {
-    faux.unregister();
-    rmSync(cwd, { recursive: true, force: true });
-  });
+	beforeEach(() => {
+		cwd = mkdtempSync(join(tmpdir(), "subagents-veto-"));
+		faux = registerFauxProvider({
+			provider: "faux",
+			models: [{ id: "faux-1", contextWindow: 200_000 }],
+		});
+	});
+	afterEach(() => {
+		faux.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	});
 
-  it("pi installs a chainable beforeToolCall, and runAgent's veto blocks out-of-scope tools", async () => {
-    registerAgents(
-      new Map([
-        [
-          "veto",
-          {
-            name: "veto",
-            description: "veto guard",
-            builtinToolNames: ["read"],
-            // Select alpha only — beta loads (its handlers run) but is muted.
-            extensions: [ALPHA, BETA],
-            extSelectors: ["ext:ext-alpha.mjs"],
-            skills: false,
-            systemPrompt: "You are veto.",
-            promptMode: "replace",
-            inheritContext: false,
-            runInBackground: false,
-            isolated: false,
-          } as AgentConfig,
-        ],
-      ]),
-    );
+	it("pi installs a chainable beforeToolCall, and runAgent's veto blocks out-of-scope tools", async () => {
+		registerAgents(
+			new Map([
+				[
+					"veto",
+					{
+						name: "veto",
+						description: "veto guard",
+						builtinToolNames: ["read"],
+						// Select alpha only — beta loads (its handlers run) but is muted.
+						extensions: [ALPHA, BETA],
+						extSelectors: ["ext:ext-alpha.mjs"],
+						skills: false,
+						systemPrompt: "You are veto.",
+						promptMode: "replace",
+						inheritContext: false,
+						runInBackground: false,
+						isolated: false,
+					} as AgentConfig,
+				],
+			]),
+		);
 
-    const model = faux.getModel();
-    const modelRegistry: any = {
-      find: () => model,
-      getAll: () => [model],
-      getAvailable: () => [model],
-      hasConfiguredAuth: () => true,
-      isUsingOAuth: () => false,
-      getApiKeyAndHeaders: async () => ({ apiKey: "faux", headers: {} }),
-      registerProvider: () => {},
-      unregisterProvider: () => {},
-    };
-    const ctx: any = { cwd, getSystemPrompt: () => "PARENT", isProjectTrusted: () => true, model, modelRegistry };
+		const model = faux.getModel();
+		const modelRegistry: any = {
+			find: () => model,
+			getAll: () => [model],
+			getAvailable: () => [model],
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+			getApiKeyAndHeaders: async () => ({ apiKey: "faux", headers: {} }),
+			registerProvider: () => {},
+			unregisterProvider: () => {},
+		};
+		const ctx: any = { cwd, getSystemPrompt: () => "PARENT", isProjectTrusted: () => true, model, modelRegistry };
 
-    let priorIsFunction: boolean | undefined;
-    let session: any;
-    try {
-      await runAgent(ctx, "veto", "go", {
-        pi: bootPi({}, { execResult: { code: 1, stdout: "", stderr: "", killed: false } }).pi,
-        model,
-        onSessionCreated: (s: any) => {
-          session = s;
-          // By onSessionCreated our wrapper is already installed, so this being a
-          // function proves the property is reachable and writable. Pi installing
-          // its own in the constructor is what gives us something to chain to —
-          // asserted below via the in-scope path returning undefined rather than
-          // throwing on a missing prior hook.
-          priorIsFunction = typeof s.agent?.beforeToolCall === "function";
-        },
-      });
-    } catch {
-      // A faux-model turn may not complete; the veto is fixed at construction.
-    }
+		let priorIsFunction: boolean | undefined;
+		let session: any;
+		try {
+			await runAgent(ctx, "veto", "go", {
+				pi: bootPi({}, { execResult: { code: 1, stdout: "", stderr: "", killed: false } }).pi,
+				model,
+				onSessionCreated: (s: any) => {
+					session = s;
+					// By onSessionCreated our wrapper is already installed, so this being a
+					// function proves the property is reachable and writable. Pi installing
+					// its own in the constructor is what gives us something to chain to —
+					// asserted below via the in-scope path returning undefined rather than
+					// throwing on a missing prior hook.
+					priorIsFunction = typeof s.agent?.beforeToolCall === "function";
+				},
+			});
+		} catch {
+			// A faux-model turn may not complete; the veto is fixed at construction.
+		}
 
-    expect(priorIsFunction).toBe(true);
+		expect(priorIsFunction).toBe(true);
 
-    // Out of scope: beta loaded but the ext: flip did not select it.
-    await expect(
-      session.agent.beforeToolCall({ toolCall: { name: "beta_tool" }, args: {} }),
-    ).resolves.toMatchObject({ block: true, reason: expect.any(String) });
+		// Out of scope: beta loaded but the ext: flip did not select it.
+		await expect(session.agent.beforeToolCall({ toolCall: { name: "beta_tool" }, args: {} })).resolves.toMatchObject({
+			block: true,
+			reason: expect.any(String),
+		});
 
-    // In scope: must NOT be blocked. Reaching Pi's own prior hook without throwing
-    // also proves the chain is intact (a clobbered/absent prior would surface here).
-    await expect(
-      session.agent.beforeToolCall({ toolCall: { name: "alpha_read" }, args: {} }),
-    ).resolves.toSatisfy((r: any) => !r?.block);
+		// In scope: must NOT be blocked. Reaching Pi's own prior hook without throwing
+		// also proves the chain is intact (a clobbered/absent prior would surface here).
+		await expect(session.agent.beforeToolCall({ toolCall: { name: "alpha_read" }, args: {} })).resolves.toSatisfy(
+			(r: any) => !r?.block,
+		);
 
-    // Calls a tool makes through `ctx.executeTool()` (codemode scripts) never
-    // reach `agent.beforeToolCall`: pi runs them past the session's own
-    // `_beforeToolCall`, i.e. extensions' `tool_call` handlers. Our inline scope
-    // gate must veto there too, or a codemode script reaches out-of-scope tools.
-    await expect(
-      session._beforeToolCall({ toolCall: { name: "beta_tool", id: "n1" }, args: {} }, "parent-call"),
-    ).resolves.toMatchObject({ block: true, reason: expect.any(String) });
-    await expect(
-      session._beforeToolCall({ toolCall: { name: "alpha_read", id: "n2" }, args: {} }, "parent-call"),
-    ).resolves.toSatisfy((r: any) => !r?.block);
-  });
+		// Calls a tool makes through `ctx.executeTool()` (codemode scripts) never
+		// reach `agent.beforeToolCall`: pi runs them past the session's own
+		// `_beforeToolCall`, i.e. extensions' `tool_call` handlers. Our inline scope
+		// gate must veto there too, or a codemode script reaches out-of-scope tools.
+		await expect(
+			session._beforeToolCall({ toolCall: { name: "beta_tool", id: "n1" }, args: {} }, "parent-call"),
+		).resolves.toMatchObject({ block: true, reason: expect.any(String) });
+		await expect(
+			session._beforeToolCall({ toolCall: { name: "alpha_read", id: "n2" }, args: {} }, "parent-call"),
+		).resolves.toSatisfy((r: any) => !r?.block);
+	});
 });

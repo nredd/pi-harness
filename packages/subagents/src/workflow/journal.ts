@@ -50,32 +50,32 @@ import { isTierDisclosure, type TierDisclosure, tierDisclosure } from "../model-
 
 /** One settled agent call, as replayed. */
 export interface WorkflowJournalEntry {
-  /** Position in the run — the same counter that names `wf-agent-N`. */
-  index: number;
-  /** Hash of the call's payload; a mismatch ends the replayable prefix. */
-  key: string;
-  /** Whether the agent succeeded. A failure ends the prefix on replay. */
-  ok: boolean;
-  /** The agent's answer, when it had one. */
-  text?: string;
-  /**
-   * The `Note:` line when the child ran on another model than configured.
-   * Replayed with the text so a resumed run discloses it too; absent on
-   * journals written before it existed, which means "no note", not an error.
-   */
-  modelNote?: string;
-  /** The original tier outcome, retained on replay and journal-of-journal runs. */
-  modelTier?: TierDisclosure;
-  /**
-   * Whether the call continued an earlier child (`agent({ resume })`).
-   *
-   * A replayed agent leaves no session behind in the run that replays it — the
-   * conversation belongs to the run that actually spawned it, and the host's
-   * id map is per-run — so a later `resume` would have nothing to continue.
-   * Recording it lets the next run decline to replay at all rather than fail
-   * partway through, which is why the flag is on the journal and not derived.
-   */
-  resumed?: true;
+	/** Position in the run — the same counter that names `wf-agent-N`. */
+	index: number;
+	/** Hash of the call's payload; a mismatch ends the replayable prefix. */
+	key: string;
+	/** Whether the agent succeeded. A failure ends the prefix on replay. */
+	ok: boolean;
+	/** The agent's answer, when it had one. */
+	text?: string;
+	/**
+	 * The `Note:` line when the child ran on another model than configured.
+	 * Replayed with the text so a resumed run discloses it too; absent on
+	 * journals written before it existed, which means "no note", not an error.
+	 */
+	modelNote?: string;
+	/** The original tier outcome, retained on replay and journal-of-journal runs. */
+	modelTier?: TierDisclosure;
+	/**
+	 * Whether the call continued an earlier child (`agent({ resume })`).
+	 *
+	 * A replayed agent leaves no session behind in the run that replays it — the
+	 * conversation belongs to the run that actually spawned it, and the host's
+	 * id map is per-run — so a later `resume` would have nothing to continue.
+	 * Recording it lets the next run decline to replay at all rather than fail
+	 * partway through, which is why the flag is on the journal and not derived.
+	 */
+	resumed?: true;
 }
 
 /**
@@ -86,37 +86,37 @@ export interface WorkflowJournalEntry {
  * sees, so re-grouping phases should not throw away an hour of results.
  */
 export interface JournalKeyInput {
-  prompt: string;
-  label?: string;
-  model?: string;
-  agentType?: string;
-  effort?: string;
-  isolation?: string;
-  gate?: string;
-  resume?: string;
-  /** Serialized `agent({ schema })`, when the call asked for one. */
-  schema?: string;
+	prompt: string;
+	label?: string;
+	model?: string;
+	agentType?: string;
+	effort?: string;
+	isolation?: string;
+	gate?: string;
+	resume?: string;
+	/** Serialized `agent({ schema })`, when the call asked for one. */
+	schema?: string;
 }
 
 /** Stable hash of a call's payload. Field order is fixed here, not by the caller. */
 export function journalKey(input: JournalKeyInput): string {
-  const canonical = JSON.stringify([
-    input.prompt,
-    input.label ?? null,
-    input.model ?? null,
-    input.agentType ?? null,
-    input.effort ?? null,
-    input.isolation ?? null,
-    input.gate ?? null,
-    input.resume ?? null,
-    // Appended only when present, which looks like a hack and is not: adding a
-    // ninth slot unconditionally would change the canonical form of every entry
-    // and invalidate every journal already on disk. Conditional, a schema-less
-    // call keys exactly as it always did, and adding or changing a schema still
-    // produces a different key.
-    ...(input.schema !== undefined ? [input.schema] : []),
-  ]);
-  return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+	const canonical = JSON.stringify([
+		input.prompt,
+		input.label ?? null,
+		input.model ?? null,
+		input.agentType ?? null,
+		input.effort ?? null,
+		input.isolation ?? null,
+		input.gate ?? null,
+		input.resume ?? null,
+		// Appended only when present, which looks like a hack and is not: adding a
+		// ninth slot unconditionally would change the canonical form of every entry
+		// and invalidate every journal already on disk. Conditional, a schema-less
+		// call keys exactly as it always did, and adding or changing a schema still
+		// produces a different key.
+		...(input.schema !== undefined ? [input.schema] : []),
+	]);
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
 }
 
 /**
@@ -127,50 +127,50 @@ export function journalKey(input: JournalKeyInput): string {
  * A partial last line is normal — the file is appended to while agents settle.
  */
 export function readJournal(path: string): WorkflowJournalEntry[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch {
-    return [];
-  }
+	let raw: string;
+	try {
+		raw = readFileSync(path, "utf-8");
+	} catch {
+		return [];
+	}
 
-  const entries: WorkflowJournalEntry[] = [];
-  for (const line of raw.split("\n")) {
-    if (line.trim() === "") continue;
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!isEntry(parsed)) continue;
-      entries.push(parsed);
-    } catch {
-      // A half-written final line, or someone editing the file. Skipping it
-      // keeps what came before, and a shorter prefix is still a useful one.
-    }
-  }
-  entries.sort((a, b) => a.index - b.index);
-  return entries;
+	const entries: WorkflowJournalEntry[] = [];
+	for (const line of raw.split("\n")) {
+		if (line.trim() === "") continue;
+		try {
+			const parsed = JSON.parse(line) as unknown;
+			if (!isEntry(parsed)) continue;
+			entries.push(parsed);
+		} catch {
+			// A half-written final line, or someone editing the file. Skipping it
+			// keeps what came before, and a shorter prefix is still a useful one.
+		}
+	}
+	entries.sort((a, b) => a.index - b.index);
+	return entries;
 }
 
 /** Append one settled call. Failure to write is not failure to run. */
 export function appendJournal(path: string, entry: WorkflowJournalEntry): void {
-  try {
-    const persisted = entry.modelTier ? { ...entry, modelTier: tierDisclosure(entry.modelTier) } : entry;
-    appendFileSync(path, `${JSON.stringify(persisted)}\n`, "utf-8");
-  } catch {
-    // A journal that cannot be written costs a future resume, nothing more.
-  }
+	try {
+		const persisted = entry.modelTier ? { ...entry, modelTier: tierDisclosure(entry.modelTier) } : entry;
+		appendFileSync(path, `${JSON.stringify(persisted)}\n`, "utf-8");
+	} catch {
+		// A journal that cannot be written costs a future resume, nothing more.
+	}
 }
 
 function isEntry(value: unknown): value is WorkflowJournalEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const entry = value as Record<string, unknown>;
-  return (
-    Number.isInteger(entry.index) &&
-    (entry.index as number) >= 0 &&
-    typeof entry.key === "string" &&
-    typeof entry.ok === "boolean" &&
-    (entry.text === undefined || typeof entry.text === "string") &&
-    (entry.modelNote === undefined || typeof entry.modelNote === "string") &&
-    (entry.modelTier === undefined || isTierDisclosure(entry.modelTier)) &&
-    (entry.resumed === undefined || entry.resumed === true)
-  );
+	if (typeof value !== "object" || value === null) return false;
+	const entry = value as Record<string, unknown>;
+	return (
+		Number.isInteger(entry.index) &&
+		(entry.index as number) >= 0 &&
+		typeof entry.key === "string" &&
+		typeof entry.ok === "boolean" &&
+		(entry.text === undefined || typeof entry.text === "string") &&
+		(entry.modelNote === undefined || typeof entry.modelNote === "string") &&
+		(entry.modelTier === undefined || isTierDisclosure(entry.modelTier)) &&
+		(entry.resumed === undefined || entry.resumed === true)
+	);
 }

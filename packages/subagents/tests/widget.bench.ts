@@ -30,67 +30,67 @@ const SIZES = [1, 10, 100];
 /** Everything mounted here, torn down once at the end (FleetList holds a timer). */
 const mounted: { dispose: () => void }[] = [];
 function track<T extends { dispose: () => void }>(m: T): T {
-  mounted.push(m);
-  return m;
+	mounted.push(m);
+	return m;
 }
 afterAll(() => {
-  for (const m of mounted) m.dispose();
+	for (const m of mounted) m.dispose();
 });
 
 describe("AgentWidget.render (per TUI frame)", () => {
-  for (const n of SIZES) {
-    const w = track(mountWidget(AgentWidget, makeFleet({ running: n })));
-    bench(`${n} agents`, () => {
-      w.render();
-    });
-  }
+	for (const n of SIZES) {
+		const w = track(mountWidget(AgentWidget, makeFleet({ running: n })));
+		bench(`${n} agents`, () => {
+			w.render();
+		});
+	}
 });
 
 describe("AgentWidget.update (80ms timer + ~10 call sites)", () => {
-  for (const n of SIZES) {
-    const w = track(mountWidget(AgentWidget, makeFleet({ running: n })));
-    bench(`${n} agents`, () => {
-      w.update();
-    });
-  }
+	for (const n of SIZES) {
+		const w = track(mountWidget(AgentWidget, makeFleet({ running: n })));
+		bench(`${n} agents`, () => {
+			w.update();
+		});
+	}
 });
 
 describe("AgentWidget.render — the widget's real mix", () => {
-  // What a fan-out actually looks like on screen: a few running, a queue behind
-  // them, and finished rows still lingering. This is the shape the twelve-line
-  // overflow logic has to resolve, which the flat "n running" cases never reach.
-  const mix = () => makeFleet({ running: 3, queued: 7, finished: 3 });
+	// What a fan-out actually looks like on screen: a few running, a queue behind
+	// them, and finished rows still lingering. This is the shape the twelve-line
+	// overflow logic has to resolve, which the flat "n running" cases never reach.
+	const mix = () => makeFleet({ running: 3, queued: 7, finished: 3 });
 
-  const off = track(mountWidget(AgentWidget, mix(), { mode: "background" }));
-  bench("3 running / 7 queued / 3 finished — showModel off", () => {
-    off.render();
-  });
+	const off = track(mountWidget(AgentWidget, mix(), { mode: "background" }));
+	bench("3 running / 7 queued / 3 finished — showModel off", () => {
+		off.render();
+	});
 
-  const on = track(mountWidget(AgentWidget, mix(), { mode: "background", showModel: true }));
-  bench("3 running / 7 queued / 3 finished — showModel on", () => {
-    on.render();
-  });
+	const on = track(mountWidget(AgentWidget, mix(), { mode: "background", showModel: true }));
+	bench("3 running / 7 queued / 3 finished — showModel on", () => {
+		on.render();
+	});
 
-  const cost = track(mountWidget(AgentWidget, mix(), { mode: "background", showCost: true }));
-  bench("3 running / 7 queued / 3 finished — showCost on", () => {
-    cost.render();
-  });
+	const cost = track(mountWidget(AgentWidget, mix(), { mode: "background", showCost: true }));
+	bench("3 running / 7 queued / 3 finished — showCost on", () => {
+		cost.render();
+	});
 });
 
 describe("FleetList.render (per TUI frame, below the editor)", () => {
-  for (const n of SIZES) {
-    const f = track(mountFleet(FleetList, makeFleet({ running: n })));
-    bench(`${n} agents`, () => {
-      f.render(120);
-    });
-  }
+	for (const n of SIZES) {
+		const f = track(mountFleet(FleetList, makeFleet({ running: n })));
+		bench(`${n} agents`, () => {
+			f.render(120);
+		});
+	}
 });
 
 describe("FleetList.update (200ms timer)", () => {
-  for (const n of SIZES) {
-    const f = track(mountFleet(FleetList, makeFleet({ running: n })));
-    bench(`${n} agents`, () => {
-      f.update();
-    });
-  }
+	for (const n of SIZES) {
+		const f = track(mountFleet(FleetList, makeFleet({ running: n })));
+		bench(`${n} agents`, () => {
+			f.update();
+		});
+	}
 });

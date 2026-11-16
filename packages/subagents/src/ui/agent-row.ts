@@ -18,14 +18,14 @@ import { modelSelectionNote } from "../model-selection.ts";
 import type { AgentRecord } from "../types.ts";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.ts";
 import {
-  type AgentActivity,
-  type AgentDetails,
-  describeActivity,
-  fgPreservingNestedStyles,
-  formatCost,
-  formatTokens,
-  SPINNER,
-  type Theme,
+	type AgentActivity,
+	type AgentDetails,
+	describeActivity,
+	fgPreservingNestedStyles,
+	formatCost,
+	formatTokens,
+	SPINNER,
+	type Theme,
 } from "./agent-widget.ts";
 import { fallbackFlag, withLeadingFlag } from "./fallback-flag.ts";
 
@@ -36,9 +36,9 @@ const EXPANDED_PROMPT_LINES = 30;
 
 /** What the row reads at render time. */
 export interface AgentRowLive {
-  getRecord(id: string): AgentRecord | undefined;
-  getActivity(id: string): AgentActivity | undefined;
-  showCost(): boolean;
+	getRecord(id: string): AgentRecord | undefined;
+	getActivity(id: string): AgentActivity | undefined;
+	showCost(): boolean;
 }
 
 /** Statuses after which nothing about the run changes any more. */
@@ -46,73 +46,75 @@ const TERMINAL = new Set(["completed", "steered", "aborted", "stopped", "error"]
 
 /** Whether the row still has something live to show. */
 export function isRowLive(details: AgentDetails, live: AgentRowLive): boolean {
-  const record = details.agentId ? live.getRecord(details.agentId) : undefined;
-  if (record) return record.status === "running" || record.status === "queued";
-  return details.status === "running" || details.status === "queued";
+	const record = details.agentId ? live.getRecord(details.agentId) : undefined;
+	if (record) return record.status === "running" || record.status === "queued";
+	return details.status === "running" || details.status === "queued";
 }
 
 /** The icon and wording for a run's state, reading the record when the details are not final. */
 function statusOf(
-  details: AgentDetails,
-  record: AgentRecord | undefined,
-  activity: AgentActivity | undefined,
-  theme: Theme,
-  now: number,
+	details: AgentDetails,
+	record: AgentRecord | undefined,
+	activity: AgentActivity | undefined,
+	theme: Theme,
+	now: number,
 ): { icon: string; text: string } {
-  // A terminal result is the tool's own verdict (it also knows the worktree note
-  // and the final error). Only a non-final one is replaced by the live record.
-  const status = TERMINAL.has(details.status) ? details.status : (record?.status ?? details.status);
-  switch (status) {
-    case "completed":
-      return { icon: theme.fg("success", "✓"), text: "done" };
-    case "steered":
-      return { icon: theme.fg("warning", "✓"), text: "wrapped up (turn limit)" };
-    case "stopped":
-      return { icon: theme.fg("dim", "■"), text: "stopped" };
-    case "aborted":
-      return { icon: theme.fg("error", "✗"), text: "aborted (max turns exceeded)" };
-    case "error":
-      return { icon: theme.fg("error", "✗"), text: `error: ${record?.error ?? details.error ?? "unknown"}` };
-    case "queued":
-      return { icon: theme.fg("muted", "◦"), text: details.activity ?? "queued" };
-    default: {
-      const frame = SPINNER[Math.floor(now / 80) % SPINNER.length]!;
-      const text = activity
-        ? describeActivity(activity.activeTools, activity.responseText, activity.modelCall, now)
-        : (details.status === "background" ? "running in background" : (details.activity ?? "thinking…"));
-      return { icon: theme.fg("accent", frame), text };
-    }
-  }
+	// A terminal result is the tool's own verdict (it also knows the worktree note
+	// and the final error). Only a non-final one is replaced by the live record.
+	const status = TERMINAL.has(details.status) ? details.status : (record?.status ?? details.status);
+	switch (status) {
+		case "completed":
+			return { icon: theme.fg("success", "✓"), text: "done" };
+		case "steered":
+			return { icon: theme.fg("warning", "✓"), text: "wrapped up (turn limit)" };
+		case "stopped":
+			return { icon: theme.fg("dim", "■"), text: "stopped" };
+		case "aborted":
+			return { icon: theme.fg("error", "✗"), text: "aborted (max turns exceeded)" };
+		case "error":
+			return { icon: theme.fg("error", "✗"), text: `error: ${record?.error ?? details.error ?? "unknown"}` };
+		case "queued":
+			return { icon: theme.fg("muted", "◦"), text: details.activity ?? "queued" };
+		default: {
+			const frame = SPINNER[Math.floor(now / 80) % SPINNER.length]!;
+			const text = activity
+				? describeActivity(activity.activeTools, activity.responseText, activity.modelCall, now)
+				: details.status === "background"
+					? "running in background"
+					: (details.activity ?? "thinking…");
+			return { icon: theme.fg("accent", frame), text };
+		}
+	}
 }
 
 /** `✓ done · 12s · 33.8k token`: the first line of the result, and half of the folded row. */
 export function agentRowSummary(
-  details: AgentDetails,
-  live: AgentRowLive,
-  theme: Theme,
-  now: number = Date.now(),
-  width?: number,
+	details: AgentDetails,
+	live: AgentRowLive,
+	theme: Theme,
+	now: number = Date.now(),
+	width?: number,
 ): string {
-  const record = details.agentId ? live.getRecord(details.agentId) : undefined;
-  const activity = details.agentId ? live.getActivity(details.agentId) : undefined;
-  const { icon, text } = statusOf(details, record, activity, theme, now);
+	const record = details.agentId ? live.getRecord(details.agentId) : undefined;
+	const activity = details.agentId ? live.getActivity(details.agentId) : undefined;
+	const { icon, text } = statusOf(details, record, activity, theme, now);
 
-  const finished = TERMINAL.has(details.status) || (record !== undefined && TERMINAL.has(record.status));
-  const elapsed = record
-    ? (finished ? (record.completedAt ?? now) : now) - record.startedAt
-    : details.durationMs;
-  const tokens = record ? getLifetimeTotal(record.lifetimeUsage) : 0;
-  const tokenText = record ? (tokens > 0 ? formatTokens(tokens) : "") : details.tokens;
-  const cost = live.showCost() ? formatCost(record ? getLifetimeCost(record.lifetimeUsage) : (details.cost ?? 0)) : "";
+	const finished = TERMINAL.has(details.status) || (record !== undefined && TERMINAL.has(record.status));
+	const elapsed = record ? (finished ? (record.completedAt ?? now) : now) - record.startedAt : details.durationMs;
+	const tokens = record ? getLifetimeTotal(record.lifetimeUsage) : 0;
+	const tokenText = record ? (tokens > 0 ? formatTokens(tokens) : "") : details.tokens;
+	const cost = live.showCost() ? formatCost(record ? getLifetimeCost(record.lifetimeUsage) : (details.cost ?? 0)) : "";
 
-  const parts = [text, formatClock(elapsed)];
-  if (tokenText) parts.push(tokenText);
-  if (cost) parts.push(cost);
-  if (!finished && details.backgroundHint && elapsed >= 2000) parts.push("(ctrl+b to run in background)");
-  // Leading, ahead of the status text, which may carry a 300-char error.
-  const flag = fallbackFlag(theme, record?.modelFallback || record?.modelTier ? record : details);
-  const body = parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `);
-  return width === undefined ? `${icon} ${flag ? `${flag} ` : ""}${body}` : withLeadingFlag(`${icon} `, flag, body, width);
+	const parts = [text, formatClock(elapsed)];
+	if (tokenText) parts.push(tokenText);
+	if (cost) parts.push(cost);
+	if (!finished && details.backgroundHint && elapsed >= 2000) parts.push("(ctrl+b to run in background)");
+	// Leading, ahead of the status text, which may carry a 300-char error.
+	const flag = fallbackFlag(theme, record?.modelFallback || record?.modelTier ? record : details);
+	const body = parts.map((p) => fgPreservingNestedStyles(theme, "dim", p)).join(` ${theme.fg("dim", "·")} `);
+	return width === undefined
+		? `${icon} ${flag ? `${flag} ` : ""}${body}`
+		: withLeadingFlag(`${icon} `, flag, body, width);
 }
 
 /**
@@ -121,24 +123,24 @@ export function agentRowSummary(
  * (pi may have clamped the level) and which carry the `twin` label.
  */
 function tagsLine(details: AgentDetails, theme: Theme): string | undefined {
-  const parts = [...(details.modelName ? [details.modelName] : []), ...(details.tags ?? [])];
-  const flag = fallbackFlag(theme, details);
-  if (parts.length === 0 && !flag) return undefined;
-  return `${theme.fg("dim", "↳")} ${flag ? `${flag} ` : ""}${theme.fg("dim", parts.join(" · "))}`;
+	const parts = [...(details.modelName ? [details.modelName] : []), ...(details.tags ?? [])];
+	const flag = fallbackFlag(theme, details);
+	if (parts.length === 0 && !flag) return undefined;
+	return `${theme.fg("dim", "↳")} ${flag ? `${flag} ` : ""}${theme.fg("dim", parts.join(" · "))}`;
 }
 
 /** The transcript as an OSC 8 hyperlink, so a click opens it. */
 export function transcriptLink(path: string, theme: Theme): string {
-  return `${hyperlink("transcript ↗", pathToFileURL(path).href)} ${theme.fg("dim", path)}`;
+	return `${hyperlink("transcript ↗", pathToFileURL(path).href)} ${theme.fg("dim", path)}`;
 }
 
 /** Redraw cadence while a row has something live to show. */
 const ROW_TICK_MS = 1000;
 
 interface RowTickState {
-  ticker?: TimerHandle;
-  isLive?: () => boolean;
-  invalidate?: () => void;
+	ticker?: TimerHandle;
+	isLive?: () => boolean;
+	invalidate?: () => void;
 }
 
 /**
@@ -151,35 +153,35 @@ interface RowTickState {
  * never starts one.
  */
 export function keepTicking(
-  context: { state?: unknown; invalidate?: () => void; probe?: boolean },
-  isLive: () => boolean,
-  clock: Clock = realClock,
+	context: { state?: unknown; invalidate?: () => void; probe?: boolean },
+	isLive: () => boolean,
+	clock: Clock = realClock,
 ): void {
-  const state = context.state as RowTickState | undefined;
-  if (context.probe || !state || !context.invalidate) return;
-  state.isLive = isLive;
-  state.invalidate = context.invalidate;
-  if (state.ticker !== undefined || !isLive()) return;
-  state.ticker = clock.setInterval(() => {
-    if (state.isLive?.()) {
-      state.invalidate?.();
-      return;
-    }
-    state.ticker?.cancel();
-    state.ticker = undefined;
-    state.invalidate?.(); // one last repaint, showing the final state
-  }, ROW_TICK_MS);
-  state.ticker.unref?.();
+	const state = context.state as RowTickState | undefined;
+	if (context.probe || !state || !context.invalidate) return;
+	state.isLive = isLive;
+	state.invalidate = context.invalidate;
+	if (state.ticker !== undefined || !isLive()) return;
+	state.ticker = clock.setInterval(() => {
+		if (state.isLive?.()) {
+			state.invalidate?.();
+			return;
+		}
+		state.ticker?.cancel();
+		state.ticker = undefined;
+		state.invalidate?.(); // one last repaint, showing the final state
+	}, ROW_TICK_MS);
+	state.ticker.unref?.();
 }
 
 /** {@link keepTicking} for an `Agent` row: live while its record is running or queued. */
 export function keepRowTicking(
-  context: { state?: unknown; invalidate?: () => void; probe?: boolean },
-  details: AgentDetails,
-  live: AgentRowLive,
-  clock: Clock = realClock,
+	context: { state?: unknown; invalidate?: () => void; probe?: boolean },
+	details: AgentDetails,
+	live: AgentRowLive,
+	clock: Clock = realClock,
 ): void {
-  keepTicking(context, () => isRowLive(details, live), clock);
+	keepTicking(context, () => isRowLive(details, live), clock);
 }
 
 /**
@@ -187,79 +189,81 @@ export function keepRowTicking(
  * the agent's state now rather than the state when the tool last returned.
  */
 export class AgentResultView implements Component {
-    private readonly details: AgentDetails;
-  private readonly resultText: string;
-  private readonly expanded: boolean;
-  private readonly live: AgentRowLive;
-  private readonly theme: Theme;
-  private readonly clock: Clock;
-constructor(
-    details: AgentDetails,
-    resultText: string,
-    expanded: boolean,
-    live: AgentRowLive,
-    theme: Theme,
-    clock: Clock = realClock,
-  ) {
-    this.details = details;
-    this.resultText = resultText;
-    this.expanded = expanded;
-    this.live = live;
-    this.theme = theme;
-    this.clock = clock;
-}
+	private readonly details: AgentDetails;
+	private readonly resultText: string;
+	private readonly expanded: boolean;
+	private readonly live: AgentRowLive;
+	private readonly theme: Theme;
+	private readonly clock: Clock;
+	constructor(
+		details: AgentDetails,
+		resultText: string,
+		expanded: boolean,
+		live: AgentRowLive,
+		theme: Theme,
+		clock: Clock = realClock,
+	) {
+		this.details = details;
+		this.resultText = resultText;
+		this.expanded = expanded;
+		this.live = live;
+		this.theme = theme;
+		this.clock = clock;
+	}
 
-  render(width: number): string[] {
-    const lines = [agentRowSummary(this.details, this.live, this.theme, this.clock.now(), width)];
-    if (!this.expanded) return lines;
+	render(width: number): string[] {
+		const lines = [agentRowSummary(this.details, this.live, this.theme, this.clock.now(), width)];
+		if (!this.expanded) return lines;
 
-    const record = this.details.agentId ? this.live.getRecord(this.details.agentId) : undefined;
-    const tags = tagsLine(this.details, this.theme);
-    if (tags) lines.push(truncateToWidth(tags, width));
-    const note = modelSelectionNote(record) || this.details.modelNote;
-    if (note) lines.push(...wrapTextWithAnsi(this.theme.fg("warning", note), width));
-    const transcript = record?.outputFile ?? this.details.outputFile;
-    if (transcript) lines.push(truncateToWidth(transcriptLink(transcript, this.theme), width));
+		const record = this.details.agentId ? this.live.getRecord(this.details.agentId) : undefined;
+		const tags = tagsLine(this.details, this.theme);
+		if (tags) lines.push(truncateToWidth(tags, width));
+		const note = modelSelectionNote(record) || this.details.modelNote;
+		if (note) lines.push(...wrapTextWithAnsi(this.theme.fg("warning", note), width));
+		const transcript = record?.outputFile ?? this.details.outputFile;
+		if (transcript) lines.push(truncateToWidth(transcriptLink(transcript, this.theme), width));
 
-    if (this.details.status === "completed" || this.details.status === "steered") {
-      const body = this.resultText.split("\n");
-      for (const line of body.slice(0, EXPANDED_RESULT_LINES)) {
-        lines.push(...wrapTextWithAnsi(this.theme.fg("dim", `  ${line}`), width));
-      }
-      if (body.length > EXPANDED_RESULT_LINES) {
-        lines.push(this.theme.fg("muted", "  ... (use get_subagent_result with verbose for full output)"));
-      }
-    }
-    return lines;
-  }
+		if (this.details.status === "completed" || this.details.status === "steered") {
+			const body = this.resultText.split("\n");
+			for (const line of body.slice(0, EXPANDED_RESULT_LINES)) {
+				lines.push(...wrapTextWithAnsi(this.theme.fg("dim", `  ${line}`), width));
+			}
+			if (body.length > EXPANDED_RESULT_LINES) {
+				lines.push(this.theme.fg("muted", "  ... (use get_subagent_result with verbose for full output)"));
+			}
+		}
+		return lines;
+	}
 
-  invalidate(): void { /* reads live state on every render */ }
+	invalidate(): void {
+		/* reads live state on every render */
+	}
 }
 
 /** The call half: `Plan  desc`, and the prompt underneath when expanded. */
 export class AgentCallView implements Component {
-    private readonly header: string;
-  private readonly prompt: string | undefined;
-  private readonly theme: Theme;
-constructor(
-    header: string,
-    prompt: string | undefined,
-    theme: Theme,
-  ) {
-    this.header = header;
-    this.prompt = prompt;
-    this.theme = theme;
-}
+	private readonly header: string;
+	private readonly prompt: string | undefined;
+	private readonly theme: Theme;
+	constructor(header: string, prompt: string | undefined, theme: Theme) {
+		this.header = header;
+		this.prompt = prompt;
+		this.theme = theme;
+	}
 
-  render(width: number): string[] {
-    const lines = [truncateToWidth(this.header, width)];
-    if (this.prompt) {
-      const wrapped = this.prompt.split("\n").flatMap(line => wrapTextWithAnsi(this.theme.fg("dim", `  ${line}`), width));
-      lines.push(...wrapped.slice(0, EXPANDED_PROMPT_LINES));
-      if (wrapped.length > EXPANDED_PROMPT_LINES) lines.push(this.theme.fg("muted", "  …"));
-    }
-    return lines;
-  }
+	render(width: number): string[] {
+		const lines = [truncateToWidth(this.header, width)];
+		if (this.prompt) {
+			const wrapped = this.prompt
+				.split("\n")
+				.flatMap((line) => wrapTextWithAnsi(this.theme.fg("dim", `  ${line}`), width));
+			lines.push(...wrapped.slice(0, EXPANDED_PROMPT_LINES));
+			if (wrapped.length > EXPANDED_PROMPT_LINES) lines.push(this.theme.fg("muted", "  …"));
+		}
+		return lines;
+	}
 
-  invalidate(): void { /* static */ }
+	invalidate(): void {
+		/* static */
+	}
 }

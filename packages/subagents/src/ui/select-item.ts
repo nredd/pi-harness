@@ -17,7 +17,7 @@
 
 /** Minimal shape of the `ctx.ui` surface this needs. */
 export interface SelectUI {
-  select(title: string, options: string[]): Promise<string | undefined>;
+	select(title: string, options: string[]): Promise<string | undefined>;
 }
 
 /**
@@ -27,19 +27,22 @@ export interface SelectUI {
  * one we offered.
  */
 export async function selectItem<T>(
-  ui: SelectUI,
-  title: string,
-  items: readonly T[],
-  format: (item: T, index: number) => string,
+	ui: SelectUI,
+	title: string,
+	items: readonly T[],
+	format: (item: T, index: number) => string,
 ): Promise<T | undefined> {
-  // Pad the number so a 10+ item list keeps its columns aligned.
-  const width = String(items.length).length;
-  const rows = items.map((item, i) => ({
-    item,
-    label: `${String(i + 1).padStart(width)}. ${format(item, i)}`,
-  }));
+	// Pad the number so a 10+ item list keeps its columns aligned.
+	const width = String(items.length).length;
+	const rows = items.map((item, i) => ({
+		item,
+		label: `${String(i + 1).padStart(width)}. ${format(item, i)}`,
+	}));
 
-  const choice = await ui.select(title, rows.map(r => r.label));
-  if (!choice) return undefined;
-  return rows.find(r => r.label === choice)?.item;
+	const choice = await ui.select(
+		title,
+		rows.map((r) => r.label),
+	);
+	if (!choice) return undefined;
+	return rows.find((r) => r.label === choice)?.item;
 }

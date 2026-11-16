@@ -38,16 +38,16 @@ export const STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput";
 
 /** What the child produced, filled in as the tool is called. */
 export interface StructuredCapture {
-  /** The last payload that validated, canonicalised. Absent until one does. */
-  json?: string;
-  /** Why the most recent attempt was rejected, for the retry prompt. */
-  lastError?: string;
-  /** Whether the tool was called at all — "never tried" reads differently. */
-  called: boolean;
+	/** The last payload that validated, canonicalised. Absent until one does. */
+	json?: string;
+	/** Why the most recent attempt was rejected, for the retry prompt. */
+	lastError?: string;
+	/** Whether the tool was called at all — "never tried" reads differently. */
+	called: boolean;
 }
 
 export function createStructuredCapture(): StructuredCapture {
-  return { called: false };
+	return { called: false };
 }
 
 /**
@@ -57,62 +57,61 @@ export function createStructuredCapture(): StructuredCapture {
  * returned so `runAgent` owns its lifetime and can consult it on every exit
  * path, including the ones where the tool was never reached.
  */
-export function createStructuredOutputTool(
-  compiled: CompiledSchema,
-  capture: StructuredCapture,
-): ToolDefinition {
-  return defineTool({
-    name: STRUCTURED_OUTPUT_TOOL_NAME,
-    label: "Structured Output",
-    description:
-      "Report your final answer. Call this exactly once, with the complete result, and put everything the "
-      + "caller needs inside the arguments — text written outside this call is discarded. If a call is "
-      + "rejected for not matching the schema, fix the reported fields and call it again.",
-    promptSnippet: "Report your final answer as structured data",
-    promptGuidelines: [
-      "Your final answer MUST be reported by calling StructuredOutput. Prose outside that call is discarded.",
-    ],
-    // The caller's schema *is* the tool's input schema, verbatim — that is what
-    // makes the provider fill the fields. pi types this as TypeBox's `TSchema`,
-    // which v1 defines as an open interface, so a plain JSON Schema satisfies
-    // it without a cast at runtime or a conversion at author time.
-    parameters: compiled.schema as never,
-    // "prefer", not "require": a provider that cannot constrain sampling should
-    // fall through to validation-and-retry rather than fail the call outright.
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
-    // Models occasionally send the whole payload as one JSON string instead of
-    // an object. Recovering that costs nothing and saves a whole retry.
-    prepareArguments: (args: unknown) => {
-      if (typeof args !== "string") return args as never;
-      try {
-        return JSON.parse(args) as never;
-      } catch {
-        return args as never;
-      }
-    },
-    execute: async (_toolCallId, params) => {
-      capture.called = true;
-      const verdict = compiled.check(params);
-      if (verdict !== true) {
-        capture.lastError = verdict;
-        // `isError` puts the reason in front of the model as a tool result, so
-        // it can correct itself inside this same run. This is where most
-        // mismatches are resolved; the prompt-level retry is the backstop.
-        return {
-          content: [{
-            type: "text",
-            text: `StructuredOutput did not match the required schema:\n${verdict}\nCall it again with a corrected value.`,
-          }],
-          isError: true,
-          details: {},
-        };
-      }
-      // Last valid call wins: a model that calls twice meant the second one.
-      capture.json = JSON.stringify(params);
-      capture.lastError = undefined;
-      return { content: [{ type: "text", text: "Recorded." }], details: {} };
-    },
-  }) as ToolDefinition;
+export function createStructuredOutputTool(compiled: CompiledSchema, capture: StructuredCapture): ToolDefinition {
+	return defineTool({
+		name: STRUCTURED_OUTPUT_TOOL_NAME,
+		label: "Structured Output",
+		description:
+			"Report your final answer. Call this exactly once, with the complete result, and put everything the " +
+			"caller needs inside the arguments — text written outside this call is discarded. If a call is " +
+			"rejected for not matching the schema, fix the reported fields and call it again.",
+		promptSnippet: "Report your final answer as structured data",
+		promptGuidelines: [
+			"Your final answer MUST be reported by calling StructuredOutput. Prose outside that call is discarded.",
+		],
+		// The caller's schema *is* the tool's input schema, verbatim — that is what
+		// makes the provider fill the fields. pi types this as TypeBox's `TSchema`,
+		// which v1 defines as an open interface, so a plain JSON Schema satisfies
+		// it without a cast at runtime or a conversion at author time.
+		parameters: compiled.schema as never,
+		// "prefer", not "require": a provider that cannot constrain sampling should
+		// fall through to validation-and-retry rather than fail the call outright.
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		// Models occasionally send the whole payload as one JSON string instead of
+		// an object. Recovering that costs nothing and saves a whole retry.
+		prepareArguments: (args: unknown) => {
+			if (typeof args !== "string") return args as never;
+			try {
+				return JSON.parse(args) as never;
+			} catch {
+				return args as never;
+			}
+		},
+		execute: async (_toolCallId, params) => {
+			capture.called = true;
+			const verdict = compiled.check(params);
+			if (verdict !== true) {
+				capture.lastError = verdict;
+				// `isError` puts the reason in front of the model as a tool result, so
+				// it can correct itself inside this same run. This is where most
+				// mismatches are resolved; the prompt-level retry is the backstop.
+				return {
+					content: [
+						{
+							type: "text",
+							text: `StructuredOutput did not match the required schema:\n${verdict}\nCall it again with a corrected value.`,
+						},
+					],
+					isError: true,
+					details: {},
+				};
+			}
+			// Last valid call wins: a model that calls twice meant the second one.
+			capture.json = JSON.stringify(params);
+			capture.lastError = undefined;
+			return { content: [{ type: "text", text: "Recorded." }], details: {} };
+		},
+	}) as ToolDefinition;
 }
 
 /**
@@ -123,8 +122,9 @@ export function createStructuredOutputTool(
  * never answered at all sends it looking for a mistake it did not make.
  */
 export function structuredRetryPrompt(capture: StructuredCapture): string {
-  const reason = capture.called && capture.lastError !== undefined
-    ? `Your last ${STRUCTURED_OUTPUT_TOOL_NAME} call did not match the required schema: ${capture.lastError}`
-    : `You did not call ${STRUCTURED_OUTPUT_TOOL_NAME}, so your answer was not recorded.`;
-  return `${reason}\n\nCall ${STRUCTURED_OUTPUT_TOOL_NAME} now with your complete final answer. Do not reply with prose.`;
+	const reason =
+		capture.called && capture.lastError !== undefined
+			? `Your last ${STRUCTURED_OUTPUT_TOOL_NAME} call did not match the required schema: ${capture.lastError}`
+			: `You did not call ${STRUCTURED_OUTPUT_TOOL_NAME}, so your answer was not recorded.`;
+	return `${reason}\n\nCall ${STRUCTURED_OUTPUT_TOOL_NAME} now with your complete final answer. Do not reply with prose.`;
 }

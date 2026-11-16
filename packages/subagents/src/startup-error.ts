@@ -16,7 +16,7 @@ import * as hostSdk from "@earendil-works/pi-coding-agent";
 export type StartupErrorConstructor = new (message: string, options?: ErrorOptions) => Error;
 
 function isStartupErrorConstructor(value: unknown): value is StartupErrorConstructor {
-  return typeof value === "function" && value.prototype instanceof Error;
+	return typeof value === "function" && value.prototype instanceof Error;
 }
 
 /**
@@ -24,6 +24,6 @@ function isStartupErrorConstructor(value: unknown): value is StartupErrorConstru
  * not export one. `sdk` defaults to the real host module; tests pass a stand-in.
  */
 export function hostStartupErrorClass(sdk: object = hostSdk): StartupErrorConstructor | undefined {
-  const candidate: unknown = Reflect.get(sdk, "ExtensionStartupError");
-  return isStartupErrorConstructor(candidate) ? candidate : undefined;
+	const candidate: unknown = Reflect.get(sdk, "ExtensionStartupError");
+	return isStartupErrorConstructor(candidate) ? candidate : undefined;
 }

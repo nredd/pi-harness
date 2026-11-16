@@ -1,112 +1,168 @@
 /** One selection policy for every dispatch, independent of its transport. */
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { type Clock, realClock } from "./clock.ts";
-import { describeModel, describeVirtualModel, getAgentModels, getModelAliases, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel } from "./model-resolver.ts";
+import {
+	describeModel,
+	describeVirtualModel,
+	getAgentModels,
+	getModelAliases,
+	isVirtualModel,
+	type ModelFallback,
+	type ModelRegistry,
+	modelFallbackNote,
+	modelFallbackTo,
+	resolveModel,
+} from "./model-resolver.ts";
 import { checkModelScope } from "./model-scope.ts";
-import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.ts";
+import {
+	exactTierModel,
+	getModelResolution,
+	parseTierBinding,
+	resolveTier,
+	type TierBinding,
+	type TierDisclosure,
+	type TierOutcome,
+	tierBinding,
+	tierNote,
+} from "./model-tiers.ts";
 import { type AdmissionEvents, admissionOutcome, type QuotaBlock } from "./quota-admission.ts";
 
 /** Exact compatibility pins for user-defined legacy Explore definitions. User aliases win. */
-const LEGACY_MODEL_PINS = new Map([
-  ["claude-haiku-4-5", "anthropic/claude-haiku-4-5"],
-]);
+const LEGACY_MODEL_PINS = new Map([["claude-haiku-4-5", "anthropic/claude-haiku-4-5"]]);
 
 /** The winning precedence level, before resolution or fallback. */
 export type ModelSource = "param" | "agentModels:type" | "agentModels:*" | "definition" | "parent";
 
 /** Keep the original request even when it could not be resolved. */
 export interface ModelSelection {
-  requested?: string;
-  source: ModelSource;
-  model: Model<Api> | undefined;
-  outcome: "resolved" | "inherited" | "fallback";
-  fallback?: ModelFallback;
-  scopeWarning?: string;
-  /** Serializable tier provenance, retained when the answering model changes. */
-  tier?: TierOutcome;
-  /** A prepared binding is resolved with admission before starting the child. */
-  tierBinding?: TierBinding;
-  tierAdmitted?: boolean;
-  /** Startup-only parent floor if credentials/profile disappear between preflight and admission. */
-  tierParent?: Model<Api>;
+	requested?: string;
+	source: ModelSource;
+	model: Model<Api> | undefined;
+	outcome: "resolved" | "inherited" | "fallback";
+	fallback?: ModelFallback;
+	scopeWarning?: string;
+	/** Serializable tier provenance, retained when the answering model changes. */
+	tier?: TierOutcome;
+	/** A prepared binding is resolved with admission before starting the child. */
+	tierBinding?: TierBinding;
+	tierAdmitted?: boolean;
+	/** Startup-only parent floor if credentials/profile disappear between preflight and admission. */
+	tierParent?: Model<Api>;
 }
 
 /** Inputs in dispatch precedence order, including shadowed defaults; blank strings are unset. */
-export function modelInputs(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): { requested?: string; source: ModelSource }[] {
-  const overrides = getAgentModels();
-  const inputs: { requested?: string; source: ModelSource }[] = [
-    { source: "param", requested: paramModel == null ? undefined : typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}` },
-    { source: "agentModels:type", requested: overrides.get(type.toLowerCase()) },
-    { source: "agentModels:*", requested: overrides.get("*") },
-    { source: "definition", requested: definitionModel },
-  ];
-  return [...inputs.filter(input => input.requested?.trim()), { source: "parent" }];
+export function modelInputs(
+	type: string,
+	definitionModel?: string,
+	paramModel?: string | Model<Api> | null,
+): { requested?: string; source: ModelSource }[] {
+	const overrides = getAgentModels();
+	const inputs: { requested?: string; source: ModelSource }[] = [
+		{
+			source: "param",
+			requested:
+				paramModel == null
+					? undefined
+					: typeof paramModel === "string"
+						? paramModel
+						: `${paramModel.provider}/${paramModel.id}`,
+		},
+		{ source: "agentModels:type", requested: overrides.get(type.toLowerCase()) },
+		{ source: "agentModels:*", requested: overrides.get("*") },
+		{ source: "definition", requested: definitionModel },
+	];
+	return [...inputs.filter((input) => input.requested?.trim()), { source: "parent" }];
 }
 
 /** Resolve trusted tier/legacy configuration without registry or admission work. */
-export function modelInputBinding(input: { requested?: string; source: ModelSource }, agentType: string): TierBinding | undefined {
-  const requested = input.requested?.trim();
-  if (!requested) return undefined;
-  const legacy = getModelAliases().get(requested.toLowerCase());
-  const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
-  // Preserve existing enterprise manifests during the built-in Explore migration.
-  // An explicit cheap binding always wins, even when it is unavailable.
-  const cheapCompatibility = requested === "@cheap" && agentType === "Explore" && input.source === "definition"
-    ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
-  return requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
-    : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
+export function modelInputBinding(
+	input: { requested?: string; source: ModelSource },
+	agentType: string,
+): TierBinding | undefined {
+	const requested = input.requested?.trim();
+	if (!requested) return undefined;
+	const legacy = getModelAliases().get(requested.toLowerCase());
+	const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
+	// Preserve existing enterprise manifests during the built-in Explore migration.
+	// An explicit cheap binding always wins, even when it is unavailable.
+	const cheapCompatibility =
+		requested === "@cheap" && agentType === "Explore" && input.source === "definition"
+			? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5"))
+			: undefined;
+	return requested.startsWith("@")
+		? (tierBinding(requested.slice(1)) ?? cheapCompatibility)
+		: legacyBinding
+			? { ...legacyBinding, tier: requested }
+			: undefined;
 }
 
 /** Inputs shared by dispatch selection and registration-only validation. */
 export interface ModelSelectionRequest {
-  homeDir?: string;
-  agentType: string;
-  definitionModel?: string;
-  paramModel?: string | Model<Api> | null;
-  parentModel: Model<Api> | undefined;
-  registry: ModelRegistry;
-  cwd: string;
-  agentLabel?: string;
+	homeDir?: string;
+	agentType: string;
+	definitionModel?: string;
+	paramModel?: string | Model<Api> | null;
+	parentModel: Model<Api> | undefined;
+	registry: ModelRegistry;
+	cwd: string;
+	agentLabel?: string;
 }
 
 /** Shared resolution before scope checking; structural validation must not populate live scope caches. */
 function prepareModelSelection(request: ModelSelectionRequest): ModelSelection | string {
-  const input = modelInputs(request.agentType, request.definitionModel, request.paramModel)[0]!;
-  let selection: ModelSelection = { ...input, model: request.parentModel, outcome: "inherited" };
-  if (input.requested) {
-    const requested = input.requested.trim();
-    const legacy = getModelAliases().get(requested.toLowerCase());
-    const binding = modelInputBinding(input, request.agentType);
-    if (requested.startsWith("@") || legacy) {
-      const tier = requested.startsWith("@") ? requested.slice(1) : requested;
-      const refs = binding?.kind === "routed" ? [binding.profile] : binding?.members ?? [];
-      const model = refs.map(ref => exactTierModel(ref, request.registry)).find(Boolean);
-      if (!binding || !model) {
-        const outcome: TierOutcome = binding ? { kind: "unavailable", tier, tried: refs } : { kind: "unmapped", tier };
-        const mode = outcome.kind === "unmapped" ? getModelResolution().onUnmapped : getModelResolution().onUnavailable;
-        if (mode === "error") return `Model tier @${tier} is ${outcome.kind}.`;
-        selection = { ...selection, tier: outcome, outcome: "fallback", fallback: modelFallbackTo(input.requested, request.parentModel) };
-      } else {
-        selection = { ...input, model, outcome: "resolved", tierBinding: binding, tierParent: request.parentModel };
-      }
-    } else {
-      const compatibilityPin = input.source === "definition" && request.agentType === "Explore"
-        ? LEGACY_MODEL_PINS.get(requested) : undefined;
-      const resolved = request.paramModel != null && typeof request.paramModel === "object"
-        ? request.paramModel : input.source === "param" ? resolveModel(requested, request.registry, { cwd: request.cwd, homeDir: request.homeDir })
-        : exactTierModel(compatibilityPin ?? requested, request.registry) ?? `Model not found: "${requested}".`;
-      if (typeof resolved !== "string") selection = { ...input, model: resolved, outcome: "resolved" };
-      else if (compatibilityPin) {
-        const tier: TierOutcome = { kind: "unavailable", tier: requested, tried: [compatibilityPin] };
-        if (getModelResolution().onUnavailable === "error") return `Model tier @${requested} is unavailable.`;
-        selection = { ...selection, tier, outcome: "fallback", fallback: modelFallbackTo(input.requested, request.parentModel) };
-      } else {
-        if (input.source === "param" || getModelResolution().onUnavailable === "error") return resolved;
-        selection = { ...selection, outcome: "fallback", fallback: modelFallbackTo(input.requested, request.parentModel) };
-      }
-    }
-  }
-  return selection;
+	const input = modelInputs(request.agentType, request.definitionModel, request.paramModel)[0]!;
+	let selection: ModelSelection = { ...input, model: request.parentModel, outcome: "inherited" };
+	if (input.requested) {
+		const requested = input.requested.trim();
+		const legacy = getModelAliases().get(requested.toLowerCase());
+		const binding = modelInputBinding(input, request.agentType);
+		if (requested.startsWith("@") || legacy) {
+			const tier = requested.startsWith("@") ? requested.slice(1) : requested;
+			const refs = binding?.kind === "routed" ? [binding.profile] : (binding?.members ?? []);
+			const model = refs.map((ref) => exactTierModel(ref, request.registry)).find(Boolean);
+			if (!binding || !model) {
+				const outcome: TierOutcome = binding ? { kind: "unavailable", tier, tried: refs } : { kind: "unmapped", tier };
+				const mode = outcome.kind === "unmapped" ? getModelResolution().onUnmapped : getModelResolution().onUnavailable;
+				if (mode === "error") return `Model tier @${tier} is ${outcome.kind}.`;
+				selection = {
+					...selection,
+					tier: outcome,
+					outcome: "fallback",
+					fallback: modelFallbackTo(input.requested, request.parentModel),
+				};
+			} else {
+				selection = { ...input, model, outcome: "resolved", tierBinding: binding, tierParent: request.parentModel };
+			}
+		} else {
+			const compatibilityPin =
+				input.source === "definition" && request.agentType === "Explore" ? LEGACY_MODEL_PINS.get(requested) : undefined;
+			const resolved =
+				request.paramModel != null && typeof request.paramModel === "object"
+					? request.paramModel
+					: input.source === "param"
+						? resolveModel(requested, request.registry, { cwd: request.cwd, homeDir: request.homeDir })
+						: (exactTierModel(compatibilityPin ?? requested, request.registry) ?? `Model not found: "${requested}".`);
+			if (typeof resolved !== "string") selection = { ...input, model: resolved, outcome: "resolved" };
+			else if (compatibilityPin) {
+				const tier: TierOutcome = { kind: "unavailable", tier: requested, tried: [compatibilityPin] };
+				if (getModelResolution().onUnavailable === "error") return `Model tier @${requested} is unavailable.`;
+				selection = {
+					...selection,
+					tier,
+					outcome: "fallback",
+					fallback: modelFallbackTo(input.requested, request.parentModel),
+				};
+			} else {
+				if (input.source === "param" || getModelResolution().onUnavailable === "error") return resolved;
+				selection = {
+					...selection,
+					outcome: "fallback",
+					fallback: modelFallbackTo(input.requested, request.parentModel),
+				};
+			}
+		}
+	}
+	return selection;
 }
 
 /**
@@ -115,74 +171,101 @@ function prepareModelSelection(request: ModelSelectionRequest): ModelSelection |
  * through admitModelSelection; an already-open resume keeps its existing selection.
  */
 export function selectModel(request: ModelSelectionRequest): ModelSelection | string {
-  const selection = prepareModelSelection(request);
-  if (typeof selection === "string") return selection;
-  const scope = checkModelScope({
-    model: selection.model, cwd: request.cwd, modelRegistry: request.registry,
-    callerSupplied: selection.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: selection.requested, homeDir: request.homeDir,
-  });
-  if (scope.kind === "error") return scope.message;
-  if (scope.kind === "warn") selection.scopeWarning = scope.message;
-  return selection;
+	const selection = prepareModelSelection(request);
+	if (typeof selection === "string") return selection;
+	const scope = checkModelScope({
+		model: selection.model,
+		cwd: request.cwd,
+		modelRegistry: request.registry,
+		callerSupplied: selection.source === "param" && !selection.tierBinding && !selection.tier,
+		agentLabel: request.agentLabel ?? request.agentType,
+		modelInput: selection.requested,
+		homeDir: request.homeDir,
+	});
+	if (scope.kind === "error") return scope.message;
+	if (scope.kind === "warn") selection.scopeWarning = scope.message;
+	return selection;
 }
 
 /** Registration-only configuration errors, deliberately excluding live availability and scope evaluation. */
 export function hasModelConfigurationError(request: Omit<ModelSelectionRequest, "paramModel">): boolean {
-  const registered = request.registry.getAll?.() ?? [];
-  const getRegistered = () => registered;
-  const registry = { find: (provider: string, id: string) => registered.find(model => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
-  return typeof prepareModelSelection({ ...request, paramModel: undefined, registry }) === "string";
+	const registered = request.registry.getAll?.() ?? [];
+	const getRegistered = () => registered;
+	const registry = {
+		find: (provider: string, id: string) => registered.find((model) => model.provider === provider && model.id === id),
+		getAll: getRegistered,
+		getAvailable: getRegistered,
+	};
+	return typeof prepareModelSelection({ ...request, paramModel: undefined, registry }) === "string";
 }
 
 /** Label an admitted physical model before any response, without replacing the virtual selection. */
-export function describeSelection(selection: ModelSelection | undefined, registry: ModelRegistry): { modelName?: string; modelId?: string } {
-  const admitted = selection?.tier?.kind === "routed" ? selection.tier.admitted : undefined;
-  if (admitted) {
-    const slash = admitted.indexOf("/");
-    const provider = admitted.slice(0, slash);
-    const id = admitted.slice(slash + 1);
-    return describeModel(registry.find(provider, id) ?? { provider, id });
-  }
-  const model = selection?.model;
-  return model ? isVirtualModel(model) ? describeVirtualModel(model) : describeModel(model) : {};
+export function describeSelection(
+	selection: ModelSelection | undefined,
+	registry: ModelRegistry,
+): { modelName?: string; modelId?: string } {
+	const admitted = selection?.tier?.kind === "routed" ? selection.tier.admitted : undefined;
+	if (admitted) {
+		const slash = admitted.indexOf("/");
+		const provider = admitted.slice(0, slash);
+		const id = admitted.slice(slash + 1);
+		return describeModel(registry.find(provider, id) ?? { provider, id });
+	}
+	const model = selection?.model;
+	return model ? (isVirtualModel(model) ? describeVirtualModel(model) : describeModel(model)) : {};
 }
 
 /** Resolved selection identity for model-facing text, not an actionable fallback warning. */
-export function modelIdentityNote(carrier: { modelSelection?: ModelSelection; modelTier?: TierDisclosure } | undefined): string {
-  const selected = carrier?.modelSelection?.model;
-  // Tier notes already carry admission/answer provenance. Literal virtual
-  // selections have no such evidence, so never claim their alias is a leaf.
-  return selected && !carrier?.modelTier
-    ? `Resolved model: ${selected.provider}/${selected.id}${isVirtualModel(selected) ? " (routing alias; physical response model: unknown)" : ""}.`
-    : "";
+export function modelIdentityNote(
+	carrier: { modelSelection?: ModelSelection; modelTier?: TierDisclosure } | undefined,
+): string {
+	const selected = carrier?.modelSelection?.model;
+	// Tier notes already carry admission/answer provenance. Literal virtual
+	// selections have no such evidence, so never claim their alias is a leaf.
+	return selected && !carrier?.modelTier
+		? `Resolved model: ${selected.provider}/${selected.id}${isVirtualModel(selected) ? " (routing alias; physical response model: unknown)" : ""}.`
+		: "";
 }
 
 /** One disclosure for records, persisted details, workflows and notices. */
-export function modelSelectionNote(carrier: { modelTier?: TierDisclosure; modelFallback?: ModelFallback; invocation?: { modelId?: string } } | undefined): string {
-  const tier = carrier?.modelTier;
-  const fallback = carrier?.modelFallback;
-  const sameRequest = tier && (fallback?.input === tier.tier || fallback?.input === `@${tier.tier}`);
-  return [tierNote(tier, carrier?.invocation?.modelId), sameRequest ? "" : modelFallbackNote(fallback)].filter(Boolean).join("\n");
+export function modelSelectionNote(
+	carrier: { modelTier?: TierDisclosure; modelFallback?: ModelFallback; invocation?: { modelId?: string } } | undefined,
+): string {
+	const tier = carrier?.modelTier;
+	const fallback = carrier?.modelFallback;
+	const sameRequest = tier && (fallback?.input === tier.tier || fallback?.input === `@${tier.tier}`);
+	return [tierNote(tier, carrier?.invocation?.modelId), sameRequest ? "" : modelFallbackNote(fallback)]
+		.filter(Boolean)
+		.join("\n");
 }
 
 /** Admission for tiers is made once and is shared by every transport. */
-export async function admitModelSelection(selection: ModelSelection, registry: ModelRegistry, events: AdmissionEvents, clock: Clock = realClock, signal?: AbortSignal): Promise<QuotaBlock | undefined> {
-  if (!selection.tierBinding || selection.tierAdmitted) return selection.tier?.kind === "exhausted" ? selection.tier.block : undefined;
-  selection.tier = await resolveTier(selection.tierBinding.tier, {
-    registry, binding: selection.tierBinding, admit: ref => admissionOutcome(events, ref, undefined, clock, signal),
-  });
-  selection.tierAdmitted = true;
-  if (selection.tier.kind === "routed" || selection.tier.kind === "static") selection.model = selection.tier.model;
-  if (selection.tier.kind === "exhausted") return selection.tier.block;
-  // The binding is handed to `resolveTier`, so it is never `unmapped` here.
-  if (selection.tier.kind === "unavailable") {
-    if (getModelResolution().onUnavailable === "error") throw new Error(`Model tier @${selection.tier.tier} is unavailable.`);
-    selection.model = selection.tierParent;
-    selection.outcome = "fallback";
-    selection.fallback = modelFallbackTo(selection.requested ?? `@${selection.tier.tier}`, selection.tierParent);
-    delete selection.tierBinding;
-  }
-  delete selection.tierParent;
-  return undefined;
+export async function admitModelSelection(
+	selection: ModelSelection,
+	registry: ModelRegistry,
+	events: AdmissionEvents,
+	clock: Clock = realClock,
+	signal?: AbortSignal,
+): Promise<QuotaBlock | undefined> {
+	if (!selection.tierBinding || selection.tierAdmitted)
+		return selection.tier?.kind === "exhausted" ? selection.tier.block : undefined;
+	selection.tier = await resolveTier(selection.tierBinding.tier, {
+		registry,
+		binding: selection.tierBinding,
+		admit: (ref) => admissionOutcome(events, ref, undefined, clock, signal),
+	});
+	selection.tierAdmitted = true;
+	if (selection.tier.kind === "routed" || selection.tier.kind === "static") selection.model = selection.tier.model;
+	if (selection.tier.kind === "exhausted") return selection.tier.block;
+	// The binding is handed to `resolveTier`, so it is never `unmapped` here.
+	if (selection.tier.kind === "unavailable") {
+		if (getModelResolution().onUnavailable === "error")
+			throw new Error(`Model tier @${selection.tier.tier} is unavailable.`);
+		selection.model = selection.tierParent;
+		selection.outcome = "fallback";
+		selection.fallback = modelFallbackTo(selection.requested ?? `@${selection.tier.tier}`, selection.tierParent);
+		delete selection.tierBinding;
+	}
+	delete selection.tierParent;
+	return undefined;
 }

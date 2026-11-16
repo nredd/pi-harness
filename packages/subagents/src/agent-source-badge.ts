@@ -25,12 +25,12 @@ import type { AgentConfig } from "./types.ts";
  * package put there — harder to pick out, not easier.
  */
 export function sourceIndicator(cfg: AgentConfig | undefined): string {
-  const disabled = cfg?.enabled === false;
-  if (cfg?.source === "project") return disabled ? "✕• " : "•  ";
-  if (cfg?.source === "global") return disabled ? "✕◦ " : "◦  ";
-  if (cfg?.source === "package") return disabled ? "✕▪ " : "▪  ";
-  if (disabled) return "✕  ";
-  return "   ";
+	const disabled = cfg?.enabled === false;
+	if (cfg?.source === "project") return disabled ? "✕• " : "•  ";
+	if (cfg?.source === "global") return disabled ? "✕◦ " : "◦  ";
+	if (cfg?.source === "package") return disabled ? "✕▪ " : "▪  ";
+	if (disabled) return "✕  ";
+	return "   ";
 }
 
 /**
@@ -45,12 +45,12 @@ export function sourceIndicator(cfg: AgentConfig | undefined): string {
  * `isDefault` — so they contribute no key, matching their blank badge.
  */
 export function sourceLegend(cfgs: readonly (AgentConfig | undefined)[]): string {
-  const parts: string[] = [];
-  if (cfgs.some(c => c?.source === "project")) parts.push("• = project");
-  if (cfgs.some(c => c?.source === "global")) parts.push("◦ = global");
-  if (cfgs.some(c => c?.source === "package")) parts.push("▪ = package");
-  if (cfgs.some(c => c?.enabled === false)) parts.push("✕ = disabled");
-  return parts.join("  ");
+	const parts: string[] = [];
+	if (cfgs.some((c) => c?.source === "project")) parts.push("• = project");
+	if (cfgs.some((c) => c?.source === "global")) parts.push("◦ = global");
+	if (cfgs.some((c) => c?.source === "package")) parts.push("▪ = package");
+	if (cfgs.some((c) => c?.enabled === false)) parts.push("✕ = disabled");
+	return parts.join("  ");
 }
 
 /**
@@ -65,11 +65,7 @@ export function sourceLegend(cfgs: readonly (AgentConfig | undefined)[]): string
  * Falls back to the agent's own name when it has no description, which is what
  * a hand-written agent file without one already showed.
  */
-export function rowDescription(
-  name: string,
-  cfg: AgentConfig | undefined,
-  packageName?: string,
-): string {
-  const base = cfg?.enabled === false ? "(disabled)" : (cfg?.description ?? name);
-  return packageName ? `${packageName} · ${base}` : base;
+export function rowDescription(name: string, cfg: AgentConfig | undefined, packageName?: string): string {
+	const base = cfg?.enabled === false ? "(disabled)" : (cfg?.description ?? name);
+	return packageName ? `${packageName} · ${base}` : base;
 }

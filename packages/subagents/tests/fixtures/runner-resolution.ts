@@ -12,16 +12,22 @@ import { getAgentConfig } from "../../src/agent-types.ts";
 import { selectModel } from "../../src/model-selection.ts";
 
 export function runnerResolution(opts: { hold?: boolean } = {}) {
-  return async (ctx: any, type: string, _prompt: string, options: any) => {
-    const outcome = options.modelSelection ?? selectModel({
-      agentType: type, definitionModel: getAgentConfig(type)?.model, paramModel: options.model,
-      parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
-    });
-    if (typeof outcome === "string") throw new Error(outcome);
-    if (outcome.fallback) options.onModelFallback?.(outcome.fallback);
-    const session = { dispose: vi.fn(), subscribe: vi.fn(() => vi.fn()), messages: [], model: outcome.model } as any;
-    options.onSessionCreated?.(session);
-    if (opts.hold) return new Promise(() => {}) as never;
-    return { responseText: "done", session, aborted: false, steered: false };
-  };
+	return async (ctx: any, type: string, _prompt: string, options: any) => {
+		const outcome =
+			options.modelSelection ??
+			selectModel({
+				agentType: type,
+				definitionModel: getAgentConfig(type)?.model,
+				paramModel: options.model,
+				parentModel: ctx.model,
+				registry: ctx.modelRegistry,
+				cwd: ctx.cwd,
+			});
+		if (typeof outcome === "string") throw new Error(outcome);
+		if (outcome.fallback) options.onModelFallback?.(outcome.fallback);
+		const session = { dispose: vi.fn(), subscribe: vi.fn(() => vi.fn()), messages: [], model: outcome.model } as any;
+		options.onSessionCreated?.(session);
+		if (opts.hold) return new Promise(() => {}) as never;
+		return { responseText: "done", session, aborted: false, steered: false };
+	};
 }

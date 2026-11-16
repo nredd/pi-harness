@@ -16,8 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
 import { runAgent } from "../src/agent-runner.ts";
@@ -28,150 +28,158 @@ let hermetic: Hermetic | undefined;
 let booted: Map<string, any> | undefined;
 
 beforeEach(() => {
-  vi.mocked(runAgent).mockReset();
+	vi.mocked(runAgent).mockReset();
 });
 
 afterEach(async () => {
-  await booted?.get("session_shutdown")?.();
-  // The manager registry is a globalThis symbol released only on shutdown; a
-  // test that threw first would leave the next one reading a dead manager.
-  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
-  booted = undefined;
-  hermetic?.restore();
-  hermetic = undefined;
+	await booted?.get("session_shutdown")?.();
+	// The manager registry is a globalThis symbol released only on shutdown; a
+	// test that threw first would leave the next one reading a dead manager.
+	delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+	booted = undefined;
+	hermetic?.restore();
+	hermetic = undefined;
 });
 
 /** Boot the real extension with foreground concurrency pinned to one slot. */
 function boot(settings: Record<string, unknown> = {}) {
-  hermetic = hermeticDir({
-    settings: { outputTranscript: false, maxConcurrentForeground: 1, ...settings },
-  });
-  const b = bootPi();
-  subagentsExtension(b.pi);
-  booted = b.lifecycle;
-  return b;
+	hermetic = hermeticDir({
+		settings: { outputTranscript: false, maxConcurrentForeground: 1, ...settings },
+	});
+	const b = bootPi();
+	subagentsExtension(b.pi);
+	booted = b.lifecycle;
+	return b;
 }
 
 /** Runs that settle only when their resolver is called, keyed by prompt. */
 function controllableRuns() {
-  const resolvers = new Map<string, () => void>();
-  vi.mocked(runAgent).mockImplementation(
-    (_c: any, _t: any, prompt: any, opts: any) =>
-      new Promise<any>(resolve => {
-        opts.onSessionCreated?.({
-          dispose: vi.fn(),
-          subscribe: vi.fn(() => () => {}),
-          messages: [],
-          getActiveToolNames: vi.fn(() => []),
-        });
-        resolvers.set(prompt as string, () => resolve({
-          responseText: `${prompt}-RESULT`,
-          session: { dispose: vi.fn() },
-          aborted: false,
-          steered: false,
-        }));
-      }) as any,
-  );
-  return resolvers;
+	const resolvers = new Map<string, () => void>();
+	vi.mocked(runAgent).mockImplementation(
+		(_c: any, _t: any, prompt: any, opts: any) =>
+			new Promise<any>((resolve) => {
+				opts.onSessionCreated?.({
+					dispose: vi.fn(),
+					subscribe: vi.fn(() => () => {}),
+					messages: [],
+					getActiveToolNames: vi.fn(() => []),
+				});
+				resolvers.set(prompt as string, () =>
+					resolve({
+						responseText: `${prompt}-RESULT`,
+						session: { dispose: vi.fn() },
+						aborted: false,
+						steered: false,
+					}),
+				);
+			}) as any,
+	);
+	return resolvers;
 }
 
 /** Dispatch a blocking Agent call the way pi does — without awaiting it. */
-function callForeground(tools: Map<string, any>, prompt: string, opts: {
-  signal?: AbortSignal;
-  onUpdate?: (u: any) => void;
-} = {}) {
-  return tools.get("Agent").execute(
-    `tc-${prompt}`,
-    { prompt, description: prompt, subagent_type: "general-purpose", run_in_background: false },
-    opts.signal,
-    opts.onUpdate,
-    ctx(),
-  );
+function callForeground(
+	tools: Map<string, any>,
+	prompt: string,
+	opts: {
+		signal?: AbortSignal;
+		onUpdate?: (u: any) => void;
+	} = {},
+) {
+	return tools
+		.get("Agent")
+		.execute(
+			`tc-${prompt}`,
+			{ prompt, description: prompt, subagent_type: "general-purpose", run_in_background: false },
+			opts.signal,
+			opts.onUpdate,
+			ctx(),
+		);
 }
 
 describe("maxConcurrentForeground, through the Agent tool", () => {
-  it("runs blocking calls one at a time and returns each its own result", async () => {
-    const { tools } = boot();
-    const resolvers = controllableRuns();
+	it("runs blocking calls one at a time and returns each its own result", async () => {
+		const { tools } = boot();
+		const resolvers = controllableRuns();
 
-    const first = callForeground(tools, "alpha");
-    const second = callForeground(tools, "beta");
-    await flush();
+		const first = callForeground(tools, "alpha");
+		const second = callForeground(tools, "beta");
+		await flush();
 
-    // Only one started; "beta" is parked on the pool.
-    expect(runAgent).toHaveBeenCalledTimes(1);
+		// Only one started; "beta" is parked on the pool.
+		expect(runAgent).toHaveBeenCalledTimes(1);
 
-    resolvers.get("alpha")!();
-    expect(textOf(await first)).toContain("alpha-RESULT");
+		resolvers.get("alpha")!();
+		expect(textOf(await first)).toContain("alpha-RESULT");
 
-    await flush();
-    expect(runAgent).toHaveBeenCalledTimes(2);
-    resolvers.get("beta")!();
-    expect(textOf(await second)).toContain("beta-RESULT");
-  });
+		await flush();
+		expect(runAgent).toHaveBeenCalledTimes(2);
+		resolvers.get("beta")!();
+		expect(textOf(await second)).toContain("beta-RESULT");
+	});
 
-  // The Promise.all constraint. A queued agent aborted by Esc must come back as
-  // an ordinary stopped result, not as a throw that would take the batch down.
-  it("resolves a queued call as STOPPED when the turn is interrupted", async () => {
-    const { tools } = boot();
-    const resolvers = controllableRuns();
+	// The Promise.all constraint. A queued agent aborted by Esc must come back as
+	// an ordinary stopped result, not as a throw that would take the batch down.
+	it("resolves a queued call as STOPPED when the turn is interrupted", async () => {
+		const { tools } = boot();
+		const resolvers = controllableRuns();
 
-    const controller = new AbortController();
-    const first = callForeground(tools, "alpha");
-    const second = callForeground(tools, "beta", { signal: controller.signal });
-    await flush();
+		const controller = new AbortController();
+		const first = callForeground(tools, "alpha");
+		const second = callForeground(tools, "beta", { signal: controller.signal });
+		await flush();
 
-    controller.abort();
+		controller.abort();
 
-    const result = await second; // resolves — never rejects
-    expect(textOf(result)).toContain("STOPPED BY THE USER");
-    expect(result.isError).toBeFalsy();
+		const result = await second; // resolves — never rejects
+		expect(textOf(result)).toContain("STOPPED BY THE USER");
+		expect(result.isError).toBeFalsy();
 
-    // Freeing the slot must not start the agent the user just stopped.
-    resolvers.get("alpha")!();
-    await first;
-    await flush();
-    expect(runAgent).toHaveBeenCalledTimes(1);
-  });
+		// Freeing the slot must not start the agent the user just stopped.
+		resolvers.get("alpha")!();
+		await first;
+		await flush();
+		expect(runAgent).toHaveBeenCalledTimes(1);
+	});
 
-  // "thinking…" would be a lie for an agent that has not started and may not
-  // for minutes. The row keeps its spinner either way — a status the renderer
-  // does not know falls through to raw text and reads as hung.
-  it("says it is queued in the live tool result, then stops saying it", async () => {
-    const { tools } = boot();
-    const resolvers = controllableRuns();
+	// "thinking…" would be a lie for an agent that has not started and may not
+	// for minutes. The row keeps its spinner either way — a status the renderer
+	// does not know falls through to raw text and reads as hung.
+	it("says it is queued in the live tool result, then stops saying it", async () => {
+		const { tools } = boot();
+		const resolvers = controllableRuns();
 
-    const firstUpdates: any[] = [];
-    const secondUpdates: any[] = [];
-    const first = callForeground(tools, "alpha", { onUpdate: u => firstUpdates.push(u) });
-    const second = callForeground(tools, "beta", { onUpdate: u => secondUpdates.push(u) });
-    await flush();
+		const firstUpdates: any[] = [];
+		const secondUpdates: any[] = [];
+		const first = callForeground(tools, "alpha", { onUpdate: (u) => firstUpdates.push(u) });
+		const second = callForeground(tools, "beta", { onUpdate: (u) => secondUpdates.push(u) });
+		await flush();
 
-    const queuedActivity = secondUpdates.map(u => u.details?.activity);
-    expect(queuedActivity.some((a: string) => a?.includes("waiting for a foreground slot"))).toBe(true);
-    expect(secondUpdates.at(-1)?.details?.status).toBe("running");
-    // The agent that actually started never claims to be queued.
-    expect(firstUpdates.every((u: any) => !u.details?.activity?.includes("queued"))).toBe(true);
+		const queuedActivity = secondUpdates.map((u) => u.details?.activity);
+		expect(queuedActivity.some((a: string) => a?.includes("waiting for a foreground slot"))).toBe(true);
+		expect(secondUpdates.at(-1)?.details?.status).toBe("running");
+		// The agent that actually started never claims to be queued.
+		expect(firstUpdates.every((u: any) => !u.details?.activity?.includes("queued"))).toBe(true);
 
-    resolvers.get("alpha")!();
-    await first;
-    await flush();
+		resolvers.get("alpha")!();
+		await first;
+		await flush();
 
-    const afterStart = secondUpdates.at(-1)?.details?.activity;
-    expect(afterStart).not.toContain("waiting for a foreground slot");
+		const afterStart = secondUpdates.at(-1)?.details?.activity;
+		expect(afterStart).not.toContain("waiting for a foreground slot");
 
-    resolvers.get("beta")!();
-    await second;
-  });
+		resolvers.get("beta")!();
+		await second;
+	});
 
-  it("leaves blocking calls unbounded when the setting is unset", async () => {
-    const { tools } = boot({ maxConcurrentForeground: 0 });
-    const resolvers = controllableRuns();
+	it("leaves blocking calls unbounded when the setting is unset", async () => {
+		const { tools } = boot({ maxConcurrentForeground: 0 });
+		const resolvers = controllableRuns();
 
-    const calls = ["a", "b", "c"].map(p => callForeground(tools, p));
-    await flush();
-    expect(runAgent).toHaveBeenCalledTimes(3);
-    for (const p of ["a", "b", "c"]) resolvers.get(p)!();
-    await Promise.all(calls);
-  });
+		const calls = ["a", "b", "c"].map((p) => callForeground(tools, p));
+		await flush();
+		expect(runAgent).toHaveBeenCalledTimes(3);
+		for (const p of ["a", "b", "c"]) resolvers.get(p)!();
+		await Promise.all(calls);
+	});
 });

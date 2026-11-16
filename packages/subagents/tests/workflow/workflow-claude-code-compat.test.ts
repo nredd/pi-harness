@@ -36,58 +36,65 @@ return { confirmed: confirmed.length, total: results.flat().length }
 `;
 
 describe("a Claude Code script, unchanged", () => {
-  it("runs the canonical review-changes example", async () => {
-    const host: WorkflowHost = {
-      async spawnAgent(request) {
-        const text = request.label?.startsWith("verify:")
-          ? JSON.stringify({ isReal: request.label.includes("a.ts") })
-          : JSON.stringify({ findings: [{ title: "t1", file: "a.ts" }, { title: "t2", file: "b.ts" }] });
-        return { ok: true, text, outputTokens: 10 };
-      },
-      abortAgent() {},
-    };
+	it("runs the canonical review-changes example", async () => {
+		const host: WorkflowHost = {
+			async spawnAgent(request) {
+				const text = request.label?.startsWith("verify:")
+					? JSON.stringify({ isReal: request.label.includes("a.ts") })
+					: JSON.stringify({
+							findings: [
+								{ title: "t1", file: "a.ts" },
+								{ title: "t2", file: "b.ts" },
+							],
+						});
+				return { ok: true, text, outputTokens: 10 };
+			},
+			abortAgent() {},
+		};
 
-    const result = await runWorkflow({ script: CC_SCRIPT, host });
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe("completed");
-    // 2 dimensions x 2 findings verified, of which the a.ts ones are real.
-    expect(result.value).toEqual({ confirmed: 2, total: 4 });
-    expect(result.agentCount).toBe(6);
-  });
+		const result = await runWorkflow({ script: CC_SCRIPT, host });
+		expect(result.error).toBeUndefined();
+		expect(result.status).toBe("completed");
+		// 2 dimensions x 2 findings verified, of which the a.ts ones are real.
+		expect(result.value).toEqual({ confirmed: 2, total: 4 });
+		expect(result.agentCount).toBe(6);
+	});
 });
 
 describe("the other Claude Code globals", () => {
-  const host: WorkflowHost = {
-    async spawnAgent() { return { ok: true, text: "ok", outputTokens: 25 }; },
-    abortAgent() {},
-    loadWorkflow: () => ({
-      ok: true,
-      script: 'export const meta = { name: "sub", description: "d" };\nreturn args.n * 2;\n',
-    }),
-  };
+	const host: WorkflowHost = {
+		async spawnAgent() {
+			return { ok: true, text: "ok", outputTokens: 25 };
+		},
+		abortAgent() {},
+		loadWorkflow: () => ({
+			ok: true,
+			script: 'export const meta = { name: "sub", description: "d" };\nreturn args.n * 2;\n',
+		}),
+	};
 
-  it("runs the loop-until-budget and static-scaling patterns as written", async () => {
-    const script = [
-      "export const meta = { name: 'b', description: 'd' };",
-      "const found = [];",
-      "while (budget.total && budget.remaining() > 50_000) { found.push(await agent('find')); }",
-      "const FLEET = budget.total ? Math.floor(budget.total / 100_000) : 5;",
-      "return JSON.stringify([found.length, FLEET, budget.spent()]);",
-    ].join("\n");
+	it("runs the loop-until-budget and static-scaling patterns as written", async () => {
+		const script = [
+			"export const meta = { name: 'b', description: 'd' };",
+			"const found = [];",
+			"while (budget.total && budget.remaining() > 50_000) { found.push(await agent('find')); }",
+			"const FLEET = budget.total ? Math.floor(budget.total / 100_000) : 5;",
+			"return JSON.stringify([found.length, FLEET, budget.spent()]);",
+		].join("\n");
 
-    const result = await runWorkflow({ script, host });
-    // No target, so the loop never runs and the fallback fleet size is used —
-    // which is exactly what those guards were written to do.
-    expect(JSON.parse(result.value as string)).toEqual([0, 5, 0]);
-  });
+		const result = await runWorkflow({ script, host });
+		// No target, so the loop never runs and the fallback fleet size is used —
+		// which is exactly what those guards were written to do.
+		expect(JSON.parse(result.value as string)).toEqual([0, 5, 0]);
+	});
 
-  it("composes a saved workflow through workflow()", async () => {
-    const script = [
-      "export const meta = { name: 'c', description: 'd' };",
-      "const doubled = await workflow('sub', { n: 21 });",
-      "return doubled;",
-    ].join("\n");
+	it("composes a saved workflow through workflow()", async () => {
+		const script = [
+			"export const meta = { name: 'c', description: 'd' };",
+			"const doubled = await workflow('sub', { n: 21 });",
+			"return doubled;",
+		].join("\n");
 
-    expect((await runWorkflow({ script, host })).value).toBe(42);
-  });
+		expect((await runWorkflow({ script, host })).value).toBe(42);
+	});
 });

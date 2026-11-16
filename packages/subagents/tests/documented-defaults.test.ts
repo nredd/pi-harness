@@ -13,80 +13,94 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getBudgetPolicy, resetBudgetForTests } from "../src/process-budget.ts";
 
 describe("documented defaults (README:441)", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
+	beforeEach(() => {
+		vi.resetModules();
+	});
 
-  // src/agent-runner.js pulls in the whole pi-coding-agent graph, and
-  // `server.deps.inline` means resetModules re-transforms all of it — several
-  // seconds under a loaded full run, versus instant in isolation. The default
-  // 5s timeout makes these two flaky, so they get an explicit generous one
-  // rather than a retry.
-  const HEAVY_REIMPORT_MS = 60_000;
+	// src/agent-runner.js pulls in the whole pi-coding-agent graph, and
+	// `server.deps.inline` means resetModules re-transforms all of it — several
+	// seconds under a loaded full run, versus instant in isolation. The default
+	// 5s timeout makes these two flaky, so they get an explicit generous one
+	// rather than a retry.
+	const HEAVY_REIMPORT_MS = 60_000;
 
-  it("grace turns after the soft limit default to 5", async () => {
-    const { getGraceTurns } = await import("../src/agent-runner.ts");
-    expect(getGraceTurns()).toBe(5);
-  }, HEAVY_REIMPORT_MS);
+	it(
+		"grace turns after the soft limit default to 5",
+		async () => {
+			const { getGraceTurns } = await import("../src/agent-runner.ts");
+			expect(getGraceTurns()).toBe(5);
+		},
+		HEAVY_REIMPORT_MS,
+	);
 
-  it("max turns is unlimited by default", async () => {
-    const { getDefaultMaxTurns } = await import("../src/agent-runner.ts");
-    expect(getDefaultMaxTurns()).toBeUndefined();
-  }, HEAVY_REIMPORT_MS);
+	it(
+		"max turns is unlimited by default",
+		async () => {
+			const { getDefaultMaxTurns } = await import("../src/agent-runner.ts");
+			expect(getDefaultMaxTurns()).toBeUndefined();
+		},
+		HEAVY_REIMPORT_MS,
+	);
 
-  // Off: nothing above the per-session pools ever bounded the process, and the
-  // 12-with-reserve-2 policy is an opt-in in global settings, not a default.
-  it("the process budget is off by default with a reserve of 2 at depth 2", () => {
-    resetBudgetForTests();
-    expect(getBudgetPolicy()).toEqual({ maxActive: 0, nestedReserve: 2, maxDepth: 2 });
-  });
+	// Off: nothing above the per-session pools ever bounded the process, and the
+	// 12-with-reserve-2 policy is an opt-in in global settings, not a default.
+	it("the process budget is off by default with a reserve of 2 at depth 2", () => {
+		resetBudgetForTests();
+		expect(getBudgetPolicy()).toEqual({ maxActive: 0, nestedReserve: 2, maxDepth: 2 });
+	});
 
-  it("nested subagent depth defaults to 2", async () => {
-    const { getMaxSubagentDepth } = await import("../src/nested-tools.ts");
-    expect(getMaxSubagentDepth()).toBe(2);
-  });
+	it("nested subagent depth defaults to 2", async () => {
+		const { getMaxSubagentDepth } = await import("../src/nested-tools.ts");
+		expect(getMaxSubagentDepth()).toBe(2);
+	});
 
-  // Raised from 4 when top-level spawns started defaulting to background:
-  // foreground bypasses the pool entirely, so a limit tuned for opt-in
-  // background would now queue the tail of ordinary parallel fan-outs.
-  it("background concurrency defaults to 10", async () => {
-    const { AgentManager } = await import("../src/agent-manager.ts");
-    const manager = new AgentManager();
-    try {
-      expect(manager.getMaxConcurrent()).toBe(10);
-    } finally {
-      manager.dispose();
-    }
-  });
+	// Raised from 4 when top-level spawns started defaulting to background:
+	// foreground bypasses the pool entirely, so a limit tuned for opt-in
+	// background would now queue the tail of ordinary parallel fan-outs.
+	it("background concurrency defaults to 10", async () => {
+		const { AgentManager } = await import("../src/agent-manager.ts");
+		const manager = new AgentManager();
+		try {
+			expect(manager.getMaxConcurrent()).toBe(10);
+		} finally {
+			manager.dispose();
+		}
+	});
 
-  // Off, not a number: nothing here ever bounded foreground work, and pi runs a
-  // message's tool calls through Promise.all, so any default above 0 would be a
-  // behaviour change for everyone rather than an opt-in for #253's reporter.
-  it("foreground concurrency is unlimited by default", async () => {
-    const { AgentManager } = await import("../src/agent-manager.ts");
-    const manager = new AgentManager();
-    try {
-      expect(manager.getMaxConcurrentForeground()).toBe(0);
-    } finally {
-      manager.dispose();
-    }
-  });
+	// Off, not a number: nothing here ever bounded foreground work, and pi runs a
+	// message's tool calls through Promise.all, so any default above 0 would be a
+	// behaviour change for everyone rather than an opt-in for #253's reporter.
+	it("foreground concurrency is unlimited by default", async () => {
+		const { AgentManager } = await import("../src/agent-manager.ts");
+		const manager = new AgentManager();
+		try {
+			expect(manager.getMaxConcurrentForeground()).toBe(0);
+		} finally {
+			manager.dispose();
+		}
+	});
 
-  it("top-level spawns default to background, nested spawns to foreground", async () => {
-    const { resolveAgentInvocationConfig } = await import("../src/invocation-config.ts");
-    // The setting's default (true) is what index.ts passes for top-level calls.
-    expect(resolveAgentInvocationConfig(undefined, {}, { defaultRunInBackground: true }).runInBackground).toBe(true);
-    // nested-tools.ts passes false unconditionally.
-    expect(resolveAgentInvocationConfig(undefined, {}, { defaultRunInBackground: false }).runInBackground).toBe(false);
-    // An explicit param still wins over either default.
-    expect(resolveAgentInvocationConfig(undefined, { run_in_background: false }, { defaultRunInBackground: true }).runInBackground).toBe(false);
-    expect(resolveAgentInvocationConfig(undefined, { run_in_background: true }, { defaultRunInBackground: false }).runInBackground).toBe(true);
-  });
+	it("top-level spawns default to background, nested spawns to foreground", async () => {
+		const { resolveAgentInvocationConfig } = await import("../src/invocation-config.ts");
+		// The setting's default (true) is what index.ts passes for top-level calls.
+		expect(resolveAgentInvocationConfig(undefined, {}, { defaultRunInBackground: true }).runInBackground).toBe(true);
+		// nested-tools.ts passes false unconditionally.
+		expect(resolveAgentInvocationConfig(undefined, {}, { defaultRunInBackground: false }).runInBackground).toBe(false);
+		// An explicit param still wins over either default.
+		expect(
+			resolveAgentInvocationConfig(undefined, { run_in_background: false }, { defaultRunInBackground: true })
+				.runInBackground,
+		).toBe(false);
+		expect(
+			resolveAgentInvocationConfig(undefined, { run_in_background: true }, { defaultRunInBackground: false })
+				.runInBackground,
+		).toBe(true);
+	});
 
-  it("model scope is off by default", async () => {
-    // Off is the safe default: on, an unconfigured enabledModels would start
-    // refusing spawns. README:428 documents it as opt-in.
-    const { isScopeModelsEnabled } = await import("../src/model-scope.ts");
-    expect(isScopeModelsEnabled()).toBe(false);
-  });
+	it("model scope is off by default", async () => {
+		// Off is the safe default: on, an unconfigured enabledModels would start
+		// refusing spawns. README:428 documents it as opt-in.
+		const { isScopeModelsEnabled } = await import("../src/model-scope.ts");
+		expect(isScopeModelsEnabled()).toBe(false);
+	});
 });

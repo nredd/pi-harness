@@ -14,7 +14,7 @@
  * the SDK fails the bundle with `MISSING_EXPORT`.
  */
 export function getAgentDir() {
-  throw new Error("budget reload fixture: the scenario must not read the host agent directory");
+	throw new Error("budget reload fixture: the scenario must not read the host agent directory");
 }
 export const createCodingTools = () => [];
 export const createReadOnlyTools = () => [];

@@ -14,86 +14,86 @@
  */
 import { describe } from "vitest";
 import {
-  buildInvocationTags,
-  describeActivity,
-  formatCost,
-  formatDuration,
-  formatSessionTokens,
-  formatTurns,
+	buildInvocationTags,
+	describeActivity,
+	formatCost,
+	formatDuration,
+	formatSessionTokens,
+	formatTurns,
 } from "../src/ui/agent-widget.ts";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent } from "../src/usage.ts";
 import { bench } from "./fixtures/benchmark.ts";
 import { NOW, perfSession, perfTheme } from "./fixtures/perf-fixtures.ts";
 
 const INVOCATION = {
-  modelName: "sonnet 4.6",
-  modelId: "anthropic/claude-sonnet-4-6",
-  thinking: "high",
-  runInBackground: true,
-  maxTurns: 60,
+	modelName: "sonnet 4.6",
+	modelId: "anthropic/claude-sonnet-4-6",
+	thinking: "high",
+	runInBackground: true,
+	maxTurns: 60,
 } as any;
 
 /** The disclosure shape: both "(asked …)" annotations live, as #257 renders them. */
 const INVOCATION_DISCLOSED = {
-  ...INVOCATION,
-  requestedThinking: "max",
+	...INVOCATION,
+	requestedThinking: "max",
 } as any;
 
 const USAGE = { input: 12_000, output: 3_000, cacheRead: 400, cacheWrite: 500 };
 const SESSION = perfSession();
 
 const ACTIVE_TOOLS = new Map([
-  ["t1", "read"],
-  ["t2", "bash"],
-  ["t3", "grep"],
+	["t1", "read"],
+	["t2", "bash"],
+	["t3", "grep"],
 ]);
 
 describe("invocation tags", () => {
-  bench("buildInvocationTags — nothing overridden", () => {
-    buildInvocationTags(INVOCATION);
-  });
+	bench("buildInvocationTags — nothing overridden", () => {
+		buildInvocationTags(INVOCATION);
+	});
 
-  bench("buildInvocationTags — model and thinking disclosed", () => {
-    buildInvocationTags(INVOCATION_DISCLOSED);
-  });
+	bench("buildInvocationTags — model and thinking disclosed", () => {
+		buildInvocationTags(INVOCATION_DISCLOSED);
+	});
 });
 
 describe("row formatters", () => {
-  bench("formatSessionTokens", () => {
-    formatSessionTokens(15_500, 42, perfTheme, 2);
-  });
+	bench("formatSessionTokens", () => {
+		formatSessionTokens(15_500, 42, perfTheme, 2);
+	});
 
-  bench("formatDuration", () => {
-    formatDuration(NOW - 90_000, undefined);
-  });
+	bench("formatDuration", () => {
+		formatDuration(NOW - 90_000, undefined);
+	});
 
-  bench("formatTurns", () => {
-    formatTurns(4, 60);
-  });
+	bench("formatTurns", () => {
+		formatTurns(4, 60);
+	});
 
-  bench("formatCost", () => {
-    formatCost(0.0123);
-  });
+	bench("formatCost", () => {
+		formatCost(0.0123);
+	});
 
-  bench("describeActivity — three tools active", () => {
-    describeActivity(ACTIVE_TOOLS, "");
-  });
+	bench("describeActivity — three tools active", () => {
+		describeActivity(ACTIVE_TOOLS, "");
+	});
 
-  bench("describeActivity — streaming text", () => {
-    describeActivity(new Map(), "a partial assistant response still streaming in");
-  });
+	bench("describeActivity — streaming text", () => {
+		describeActivity(new Map(), "a partial assistant response still streaming in");
+	});
 });
 
 describe("usage leaves", () => {
-  bench("getLifetimeTotal", () => {
-    getLifetimeTotal(USAGE);
-  });
+	bench("getLifetimeTotal", () => {
+		getLifetimeTotal(USAGE);
+	});
 
-  bench("getLifetimeCost", () => {
-    getLifetimeCost(USAGE);
-  });
+	bench("getLifetimeCost", () => {
+		getLifetimeCost(USAGE);
+	});
 
-  bench("getSessionContextPercent", () => {
-    getSessionContextPercent(SESSION);
-  });
+	bench("getSessionContextPercent", () => {
+		getSessionContextPercent(SESSION);
+	});
 });

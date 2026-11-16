@@ -17,7 +17,13 @@ assert.deepEqual(fresh.budgetUsage(), { active: 12, pending: 0, maxActive: 12 })
 assert.deepEqual(old.budgetUsage(), fresh.budgetUsage());
 
 let granted;
-fresh.enqueueBudget({ depth: 1, ready: () => true, grant: lease => { granted = lease; } });
+fresh.enqueueBudget({
+	depth: 1,
+	ready: () => true,
+	grant: (lease) => {
+		granted = lease;
+	},
+});
 fresh.pumpBudget();
 assert.equal(granted, undefined);
 assert.deepEqual(old.budgetUsage(), { active: 12, pending: 1, maxActive: 12 });

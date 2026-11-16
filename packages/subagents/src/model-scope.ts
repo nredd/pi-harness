@@ -18,16 +18,20 @@ import { isModelInScope, type ModelRegistryRef, readEnabledModels, resolveEnable
  */
 let scopeModelsEnabled = false;
 
-export function isScopeModelsEnabled(): boolean { return scopeModelsEnabled; }
-export function setScopeModelsEnabled(enabled: boolean): void { scopeModelsEnabled = enabled; }
+export function isScopeModelsEnabled(): boolean {
+	return scopeModelsEnabled;
+}
+export function setScopeModelsEnabled(enabled: boolean): void {
+	scopeModelsEnabled = enabled;
+}
 
 export type ModelScopeVerdict =
-  /** In scope, or nothing to validate against (feature off / no allowlist). */
-  | { kind: "ok" }
-  /** Caller-supplied out-of-scope choice — refuse the spawn with this message. */
-  | { kind: "error"; message: string }
-  /** Frontmatter-pinned or parent-inherited — proceed, but tell the user. */
-  | { kind: "warn"; message: string };
+	/** In scope, or nothing to validate against (feature off / no allowlist). */
+	| { kind: "ok" }
+	/** Caller-supplied out-of-scope choice — refuse the spawn with this message. */
+	| { kind: "error"; message: string }
+	/** Frontmatter-pinned or parent-inherited — proceed, but tell the user. */
+	| { kind: "warn"; message: string };
 
 /**
  * Check the effective resolved model against the user's enabledModels list.
@@ -39,33 +43,36 @@ export type ModelScopeVerdict =
  *     user authored/installed this agent or chose the parent's model; trust it).
  */
 export function checkModelScope(args: {
-  homeDir?: string;
-  model: { provider: string; id: string } | undefined;
-  cwd: string;
-  modelRegistry: ModelRegistryRef;
-  /** True when the model came from the tool call rather than frontmatter. */
-  callerSupplied: boolean;
-  /** Display name used in the warning toast. */
-  agentLabel: string;
-  /** The raw `model:` input, when there was one. */
-  modelInput?: string;
+	homeDir?: string;
+	model: { provider: string; id: string } | undefined;
+	cwd: string;
+	modelRegistry: ModelRegistryRef;
+	/** True when the model came from the tool call rather than frontmatter. */
+	callerSupplied: boolean;
+	/** Display name used in the warning toast. */
+	agentLabel: string;
+	/** The raw `model:` input, when there was one. */
+	modelInput?: string;
 }): ModelScopeVerdict {
-  const { model, cwd, modelRegistry, callerSupplied, agentLabel, modelInput } = args;
-  if (!scopeModelsEnabled || !model) return { kind: "ok" };
+	const { model, cwd, modelRegistry, callerSupplied, agentLabel, modelInput } = args;
+	if (!scopeModelsEnabled || !model) return { kind: "ok" };
 
-  const allowed = resolveEnabledModels(readEnabledModels(cwd, args.homeDir), modelRegistry, cwd, args.homeDir);
-  if (!allowed || isModelInScope(model, allowed)) return { kind: "ok" };
+	const allowed = resolveEnabledModels(readEnabledModels(cwd, args.homeDir), modelRegistry, cwd, args.homeDir);
+	if (!allowed || isModelInScope(model, allowed)) return { kind: "ok" };
 
-  if (callerSupplied) {
-    const list = [...allowed].sort().map(m => `  ${m}`).join("\n");
-    return {
-      kind: "error",
-      message: `Model not in scope: "${modelInput}".\n\nAllowed models (from enabledModels):\n${list}`,
-    };
-  }
-  const modelLabel = modelInput ?? `${model.provider}/${model.id}`;
-  return {
-    kind: "warn",
-    message: `Agent "${agentLabel}" using out-of-scope model "${modelLabel}"`,
-  };
+	if (callerSupplied) {
+		const list = [...allowed]
+			.sort()
+			.map((m) => `  ${m}`)
+			.join("\n");
+		return {
+			kind: "error",
+			message: `Model not in scope: "${modelInput}".\n\nAllowed models (from enabledModels):\n${list}`,
+		};
+	}
+	const modelLabel = modelInput ?? `${model.provider}/${model.id}`;
+	return {
+		kind: "warn",
+		message: `Agent "${agentLabel}" using out-of-scope model "${modelLabel}"`,
+	};
 }

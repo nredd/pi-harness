@@ -13,31 +13,37 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/worktree.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/worktree.ts")>("../src/worktree.ts");
-  return { ...actual, createWorktree: vi.fn(async () => { throw new actual.WorktreeError("/x is not inside a git repository"); }) };
+	const actual = await vi.importActual<typeof import("../src/worktree.ts")>("../src/worktree.ts");
+	return {
+		...actual,
+		createWorktree: vi.fn(async () => {
+			throw new actual.WorktreeError("/x is not inside a git repository");
+		}),
+	};
 });
 
 import { createWorktree } from "../src/worktree.ts";
 import { createSubagentsExtension } from "./fixtures/home-extension.ts";
 
-const subagentsExtension: ReturnType<typeof createSubagentsExtension> = pi => createSubagentsExtension({ homeDir: cwd })(pi);
+const subagentsExtension: ReturnType<typeof createSubagentsExtension> = (pi) =>
+	createSubagentsExtension({ homeDir: cwd })(pi);
 
 function boot() {
-  const tools = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn(),
-    events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  subagentsExtension(pi);
-  return tools;
+	const tools = new Map<string, any>();
+	const pi = {
+		registerMessageRenderer: vi.fn(),
+		registerTool: vi.fn((t: any) => tools.set(t.name, t)),
+		registerCommand: vi.fn(),
+		registerEntryRenderer: vi.fn(),
+		registerFlag: vi.fn(),
+		getFlag: vi.fn(),
+		on: vi.fn(),
+		events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
+		appendEntry: vi.fn(),
+		sendMessage: vi.fn(),
+	} as any;
+	subagentsExtension(pi);
+	return tools;
 }
 
 let cwd: string;
@@ -45,98 +51,104 @@ let originalCwd: string;
 let originalAgentDir: string | undefined;
 
 function ctx() {
-  return {
-    hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
-    cwd,
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
-    getSystemPrompt: vi.fn(() => "parent"),
-  } as any;
+	return {
+		hasUI: false,
+		ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+		cwd,
+		model: undefined,
+		modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+		sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
+		getSystemPrompt: vi.fn(() => "parent"),
+	} as any;
 }
 
 describe("Agent startup failures fail the tool call (#179)", () => {
-  beforeEach(() => {
-    originalCwd = process.cwd();
-    cwd = mkdtempSync(join(tmpdir(), "startup-error-"));
-    process.chdir(cwd);
-    originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-  });
+	beforeEach(() => {
+		originalCwd = process.cwd();
+		cwd = mkdtempSync(join(tmpdir(), "startup-error-"));
+		process.chdir(cwd);
+		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
+	});
 
-  afterEach(() => {
-    delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    process.chdir(originalCwd);
-    if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    rmSync(cwd, { recursive: true, force: true });
-  });
+	afterEach(() => {
+		delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+		process.chdir(originalCwd);
+		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		rmSync(cwd, { recursive: true, force: true });
+	});
 
-  for (const background of [false, true]) {
-    it(`rejects instead of returning the diagnostic (run_in_background: ${background})`, async () => {
-      const tools = boot();
+	for (const background of [false, true]) {
+		it(`rejects instead of returning the diagnostic (run_in_background: ${background})`, async () => {
+			const tools = boot();
 
-      await expect(
-        tools.get("Agent").execute(
-          "tc-1",
-          {
-            prompt: "do it",
-            description: "worktree probe",
-            subagent_type: "general-purpose",
-            isolation: "worktree",
-            run_in_background: background,
-          },
-          undefined, undefined, ctx(),
-        ),
-      ).rejects.toThrow(
-        'Cannot run with isolation: "worktree": /x is not inside a git repository. ' +
-          "To isolate another repo, pass its path as the `Agent` tool's `cwd`",
-      );
-    });
-  }
+			await expect(
+				tools.get("Agent").execute(
+					"tc-1",
+					{
+						prompt: "do it",
+						description: "worktree probe",
+						subagent_type: "general-purpose",
+						isolation: "worktree",
+						run_in_background: background,
+					},
+					undefined,
+					undefined,
+					ctx(),
+				),
+			).rejects.toThrow(
+				'Cannot run with isolation: "worktree": /x is not inside a git repository. ' +
+					"To isolate another repo, pass its path as the `Agent` tool's `cwd`",
+			);
+		});
+	}
 
-  it("makes the worktree from the repo named by `cwd`, with ~ expanded", async () => {
-    // HOME is the temp dir here, so "~/repo/pkg" must reach createWorktree as
-    // <tmp>/repo/pkg: the session cwd is not where the caller wants isolation.
-    mkdirSync(join(cwd, "repo", "pkg"), { recursive: true });
-    vi.mocked(createWorktree).mockClear();
-    const tools = boot();
+	it("makes the worktree from the repo named by `cwd`, with ~ expanded", async () => {
+		// HOME is the temp dir here, so "~/repo/pkg" must reach createWorktree as
+		// <tmp>/repo/pkg: the session cwd is not where the caller wants isolation.
+		mkdirSync(join(cwd, "repo", "pkg"), { recursive: true });
+		vi.mocked(createWorktree).mockClear();
+		const tools = boot();
 
-    await expect(
-      tools.get("Agent").execute(
-        "tc-2",
-        {
-          prompt: "do it",
-          description: "worktree probe",
-          subagent_type: "general-purpose",
-          isolation: "worktree",
-          cwd: "~/repo/pkg",
-          run_in_background: false,
-        },
-        undefined, undefined, ctx(),
-      ),
-    ).rejects.toThrow("Pass a `cwd` inside a git repo with at least one commit");
-    expect(createWorktree).toHaveBeenCalledWith(expect.anything(), join(cwd, "repo", "pkg"), expect.any(String));
-  });
+		await expect(
+			tools.get("Agent").execute(
+				"tc-2",
+				{
+					prompt: "do it",
+					description: "worktree probe",
+					subagent_type: "general-purpose",
+					isolation: "worktree",
+					cwd: "~/repo/pkg",
+					run_in_background: false,
+				},
+				undefined,
+				undefined,
+				ctx(),
+			),
+		).rejects.toThrow("Pass a `cwd` inside a git repo with at least one commit");
+		expect(createWorktree).toHaveBeenCalledWith(expect.anything(), join(cwd, "repo", "pkg"), expect.any(String));
+	});
 
-  it("fails the call for a `cwd` that does not exist, before any worktree", async () => {
-    vi.mocked(createWorktree).mockClear();
-    const tools = boot();
+	it("fails the call for a `cwd` that does not exist, before any worktree", async () => {
+		vi.mocked(createWorktree).mockClear();
+		const tools = boot();
 
-    await expect(
-      tools.get("Agent").execute(
-        "tc-3",
-        {
-          prompt: "do it",
-          description: "worktree probe",
-          subagent_type: "general-purpose",
-          isolation: "worktree",
-          cwd: "nope",
-        },
-        undefined, undefined, ctx(),
-      ),
-    ).rejects.toThrow(`SpawnOptions.cwd does not exist: "${join(cwd, "nope")}"`);
-    expect(createWorktree).not.toHaveBeenCalled();
-  });
+		await expect(
+			tools.get("Agent").execute(
+				"tc-3",
+				{
+					prompt: "do it",
+					description: "worktree probe",
+					subagent_type: "general-purpose",
+					isolation: "worktree",
+					cwd: "nope",
+				},
+				undefined,
+				undefined,
+				ctx(),
+			),
+		).rejects.toThrow(`SpawnOptions.cwd does not exist: "${join(cwd, "nope")}"`);
+		expect(createWorktree).not.toHaveBeenCalled();
+	});
 });

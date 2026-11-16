@@ -13,15 +13,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/agent-runner.ts", () => ({
-  runAgent: vi.fn(),
-  resumeAgent: vi.fn(),
+	runAgent: vi.fn(),
+	resumeAgent: vi.fn(),
 }));
 
 vi.mock("../../src/worktree.ts", () => ({
-  createWorktree: vi.fn(),
-  cleanupWorktree: vi.fn(async () => ({ hasChanges: false })),
-  pruneWorktrees: vi.fn(async () => {}),
-  isWorktreeIsolationEnabled: vi.fn(() => false),
+	createWorktree: vi.fn(),
+	cleanupWorktree: vi.fn(async () => ({ hasChanges: false })),
+	pruneWorktrees: vi.fn(async () => {}),
+	isWorktreeIsolationEnabled: vi.fn(() => false),
 }));
 
 import { AgentManager } from "../../src/agent-manager.ts";
@@ -34,60 +34,60 @@ import { ctx } from "../fixtures/boot-extension.ts";
 const pi = {} as any;
 
 const spawnRequest = (overrides: Partial<WorkflowSpawnRequest> = {}): WorkflowSpawnRequest => ({
-  agentId: "wf-agent-0",
-  index: 0,
-  prompt: "do the thing",
-  label: "impl",
-  agentType: "general-purpose",
-  ...overrides,
+	agentId: "wf-agent-0",
+	index: 0,
+	prompt: "do the thing",
+	label: "impl",
+	agentType: "general-purpose",
+	...overrides,
 });
 
 /** The spawn options the manager handed to `runAgent` for the first child. */
 function runAgentOptions(): Record<string, unknown> {
-  return vi.mocked(runAgent).mock.calls[0]?.[3] as unknown as Record<string, unknown>;
+	return vi.mocked(runAgent).mock.calls[0]?.[3] as unknown as Record<string, unknown>;
 }
 
 describe("the workflow host forwards an agent's `isolated`", () => {
-  let manager: AgentManager;
+	let manager: AgentManager;
 
-  beforeEach(() => {
-    vi.mocked(runAgent).mockReset();
-    vi.mocked(runAgent).mockResolvedValue({
-      responseText: "done",
-      session: { dispose: vi.fn() } as any,
-      aborted: false,
-      steered: false,
-    });
-    registerAgents(new Map());
-    manager = new AgentManager();
-  });
+	beforeEach(() => {
+		vi.mocked(runAgent).mockReset();
+		vi.mocked(runAgent).mockResolvedValue({
+			responseText: "done",
+			session: { dispose: vi.fn() } as any,
+			aborted: false,
+			steered: false,
+		});
+		registerAgents(new Map());
+		manager = new AgentManager();
+	});
 
-  it("passes `isolated: true` from the agent file through to the runner", async () => {
-    registerAgents(new Map([["hermit", { name: "hermit", isolated: true } as any]]));
-    const host = createWorkflowHost({ pi, ctx: ctx({}), manager });
+	it("passes `isolated: true` from the agent file through to the runner", async () => {
+		registerAgents(new Map([["hermit", { name: "hermit", isolated: true } as any]]));
+		const host = createWorkflowHost({ pi, ctx: ctx({}), manager });
 
-    await host.spawnAgent(spawnRequest({ agentType: "hermit" }));
+		await host.spawnAgent(spawnRequest({ agentType: "hermit" }));
 
-    expect(runAgentOptions()).toMatchObject({ isolated: true });
-  });
+		expect(runAgentOptions()).toMatchObject({ isolated: true });
+	});
 
-  it("passes an explicit `isolated: false` too, rather than only truthy values", async () => {
-    registerAgents(new Map([["open", { name: "open", isolated: false } as any]]));
-    const host = createWorkflowHost({ pi, ctx: ctx({}), manager });
+	it("passes an explicit `isolated: false` too, rather than only truthy values", async () => {
+		registerAgents(new Map([["open", { name: "open", isolated: false } as any]]));
+		const host = createWorkflowHost({ pi, ctx: ctx({}), manager });
 
-    await host.spawnAgent(spawnRequest({ agentType: "open" }));
+		await host.spawnAgent(spawnRequest({ agentType: "open" }));
 
-    expect(runAgentOptions()).toMatchObject({ isolated: false });
-  });
+		expect(runAgentOptions()).toMatchObject({ isolated: false });
+	});
 
-  it("leaves `isolated` undefined when the agent file does not set it", async () => {
-    // The runner's own default must decide here. Forwarding `false` for an
-    // unset flag would be a different, unrequested behaviour.
-    registerAgents(new Map([["plain", { name: "plain" } as any]]));
-    const host = createWorkflowHost({ pi, ctx: ctx({}), manager });
+	it("leaves `isolated` undefined when the agent file does not set it", async () => {
+		// The runner's own default must decide here. Forwarding `false` for an
+		// unset flag would be a different, unrequested behaviour.
+		registerAgents(new Map([["plain", { name: "plain" } as any]]));
+		const host = createWorkflowHost({ pi, ctx: ctx({}), manager });
 
-    await host.spawnAgent(spawnRequest({ agentType: "plain" }));
+		await host.spawnAgent(spawnRequest({ agentType: "plain" }));
 
-    expect(runAgentOptions().isolated).toBeUndefined();
-  });
+		expect(runAgentOptions().isolated).toBeUndefined();
+	});
 });

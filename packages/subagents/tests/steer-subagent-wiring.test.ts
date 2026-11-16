@@ -17,8 +17,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn(), steerAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn(), steerAgent: vi.fn() };
 });
 
 import { resumeAgent, runAgent, steerAgent } from "../src/agent-runner.ts";
@@ -29,9 +29,9 @@ import { bootPi, ctx, flush, hermeticDir, textOf } from "./fixtures/boot-extensi
 // call history has to be reset or a "was never called" assertion depends on the
 // order the cases happen to run in.
 beforeEach(() => {
-  vi.mocked(steerAgent).mockReset();
-  vi.mocked(runAgent).mockReset();
-  vi.mocked(resumeAgent).mockReset();
+	vi.mocked(steerAgent).mockReset();
+	vi.mocked(runAgent).mockReset();
+	vi.mocked(resumeAgent).mockReset();
 });
 
 /** The live manager record behind an id, through the extension's public registry. */
@@ -39,269 +39,279 @@ const recordOf = (id: string) => (globalThis as any)[Symbol.for("pi-subagents:ma
 
 /** Enough of an AgentSession for the manager's and index's onSessionCreated hooks. */
 function fakeSession(overrides: Record<string, unknown> = {}) {
-  return {
-    steer: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-    subscribe: vi.fn(() => () => {}),
-    messages: [],
-    getActiveToolNames: vi.fn(() => []),
-    ...overrides,
-  } as any;
+	return {
+		steer: vi.fn().mockResolvedValue(undefined),
+		dispose: vi.fn(),
+		subscribe: vi.fn(() => () => {}),
+		messages: [],
+		getActiveToolNames: vi.fn(() => []),
+		...overrides,
+	} as any;
 }
 
 /** A runAgent that never settles, and only creates its session when told to. */
 function heldRun() {
-  let createSession: ((session: any) => void) | undefined;
-  vi.mocked(runAgent).mockImplementation(
-    (_ctx: any, _type: any, _prompt: any, opts: any) =>
-      new Promise(() => {
-        createSession = (session: any) => opts.onSessionCreated?.(session);
-      }) as any,
-  );
-  return {
-    create(session: any) {
-      createSession?.(session);
-    },
-  };
+	let createSession: ((session: any) => void) | undefined;
+	vi.mocked(runAgent).mockImplementation(
+		(_ctx: any, _type: any, _prompt: any, opts: any) =>
+			new Promise(() => {
+				createSession = (session: any) => opts.onSessionCreated?.(session);
+			}) as any,
+	);
+	return {
+		create(session: any) {
+			createSession?.(session);
+		},
+	};
 }
 
 async function spawnBackground(tools: Map<string, any>, prompt = "go"): Promise<string> {
-  const r = await tools.get("Agent").execute(
-    "tc-spawn",
-    { prompt, description: "steer wiring agent", subagent_type: "general-purpose", run_in_background: true },
-    undefined,
-    undefined,
-    ctx(),
-  );
-  return /Agent ID: (\S+)/.exec(textOf(r))![1]!;
+	const r = await tools
+		.get("Agent")
+		.execute(
+			"tc-spawn",
+			{ prompt, description: "steer wiring agent", subagent_type: "general-purpose", run_in_background: true },
+			undefined,
+			undefined,
+			ctx(),
+		);
+	return /Agent ID: (\S+)/.exec(textOf(r))![1]!;
 }
 
 const steer = (tools: Map<string, any>, agent_id: string, message: string) =>
-  tools.get("steer_subagent").execute("tc-steer", { agent_id, message }, undefined, undefined, ctx());
+	tools.get("steer_subagent").execute("tc-steer", { agent_id, message }, undefined, undefined, ctx());
 
 describe("steer_subagent before the session exists", () => {
-  it("queues the message on the record and says so", async () => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    heldRun();
+	it("queues the message on the record and says so", async () => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		heldRun();
 
-    const id = await spawnBackground(tools);
-    await flush();
+		const id = await spawnBackground(tools);
+		await flush();
 
-    const result = await steer(tools, id, "change course");
-    expect(textOf(result)).toContain("queued");
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "change course" });
+		const result = await steer(tools, id, "change course");
+		expect(textOf(result)).toContain("queued");
+		expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "change course" });
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 
-  it("appends a second queued steer instead of replacing the first", async () => {
-    // Overwriting would lose the earlier correction while still reporting success.
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const run = heldRun();
+	it("appends a second queued steer instead of replacing the first", async () => {
+		// Overwriting would lose the earlier correction while still reporting success.
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const run = heldRun();
 
-    const id = await spawnBackground(tools);
-    await flush();
+		const id = await spawnBackground(tools);
+		await flush();
 
-    await steer(tools, id, "first");
-    await steer(tools, id, "second");
+		await steer(tools, id, "first");
+		await steer(tools, id, "second");
 
-    // Observe the queue through its only real consumer: the flush on session
-    // creation, which must deliver both, in order.
-    const sessionSteer = vi.fn().mockResolvedValue(undefined);
-    run.create(fakeSession({ steer: sessionSteer }));
-    await flush();
+		// Observe the queue through its only real consumer: the flush on session
+		// creation, which must deliver both, in order.
+		const sessionSteer = vi.fn().mockResolvedValue(undefined);
+		run.create(fakeSession({ steer: sessionSteer }));
+		await flush();
 
-    expect(sessionSteer.mock.calls.map((c) => c[0])).toEqual(["first", "second"]);
+		expect(sessionSteer.mock.calls.map((c) => c[0])).toEqual(["first", "second"]);
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 
-  it("does not call steerAgent — there is no session to steer yet", async () => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    heldRun();
+	it("does not call steerAgent — there is no session to steer yet", async () => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		heldRun();
 
-    const id = await spawnBackground(tools);
-    await flush();
-    await steer(tools, id, "hello");
+		const id = await spawnBackground(tools);
+		await flush();
+		await steer(tools, id, "hello");
 
-    expect(steerAgent).not.toHaveBeenCalled();
+		expect(steerAgent).not.toHaveBeenCalled();
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 });
 
 describe("steer_subagent once the session exists", () => {
-  it("reports failure and emits no event when the steer throws", async () => {
-    // The event is emitted only AFTER steerAgent resolves, so a failed steer
-    // must not announce itself as delivered.
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const run = heldRun();
+	it("reports failure and emits no event when the steer throws", async () => {
+		// The event is emitted only AFTER steerAgent resolves, so a failed steer
+		// must not announce itself as delivered.
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const run = heldRun();
 
-    const id = await spawnBackground(tools);
-    await flush();
-    run.create(fakeSession());
-    await flush();
+		const id = await spawnBackground(tools);
+		await flush();
+		run.create(fakeSession());
+		await flush();
 
-    vi.mocked(steerAgent).mockRejectedValueOnce(new Error("session closed"));
-    const result = await steer(tools, id, "too late");
+		vi.mocked(steerAgent).mockRejectedValueOnce(new Error("session closed"));
+		const result = await steer(tools, id, "too late");
 
-    expect(textOf(result)).toContain("Failed to steer agent");
-    expect(textOf(result)).toContain("session closed");
-    expect(pi.events.emit).not.toHaveBeenCalledWith(
-      "subagents:steered",
-      expect.objectContaining({ message: "too late" }),
-    );
+		expect(textOf(result)).toContain("Failed to steer agent");
+		expect(textOf(result)).toContain("session closed");
+		expect(pi.events.emit).not.toHaveBeenCalledWith(
+			"subagents:steered",
+			expect.objectContaining({ message: "too late" }),
+		);
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 
-  it("delivers through steerAgent and announces the steer on success", async () => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const run = heldRun();
+	it("delivers through steerAgent and announces the steer on success", async () => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const run = heldRun();
 
-    const id = await spawnBackground(tools);
-    await flush();
-    run.create(fakeSession());
-    await flush();
+		const id = await spawnBackground(tools);
+		await flush();
+		run.create(fakeSession());
+		await flush();
 
-    vi.mocked(steerAgent).mockResolvedValueOnce(undefined as any);
-    const result = await steer(tools, id, "refocus");
+		vi.mocked(steerAgent).mockResolvedValueOnce(undefined as any);
+		const result = await steer(tools, id, "refocus");
 
-    expect(steerAgent).toHaveBeenCalledWith(expect.anything(), "refocus");
-    expect(textOf(result)).toContain("Steering message sent");
-    expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "refocus" });
+		expect(steerAgent).toHaveBeenCalledWith(expect.anything(), "refocus");
+		expect(textOf(result)).toContain("Steering message sent");
+		expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id, message: "refocus" });
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 });
 
 describe("steer_subagent on a queued agent", () => {
-  it("queues the steer, says the agent is queued, and delivers it when the agent starts", async () => {
-    // The tool used to refuse anything but `running`, so an agent waiting on a
-    // concurrency slot could not be redirected before it burned its first turn.
-    const hermetic = hermeticDir({ settings: { maxConcurrent: 1 } });
-    try {
-      const { pi, tools, lifecycle } = bootPi();
-      subagentsExtension(pi);
-      await lifecycle.get("session_start")?.({}, ctx());
+	it("queues the steer, says the agent is queued, and delivers it when the agent starts", async () => {
+		// The tool used to refuse anything but `running`, so an agent waiting on a
+		// concurrency slot could not be redirected before it burned its first turn.
+		const hermetic = hermeticDir({ settings: { maxConcurrent: 1 } });
+		try {
+			const { pi, tools, lifecycle } = bootPi();
+			subagentsExtension(pi);
+			await lifecycle.get("session_start")?.({}, ctx());
 
-      const runs = new Map<string, { opts: any; finish: () => void }>();
-      vi.mocked(runAgent).mockImplementation(
-        (_ctx: any, _type: any, prompt: any, opts: any) =>
-          new Promise((resolve) => {
-            runs.set(prompt, {
-              opts,
-              finish: () => resolve({ responseText: "done", session: fakeSession(), aborted: false, steered: false } as any),
-            });
-          }) as any,
-      );
+			const runs = new Map<string, { opts: any; finish: () => void }>();
+			vi.mocked(runAgent).mockImplementation(
+				(_ctx: any, _type: any, prompt: any, opts: any) =>
+					new Promise((resolve) => {
+						runs.set(prompt, {
+							opts,
+							finish: () =>
+								resolve({ responseText: "done", session: fakeSession(), aborted: false, steered: false } as any),
+						});
+					}) as any,
+			);
 
-      await spawnBackground(tools, "blocker");
-      const queuedId = await spawnBackground(tools, "queued");
-      await flush();
-      expect(runs.has("queued")).toBe(false);
+			await spawnBackground(tools, "blocker");
+			const queuedId = await spawnBackground(tools, "queued");
+			await flush();
+			expect(runs.has("queued")).toBe(false);
 
-      const result = await steer(tools, queuedId, "change course");
-      expect(textOf(result)).toContain("status: queued");
-      expect(textOf(result)).toContain("delivered when the agent starts");
-      expect(steerAgent).not.toHaveBeenCalled();
-      expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id: queuedId, message: "change course" });
+			const result = await steer(tools, queuedId, "change course");
+			expect(textOf(result)).toContain("status: queued");
+			expect(textOf(result)).toContain("delivered when the agent starts");
+			expect(steerAgent).not.toHaveBeenCalled();
+			expect(pi.events.emit).toHaveBeenCalledWith("subagents:steered", { id: queuedId, message: "change course" });
 
-      runs.get("blocker")!.finish();
-      await vi.waitFor(() => expect(runs.has("queued")).toBe(true));
-      const sessionSteer = vi.fn().mockResolvedValue(undefined);
-      runs.get("queued")!.opts.onSessionCreated(fakeSession({ steer: sessionSteer }));
-      await flush();
-      expect(sessionSteer.mock.calls.map((c) => c[0])).toEqual(["change course"]);
+			runs.get("blocker")!.finish();
+			await vi.waitFor(() => expect(runs.has("queued")).toBe(true));
+			const sessionSteer = vi.fn().mockResolvedValue(undefined);
+			runs.get("queued")!.opts.onSessionCreated(fakeSession({ steer: sessionSteer }));
+			await flush();
+			expect(sessionSteer.mock.calls.map((c) => c[0])).toEqual(["change course"]);
 
-      await lifecycle.get("session_shutdown")?.();
-    } finally {
-      hermetic.restore();
-    }
-  });
-
+			await lifecycle.get("session_shutdown")?.();
+		} finally {
+			hermetic.restore();
+		}
+	});
 });
 
 describe("steer_subagent on a finished agent (#442)", () => {
-  it.each([
-    ["completed", { aborted: false, steered: false }],
-    ["steered", { aborted: false, steered: true }],
-    ["aborted", { aborted: true, steered: false }],
-    ["error", new Error("provider 500")],
-  ] as const)("resumes a finished agent (status %s) in the background with the message as its next prompt", async (status, outcome) => {
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const session = fakeSession();
-    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
-      opts.onSessionCreated?.(session);
-      if (outcome instanceof Error) throw outcome;
-      return { responseText: "done", session, ...outcome } as any;
-    });
-    vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed answer" } as any);
+	it.each([
+		["completed", { aborted: false, steered: false }],
+		["steered", { aborted: false, steered: true }],
+		["aborted", { aborted: true, steered: false }],
+		["error", new Error("provider 500")],
+	] as const)(
+		"resumes a finished agent (status %s) in the background with the message as its next prompt",
+		async (status, outcome) => {
+			const { pi, tools, lifecycle } = bootPi();
+			subagentsExtension(pi);
+			const session = fakeSession();
+			vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
+				opts.onSessionCreated?.(session);
+				if (outcome instanceof Error) throw outcome;
+				return { responseText: "done", session, ...outcome } as any;
+			});
+			vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed answer" } as any);
 
-    const id = await spawnBackground(tools);
-    await flush();
-    expect(recordOf(id).status).toBe(status);
+			const id = await spawnBackground(tools);
+			await flush();
+			expect(recordOf(id).status).toBe(status);
 
-    const result = await steer(tools, id, "keep going");
+			const result = await steer(tools, id, "keep going");
 
-    expect(textOf(result)).toContain("Agent resumed in background.");
-    expect(textOf(result)).toContain(`Agent ID: ${id}`);
-    expect(resumeAgent).toHaveBeenCalledExactlyOnceWith(session, "keep going", expect.anything());
-    expect(steerAgent).not.toHaveBeenCalled();
+			expect(textOf(result)).toContain("Agent resumed in background.");
+			expect(textOf(result)).toContain(`Agent ID: ${id}`);
+			expect(resumeAgent).toHaveBeenCalledExactlyOnceWith(session, "keep going", expect.anything());
+			expect(steerAgent).not.toHaveBeenCalled();
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+			await lifecycle.get("session_shutdown")?.();
+		},
+	);
 
-  it("resumes once when two steers race on one finished agent; the second steers the resumed run", async () => {
-    // Parallel tool calls in one turn: the first resume flips the record to
-    // running before it awaits, so the second must not start a second run.
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    const session = fakeSession();
-    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
-      opts.onSessionCreated?.(session);
-      return { responseText: "done", session, aborted: false, steered: false } as any;
-    });
-    vi.mocked(resumeAgent).mockImplementation(() => new Promise(() => {}) as any);
-    vi.mocked(steerAgent).mockResolvedValue(undefined as any);
+	it("resumes once when two steers race on one finished agent; the second steers the resumed run", async () => {
+		// Parallel tool calls in one turn: the first resume flips the record to
+		// running before it awaits, so the second must not start a second run.
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const session = fakeSession();
+		vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
+			opts.onSessionCreated?.(session);
+			return { responseText: "done", session, aborted: false, steered: false } as any;
+		});
+		vi.mocked(resumeAgent).mockImplementation(() => new Promise(() => {}) as any);
+		vi.mocked(steerAgent).mockResolvedValue(undefined as any);
 
-    const id = await spawnBackground(tools);
-    await flush();
-    expect(recordOf(id).status).toBe("completed");
+		const id = await spawnBackground(tools);
+		await flush();
+		expect(recordOf(id).status).toBe("completed");
 
-    const [first, second] = await Promise.all([steer(tools, id, "one"), steer(tools, id, "two")]);
+		const [first, second] = await Promise.all([steer(tools, id, "one"), steer(tools, id, "two")]);
 
-    expect(resumeAgent).toHaveBeenCalledExactlyOnceWith(session, "one", expect.anything());
-    expect(textOf(first)).toContain("Agent resumed in background.");
-    expect(textOf(second).startsWith("Steering message sent")).toBe(true);
-    expect(steerAgent).toHaveBeenCalledExactlyOnceWith(session, "two");
+		expect(resumeAgent).toHaveBeenCalledExactlyOnceWith(session, "one", expect.anything());
+		expect(textOf(first)).toContain("Agent resumed in background.");
+		expect(textOf(second).startsWith("Steering message sent")).toBe(true);
+		expect(steerAgent).toHaveBeenCalledExactlyOnceWith(session, "two");
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 
-  it("does not resume another agent's child, even once it has finished", async () => {
-    // Ownership is unchanged: a nested or workflow child stays unreachable from
-    // the top-level tool, so finishing cannot turn it into something to resume.
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    vi.mocked(runAgent).mockResolvedValue({ responseText: "done", session: fakeSession(), aborted: false, steered: false } as any);
+	it("does not resume another agent's child, even once it has finished", async () => {
+		// Ownership is unchanged: a nested or workflow child stays unreachable from
+		// the top-level tool, so finishing cannot turn it into something to resume.
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		vi.mocked(runAgent).mockResolvedValue({
+			responseText: "done",
+			session: fakeSession(),
+			aborted: false,
+			steered: false,
+		} as any);
 
-    const id = await spawnBackground(tools);
-    await flush();
-    expect(recordOf(id).status).toBe("completed");
-    recordOf(id).parentAgentId = "someone-else";
+		const id = await spawnBackground(tools);
+		await flush();
+		expect(recordOf(id).status).toBe("completed");
+		recordOf(id).parentAgentId = "someone-else";
 
-    const result = await steer(tools, id, "hijack");
+		const result = await steer(tools, id, "hijack");
 
-    expect(textOf(result)).toBe(`Agent not found: "${id}". It may have been cleaned up.`);
-    expect(resumeAgent).not.toHaveBeenCalled();
+		expect(textOf(result)).toBe(`Agent not found: "${id}". It may have been cleaned up.`);
+		expect(resumeAgent).not.toHaveBeenCalled();
 
-    await lifecycle.get("session_shutdown")?.();
-  });
+		await lifecycle.get("session_shutdown")?.();
+	});
 });

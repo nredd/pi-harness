@@ -6,7 +6,23 @@
  */
 
 import { createHash } from "node:crypto";
-import { accessSync, appendFileSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	accessSync,
+	appendFileSync,
+	chmodSync,
+	constants,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmdirSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -24,8 +40,12 @@ import { type TierDisclosure, tierDisclosure, tierNote } from "./model-tiers.ts"
  */
 let outputTranscriptDefault = true;
 
-export function getOutputTranscriptDefault(): boolean { return outputTranscriptDefault; }
-export function setOutputTranscriptDefault(b: boolean): void { outputTranscriptDefault = b; }
+export function getOutputTranscriptDefault(): boolean {
+	return outputTranscriptDefault;
+}
+export function setOutputTranscriptDefault(b: boolean): void {
+	outputTranscriptDefault = b;
+}
 
 /**
  * Encode a cwd path as a filesystem-safe directory name. Handles:
@@ -34,10 +54,10 @@ export function setOutputTranscriptDefault(b: boolean): void { outputTranscriptD
  *   - UNC:     "\\\\server\\share\\project"  → "server-share-project"
  */
 export function encodeCwd(cwd: string): string {
-  return cwd
-    .replace(/[/\\]/g, "-")        // both separators → dash
-    .replace(/^[A-Za-z]:-/, "")    // strip Windows drive prefix ("C:-")
-    .replace(/^-+/, "");           // strip leading dashes (POSIX root, UNC)
+	return cwd
+		.replace(/[/\\]/g, "-") // both separators → dash
+		.replace(/^[A-Za-z]:-/, "") // strip Windows drive prefix ("C:-")
+		.replace(/^-+/, ""); // strip leading dashes (POSIX root, UNC)
 }
 
 /** Session task dirs untouched for this long are pruned (30 days). */
@@ -56,13 +76,13 @@ const ROOT_MARKER = ".pi-subagents-root";
 
 /** A real directory (not a symlink) owned by this user. */
 function isOwnedDirectory(path: string): boolean {
-  try {
-    const st = lstatSync(path);
-    const uid = process.getuid?.();
-    return st.isDirectory() && (uid === undefined || st.uid === uid);
-  } catch {
-    return false;
-  }
+	try {
+		const st = lstatSync(path);
+		const uid = process.getuid?.();
+		return st.isDirectory() && (uid === undefined || st.uid === uid);
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -74,27 +94,27 @@ function isOwnedDirectory(path: string): boolean {
  * chmod'ed or marked. Throws when the result is not readable, writable and searchable.
  */
 function prepareRoot(root: string, adopt: boolean): boolean {
-  let created = false;
-  try {
-    mkdirSync(root, { mode: 0o700 });
-    created = true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-  }
-  const marker = join(root, ROOT_MARKER);
-  if (created || adopt || existsSync(marker)) {
-    if (!created && !isOwnedDirectory(root)) return false;
-    // chmod is a no-op on Windows and throws on some Windows filesystems.
-    // On Unix we still want to enforce 0o700 past umask, so only swallow on Windows.
-    try {
-      chmodSync(root, 0o700);
-    } catch (err) {
-      if (process.platform !== "win32") throw err;
-    }
-    if (!existsSync(marker)) writeFileSync(marker, "", "utf-8");
-  }
-  accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
-  return true;
+	let created = false;
+	try {
+		mkdirSync(root, { mode: 0o700 });
+		created = true;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+	}
+	const marker = join(root, ROOT_MARKER);
+	if (created || adopt || existsSync(marker)) {
+		if (!created && !isOwnedDirectory(root)) return false;
+		// chmod is a no-op on Windows and throws on some Windows filesystems.
+		// On Unix we still want to enforce 0o700 past umask, so only swallow on Windows.
+		try {
+			chmodSync(root, 0o700);
+		} catch (err) {
+			if (process.platform !== "win32") throw err;
+		}
+		if (!existsSync(marker)) writeFileSync(marker, "", "utf-8");
+	}
+	accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+	return true;
 }
 
 /**
@@ -105,15 +125,15 @@ function prepareRoot(root: string, adopt: boolean): boolean {
  * XDG spec.
  */
 function defaultTranscriptRoot(): string {
-  const xdg = process.env.XDG_STATE_HOME;
-  const base = xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state");
-  return join(base, "pi-subagents");
+	const xdg = process.env.XDG_STATE_HOME;
+	const base = xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state");
+	return join(base, "pi-subagents");
 }
 
 /** `PI_SUBAGENTS_TRANSCRIPT_DIR`, when set to an absolute path. */
 function transcriptDirOverride(): string | undefined {
-  const override = process.env.PI_SUBAGENTS_TRANSCRIPT_DIR;
-  return override && isAbsolute(override) ? override : undefined;
+	const override = process.env.PI_SUBAGENTS_TRANSCRIPT_DIR;
+	return override && isAbsolute(override) ? override : undefined;
 }
 
 let freshTempRoot: { base: string; path: string } | undefined;
@@ -128,25 +148,29 @@ let freshTempRoot: { base: string; path: string } | undefined;
  * process, take over. A refused path is never walked, written or pruned.
  */
 export function tempFallbackRoot(): string {
-  const base = tmpdir();
-  try {
-    mkdirSync(base, { recursive: true });
-  } catch { /* a non-directory tmpdir fails below with the real error */ }
-  const uid = process.getuid?.() ?? 0;
-  let real = base;
-  try {
-    real = realpathSync(base);
-  } catch { /* hash the unresolved path: the plain name must still work */ }
-  const hash = createHash("sha256").update(`${uid}:${real}`).digest("hex").slice(0, 8);
-  const plain = join(base, `pi-subagents-${uid}`);
-  for (const root of [plain, `${plain}-${hash}`]) {
-    if (prepareRoot(root, true)) return root;
-  }
-  if (freshTempRoot?.base !== base || !isOwnedDirectory(freshTempRoot.path)) {
-    freshTempRoot = { base, path: mkdtempSync(`${plain}-`) };
-  }
-  prepareRoot(freshTempRoot.path, true);
-  return freshTempRoot.path;
+	const base = tmpdir();
+	try {
+		mkdirSync(base, { recursive: true });
+	} catch {
+		/* a non-directory tmpdir fails below with the real error */
+	}
+	const uid = process.getuid?.() ?? 0;
+	let real = base;
+	try {
+		real = realpathSync(base);
+	} catch {
+		/* hash the unresolved path: the plain name must still work */
+	}
+	const hash = createHash("sha256").update(`${uid}:${real}`).digest("hex").slice(0, 8);
+	const plain = join(base, `pi-subagents-${uid}`);
+	for (const root of [plain, `${plain}-${hash}`]) {
+		if (prepareRoot(root, true)) return root;
+	}
+	if (freshTempRoot?.base !== base || !isOwnedDirectory(freshTempRoot.path)) {
+		freshTempRoot = { base, path: mkdtempSync(`${plain}-`) };
+	}
+	prepareRoot(freshTempRoot.path, true);
+	return freshTempRoot.path;
 }
 
 /**
@@ -155,15 +179,17 @@ export function tempFallbackRoot(): string {
  * cannot be created or written; a failure there is the one thrown.
  */
 export function transcriptRoot(): string {
-  try {
-    const override = transcriptDirOverride();
-    const root = override ?? defaultTranscriptRoot();
-    // Parents keep the default mode: only the pi-subagents root itself is private.
-    mkdirSync(dirname(root), { recursive: true });
-    // A pi-named default dir is pi's to adopt; a user-chosen override is not until marked.
-    if (prepareRoot(root, override === undefined)) return root;
-  } catch { /* fall through to the temp root */ }
-  return tempFallbackRoot();
+	try {
+		const override = transcriptDirOverride();
+		const root = override ?? defaultTranscriptRoot();
+		// Parents keep the default mode: only the pi-subagents root itself is private.
+		mkdirSync(dirname(root), { recursive: true });
+		// A pi-named default dir is pi's to adopt; a user-chosen override is not until marked.
+		if (prepareRoot(root, override === undefined)) return root;
+	} catch {
+		/* fall through to the temp root */
+	}
+	return tempFallbackRoot();
 }
 
 /**
@@ -174,9 +200,9 @@ export function transcriptRoot(): string {
  * iterating on one is edit-file-then-rerun — the same convention, one directory.
  */
 export function sessionTaskDir(cwd: string, sessionId: string): string {
-  const dir = join(transcriptRoot(), encodeCwd(cwd), sessionId, "tasks");
-  mkdirSync(dir, { recursive: true });
-  return dir;
+	const dir = join(transcriptRoot(), encodeCwd(cwd), sessionId, "tasks");
+	mkdirSync(dir, { recursive: true });
+	return dir;
 }
 
 /** A file pi writes into `tasks/`: a transcript, a saved workflow script or its journal. */
@@ -191,61 +217,68 @@ const PI_TASK_FILE = /\.(output|workflow\.js|workflow\.jsonl)$/;
  * the caller treats as "skip".
  */
 function newestActivity(sessionDir: string, cutoff: number): number | undefined {
-  let newest = lstatSync(sessionDir).mtimeMs;
-  const entries = readdirSync(sessionDir, { withFileTypes: true });
-  if (entries.some((e) => !e.isDirectory() || e.name !== "tasks")) return undefined;
-  if (entries.length === 0) return newest;
-  const tasks = join(sessionDir, "tasks");
-  newest = Math.max(newest, lstatSync(tasks).mtimeMs);
-  if (newest > cutoff) return newest;
-  for (const file of readdirSync(tasks, { withFileTypes: true })) {
-    if (!file.isFile() || !PI_TASK_FILE.test(file.name)) return undefined;
-    newest = Math.max(newest, lstatSync(join(tasks, file.name)).mtimeMs);
-    if (newest > cutoff) return newest;
-  }
-  return newest;
+	let newest = lstatSync(sessionDir).mtimeMs;
+	const entries = readdirSync(sessionDir, { withFileTypes: true });
+	if (entries.some((e) => !e.isDirectory() || e.name !== "tasks")) return undefined;
+	if (entries.length === 0) return newest;
+	const tasks = join(sessionDir, "tasks");
+	newest = Math.max(newest, lstatSync(tasks).mtimeMs);
+	if (newest > cutoff) return newest;
+	for (const file of readdirSync(tasks, { withFileTypes: true })) {
+		if (!file.isFile() || !PI_TASK_FILE.test(file.name)) return undefined;
+		newest = Math.max(newest, lstatSync(join(tasks, file.name)).mtimeMs);
+		if (newest > cutoff) return newest;
+	}
+	return newest;
 }
 
 /** Sub-directory names of `parent`, sorted; unreadable or symlinked entries are skipped. */
 function subdirs(parent: string): string[] {
-  try {
-    return readdirSync(parent, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  } catch {
-    return [];
-  }
+	try {
+		return readdirSync(parent, { withFileTypes: true })
+			.filter((e) => e.isDirectory())
+			.map((e) => e.name)
+			.sort();
+	} catch {
+		return [];
+	}
 }
 
 /** mtime of `path` without following a symlink; undefined when it vanished. */
 function mtimeOf(path: string): number | undefined {
-  try {
-    return lstatSync(path).mtimeMs;
-  } catch {
-    return undefined;
-  }
+	try {
+		return lstatSync(path).mtimeMs;
+	} catch {
+		return undefined;
+	}
 }
 
 function readCursor(root: string): [string, string] | undefined {
-  try {
-    const value: unknown = JSON.parse(readFileSync(join(root, PRUNE_CURSOR_FILE), "utf-8"));
-    if (Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") {
-      return [value[0], value[1]];
-    }
-  } catch { /* missing or corrupt: sweep from the start */ }
-  return undefined;
+	try {
+		const value: unknown = JSON.parse(readFileSync(join(root, PRUNE_CURSOR_FILE), "utf-8"));
+		if (Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") {
+			return [value[0], value[1]];
+		}
+	} catch {
+		/* missing or corrupt: sweep from the start */
+	}
+	return undefined;
 }
 
 function writeCursor(root: string, cursor: [string, string] | undefined): void {
-  try {
-    if (cursor) writeFileSync(join(root, PRUNE_CURSOR_FILE), JSON.stringify(cursor), "utf-8");
-    else rmSync(join(root, PRUNE_CURSOR_FILE), { force: true });
-  } catch { /* the next start just sweeps from the same place */ }
+	try {
+		if (cursor) writeFileSync(join(root, PRUNE_CURSOR_FILE), JSON.stringify(cursor), "utf-8");
+		else rmSync(join(root, PRUNE_CURSOR_FILE), { force: true });
+	} catch {
+		/* the next start just sweeps from the same place */
+	}
 }
 
 export interface PruneOptions {
-  /** Session ids never pruned, in any cwd dir (the live session and anything it references). */
-  keepSessionIds?: readonly string[];
-  now?: number;
-  maxAgeMs?: number;
+	/** Session ids never pruned, in any cwd dir (the live session and anything it references). */
+	keepSessionIds?: readonly string[];
+	now?: number;
+	maxAgeMs?: number;
 }
 
 /**
@@ -261,61 +294,72 @@ export interface PruneOptions {
  * that entry. Returns the dirs removed.
  */
 export function pruneStaleTranscripts(options: PruneOptions = {}): number {
-  const { now = Date.now(), maxAgeMs = TRANSCRIPT_RETENTION_MS } = options;
-  const keep = new Set(options.keepSessionIds);
-  const cutoff = now - maxAgeMs;
-  let root: string;
-  try {
-    root = transcriptRoot();
-  } catch {
-    return 0;
-  }
-  if (!existsSync(join(root, ROOT_MARKER))) return 0;
-  const cwdNames = subdirs(root).filter((name) => name !== "detached");
-  const cursor = readCursor(root);
-  const start = cursor ? Math.max(0, cwdNames.findIndex((name) => name >= cursor[0])) : 0;
-  const order = [...cwdNames.slice(start), ...cwdNames.slice(0, start)];
+	const { now = Date.now(), maxAgeMs = TRANSCRIPT_RETENTION_MS } = options;
+	const keep = new Set(options.keepSessionIds);
+	const cutoff = now - maxAgeMs;
+	let root: string;
+	try {
+		root = transcriptRoot();
+	} catch {
+		return 0;
+	}
+	if (!existsSync(join(root, ROOT_MARKER))) return 0;
+	const cwdNames = subdirs(root).filter((name) => name !== "detached");
+	const cursor = readCursor(root);
+	const start = cursor
+		? Math.max(
+				0,
+				cwdNames.findIndex((name) => name >= cursor[0]),
+			)
+		: 0;
+	const order = [...cwdNames.slice(start), ...cwdNames.slice(0, start)];
 
-  const candidates: { cwdName: string; sessionDir: string; mtime: number }[] = [];
-  let last: [string, string] | undefined;
-  let full = false;
-  const collect = (cwdName: string, accept: (sessionName: string) => boolean): void => {
-    for (const sessionName of subdirs(join(root, cwdName))) {
-      if (full) return;
-      if (!accept(sessionName) || keep.has(sessionName)) continue;
-      const sessionDir = join(root, cwdName, sessionName);
-      const mtime = mtimeOf(sessionDir);
-      if (mtime === undefined) continue;
-      candidates.push({ cwdName, sessionDir, mtime });
-      last = [cwdName, sessionName];
-      full = candidates.length >= PRUNE_SCAN_LIMIT;
-    }
-  };
-  for (const [i, cwdName] of order.entries()) {
-    if (full) break;
-    collect(cwdName, cursor && i === 0 && cwdName === cursor[0] ? (name) => name > cursor[1] : () => true);
-  }
-  // Wrap: the head of the cursor's own cwd dir, skipped on the way in.
-  if (!full && cursor && cwdNames.includes(cursor[0])) collect(cursor[0], (name) => name <= cursor[1]);
-  writeCursor(root, full ? last : undefined);
+	const candidates: { cwdName: string; sessionDir: string; mtime: number }[] = [];
+	let last: [string, string] | undefined;
+	let full = false;
+	const collect = (cwdName: string, accept: (sessionName: string) => boolean): void => {
+		for (const sessionName of subdirs(join(root, cwdName))) {
+			if (full) return;
+			if (!accept(sessionName) || keep.has(sessionName)) continue;
+			const sessionDir = join(root, cwdName, sessionName);
+			const mtime = mtimeOf(sessionDir);
+			if (mtime === undefined) continue;
+			candidates.push({ cwdName, sessionDir, mtime });
+			last = [cwdName, sessionName];
+			full = candidates.length >= PRUNE_SCAN_LIMIT;
+		}
+	};
+	for (const [i, cwdName] of order.entries()) {
+		if (full) break;
+		collect(cwdName, cursor && i === 0 && cwdName === cursor[0] ? (name) => name > cursor[1] : () => true);
+	}
+	// Wrap: the head of the cursor's own cwd dir, skipped on the way in.
+	if (!full && cursor && cwdNames.includes(cursor[0])) collect(cursor[0], (name) => name <= cursor[1]);
+	writeCursor(root, full ? last : undefined);
 
-  // Oldest first, so the likeliest-stale dirs are judged before the budget runs out.
-  candidates.sort((x, y) => x.mtime - y.mtime);
-  let removed = 0;
-  const touched = new Set<string>();
-  for (const { cwdName, sessionDir } of candidates) {
-    try {
-      const activity = newestActivity(sessionDir, cutoff);
-      if (activity === undefined || activity > cutoff) continue;
-      rmSync(sessionDir, { recursive: true, force: true });
-      removed++;
-      touched.add(cwdName);
-    } catch { /* skip: next start retries */ }
-  }
-  for (const cwdName of touched) {
-    try { rmdirSync(join(root, cwdName)); } catch { /* not empty: keep */ }
-  }
-  return removed;
+	// Oldest first, so the likeliest-stale dirs are judged before the budget runs out.
+	candidates.sort((x, y) => x.mtime - y.mtime);
+	let removed = 0;
+	const touched = new Set<string>();
+	for (const { cwdName, sessionDir } of candidates) {
+		try {
+			const activity = newestActivity(sessionDir, cutoff);
+			if (activity === undefined || activity > cutoff) continue;
+			rmSync(sessionDir, { recursive: true, force: true });
+			removed++;
+			touched.add(cwdName);
+		} catch {
+			/* skip: next start retries */
+		}
+	}
+	for (const cwdName of touched) {
+		try {
+			rmdirSync(join(root, cwdName));
+		} catch {
+			/* not empty: keep */
+		}
+	}
+	return removed;
 }
 
 /**
@@ -324,15 +368,19 @@ export function pruneStaleTranscripts(options: PruneOptions = {}): number {
  * {@link pruneStaleTranscripts}), so it cannot stall the event loop for long.
  */
 export function schedulePrune(options?: PruneOptions): void {
-  setImmediate(() => {
-    try { pruneStaleTranscripts(options); } catch { /* best effort */ }
-  }).unref();
+	setImmediate(() => {
+		try {
+			pruneStaleTranscripts(options);
+		} catch {
+			/* best effort */
+		}
+	}).unref();
 }
 
 /** The session id in a pi session file name (`<timestamp>_<id>.jsonl`). */
 export function sessionIdFromSessionFile(file: string): string {
-  const stem = basename(file).replace(/\.jsonl$/, "");
-  return stem.slice(stem.lastIndexOf("_") + 1);
+	const stem = basename(file).replace(/\.jsonl$/, "");
+	return stem.slice(stem.lastIndexOf("_") + 1);
 }
 
 /**
@@ -342,40 +390,44 @@ export function sessionIdFromSessionFile(file: string): string {
  * from the next prune, including the fork source's.
  */
 export function retainReferencedTranscripts(transcripts: Iterable<string>, parentSessionFile?: string): string[] {
-  const ids = new Set<string>();
-  const parentId = parentSessionFile ? sessionIdFromSessionFile(parentSessionFile) : undefined;
-  if (parentId) ids.add(parentId);
-  let root: string;
-  try {
-    root = transcriptRoot();
-  } catch {
-    return [...ids];
-  }
-  // Only a root pi owns (marked) is touched; an unmarked override dir is used as is.
-  if (!existsSync(join(root, ROOT_MARKER))) return [...ids];
-  const now = new Date();
-  const touch = (sessionDir: string): void => {
-    for (const dir of [join(sessionDir, "tasks"), sessionDir]) {
-      // lstat: utimes follows symlinks, and only real dirs inside the root are ours to touch.
-      try { if (lstatSync(dir).isDirectory()) utimesSync(dir, now, now); } catch { /* gone: nothing to keep */ }
-    }
-  };
-  // The fork source has no record naming its dirs, so find it in every cwd dir.
-  if (parentId) for (const cwdName of subdirs(root)) touch(join(root, cwdName, parentId));
-  for (const transcript of transcripts) {
-    const rel = relative(root, transcript);
-    const parts = rel.split(sep);
-    // <encoded-cwd>/<session>/tasks/<file>
-    if (rel.startsWith("..") || isAbsolute(rel) || parts.length !== 4 || parts[2] !== "tasks") continue;
-    ids.add(parts[1]!);
-    touch(join(root, parts[0]!, parts[1]!));
-  }
-  return [...ids];
+	const ids = new Set<string>();
+	const parentId = parentSessionFile ? sessionIdFromSessionFile(parentSessionFile) : undefined;
+	if (parentId) ids.add(parentId);
+	let root: string;
+	try {
+		root = transcriptRoot();
+	} catch {
+		return [...ids];
+	}
+	// Only a root pi owns (marked) is touched; an unmarked override dir is used as is.
+	if (!existsSync(join(root, ROOT_MARKER))) return [...ids];
+	const now = new Date();
+	const touch = (sessionDir: string): void => {
+		for (const dir of [join(sessionDir, "tasks"), sessionDir]) {
+			// lstat: utimes follows symlinks, and only real dirs inside the root are ours to touch.
+			try {
+				if (lstatSync(dir).isDirectory()) utimesSync(dir, now, now);
+			} catch {
+				/* gone: nothing to keep */
+			}
+		}
+	};
+	// The fork source has no record naming its dirs, so find it in every cwd dir.
+	if (parentId) for (const cwdName of subdirs(root)) touch(join(root, cwdName, parentId));
+	for (const transcript of transcripts) {
+		const rel = relative(root, transcript);
+		const parts = rel.split(sep);
+		// <encoded-cwd>/<session>/tasks/<file>
+		if (rel.startsWith("..") || isAbsolute(rel) || parts.length !== 4 || parts[2] !== "tasks") continue;
+		ids.add(parts[1]!);
+		touch(join(root, parts[0]!, parts[1]!));
+	}
+	return [...ids];
 }
 
 /** Create the output file path, ensuring the directory exists. */
 export function createOutputFilePath(cwd: string, agentId: string, sessionId: string): string {
-  return join(sessionTaskDir(cwd, sessionId), `${agentId}.output`);
+	return join(sessionTaskDir(cwd, sessionId), `${agentId}.output`);
 }
 
 /**
@@ -388,41 +440,51 @@ export function createOutputFilePath(cwd: string, agentId: string, sessionId: st
  * when this is the agent's first transcript and is a no-op when it is not.
  */
 export function ensureOutputFile(path: string): void {
-  try {
-    appendFileSync(path, "", "utf-8");
-  } catch { /* ignore — streaming writes are best-effort too */ }
+	try {
+		appendFileSync(path, "", "utf-8");
+	} catch {
+		/* ignore — streaming writes are best-effort too */
+	}
 }
 
 /** Append the model-fallback disclosure as a transcript line (best effort, like streaming writes). */
 export function appendModelFallbackEntry(path: string, agentId: string, fallback: ModelFallback): void {
-  try {
-    // A resumed agent reuses its transcript, which may already say it.
-    if (existsSync(path) && readFileSync(path, "utf-8").includes('"type":"model-fallback"')) return;
-    appendFileSync(
-      path,
-      `${JSON.stringify({ isSidechain: true, agentId, type: "model-fallback", modelFallback: fallback, note: modelFallbackNote(fallback), timestamp: new Date().toISOString() })}\n`,
-      "utf-8",
-    );
-  } catch { /* ignore */ }
+	try {
+		// A resumed agent reuses its transcript, which may already say it.
+		if (existsSync(path) && readFileSync(path, "utf-8").includes('"type":"model-fallback"')) return;
+		appendFileSync(
+			path,
+			`${JSON.stringify({ isSidechain: true, agentId, type: "model-fallback", modelFallback: fallback, note: modelFallbackNote(fallback), timestamp: new Date().toISOString() })}\n`,
+			"utf-8",
+		);
+	} catch {
+		/* ignore */
+	}
 }
 
 /** Append tier provenance separately from assistant messages for durable replay. */
 export function appendModelTierEntry(path: string, agentId: string, modelTier: TierDisclosure): void {
-  try {
-    appendFileSync(path, `${JSON.stringify({ isSidechain: true, agentId, type: "model-tier", modelTier: tierDisclosure(modelTier), note: tierNote(modelTier), timestamp: new Date().toISOString() })}\n`, "utf-8");
-  } catch { /* transcript writes are best effort */ }
+	try {
+		appendFileSync(
+			path,
+			`${JSON.stringify({ isSidechain: true, agentId, type: "model-tier", modelTier: tierDisclosure(modelTier), note: tierNote(modelTier), timestamp: new Date().toISOString() })}\n`,
+			"utf-8",
+		);
+	} catch {
+		/* transcript writes are best effort */
+	}
 }
 
 /** Where `path` lands under the temp fallback root, when it sits under the transcript root and that differs. */
 function relocatedToTemp(path: string): string | undefined {
-  try {
-    const rel = relative(transcriptRoot(), path);
-    if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
-    const alt = join(tempFallbackRoot(), rel);
-    return alt === path ? undefined : alt;
-  } catch {
-    return undefined;
-  }
+	try {
+		const rel = relative(transcriptRoot(), path);
+		if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
+		const alt = join(tempFallbackRoot(), rel);
+		return alt === path ? undefined : alt;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -431,26 +493,26 @@ function relocatedToTemp(path: string): string | undefined {
  * Agent call is not failed over a transcript; callers must use the returned path.
  */
 export function writeInitialEntry(path: string, agentId: string, prompt: string, cwd: string): string {
-  const entry = {
-    isSidechain: true,
-    agentId,
-    type: "user",
-    message: { role: "user", content: prompt },
-    timestamp: new Date().toISOString(),
-    cwd,
-  };
-  const line = JSON.stringify(entry) + "\n";
-  try {
-    writeFileSync(path, line, "utf-8");
-    return path;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    const alt = code === "ENOSPC" || code === "EROFS" ? relocatedToTemp(path) : undefined;
-    if (alt === undefined) throw err;
-    mkdirSync(dirname(alt), { recursive: true });
-    writeFileSync(alt, line, "utf-8");
-    return alt;
-  }
+	const entry = {
+		isSidechain: true,
+		agentId,
+		type: "user",
+		message: { role: "user", content: prompt },
+		timestamp: new Date().toISOString(),
+		cwd,
+	};
+	const line = `${JSON.stringify(entry)}\n`;
+	try {
+		writeFileSync(path, line, "utf-8");
+		return path;
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		const alt = code === "ENOSPC" || code === "EROFS" ? relocatedToTemp(path) : undefined;
+		if (alt === undefined) throw err;
+		mkdirSync(dirname(alt), { recursive: true });
+		writeFileSync(alt, line, "utf-8");
+		return alt;
+	}
 }
 
 /**
@@ -458,67 +520,71 @@ export function writeInitialEntry(path: string, agentId: string, prompt: string,
  * Returns a cleanup function that does a final flush and unsubscribes.
  */
 export function streamToOutputFile(
-  session: AgentSession,
-  path: string,
-  agentId: string,
-  cwd: string,
-  startIndex?: number,
+	session: AgentSession,
+	path: string,
+	agentId: string,
+	cwd: string,
+	startIndex?: number,
 ): () => void {
-  // Index of the first message this stream is responsible for. A resume hands
-  // in the session's length as of just before the run: the session already
-  // holds every prior turn, and re-emitting those would duplicate history that
-  // is already in the file. A spawn has already written its prompt as the
-  // initial entry, so it starts after the first user message — found on the
-  // first flush, because pi puts a system message ahead of it and adds both
-  // only once the prompt runs.
-  let writtenCount = startIndex;
+	// Index of the first message this stream is responsible for. A resume hands
+	// in the session's length as of just before the run: the session already
+	// holds every prior turn, and re-emitting those would duplicate history that
+	// is already in the file. A spawn has already written its prompt as the
+	// initial entry, so it starts after the first user message — found on the
+	// first flush, because pi puts a system message ahead of it and adds both
+	// only once the prompt runs.
+	let writtenCount = startIndex;
 
-  const flush = () => {
-    const messages = session.messages;
-    if (writtenCount === undefined) {
-      const prompt = messages.findIndex((m) => m.role === "user");
-      if (prompt === -1) return;
-      writtenCount = prompt + 1;
-    }
-    while (writtenCount < messages.length) {
-      const msg = messages[writtenCount++]!;
-      // Pi's prompt and tool-loadout records; a Claude Code transcript has no
-      // such entry.
-      if (msg.role === "system") continue;
-      const entry = {
-        isSidechain: true,
-        agentId,
-        type: msg.role === "assistant" ? "assistant" : msg.role === "user" ? "user" : "toolResult",
-        message: msg,
-        timestamp: new Date().toISOString(),
-        cwd,
-      };
-      try {
-        appendFileSync(path, JSON.stringify(entry) + "\n", "utf-8");
-      } catch { /* ignore write errors */ }
-    }
-  };
+	const flush = () => {
+		const messages = session.messages;
+		if (writtenCount === undefined) {
+			const prompt = messages.findIndex((m) => m.role === "user");
+			if (prompt === -1) return;
+			writtenCount = prompt + 1;
+		}
+		while (writtenCount < messages.length) {
+			const msg = messages[writtenCount++]!;
+			// Pi's prompt and tool-loadout records; a Claude Code transcript has no
+			// such entry.
+			if (msg.role === "system") continue;
+			const entry = {
+				isSidechain: true,
+				agentId,
+				type: msg.role === "assistant" ? "assistant" : msg.role === "user" ? "user" : "toolResult",
+				message: msg,
+				timestamp: new Date().toISOString(),
+				cwd,
+			};
+			try {
+				appendFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+			} catch {
+				/* ignore write errors */
+			}
+		}
+	};
 
-  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-    if (event.type === "turn_end") flush();
-    // Compaction replaces session.messages with a shorter, summarized array,
-    // leaving writtenCount past the new end — without re-anchoring, the flush
-    // loop would never match again and streaming would halt for good (#145).
-    // Flush before it runs so any not-yet-flushed tail still reaches the file,
-    // then re-anchor to the rebuilt array once it lands. The re-anchor is
-    // deferred a microtask because on the overflow-retry path pi trims the
-    // trailing error assistant message AFTER emitting compaction_end —
-    // anchoring synchronously would sit one past the trimmed array and skip
-    // the first post-compaction message. Aborted/failed compactions leave
-    // session.messages untouched, so only successful ones re-anchor.
-    if (event.type === "compaction_start") flush();
-    if (event.type === "compaction_end" && !event.aborted && event.result) {
-      queueMicrotask(() => { writtenCount = session.messages.length; });
-    }
-  });
+	const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+		if (event.type === "turn_end") flush();
+		// Compaction replaces session.messages with a shorter, summarized array,
+		// leaving writtenCount past the new end — without re-anchoring, the flush
+		// loop would never match again and streaming would halt for good (#145).
+		// Flush before it runs so any not-yet-flushed tail still reaches the file,
+		// then re-anchor to the rebuilt array once it lands. The re-anchor is
+		// deferred a microtask because on the overflow-retry path pi trims the
+		// trailing error assistant message AFTER emitting compaction_end —
+		// anchoring synchronously would sit one past the trimmed array and skip
+		// the first post-compaction message. Aborted/failed compactions leave
+		// session.messages untouched, so only successful ones re-anchor.
+		if (event.type === "compaction_start") flush();
+		if (event.type === "compaction_end" && !event.aborted && event.result) {
+			queueMicrotask(() => {
+				writtenCount = session.messages.length;
+			});
+		}
+	});
 
-  return () => {
-    flush();
-    unsubscribe();
-  };
+	return () => {
+		flush();
+		unsubscribe();
+	};
 }

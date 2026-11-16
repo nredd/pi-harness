@@ -40,10 +40,10 @@ import { runPrintMode, toolCallsNamed, toolResultsNamed } from "../fixtures/prin
  * and the parent model has nothing to call.
  */
 function workflowProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), "subagents-wf-e2e-"));
-  mkdirSync(join(dir, ".pi"), { recursive: true });
-  writeFileSync(join(dir, ".pi", "subagents.json"), JSON.stringify({ workflowsEnabled: true }));
-  return dir;
+	const dir = mkdtempSync(join(tmpdir(), "subagents-wf-e2e-"));
+	mkdirSync(join(dir, ".pi"), { recursive: true });
+	writeFileSync(join(dir, ".pi", "subagents.json"), JSON.stringify({ workflowsEnabled: true }));
+	return dir;
 }
 
 /**
@@ -52,28 +52,27 @@ function workflowProject(): string {
  * reaches a child only through `allowed_subagents`, which nothing here sets.
  */
 const isParentContext = (context: { messages: Parameters<typeof getCurrentTools>[0] }) =>
-  getCurrentTools(context.messages).some(tool => tool.name === "get_subagent_result");
+	getCurrentTools(context.messages).some((tool) => tool.name === "get_subagent_result");
 
 /** A `SubagentWorkflow` tool call, the way the parent model would emit one. */
-const workflowCall = (script: string, id = "wf-call-1") =>
-  fauxToolCall("SubagentWorkflow", { script }, { id });
+const workflowCall = (script: string, id = "wf-call-1") => fauxToolCall("SubagentWorkflow", { script }, { id });
 
 /**
  * Every workflow journal written for `cwd`, across whatever session id the run
  * ended up with. The path is derived the same way `sessionTaskDir` derives it.
  */
 function journalsFor(cwd: string): string[] {
-  const root = join(transcriptRoot(), encodeCwd(cwd));
-  if (!existsSync(root)) return [];
-  const found: string[] = [];
-  for (const session of readdirSync(root)) {
-    const tasks = join(root, session, "tasks");
-    if (!existsSync(tasks)) continue;
-    for (const file of readdirSync(tasks)) {
-      if (file.endsWith(".workflow.jsonl")) found.push(join(tasks, file));
-    }
-  }
-  return found;
+	const root = join(transcriptRoot(), encodeCwd(cwd));
+	if (!existsSync(root)) return [];
+	const found: string[] = [];
+	for (const session of readdirSync(root)) {
+		const tasks = join(root, session, "tasks");
+		if (!existsSync(tasks)) continue;
+		for (const file of readdirSync(tasks)) {
+			if (file.endsWith(".workflow.jsonl")) found.push(join(tasks, file));
+		}
+	}
+	return found;
 }
 
 /** Everything the faux backend was ever asked, flattened for substring checks. */
@@ -81,285 +80,289 @@ const asText = (context: { messages?: unknown[] }) => JSON.stringify(context.mes
 
 /** Poll until `predicate` holds or the deadline passes. */
 async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return true;
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  return predicate();
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (predicate()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	return predicate();
 }
 
 describe("Workflow end to end", () => {
-  it.each([
-    { nested: false, stop: false },
-    { nested: true, stop: false },
-    { nested: false, stop: true },
-    { nested: true, stop: true },
-  ])("retains background ownership after parent return (codemode=$nested, stop=$stop)", async ({ nested, stop }) => {
-    const project = hermeticDir({ settings: { workflowsEnabled: true } });
-    const cwd = project.dir;
-    const input = join(cwd, "input.txt");
-    writeFileSync(input, "WORKFLOW-READ-RESULT");
-    // Seventeen items always exceed the runtime's maximum sixteen permits.
-    const items = Array.from({ length: stop ? 17 : 15 }, (_, index) => ({ marker: `ITEM-${index}` }));
-    const script = [
-      'export const meta = { name: "background-owner", description: "synthetic fanout" };',
-      'return await pipeline(args.items, async item => agent(item.marker + " read " + args.input, { label: item.marker, model: "faux/faux-1" }));',
-    ].join("\n");
-    const params = { script, args: { items, input } };
-    const readResults: string[] = [];
-    let release!: () => void;
-    const barrier = new Promise<void>(resolve => { release = resolve; });
-    let stopId: string | undefined;
-    let stopSent = false;
-    let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
-    try {
-      run = await runPrintMode({
-        prompt: "launch synthetic fanout",
-        cwd,
-        live: false,
-        hold: false,
-        maxModelCalls: 128,
-        extensionFactories: [createCodemodeExtension({ mode: "on" })],
-        onParentSession: session => session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]),
-        respond: async context => {
-          const text = asText(context);
-          if (!isParentContext(context)) {
-            if (!text.includes("WORKFLOW-READ-RESULT")) return fauxToolCall("read", { path: input });
-            readResults.push(text);
-            await barrier;
-            return fauxText("CHILD-FINISHED");
-          }
-          if (stopId !== undefined && !stopSent) {
-            stopSent = true;
-            return fauxToolCall("stop_subagent", { agent_id: stopId });
-          }
-          if (text.includes("Task ID")) return fauxText("PARENT-RETURNED");
-          return nested
-            ? fauxToolCall("codemode", { code: `text(await tools.SubagentWorkflow(${JSON.stringify(params)}));` })
-            : fauxToolCall("SubagentWorkflow", params);
-        },
-      });
-      const session = run.parentSession;
-      expect(run.responseText).toBe("PARENT-RETURNED");
-      const launch = toolResultsNamed(run.parentSession, nested ? "codemode" : "SubagentWorkflow").join("\n");
-      const id = launch.match(/Task ID: (wf_[a-z0-9]+)/)?.[1];
-      expect(id, launch).toBeDefined();
-      const active = Math.min(items.length, workflowConcurrency());
-      expect(await waitFor(() => readResults.length === active)).toBe(true);
-      // Real child read results, after the nested call AND parent turn ended.
-      expect(readResults.every(text => text.includes("WORKFLOW-READ-RESULT"))).toBe(true);
-      expect(journalsFor(cwd)).toHaveLength(0);
-      if (stop) {
-        stopId = id;
-        await run.parentSession.prompt("stop the workflow");
-      }
-      release();
-      const notifications = () => session.messages.filter(message =>
-        message.role === "custom" && typeof message.content === "string" && message.content.includes(`<task-id>${id}</task-id>`),
-      );
-      expect(await waitFor(() => notifications().length > 0)).toBe(true);
-      expect(notifications()).toHaveLength(1);
-      const notice = text(notifications()[0]!);
-      expect(notice).toContain(`${stop ? 0 : items.length}/${items.length} agents`);
-      if (stop) {
-        await run.manager?.waitForAll();
-        expect(readResults).toHaveLength(active);
-        expect(notice).toContain("Stopped by the parent with stop_subagent");
-      } else {
-        const journal = journalsFor(cwd).flatMap(path => readJournal(path));
-        expect(journal).toHaveLength(items.length);
-        expect(journal.every(entry => entry.ok && entry.text === "CHILD-FINISHED")).toBe(true);
-        expect(new Set(journal.map(entry => entry.index)).size).toBe(items.length);
-        expect(readResults).toHaveLength(items.length);
-        for (const item of items) expect(readResults.some(text => text.includes(`${item.marker} read `))).toBe(true);
-      }
-    } finally {
-      release();
-      await run?.dispose();
-      project.restore();
-    }
-  }, 90_000);
+	it.each([
+		{ nested: false, stop: false },
+		{ nested: true, stop: false },
+		{ nested: false, stop: true },
+		{ nested: true, stop: true },
+	])(
+		"retains background ownership after parent return (codemode=$nested, stop=$stop)",
+		async ({ nested, stop }) => {
+			const project = hermeticDir({ settings: { workflowsEnabled: true } });
+			const cwd = project.dir;
+			const input = join(cwd, "input.txt");
+			writeFileSync(input, "WORKFLOW-READ-RESULT");
+			// Seventeen items always exceed the runtime's maximum sixteen permits.
+			const items = Array.from({ length: stop ? 17 : 15 }, (_, index) => ({ marker: `ITEM-${index}` }));
+			const script = [
+				'export const meta = { name: "background-owner", description: "synthetic fanout" };',
+				'return await pipeline(args.items, async item => agent(item.marker + " read " + args.input, { label: item.marker, model: "faux/faux-1" }));',
+			].join("\n");
+			const params = { script, args: { items, input } };
+			const readResults: string[] = [];
+			let release!: () => void;
+			const barrier = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let stopId: string | undefined;
+			let stopSent = false;
+			let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
+			try {
+				run = await runPrintMode({
+					prompt: "launch synthetic fanout",
+					cwd,
+					live: false,
+					hold: false,
+					maxModelCalls: 128,
+					extensionFactories: [createCodemodeExtension({ mode: "on" })],
+					onParentSession: (session) => session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]),
+					respond: async (context) => {
+						const text = asText(context);
+						if (!isParentContext(context)) {
+							if (!text.includes("WORKFLOW-READ-RESULT")) return fauxToolCall("read", { path: input });
+							readResults.push(text);
+							await barrier;
+							return fauxText("CHILD-FINISHED");
+						}
+						if (stopId !== undefined && !stopSent) {
+							stopSent = true;
+							return fauxToolCall("stop_subagent", { agent_id: stopId });
+						}
+						if (text.includes("Task ID")) return fauxText("PARENT-RETURNED");
+						return nested
+							? fauxToolCall("codemode", { code: `text(await tools.SubagentWorkflow(${JSON.stringify(params)}));` })
+							: fauxToolCall("SubagentWorkflow", params);
+					},
+				});
+				const session = run.parentSession;
+				expect(run.responseText).toBe("PARENT-RETURNED");
+				const launch = toolResultsNamed(run.parentSession, nested ? "codemode" : "SubagentWorkflow").join("\n");
+				const id = launch.match(/Task ID: (wf_[a-z0-9]+)/)?.[1];
+				expect(id, launch).toBeDefined();
+				const active = Math.min(items.length, workflowConcurrency());
+				expect(await waitFor(() => readResults.length === active)).toBe(true);
+				// Real child read results, after the nested call AND parent turn ended.
+				expect(readResults.every((text) => text.includes("WORKFLOW-READ-RESULT"))).toBe(true);
+				expect(journalsFor(cwd)).toHaveLength(0);
+				if (stop) {
+					stopId = id;
+					await run.parentSession.prompt("stop the workflow");
+				}
+				release();
+				const notifications = () =>
+					session.messages.filter(
+						(message) =>
+							message.role === "custom" &&
+							typeof message.content === "string" &&
+							message.content.includes(`<task-id>${id}</task-id>`),
+					);
+				expect(await waitFor(() => notifications().length > 0)).toBe(true);
+				expect(notifications()).toHaveLength(1);
+				const notice = text(notifications()[0]!);
+				expect(notice).toContain(`${stop ? 0 : items.length}/${items.length} agents`);
+				if (stop) {
+					await run.manager?.waitForAll();
+					expect(readResults).toHaveLength(active);
+					expect(notice).toContain("Stopped by the parent with stop_subagent");
+				} else {
+					const journal = journalsFor(cwd).flatMap((path) => readJournal(path));
+					expect(journal).toHaveLength(items.length);
+					expect(journal.every((entry) => entry.ok && entry.text === "CHILD-FINISHED")).toBe(true);
+					expect(new Set(journal.map((entry) => entry.index)).size).toBe(items.length);
+					expect(readResults).toHaveLength(items.length);
+					for (const item of items)
+						expect(readResults.some((text) => text.includes(`${item.marker} read `))).toBe(true);
+				}
+			} finally {
+				release();
+				await run?.dispose();
+				project.restore();
+			}
+		},
+		90_000,
+	);
 
-  it("runs a real script whose agents reach real sessions with the script's prompts", async () => {
-    const script = [
-      'export const meta = { name: "e2e-fanout", description: "spawn two agents", phases: [{ title: "Work" }] };',
-      'phase("Work");',
-      "const results = await parallel([",
-      '  () => agent("FIRST-TASK-MARKER", { label: "one" }),',
-      '  () => agent("SECOND-TASK-MARKER", { label: "two" }),',
-      "]);",
-      'log("collected " + results.length);',
-      "return results;",
-    ].join("\n");
+	it("runs a real script whose agents reach real sessions with the script's prompts", async () => {
+		const script = [
+			'export const meta = { name: "e2e-fanout", description: "spawn two agents", phases: [{ title: "Work" }] };',
+			'phase("Work");',
+			"const results = await parallel([",
+			'  () => agent("FIRST-TASK-MARKER", { label: "one" }),',
+			'  () => agent("SECOND-TASK-MARKER", { label: "two" }),',
+			"]);",
+			'log("collected " + results.length);',
+			"return results;",
+		].join("\n");
 
-    /** Prompts the faux backend saw on non-parent (i.e. subagent) calls. */
-    const childPrompts: string[] = [];
-    /** System prompts those same subagent calls were given. */
-    const childSystemPrompts: string[] = [];
+		/** Prompts the faux backend saw on non-parent (i.e. subagent) calls. */
+		const childPrompts: string[] = [];
+		/** System prompts those same subagent calls were given. */
+		const childSystemPrompts: string[] = [];
 
-    const cwd = workflowProject();
-    const run = await runPrintMode({
-      prompt: "run the workflow",
-      cwd,
-      maxModelCalls: 32,
-      live: false, // scripted on purpose: a real model would not emit the tool call
-      respond: context => {
-        const isParent = isParentContext(context);
-        if (!isParent) {
-          childPrompts.push(asText(context));
-          childSystemPrompts.push(getCurrentSystemPrompt(context.messages));
-          return fauxText("SUBAGENT-DONE");
-        }
-        return asText(context).includes("Task ID")
-          ? fauxText("workflow launched")
-          : workflowCall(script);
-      },
-    });
+		const cwd = workflowProject();
+		const run = await runPrintMode({
+			prompt: "run the workflow",
+			cwd,
+			maxModelCalls: 32,
+			live: false, // scripted on purpose: a real model would not emit the tool call
+			respond: (context) => {
+				const isParent = isParentContext(context);
+				if (!isParent) {
+					childPrompts.push(asText(context));
+					childSystemPrompts.push(getCurrentSystemPrompt(context.messages));
+					return fauxText("SUBAGENT-DONE");
+				}
+				return asText(context).includes("Task ID") ? fauxText("workflow launched") : workflowCall(script);
+			},
+		});
 
-    try {
-      // The tool reported a background task rather than an error.
-      expect(asText(run.parentSession as unknown as { messages?: unknown[] })).toContain("Task ID");
+		try {
+			// The tool reported a background task rather than an error.
+			expect(asText(run.parentSession as unknown as { messages?: unknown[] })).toContain("Task ID");
 
-      // The detached run is still going when the parent turn ends — that is the
-      // point of background dispatch — so wait for the children to actually run.
-      const sawBoth = await waitFor(
-        () =>
-          childPrompts.some(p => p.includes("FIRST-TASK-MARKER")) &&
-          childPrompts.some(p => p.includes("SECOND-TASK-MARKER")),
-      );
+			// The detached run is still going when the parent turn ends — that is the
+			// point of background dispatch — so wait for the children to actually run.
+			const sawBoth = await waitFor(
+				() =>
+					childPrompts.some((p) => p.includes("FIRST-TASK-MARKER")) &&
+					childPrompts.some((p) => p.includes("SECOND-TASK-MARKER")),
+			);
 
-      expect(sawBoth, `child prompts seen: ${childPrompts.length}`).toBe(true);
-      await run.manager?.waitForAll();
+			expect(sawBoth, `child prompts seen: ${childPrompts.length}`).toBe(true);
+			await run.manager?.waitForAll();
 
-      // The journal is what makes `resumeFromRunId` cheap, and it is only real
-      // if a real run writes it — both agents, keyed and answered, on disk.
-      const journals = journalsFor(cwd);
-      expect(journals, "a real run must leave a journal beside its script").toHaveLength(1);
-      const recorded = readJournal(journals[0]!);
-      expect(recorded).toHaveLength(2);
-      expect(recorded.every(entry => entry.ok && entry.key.length > 0)).toBe(true);
-      expect(recorded.map(entry => entry.index)).toEqual([0, 1]);
+			// The journal is what makes `resumeFromRunId` cheap, and it is only real
+			// if a real run writes it — both agents, keyed and answered, on disk.
+			const journals = journalsFor(cwd);
+			expect(journals, "a real run must leave a journal beside its script").toHaveLength(1);
+			const recorded = readJournal(journals[0]!);
+			expect(recorded).toHaveLength(2);
+			expect(recorded.every((entry) => entry.ok && entry.key.length > 0)).toBe(true);
+			expect(recorded.map((entry) => entry.index)).toEqual([0, 1]);
 
-      // A workflow child's text is the value `agent()` resolves to, not a
-      // report a person reads, and its prompt has to say so — otherwise the
-      // next pipeline stage is fed a preamble. Asserted here rather than only
-      // at the unit level because the flag crosses manager -> runner -> prompt
-      // builder, and every link has to be wired for it to land.
-      expect(childSystemPrompts).toHaveLength(childPrompts.length);
-      expect(childSystemPrompts.every(p => p.includes("<workflow_child>"))).toBe(true);
-      expect(childSystemPrompts[0]).toContain("Your final message IS the return value");
-    } finally {
-      await run.dispose?.();
-    }
-  }, 90_000);
+			// A workflow child's text is the value `agent()` resolves to, not a
+			// report a person reads, and its prompt has to say so — otherwise the
+			// next pipeline stage is fed a preamble. Asserted here rather than only
+			// at the unit level because the flag crosses manager -> runner -> prompt
+			// builder, and every link has to be wired for it to land.
+			expect(childSystemPrompts).toHaveLength(childPrompts.length);
+			expect(childSystemPrompts.every((p) => p.includes("<workflow_child>"))).toBe(true);
+			expect(childSystemPrompts[0]).toContain("Your final message IS the return value");
+		} finally {
+			await run.dispose?.();
+		}
+	}, 90_000);
 
-  it("runs a saved workflow by name, with schema and a nested child, end to end", async () => {
-    // The point of the compatibility work, exercised the way a real script
-    // does it: a saved workflow invoked by `name`, calling another saved
-    // workflow inline, whose agent answers through StructuredOutput. Every
-    // link — resolution, nesting, the injected tool, validation, the realm
-    // parse — has to hold or this fails.
-    const cwd = workflowProject();
-    mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
-    writeFileSync(
-      join(cwd, ".pi", "workflows", "child.js"),
-      [
-        'export const meta = { name: "child", description: "the nested one" };',
-        'const found = await agent("NESTED-TASK-MARKER", {',
-        '  label: "scan",',
-        '  schema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },',
-        "});",
-        "return found.files.length;",
-      ].join("\n"),
-    );
-    writeFileSync(
-      join(cwd, ".pi", "workflows", "parent.js"),
-      [
-        'export const meta = { name: "parent", description: "the outer one" };',
-        'const count = await workflow("child", { depth: 1 });',
-        'return "child found " + count;',
-      ].join("\n"),
-    );
+	it("runs a saved workflow by name, with schema and a nested child, end to end", async () => {
+		// The point of the compatibility work, exercised the way a real script
+		// does it: a saved workflow invoked by `name`, calling another saved
+		// workflow inline, whose agent answers through StructuredOutput. Every
+		// link — resolution, nesting, the injected tool, validation, the realm
+		// parse — has to hold or this fails.
+		const cwd = workflowProject();
+		mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "workflows", "child.js"),
+			[
+				'export const meta = { name: "child", description: "the nested one" };',
+				'const found = await agent("NESTED-TASK-MARKER", {',
+				'  label: "scan",',
+				'  schema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },',
+				"});",
+				"return found.files.length;",
+			].join("\n"),
+		);
+		writeFileSync(
+			join(cwd, ".pi", "workflows", "parent.js"),
+			[
+				'export const meta = { name: "parent", description: "the outer one" };',
+				'const count = await workflow("child", { depth: 1 });',
+				'return "child found " + count;',
+			].join("\n"),
+		);
 
-    const childPrompts: string[] = [];
-    const run = await runPrintMode({
-      prompt: "run the saved workflow",
-      cwd,
-      maxModelCalls: 32,
-      live: false, // scripted on purpose: a real model would not emit the tool call
-      respond: context => {
-        const isParent = isParentContext(context);
-        if (!isParent) {
-          const seen = asText(context);
-          childPrompts.push(seen);
-          // Answer through the injected tool exactly once, then stop — a model
-          // that kept calling it every turn would just spin.
-          const alreadyAnswered = getCurrentTools(context.messages).length > 0 && /Recorded\./.test(seen);
-          return alreadyAnswered
-            ? fauxText("done")
-            : fauxToolCall("StructuredOutput", { files: ["a.ts", "b.ts"] }, { id: "so-1" });
-        }
-        return asText(context).includes("Task ID")
-          ? fauxText("workflow launched")
-          : fauxToolCall("SubagentWorkflow", { name: "parent" }, { id: "wf-call-named" });
-      },
-    });
+		const childPrompts: string[] = [];
+		const run = await runPrintMode({
+			prompt: "run the saved workflow",
+			cwd,
+			maxModelCalls: 32,
+			live: false, // scripted on purpose: a real model would not emit the tool call
+			respond: (context) => {
+				const isParent = isParentContext(context);
+				if (!isParent) {
+					const seen = asText(context);
+					childPrompts.push(seen);
+					// Answer through the injected tool exactly once, then stop — a model
+					// that kept calling it every turn would just spin.
+					const alreadyAnswered = getCurrentTools(context.messages).length > 0 && /Recorded\./.test(seen);
+					return alreadyAnswered
+						? fauxText("done")
+						: fauxToolCall("StructuredOutput", { files: ["a.ts", "b.ts"] }, { id: "so-1" });
+				}
+				return asText(context).includes("Task ID")
+					? fauxText("workflow launched")
+					: fauxToolCall("SubagentWorkflow", { name: "parent" }, { id: "wf-call-named" });
+			},
+		});
 
-    try {
-      expect(asText(run.parentSession as unknown as { messages?: unknown[] })).toContain("Task ID");
-      const sawNested = await waitFor(() =>
-        childPrompts.some(prompt => prompt.includes("NESTED-TASK-MARKER")),
-      );
-      expect(sawNested, `child prompts seen: ${childPrompts.length}`).toBe(true);
-      await run.manager?.waitForAll();
+		try {
+			expect(asText(run.parentSession as unknown as { messages?: unknown[] })).toContain("Task ID");
+			const sawNested = await waitFor(() => childPrompts.some((prompt) => prompt.includes("NESTED-TASK-MARKER")));
+			expect(sawNested, `child prompts seen: ${childPrompts.length}`).toBe(true);
+			await run.manager?.waitForAll();
 
-      // The nested child's agent is journaled as this run's own — one run, one
-      // counter — which is the whole claim of same-worker nesting.
-      const journals = journalsFor(cwd);
-      expect(journals).toHaveLength(1);
-      const recorded = readJournal(journals[0]!);
-      expect(recorded).toHaveLength(1);
-      expect(recorded[0]!.index).toBe(0);
-      // And the recorded answer is the validated payload, not prose.
-      expect(JSON.parse(String(recorded[0]!.text))).toEqual({ files: ["a.ts", "b.ts"] });
-    } finally {
-      await run.dispose?.();
-    }
-  }, 90_000);
+			// The nested child's agent is journaled as this run's own — one run, one
+			// counter — which is the whole claim of same-worker nesting.
+			const journals = journalsFor(cwd);
+			expect(journals).toHaveLength(1);
+			const recorded = readJournal(journals[0]!);
+			expect(recorded).toHaveLength(1);
+			expect(recorded[0]!.index).toBe(0);
+			// And the recorded answer is the validated payload, not prose.
+			expect(JSON.parse(String(recorded[0]!.text))).toEqual({ files: ["a.ts", "b.ts"] });
+		} finally {
+			await run.dispose?.();
+		}
+	}, 90_000);
 
-  it("surfaces a script that fails to parse instead of launching it", async () => {
-    const childPrompts: string[] = [];
+	it("surfaces a script that fails to parse instead of launching it", async () => {
+		const childPrompts: string[] = [];
 
-    const run = await runPrintMode({
-      prompt: "run the broken workflow",
-      cwd: workflowProject(),
-      maxModelCalls: 12,
-      live: false, // scripted on purpose: a real model would not emit the tool call
-      respond: context => {
-        const isParent = isParentContext(context);
-        if (!isParent) {
-          childPrompts.push(asText(context));
-          return fauxText("SUBAGENT-DONE");
-        }
-        return asText(context).includes("PURE LITERAL")
-          ? fauxText("reported")
-          : workflowCall(
-              'export const meta = { name: computeName(), description: "x" };\n',
-              "wf-call-2",
-            );
-      },
-    });
+		const run = await runPrintMode({
+			prompt: "run the broken workflow",
+			cwd: workflowProject(),
+			maxModelCalls: 12,
+			live: false, // scripted on purpose: a real model would not emit the tool call
+			respond: (context) => {
+				const isParent = isParentContext(context);
+				if (!isParent) {
+					childPrompts.push(asText(context));
+					return fauxText("SUBAGENT-DONE");
+				}
+				return asText(context).includes("PURE LITERAL")
+					? fauxText("reported")
+					: workflowCall('export const meta = { name: computeName(), description: "x" };\n', "wf-call-2");
+			},
+		});
 
-    try {
-      // The author-facing rejection reaches the model, not a stack trace.
-      expect(asText(run.parentSession as unknown as { messages?: unknown[] })).toContain("PURE LITERAL");
-      // And nothing was spawned for a script that never compiled.
-      expect(childPrompts).toHaveLength(0);
-    } finally {
-      await run.dispose?.();
-    }
-  }, 60_000);
+		try {
+			// The author-facing rejection reaches the model, not a stack trace.
+			expect(asText(run.parentSession as unknown as { messages?: unknown[] })).toContain("PURE LITERAL");
+			// And nothing was spawned for a script that never compiled.
+			expect(childPrompts).toHaveLength(0);
+		} finally {
+			await run.dispose?.();
+		}
+	}, 60_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -393,166 +396,165 @@ const LIVE_VITEST_TIMEOUT = LIVE_TIMEOUT + 60_000;
 const LIVE_SETTLE_TIMEOUT = 150_000;
 
 /** Every journal entry the run left behind, across whatever journals it wrote. */
-const entriesFor = (cwd: string) => journalsFor(cwd).flatMap(path => readJournal(path));
+const entriesFor = (cwd: string) => journalsFor(cwd).flatMap((path) => readJournal(path));
 
 describe.runIf(LIVE)("Workflow end to end (live LLM, opt-in)", () => {
-  const dirs: string[] = [];
-  let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
+	const dirs: string[] = [];
+	let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
 
-  afterEach(async () => {
-    await run?.dispose?.();
-    run = undefined;
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  });
+	afterEach(async () => {
+		await run?.dispose?.();
+		run = undefined;
+		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
 
-  /** A project with workflows on, registered for cleanup. */
-  const liveProject = () => {
-    const dir = workflowProject();
-    dirs.push(dir);
-    return dir;
-  };
+	/** A project with workflows on, registered for cleanup. */
+	const liveProject = () => {
+		const dir = workflowProject();
+		dirs.push(dir);
+		return dir;
+	};
 
-  it(
-    "a real model runs a saved workflow by name, and its agent reaches a real session",
-    async () => {
-      const cwd = liveProject();
-      mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
-      writeFileSync(
-        join(cwd, ".pi", "workflows", "live-smoke.js"),
-        [
-          'export const meta = { name: "live-smoke", description: "one agent, one token", phases: [{ title: "Smoke" }] };',
-          'phase("Smoke");',
-          'const answer = await agent("Reply with exactly the token WF_LIVE_OK and nothing else.", { label: "echo" });',
-          "return answer;",
-        ].join("\n"),
-      );
+	it(
+		"a real model runs a saved workflow by name, and its agent reaches a real session",
+		async () => {
+			const cwd = liveProject();
+			mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
+			writeFileSync(
+				join(cwd, ".pi", "workflows", "live-smoke.js"),
+				[
+					'export const meta = { name: "live-smoke", description: "one agent, one token", phases: [{ title: "Smoke" }] };',
+					'phase("Smoke");',
+					'const answer = await agent("Reply with exactly the token WF_LIVE_OK and nothing else.", { label: "echo" });',
+					"return answer;",
+				].join("\n"),
+			);
 
-      run = await runPrintMode({
-        prompt:
-          'Use the SubagentWorkflow tool to run the saved workflow called "live-smoke". ' +
-          "Pass it as the `name` parameter — do not write a script of your own. " +
-          "Then tell me the task id it returned.",
-        cwd,
-        timeoutMs: LIVE_TIMEOUT,
-      });
+			run = await runPrintMode({
+				prompt:
+					'Use the SubagentWorkflow tool to run the saved workflow called "live-smoke". ' +
+					"Pass it as the `name` parameter — do not write a script of your own. " +
+					"Then tell me the task id it returned.",
+				cwd,
+				timeoutMs: LIVE_TIMEOUT,
+			});
 
-      // The model reached for the tool rather than narrating that it would.
-      const calls = toolCallsNamed(run.parentSession, "SubagentWorkflow");
-      expect(calls.length, "the model never called SubagentWorkflow").toBeGreaterThan(0);
-      // …by name, which is the resolution path this test is about.
-      expect(calls.some(c => c.name === "live-smoke")).toBe(true);
-      // …and it launched rather than being rejected.
-      expect(toolResultsNamed(run.parentSession, "SubagentWorkflow").join("\n")).toContain("Task ID");
+			// The model reached for the tool rather than narrating that it would.
+			const calls = toolCallsNamed(run.parentSession, "SubagentWorkflow");
+			expect(calls.length, "the model never called SubagentWorkflow").toBeGreaterThan(0);
+			// …by name, which is the resolution path this test is about.
+			expect(calls.some((c) => c.name === "live-smoke")).toBe(true);
+			// …and it launched rather than being rejected.
+			expect(toolResultsNamed(run.parentSession, "SubagentWorkflow").join("\n")).toContain("Task ID");
 
-      // The run is detached, so the evidence is on disk: a journal entry means a
-      // real child session ran the script's prompt and answered it.
-      const settled = await waitFor(
-        () => entriesFor(cwd).some(entry => entry.ok),
-        LIVE_SETTLE_TIMEOUT,
-      );
-      const recorded = entriesFor(cwd);
-      expect(settled, `journal entries: ${JSON.stringify(recorded)}`).toBe(true);
-      expect(recorded.map(entry => entry.text ?? "").join("\n")).toMatch(/WF_LIVE_OK/i);
-    },
-    LIVE_VITEST_TIMEOUT,
-  );
+			// The run is detached, so the evidence is on disk: a journal entry means a
+			// real child session ran the script's prompt and answered it.
+			const settled = await waitFor(() => entriesFor(cwd).some((entry) => entry.ok), LIVE_SETTLE_TIMEOUT);
+			const recorded = entriesFor(cwd);
+			expect(settled, `journal entries: ${JSON.stringify(recorded)}`).toBe(true);
+			expect(recorded.map((entry) => entry.text ?? "").join("\n")).toMatch(/WF_LIVE_OK/i);
+		},
+		LIVE_VITEST_TIMEOUT,
+	);
 
-  it(
-    "a real model dispatches an inline script, and its parallel agents both run",
-    async () => {
-      // Handed to the model verbatim: what is under test is that a real model
-      // routes a script through the `script` parameter and that the worker runs
-      // it, not whether it can recall the API unaided.
-      const script = [
-        'export const meta = { name: "live-fanout", description: "two agents", phases: [{ title: "Work" }] };',
-        'phase("Work");',
-        "const results = await parallel([",
-        '  () => agent("Reply with exactly the token WF_ONE_OK and nothing else.", { label: "one" }),',
-        '  () => agent("Reply with exactly the token WF_TWO_OK and nothing else.", { label: "two" }),',
-        "]);",
-        "return results;",
-      ].join("\n");
+	it(
+		"a real model dispatches an inline script, and its parallel agents both run",
+		async () => {
+			// Handed to the model verbatim: what is under test is that a real model
+			// routes a script through the `script` parameter and that the worker runs
+			// it, not whether it can recall the API unaided.
+			const script = [
+				'export const meta = { name: "live-fanout", description: "two agents", phases: [{ title: "Work" }] };',
+				'phase("Work");',
+				"const results = await parallel([",
+				'  () => agent("Reply with exactly the token WF_ONE_OK and nothing else.", { label: "one" }),',
+				'  () => agent("Reply with exactly the token WF_TWO_OK and nothing else.", { label: "two" }),',
+				"]);",
+				"return results;",
+			].join("\n");
 
-      const cwd = liveProject();
-      run = await runPrintMode({
-        prompt: [
-          "Call the SubagentWorkflow tool once, passing EXACTLY the following script as the",
-          "`script` parameter. Do not modify it, do not summarize it, and do not use `name`.",
-          "Then tell me the task id it returned.",
-          "",
-          script,
-        ].join("\n"),
-        cwd,
-        timeoutMs: LIVE_TIMEOUT,
-      });
+			const cwd = liveProject();
+			run = await runPrintMode({
+				prompt: [
+					"Call the SubagentWorkflow tool once, passing EXACTLY the following script as the",
+					"`script` parameter. Do not modify it, do not summarize it, and do not use `name`.",
+					"Then tell me the task id it returned.",
+					"",
+					script,
+				].join("\n"),
+				cwd,
+				timeoutMs: LIVE_TIMEOUT,
+			});
 
-      const calls = toolCallsNamed(run.parentSession, "SubagentWorkflow");
-      expect(calls.length, "the model never called SubagentWorkflow").toBeGreaterThan(0);
-      // The inline path, not the saved-name one.
-      expect(calls.some(c => typeof c.script === "string" && String(c.script).includes("live-fanout"))).toBe(true);
-      expect(toolResultsNamed(run.parentSession, "SubagentWorkflow").join("\n")).toContain("Task ID");
+			const calls = toolCallsNamed(run.parentSession, "SubagentWorkflow");
+			expect(calls.length, "the model never called SubagentWorkflow").toBeGreaterThan(0);
+			// The inline path, not the saved-name one.
+			expect(calls.some((c) => typeof c.script === "string" && String(c.script).includes("live-fanout"))).toBe(true);
+			expect(toolResultsNamed(run.parentSession, "SubagentWorkflow").join("\n")).toContain("Task ID");
 
-      // Both fan-out agents settled. Asserted on the markers rather than on a
-      // count: a live model may retry the call, and a second run would journal
-      // its own entries alongside the first.
-      const bothRan = await waitFor(() => {
-        const text = entriesFor(cwd).map(entry => entry.text ?? "").join("\n");
-        return /WF_ONE_OK/i.test(text) && /WF_TWO_OK/i.test(text);
-      }, LIVE_SETTLE_TIMEOUT);
-      const recorded = entriesFor(cwd);
-      expect(bothRan, `journal entries: ${JSON.stringify(recorded)}`).toBe(true);
-      expect(recorded.every(entry => entry.ok)).toBe(true);
-    },
-    LIVE_VITEST_TIMEOUT,
-  );
+			// Both fan-out agents settled. Asserted on the markers rather than on a
+			// count: a live model may retry the call, and a second run would journal
+			// its own entries alongside the first.
+			const bothRan = await waitFor(() => {
+				const text = entriesFor(cwd)
+					.map((entry) => entry.text ?? "")
+					.join("\n");
+				return /WF_ONE_OK/i.test(text) && /WF_TWO_OK/i.test(text);
+			}, LIVE_SETTLE_TIMEOUT);
+			const recorded = entriesFor(cwd);
+			expect(bothRan, `journal entries: ${JSON.stringify(recorded)}`).toBe(true);
+			expect(recorded.every((entry) => entry.ok)).toBe(true);
+		},
+		LIVE_VITEST_TIMEOUT,
+	);
 
-  it(
-    "a schema-bearing agent answers through StructuredOutput against a real provider",
-    async () => {
-      // The one path a faux backend genuinely cannot stand in for. `schema`
-      // rests on `constrainedSampling` reaching the provider's own constrained
-      // decoding, plus a description, a guideline and host-side validation
-      // behind it — a faux model answers because the harness told it to, so
-      // nothing below the tool call is exercised there.
-      const script = [
-        'export const meta = { name: "live-schema", description: "one structured answer" };',
-        "const picked = await agent(",
-        '  "Pick the fruit named in this sentence: the banana is yellow. Answer through the StructuredOutput tool.",',
-        '  { label: "pick", schema: { type: "object", properties: { fruit: { type: "string" } }, required: ["fruit"] } },',
-        ");",
-        "return picked.fruit;",
-      ].join("\n");
+	it(
+		"a schema-bearing agent answers through StructuredOutput against a real provider",
+		async () => {
+			// The one path a faux backend genuinely cannot stand in for. `schema`
+			// rests on `constrainedSampling` reaching the provider's own constrained
+			// decoding, plus a description, a guideline and host-side validation
+			// behind it — a faux model answers because the harness told it to, so
+			// nothing below the tool call is exercised there.
+			const script = [
+				'export const meta = { name: "live-schema", description: "one structured answer" };',
+				"const picked = await agent(",
+				'  "Pick the fruit named in this sentence: the banana is yellow. Answer through the StructuredOutput tool.",',
+				'  { label: "pick", schema: { type: "object", properties: { fruit: { type: "string" } }, required: ["fruit"] } },',
+				");",
+				"return picked.fruit;",
+			].join("\n");
 
-      const cwd = liveProject();
-      run = await runPrintMode({
-        prompt: [
-          "Call the SubagentWorkflow tool once, passing EXACTLY the following script as the",
-          "`script` parameter. Do not modify it. Then tell me the task id it returned.",
-          "",
-          script,
-        ].join("\n"),
-        cwd,
-        timeoutMs: LIVE_TIMEOUT,
-      });
+			const cwd = liveProject();
+			run = await runPrintMode({
+				prompt: [
+					"Call the SubagentWorkflow tool once, passing EXACTLY the following script as the",
+					"`script` parameter. Do not modify it. Then tell me the task id it returned.",
+					"",
+					script,
+				].join("\n"),
+				cwd,
+				timeoutMs: LIVE_TIMEOUT,
+			});
 
-      expect(toolCallsNamed(run.parentSession, "SubagentWorkflow").length).toBeGreaterThan(0);
-      expect(toolResultsNamed(run.parentSession, "SubagentWorkflow").join("\n")).toContain("Task ID");
+			expect(toolCallsNamed(run.parentSession, "SubagentWorkflow").length).toBeGreaterThan(0);
+			expect(toolResultsNamed(run.parentSession, "SubagentWorkflow").join("\n")).toContain("Task ID");
 
-      const settled = await waitFor(
-        () => entriesFor(cwd).some(entry => entry.ok && (entry.text ?? "").trim().startsWith("{")),
-        LIVE_SETTLE_TIMEOUT,
-      );
-      const recorded = entriesFor(cwd);
-      expect(settled, `journal entries: ${JSON.stringify(recorded)}`).toBe(true);
+			const settled = await waitFor(
+				() => entriesFor(cwd).some((entry) => entry.ok && (entry.text ?? "").trim().startsWith("{")),
+				LIVE_SETTLE_TIMEOUT,
+			);
+			const recorded = entriesFor(cwd);
+			expect(settled, `journal entries: ${JSON.stringify(recorded)}`).toBe(true);
 
-      // The journal records the validated payload, not prose — `text` is
-      // `record.structuredJson ?? record.result`, so JSON here means the
-      // StructuredOutput path answered and validation passed.
-      const structured = recorded.find(entry => (entry.text ?? "").trim().startsWith("{"));
-      const payload = JSON.parse(String(structured?.text)) as { fruit?: unknown };
-      expect(typeof payload.fruit).toBe("string");
-      expect(String(payload.fruit)).toMatch(/banana/i);
-    },
-    LIVE_VITEST_TIMEOUT,
-  );
+			// The journal records the validated payload, not prose — `text` is
+			// `record.structuredJson ?? record.result`, so JSON here means the
+			// StructuredOutput path answered and validation passed.
+			const structured = recorded.find((entry) => (entry.text ?? "").trim().startsWith("{"));
+			const payload = JSON.parse(String(structured?.text)) as { fruit?: unknown };
+			expect(typeof payload.fruit).toBe("string");
+			expect(String(payload.fruit)).toMatch(/banana/i);
+		},
+		LIVE_VITEST_TIMEOUT,
+	);
 });

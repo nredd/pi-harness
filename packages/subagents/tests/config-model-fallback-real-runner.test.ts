@@ -29,176 +29,194 @@ let saved: { cwd: string; agentDir?: string };
 
 /** A registry like the e2e one: only the faux model exists, so any other input is unavailable. */
 function ctxFor(model: any, extra: Record<string, unknown> = {}) {
-  return {
-    hasUI: false,
-    mode: "tui",
-    cwd,
-    model,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn(), addAutocompleteProvider: vi.fn() },
-    isProjectTrusted: () => true,
-    getSystemPrompt: () => "PARENT",
-    sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
-    modelRegistry: {
-      find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
-      getAll: () => [model],
-      getAvailable: () => [model],
-      hasConfiguredAuth: () => true,
-      isUsingOAuth: () => false,
-      getApiKeyAndHeaders: async () => ({ apiKey: "faux", headers: {} }),
-      registerProvider: () => {},
-      unregisterProvider: () => {},
-    },
-    ...extra,
-  } as any;
+	return {
+		hasUI: false,
+		mode: "tui",
+		cwd,
+		model,
+		ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn(), addAutocompleteProvider: vi.fn() },
+		isProjectTrusted: () => true,
+		getSystemPrompt: () => "PARENT",
+		sessionManager: { getSessionId: () => "s1", getBranch: () => [] },
+		modelRegistry: {
+			find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
+			getAll: () => [model],
+			getAvailable: () => [model],
+			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => false,
+			getApiKeyAndHeaders: async () => ({ apiKey: "faux", headers: {} }),
+			registerProvider: () => {},
+			unregisterProvider: () => {},
+		},
+		...extra,
+	} as any;
 }
 
 const parentRef = () => `${faux.getModel().provider}/${faux.getModel().id}`;
-const note = (inputs: string) =>
-  `Note: configured ${inputs} not resolve; running on parent model ${parentRef()}.`;
+const note = (inputs: string) => `Note: configured ${inputs} not resolve; running on parent model ${parentRef()}.`;
 const NOTE = () => note('model "claude-haiku-4-5" did');
 
 function writeScout(model: string): void {
-  const dir = join(cwd, ".pi", "agents");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "scout.md"), `---\ndescription: scout\ntools: read\nmodel: ${model}\n---\nscout.\n`);
+	const dir = join(cwd, ".pi", "agents");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "scout.md"), `---\ndescription: scout\ntools: read\nmodel: ${model}\n---\nscout.\n`);
 }
 
 beforeEach(() => {
-  saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
-  cwd = mkdtempSync(join(tmpdir(), "config-model-real-"));
-  process.chdir(cwd);
-  process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-  faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
+	saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
+	cwd = mkdtempSync(join(tmpdir(), "config-model-real-"));
+	process.chdir(cwd);
+	process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
+	faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 });
 
 afterEach(() => {
-  setAgentModels(undefined);
-  faux.unregister();
-  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
-  process.chdir(saved.cwd);
-  if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
-  registerAgents(new Map());
-  rmSync(cwd, { recursive: true, force: true });
+	setAgentModels(undefined);
+	faux.unregister();
+	delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+	process.chdir(saved.cwd);
+	if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
+	registerAgents(new Map());
+	rmSync(cwd, { recursive: true, force: true });
 });
 
 async function bootWithBus() {
-  const handlers = new Map<string, Array<(data: any) => void>>();
-  const bus = {
-    on: (event: string, handler: (data: any) => void) => {
-      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-      return () => {};
-    },
-    emit: (event: string, data: unknown) => { for (const h of handlers.get(event) ?? []) h(data); },
-  };
-  const booted = bootPi();
-  booted.pi.events = bus;
-  subagentsExtension(booted.pi);
-  const c = ctxFor(faux.getModel());
-  await startSession(booted.lifecycle, true, { model: c.model, modelRegistry: c.modelRegistry });
-  return { ...booted, bus };
+	const handlers = new Map<string, Array<(data: any) => void>>();
+	const bus = {
+		on: (event: string, handler: (data: any) => void) => {
+			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+			return () => {};
+		},
+		emit: (event: string, data: unknown) => {
+			for (const h of handlers.get(event) ?? []) h(data);
+		},
+	};
+	const booted = bootPi();
+	booted.pi.events = bus;
+	subagentsExtension(booted.pi);
+	const c = ctxFor(faux.getModel());
+	await startSession(booted.lifecycle, true, { model: c.model, modelRegistry: c.modelRegistry });
+	return { ...booted, bus };
 }
 
 const manager = () => (globalThis as any)[Symbol.for("pi-subagents:manager")];
 
 describe("real runAgent honors and discloses an unavailable agentModels override", () => {
-  it("cross-extension RPC", async () => {
-    writeScout(parentRef());
-    const { bus, lifecycle } = await bootWithBus();
-    setAgentModels({ scout: "claude-haiku-4-5" });
+	it("cross-extension RPC", async () => {
+		writeScout(parentRef());
+		const { bus, lifecycle } = await bootWithBus();
+		setAgentModels({ scout: "claude-haiku-4-5" });
 
-    const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
-    bus.emit("subagents:rpc:spawn", { requestId: "r1", type: "scout", prompt: "go", options: { description: "rpc" } });
-    const id = (await reply).data.id;
+		const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
+		bus.emit("subagents:rpc:spawn", { requestId: "r1", type: "scout", prompt: "go", options: { description: "rpc" } });
+		const id = (await reply).data.id;
 
-    await vi.waitFor(() => expect(manager().getRecord(id).modelFallback).toBeDefined());
-    expect(modelFallbackNote(manager().getRecord(id).modelFallback)).toBe(NOTE());
-    await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
-  });
+		await vi.waitFor(() => expect(manager().getRecord(id).modelFallback).toBeDefined());
+		expect(modelFallbackNote(manager().getRecord(id).modelFallback)).toBe(NOTE());
+		await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
+	});
 
-  it("cross-extension RPC with `model: null` (inherit) still selects the configured model and discloses", async () => {
-    writeScout(parentRef());
-    const { bus, lifecycle } = await bootWithBus();
-    setAgentModels({ scout: "claude-haiku-4-5" });
+	it("cross-extension RPC with `model: null` (inherit) still selects the configured model and discloses", async () => {
+		writeScout(parentRef());
+		const { bus, lifecycle } = await bootWithBus();
+		setAgentModels({ scout: "claude-haiku-4-5" });
 
-    const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
-    bus.emit("subagents:rpc:spawn", { requestId: "r1", type: "scout", prompt: "go", options: { description: "rpc", model: null } });
-    const id = (await reply).data.id;
+		const reply = new Promise<any>((resolve) => bus.on("subagents:rpc:spawn:reply:r1", resolve));
+		bus.emit("subagents:rpc:spawn", {
+			requestId: "r1",
+			type: "scout",
+			prompt: "go",
+			options: { description: "rpc", model: null },
+		});
+		const id = (await reply).data.id;
 
-    await vi.waitFor(() => expect(manager().getRecord(id).modelFallback).toBeDefined());
-    expect(modelFallbackNote(manager().getRecord(id).modelFallback)).toBe(NOTE());
-    await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
-  });
+		await vi.waitFor(() => expect(manager().getRecord(id).modelFallback).toBeDefined());
+		expect(modelFallbackNote(manager().getRecord(id).modelFallback)).toBe(NOTE());
+		await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
+	});
 
-  it("direct @mention", async () => {
-    writeScout(parentRef());
-    mkdirSync(join(cwd, "agent-dir"), { recursive: true });
-    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ agentMentions: "direct" }));
-    const { tools, lifecycle } = await bootWithBus();
-    setAgentModels({ scout: "claude-haiku-4-5" });
+	it("direct @mention", async () => {
+		writeScout(parentRef());
+		mkdirSync(join(cwd, "agent-dir"), { recursive: true });
+		writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ agentMentions: "direct" }));
+		const { tools, lifecycle } = await bootWithBus();
+		setAgentModels({ scout: "claude-haiku-4-5" });
 
-    await lifecycle.get("input")?.({ type: "input", text: "@scout look around", source: "interactive" } as any, ctxFor(faux.getModel()));
-    await flush();
+		await lifecycle.get("input")?.(
+			{ type: "input", text: "@scout look around", source: "interactive" } as any,
+			ctxFor(faux.getModel()),
+		);
+		await flush();
 
-    await vi.waitFor(async () => {
-      const fetched = await tools.get("get_subagent_result").execute("tc", { agent_id: "scout" }, undefined, undefined, ctxFor(faux.getModel()));
-      expect(textOf(fetched)).toContain(NOTE());
-    });
-    await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
-  });
+		await vi.waitFor(async () => {
+			const fetched = await tools
+				.get("get_subagent_result")
+				.execute("tc", { agent_id: "scout" }, undefined, undefined, ctxFor(faux.getModel()));
+			expect(textOf(fetched)).toContain(NOTE());
+		});
+		await lifecycle.get("session_shutdown")?.({} as any, ctxFor(faux.getModel()));
+	});
 
-  describe("scheduler job without a stored model", () => {
-    let tmp: string;
-    let scheduler: SubagentScheduler;
-    let mgr: AgentManager;
+	describe("scheduler job without a stored model", () => {
+		let tmp: string;
+		let scheduler: SubagentScheduler;
+		let mgr: AgentManager;
 
-    beforeEach(() => {
-      tmp = mkdtempSync(join(tmpdir(), "config-model-real-sched-"));
-      scheduler = new SubagentScheduler();
-      mgr = new AgentManager();
-    });
+		beforeEach(() => {
+			tmp = mkdtempSync(join(tmpdir(), "config-model-real-sched-"));
+			scheduler = new SubagentScheduler();
+			mgr = new AgentManager();
+		});
 
-    afterEach(() => {
-      scheduler.stop();
-      rmSync(tmp, { recursive: true, force: true });
-    });
+		afterEach(() => {
+			scheduler.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		});
 
-    async function fire(model?: string, refused = false) {
-      registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
-      const pi = { events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) }, exec: async () => ({ code: 1, stdout: "", stderr: "" }) } as any;
-      scheduler.start(pi, ctxFor(faux.getModel()), mgr, new ScheduleStore(join(tmp, "s.json")));
-      scheduler.addJob({
-        name: "job", description: "job", schedule: new Date(Date.now() + 50).toISOString(),
-        subagent_type: "scout", prompt: "go", ...(model ? { model } : {}),
-      });
-      if (refused) {
-        await vi.waitFor(() => expect(scheduler.list()[0]!.lastStatus).toBe("error"), { timeout: 3000 });
-        return undefined;
-      }
-      await vi.waitFor(() => expect(mgr.listAgents()).toHaveLength(1), { timeout: 3000 });
-      const record = mgr.listAgents()[0]!;
-      await vi.waitFor(() => expect(record.modelFallback).toBeDefined(), { timeout: 5000 });
-      return record;
-    }
+		async function fire(model?: string, refused = false) {
+			registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
+			const pi = {
+				events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
+				exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+			} as any;
+			scheduler.start(pi, ctxFor(faux.getModel()), mgr, new ScheduleStore(join(tmp, "s.json")));
+			scheduler.addJob({
+				name: "job",
+				description: "job",
+				schedule: new Date(Date.now() + 50).toISOString(),
+				subagent_type: "scout",
+				prompt: "go",
+				...(model ? { model } : {}),
+			});
+			if (refused) {
+				await vi.waitFor(() => expect(scheduler.list()[0]!.lastStatus).toBe("error"), { timeout: 3000 });
+				return undefined;
+			}
+			await vi.waitFor(() => expect(mgr.listAgents()).toHaveLength(1), { timeout: 3000 });
+			const record = mgr.listAgents()[0]!;
+			await vi.waitFor(() => expect(record.modelFallback).toBeDefined(), { timeout: 5000 });
+			return record;
+		}
 
-    it("honors the override over a resolving definition model", async () => {
-      writeScout(parentRef());
-      setAgentModels({ scout: "claude-haiku-4-5" });
+		it("honors the override over a resolving definition model", async () => {
+			writeScout(parentRef());
+			setAgentModels({ scout: "claude-haiku-4-5" });
 
-      const record = await fire();
+			const record = await fire();
 
-      expect(modelFallbackNote(record!.modelFallback)).toBe(NOTE());
-    });
+			expect(modelFallbackNote(record!.modelFallback)).toBe(NOTE());
+		});
 
-    it("refuses the explicit stored input rather than trying a failing override after it", async () => {
-      writeScout(parentRef());
-      setAgentModels({ scout: "claude-haiku-4-5" });
+		it("refuses the explicit stored input rather than trying a failing override after it", async () => {
+			writeScout(parentRef());
+			setAgentModels({ scout: "claude-haiku-4-5" });
 
-      const record = await fire("claude-opus-4-6", true);
+			const record = await fire("claude-opus-4-6", true);
 
-      expect(record).toBeUndefined();
-      expect(mgr.listAgents()).toEqual([]);
-      expect(scheduler.list()[0]!.lastStatus).toBe("error");
-    });
-  });
+			expect(record).toBeUndefined();
+			expect(mgr.listAgents()).toEqual([]);
+			expect(scheduler.list()[0]!.lastStatus).toBe("error");
+		});
+	});
 });

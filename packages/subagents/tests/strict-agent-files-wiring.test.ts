@@ -21,14 +21,14 @@ import { registerAgents } from "../src/agent-types.ts";
 import { bootPi, ctx, startSession } from "./fixtures/boot-extension.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
 
-vi.mock("@earendil-works/pi-coding-agent", async importOriginal => {
-  class ExtensionStartupError extends Error {
-    constructor(message: string, options?: ErrorOptions) {
-      super(message, options);
-      this.name = "ExtensionStartupError";
-    }
-  }
-  return { ...(await importOriginal<object>()), ExtensionStartupError };
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+	class ExtensionStartupError extends Error {
+		constructor(message: string, options?: ErrorOptions) {
+			super(message, options);
+			this.name = "ExtensionStartupError";
+		}
+	}
+	return { ...(await importOriginal<object>()), ExtensionStartupError };
 });
 
 const BROKEN = "---\nname: broken\ndescription: Use this: that\n---\n\nBroken.\n";
@@ -38,110 +38,118 @@ let originalCwd: string;
 let originalAgentDir: string | undefined;
 
 function writeSettings(settings: Record<string, unknown>): void {
-  const dir = join(cwd, ".pi");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "subagents.json"), JSON.stringify(settings));
+	const dir = join(cwd, ".pi");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "subagents.json"), JSON.stringify(settings));
 }
 
 function writeBrokenAgent(): string {
-  const dir = join(cwd, ".pi", "agents");
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, "broken.md");
-  writeFileSync(path, BROKEN);
-  return path;
+	const dir = join(cwd, ".pi", "agents");
+	mkdirSync(dir, { recursive: true });
+	const path = join(dir, "broken.md");
+	writeFileSync(path, BROKEN);
+	return path;
 }
 
 describe("strictAgentFiles gates session startup", () => {
-  let warn: ReturnType<typeof vi.spyOn>;
+	let warn: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
-    originalCwd = process.cwd();
-    cwd = mkdtempSync(join(tmpdir(), "strict-agent-files-"));
-    process.chdir(cwd);
-    // A developer's real ~/.pi/subagents.json would otherwise set this very
-    // setting under the tests, and their global agents would pollute the roster.
-    originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
-    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
+	beforeEach(() => {
+		originalCwd = process.cwd();
+		cwd = mkdtempSync(join(tmpdir(), "strict-agent-files-"));
+		process.chdir(cwd);
+		// A developer's real ~/.pi/subagents.json would otherwise set this very
+		// setting under the tests, and their global agents would pollute the roster.
+		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
+		warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
 
-  afterEach(() => {
-    warn.mockRestore();
-    delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    process.chdir(originalCwd);
-    if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-    registerAgents(new Map());
-    rmSync(cwd, { recursive: true, force: true });
-  });
+	afterEach(() => {
+		warn.mockRestore();
+		delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+		process.chdir(originalCwd);
+		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		registerAgents(new Map());
+		rmSync(cwd, { recursive: true, force: true });
+	});
 
-  it("activates, then fails session_start naming the file with the host's startup error", async () => {
-    const path = writeBrokenAgent();
-    writeSettings({ strictAgentFiles: true });
-    const { pi, lifecycle } = bootPi();
+	it("activates, then fails session_start naming the file with the host's startup error", async () => {
+		const path = writeBrokenAgent();
+		writeSettings({ strictAgentFiles: true });
+		const { pi, lifecycle } = bootPi();
 
-    expect(() => subagentsExtension(pi)).not.toThrow();
-    const failure = await startSession(lifecycle, true).then(
-      () => undefined,
-      (err: unknown) => err,
-    );
+		expect(() => subagentsExtension(pi)).not.toThrow();
+		const failure = await startSession(lifecycle, true).then(
+			() => undefined,
+			(err: unknown) => err,
+		);
 
-    expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).name).toBe("ExtensionStartupError");
-    expect((failure as Error).message).toContain(path);
-    expect(((failure as Error).cause as Error).message).toContain(path);
-  });
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).name).toBe("ExtensionStartupError");
+		expect((failure as Error).message).toContain(path);
+		expect(((failure as Error).cause as Error).message).toContain(path);
+	});
 
-  it("stays latched until a bind succeeds, so a retried bind is strict again", async () => {
-    const path = writeBrokenAgent();
-    writeSettings({ strictAgentFiles: true });
-    const { pi, lifecycle } = bootPi();
-    subagentsExtension(pi);
+	it("stays latched until a bind succeeds, so a retried bind is strict again", async () => {
+		const path = writeBrokenAgent();
+		writeSettings({ strictAgentFiles: true });
+		const { pi, lifecycle } = bootPi();
+		subagentsExtension(pi);
 
-    await expect(startSession(lifecycle, true)).rejects.toThrow(path);
-    await expect(startSession(lifecycle, true)).rejects.toThrow(path);
-    writeFileSync(path, "---\ndescription: Fixed\n---\n\nFixed.\n");
-    await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
-  });
+		await expect(startSession(lifecycle, true)).rejects.toThrow(path);
+		await expect(startSession(lifecycle, true)).rejects.toThrow(path);
+		writeFileSync(path, "---\ndescription: Fixed\n---\n\nFixed.\n");
+		await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
+	});
 
-  it("never reads a malformed project file of an untrusted project", async () => {
-    writeBrokenAgent();
-    writeSettings({ strictAgentFiles: true });
-    const { pi, lifecycle } = bootPi();
-    subagentsExtension(pi);
+	it("never reads a malformed project file of an untrusted project", async () => {
+		writeBrokenAgent();
+		writeSettings({ strictAgentFiles: true });
+		const { pi, lifecycle } = bootPi();
+		subagentsExtension(pi);
 
-    await expect(startSession(lifecycle, false)).resolves.toBeUndefined();
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Skipping agent file"));
-  });
+		await expect(startSession(lifecycle, false)).resolves.toBeUndefined();
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Skipping agent file"));
+	});
 
-  it("skips the file and starts when disabled (the default)", async () => {
-    writeBrokenAgent();
-    const { pi, lifecycle } = bootPi();
-    subagentsExtension(pi);
+	it("skips the file and starts when disabled (the default)", async () => {
+		writeBrokenAgent();
+		const { pi, lifecycle } = bootPi();
+		subagentsExtension(pi);
 
-    await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
-    expect(String(warn.mock.calls.find((c: unknown[]) => String(c[0]).includes("Skipping agent file"))?.[0])).toContain("Skipping agent file");
-  });
+		await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
+		expect(String(warn.mock.calls.find((c: unknown[]) => String(c[0]).includes("Skipping agent file"))?.[0])).toContain(
+			"Skipping agent file",
+		);
+	});
 
-  it("is a startup decision: a later reload of the same file does not throw", async () => {
-    const path = writeBrokenAgent();
-    writeSettings({ strictAgentFiles: true });
+	it("is a startup decision: a later reload of the same file does not throw", async () => {
+		const path = writeBrokenAgent();
+		writeSettings({ strictAgentFiles: true });
 
-    // Start clean, so the session exists — then break the file underneath it.
-    writeFileSync(path, "---\ndescription: Fixed\n---\n\nFixed.\n");
-    const { pi, tools, lifecycle } = bootPi();
-    subagentsExtension(pi);
-    await startSession(lifecycle, true);
-    writeFileSync(path, BROKEN);
+		// Start clean, so the session exists — then break the file underneath it.
+		writeFileSync(path, "---\ndescription: Fixed\n---\n\nFixed.\n");
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		await startSession(lifecycle, true);
+		writeFileSync(path, BROKEN);
 
-    const agentTool = tools.get("Agent");
-    expect(agentTool).toBeDefined();
+		const agentTool = tools.get("Agent");
+		expect(agentTool).toBeDefined();
 
-    // The Agent tool reloads the registry per call. That reload must be
-    // non-strict: it returns a normal "unknown type" result, not a YAML throw.
-    const result = await agentTool.execute("call-1", { subagent_type: "nope", prompt: "x" }, undefined, vi.fn(), ctx({ cwd }));
-    expect(JSON.stringify(result)).not.toContain("Nested mappings");
-    // And so is a later session_start (new / resume / reload-in-place).
-    await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
-  });
+		// The Agent tool reloads the registry per call. That reload must be
+		// non-strict: it returns a normal "unknown type" result, not a YAML throw.
+		const result = await agentTool.execute(
+			"call-1",
+			{ subagent_type: "nope", prompt: "x" },
+			undefined,
+			vi.fn(),
+			ctx({ cwd }),
+		);
+		expect(JSON.stringify(result)).not.toContain("Nested mappings");
+		// And so is a later session_start (new / resume / reload-in-place).
+		await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
+	});
 });

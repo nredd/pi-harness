@@ -21,8 +21,8 @@ import { afterAll, describe, vi } from "vitest";
 import { bench } from "./fixtures/benchmark.ts";
 
 vi.mock("../src/agent-runner.ts", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
-  return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
+	const actual = await vi.importActual<typeof import("../src/agent-runner.ts")>("../src/agent-runner.ts");
+	return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
 import { runAgent } from "../src/agent-runner.ts";
@@ -33,15 +33,15 @@ import { bootPi, ctx, type Hermetic, hermeticDir } from "./fixtures/boot-extensi
 
 /** A believable agent file: frontmatter to parse plus a body to read past. */
 function agentFile(i: number): string {
-  return [
-    "---",
-    `description: "Perf fixture agent ${i}, one of many in this directory."`,
-    "tools: read, grep, bash",
-    "---",
-    "",
-    `You are perf fixture agent ${i}. Do the thing the parent asked, then stop.`,
-    "",
-  ].join("\n");
+	return [
+		"---",
+		`description: "Perf fixture agent ${i}, one of many in this directory."`,
+		"tools: read, grep, bash",
+		"---",
+		"",
+		`You are perf fixture agent ${i}. Do the thing the parent asked, then stop.`,
+		"",
+	].join("\n");
 }
 
 /**
@@ -59,21 +59,21 @@ function agentFile(i: number): string {
  * not an error.
  */
 function projectDirWith(n: number): string {
-  const dir = mkdtempSync(join(tmpdir(), "perf-agents-"));
-  const agentsDir = join(dir, ".pi", "agents");
-  mkdirSync(agentsDir, { recursive: true });
-  for (let i = 0; i < n; i++) writeFileSync(join(agentsDir, `perf-agent-${i}.md`), agentFile(i));
-  tempDirs.push(dir);
-  return dir;
+	const dir = mkdtempSync(join(tmpdir(), "perf-agents-"));
+	const agentsDir = join(dir, ".pi", "agents");
+	mkdirSync(agentsDir, { recursive: true });
+	for (let i = 0; i < n; i++) writeFileSync(join(agentsDir, `perf-agent-${i}.md`), agentFile(i));
+	tempDirs.push(dir);
+	return dir;
 }
 
 const tempDirs: string[] = [];
 const hermetics: Hermetic[] = [];
 afterAll(() => {
-  for (const h of hermetics.reverse()) h.restore();
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
-  registerAgents(new Map());
-  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+	for (const h of hermetics.reverse()) h.restore();
+	for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+	registerAgents(new Map());
+	delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
 });
 
 // Empty global agent dir + empty cwd, so the developer's own ~/.pi agents are
@@ -82,67 +82,67 @@ const globalRedirect = hermeticDir();
 hermetics.push(globalRedirect);
 
 describe("loadCustomAgents (runs on every Agent call)", () => {
-  for (const n of [5, 50, 200]) {
-    const cwd = projectDirWith(n);
-    bench(`${n} agent files`, () => {
-      loadCustomAgents(cwd);
-    });
-  }
+	for (const n of [5, 50, 200]) {
+		const cwd = projectDirWith(n);
+		bench(`${n} agent files`, () => {
+			loadCustomAgents(cwd);
+		});
+	}
 });
 
 describe("Agent tool — background spawn", () => {
-  vi.mocked(runAgent).mockImplementation(async () => ({
-    responseText: "done",
-    session: { dispose: vi.fn() } as any,
-    aborted: false,
-    steered: false,
-  }));
+	vi.mocked(runAgent).mockImplementation(async () => ({
+		responseText: "done",
+		session: { dispose: vi.fn() } as any,
+		aborted: false,
+		steered: false,
+	}));
 
-  /** A freshly activated extension, reading agent files from `globalRedirect`. */
-  function bootAgentTool() {
-    const { pi, tools } = bootPi();
-    subagentsExtension(pi);
-    return tools.get("Agent");
-  }
+	/** A freshly activated extension, reading agent files from `globalRedirect`. */
+	function bootAgentTool() {
+		const { pi, tools } = bootPi();
+		subagentsExtension(pi);
+		return tools.get("Agent");
+	}
 
-  const c = ctx();
-  let i = 0;
+	const c = ctx();
+	let i = 0;
 
-  const agent = bootAgentTool();
+	const agent = bootAgentTool();
 
-  /**
-   * The sample count is pinned, and that pin is what makes this number mean
-   * something.
-   *
-   * Spawned records stay in the manager, and the spawn path scans them —
-   * `takenHandles()` walks every live agent plus every tombstone, twice per
-   * call — so the population grows underneath the measurement. Measured over
-   * 600 consecutive spawns it drifts from 0.416 ms to 0.608 ms, a 46% climb
-   * that belongs to the benchmark rather than to the code under test. Over the
-   * first hundred it is flat. `time: 0` makes the loop run exactly `iterations`
-   * samples instead of as many as fit in 500 ms, which held that drift to
-   * roughly 1% between repeat runs; left to the default it sampled ~900 spawns
-   * and inflated the mean 2.5x.
-   *
-   * So this is the cost of a spawn into a manager holding at most ~100 agents.
-   * A cleaner design would reset the manager between samples, but the handle
-   * published on `Symbol.for("pi-subagents:manager")` exposes no way to clear
-   * it, tinybench's per-sample hooks never run (vitest drops them — see
-   * `viewer.bench.ts`), and a pool of freshly booted extensions was tried and
-   * was worse: 105 live managers and their timers produced a 64 ms outlier and
-   * ±42% rme, replacing a known bias with unusable noise.
-   */
-  bench(
-    "general-purpose, run_in_background",
-    async () => {
-      await agent.execute(
-        `bench-${i++}`,
-        { subagent_type: "general-purpose", description: "bench spawn", prompt: "go", run_in_background: true },
-        undefined,
-        undefined,
-        c,
-      );
-    },
-    { time: 0, iterations: 100, warmupTime: 0, warmupIterations: 10 },
-  );
+	/**
+	 * The sample count is pinned, and that pin is what makes this number mean
+	 * something.
+	 *
+	 * Spawned records stay in the manager, and the spawn path scans them —
+	 * `takenHandles()` walks every live agent plus every tombstone, twice per
+	 * call — so the population grows underneath the measurement. Measured over
+	 * 600 consecutive spawns it drifts from 0.416 ms to 0.608 ms, a 46% climb
+	 * that belongs to the benchmark rather than to the code under test. Over the
+	 * first hundred it is flat. `time: 0` makes the loop run exactly `iterations`
+	 * samples instead of as many as fit in 500 ms, which held that drift to
+	 * roughly 1% between repeat runs; left to the default it sampled ~900 spawns
+	 * and inflated the mean 2.5x.
+	 *
+	 * So this is the cost of a spawn into a manager holding at most ~100 agents.
+	 * A cleaner design would reset the manager between samples, but the handle
+	 * published on `Symbol.for("pi-subagents:manager")` exposes no way to clear
+	 * it, tinybench's per-sample hooks never run (vitest drops them — see
+	 * `viewer.bench.ts`), and a pool of freshly booted extensions was tried and
+	 * was worse: 105 live managers and their timers produced a 64 ms outlier and
+	 * ±42% rme, replacing a known bias with unusable noise.
+	 */
+	bench(
+		"general-purpose, run_in_background",
+		async () => {
+			await agent.execute(
+				`bench-${i++}`,
+				{ subagent_type: "general-purpose", description: "bench spawn", prompt: "go", run_in_background: true },
+				undefined,
+				undefined,
+				c,
+			);
+		},
+		{ time: 0, iterations: 100, warmupTime: 0, warmupIterations: 10 },
+	);
 });

@@ -23,73 +23,72 @@ import { AgentWidget } from "../src/ui/agent-widget.ts";
 import { bootPi } from "./fixtures/boot-extension.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
 
-
 function ctx() {
-  return {
-    hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
-    cwd: process.cwd(),
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
-    getSystemPrompt: vi.fn(() => "parent"),
-  } as any;
+	return {
+		hasUI: false,
+		ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
+		cwd: process.cwd(),
+		model: undefined,
+		modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+		sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
+		getSystemPrompt: vi.fn(() => "parent"),
+	} as any;
 }
 
 describe("session_shutdown disposes activation-owned resources (#256)", () => {
-  let tmpDir: string;
-  let agentDir: string;
-  let prevCwd: string;
-  let prevAgentDir: string | undefined;
+	let tmpDir: string;
+	let agentDir: string;
+	let prevCwd: string;
+	let prevAgentDir: string | undefined;
 
-  beforeEach(() => {
-    // Hermetic cwd + global dir, scheduling off, so session_start doesn't spin a
-    // scheduler or touch the dev's filesystem — same isolation as #108's wiring
-    // tests, and it makes the built-in general-purpose type resolve.
-    tmpDir = mkdtempSync(join(tmpdir(), "pi-256-"));
-    agentDir = mkdtempSync(join(tmpdir(), "pi-256-agentdir-"));
-    prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    prevCwd = process.cwd();
-    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
-    process.chdir(tmpDir);
-  });
+	beforeEach(() => {
+		// Hermetic cwd + global dir, scheduling off, so session_start doesn't spin a
+		// scheduler or touch the dev's filesystem — same isolation as #108's wiring
+		// tests, and it makes the built-in general-purpose type resolve.
+		tmpDir = mkdtempSync(join(tmpdir(), "pi-256-"));
+		agentDir = mkdtempSync(join(tmpdir(), "pi-256-agentdir-"));
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		prevCwd = process.cwd();
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
+		process.chdir(tmpDir);
+	});
 
-  afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    rmSync(tmpDir, { recursive: true, force: true });
-    rmSync(agentDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
+	afterEach(() => {
+		process.chdir(prevCwd);
+		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+		rmSync(tmpDir, { recursive: true, force: true });
+		rmSync(agentDir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
 
-  it("disposes the widget and group-join manager on shutdown", async () => {
-    const { pi, lifecycle } = bootPi();
-    const widgetDispose = vi.spyOn(AgentWidget.prototype, "dispose");
-    const groupJoinDispose = vi.spyOn(GroupJoinManager.prototype, "dispose");
-    subagentsExtension(pi);
+	it("disposes the widget and group-join manager on shutdown", async () => {
+		const { pi, lifecycle } = bootPi();
+		const widgetDispose = vi.spyOn(AgentWidget.prototype, "dispose");
+		const groupJoinDispose = vi.spyOn(GroupJoinManager.prototype, "dispose");
+		subagentsExtension(pi);
 
-    await lifecycle.get("session_shutdown")?.({}, ctx());
+		await lifecycle.get("session_shutdown")?.({}, ctx());
 
-    expect(widgetDispose).toHaveBeenCalledTimes(1);
-    expect(groupJoinDispose).toHaveBeenCalledTimes(1);
-  });
+		expect(widgetDispose).toHaveBeenCalledTimes(1);
+		expect(groupJoinDispose).toHaveBeenCalledTimes(1);
+	});
 
-  it("does not dispose them on session_before_switch — a vetoed switch must keep the live UI", async () => {
-    const { pi, lifecycle } = bootPi();
-    const widgetDispose = vi.spyOn(AgentWidget.prototype, "dispose");
-    const groupJoinDispose = vi.spyOn(GroupJoinManager.prototype, "dispose");
-    subagentsExtension(pi);
+	it("does not dispose them on session_before_switch — a vetoed switch must keep the live UI", async () => {
+		const { pi, lifecycle } = bootPi();
+		const widgetDispose = vi.spyOn(AgentWidget.prototype, "dispose");
+		const groupJoinDispose = vi.spyOn(GroupJoinManager.prototype, "dispose");
+		subagentsExtension(pi);
 
-    // A switch begins but may be vetoed: the session continues, so the
-    // activation-owned UI and group state must survive until a real shutdown.
-    await lifecycle.get("session_before_switch")?.();
+		// A switch begins but may be vetoed: the session continues, so the
+		// activation-owned UI and group state must survive until a real shutdown.
+		await lifecycle.get("session_before_switch")?.();
 
-    expect(widgetDispose).not.toHaveBeenCalled();
-    expect(groupJoinDispose).not.toHaveBeenCalled();
+		expect(widgetDispose).not.toHaveBeenCalled();
+		expect(groupJoinDispose).not.toHaveBeenCalled();
 
-    await lifecycle.get("session_shutdown")?.({}, ctx());
-  });
+		await lifecycle.get("session_shutdown")?.({}, ctx());
+	});
 });
