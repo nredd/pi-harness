@@ -97,7 +97,7 @@ def classify_change(repo: Path, files: dict[str, str]) -> ci_paths.ChangeClassif
 @pytest.mark.parametrize(
     "path",
     [
-        "docs/ci.md",
+        "docs/guide.md",
         "CONTRIBUTING.md",
         "NOTES.md",
         "packages/dev-tools/README.md",
@@ -131,6 +131,9 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
         "packages/session-kit/README.md",
         "packages/todo/README.md",
         ".github/workflows/ci.yml",
+        "AGENTS.md",
+        "docs/coverage.md",
+        "docs/install.md",
         "package-lock.json",
         "forks/pi",
         "integration/README.md",
@@ -163,9 +166,9 @@ def test_classify_rejects_mixed_changes(repo: Path) -> None:
     Returns:
         None: Assertions verify classification.
     """
-    result = classify_change(repo, {"docs/ci.md": "docs\n", "packages/dev-tools/src/index.ts": "code\n"})
+    result = classify_change(repo, {"docs/guide.md": "docs\n", "packages/dev-tools/src/index.ts": "code\n"})
     assert not result.docs_only
-    assert result.paths == ("docs/ci.md", "packages/dev-tools/src/index.ts")
+    assert result.paths == ("docs/guide.md", "packages/dev-tools/src/index.ts")
 
 
 def test_classify_rejects_empty_diff(repo: Path) -> None:
@@ -294,14 +297,16 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
     """
     output = tmp_path / "output"
     result = ci_paths.ChangeClassification(
-        paths=("docs/ci.md", "NOTES.md"), docs_only=True, inputs={"wsl_inputs": False, "stack_inputs": False}
+        paths=("docs/guide.md", "NOTES.md"),
+        docs_only=True,
+        inputs={"wsl_inputs": False, "stack_inputs": False},
     )
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
     contents = output.read_text(encoding="utf-8")
     assert "docs_only=true\n" in contents
     assert "wsl_inputs=false\n" in contents
     assert "stack_inputs=false\n" in contents
-    assert "docs/ci.md\nNOTES.md\n" in contents
+    assert "docs/guide.md\nNOTES.md\n" in contents
 
 
 @pytest.mark.parametrize(
@@ -390,7 +395,7 @@ def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> 
 @pytest.mark.parametrize(
     "path",
     [
-        "docs/ci.md",
+        "docs/guide.md",
         "NOTES.md",
         "packages/dev-tools/src/index.ts",
         "integration/harness/stack.py",
@@ -454,7 +459,7 @@ def test_stack_inputs_accept_paths_the_personal_stack_reads(repo: Path, path: st
 @pytest.mark.parametrize(
     "path",
     [
-        "docs/ci.md",
+        "docs/guide.md",
         "packages/session-kit/src/index.ts",
         "packages/preset/package.json",
         "integration/README.md",
@@ -519,7 +524,7 @@ def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str
         ".github/actions/setup-ci-wsl/action.yml",
         "benchmarks/other/pyproject.toml",
         "benchmarks/comparison-notes.md",
-        "docs/ci.md",
+        "docs/guide.md",
         "coverage/policy.json",
     ],
 )
@@ -559,7 +564,7 @@ def test_mixed_change_reports_each_input_family(repo: Path) -> None:
     Returns:
         None: Assertions verify classification.
     """
-    result = classify_change(repo, {"docs/ci.md": "docs\n", "scripts/ci_paths.py": "code\n"})
+    result = classify_change(repo, {"docs/guide.md": "docs\n", "scripts/ci_paths.py": "code\n"})
     assert (result.docs_only, result.inputs["wsl_inputs"], result.inputs["stack_inputs"]) == (
         False,
         True,
@@ -797,7 +802,7 @@ def test_docs_only_change_bypasses_native_cells_and_wsl_runs_on_main(repo: Path,
     Returns:
         None: Assertions verify the plan.
     """
-    plan = plan_change(repo, {"docs/ci.md": "x\n"}, event)
+    plan = plan_change(repo, {"docs/guide.md": "x\n"}, event)
     for name in (
         "owned (ubuntu-24.04)",
         "owned (macos-14)",
@@ -828,7 +833,7 @@ def test_permanent_stack_bypass_cells_report_why_on_every_change(
     Returns:
         None: Assertions verify the plan.
     """
-    for files in ({"docs/ci.md": "x\n"}, {".github/workflows/ci.yml": "x\n"}):
+    for files in ({"docs/guide.md": "x\n"}, {".github/workflows/ci.yml": "x\n"}):
         plan = plan_change(repo, files, event)[f"stack ({stack_cell[0]}, {stack_cell[1]})"]
         assert plan == ci_paths.CellPlan(False, False, (), ci_paths.STACK_NOT_RUN[stack_cell])
 
@@ -1421,7 +1426,7 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     Parameters:
         repo (Path): Disposable repository.
     """
-    docs = plan_change(repo, {"docs/ci.md": "x\n"}, PULL_REQUEST)
+    docs = plan_change(repo, {"docs/guide.md": "x\n"}, PULL_REQUEST)
     assert docs["owned (ubuntu-24.04)"].shards == ()
     assert docs["owned (wsl2)"].shards == ()
     code = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
