@@ -1,4 +1,9 @@
-"""Exercise isolation receipts through the smoke entry with disposable OS boundaries."""
+"""Exercise isolation receipts through the smoke entry with disposable OS boundaries.
+
+References:
+    https://github.com/nredd/pi-harness/issues/695
+    https://docs.python.org/3/library/socket.html
+"""
 
 from __future__ import annotations
 
@@ -24,7 +29,11 @@ class Guest:
     """Disposable guest files and recording process boundary, never a live probe."""
 
     def __init__(self, root: Path) -> None:
-        """Create a synthetic isolated guest."""
+        """Create a synthetic isolated guest.
+
+        Parameters:
+            root (Path): Disposable guest filesystem root.
+        """
         self.root = root
         self.env = {"SMOKE_ROOT": str(root), "PATH": str(root / "commands")}
         self.commands: list[list[str]] = []
@@ -43,7 +52,15 @@ class Guest:
             executable.touch(mode=0o755)
 
     def run(self, cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        """Return synthetic process results and retain the actual argv."""
+        """Return synthetic process results and retain the actual argv.
+
+        Parameters:
+            cmd (list[str]): Literal external command argv.
+            _kwargs (object): Unused subprocess keyword arguments.
+
+        Returns:
+            subprocess.CompletedProcess[str]: Injected process status and stdout.
+        """
         self.commands.append(cmd)
         defaults = {
             "id -un": (0, "runner\n"),
@@ -67,7 +84,11 @@ class Guest:
 
 
 def test_isolated_guest_passes_with_calibrated_negative_probes(tmp_path: Path) -> None:
-    """All original private classes and the gateway are probed after calibration."""
+    """All original private classes and the gateway are probed after calibration.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+    """
     guest = Guest(tmp_path)
     assert main(run=guest.run, environ=guest.env) == 0
     probes = [cmd[-2:] for cmd in guest.commands if cmd[0] == "timeout"]
@@ -89,7 +110,13 @@ def test_isolated_guest_passes_with_calibrated_negative_probes(tmp_path: Path) -
 def test_unexecuted_broken_or_reachable_negative_never_counts_as_blocked(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], status: int
 ) -> None:
-    """Generic interpreter failures are not the distinct network-denial exit code."""
+    """Generic interpreter failures are not the distinct network-denial exit code.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        capsys (pytest.CaptureFixture[str]): Captured diagnostic receipts.
+        status (int): Injected negative-probe status.
+    """
     guest = Guest(tmp_path)
     guest.results["192.0.2.1 445"] = (status, "")
     assert main(run=guest.run, environ=guest.env) == 1
@@ -98,7 +125,12 @@ def test_unexecuted_broken_or_reachable_negative_never_counts_as_blocked(
 
 @pytest.mark.parametrize("status", [10, 124])
 def test_classified_denial_or_bounded_drop_counts_after_calibration(tmp_path: Path, status: int) -> None:
-    """A calibrated engine may report network denial or the original four-second drop."""
+    """A calibrated engine may report network denial or the original four-second drop.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        status (int): Classified denial or timeout status.
+    """
     guest = Guest(tmp_path)
     guest.results["192.0.2.1 445"] = (status, "")
     assert main(run=guest.run, environ=guest.env) == 0
@@ -116,7 +148,13 @@ def test_classified_denial_or_bounded_drop_counts_after_calibration(tmp_path: Pa
 def test_failed_public_control_invalidates_all_negative_receipts(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], failure: str
 ) -> None:
-    """Failed public HTTP or TCP makes blocked results meaningless without skipping targets."""
+    """Failed public HTTP or TCP makes blocked results meaningless without skipping targets.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        capsys (pytest.CaptureFixture[str]): Captured diagnostic receipts.
+        failure (str): Public control command whose execution fails.
+    """
     guest = Guest(tmp_path)
     guest.env |= {
         "SMOKE_HOST_IP": "198.51.100.2",
@@ -136,7 +174,12 @@ def test_failed_public_control_invalidates_all_negative_receipts(
 
 @pytest.mark.parametrize("missing", ["timeout", "unshare"])
 def test_missing_control_command_refuses(tmp_path: Path, missing: str) -> None:
-    """Missing executables cannot masquerade as denied network or namespaces."""
+    """Missing executables cannot masquerade as denied network or namespaces.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        missing (str): Executable to remove from the fixture PATH.
+    """
     guest = Guest(tmp_path)
     (tmp_path / "commands" / missing).unlink()
     assert main(run=guest.run, environ=guest.env) == 1
@@ -164,7 +207,14 @@ def test_missing_control_command_refuses(tmp_path: Path, missing: str) -> None:
 def test_identity_namespace_route_and_mount_failures_refuse(
     tmp_path: Path, cmd: str, status: int, output: str
 ) -> None:
-    """Run every denial/control through the whole smoke without any real command."""
+    """Run every denial/control through the whole smoke without any real command.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        cmd (str): Control command to override.
+        status (int): Injected process exit status.
+        output (str): Injected process stdout.
+    """
     guest = Guest(tmp_path)
     guest.results[cmd] = (status, output)
     assert main(run=guest.run, environ=guest.env) == 1
@@ -172,7 +222,12 @@ def test_identity_namespace_route_and_mount_failures_refuse(
 
 @pytest.mark.parametrize("mode", ["", "1001 644", "0 664", "0 646", "0 invalid", "0 10000", "0 644 extra"])
 def test_unprotected_policy_refuses(tmp_path: Path, mode: str) -> None:
-    """Protection evidence must be complete, octal, root-owned and non-writable."""
+    """Protection evidence must be complete, octal, root-owned and non-writable.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        mode (str): Injected stat ownership and permission evidence.
+    """
     guest = Guest(tmp_path)
     guest.results[f"stat -c %u %a {tmp_path}/etc/wsl.conf"] = (0, mode)
     assert main(run=guest.run, environ=guest.env) == 1
@@ -196,7 +251,12 @@ def test_unprotected_policy_refuses(tmp_path: Path, mode: str) -> None:
     ],
 )
 def test_strict_policy_denials_through_entry(tmp_path: Path, policy: str) -> None:
-    """No inherited, interpolated, malformed or alternate boolean policy passes."""
+    """No inherited, interpolated, malformed or alternate boolean policy passes.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        policy (str): Invalid or enabled WSL policy contents.
+    """
     guest = Guest(tmp_path)
     (tmp_path / "etc/wsl.conf").write_text(policy)
     assert main(run=guest.run, environ=guest.env) == 1
@@ -204,7 +264,12 @@ def test_strict_policy_denials_through_entry(tmp_path: Path, policy: str) -> Non
 
 @pytest.mark.parametrize("policy", [None, b"\xff"])
 def test_missing_or_undecodable_policy_refuses(tmp_path: Path, policy: bytes | None) -> None:
-    """File errors do not bypass the protected policy requirement."""
+    """File errors do not bypass the protected policy requirement.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        policy (bytes | None): Invalid bytes, or None for a missing policy.
+    """
     guest = Guest(tmp_path)
     path = tmp_path / "etc/wsl.conf"
     if policy is None:
@@ -219,7 +284,13 @@ def test_missing_or_undecodable_policy_refuses(tmp_path: Path, policy: bytes | N
 )
 @pytest.mark.parametrize("content", [None, b"\xff", b"2\n"])
 def test_unreadable_or_wrong_sysctl_refuses(tmp_path: Path, entry: str, content: bytes | None) -> None:
-    """Missing, undecodable and unexpected sysctl values fail closed."""
+    """Missing, undecodable and unexpected sysctl values fail closed.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        entry (str): Relative sysctl file to alter.
+        content (bytes | None): Replacement bytes, or None to remove the entry.
+    """
     guest = Guest(tmp_path)
     path = tmp_path / entry
     if content is None:
@@ -231,7 +302,12 @@ def test_unreadable_or_wrong_sysctl_refuses(tmp_path: Path, entry: str, content:
 
 @pytest.mark.parametrize("content", [b"enabled\n", b"", b"disabled \n", b"disabled\r\n", b"\xff"])
 def test_exact_disabled_first_line_required(tmp_path: Path, content: bytes) -> None:
-    """Preserve the shell's exact first-line semantics, including carriage returns."""
+    """Preserve the shell's exact first-line semantics, including carriage returns.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        content (bytes): Registration bytes that must not count as disabled.
+    """
     guest = Guest(tmp_path)
     entry = tmp_path / "proc/sys/fs/binfmt_misc/WSLInterop"
     entry.parent.mkdir(parents=True)
@@ -242,7 +318,12 @@ def test_exact_disabled_first_line_required(tmp_path: Path, content: bytes) -> N
 def test_residual_disabled_plumbing_is_only_a_note(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Both disabled registrations and broker sockets stay nonblocking diagnostics."""
+    """Both disabled registrations and broker sockets stay nonblocking diagnostics.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        capsys (pytest.CaptureFixture[str]): Captured diagnostic receipts.
+    """
     guest = Guest(tmp_path)
     for name in ("WSLInterop", "WSLInterop-late"):
         entry = tmp_path / "proc/sys/fs/binfmt_misc" / name
@@ -257,7 +338,12 @@ def test_residual_disabled_plumbing_is_only_a_note(
 
 @pytest.mark.parametrize("leak", ["c", "d", "PATH", "cmd.exe", "powershell.exe", "wsl.exe", "explorer.exe"])
 def test_windows_reachability_refuses(tmp_path: Path, leak: str) -> None:
-    """All original Windows mount, executable and PATH checks remain blocking."""
+    """All original Windows mount, executable and PATH checks remain blocking.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        leak (str): Windows mount, path or executable to expose in the fixture.
+    """
     guest = Guest(tmp_path)
     if leak in ("c", "d"):
         (tmp_path / f"mnt/{leak}").mkdir(parents=True)
@@ -270,7 +356,12 @@ def test_windows_reachability_refuses(tmp_path: Path, leak: str) -> None:
 
 @pytest.mark.parametrize("status", [0, 2, 127])
 def test_loopback_connection_or_engine_failure_refuses(tmp_path: Path, status: int) -> None:
-    """Dev ports always include loopback even with no dev address configured."""
+    """Dev ports always include loopback even with no dev address configured.
+
+    Parameters:
+        tmp_path (Path): Disposable guest filesystem root.
+        status (int): Reachable or broken loopback-probe status.
+    """
     guest = Guest(tmp_path)
     guest.env["SMOKE_DEV_PORTS"] = "8080"
     guest.results["127.0.0.1 8080"] = (status, "")
@@ -279,13 +370,21 @@ def test_loopback_connection_or_engine_failure_refuses(tmp_path: Path, status: i
 
 @pytest.mark.parametrize("port", ["0", "65536", "bad"])
 def test_invalid_tcp_port_is_engine_failure(port: str) -> None:
-    """Invalid targets refuse before calling the socket boundary."""
+    """Invalid targets refuse before calling the socket boundary.
+
+    Parameters:
+        port (str): Invalid TCP port supplied to the child entry.
+    """
     assert main(argv=["--tcp", "192.0.2.1", port]) == 2
 
 
 @pytest.mark.parametrize("args", [["--tcp"], ["--tcp", "192.0.2.1"], ["--tcp", "192.0.2.1", "80", "extra"]])
 def test_tcp_child_arity_refuses(args: list[str]) -> None:
-    """Malformed internal argv cannot trigger a complete smoke or a network call."""
+    """Malformed internal argv cannot trigger a complete smoke or a network call.
+
+    Parameters:
+        args (list[str]): Incomplete or overlong child argv.
+    """
     assert main(argv=args) == 2
 
 
@@ -307,9 +406,24 @@ def test_tcp_child_arity_refuses(args: list[str]) -> None:
 def test_socket_denial_is_distinct_from_execution_failure(
     monkeypatch: pytest.MonkeyPatch, error: Exception, status: int
 ) -> None:
-    """Only a known network outcome is accepted as denial; no real socket is opened."""
+    """Only a known network outcome is accepted as denial; no real socket is opened.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Socket boundary replacement.
+        error (Exception): Injected socket failure.
+        status (int): Expected classified child status.
+    """
 
     def connect(_address: tuple[str, int], *, timeout: int) -> None:
+        """Raise the injected socket error instead of connecting.
+
+        Parameters:
+            _address (tuple[str, int]): Unused synthetic target.
+            timeout (int): Required socket timeout.
+
+        Raises:
+            Exception: The parametrized boundary error.
+        """
         assert timeout == 4
         raise error
 
@@ -318,16 +432,40 @@ def test_socket_denial_is_distinct_from_execution_failure(
 
 
 def test_tcp_success_and_executable_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run the actual module entry with a disposable socket boundary and exact argv."""
+    """Run the actual module entry with a disposable socket boundary and exact argv.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Socket and process argv replacement.
+    """
 
     class Connection:
+        """Model an open connection without creating a socket."""
+
         def __enter__(self) -> Connection:
+            """Enter the synthetic connection context.
+
+            Returns:
+                Connection: This disposable context.
+            """
             return self
 
         def __exit__(self, *_args: object) -> None:
-            return None
+            """Leave the synthetic context without suppressing errors.
+
+            Parameters:
+                _args (object): Unused context-manager exception arguments.
+            """
 
     def connect(address: tuple[str, int], *, timeout: int) -> Connection:
+        """Verify the socket boundary and return a synthetic open connection.
+
+        Parameters:
+            address (tuple[str, int]): Expected synthetic address and port.
+            timeout (int): Required socket timeout.
+
+        Returns:
+            Connection: Synthetic open connection context.
+        """
         assert address == ("192.0.2.1", 80)
         assert timeout == 4
         return Connection()
@@ -340,7 +478,11 @@ def test_tcp_success_and_executable_entry(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_bootstrap_preserves_argv_environment_and_exit_status(tmp_path: Path) -> None:
-    """Execute the real shell entry with an injected interpreter, never any guest probe."""
+    """Execute the real shell entry with an injected interpreter, never any guest probe.
+
+    Parameters:
+        tmp_path (Path): Disposable interpreter directory.
+    """
     interpreter = tmp_path / "python3"
     interpreter.write_text(
         f"#!{sys.executable}\n"
