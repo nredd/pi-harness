@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { createTestUiContext, fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
 import { settled, toolCall } from "@nredd/pi-test-lib/faux";
+import { createTestUiContext, fauxAssistantMessage, getMessageText } from "@nredd/pi-test-lib/harness";
 import { expect, test } from "vitest";
 import { CONFIRMATION, complete, GATE_ERROR, SessionFixture, state } from "./fixtures/session-support.ts";
 

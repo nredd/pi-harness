@@ -1,7 +1,7 @@
 /** Real core sessions: the user edits a ready plan through the RPC editor dialog. */
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { createTestUiContext, fauxAssistantMessage, getUserTexts } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
+import { createTestUiContext, fauxAssistantMessage, getUserTexts } from "@nredd/pi-test-lib/harness";
 import { expect, test } from "vitest";
 import { formatTransferredPlanPrompt } from "../src/fresh-implementation.ts";
 import { PLAN_APPROVED_EVENT, type PlanApprovedPayload } from "../src/plan-approval.ts";

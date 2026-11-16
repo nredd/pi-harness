@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { createHarness, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
+import { createHarness, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
 import planMode from "../../src/plan-mode.ts";
 import type { PlanModeState } from "../../src/state.ts";
 
@@ -70,7 +70,7 @@ export function complete(title: string) {
 }
 
 /** Latest persisted Plan state, not a mirrored fixture state machine. */
-export function state(harness: Harness): PlanModeState {
+export function state(harness: Pick<Harness, "sessionManager">): PlanModeState {
 	const entry = harness.sessionManager
 		.getBranch()
 		.slice()
