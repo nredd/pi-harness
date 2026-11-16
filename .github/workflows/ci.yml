@@ -454,7 +454,8 @@ jobs:
           host: ${{ matrix.host }}
           owned: 'true'
       # The pooled ARM64 cell: prove the isolation first, then bootstrap in place (no copy, no `pi-ci` user; the
-      # golden image's tools are reused when their versions match the pins).
+      # golden image's tools are reused when their versions match the pins). The smoke shell entry now
+      # delegates to measured Python; system Python was already required for its protected wsl.conf check.
       - name: Smoke the native guest
         if: matrix.host == 'native'
         run: bash scripts/wsl2_smoke.sh
@@ -1053,6 +1054,7 @@ jobs:
         with:
           guest: ${{ matrix.guest }}
           host: ${{ matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host || '' }}
+      # The compatible smoke entry uses the image's existing system Python, before tool bootstrap.
       - name: Smoke the native guest
         if: steps.plan.outputs.run == 'true' && matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host == 'native'
         run: bash scripts/wsl2_smoke.sh
