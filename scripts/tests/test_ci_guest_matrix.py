@@ -2384,11 +2384,11 @@ def test_setup_refuses_non_linux_filesystem(tmp_path: Path, filesystem: str) -> 
 
 
 def test_docs_list_every_benchmark_input() -> None:
-    """Pin the `benchmark_inputs` bullet in `docs/ci.md` to the classifier's constants."""
+    """Pin the workflow's `benchmark_inputs` policy comment to the classifier's constants."""
     bullet = next(
-        line
-        for line in (ROOT / "docs/ci.md").read_text().splitlines()
-        if line.startswith("- `benchmark_inputs`")
+        line.removeprefix("  # ")
+        for line in (ROOT / ".github/workflows/ci.yml").read_text().splitlines()
+        if line.startswith("  # - `benchmark_inputs`")
     )
     for entry in sorted(ci_paths.BENCHMARK_INPUT_FILES) + list(ci_paths.BENCHMARK_INPUT_PREFIXES):
         assert f"`{entry}`" in bullet

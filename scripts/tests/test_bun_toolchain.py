@@ -31,4 +31,6 @@ def test_ci_uses_version_file() -> None:
             setups += 1
     assert setups > 0
     version = (ROOT / ".bun-version").read_text().strip()
-    assert f"repository's pinned `{version}`" in (ROOT / "docs/ci.md").read_text()
+    assert (
+        f"repository's pinned `{version}`" in (ROOT / ".github/actions/setup-ci-tools/action.yml").read_text()
+    )

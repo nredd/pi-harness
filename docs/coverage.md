@@ -444,7 +444,7 @@ consume the integer counters emitted by `account`, not the package, signal, OS o
 file with no executable lines; for any other producer a bare record is a truncated report and fails. The same
 `coverage.py` dialect covers what `branch = true` writes (#387): a module without functions carries no `FNF`/`FNH`,
 read as zero functions, and `BRDA` names each branch by its destination (`jump to line 12`) instead of a number. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
-pytest (`docs/ci.md`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
+pytest (`.github/workflows/ci.yml`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
 `skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
 a skipped host.
 
@@ -696,7 +696,7 @@ and Bun are 0 uncovered branches on darwin and on linux (ubuntu-24.04 and wsl2, 
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary
 fetched during the Node pass is not available to Bun. Ubuntu and macOS owned CI
-install them before tests with SHA-pinned `taiki-e/install-action` (no apt mirror on the path, see `docs/ci.md`)
+install them before tests with SHA-pinned `taiki-e/install-action` (no apt mirror on the path, see `.github/workflows/ci.yml`)
 with exact `ripgrep@14.1.1` and `fd-find@10.5.0` versions (its cargo-binstall fallback for these
 crates). `BINSTALL_DISABLE_STRATEGIES=compile` makes a missing prebuilt fail the step instead of
 compiling from source; `fd-find` before 10.4.2 has no binstall metadata matching its release
@@ -717,4 +717,4 @@ to claim a clean gate.
 
 The Python benchmark's combined statement/branch gate is 100% (#387): still in `make check`, and in CI on `main` pushes and on PRs that touch `benchmark_inputs` (NOT RUN otherwise). Instrumented runs
 must not refresh performance baselines. Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
-The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](ci.md) for platform boundaries.
+The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](../.github/workflows/ci.yml) for platform boundaries.

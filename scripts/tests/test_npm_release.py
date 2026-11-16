@@ -1020,7 +1020,12 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     Returns:
         None: Permissions, immutable transfer and release dependencies match the design.
     """
-    workflow = (pc.REPO_ROOT / ".github/workflows/publish.yml").read_text()
+    # Count executable declarations, not the inline policy that explains their scope.
+    workflow = "\n".join(
+        line
+        for line in (pc.REPO_ROOT / ".github/workflows/publish.yml").read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    )
     assert "tags: ['@nredd/*@*']" in workflow
     assert "cancel-in-progress: false" in workflow
     assert workflow.count("id-token: write") == 2  # Isolated attestor and npm publisher.

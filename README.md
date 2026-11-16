@@ -4,11 +4,13 @@ Development home for the `@nredd/pi-*` Pi plugins, the Pi core fork, their integ
 the exact-stack release tooling.
 
 Documentation lives in this file, each package's `README.md` and git history. `docs/` holds only
-the long references a test or release procedure reads: [CI](docs/ci.md), [coverage](docs/coverage.md),
-[install](docs/install.md) and [releases](docs/releases.md), plus `docs/agents/issue-tracker.md` for
-the `code-review` skill. New documentation under about 100 lines goes in a README and CI policy goes in comments next
-to the workflow it describes; #893 moves `docs/ci.md` there. Do not add plans, coverage write-ups or
-investigation notes; put the why in the commit.
+the long references a test or release procedure reads: [coverage](docs/coverage.md) (720 lines,
+policy pins and hosted replay), [install](docs/install.md) (254 lines, including the tested recovery
+table) and [releases](docs/releases.md) (336 lines, publication and recovery procedures), plus
+`docs/agents/issue-tracker.md` for the `code-review` skill. These exceed the roughly 100-line folding
+threshold and stay separate. Shorter documentation goes in a README; CI policy lives in comments
+next to its workflow or action. Do not add plans, coverage write-ups or investigation notes;
+put the why in the commit.
 
 ## Layout
 
@@ -76,7 +78,12 @@ make help                    # every target
 
 ## CI and release
 
-- What runs, what is NOT RUN and the flake policy: [CI](docs/ci.md)
+- What runs, what is NOT RUN, sharding, coverage and stack diagnostics: comments in [CI](.github/workflows/ci.yml)
+- Shared tool/cache setup, WSL bootstrap and capture: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml),
+  [setup-ci-wsl](.github/actions/setup-ci-wsl/action.yml), [capture-ci-wsl](.github/actions/capture-ci-wsl/action.yml)
+- Other workflow policy: [installer](.github/workflows/installer.yml), [core forks](.github/workflows/forks.yml),
+  [publishing](.github/workflows/publish.yml), [runner rescue](.github/workflows/runner-rescue.yml),
+  [WSL watchdog controls](.github/workflows/wsl-watchdog.yml). Review policy stays [here](#review-and-merge-evidence); flakes follow the comments in `ci.yml`
 - Owned packages publish through `publish.yml` from a signed tag; core ships through
   `nredd/tap/pi-coding-agent`. Procedure: [releases](docs/releases.md)
 - `promote-stack.yml` attests a gated `main` commit as `stack/<sha>`:
@@ -96,6 +103,80 @@ Required checks on `main`, twelve contexts:
 Dropping a cell from a matrix would leave its context pending forever, which is why the cells that no longer test anything stay as bypass cells.
 
 The `macos-14` in these names is a stable check context, not the OS version: GitHub retired that image, so the cells run on `xcode-27` (macOS 27, GitHub names new images after the Xcode major) via `matrix.runner`. Renaming them would need a ruleset change.
+
+### Review and merge evidence
+
+The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
+
+The twelve jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` ("Stack promotion" in `README.md`). `migration-review/standards` and
+`migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
+
+- Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
+- `scripts/merge-pr.ts` is the measured Node merge/receipt implementation; `scripts/merge-pr.sh`
+  is only its unmeasured compatibility bootstrap. `scripts/merge_pr_checks.py` retains the read-only CI
+  predicate. Invoke the helper from an exact reviewed checkout. It validates distinct reviewer IDs,
+  exact final-report HEAD and axis, unresolved-revision errors, receipt posting and
+  `--match-head-commit`. Each reviewer's **final assistant report** must begin with these literal
+  lines (use `Axis: Spec` for the other axis), then its normal `Checked:` and `Findings:` sections (`Findings:` alone on its line, then findings or `None.`; the inline `Findings: None.` refuses). `packages/preset/agents/code-reviewer.md` ships this exact skeleton and a test feeds it through `merge-pr.sh`:
+  ```text
+  Axis: Standards
+  Reviewed HEAD: <full-40-character-reviewed-sha>
+  ```
+  Missing, duplicate or conflicting declarations refuse. A SHA in an earlier request, tool call or
+  incidental prose is not a receipt. Git diagnostic detection requires explicit boolean `isError`
+  metadata: successful source reads/diffs may quote every failure pattern without invalidating the
+  review. An actual failed unresolved-revision result blocks even if a later call succeeds. Missing
+  or malformed Git-result status/content and reader errors fail closed. Renew the review rather than
+  editing a transcript. The unmanaged
+  `~/code/pi-harness-builds/merge-pr.sh` is a distribution copy, not source. Only after this PR is
+  reviewed and merged may the parent copy **all three** scripts together from the merged revision into
+  that directory. Do not activate an unreviewed copy or change managed Pi config
+- The helper gates **all** reported checks, including optional fork jobs, not just required contexts.
+  It independently verifies every ruleset context against its bound app and reviewed SHA. Missing,
+  pending, failed and current cancelled checks refuse. `SKIPPED` remains accepted for non-required
+  conditional jobs
+- A zero-step completed/cancelled literal CI matrix placeholder (`owned`, `contracts`, `stack`, and
+  the non-required `owned shard` jobs)
+  is stale only with a later completed/successful execution of the same workflow ID/path, event,
+  PR/head/base (including repository identity), Actions app and SHA. All twelve expected expanded
+  matrix cells must individually succeed. The latest workflow execution must qualify; an intermediate
+  green run cannot hide a later cancellation. Ordering uses `run_number`, then `run_attempt`, never
+  timestamps or API page order. Evidence is fully paginated and validated as strict Pydantic records;
+  missing, malformed or ambiguous evidence refuses.
+  The bounded matrix contract test must change alongside any CI matrix change
+- Bootstrap this helper's own PR without replacing the scratch copy: after independent Standards +
+  Spec reviews of its final HEAD and existing hosted checks are green, invoke its reviewed tracked
+  helper directly from the candidate worktree:
+  Install the existing locked integration environment (`uv sync --locked` in `integration/`)
+  for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
+  storage directory explicitly; there is no PATH-based or workstation-specific fallback.
+  Select `MERGE_PR_NODE` as a trusted absolute Node executable (the repository Node version supports
+  direct TypeScript execution). The six positional arguments are unchanged. Node uses filesystem APIs
+  for transcript discovery, regular-file checks and private temporary receipt cleanup; child commands
+  use literal argv without a shell. The Python predicate is selected relative to the Node module, not
+  the working directory or PATH. The poisoned-PATH regression retains the actual wrapper/Node/Python
+  chain and synthetic GitHub CLI; no real merge is attempted. `make check-import-audit` produces actual
+  V8 lines/functions/branches/statements for `merge-pr.ts`, enforced at zero gaps by coverage accounting.
+  The tiny shell executable-selection/exec bootstrap is still pending/unmeasured, not a shell coverage
+  claim. Root WSL, PowerShell and workflow-inline measurement remains open under #695; this slice does
+  not close that umbrella or replace its remaining lint requirements.
+
+  Example:
+
+  ```sh
+  MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
+  MERGE_PR_NODE=<absolute-node-executable> \
+  MERGE_PR_GH=/opt/homebrew/bin/gh \
+  MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/integration/.venv/bin/python \
+  bash ~/code/pi-harness-merge-helper/scripts/merge-pr.sh \
+    <helper-pr> <full-reviewed-head> <standards-task-id> <spec-task-id> \
+    <gate-history-file> nredd/pi-harness
+  ```
+  This uses real green checks and the same receipt/expected-head enforcement, not a bypass.
+  Any actual conflict resolution or other HEAD change invalidates both reviews; unrelated base advancement does not. Refresh the distribution copy
+  only after that reviewed merge. This procedure does not authorize merging router PR135,
+  publishing packages, or activating live configuration
+- `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
 
 ## Core fork
 
@@ -164,7 +245,7 @@ the verifier that matches its candidate: `publish.yml` runs from the tag's commi
 change (e.g. the #660 macOS split) therefore verifies under its own commit's gate, not current
 `main`'s; do not promote such a candidate from a later `main` without re-freezing it.
 
-The required steps follow the CI plan (`scripts/ci_paths.py`, [ci.md](docs/ci.md)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps, and the macOS `python` shard its `Benchmark unit gate` (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `harness.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
+The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps, and the macOS `python` shard its `Benchmark unit gate` (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `harness.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
 uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
@@ -241,7 +322,7 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 
 - Inputs: `select_source_sha` (called by `promotion_verify`) requires `operation` to be `verify-only` or `promote` and `source_sha` to match `^[0-9a-f]{40}$`. The commit must be an ancestor of `origin/main`. The `fetch origin main` that gets `origin/main` carries no credentials (`persist-credentials: false`), which is fine because the repository is public.
 - Required checks: every context from `GET /repos/nredd/pi-harness/rules/branches/main` (ruleset `main required checks`, readable by `GITHUB_TOKEN`) must be `completed`/`success` on that exact SHA, reported by the rule's `integration_id` app (`app.id`, 15368 for every configured context). No checks from the rules API fails closed. Review statuses are not required checks.
-- Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`docs/ci.md`), so there is nothing to read; reviews stay a process step.
+- Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`.github/workflows/ci.yml`), so there is nothing to read; reviews stay a process step.
 - Deferred, tap readiness when core changes: not implemented; the core release's asset digests and attestation are the only core gate, and a tap bump is gated by its own green CI.
 - Registry-stack evidence: the exact full `workflow_dispatch` run validated by `harness.release_gate`. Every owned and contracts cell, each stack cell that runs a stack, and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
 - Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so docs-only and main-push smoke cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
@@ -261,7 +342,7 @@ The CI evidence is the only coupling to CI: run IDs are read with `gh run list/v
 
 ### Required-check visibility
 
-The twelve required checks live in ruleset `main required checks` (id `25524267`, non-strict). See [CI](docs/ci.md) for which of them are bypass cells: a green bypass cell is a reported name, not evidence, which is why the registry-stack artifact below is the evidence. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
+The twelve required checks live in ruleset `main required checks` (id `25524267`, non-strict). See [CI](.github/workflows/ci.yml) for which of them are bypass cells: a green bypass cell is a reported name, not evidence, which is why the registry-stack artifact below is the evidence. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
 
 ### Operations
 
@@ -358,6 +439,6 @@ The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` wi
 ### Remaining
 
 - `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
-- Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](docs/ci.md)
+- Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](.github/workflows/ci.yml)
 - `pi-wsl2` acceptance before `PI_WSL2_HEARTBEAT` is set: three consecutive green real jobs and a clean smoke on the laptop, then replace the estimated `CELL_SECONDS` entries for the `wsl2` cells with measured ones. Until the variable exists the pool reads as down and every `wsl2` cell stays hosted. Pooled cells keep reporting as `owned (wsl2)` and `contracts (wsl2)`, and the pool's own job is `smoke (pi-wsl2)`; no new required check name is added
 - Alerting: the daemon only logs to journald; nothing pages when it is down
