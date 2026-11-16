@@ -8,7 +8,7 @@ import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { modelLeaks, modelValues, TIER_REF } from "@nredd/pi-test-lib/model-guard";
 import Schema from "typebox/schema";
 import { test } from "vitest";
-import { frontmatterOf, type Json, manifest, pkgRoot, readJson, readText, walk } from "./support.ts";
+import { frontmatterOf, type Json, manifest, pkgRoot, readJson, readText, walk } from "./fixtures/package.ts";
 
 const AGENTS = [
 	"architect",
@@ -577,7 +577,7 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 		spec === "@earendil-works/pi-tui" ||
 		/^\.\.?\/(lib\/)?footer-(cache|quota)\.ts$/.test(spec) ||
 		/^\.\.\/lib\/footer-(cache|quota)\.ts$/.test(spec);
-	for (const file of ["extensions/expanded-footer.ts", "lib/footer-cache.ts", "lib/footer-quota.ts"]) {
+	for (const file of ["src/index.ts", "src/footer-cache.ts", "src/footer-quota.ts"]) {
 		const specs = [...readText(file).matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+"([^"]+)"/gm)].map((m) =>
 			must(m[1]),
 		);
@@ -589,11 +589,11 @@ test("footer code imports only node built-ins, declared peers, and its own sibli
 			`${file}: network or credential access`,
 		);
 	}
-	const lib = ["lib/footer-cache.ts", "lib/footer-quota.ts"].map(readText).join("\n");
-	assert.ok(!lib.includes("@earendil-works"), "lib/ stays free of host imports");
-	assert.deepEqual(readText("extensions/expanded-footer.ts").match(/from "\.\.\/lib\/footer-(?:cache|quota)\.ts"/g), [
-		'from "../lib/footer-cache.ts"',
-		'from "../lib/footer-quota.ts"',
+	const lib = ["src/footer-cache.ts", "src/footer-quota.ts"].map(readText).join("\n");
+	assert.ok(!lib.includes("@earendil-works"), "footer helpers stay free of host imports");
+	assert.deepEqual(readText("src/index.ts").match(/from "\.\/footer-(?:cache|quota)\.ts"/g), [
+		'from "./footer-cache.ts"',
+		'from "./footer-quota.ts"',
 	]);
 });
 

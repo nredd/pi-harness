@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import * as c from "../lib/footer-cache.ts";
+import * as c from "../src/footer-cache.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const TTL = 300;
-const at = (seconds) => T0 + seconds * 1000;
+const at = (seconds: number) => T0 + seconds * 1000;
 
 /** Assistant entry; `hit` is the cache-read share of a 1000 token prompt. */
-const turn = (seconds, hit, extra = {}) => ({
+const turn = (seconds: number, hit: number, extra: Record<string, unknown> = {}) => ({
 	type: "message",
-	timestamp: new Date(at(seconds)).toISOString(),
+	timestamp: new Date(at(seconds)).toISOString() as string | undefined,
 	message: {
 		role: "assistant",
 		provider: "anthropic",
@@ -19,9 +19,9 @@ const turn = (seconds, hit, extra = {}) => ({
 		...extra,
 	},
 });
-const user = (seconds) => ({ type: "message", message: { role: "user", timestamp: at(seconds) } });
-const compaction = (seconds) => ({ type: "compaction", timestamp: new Date(at(seconds)).toISOString() });
-const analyze = (entries, nowS) => c.analyzeCache(entries, at(nowS), TTL);
+const user = (seconds: number) => ({ type: "message", message: { role: "user", timestamp: at(seconds) } });
+const compaction = (seconds: number) => ({ type: "compaction", timestamp: new Date(at(seconds)).toISOString() });
+const analyze = (entries: Parameters<typeof c.analyzeCache>[0], nowS: number) => c.analyzeCache(entries, at(nowS), TTL);
 
 test("ttl: promptCache.short in seconds, else 300", () => {
 	assert.equal(c.cacheTtlSeconds({ short: 120 }), 120);
@@ -164,8 +164,8 @@ test("subagent and tool-result rows are not turns", () => {
 });
 
 test("missing timestamps: no marker, no idle cause; entry timestamp is a fallback", () => {
-	const noStamp = (hit) => turn(0, hit, { timestamp: undefined, usage: turn(0, hit).message.usage });
-	const bare = (hit) => {
+	const noStamp = (hit: number) => turn(0, hit, { timestamp: undefined, usage: turn(0, hit).message.usage });
+	const bare = (hit: number) => {
 		const entry = noStamp(hit);
 		entry.timestamp = undefined;
 		return entry;

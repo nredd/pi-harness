@@ -4,7 +4,7 @@ Personal exercises its exact published footer-only pin; local exercises the full
 preset. Never add a local preset to personal or silently replace its published footer.
 
 References:
-- https://github.com/nredd/pi-harness/blob/main/packages/preset/extensions/expanded-footer.ts
+- https://github.com/nredd/pi-harness/blob/main/packages/preset/src/index.ts
 """
 
 from __future__ import annotations
@@ -52,7 +52,8 @@ def preset_shows_resets(preset: Path) -> bool:
 
     The personal stack installs the PUBLISHED `@nredd/pi-preset`, which predates the reset-time
     footer until a release carrying it is pinned; the local stack installs this workspace's preset.
-    The marker is the exported `formatResetAt` of the installed `lib/footer-quota.ts`.
+    The marker is the exported `formatResetAt` in the installed quota helper. The published
+    0.4.0 package keeps it in `lib/`; the workspace layout moves it to `src/`.
 
     Parameters:
         preset (Path): installed `pi-preset` package directory.
@@ -60,7 +61,12 @@ def preset_shows_resets(preset: Path) -> bool:
     Returns:
         bool: True when the installed footer is the reset-time one.
     """
-    return "formatResetAt" in (preset / "lib" / "footer-quota.ts").read_text()
+    entry = json.loads((preset / "package.json").read_text())["pi"]["extensions"]
+    assert len(entry) == 1, entry
+    helper_dirs = {"./src/index.ts": "src", "./extensions/expanded-footer.ts": "lib"}
+    assert entry[0] in helper_dirs, entry
+    helper = preset / helper_dirs[entry[0]] / "footer-quota.ts"
+    return "formatResetAt" in helper.read_text()
 
 
 def assert_footer(pane: TmuxPane, width: int, *, resets: bool) -> None:

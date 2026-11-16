@@ -49,7 +49,7 @@ export interface Manifest {
 	piPreset: { externalResources: { skills: ExternalSkill[]; extensions: ExternalExtension[] } };
 }
 
-export const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 export const readText = (rel: string): string => readFileSync(join(pkgRoot, rel), "utf8");
 export const readJson = <T = Json>(rel: string): T => JSON.parse(readText(rel)) as T;
@@ -78,6 +78,6 @@ export function resourceFiles(): string[] {
 		"NOTICE.md",
 		"README.md",
 		"package.json",
-		...["agents", "extensions", "lib", "licenses", "settings", "skills", "themes"].flatMap(walk),
+		...["agents", "src", "licenses", "settings", "skills", "themes"].flatMap(walk),
 	].sort();
 }

@@ -2645,13 +2645,13 @@ def preset_manifest() -> dict[str, object]:
         "dependencies": {},
         "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*"},
-        "pi": {"extensions": ["./extensions/expanded-footer.ts"]},
+        "pi": {"extensions": ["./src/index.ts"]},
     }
 
 
 def test_preset_contract_accounts_for_separately_licensed_assets() -> None:
     """The preset must declare the full license expression; plugins stay MIT-only."""
-    files = ["extensions/expanded-footer.ts"]
+    files = ["src/index.ts"]
     assert pc.audit_manifest(pc.PRESET_CONTRACT, preset_manifest(), files) == []
     mit_only = pc.audit_manifest(pc.PRESET_CONTRACT, preset_manifest() | {"license": "MIT"}, files)
     assert any("MIT AND Apache-2.0 AND CC-BY-SA-4.0" in problem for problem in mit_only), mit_only
@@ -2790,8 +2790,8 @@ def test_preset_audit_requires_notice_and_license_texts(files: list[str]) -> Non
 
 def test_preset_audit_rejects_unlisted_files() -> None:
     """Tests, fixtures and config do not ship in the preset tarball."""
-    problems = pc.audit_files(pc.PRESET_CONTRACT, [*pc.PRESET_CONTRACT.required, "test/x.ts", "biome.json"])
-    assert "unexpected file 'test/x.ts'" in problems
+    problems = pc.audit_files(pc.PRESET_CONTRACT, [*pc.PRESET_CONTRACT.required, "tests/x.ts", "biome.json"])
+    assert "unexpected file 'tests/x.ts'" in problems
     assert "unexpected file 'biome.json'" in problems
 
 

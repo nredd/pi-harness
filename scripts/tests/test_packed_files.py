@@ -133,16 +133,16 @@ def test_preset_resource_disk_completeness(tmp_path: Path) -> None:
     Returns:
         None: Every resource type, including dotfiles, must ship.
     """
-    for name in ("lib/known.ts", "lib/new.ts", "themes/new.json", "agents/.hidden.md"):
+    for name in ("licenses/known.txt", "licenses/new.txt", "themes/new.json", "agents/.hidden.md"):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("")
     problems = pc.audit_source_files(
-        tmp_path, ["lib/known.ts"], resource_directories=pc.PRESET_CONTRACT.resource_directories
+        tmp_path, ["licenses/known.txt"], resource_directories=pc.PRESET_CONTRACT.resource_directories
     )
     assert problems == [
         "resource file 'agents/.hidden.md' is not packed",
-        "resource file 'lib/new.ts' is not packed",
+        "resource file 'licenses/new.txt' is not packed",
         "resource file 'themes/new.json' is not packed",
     ]
 
@@ -162,6 +162,7 @@ def test_packed_gate_reports_actual_pack_and_rejects_mismatch(
     contract = dataclasses.replace(
         pc.PRESET_CONTRACT, packed_files=("LICENSE",), required=("LICENSE",), resource_directories=()
     )
+    monkeypatch.setattr(pc, "REPO_ROOT", tmp_path)
     artifact = pc.PackedArtifact(contract, tmp_path / "x.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ("LICENSE",))
     monkeypatch.setattr(pc, "ALL_CONTRACTS", (contract,))
     monkeypatch.setattr(pc, "pack", Mock(return_value=artifact))

@@ -1,39 +1,55 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
-import * as q from "../lib/footer-quota.ts";
+import * as q from "../src/footer-quota.ts";
 
 const NOW = 1_000_000;
-const win = (name, usedPercent, scope = "provider") => ({
+const win = (name: string, usedPercent: number, scope = "provider") => ({
 	name,
 	usedPercent,
 	scope,
 });
-const reply = (snapshots) => ({
+const reply = (snapshots: unknown[]) => ({
 	success: true,
 	data: { snapshots, blocks: [] },
 });
-const snap = (provider, windows, extra = {}) => ({
+const snap = (provider: string, windows: unknown[], extra: Record<string, unknown> = {}) => ({
 	provider,
 	status: "available",
 	windows,
 	expiresAt: NOW + 1,
 	...extra,
 });
-const plain = (_c, t) => t;
+const plain = (_c: string, t: string): string => t;
+
+/** Assert a fixture result exists before using it. */
+function present<T>(value: T | undefined): T {
+	assert.ok(value !== undefined);
+	return value;
+}
+
+/** Bus lookup fails at the missing subscription, not at a later invocation. */
+class Handlers extends Map<string, (data: unknown) => void> {
+	require(channel: string): (data: unknown) => void {
+		return present(this.get(channel));
+	}
+}
 
 function fakeEnv() {
-	const handlers = new Map();
-	const emitted = [];
-	const timers = [];
+	const handlers = new Handlers();
+	const emitted: { ch: string; data: { requestId: string; refresh: boolean } }[] = [];
+	const timers: { ms: number; live: boolean; fn: () => void }[] = [];
 	let intervals = 0;
 	let changes = 0;
 	const events = {
-		on(ch, fn) {
+		on(ch: string, fn: (data: unknown) => void): () => void {
 			handlers.set(ch, fn);
 			return () => handlers.delete(ch);
 		},
-		emit(ch, data) {
-			emitted.push({ ch, data });
+		emit(ch: string, data: unknown): void {
+			assert.ok(data && typeof data === "object" && "requestId" in data && "refresh" in data);
+			assert.ok(typeof data.requestId === "string");
+			assert.ok(typeof data.refresh === "boolean");
+			emitted.push({ ch, data: { requestId: data.requestId, refresh: data.refresh } });
 		},
 	};
 	let n = 0;
@@ -43,7 +59,7 @@ function fakeEnv() {
 		onChange: () => changes++,
 		now: () => clock.now,
 		newId: () => `id${++n}`,
-		setTimeout: (fn, ms) => {
+		setTimeout: (fn: () => void, ms: number) => {
 			const timer = {
 				ms,
 				live: true,
@@ -55,15 +71,16 @@ function fakeEnv() {
 			timers.push(timer);
 			return timers.length - 1;
 		},
-		clearTimeout: (h) => {
-			timers[h].live = false;
+		clearTimeout: (h: unknown) => {
+			assert.ok(typeof h === "number");
+			present(timers[h]).live = false;
 		},
-		setInterval: () => ++intervals,
+		setInterval: (_fn: () => void, _ms: number) => ++intervals,
 		clearInterval: () => {
 			intervals--;
 		},
 	};
-	const live = (ms) => timers.filter((t) => t.live && t.ms === ms);
+	const live = (ms: number) => timers.filter((t) => t.live && t.ms === ms);
 	return {
 		deps,
 		handlers,
@@ -116,7 +133,7 @@ test("parse: fresh snapshots read provider windows only", () => {
 		]),
 		NOW,
 	);
-	assert.deepEqual(state.anthropic, {
+	assert.deepEqual(state?.anthropic, {
 		fiveHourReported: true,
 		fiveHour: 76,
 		weekly: 58,
@@ -124,7 +141,7 @@ test("parse: fresh snapshots read provider windows only", () => {
 		expiresAt: NOW + 5,
 	});
 	// OpenAI has no 5h quota: its "5h" window is never surfaced.
-	assert.deepEqual(state["openai-codex"], {
+	assert.deepEqual(state?.["openai-codex"], {
 		weekly: 63,
 		stale: false,
 		expiresAt: NOW + 6,
@@ -158,10 +175,10 @@ test("parse: fresh requires finite future expiresAt, known status, windows array
 	};
 	for (const [name, extra] of Object.entries(cases)) {
 		const state = q.parseUsageReply(reply([ok(extra)]), NOW);
-		assert.equal(state.anthropic.stale, true, name);
+		assert.equal(state?.anthropic?.stale, true, name);
 	}
 	const noWindows = { ...ok({ expiresAt: NOW + 5 }), windows: "nope" };
-	assert.equal(q.parseUsageReply(reply([noWindows]), NOW).anthropic.stale, true);
+	assert.equal(q.parseUsageReply(reply([noWindows]), NOW)?.anthropic?.stale, true);
 });
 
 test("parse: provider error/unavailable/empty windows retain last-known values as stale", () => {
@@ -172,12 +189,12 @@ test("parse: provider error/unavailable/empty windows retain last-known values a
 		{ windows: undefined },
 	]) {
 		const state = q.parseUsageReply(reply([snap("anthropic", [], { expiresAt: NOW + 5, ...extra })]), NOW, prior);
-		assert.equal(state.anthropic.stale, true);
-		assert.equal(state.anthropic.fiveHour, 76);
-		assert.equal(state.anthropic.weekly, 58);
+		assert.equal(state?.anthropic?.stale, true);
+		assert.equal(state?.anthropic?.fiveHour, 76);
+		assert.equal(state?.anthropic?.weekly, 58);
 		// provider missing from reply entirely
-		assert.equal(state["openai-codex"].stale, true);
-		assert.equal(state["openai-codex"].fiveHour, 82);
+		assert.equal(state?.["openai-codex"]?.stale, true);
+		assert.equal(state?.["openai-codex"]?.fiveHour, 82);
 	}
 });
 
@@ -192,9 +209,9 @@ test("parse: stale merge is per field, valid snapshot values win", () => {
 		NOW,
 		prior,
 	);
-	assert.equal(state.anthropic.fiveHour, 50);
-	assert.equal(state.anthropic.weekly, 58);
-	assert.equal(state.anthropic.stale, true);
+	assert.equal(state?.anthropic?.fiveHour, 50);
+	assert.equal(state?.anthropic?.weekly, 58);
+	assert.equal(state?.anthropic?.stale, true);
 });
 
 test("parse: fresh with missing/invalid windows shows -- and does not retain", () => {
@@ -206,14 +223,14 @@ test("parse: fresh with missing/invalid windows shows -- and does not retain", (
 		NOW,
 		prior,
 	);
-	assert.deepEqual(state.anthropic, {
+	assert.deepEqual(state?.anthropic, {
 		fiveHourReported: true,
 		fiveHour: undefined,
 		stale: false,
 		expiresAt: NOW + 5,
 	});
-	assert.equal(state["openai-codex"].fiveHour, undefined);
-	assert.equal(state["openai-codex"].stale, false);
+	assert.equal(state?.["openai-codex"]?.fiveHour, undefined);
+	assert.equal(state?.["openai-codex"]?.stale, false);
 });
 
 test("format: full, compact, boundaries and colors", () => {
@@ -223,8 +240,8 @@ test("format: full, compact, boundaries and colors", () => {
 	};
 	assert.equal(q.formatQuotaRow(state, "full", plain), "Quota left: Anthropic 5h 76% weekly 58% | OpenAI weekly 63%");
 	assert.equal(q.formatQuotaRow(state, "compact", plain), "Left: Anth 5h 76% 7d 58% | OAI 7d 63%");
-	const colorsFor = (value) => {
-		const colors = [];
+	const colorsFor = (value: number) => {
+		const colors: string[] = [];
 		q.formatQuotaRow({ anthropic: { fiveHourReported: true, fiveHour: value, stale: false } }, "compact", (c, t) => {
 			colors.push(`${c}:${t}`);
 			return t;
@@ -249,9 +266,9 @@ test("poller: request shape and unique ids across pollers (default newId)", () =
 	b.start();
 	const [x, y] = env.emitted.map((e) => e.data.requestId);
 	assert.notEqual(x, y);
-	assert.match(x, /^[0-9a-f-]{36}$/);
-	assert.equal(env.emitted[0].ch, "router:rpc:usage");
-	assert.equal(env.emitted[0].data.refresh, true);
+	assert.match(present(x), /^[0-9a-f-]{36}$/);
+	assert.equal(present(env.emitted[0]).ch, "router:rpc:usage");
+	assert.equal(present(env.emitted[0]).data.refresh, true);
 	a.dispose();
 	b.dispose();
 });
@@ -263,7 +280,7 @@ test("poller: timeout with no data stays hidden; one outstanding request", () =>
 	poller.start();
 	assert.equal(env.emitted.length, 1);
 	assert.equal(env.live(12_000).length, 1);
-	env.live(12_000)[0].fn();
+	present(env.live(12_000)[0]).fn();
 	assert.equal(poller.getState(), undefined);
 	assert.equal(env.changes(), 0);
 	assert.equal(env.handlers.size, 0);
@@ -272,26 +289,26 @@ test("poller: timeout with no data stays hidden; one outstanding request", () =>
 
 test("poller: timeout after data keeps figures, marks stale, notifies", () => {
 	const env = fakeEnv();
-	let tick;
+	let tick: () => void = () => assert.fail("interval not registered");
 	env.deps.setInterval = (fn) => {
 		tick = fn;
 		return 1;
 	};
 	const poller = q.createQuotaPoller(env.deps);
 	poller.start();
-	env.handlers.get("router:rpc:usage:reply:id1")(both());
-	assert.equal(poller.getState().anthropic.stale, false);
+	env.handlers.require("router:rpc:usage:reply:id1")(both());
+	assert.equal(poller.getState()?.anthropic?.stale, false);
 	assert.equal(env.changes(), 1);
 	tick();
 	assert.equal(env.emitted.length, 2);
 	tick(); // outstanding: no second request
 	assert.equal(env.emitted.length, 2);
 	const before = env.changes();
-	env.live(12_000)[0].fn();
+	present(env.live(12_000)[0]).fn();
 	const state = poller.getState();
-	assert.equal(state.anthropic.stale, true);
-	assert.equal(state.anthropic.fiveHour, 76);
-	assert.equal(state["openai-codex"].weekly, 63);
+	assert.equal(state?.anthropic?.stale, true);
+	assert.equal(state?.anthropic?.fiveHour, 76);
+	assert.equal(state?.["openai-codex"]?.weekly, 63);
 	assert.equal(env.changes(), before + 1);
 	assert.equal(env.handlers.size, 0);
 	poller.dispose();
@@ -299,41 +316,41 @@ test("poller: timeout after data keeps figures, marks stale, notifies", () => {
 
 test("poller: error reply and failed snapshot retain values", () => {
 	const env = fakeEnv();
-	let tick;
+	let tick: () => void = () => assert.fail("interval not registered");
 	env.deps.setInterval = (fn) => {
 		tick = fn;
 		return 1;
 	};
 	const poller = q.createQuotaPoller(env.deps);
 	poller.start();
-	env.handlers.get("router:rpc:usage:reply:id1")(both());
+	env.handlers.require("router:rpc:usage:reply:id1")(both());
 	tick();
-	env.handlers.get("router:rpc:usage:reply:id2")({
+	env.handlers.require("router:rpc:usage:reply:id2")({
 		success: false,
 		error: "boom",
 	});
-	assert.equal(poller.getState().anthropic.stale, true);
-	assert.equal(poller.getState().anthropic.fiveHour, 76);
+	assert.equal(poller.getState()?.anthropic?.stale, true);
+	assert.equal(poller.getState()?.anthropic?.fiveHour, 76);
 	tick();
-	env.handlers.get("router:rpc:usage:reply:id3")(
+	env.handlers.require("router:rpc:usage:reply:id3")(
 		reply([snap("anthropic", [], { status: "error" }), snap("openai-codex", [], { status: "unavailable" })]),
 	);
-	assert.equal(poller.getState().anthropic.fiveHour, 76);
-	assert.equal(poller.getState()["openai-codex"].weekly, 63);
-	assert.equal(poller.getState().anthropic.stale, true);
+	assert.equal(poller.getState()?.anthropic?.fiveHour, 76);
+	assert.equal(poller.getState()?.["openai-codex"]?.weekly, 63);
+	assert.equal(poller.getState()?.anthropic?.stale, true);
 	poller.dispose();
 });
 
 test("poller: staleness progresses with the clock while a request is pending", () => {
 	const env = fakeEnv();
-	let tick;
+	let tick: () => void = () => assert.fail("interval not registered");
 	env.deps.setInterval = (fn) => {
 		tick = fn;
 		return 1;
 	};
 	const poller = q.createQuotaPoller(env.deps);
 	poller.start();
-	env.handlers.get("router:rpc:usage:reply:id1")(
+	env.handlers.require("router:rpc:usage:reply:id1")(
 		reply([
 			ok({ expiresAt: NOW + 5_000 }),
 			snap("openai-codex", [win("5h", 18), win("7d", 37)], {
@@ -342,25 +359,25 @@ test("poller: staleness progresses with the clock while a request is pending", (
 		]),
 	);
 	tick(); // request pending from here on
-	assert.equal(poller.getState().anthropic.stale, false);
+	assert.equal(poller.getState()?.anthropic?.stale, false);
 	const expiry = env.live(5_000);
 	assert.equal(expiry.length, 1);
 
 	env.clock.now = NOW + 5_000;
 	const before = env.changes();
-	expiry[0].fn(); // timer fires: notify, schedule next
+	present(expiry[0]).fn(); // timer fires: notify, schedule next
 	assert.equal(env.changes(), before + 1);
 	let state = poller.getState();
-	assert.equal(state.anthropic.stale, true);
-	assert.equal(state.anthropic.fiveHour, 76);
-	assert.equal(state["openai-codex"].stale, false);
+	assert.equal(state?.anthropic?.stale, true);
+	assert.equal(state?.anthropic?.fiveHour, 76);
+	assert.equal(state?.["openai-codex"]?.stale, false);
 	assert.equal(env.live(4_000).length, 1);
 
 	env.clock.now = NOW + 9_000;
-	env.live(4_000)[0].fn();
+	present(env.live(4_000)[0]).fn();
 	state = poller.getState();
-	assert.equal(state["openai-codex"].stale, true);
-	assert.equal(state["openai-codex"].weekly, 63);
+	assert.equal(state?.["openai-codex"]?.stale, true);
+	assert.equal(state?.["openai-codex"]?.weekly, 63);
 	poller.dispose();
 	assert.equal(env.live(5_000).length + env.live(4_000).length, 0);
 });
@@ -375,7 +392,7 @@ test("poller: an expiry onChange that disposes the poller leaves no timer armed"
 		},
 	});
 	poller.start();
-	env.handlers.get("router:rpc:usage:reply:id1")(
+	env.handlers.require("router:rpc:usage:reply:id1")(
 		reply([
 			ok({ expiresAt: NOW + 5_000 }),
 			snap("openai-codex", [win("5h", 18), win("7d", 37)], { expiresAt: NOW + 9_000 }),
@@ -385,27 +402,27 @@ test("poller: an expiry onChange that disposes the poller leaves no timer armed"
 	assert.equal(expiry.length, 1);
 	disposeOnChange = true;
 	env.clock.now = NOW + 5_000;
-	expiry[0].fn();
+	present(expiry[0]).fn();
 	assert.equal(env.timers.filter((t) => t.live).length, 0); // without the guard, a 4s expiry re-arms
 });
 
 test("poller: late replies are ignored after dispose, timeout and supersession", () => {
 	const env = fakeEnv();
-	let tick;
+	let tick: () => void = () => assert.fail("interval not registered");
 	env.deps.setInterval = (fn) => {
 		tick = fn;
 		return 1;
 	};
 	const poller = q.createQuotaPoller(env.deps);
 	poller.start();
-	const late1 = env.handlers.get("router:rpc:usage:reply:id1");
-	env.live(12_000)[0].fn(); // times out with nothing
+	const late1 = env.handlers.require("router:rpc:usage:reply:id1");
+	present(env.live(12_000)[0]).fn(); // times out with nothing
 	late1(both());
 	assert.equal(poller.getState(), undefined);
 	assert.equal(env.changes(), 0);
 
 	tick(); // id2 outstanding
-	const late2 = env.handlers.get("router:rpc:usage:reply:id2");
+	const late2 = env.handlers.require("router:rpc:usage:reply:id2");
 	assert.ok(late2);
 	poller.dispose();
 	late2(both());
@@ -424,17 +441,17 @@ test("poller: default timers retry, expire readings and cancel pending work", ()
 	try {
 		poller.start();
 		assert.equal(env.emitted.length, 1);
-		const firstId = env.emitted[0].data.requestId;
+		const firstId = present(env.emitted[0]).data.requestId;
 		assert.match(firstId, /^[\da-f-]{36}$/);
-		env.handlers.get(`${q.USAGE_CHANNEL}:reply:${firstId}`)(reply([ok({ expiresAt: NOW + 5_000 })]));
-		assert.equal(poller.getState().anthropic.fiveHour, 76);
-		assert.equal(poller.getState().anthropic.stale, false);
+		env.handlers.require(`${q.USAGE_CHANNEL}:reply:${firstId}`)(reply([ok({ expiresAt: NOW + 5_000 })]));
+		assert.equal(poller.getState()?.anthropic?.fiveHour, 76);
+		assert.equal(poller.getState()?.anthropic?.stale, false);
 		vi.advanceTimersByTime(5_000);
-		assert.equal(poller.getState().anthropic.stale, true);
+		assert.equal(poller.getState()?.anthropic?.stale, true);
 		assert.equal(env.changes(), 2);
 		vi.advanceTimersByTime(55_000);
 		assert.equal(env.emitted.length, 2);
-		assert.notEqual(env.emitted[1].data.requestId, firstId);
+		assert.notEqual(present(env.emitted[1]).data.requestId, firstId);
 		assert.equal(env.handlers.size, 1);
 		poller.dispose();
 		assert.equal(env.handlers.size, 0);
@@ -450,14 +467,14 @@ test("poller: default timers retry, expire readings and cancel pending work", ()
 
 test("poller: synchronous emit failure cleans up and retries without losing figures", () => {
 	const env = fakeEnv();
-	let tick;
+	let tick: () => void = () => assert.fail("interval not registered");
 	env.deps.setInterval = (fn) => {
 		tick = fn;
 		return 1;
 	};
 	const poller = q.createQuotaPoller(env.deps);
 	poller.start();
-	env.handlers.get(`${q.USAGE_CHANNEL}:reply:id1`)(both());
+	env.handlers.require(`${q.USAGE_CHANNEL}:reply:id1`)(both());
 	const emit = env.deps.events.emit;
 	env.deps.events.emit = () => {
 		throw new Error("router unavailable");
@@ -465,14 +482,14 @@ test("poller: synchronous emit failure cleans up and retries without losing figu
 	assert.doesNotThrow(() => tick());
 	assert.equal(env.handlers.size, 0);
 	assert.equal(env.live(q.REPLY_TIMEOUT_MS).length, 0);
-	assert.equal(poller.getState().anthropic.fiveHour, 76);
-	assert.equal(poller.getState().anthropic.stale, true);
+	assert.equal(poller.getState()?.anthropic?.fiveHour, 76);
+	assert.equal(poller.getState()?.anthropic?.stale, true);
 	assert.equal(env.changes(), 2);
 	env.deps.events.emit = emit;
 	tick();
 	assert.equal(env.handlers.size, 1);
-	env.handlers.get(`${q.USAGE_CHANNEL}:reply:id3`)(both());
-	assert.equal(poller.getState().anthropic.stale, false);
+	env.handlers.require(`${q.USAGE_CHANNEL}:reply:id3`)(both());
+	assert.equal(poller.getState()?.anthropic?.stale, false);
 	assert.equal(env.changes(), 3);
 	poller.dispose();
 });
@@ -489,11 +506,11 @@ test("poller: a bus that replays during subscription settles once before its uns
 	const poller = q.createQuotaPoller({ events: env.deps.events, onChange: env.deps.onChange });
 	try {
 		poller.start();
-		assert.equal(poller.getState().anthropic.fiveHour, 76);
+		assert.equal(poller.getState()?.anthropic?.fiveHour, 76);
 		assert.equal(env.changes(), 1);
 		// The already-settled token's later deadline cannot overwrite a valid reply.
 		vi.advanceTimersByTime(q.REPLY_TIMEOUT_MS);
-		assert.equal(poller.getState().anthropic.stale, false);
+		assert.equal(poller.getState()?.anthropic?.stale, false);
 		assert.equal(env.changes(), 1);
 		assert.equal(offCalls, 0);
 	} finally {
@@ -513,27 +530,27 @@ test("poller: interval cleared on dispose", () => {
 
 test("poller: stale reply from superseded request cannot settle the current one", () => {
 	const env = fakeEnv();
-	let tick;
+	let tick: () => void = () => assert.fail("interval not registered");
 	env.deps.setInterval = (fn) => {
 		tick = fn;
 		return 1;
 	};
 	const poller = q.createQuotaPoller(env.deps);
 	poller.start();
-	const late1 = env.handlers.get("router:rpc:usage:reply:id1");
-	env.live(12_000)[0].fn();
+	const late1 = env.handlers.require("router:rpc:usage:reply:id1");
+	present(env.live(12_000)[0]).fn();
 	tick();
 	late1(both());
 	assert.equal(poller.getState(), undefined);
-	env.handlers.get("router:rpc:usage:reply:id2")(both());
-	assert.equal(poller.getState().anthropic.fiveHour, 76);
+	env.handlers.require("router:rpc:usage:reply:id2")(both());
+	assert.equal(poller.getState()?.anthropic?.fiveHour, 76);
 	poller.dispose();
 });
 
 // --- reset times ---------------------------------------------------------
 
-const at = (iso) => Date.parse(iso);
-const resetWin = (name, usedPercent, resetAt) => ({ ...win(name, usedPercent), resetAt });
+const at = (iso: string) => Date.parse(iso);
+const resetWin = (name: string, usedPercent: number, resetAt: unknown) => ({ ...win(name, usedPercent), resetAt });
 
 test("parse: reset times come from router windows; OpenAI 5h is ignored even when reported", () => {
 	const state = q.parseUsageReply(
@@ -543,12 +560,12 @@ test("parse: reset times come from router windows; OpenAI 5h is ignored even whe
 		]),
 		NOW,
 	);
-	assert.equal(state.anthropic.fiveHourResetAt, 5_000);
-	assert.equal(state.anthropic.weeklyResetAt, 9_000);
-	assert.equal(state["openai-codex"].weekly, 63);
-	assert.equal(state["openai-codex"].weeklyResetAt, 8_000);
-	assert.ok(!("fiveHour" in state["openai-codex"]));
-	assert.ok(!("fiveHourResetAt" in state["openai-codex"]));
+	assert.equal(state?.anthropic?.fiveHourResetAt, 5_000);
+	assert.equal(state?.anthropic?.weeklyResetAt, 9_000);
+	assert.equal(state?.["openai-codex"]?.weekly, 63);
+	assert.equal(state?.["openai-codex"]?.weeklyResetAt, 8_000);
+	assert.ok(!("fiveHour" in present(state?.["openai-codex"])));
+	assert.ok(!("fiveHourResetAt" in present(state?.["openai-codex"])));
 });
 
 test("parse: unknown or invalid resetAt is omitted, never invented", () => {
@@ -557,9 +574,9 @@ test("parse: unknown or invalid resetAt is omitted, never invented", () => {
 			reply([snap("anthropic", [resetWin("five_hour", 24, bad), resetWin("seven_day", 42, bad)])]),
 			NOW,
 		);
-		assert.ok(!("fiveHourResetAt" in state.anthropic), String(bad));
-		assert.ok(!("weeklyResetAt" in state.anthropic), String(bad));
-		assert.equal(state.anthropic.weekly, 58);
+		assert.ok(!("fiveHourResetAt" in present(state?.anthropic)), String(bad));
+		assert.ok(!("weeklyResetAt" in present(state?.anthropic)), String(bad));
+		assert.equal(state?.anthropic?.weekly, 58);
 	}
 });
 
@@ -577,27 +594,27 @@ test("parse: stale merge keeps a retained percent with its reset; a new percent 
 	};
 	const failed = { provider: "anthropic", status: "error", windows: [], expiresAt: NOW + 1 };
 	const kept = q.parseUsageReply(reply([failed]), NOW, prior);
-	assert.equal(kept.anthropic.fiveHourResetAt, 111);
-	assert.equal(kept.anthropic.weeklyResetAt, 222);
+	assert.equal(kept?.anthropic?.fiveHourResetAt, 111);
+	assert.equal(kept?.anthropic?.weeklyResetAt, 222);
 	const partial = q.parseUsageReply(reply([{ ...failed, windows: [resetWin("seven_day", 50, 333)] }]), NOW, prior);
 	assert.deepEqual(
 		[
-			partial.anthropic.fiveHour,
-			partial.anthropic.fiveHourResetAt,
-			partial.anthropic.weekly,
-			partial.anthropic.weeklyResetAt,
+			partial?.anthropic?.fiveHour,
+			partial?.anthropic?.fiveHourResetAt,
+			partial?.anthropic?.weekly,
+			partial?.anthropic?.weeklyResetAt,
 		],
 		[10, 111, 50, 333],
 	);
 	// New weekly percent without a reset does not inherit the old reset.
 	const noReset = q.parseUsageReply(reply([{ ...failed, windows: [win("seven_day", 60)] }]), NOW, prior);
-	assert.equal(noReset.anthropic.weekly, 40);
+	assert.equal(noReset?.anthropic?.weekly, 40);
 	assert.ok(!("weeklyResetAt" in noReset.anthropic));
 	// Fresh replacement drops everything it does not report.
 	const fresh = q.parseUsageReply(reply([snap("anthropic", [win("five_hour", 1)])]), NOW, prior);
-	assert.ok(!("weeklyResetAt" in fresh.anthropic));
-	assert.ok(!("fiveHourResetAt" in fresh.anthropic));
-	assert.equal(q.markStale(prior).anthropic.fiveHourResetAt, 111);
+	assert.ok(!("weeklyResetAt" in present(fresh?.anthropic)));
+	assert.ok(!("fiveHourResetAt" in present(fresh?.anthropic)));
+	assert.equal(q.markStale(prior)?.anthropic?.fiveHourResetAt, 111);
 });
 
 const UTC = "UTC";
@@ -688,7 +705,7 @@ test("formatResetAt: DST gaps and weekly resets across a transition are wall-clo
 
 test("fitQuotaRows: widest layout that fits; narrow widths wrap by provider, never clip it away", () => {
 	const opts = { now: CLOCK, timeZone: UTC };
-	const rows = (width, state = resetState()) => q.fitQuotaRows(state, width, plain, opts);
+	const rows = (width: number, state = resetState()) => q.fitQuotaRows(state, width, plain, opts);
 	const full = q.formatQuotaRow(resetState(), "full", plain, opts);
 	const compact = q.formatQuotaRow(resetState(), "compact", plain, opts);
 	assert.deepEqual(rows(full.length), [full]);
@@ -709,29 +726,29 @@ test("fitQuotaRows: widest layout that fits; narrow widths wrap by provider, nev
 // --- OpenAI window identity (router `spanSource`) ---------------------------
 
 const WEEK = 604_800_000;
-const span = (name, usedPercent, durationMs, spanSource, resetAt) => ({
+const span = (name: string, usedPercent: number, durationMs: number, spanSource: string, resetAt: number) => ({
 	...win(name, usedPercent),
 	durationMs,
 	spanSource,
 	resetAt,
 });
-const codexOf = (windows) =>
-	q.parseUsageReply(reply([snap("openai-codex", windows, { expiresAt: NOW + 5 })]), NOW)["openai-codex"];
+const codexOf = (windows: unknown[]) =>
+	present(q.parseUsageReply(reply([snap("openai-codex", windows, { expiresAt: NOW + 5 })]), NOW)?.["openai-codex"]);
 
 test("identity: reported weekly primary (no 5h, no secondary) is weekly with its reset", () => {
-	const state = codexOf([span("7d", 38, WEEK, "reported", 9_000)]);
+	const state = present(codexOf([span("7d", 38, WEEK, "reported", 9_000)]));
 	assert.deepEqual(state, { weekly: 62, weeklyResetAt: 9_000, stale: false, expiresAt: NOW + 5 });
 	assert.ok(!("weeklyUnknown" in state));
 });
 
 test("identity: weekly is chosen by reported duration, not by name", () => {
-	const state = codexOf([span("weekly-ish", 10, WEEK, "reported", 7_000)]);
+	const state = present(codexOf([span("weekly-ish", 10, WEEK, "reported", 7_000)]));
 	assert.equal(state.weekly, 90);
 	assert.ok(!("weeklyUnknown" in state));
 });
 
 test("identity: reported 18000s window is hidden; with no weekly the provider shows `weekly --`", () => {
-	const state = codexOf([span("5h", 10, 18_000_000, "reported", 7_000)]);
+	const state = present(codexOf([span("5h", 10, 18_000_000, "reported", 7_000)]));
 	assert.equal(state.weekly, undefined);
 	assert.ok(!("fiveHour" in state));
 	assert.ok(!("weeklyUnknown" in state));
@@ -742,7 +759,7 @@ test("identity: reported 18000s window is hidden; with no weekly the provider sh
 });
 
 test("identity: reported other spans (3600s) never become weekly or unknown", () => {
-	const state = codexOf([span("3600s", 10, 3_600_000, "reported", 7_000)]);
+	const state = present(codexOf([span("3600s", 10, 3_600_000, "reported", 7_000)]));
 	assert.ok(!("weeklyUnknown" in state));
 	assert.equal(state.weekly, undefined);
 });
@@ -757,18 +774,20 @@ test("identity: assumed-only window is an unidentified quota, never weekly; most
 });
 
 test("identity: a proven weekly suppresses any assumed window", () => {
-	const state = codexOf([span("5h", 99, 18_000_000, "assumed", 1_000), span("7d", 38, WEEK, "reported", 9_000)]);
+	const state = present(
+		codexOf([span("5h", 99, 18_000_000, "assumed", 1_000), span("7d", 38, WEEK, "reported", 9_000)]),
+	);
 	assert.deepEqual([state.weekly, state.weeklyResetAt], [62, 9_000]);
 	assert.ok(!("weeklyUnknown" in state));
 });
 
 test("identity: an assumed `7d` (positional secondary) is not proven weekly", () => {
-	const state = codexOf([span("7d", 38, WEEK, "assumed", 9_000)]);
+	const state = present(codexOf([span("7d", 38, WEEK, "assumed", 9_000)]));
 	assert.equal(state.weeklyUnknown, true);
 });
 
 test("identity: snapshots without spanSource keep the legacy `7d` behavior and ignore legacy 5h", () => {
-	const state = codexOf([resetWin("5h", 99, 1_000), resetWin("7d", 38, 9_000)]);
+	const state = present(codexOf([resetWin("5h", 99, 1_000), resetWin("7d", 38, 9_000)]));
 	assert.deepEqual([state.weekly, state.weeklyResetAt], [62, 9_000]);
 	assert.ok(!("weeklyUnknown" in state));
 	const only5h = codexOf([resetWin("5h", 99, 1_000)]);
@@ -788,14 +807,16 @@ test("identity: stale merge keeps unidentified flag with its pair, and never dis
 		"openai-codex": { weekly: 40, weeklyResetAt: 5_000, weeklyUnknown: true, stale: false, expiresAt: NOW + 1 },
 	};
 	const failed = { provider: "openai-codex", status: "error", windows: [], expiresAt: NOW + 1 };
-	const kept = q.parseUsageReply(reply([failed]), NOW, unknownPrior)["openai-codex"];
+	const kept = q.parseUsageReply(reply([failed]), NOW, unknownPrior)?.["openai-codex"];
+	assert.ok(kept);
 	assert.deepEqual([kept.weekly, kept.weeklyResetAt, kept.weeklyUnknown, kept.stale], [40, 5_000, true, true]);
 	// Proven weekly arrives later: replaces the unidentified reading and clears the flag.
 	const proven = q.parseUsageReply(
 		reply([{ ...failed, windows: [span("7d", 10, WEEK, "reported", 6_000)] }]),
 		NOW,
 		unknownPrior,
-	)["openai-codex"];
+	)?.["openai-codex"];
+	assert.ok(proven);
 	assert.deepEqual([proven.weekly, proven.weeklyResetAt], [90, 6_000]);
 	assert.ok(!("weeklyUnknown" in proven));
 	// An unidentified reading cannot displace a retained proven weekly.
@@ -804,7 +825,8 @@ test("identity: stale merge keeps unidentified flag with its pair, and never dis
 		reply([{ ...failed, windows: [span("5h", 10, 18_000_000, "assumed", 6_000)] }]),
 		NOW,
 		provenPrior,
-	)["openai-codex"];
+	)?.["openai-codex"];
+	assert.ok(guarded);
 	assert.deepEqual([guarded.weekly, guarded.weeklyResetAt], [70, 4_000]);
 	assert.ok(!("weeklyUnknown" in guarded));
 });
@@ -833,7 +855,7 @@ test("format: unidentified OpenAI quota says so, full and compact, with date and
 	const bare = { "openai-codex": { weekly: 62, weeklyUnknown: true, stale: false } };
 	assert.equal(q.formatQuotaRow(bare, "full", plain, opts).split("| ")[1], "OpenAI quota 62% (window unknown)");
 	assert.equal(q.formatQuotaRow(bare, "compact", plain, opts).split("| ")[1], "OAI quota? 62%");
-	assert.ok(!/weekly|7d/.test(q.formatQuotaRow(bare, "full", plain, opts).split("| ")[1]));
+	assert.ok(!/weekly|7d/.test(present(q.formatQuotaRow(bare, "full", plain, opts).split("| ")[1])));
 	// A past reset omits only the text.
 	const past = { "openai-codex": { weekly: 62, weeklyResetAt: CLOCK - 1, weeklyUnknown: true, stale: false } };
 	assert.equal(q.formatQuotaRow(past, "full", plain, opts).split("| ")[1], "OpenAI quota 62% (window unknown)");
@@ -843,7 +865,7 @@ test("format: unidentified OpenAI quota says so, full and compact, with date and
 
 test("format: a past reset never blanks a percent or changes its color", () => {
 	const opts = { now: CLOCK, timeZone: UTC };
-	const colored = [];
+	const colored: string[] = [];
 	const text = q.formatQuotaRow(
 		{
 			anthropic: {
@@ -870,7 +892,8 @@ test("identity: unrecognized provider windows are ignored; invalid assumed perce
 	const anth = q.parseUsageReply(
 		reply([snap("anthropic", [win("mystery", 1), win("five_hour", 10)], { expiresAt: NOW + 5 })]),
 		NOW,
-	).anthropic;
+	)?.anthropic;
+	assert.ok(anth);
 	assert.deepEqual([anth.fiveHour, anth.weekly], [90, undefined]);
 	const nanSecond = codexOf([span("5h", 30, 1, "assumed", 1_000), span("7d", Number.NaN, 2, "assumed", 2_000)]);
 	assert.deepEqual([nanSecond.weekly, nanSecond.weeklyResetAt], [70, 1_000]);
@@ -881,13 +904,15 @@ test("identity: unrecognized provider windows are ignored; invalid assumed perce
 });
 
 test("identity: a reported span wins over the name (reported 18000s named `7d` is not weekly)", () => {
-	const state = codexOf([span("7d", 10, 18_000_000, "reported", 9_000)]);
+	const state = present(codexOf([span("7d", 10, 18_000_000, "reported", 9_000)]));
 	assert.equal(state.weekly, undefined);
 	assert.ok(!("weeklyUnknown" in state));
 });
 
 test("identity: reported 18000s primary plus assumed secondary shows only the unknown quota, never 5h/weekly", () => {
-	const state = codexOf([span("5h", 10, 18_000_000, "reported", 1_000), span("7d", 40, WEEK, "assumed", 2_000)]);
+	const state = present(
+		codexOf([span("5h", 10, 18_000_000, "reported", 1_000), span("7d", 40, WEEK, "assumed", 2_000)]),
+	);
 	assert.deepEqual([state.weekly, state.weeklyResetAt, state.weeklyUnknown], [60, 2_000, true]);
 	const text = q.formatQuotaRow({ "openai-codex": state }, "full", plain, { now: CLOCK, timeZone: UTC });
 	assert.equal(text, "Quota left: Anthropic (stale) weekly -- | OpenAI quota 60% (window unknown)");
@@ -896,21 +921,21 @@ test("identity: reported 18000s primary plus assumed secondary shows only the un
 
 // --- Anthropic 5h only when reported (#311) ---------------------------------
 
-const anthOf = (windows, extra = {}, previous = undefined) =>
-	q.parseUsageReply(reply([snap("anthropic", windows, { expiresAt: NOW + 5, ...extra })]), NOW, previous);
-const weeklyOnly = (extra = {}, previous = undefined) =>
+const anthOf = (windows: unknown[], extra: Record<string, unknown> = {}, previous?: q.QuotaState) =>
+	present(q.parseUsageReply(reply([snap("anthropic", windows, { expiresAt: NOW + 5, ...extra })]), NOW, previous));
+const weeklyOnly = (extra: Record<string, unknown> = {}, previous?: q.QuotaState) =>
 	anthOf([resetWin("seven_day", 40, at("2026-01-14T09:00:00Z"))], extra, previous);
 
 test("5h: a fresh Anthropic snapshot with only seven_day has no 5h segment in any layout", () => {
 	const state = weeklyOnly();
-	assert.deepEqual(state.anthropic, {
+	assert.deepEqual(state?.anthropic, {
 		weekly: 60,
 		weeklyResetAt: at("2026-01-14T09:00:00Z"),
 		stale: false,
 		expiresAt: NOW + 5,
 	});
 	const opts = { now: CLOCK, timeZone: UTC };
-	const rows = (width) => q.fitQuotaRows(state, width, plain, opts);
+	const rows = (width: number) => q.fitQuotaRows(state, width, plain, opts);
 	const full = "Quota left: Anthropic weekly 60% (resets Jan 14 09:00) | OpenAI (stale) weekly --";
 	const compact = "Left: Anth 7d 60% @Jan 14 09:00 | OAI (stale) 7d --";
 	assert.equal(q.formatQuotaRow(state, "full", plain, opts), full);
@@ -925,7 +950,7 @@ test("5h: a fresh Anthropic snapshot with only seven_day has no 5h segment in an
 
 test("5h: a reported idle window (0% used, no reset) still renders as 5h 100%", () => {
 	const state = anthOf([win("five_hour", 0), win("seven_day", 40)]);
-	assert.equal(state.anthropic.fiveHourReported, true);
+	assert.equal(state?.anthropic?.fiveHourReported, true);
 	assert.equal(
 		q.formatQuotaRow(state, "compact", plain, { now: CLOCK }),
 		"Left: Anth 5h 100% 7d 60% | OAI (stale) 7d --",
@@ -935,24 +960,24 @@ test("5h: a reported idle window (0% used, no reset) still renders as 5h 100%", 
 	assert.equal(q.formatQuotaRow(invalid, "compact", plain, { now: CLOCK }).split(" | ")[0], "Left: Anth 5h -- 7d 60%");
 	// A model-scoped window of the same name is not the provider 5h quota.
 	const model = anthOf([win("five_hour", 10, "model"), win("seven_day", 40)]);
-	assert.ok(!("fiveHourReported" in model.anthropic));
+	assert.ok(!("fiveHourReported" in present(model.anthropic)));
 });
 
 test("5h: a stale reply never brings back a 5h the last fresh reading left out", () => {
 	const fresh = weeklyOnly();
 	// The router's stale snapshot still carries the window cached before the plan change.
 	const stale = anthOf([win("five_hour", 100), win("seven_day", 50)], { status: "stale" }, fresh);
-	assert.deepEqual(stale.anthropic, { weekly: 50, stale: true, expiresAt: NOW + 5 });
+	assert.deepEqual(stale?.anthropic, { weekly: 50, stale: true, expiresAt: NOW + 5 });
 	const failed = anthOf([], { status: "error" }, stale);
-	assert.deepEqual(failed.anthropic, { weekly: 50, stale: true, expiresAt: NOW + 5 });
+	assert.deepEqual(failed?.anthropic, { weekly: 50, stale: true, expiresAt: NOW + 5 });
 	assert.equal(q.formatQuotaRow(failed, "compact", plain, { now: CLOCK }).split(" | ")[0], "Left: Anth (stale) 7d 50%");
-	assert.ok(!("fiveHourReported" in q.markStale(failed).anthropic));
+	assert.ok(!("fiveHourReported" in present(q.markStale(failed).anthropic)));
 });
 
 test("5h: a stale reply keeps a 5h the last fresh reading had, value merged per field", () => {
 	const fresh = anthOf([win("five_hour", 24), win("seven_day", 42)]);
 	const missing = q.parseUsageReply(reply([]), NOW, fresh);
-	assert.deepEqual(missing.anthropic, {
+	assert.deepEqual(missing?.anthropic, {
 		fiveHourReported: true,
 		fiveHour: 76,
 		weekly: 58,
@@ -960,12 +985,12 @@ test("5h: a stale reply keeps a 5h the last fresh reading had, value merged per 
 		expiresAt: NOW + 5,
 	});
 	const newer = anthOf([win("five_hour", 50)], { status: "stale" }, missing);
-	assert.deepEqual([newer.anthropic.fiveHourReported, newer.anthropic.fiveHour], [true, 50]);
+	assert.deepEqual([newer?.anthropic?.fiveHourReported, newer?.anthropic?.fiveHour], [true, 50]);
 });
 
 test("5h: before any fresh reading, stale shows what the stale replies carry", () => {
 	const first = anthOf([win("five_hour", 30), win("seven_day", 40)], { status: "stale" });
-	assert.deepEqual(first.anthropic, {
+	assert.deepEqual(first?.anthropic, {
 		fiveHourReported: true,
 		fiveHour: 70,
 		weekly: 60,
@@ -974,7 +999,7 @@ test("5h: before any fresh reading, stale shows what the stale replies carry", (
 	});
 	// A later stale reply without the provider retains the reading, presence included.
 	const retained = q.parseUsageReply(reply([]), NOW, first);
-	assert.deepEqual([retained.anthropic.fiveHourReported, retained.anthropic.fiveHour], [true, 70]);
+	assert.deepEqual([retained?.anthropic?.fiveHourReported, retained?.anthropic?.fiveHour], [true, 70]);
 	const without = anthOf([win("seven_day", 40)], { status: "stale" });
 	assert.deepEqual(without.anthropic, { weekly: 60, stale: true, expiresAt: undefined });
 	assert.equal(
@@ -986,12 +1011,12 @@ test("5h: before any fresh reading, stale shows what the stale replies carry", (
 test("5h: each fresh snapshot adds or removes the segment (tier change mid-session)", () => {
 	const with5h = anthOf([win("five_hour", 10), win("seven_day", 40)]);
 	const dropped = weeklyOnly({}, with5h);
-	assert.ok(!("fiveHourReported" in dropped.anthropic));
-	assert.ok(!("fiveHour" in dropped.anthropic));
+	assert.ok(!("fiveHourReported" in present(dropped.anthropic)));
+	assert.ok(!("fiveHour" in present(dropped.anthropic)));
 	const back = anthOf([win("five_hour", 20), win("seven_day", 40)], {}, dropped);
-	assert.deepEqual([back.anthropic.fiveHourReported, back.anthropic.fiveHour], [true, 80]);
+	assert.deepEqual([back?.anthropic?.fiveHourReported, back?.anthropic?.fiveHour], [true, 80]);
 	// A stale reply after the re-add keeps it.
-	assert.equal(q.parseUsageReply(reply([]), NOW, back).anthropic.fiveHour, 80);
+	assert.equal(q.parseUsageReply(reply([]), NOW, back)?.anthropic?.fiveHour, 80);
 });
 
 test("5h: the no-data placeholder shows only the weekly window", () => {

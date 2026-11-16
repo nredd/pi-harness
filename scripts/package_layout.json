@@ -103,13 +103,5 @@
   "packages/computer-use: test/wsl2-diagnostics.test.mjs: test-extension",
   "packages/computer-use: test: top-level-entry",
   "packages/computer-use: tsconfig.signing.json: top-level-entry",
-  "packages/preset: .gitignore: dotfile",
-  "packages/preset: CHANGELOG.md: missing-file",
-  "packages/preset: extensions: top-level-entry",
-  "packages/preset: lib: top-level-entry",
-  "packages/preset: src/index.ts: missing-file",
-  "packages/preset: test/footer-cache.test.mjs: test-extension",
-  "packages/preset: test/footer-quota.test.mjs: test-extension",
-  "packages/preset: test: top-level-entry",
   "packages/subagents: package.json: script-name bench:ab"
 ]
