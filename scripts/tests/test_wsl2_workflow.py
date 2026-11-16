@@ -28,12 +28,16 @@ SCRIPTS = ROOT / "scripts"
 
 
 def workflow_text() -> str:
-    """Return the native WSL2 workflow text.
+    """Return executable WSL2 workflow text without full-line policy comments.
 
     Returns:
-        str: UTF-8 workflow contents.
+        str: UTF-8 workflow contents, excluding full-line comments.
     """
-    return WORKFLOW.read_text(encoding="utf-8")
+    return "\n".join(
+        line
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
@@ -270,7 +274,9 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "GH_TOKEN/u" in wrapper
     assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.py").read_text(encoding="utf-8")
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    assert "additional-packages" not in action
+    assert all(
+        "additional-packages" not in step.get("with", {}) for step in yaml.safe_load(action)["runs"]["steps"]
+    )
     assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
     assert "unset GH_TOKEN" in setup
     assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup

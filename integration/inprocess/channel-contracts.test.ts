@@ -7,8 +7,8 @@ import { PLAN_APPROVED_EVENT as PLAN_MODE_APPROVED_EVENT } from "../../packages/
 import { MONITOR_STARTED_EVENT, MONITOR_STOPPED_EVENT } from "../../packages/session-kit/src/monitor/index.ts";
 import * as subagentEvents from "../../packages/subagents/src/events.ts";
 import { handleBase } from "../../packages/subagents/src/mention.ts";
-import { ownerKey } from "../../packages/todo/state/agents.ts";
-import * as todo from "../../packages/todo/tool/types.ts";
+import { ownerKey } from "../../packages/todo/src/agents.ts";
+import * as todo from "../../packages/todo/src/tool/types.ts";
 
 describe("todo's redeclared channel names", () => {
 	it("match plan-mode's approval channel", () => {

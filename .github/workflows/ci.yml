@@ -1,4 +1,4 @@
-# Owned-code gates and packed-artifact contracts. See docs/ci.md.
+# Owned-code gates and packed-artifact contracts. Policy is documented inline below.
 name: CI
 
 on:
@@ -14,7 +14,175 @@ concurrency:
 permissions:
   contents: read
 
+# Policy: Flake admission
+# Flake policy
+#
+# Flake policy:
+#
+# - A new correctness failure blocks
+# - A documented, isolated flake may get ONE fresh rerun of the whole failed job, only when nothing else
+#   failed. The rerun must pass. Both attempts stay in the run's attempt history; name the flake in the PR
+# - Known timing-sensitive suites: session-kit `monitor` and `diff` reaping, dev-tools kill escalation,
+#   core `chord`/`durable` 5 s timeouts. They were green alone and flaky on a loaded laptop
+# - Historical dev-tools child-sample race (#499): sampler `0.2.0` could drop the whole baseline on a
+#   mid-`/proc` PID exit. Source consumers now pin `0.2.1`, which removes that iterator mechanism.
+#   A new missing-metadata failure is a correctness blocker, not permission to retry
+# - `npm` SIGABRT on the `pi-macos` pool (#542): the job log's shell line reads
+#   `<pid> Abort trap: 6  npm ci ...` or `npm install ...`, the step exits 134 with no npm error output,
+#   the runner is `pi-macos-*` and no other step failed. Cause: macOS LaunchServices aborts in
+#   `_LSApplicationCheckIn` when npm sets `process.title`. Only that exact match allows ONE fresh rerun
+#   of the whole job; record each occurrence on #542 (run, job, host crash report name). An abort from any other
+#   process, any other runner, or with other output is a new correctness failure and blocks. The
+#   allowance lapses when a macOS update removes the `_LSApplicationCheckIn` abort, or when a different
+#   signature appears, which blocks
+# - Runner-supervisor kill on self-hosted macOS runners (#761): the job's check-run annotation reads
+#   `The self-hosted runner lost communication with the server`, a step stays `in_progress` with no
+#   conclusion, the job log is missing (`log not found`, logs API 404) and no test assertion exists.
+#   Attempt 1 of `43177772438` (two jobs) and of `43201041536` (one job) match. In each the supervisor
+#   logged `idle past ttl, killing` for the exact runner while its job ran, and GitHub failed the job
+#   later: `43177772438` killed 2026-11-12 07:57:54 UTC, failed 08:06:54; `43201041536` killed 10:55:03,
+#   failed 11:04:10. Why the scheduler saw those runners as idle is NOT established. Mitigation
+#   `nredd/ci-runners#4` is merged. Deployment is observed, never assumed: in the supervisor-log step the
+#   runner owner records the `nredd/ci-runners` commit the supervisor was running at the kill and confirms
+#   it predates the #4 merge commit. If it includes #4 or cannot be determined, treat as deployed and
+#   block, whatever #761 says. Any deploy comment on #761 sets the deploy time (its stated time, else its
+#   own timestamp); a kill at or after it blocks, even if the recorded commit predates #4. Either signal
+#   alone blocks. The failed job proves nothing about the repository. To triage: read the annotation
+#   (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that
+#   exact runner (runner owner only). ONE fresh rerun per affected whole job is allowed only with ALL
+#   THREE recorded (the annotation; a supervisor kill of that runner while the job ran; the supervisor
+#   commit at the kill, confirmed to predate the #4 merge commit), and when nothing else failed; it must
+#   pass, and both attempts stay in the
+#   history. Jobs lost to one supervisor event are one incident. Until the rerun passes, the cell is a failed
+#   required check. A matching annotation without a supervisor-log kill of that runner, a log-less failure
+#   without the annotation, or any other failure is a new signature and blocks. Record each occurrence on
+#   #761 (run, job, runner). Never read missing logs as a pass
+# - Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
+#   imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
+#   ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled
+#   compiler/import delays reproduce the same timeout on the unchanged `origin/main` source while the
+#   child passes every budget assertion and exits successfully. Vitest checks elapsed time even after
+#   a synchronous test returns. Compile each source once and write its output to two physical ESM trees;
+#   the test pins that operation count and retains distinct managers, shared waiters and final zero usage.
+#   Neither the 5 s test deadline nor the 10 s child watchdog changes. This does not authorize a rerun
+# - Never rerun until green, never relabel NOT RUN as a pass
+
 jobs:
+  # Policy: CI planning, capacity and bypass policy
+  # CI is the gate. Local runs are for development. Hosted runners by default, plus the heaviest cells, which move to self-hosted pools while those have room (see the classify routing policy below). No stored credentials or secrets.
+  # The publish job alone requests a short-lived npm OIDC identity.
+  #
+  # `.github/workflows/ci.yml`, every PR and `main`:
+  #
+  # | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
+  # | --- | --- | --- | --- | --- |
+  # | `owned (ubuntu-24.04, macos-14, wsl2)` | A fan-in over parallel `owned shard (<os>, <shard>)` jobs (see the shards section below). Each shard runs `make install-owned`, then one step per gate it owns: `make check-ts WORKSPACES=...` (its workspaces only), `make check-scripts`, `make check-integration` (the Python halves of the last two run through `PY_GATE`: ruff, ty, then pytest across cores, see below); `make install-benchmark` and `make check-benchmark` in the macOS `python` shard only, unless the plan lists it in `skipped_gates` (a PR without `benchmark_inputs`; the step then reports NOT RUN). The WSL guest shards run `make check-ts`, `make check-probes`, `make check-providers`, `make check-import-audit`, and on a PR only with WSL inputs. The fan-in requires every shard, then runs `make check-coverage` over their merged reports. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo, plan-mode, dev-tools, subagents and inprocess run FULL Vitest suites on both engines with the shared homedir guard; session-kit alone retains a native Bun subset; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
+  # | `contracts (ubuntu-24.04, macos-14, wsl2)` | `make install-owned`, `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract`. WSL runs these on a PR only with WSL inputs | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
+  # | `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` run Node release-bundle D/E and build the core Gitlink with Bun for standalone D/E of their own stack. A PR with no stack inputs skips the personal steps. The other three cells report NOT RUN | `stack (ubuntu-24.04, personal)` only; the other two running cells log the selective smoke and the three bypass cells report NOT RUN | Every cell reports a bypass or NOT RUN | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; the auth transport cases run on standalone through the `BUN_OPTIONS --preload` adapter, no skips. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
+  #
+  # There is no `bench` job. `classify`'s step summary and a notice say bench is NOT RUN: no quiet self-hosted runner exists yet.
+  #
+  # Bench admission policy (what a quiet `bench` runner must meet): benchmarks run one at a time; the host is idle only after 5 minutes without console input plus a 1-minute low-CPU sample; every run records hardware, runtime and artifact identity; sleep is prevented by a process-scoped assertion (e.g. `caffeinate -is` on the command), never by changing power settings.
+  #
+  # Which cell does what. Every required check name reports, per the ruleset below. A *bypass cell* takes the job name on a cheap `ubuntu-24.04` runner, holds no macOS or Windows slot, runs only the `plan` step and emits a `::notice` plus a step summary saying NOT RUN, why, and that this is not a pass. A green bypass cell is a reported name, not evidence.
+  #
+  # | Check | PR | `main` push |
+  # | --- | --- | --- |
+  # | `owned` / `contracts (ubuntu-24.04, macos-14)` | Runs, except the macOS `check-benchmark` step, which runs only with `benchmark_inputs` | Runs |
+  # | `owned` / `contracts (wsl2)` | Runs on `windows-2025` (or `pi-wsl2` while that pool has its slot) only with `wsl_inputs`, otherwise bypass cell | Runs on `windows-2025` (or `pi-wsl2`) |
+  #
+  # For `owned`, "runs" means its shard jobs run on that runner; the `owned (<os>)` fan-in itself always reports from `ubuntu-24.04`.
+  # | `stack (ubuntu-24.04, personal)` | Runs; without `stack_inputs` only setup runs and the personal steps report NOT RUN | Runs, ignoring `stack_inputs` |
+  # | `stack (ubuntu-24.04, local)` | Runs | Selective smoke, not run |
+  # | `stack (macos-14, local)` | Runs | Selective smoke, not run |
+  # | `stack (macos-14, personal)` | Bypass cell | Bypass cell |
+  # | `stack (wsl2, personal)` | Bypass cell | Bypass cell |
+  # | `stack (wsl2, local)` | Bypass cell | Bypass cell |
+  #
+  # `scripts/ci_paths.py` is the CI plan module. `classify` reads the diff and `plan_cells` turns it into one decision per required check name, published as a single `plan` JSON output next to `docs_only`, `wsl_inputs`, `stack_inputs`, `benchmark_inputs` and `changed_files`. Each cell's entry carries `run`, `scenarios`, `gates` (the Make targets an `owned` cell runs across its shards), `reason` (the NOT RUN text, from one `NOT_RUN` table), `blocked`, `shards` (a running `owned` cell's shard jobs, else empty), `guest` and `coverage_os` (a running `owned` cell's `--host` and `--os` for the fan-in's accounting, from `RUNNERS` and `COVERAGE_OS`, else empty), and `skipped_gates` (the cell's planned gates this run skips, `--skipped-gates`; each shard entry carries its own share). The three jobs hold no decisions. Their `plan` step is the shared composite `.github/actions/report-plan`, which reads `fromJSON(needs.classify.outputs.plan)[<check name>]`, reports `::notice` and the step summary, and fails closed when a cell has no entry. A local action needs a checkout, so each job first does a sparse checkout of `.github/actions`; the full checkout still runs only when the plan says the cell does. Every other step is gated with a step-level `if` on `steps.plan.outputs.*`; there are no workflow-level path filters. `runs-on` also reads the plan: a cell that does not run (NOT RUN, blocked, or no plan) reports from `ubuntu-24.04` and holds no macOS or Windows slot, docs-only native cells included. The plan's tests run over real Git diffs (`scripts/tests/test_ci_paths.py`), and `scripts/tests/test_ci_guest_matrix.py` walks the real step conditions over that real plan.
+  #
+  # A failed `classify` must turn the 12 required checks red, because a skipped job satisfies a required check. So `owned`, `contracts` and `stack` run under `if: ${{ !cancelled() }}` and `report-plan` fails every cell when `needs.classify.result` is not `success`, or when the plan has no entry for the cell. `plan` falls back to `{}` when classify published nothing, so those cells also land on Ubuntu. Hosted proof: with `classify` forced to fail, all 12 required names ran and failed, none skipped ([run 41702304169](https://github.com/nredd/pi-harness/actions/runs/41702304169)).
+  #
+  # The plan fails closed: an unreadable comparison, an empty diff or a Gitlink change sets every input true. A `workflow_dispatch` full verification has no diff, so `classify` runs `ci_paths.py --full` after its ref and ancestry guard: every input true, every cell planned to run. `benchmark_inputs` is one `INPUT_CLASSES` entry. `PATH_GATED_GATES` maps `check-benchmark` to it: on a non-push run without those inputs the plan lists the gate in `skipped_gates`, and both the shard's run/skip steps and the fan-in's accounting read that one decision.
+  #
+  # Adding an input class (for example the benchmark gate's inputs) is one `is_*_input` predicate, one entry in `INPUT_CLASSES` and the rule in `plan_cells`; the output, the `ChangeClassification.inputs` mapping and the tests' fixtures follow the registry.
+  #
+  # PR title length: on `pull_request`, `classify` checks that `<title> (#N)` passes the same rule `scripts/check-commit-messages.mjs` lints on `main`: at most 72 UTF-16 units (JavaScript `String.length`, so an emoji counts twice), a capital first letter after an optional `area: ` prefix, no trailing period. `ci_paths.is_valid_subject` mirrors it, and a test runs the real lint over the same subjects, including the whitespace characters where JavaScript's `\s` and Python's differ, so a drift in the cases it covers fails. A failing title makes the plan blocked for *every* cell: each `plan` step fails with the reason, before any macOS or Windows slot does work. `classify` itself stays green for that case, and a missing title on a `pull_request` also blocks rather than skips. `pull_request` does not re-run on a title edit, so after retitling push a commit or close and reopen the PR.
+  #
+  # The root `make check-commits` target runs before path classification on every CI event, independent of workspace selection (including docs-only and todo-only PRs). It uses the PR base/head or push before/after from the event payload, refuses shallow history, and preserves explicit `COMMIT_RANGE` and CLI overrides for local use. Its CLI and in-process tests live in `scripts/tests/` and run under `check-import-audit`, with zero uncovered floors. Package checks do not run repository commit policy.
+  #
+  # - `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, `integration/probes/`, `integration/providers/`, the lockfiles and `integration/pyproject.toml`, the guest bootstrap's `scripts/install_gh_linux.sh`, `scripts/install_gh_linux.py`, `scripts/install_wsl_owned_tools.sh` and `scripts/install_wsl_owned_tools.py`, the guest gates' `scripts/import_audit.ts`, `scripts/router_contract.mjs`, `scripts/run-vitest.ts`, the `tests/lib/src/isolated-home.ts` it imports, their tests and `scripts/vitest.config.ts`, `coverage/policy.json` (the inventory that config and the probes and providers configs read), `Makefile`, root `package.json` (`packageManager`), `.npmrc` (npm fetch retries), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
+  # - `stack_inputs`: `integration/{stacks,harness,scenarios,providers,golden,probes}`, `integration/conftest.py`, `integration/pyproject.toml`, `integration/uv.lock`, `Makefile`, `.github/`, `forks/`, root `package.json`, `package-lock.json` and `.npmrc`, `.gitmodules`, the same version pins, `scripts/wsl2_*`. `packages/` is not one: `harness.stack` maps those paths into `local`, the personal stack installs published bytes
+  # - `benchmark_inputs`: `benchmarks/comparison/` (code, tests, `pyproject.toml`, `uv.lock`, results), `Makefile` (`install-benchmark`, `check-benchmark`, `PY_CHECK`), `.python-version` (the step's `UV_PYTHON`), `.node-version` (the Node that installs the pinned Codex), `.github/workflows/ci.yml` (the Codex pin and the step), `.github/actions/setup-ci-tools/`, `scripts/ci_paths.py` (a broken predicate cannot switch the gate off on the PR that breaks it). Nothing else reads it: no product package imports it, and `coverage/policy.json` only inventories it
+  #
+  # The macOS `Benchmark unit gate` (issue #315) is path-gated at step level, not by a workflow path filter, so `owned (macos-14)` still reports. It runs when `benchmark_inputs` is true or on every `push` to `main`, which still catches runner and image drift (#304). A PR without them prints `check-benchmark NOT RUN` with the reason in the log and step summary, and the macOS fan-in reports `python-benchmarks/primary` NOT RUN instead of failing on its missing report. That is not a pass. When the step runs, the report is required: `fail_under = 100` blocks the step and `check-coverage` enforces 0/0 on darwin (#387). `make check` still runs `check-benchmark` locally. A `benchmarks/comparison` break from a change outside the list above, e.g. a root `package.json` `packageManager` bump, fails on the `main` push, after merge. The NOT RUN reason points at `BENCHMARK_INPUT_FILES` and `BENCHMARK_INPUT_PREFIXES` in `scripts/ci_paths.py` instead of copying the list.
+  #
+  # Evidence given up to cut queue time (issue #297):
+  #
+  # - No WSL stack acceptance at all, on any event. Node D/E, standalone D/E (auth transport included) no longer run in WSL
+  # - No macOS `personal` or published-stack run. macOS proves only `local`, on Node and standalone
+  # - WSL `owned` and `contracts` on PRs only with `wsl_inputs`. A `packages/` change that breaks only in WSL fails on the `main` push, after merge
+  # - The WSL guest no longer runs `pytest scripts`, `pytest tests`, or the ruff and ty steps of `check-scripts` / `check-integration`. Ubuntu runs them. `check-probes`, `check-providers` and `check-import-audit` stay because `coverage-wsl2` needs their LCOV
+  # - `main` no longer runs standalone `local`: it moved into the `local` cells, which the selective smoke skips on a push. The non-strict ruleset means a merged tree can differ from the PR head that proved it
+  # - WSL distribution packages are no longer upgraded (`update: 'false'`); `scripts/wsl2_apt.sh` still refreshes apt and installs the current packages
+  #
+  # ## Capacity controls
+  #
+  # `classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all twelve required jobs start and report a terminal status (an `owned` cell through its fan-in; its shard jobs skip when the plan does not run the cell). A docs-only change skips the native Linux/macOS expensive steps; a WSL cell on a PR is a bypass cell then anyway, and a real WSL cell on `main` still runs. Every skipped job writes a notice plus a step summary. Each job's `plan` step reads its cell from the `classify` plan, emits `run=true` or `run=false`, logs the planned reason when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `stack` also emits `scenarios`, which is false only for a personal cell on a PR with no stack inputs: setup still runs there, the `Replay`, Node D/E, build, startup, standalone and auth steps do not. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates. Windows-only steps gate on `runner.os == 'Windows'`, not `matrix.os`, because a WSL bypass cell keeps its matrix values on Ubuntu.
+  #
+  # The allowed docs-only paths are Markdown under `docs/`, root Markdown, and a package-root `README.md` or `CHANGELOG.md`. The classifier is deliberately narrower than "all Markdown": workflow files, manifests, lockfiles, Gitlinks, `integration/**`, `scripts/**`, and `releases/*.json` are code because they do not match an allowed path. It also treats root `AGENTS.md`, `README.md`, `docs/coverage.md`, `docs/install.md` and the `computer-use`, `plan-mode`, `preset`, `session-kit` and `todo` package READMEs as code because repository tests read their text. A mixed change is code.
+  #
+  # The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s, p95 queue waits of 22m37s on macOS and 19m56s on Ubuntu, and four macOS jobs in each full run against five hosted macOS slots. A docs-only root Markdown PR alone consumed 100.25 runner-minutes across 18 stack executions. Bypassing that work reduces real contention without leaving a protected check pending.
+  #
+  # `main` still validates the merged result: all `owned` and `contracts` OS cells including real WSL, and `stack (ubuntu-24.04, personal)`, which `harness.promotion` needs for its `stack-ubuntu-24.04-personal` artifact. `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` report the selective smoke. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings.
+  #
+  # PR runs cancel each other per ref. `main` runs do not: `cancel-in-progress` is PR-only and the concurrency group is per SHA on push, because GitHub drops an older pending run in a shared group even without cancellation. A push cannot kill the run proving the previous merge.
+  #
+  # Selective main-push smoke is not release evidence. Combined-result release safety comes from the explicit full frozen-candidate dispatch, not repeated update-branch matrices, and unrelated main advancement does not invalidate an unchanged reviewed PR HEAD ([release verification](../../README.md#frozen-release-verification)).
+  #
+  # The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), with `strict_required_status_checks_policy: false`. It is not strict: advancing `main` does not invalidate a PR's previous green result, so the merged tree can differ from the tree CI saw. The `main` push run is what validates it.
+  #
+  # WSL2 is `matrix.os: wsl2` in the `contracts` job and the `owned-shards-wsl2` and `owned-wsl2` jobs in `.github/workflows/ci.yml`; `stack` keeps the name only for its bypass cells. On the hosted fallback (`host: windows`) `matrix.runner: windows-2025` selects the host and `matrix.guest: wsl2` selects the explicit PowerShell -> WSL shell boundary; on the `pi-wsl2` pool (`host: native`) the runner is the Linux guest itself and steps are plain bash with no PowerShell boundary. The hosted path verifies Ubuntu-24.04 as version 2 and a non-`drvfs` guest checkout; the native path checks aarch64, no `/mnt/c` and no interop in `scripts/wsl2_smoke.sh` and a Linux-filesystem checkout, and does not re-verify the distro or WSL version. Never a fictitious GitHub runner label or native Windows execution. There is no separate WSL workflow or duplicated WSL test job.
+  #
+  # WSL runs the owned gates that produce LCOV and all packed contracts through the ordinary shared steps. Mac-only Seatbelt, desktop/TCC and live credentials remain NOT RUN. Linux helper checks run inside the owned WSL guest, not on its Windows host. ARM64 runtime evidence exists only when the cell ran on the `pi-wsl2` pool (the plan's `host` is `native`, a native aarch64 guest); on the hosted x64 fallback (`host` is `windows`) ARM64 stays compile-only and NOT RUN.
+  #
+  #
+  # Reproduce guest execution on a Windows machine with WSL2 Ubuntu-24.04 using the same setup action and `scripts/wsl2_shell.ps1 <step-script>`; run the ordinary Make targets and pytest entrypoints above. A local macOS shell test proves adapter behavior, not WSL execution. Acceptance of a WSL change requires the exact-HEAD hosted `owned (wsl2)` and `contracts (wsl2)` cells and their normal artifacts, plus the native cells; local tests are not a hosted receipt. CI triggers on every pull request and main push, plus explicit full-verification manual dispatch, without path filters. Permissions stay contents-read; the concurrency group is per ref on PRs and per SHA otherwise, so unrelated main pushes cannot cancel a full dispatch. The dispatch skips every docs, WSL-input and stack-input shortcut and calls the reusable fork workflow.
+  # REA is retired, not pending WSL acceptance.
+  #
+  # Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
+  # (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
+  #
+  # PR freshness and release verification follow [the frozen-candidate policy](../../README.md#frozen-release-verification).
+  # Do not update-branch solely because main advanced. Keep exact final-HEAD checks and both reviews.
+  # Manual `ci.yml` dispatch runs the complete matrix and core fork gate without docs/smoke shortcuts;
+  # push/main smoke is not release evidence.
+  #
+  # The twelve required check names are listed [here](../../README.md#required-checks).
+  #
+  # Capacity: full PR CI requests six macOS jobs (four `owned` shards, `contracts`, `stack (macos-14, local)`) and three Windows jobs only with WSL inputs (two `owned` shards, `contracts`). Before #350 it requested three macOS jobs, and before that four of each, every run. The `owned` fan-ins are Ubuntu jobs that start after their shards. Ubuntu now builds the standalone twice, once per stack cell, where it used to build once and run both stacks serially. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid another build and two stack installs. Bun failures fail their own stack cell.
+  #
+  # Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI).
+
+  # Policy: Self-hosted routing policy
+  # ## Self-hosted pools
+  #
+  # Heavy Linux and macOS cells run on an owned machine while one has room, and on the hosted runner otherwise: `pi-linux` (NAS VMs, 2 slots) takes Linux cells and `pi-macos` (MacBook, 2 slots, macOS only) takes macOS cells, and `pi-wsl2` (an ARM64 Windows host, 1 slot, queue depth 0) takes one `wsl2` cell. Job names, steps and check names are unchanged; only a cell's runner differs in the `classify` plan. Every cell not in `CELL_SECONDS` is always hosted.
+  #
+  # A `wsl2` shard or `contracts` cell carries a `host` in the plan: `windows` (the default; the hosted x64 `windows-2025` runner reaches the guest through `wsl.exe`) or `native` (the cell moved to `pi-wsl2`, whose runner already lives in a linux-arm64 distro). `guest` stays `wsl2` either way, so coverage accounting and `skip_hosts` are unchanged. `defaults.run.shell` cannot read `runner.os`, so the `wsl2_host.sh` shell is keyed on the planned host. A native cell skips every Windows-only step (Git Bash selection, `setup-ci-wsl`, capture, diagnostics upload, each guarded by `runner.os == 'Windows'`), runs `scripts/wsl2_smoke.sh`, then `PI_WSL2_IN_GUEST=1 scripts/wsl2_setup.sh`: no `/mnt` copy and no `pi-ci` user, Node, Bun, uv, gh and Rust are taken from the golden image when their versions match the repo pins and downloaded for `uname -m` otherwise, and the tool path goes to `GITHUB_PATH`. When the pool is down, busy, draining, stale, killed by `PI_POOLS_DISABLED`, or the run is a fork PR, the cell stays on the hosted x64 runner, so `owned (wsl2)` and `contracts (wsl2)` keep reporting. That fallback runs a different guest architecture: a green hosted cell is not ARM64 evidence. The `CELL_SECONDS` entries for the `wsl2` cells are unmeasured estimates
+  #
+  # - Each pool's host writes the repo variable `PI_LINUX_HEARTBEAT` / `PI_MACOS_HEARTBEAT` / `PI_WSL2_HEARTBEAT` every ~45 s as `<epoch>:<free>` (`0` on a clean stop), where free = slots minus running minus queued jobs for that pool's label. It is negative while more jobs wait than the pool can start, which is how a run sees that the queue is already deep. A host that has been told to stop writes `<epoch>:drain` instead: it finishes the job in flight, starts nothing new, and exits. The host only beats while its scheduler loop is alive, so a hung supervisor goes stale like a dead one. `scripts/runner_pools.py` treats a beat as up only if the epoch is a positive integer at most 120 s old (30 s of skew tolerated); a plain epoch (no count) means one free slot. Missing, `0`, stale, `drain` or garbled means hosted. A mistyped `--pool-heartbeat POOL=VALUE` fails `classify` instead of quietly going hosted
+  # - Queue depth and run share: a pool takes `min(free + queue_depth, run_cap)` cells from a run, floored at 0, and a beat without a count (no backlog report) counts as one free slot with no queue allowance, held to `run_cap` where the pool has one. `pi-macos` has depth 1 and a cap of 3: hosted macOS jobs waited a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13) while `pi-macos` jobs started in a median 30 s (p90 141 s), so an idle pool (two free slots) takes three cells from a run and a busy one still takes one; the cap leaves the rest of a run's heavy macOS cells on `xcode-27`, so both pools stay busy. Depth stays 1 because the host has no admission gate of its own: a death mid-job fails a required check, and every queued cell is stranded for the rescue window below. Low storage on the host is published as `<epoch>:drain` (nredd/ci-runners#5), which already routes every cell hosted; there is no separate headroom field. `pi-linux` has depth 0 and no cap because hosted Linux queues for seconds. The negative backlog in the beat stops later runs from adding more (at backlog -1 or deeper the pool takes none), but a run only reads it once, at `classify`, and the writer publishes a changed count within one poll (~20 s). Runs that classify inside that window all read the same count, so a burst of N PRs opened within seconds can put up to N times the per-run capacity on the pool (e.g. three runs at free=0 queue three cells behind two slots); the cap and depth bound each run's share, not the burst
+  # - Nothing bounds a cell queued on a LIVE pool that is merely busy: the rescue moves a cell only when its pool is down, `drain` or stale. If that starts to hurt, the fix is a rescue rule for a cell queued past ~10 minutes on a busy pool (it cancels the whole run, so it trades finished shards for a re-plan), or one more entry in `CELL_SECONDS` turned off. The `PI_POOLS_DISABLED` kill switch is the manual lever
+  # - Draining: a pool that is draining, or whose runners keep failing to start (three in a row, e.g. a 403 or rate limit on the JIT mint), writes `<epoch>:drain`, and is treated as down by both `classify` (no new cells) and the rescue (it moves a cell queued on it after the usual 5 minutes, without waiting for the beat to go stale), because a queued job on a pool that starts nothing would otherwise wait for the whole drain. The writer announces `drain` the moment it is told to stop, retries a failed write after 5 s, writes nothing before its first successful poll, and stops beating when it cannot read the queue. A draining host never kills a runner younger than 90 s, since the API may not list its job yet. Residual: a run already at its third attempt is not rescued, so a cell queued on a pool that then drains waits out the drain (up to the 50 minute job cap)
+  # - `classify` ranks the cells this run executes in full by their measured hosted duration (`CELL_SECONDS`, from the clean `main` run 41914882314; the macOS `check-ts` shards are estimates from run 42799667706, #660) and gives the longest to each pool while it has free slots; the rest stay hosted. A cell is eligible only if it is listed, at least `MIN_HEAVY_S` (240 s) long, and not a bypass or setup-only cell. A self-hosted job pays ~25 s to clone and boot a VM plus a few seconds to register, so shorter cells lose. The table is the single place to widen or narrow routing. Only `owned shard (macos-14, ts)` and `owned shard (ubuntu-24.04, ts)` had passed on a pool before they were listed; the other macOS cells (`python`, `stack local`, `contracts`) were enabled together on request, so watch their first pool runs and drop any that fail. Unset or dead beats reproduce the all-hosted plan, every `wsl2` cell carrying `host: windows`
+  # - The plan carries the choice: an `owned` shard's `runner` in its matrix entry, and a `contracts` or `stack` cell's top-level `runner`, which `runs-on` reads (`plan[cell].runner || matrix.runner`; a bypass cell stays on `ubuntu-24.04`)
+  # - Kill switch: any non-empty repo variable `PI_POOLS_DISABLED` plans every cell hosted and makes the rescue treat every pool as down. Use it when a pool beats but cannot run jobs
+  # - A fork PR never gets a pool: `classify` passes `--no-pools`. This is not the security boundary (a fork edits its own workflow; fork-PR approval for every outside contributor and the ephemeral, network-isolated runners are), it just keeps honest runs honest. The beat variables are readable by fork workflows, which only shows liveness
+  #
+  # - Not routed, on purpose: `installer.yml` (its own path-gated matrix), `native-helper.yml` (needs a full Xcode toolchain the Mac lacks), `publish.yml` and anything with secrets or OIDC (npm trusted publishing and the attestation checks require hosted runners)
+  # - GitHub disables scheduled workflows in a public repo after 60 days without repository activity; any push re-enables it, but check Actions if this repo goes quiet
+
   classify:
     name: classify changed paths
     runs-on: ubuntu-24.04
@@ -107,6 +275,142 @@ jobs:
   # list, so no step here names a shard. One shard job and one fan-in per OS, because `needs` is per job: a single
   # fan-in matrix would hold Ubuntu's check until the macOS shards finish. The three jobs of each kind share their
   # steps through YAML anchors.
+  # Policy: Owned shard gates and verification engines
+  # The native Ubuntu computer-use shard also installs Rust `1.97.1`/matching LLVM tools and
+  # cargo-llvm-cov `0.9.1`, with at most two Cargo jobs, then collects the Linux crate headlessly.
+  # `coverage/native-linux/coverage.json` is the required raw LLVM accounting entry; unique run
+  # subdirectories retain LCOV, per-file text, raw JSON, metadata and logs, with setup timings in
+  # `setup.log`. Build products are not uploaded. The fan-in consumes these artifacts through the
+  # report-only `computer-use-linux-native/primary` signal. Removing its selected-host report fails
+  # accounting, even though uncovered counts are advisory. No native branch/statement producer or
+  # live desktop acceptance is claimed. macOS, WSL and ARM64 replacement cells explicitly skip this
+  # Ubuntu-only signal. The ordinary packed-source/diagnostics contract is unchanged.
+  #
+  # `check-scripts` also runs `scripts/package_layout.py` (#861), which checks every package under `packages/`, plus the script and Biome rules of `integration/inprocess`, against the layout standard in #860 and prints one `<package>: <path>: <rule>` line per violation. The test layout is plural `tests/` everywhere: per package `tests/*.test.ts` (and `tests/*.bench.ts`) plus `tests/fixtures/` for every non-test file, with no `support/`, `helpers/` or per-package `lib/`; root shared code goes in `tests/lib/` and data in `tests/fixtures/`. `SHARED_PACKAGES` (`integration/inprocess`, `tests/lib`) gets the script-name and Biome rules; a configured shared path with no tracked files is a hard error (exit 2), so a move cannot leave its tree unchecked. Today's deviations, including each package's `test/` directory, are one line each in `scripts/package_layout.json` (sorted, one entry per line, so rebases conflict only where two PRs touch the same line). The list can only shrink: an entry whose violation is gone fails as stale, and an entry the merge base of `HEAD` and `origin/main` (or `BASE`; an empty `BASE` also means `origin/main`) does not carry fails, so a new violation cannot be waived by listing it. A tracked path that is new since the merge base and sits under a waived banned entry (e.g. a file added to `test/` or `lib/`) fails as `added-under-banned-entry`, so the waiver covers the directory, not what is added to it (a pure rename inside the same entry is exempt). Content rules (`import-escape`, `test-extension`, `test-name`, `shell-script`, `tracked-binary`) keep running below a banned entry, so those lines stay in the allowlist as debt. No committed binaries: files under `prebuilt/` and any tracked file with an ELF, Mach-O or PE magic number are `tracked-binary`; standalone `.sh`, `.ps1`, `.bash` and `.cmd` files outside `tests/fixtures/` are `shell-script` (use a Makefile target); `test:upstream-sync` and `test:sync-reverts` are denied script names. `pretest` is a standard script name (it builds the gitignored `dist/` a test loads), and a relative import of exactly `scripts/runtime-builder.mjs`, `scripts/run-vitest.ts` or `scripts/vitest-package.ts` (the `SHARED_TOOLCHAIN` set; a later PR extends it) is not an `import-escape`, any other root path is. A package PR deletes its own entries. The python shard is never path-gated, and a diff that adds or deletes a package's `README.md` or `CHANGELOG.md` is not docs-only, so the gate runs for every change it reads.
+  #
+  # `check-scripts` and `check-integration` share one Makefile recipe, `PY_GATE`: ruff format and check, ty, then `pytest -n auto --dist loadfile` (pytest-xdist is already locked) with `--cov=<project root>` writing LCOV to `<project>/coverage/python/lcov.info`. `--dist loadfile` keeps every test file on one worker, as the scenario runs already do (`integration/Makefile`). The reports are uploaded in the `coverage-<os>` artifact and `check-coverage` accounts for them as `python-scripts` and `python-harness`. The fan-in's accounting step sets `COVERAGE_HOST` to the plan's `guest` for the cell (`RUNNERS` in `scripts/ci_paths.py`) so the WSL cell, which has no pytest, reports those two signals NOT RUN instead of failing on a missing report (`skip_hosts` in `coverage/policy.json`, pinned to each cell's planned gates by a test). Serial and parallel runs were compared test by test: identical pass sets, no order-dependent test. `PY_GATE` also passes `--cov-fail-under=100` to pytest, for both `check-scripts` and `check-integration` (`harness`); for `scripts` the measured root is `.`, so the test files are held at 100% too. `check-benchmark` is its own recipe: pytest-cov at `fail_under = 100` with branch coverage, writing `benchmarks/comparison/coverage/python/lcov.info`, accounted as `python-benchmarks` (#387). The macOS `python` shard uploads that report after the benchmark steps, and the fan-in's `COVERAGE_SKIPPED_GATES` (the plan's `skipped_gates`) reports it NOT RUN on a PR that skipped the gate.
+  #
+  # The macOS `Benchmark unit gate` exports `UV_PYTHON` from `.python-version` before `make install-benchmark`. The runner image's Homebrew Python moved to 3.15.1, `benchmarks/comparison/uv.lock` has no cp315 `pydantic-core` wheel, and uv compiled it from source: ~84s in the sync, then again in each cold-cache gate sync that `test_prepare_finalize.py` runs (the gates inherit `sys.executable`). That step went from 58s (3.14.7) to 464-500s (3.15.1) and pushed `owned (macos-14)` to the 30 min limit (#304). The pin keeps the same tests and the same timeout.
+  #
+  # `owned` is sharded (#350). Each OS has an `owned-shards-<os>` job, whose `if` reads the cell's `run` and whose matrix `include` *is* the cell's `shards` list from the plan, and an `owned-<os>` fan-in job that reports the required `owned (<os>)` name. `scripts/ci_paths.py` `OWNED_SHARDS` owns the split; no step names a shard. Each shard runs one step per gate it lists (`Owned gate check-ts`, `check-scripts`, `check-integration`, and on WSL `check-probes`, `check-providers`, `check-import-audit`), each under `!cancelled()` after a successful `Install`, so a failing gate never hides another gate's evidence. A `check-ts` shard runs `make check-ts WORKSPACES="<paths>"`, which is `npm run check --workspace=<path>...`: each package's own `npm run check`, unchanged, in npm workspace order, one package at a time; no `-j`. A `check-ts` shard that names no workspaces takes every workspace no other shard of its cell names, computed from the root `package.json` when the plan is built, so a new workspace lands in a shard without a table edit, and the plan refuses a split that names an unknown workspace or leaves a `check-ts` shard empty. `make check-ts` with no `WORKSPACES` still runs every workspace locally. `harness.release_gate` requires each shard's gate steps and each fan-in's steps (see [frozen release verification](../../README.md#frozen-release-verification)); renaming a step means updating `OWNED_GATE_STEPS` there, and a test pins its `OWNED_SHARDS` to the plan's. The `Benchmark unit gate` step keeps its implicit `success()` (no `!cancelled()`) and runs when the shard's `gates` list `check-benchmark` and its `skipped_gates` do not. It runs before the shard's coverage upload, which carries its LCOV.
+  #
+  # A shard whose gates include `check-integration` (the Ubuntu and macOS `python` shards) installs tmux first with the `stack` job's own steps, `Install tmux (Linux)` (`apt-get install tmux`, only when `command -v tmux` finds none) and `Install tmux (macOS)` (`brew install tmux`) (#383). The integration units drive `harness.tmux`, `rpc`, `headless`, `interactive`, `probe` and `fleet_load` against `integration/tests/stub_pi.py` on private tmux servers, so those modules are measured in `python-harness` instead of only running in the uncovered `stack` scenarios. No shard runs a real Pi for this. The WSL guest never runs `check-integration` and needs no step.
+  #
+  # Shards (from the per-package timings in #350, run `41749405074`):
+  #
+  # | Cell | Shards | Why |
+  # | --- | --- | --- |
+  # | `owned (ubuntu-24.04)` | `subagents`; `computer-use`; `ts` (every other workspace); `python` (`check-scripts`, `check-integration`) | The issue's four units: about 196s, 157s, 254s and 271s of gate time, against 883s in one job |
+  # | `owned (macos-14)` | `subagents`; `computer-use`; `ts` (every other workspace); `python` (`check-scripts`, `check-integration`, `check-benchmark`) | One `ts` job ran every workspace in 15-28 min of a 30 min budget (#660), `packages/subagents` alone about 10-11 min and `packages/computer-use` about 5-6 min, so macOS mirrors the Ubuntu split: about 680s, 360s and 480s of estimated hosted job time (about 75s of setup included; `CELL_SECONDS` values derived from run 42799667706, re-measure after this lands) plus the 462s `python` shard. This trades the old "at most two" macOS shards for four: the three `check-ts` shards run concurrently, so the cell finishes in about the longest shard. |
+  # | `owned (wsl2)` | `subagents-computer-use`; `ts` (every other workspace, `check-probes`, `check-providers`, `check-import-audit`) | About 461s and 324s of gate time. Each Windows job pays about 3.5 min of WSL guest setup before its first gate, so a third shard would buy about 2.5 min on a cell that already finishes inside the macOS critical path |
+  #
+  # Computer-use's macOS Swift invariants explicitly prepare SDK-only imports in their private per-run
+  # module cache before checking repository sources (#551). Cold preparation is visible and bounded:
+  # 240s compilation, 10s per identity probe and a 300s setup-hook cap, with bounded child-group cleanup.
+  # Failure fails the suite; it never authorizes source validation. `INV-8` retains its 90s test deadline,
+  # `INV-17` its 50s deadline. Compiler-file/SDK-settings identity, real invalid/corrected Swift and
+  # concurrent caller controls verify reuse of SDK modules, not reuse of source verdicts. No persistent
+  # cross-run cache, shared gate lock or retry is introduced; #506's private caches and unwritable
+  # retired-name controls remain. Details: [develop and validate](../../packages/computer-use/docs/content/docs/how-to-guides/develop-and-validate.mdx).
+  #
+  # In the `owned` cells, `@nredd/pi-computer-use`'s macOS-only checks are not passes on Linux: Vitest reports `test/invariants.test.mjs` INV-8/INV-17, `test/macos-native-pure.test.mjs` and `test/desktop-tools.test.mjs`'s helper wire mapping and gating as skipped, and so are `macos-helper-live.test.mjs` (also opt-in) and `linux-live.test.mjs` (opt-in, Linux). Conversely, `linux-native.test.mjs` (`test/linux-native.test.mjs`) runs headless on the Ubuntu and WSL cells (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, desktop/display and live UI are NOT RUN. This is coverage inside the `owned` cells' computer-use shards' `npm test`, not a new required check (Vitest reports it passed on Ubuntu and skipped on macOS; the ARM64 case is skipped unless `PI_CU_LINUX_ARM64_CHECK=1`). `windows-build-scripts.test.mjs` stays opt-in like the script it replaced: it is skipped unless `PI_CU_WINDOWS_SCRIPTS=1`, which `PI_CU_WINDOWS_SCRIPTS=1 npm test -- test/windows-build-scripts.test.mjs --coverage.enabled=false` sets. Its two macOS helper builds took 10-56 s each locally and passed the scripts' 120 s deadline under fleet load.
+  #
+  # `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
+  #
+  # - `make install-owned` first runs `make verify-root-overrides` (see [releases](../../docs/releases.md)); `owned`, `contracts`, `stack` (a dedicated step before `npm ci`, plus the core fetch) and `publish.yml` verify pass the read-only job token as `GH_TOKEN` to those steps only, for non-legacy core tags. Hosted Linux and macOS runners ship a `gh` with `attestation`. A transient release-asset download failure (HTTP 502/503/504/429, connection reset, socket timeout) is retried up to 8 attempts with logged backoff (5s, 10s, 20s, then 30s, at most 155s per request); a 404/401/403, other status or checksum/size/redirect refusal fails the job on the first attempt. A `gh attestation verify` that fails with exactly `public good verifier is not available (initialization may have failed)` (the Sigstore public-good trust-root fetch) is retried up to 3 attempts with logged backoff; every other provenance failure, including other Sigstore init errors, fails the job on the first attempt. The `npm ci` that follows reads the root `.npmrc` (`fetch-retries=7`, the same 155s window) for the same CDN 5xx, and on native cells installs the core tarballs from the restored npm cache when it is warm (see [releases](../../docs/releases.md)).
+  # - `make install-owned` ends its npm step with `make build` (`npm run build --workspaces --if-present`): `packages/*/dist/` is gitignored, and the `local` stack, `integration/inprocess` and `pi -e packages/plan-mode` load it from the checkout. `check-scripts`, `check-core-compaction`, the inprocess `pretest` and the `local` stack runner build first, so a stale `dist/` is never loaded. The `stack` job runs `npm run build` after its own `npm ci`. Package-contract packing builds first too (`package_contracts.pack`).
+  # - `owned` initializes only `forks/pi` (core) before `make install-owned`. The extensions load from
+  #   `packages/{subagents,plan-mode,todo}`; no package-local `npm ci`, no package-local host copies
+  # - `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, useModelRuntimeStream?, withConfiguredAuth?, mode?, ui? })` creates and
+  #   binds core's real harness. `loadFork(name)` imports the imported package's declared entry from `packages/<dir>`; `loadOwned(name)`
+  #   imports the owned plugin's `src/index.ts`. Direct `createXxx()` factories work too
+  # - Before importing a package workspace, resolve `pi-coding-agent`, `pi-tui`, `pi-ai`, `typebox` from both directories
+  #   and compare real paths. A mismatch or unresolvable entry fails with the package's `node_modules/`
+  #   deletion path. Node uses import conditions on `createRequire().resolve`; Bun uses
+  #   `import.meta.resolve` with an explicit parent. No aliases or copied extension code
+  # - Root workspace dependencies supply `croner` `10.0.1`, `nanoid` `5.1.16`, `pi-tui-kit` `0.65.5`
+  #   from the imported packages' historical lockfiles. Root also anchors `nanoid` `5.1.16`: otherwise npm hoists PostCSS's
+  #   `3.x` and leaves the imported subagents package's `5.x` unreachable inside the stack workspace. The `rpiv-todo`
+  #   source lockfile was retired with its Gitlink; the stack workspace pins `rpiv-config` and optional peer
+  #   `rpiv-i18n` to the imported package's `2.13.9` provenance, with the same integrity as that historical lockfile
+  # - The test launcher isolates `HOME` at process spawn on both engines. `isolateStackHome()` keeps
+  #   that home fixed (Bun caches `os.homedir()`), isolating `PI_CODING_AGENT_DIR` and XDG config
+  #   independently per fixture before loading entries.
+  #   `plan-todos.test.ts` drives the real Plan/todo pair, canonical RPC chooser selections, core
+  #   compaction with scripted summaries, file-backed dispose/reopen and legacy mode entries.
+  #   `/todos` heading counts share the evidenced-batch test; no second process
+  # - `goal-support.ts` shares one injected clock across the real kit, router and subagents factories,
+  #   with credential-free usage snapshots and explicitly configured faux auth. Goal/Plan/todo,
+  #   loop/Plan, child accounting, scheduled/busy/idle notices and quota park/refuse/resume tests
+  #   run on the same host. The child runner loads the real kit itself.
+  #
+  # - `stats-plan.test.ts` checks the explicit `viewer last import` label and cycles through
+  #   Overview, Models and Machines while Plan mode remains enabled; the Machines view retains
+  #   viewer-import and local-scan evidence across terminal resizes.
+  # - `memory-deferred-kit.test.ts` loads real npm memory/context-engine factories with session-kit:
+  #   memory write/read and system-message refresh coexist with hidden monitor registration,
+  #   session-lifetime search promotion and successful controlled monitor execution. qmd is a
+  #   failing fixture shim; no network is allowed. The D `test_extension_coverage.py` canaries
+  #   separately prove installed registry/commands, memory persistence/path rejection, workflow
+  #   list/missing-run behavior, a clean refused-loopback raw web fetch error and computer-use's
+  #   installed-but-not-loaded headless exclusion. No version pins are copied into scenarios.
+  #   The shared third-party loader
+  #   resets pi-memory's own path/snapshot/qmd caches before a new fixture: Bun caches npm modules
+  #   across test files, so import-time state must not retain a deleted prior private home.
+  #
+  # The unit gates must not read the machine: the first CI run found three `integration/tests` that only
+  # passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
+  #
+  # Verification engines: Vitest stays the owned TypeScript runner, with Node primary (the shipped
+  # runtime) and Bun the standalone target. Full Vitest runs on both engines for
+  # `subscription-router`, `preset`, `resource-sampler`, `todo`, `plan-mode`, `dev-tools`, `subagents` and
+  # `integration/inprocess`.
+  # `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
+  # spawn-time home (the keys come from `isolatedHomeEnv` in `tests/lib/src/isolated-home.ts`, which nested runners such as
+  # session-kit's worker-death test reuse as `@nredd/pi-test-lib/isolated-home`); `make check-ts` and the native `owned` cells' TypeScript shards run it.
+  # The launcher also sets `JITI_FS_CACHE=false`, and pins `CARGO_HOME`/`RUSTUP_HOME` to the account's
+  # (`toolchainHomeEnv`, explicit values win): rustup's proxies otherwise look under the disposable home,
+  # so dev-tools' real cargo suite silently skipped on Bun on the hosted runners. The `test:bun` script that starts with native
+  # `bun test` (session-kit) sets it for that half through an inline
+  # prefix, not the launcher, as do the direct `vitest` scripts. Each
+  # invocation prints engine/OS/package duration and exit status and appends it to the CI step summary.
+  # The launcher's `bun` engine also appends the Bun signal's Istanbul coverage arguments.
+  # The shared guard checks `os.homedir() === HOME` at setup, before each test and after each test,
+  # failing with the offending file and an instruction to inject home directories. These are
+  # boundary checks, not interception of transient mutations between boundaries.
+  #
+  # Phase 2 #171 resolves the todo/subagents guard deferral from
+  # [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
+  # [#160](https://github.com/nredd/pi-harness/issues/160). Both Vitest configs now install the
+  # shared guard and fixtures inject their homes instead of mutating `HOME`. Todo runs its full
+  # 390-test suite on Bun. Since [#320](https://github.com/nredd/pi-harness/issues/320) subagents runs its full suite on Bun too;
+  # session-kit keeps its native subset, see [#320](https://github.com/nredd/pi-harness/issues/320).
+  # Both full Node suites are guarded.
+  # No guard-related skip list or informational-only guard is used.
+  # Python stays on pytest/uv/ruff/ty; dotfiles stays on dependency-free `node --test` as the
+  # bootstrap exception. Istanbul consolidation is phase 3, not part of this producer change.
+  #
+  # The session-kit `/mon` mapping test injects a deadline-truncated sampler snapshot instead of assuming
+  # that a bounded host scan always includes the test process. Real-sampler cancellation tests continue to
+  # exercise the published sampler; the host-dependent polling smoke is not in the coverage-gated suite.
+  #
+  # The dev-tools real-host `resource_snapshot` smoke requires process metadata and includes the producer's
+  # unavailable reason in its failure, including child discovery after recovery is exhausted. Diagnostics retain
+  # all scan coverage, durations, terminal reason and the child's exit/signal status. Separate controls exercise
+  # registry sampler `0.2.1` through the tool schema with an injected names-only Linux enumeration failure and a
+  # genuinely exhausted scan budget. Live-child helper-seam controls force healthy/lost/healthy/lost scans and
+  # a final real deadline after an earlier loss, without weakening healthy-host assertions or the four-scan bound.
+  # The injected Linux path on macOS is not a native Linux run.
+  #
+  # `resource_snapshot` also resamples, at most twice more, when either scan of the window reports
+  # `process-collection-unavailable` (#557), sliding the window to the latest pair of scans. Failures that
+  # outlast the two resamples still report the producer's reason (or leave a lost baseline's entries `warming`). Both source consumers now pin published sampler `0.2.1`, whose names-only `/proc` enumeration removes
+  # the known iterator race (#499). The historical #557 WSL incidents did not record a producer errno; the
+  # newer incident's final unavailable collection is established, not its underlying syscall failure.
+  # Synthetic controls are diagnostic evidence only. Native WSL CI on the PR HEAD remains required.
+  #
+  # Hosted Ubuntu apt steps (#655): `Install tmux (Linux)` (both sites) and the `forks.yml` system dependencies skip apt when the runner image already has the tools (`command -v tmux`, `dpkg -s` for the dev libraries). Otherwise they run with `timeout-minutes: 5` and `-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120`, so a stalled mirror or held dpkg lock fails that step fast instead of burning the 30 minute job budget (runs `42756722827` and `42763778363` were cancelled inside apt). Not a flake to rerun: a step that hits the 5 minute bound is a real failure to investigate. `Install reviewer read dependencies` installs prebuilt `ripgrep` and `fd-find` release binaries with `taiki-e/install-action` on both Ubuntu and macOS, so an apt mirror outage (2026-11-11: every Linux owned shard timed out in apt) cannot block the Linux matrix.
+
   owned-shards-ubuntu:
     if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run }}
     name: &owned-shard-name owned shard (${{ matrix.os }}, ${{ matrix.shard }})
@@ -353,6 +657,26 @@ jobs:
     steps: *owned-shard-steps
 
   # Native Windows is not the Linux guest. Keep x64 hosted even when WSL routes to an ARM64 pool (#736).
+  # Policy: Native Windows Rust evidence
+  # `computer-use Rust (windows-x64)` separately uses hosted `windows-2025`, pinned Rust/LLVM and
+  # cargo-llvm-cov versions above, and two build jobs. It checks a native x64 MSVC compiler, formatting,
+  # all-target compilation, Clippy, docs, real crate tests and raw LLVM JSON/LCOV, then runs the opt-in
+  # Windows build/install routing tests with disposable destinations. Before npm installation it verifies
+  # core overrides with the pinned Python and a temporary PEM exported from pinned Node's built-in
+  # public Mozilla roots via the verifier's supported `SSL_CERT_FILE` input (Windows Python has no
+  # compiled-in OpenSSL CA path). It does not depend on Git's installation layout or copy private
+  # machine roots. Root export errors fail closed; system trust is not modified and TLS checks stay enabled.
+  # The shared child-process boundary also preserves `SYSTEMROOT`, required by native Windows DNS:
+  # an isolated real-verifier comparison failed without it and verified the original signer/ref policy
+  # with only that OS-runtime key restored ([receipt](https://github.com/nredd/pi-harness/actions/runs/43362875064)).
+  # No token, profile/cache state or tool-injection variables are admitted by that correction.
+  # It uploads source-bound metadata
+  # and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
+  # job and refuses any non-success outcome when computer-use is selected. This preserves the twelve
+  # required check names, without depending on a WSL slot, Linux producer or ARM64 pool activation.
+  # Windows native coverage is report-only, not a borrowed Ubuntu accounting signal or a claim of
+  # live desktop behavior; absent branches/statements stay unmeasured.
+
   computer-use-windows:
     name: computer-use Rust (windows-x64)
     needs: classify
@@ -435,6 +759,66 @@ jobs:
   # The fan-in always reports from Ubuntu: it runs no tests, so a NOT RUN, blocked or running cell holds no macOS or
   # Windows slot. Its one-cell matrix keeps the required name, and the `owned (${{ matrix.os }})` placeholder name of
   # a job a cancelled run never started.
+  # Policy: Fan-in and independent coverage accounting
+  # The fan-in (`owned-<os>`) runs on `ubuntu-24.04` for every cell, with `if: !cancelled()` and `needs: [classify, owned-shards-<os>]`; `needs` is per job, so one fan-in matrix would hold Ubuntu's check until the macOS shards finish, which is why each OS has its own pair of jobs. The three shard jobs and the three fan-ins share their definitions through YAML anchors, and each fan-in is a one-cell matrix so a never-started fan-in keeps the `owned (${{ matrix.os }})` placeholder name. The fan-in reports the plan like every other cell, then `Require every planned shard to succeed` fails a running cell unless `needs.owned-shards-<os>.result` is `success`: that value folds the whole shard matrix, so any failed or cancelled shard, or a shard job skipped although the plan runs the cell, turns the required check red. It then downloads the cell's `coverage-<os>-<shard>` artifacts (each into its own directory), fails if two shards produced the same report path, copies them back to their repository paths and runs `make check-coverage` on them, under `always()` like before. The plan's `coverage_os` and `guest` become `COVERAGE_OS` and `COVERAGE_HOST`, so `darwin` accounts the macOS cell's reports against the darwin floors with no OS switch in the workflow; the accounting reads only reports, the policy and Git, as in the `--reports-root` replay. The fan-in uploads the merged reports plus `coverage/summary.json` as `coverage-<os>`, the artifact `harness.release_gate` binds to `owned (<os>)`. A NOT RUN, docs-only or blocked cell plans no shards and its fan-in reports exactly as a bypass cell did.
+  #
+  # Phase 0 coverage runs inside the existing primary and declared Bun test invocations, never a
+  # second CI test pass. Each Vitest config reads its owned source from `coverage/policy.json`, uses text + LCOV and
+  # `reportOnFailure`; `subagents` retains Istanbul because V8 reload merging is incorrect. The
+  # `check-probes` and `check-import-audit` helper gates run Vitest with V8 coverage too, since #347
+  # (c8 + `node --test` before), and `check-providers` since #378 (native cells run it inside `check-integration`). Each `owned` fan-in's `always()` step consumes its shards' independent
+  # reports with `scripts/coverage_accounting.py`, selects `darwin` / `linux` integer uncovered-line/function
+  # floors with `COVERAGE_OS` (`--os`, the plan's `coverage_os`; the default is `sys.platform`), compares **every OS's enforced floors** with the PR base's `coverage/policy.json`,
+  # and fails closed on missing/invalid input or a missing OS floor. Hosted artifacts, not a local Mac,
+  # establish per-runner floors. `owned (wsl2)`'s shards run inside Ubuntu on WSL2, and its fan-in
+  # explicitly enforces the same Linux floors as native Ubuntu. Each WSL shard exports its LCOV reports
+  # from the Linux filesystem before Windows uploads them; the fan-in accounts and uploads `coverage-wsl2`.
+  # No counters are combined across runners. Native Windows has its separate raw LLVM producer;
+  # it does not contribute to the Linux guest coverage accounting. WSL contract
+  # scenarios remain separate acceptance evidence, not owned-source coverage. To regenerate a review-only policy diff from an
+  # artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
+  # --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
+  # artifact for macOS). The full download/replay and independent-two-run comparison procedure is
+  # [here](../../docs/coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Uncovered
+  # branches are capped per signal like lines/functions ([here](../../docs/coverage.md#branch-caps)). Final hosted run
+  # `40857829296` established zero primary misses for all eight packages on macOS and all except
+  # resource-sampler on Linux, whose 47 lines / 8 functions in native `darwin.ts` paths went to 0/0
+  # with #375's fake-host FFI tests; no package has a per-OS allowance. Session-kit now has zero primary misses on both
+  # OSes after the deterministic formatter test removes the incidental comparator hit (#163).
+  # The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
+  # on either outcome. Bun signals for `dev-tools`, `plan-mode`, `preset`, `subscription-router` and
+  # `todo` are enforced at 0/0 on both OSes (#320), `resource-sampler` since #375 and `inprocess` since #376, and `subagents` at 0/0/0 since #320 (measured on darwin; linux awaits hosted CI, see [here](../../docs/coverage.md)). The rest (session-kit) explicitly uses `enforcement: "report-only"` with
+  # mandatory reasons linked to #160. Report-only signals retain fail-closed LCOV parsing, expected-file checks,
+  # per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
+  # from references are logged and included under JSON `signals`; budget excess alone cannot fail
+  # these advisory signals. Primary budgets stay enforced and define the 100% goal. Never merge
+  # Bun counters into primary coverage.
+  #
+  # The owner's roughly 1-7% small-subset description is not a measured source-coverage percentage:
+  # historical hosted run `40455349710` had plan-mode 8/539 Bun/primary tests (1.5%), subagents 22/3078
+  # (0.7%) and todo 2/387 (0.5%); preset and in-process ran their full test sets. plan-mode and todo
+  # now run their full suites under Bun too (#320). The precise limitation is
+  # incomplete verified source scope. A strict Bun budget blocked main #153's primary-tested additions
+  # (subagents Bun 7728/512 -> 7763/515, primary unchanged at 500/68 on both OSes).
+  #
+  # A package flips to `enforced` only after its full suite runs under Bun on both OSes AND Bun's
+  # inventory covers every owned executable source file, including never-imported files, as specified
+  # by #160. Accounting rejects enforced partial Bun inventories. Any later enforced-to-report-only
+  # flip requires a new reasoned `enforcement_changes` entry relative to base; standing reasons or
+  # historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
+  # Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
+  # `computer-use` stays not measured, tracked for its native Swift/Rust and documentation site. Its 35 JS/TS runtime modules are measured by the enforced `computer-use-vitest` ratchet (#347, #645): per-OS uncovered lines, functions and branches may not grow. `dev-tools` uses #195's primary Istanbul decision with
+  # all 23 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
+  # Its Bun signal runs the same full Vitest suite on Bun and is enforced at 0/0 since #320. Python `scripts/` and `integration/harness/` are measured by `PY_GATE`, `benchmarks/comparison` by `check-benchmark` on macOS (see `docs/coverage.md`). The Vitest
+  # producer configurations are measured by `import-audit` (#380, see `docs/coverage.md`).
+  # The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet
+  # prevent silent source omission; reasoned reclassifications are required for membership losses.
+  # Verification-only scripts have exact per-file `verification_helpers` reasons; shipped runtime
+  # scripts remain owned production source, never blanket helper exclusions. The policy's eventual
+  # global-zero flip refuses pending packages.
+  # No job or required-check name changes. Definition, exclusions, receipts and ratcheting:
+  # [here](../../docs/coverage.md).
+
   owned-ubuntu:
     if: ${{ !cancelled() }}
     name: &owned-name owned (${{ matrix.os }})
@@ -589,6 +973,17 @@ jobs:
     timeout-minutes: *owned-timeout
     steps: *owned-steps
 
+  # Policy: Packed contracts and independent sampler evidence
+  # `scripts/package_contracts.py` owns packed-file validation, including the `--packed-files-only`
+  # and `--package <workspace-directory>` paths. Package gates use this same checker, not separate
+  # package-specific asset or manifest checks; the full contract gate also installs and exercises tarballs.
+  # The resource sampler's package gate runs real host sampling and bounded helper cleanup in each
+  # `owned` OS cell. `check-package-contracts` also builds/audits/installs its exact ESM tarball and
+  # runs an isolated Node consumer in each `contracts` OS cell. This library has no Pi entrypoint;
+  # Darwin process CPU is native interval CPU on Node >=26.1 and Bun, authenticated with libproc
+  # start identity rather than `ps` whole-second precision. Older Node remains explicitly unavailable.
+  # No consumer migration, publication, extra CI job or runner is added.
+
   contracts:
     if: ${{ !cancelled() }}
     name: contracts (${{ matrix.os }})
@@ -709,6 +1104,253 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: classify
     uses: ./.github/workflows/forks.yml
+
+  # Policy: Stack acceptance, diagnostics and Bun boundaries
+  # The `stack` job's `Report coverage exclusions` summary writes only `GITHUB_STEP_SUMMARY` text.
+  # The workflow contract executes that step's actual body with the test runner's `/bin/bash` in
+  # an isolated directory, checks production output-failure propagation, and checks scoped exclusions
+  # separately from shell selection. `stack` has no WSL guest any more, so this is an ordinary step.
+  # Standalone D/E skips no auth case (#14); the step outcome and JUnit, not the summary notice, are
+  # the evidence. Friendly-prose changes must preserve those disclosures and the remaining explicit
+  # `NOT RUN` scopes.
+  # All guest dispatch remains through the adapter, which labels a failing `pwsh`, `wslpath`, guest
+  # command, or generated guest step while preserving its original exit status and stderr.
+  #
+  # ## Standalone startup failure evidence
+  #
+  # The Linux personal cell runs one extra **strict** text startup before D/E: the same explicit
+  # personal stack, faux provider, `STACK-OK` output, zero exit and empty stderr as
+  # `test_extensions_load_without_warnings[text]`. No retry can turn a failure green. On failure only,
+  # `standalone-startup-linux-x64` retains the exact executable and `SHA256SUMS` for seven days.
+  # The normal standalone suites still run and retain their original assertions.
+  #
+  # Each cell builds the standalone twice through the same `build_standalone` shell function, so the Bun
+  # wrapper records the same argv (`cmp` of both `compile-command.json` files). Evidence at the root of the
+  # build-evidence directory describes the second build, the one exported as `PI_BIN`; the first build's
+  # evidence and executable are moved to `first/`, also when the first build itself fails.
+  #
+  # If the build step fails (including a digest mismatch), `collect-build-failure` scans both executables,
+  # logs and module graphs through the same `require_safe_diagnostic` policy, and
+  # `standalone-build-failure-<platform>-<stack>` retains them for seven days, only when the scan published
+  # (`artifact_ready=true`). `build-binaries.sh` clears its output directory, so a failed second build leaves
+  # no stale `second/pi`.
+  #
+  # `harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
+  # included, through the shared `harness.credentials.require_safe_diagnostic` policy before atomically
+  # publishing the upload directory. This preserves #178's npm (at least 36 alphanumerics), short GitHub,
+  # sk/pk, Slack and general private-key signatures alongside main's nonempty JSON/Bearer and release
+  # URL/proxy policy. There is one shared scanner, not a collector-local duplicate. Signatures are
+  # conservative heuristics, not a guarantee against every secret format. A scan or capture failure
+  # leaves no partial upload and cannot mask the original failing exit status.
+  # The upload also requires the probe's `artifact_ready=true` output, emitted only after a new
+  # scanned publication; stale directories and early failures cannot authorize an upload.
+  # It never copies installed homes, `auth.json`, `.storage`, sessions, environment dumps or token stores.
+  # All subprocesses use a new harness fixture HOME, empty synthetic auth and the existing command shims.
+  # This is diagnostic hygiene, not isolation from malicious same-UID package code.
+  #
+  # Artifact files:
+  #
+  # - `pi`, `SHA256SUMS`, `build.json`: exact executable, per-file SHA-256, schema-validated
+  #   Gitlink/harness SHAs, tool versions, build/startup commands and separate primary/replay verdicts.
+  # - `compile-command.json`, `module-graph.json`, `build.log`: the actual compile argv, Bun's
+  #   module graph and the frozen-data build log. A transparent build-only Bun wrapper adds
+  #   `--metafile`; it changes neither core sources nor production pins. Missing optional metadata
+  #   is explicit; a graph cannot establish the undefined symbol's cause by itself.
+  # - `packages/pi-memory/{index.ts,package.json,npm-lock.json}` (the lock's memory entry only),
+  #   `core/*.js`, `core/*-package.json`,
+  #   `core/package-lock.json`, `harness-package-lock.json`, `stack.json`: named public package/build
+  #   inputs only, with original bytes. No recursive package or home upload.
+  # - `startup.{stdout,stderr}` and `jiti/primary/*`: byte-exact original failed startup streams (including
+  #   CRLF and invalid UTF-8) and *only*
+  #   Jiti 2.7 transform filenames keyed to this fixture's exact `pi-memory/index.ts` path (MD5 and
+  #   FIPS SHA-256 naming variants). Cache absence is recorded, not replaced with another run's code.
+  # - `replay.{stdout,stderr}`, `replay-wrapper.ts`, `jiti/replay/*`: supplemental failure-only replay.
+  #   In the disposable fixture, memory's resource declaration/filter selects a wrapper at the same
+  #   package-order slot. It imports the untouched original entry, prints `error.stack` before Pi
+  #   reduces it to a message, then **rethrows**. Original package manifest/source/cache bytes are
+  #   captured *before* this instrumentation; the executable is never rebuilt or patched. A replay
+  #   passing or failing differently does not replace the primary failure or prove a root cause.
+  #   Replay streams are also raw bytes. Primary-stream decoding is separate, only for strict startup matching,
+  #   never for artifact contents. Timeouts retain untouched partial streams (absent data becomes empty
+  #   bytes), use synthetic exit status 124 and record `startup_timed_out`/`replay_timed_out` in `build.json`;
+  #   no annotation is appended to stderr. A normal child exit 124 remains distinguishable from a timeout.
+  #
+  # To diagnose an already-built binary without running the whole suite:
+  #
+  # ```sh
+  # cd integration
+  # uv run --locked python -m harness.standalone_diagnostics startup \
+  #   --binary /absolute/path/to/linux-x64/pi --core ../forks/pi \
+  #   --build-evidence /absolute/path/to/pi-build-evidence \
+  #   --output /absolute/path/to/new-failure-evidence
+  # ```
+  #
+  # For PR #178's exact graph, cherry-pick the diagnostic harness commit onto that branch and run its
+  # normal CI. The workflow observes that branch's existing frozen-core build; do not copy a binary
+  # from this diagnostic PR or change package/core/Bun pins. Do not reuse an installed live HOME.
+  # Local successful startup creates no artifact. A deliberate synthetic throwing memory factory can
+  # verify the raw-stack/capture path, but is not a reproduction of the unexplained CI `Type3` failure.
+  #
+  # ## Startup exit failure evidence
+  #
+  # The existing per-scenario artifacts now retain `*.pane.json` captured **before** tmux teardown,
+  # `*.exit` wrapper status files when present, and raw startup/RPC `*.stderr`. The pane report keeps
+  # the native PID/dead/status/signal response (empty fields can mean unsupported tmux formats), the
+  # wrapper status path and its contents or absence; a vanished server is recorded as an error rather
+  # than replacing the original failure. Only these named artifact patterns are added to the existing
+  # allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. Every candidate's
+  # complete raw bytes, including existing sessions/screens, are scanned **before publication**.
+  # `harness.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
+  # `release.redact_diagnostic` for URL/known proxy credentials and centralizes the signature rules
+  # extracted from the #191 collector. Scenario publication, the standalone collector and the WSL
+  # guest-state capture (through `python -m harness.credentials`) consume this same helper, with no
+  # collector-local credential regex or dependency from the shared helper back onto a collector. Long
+  # token/key signatures remain checked. Explicit canonical JSON string
+  # fields `access_token`, `refresh_token` and `api_key` are refused for **any nonempty string value**;
+  # case-insensitive `Bearer` followed by any nonempty whitespace-delimited value is refused regardless
+  # of length. Empty/null credential slots and metadata keys such as `api_key_available`,
+  # `access_token_count`, `auth_type: "Bearer"` and `token_count` are not auth dumps by themselves.
+  # The Bearer rule deliberately may reject prose describing a token. Signatures are heuristics, not
+  # proof against arbitrary secrets, unknown/escaped credential keys or encoded values.
+  #
+  # Candidates are staged outside the uploaded artifacts root, scanned and written from the same byte
+  # snapshot, then renamed into place only when the complete set is safe. Any unsafe/unreadable candidate
+  # or staging error refuses the whole set, removes stale publication and leaves the primary verdict
+  # unchanged; raw bytes are never redacted into a misleading "exact" capture. Every ancestor from the
+  # sandbox root itself through the candidate's parent must be an actual directory, including internal
+  # parent links that happen to resolve inside the sandbox. Candidate reads reuse the `harness.files`
+  # regular-file pattern: reject known nonregular entries before opening, then use `O_NOFOLLOW`,
+  # `O_NONBLOCK`, `O_NOCTTY` and descriptor `fstat` before reading. Final symlink/FIFO replacements cannot
+  # turn cleanup into a blocking FIFO read. Ancestry checks are observations, not a descriptor-anchored
+  # sandbox against concurrent malicious same-UID parent replacement. No broader filesystem-security
+  # claim is made. Pane reports use a strict `PaneExitEvidence` Pydantic model, including a read-only `ps` subtree of the pane PID (`process_tree`; empty when the wrapper is gone, never a signal). Missing tmux, invalid UTF-8
+  # markers and capture/write failures cannot prevent server teardown. RPC evidence open/write/flush
+  # failures disable only the disk sink: bounded pipe drainage and in-memory diagnostics continue.
+  # This supplements, not duplicates, the separate standalone build/startup collector from #191.
+  #
+  # Observed on 2026-10-28, both in `Standalone D and E (local)`:
+  #
+  # - PR #155, run `40666549747`, job `122742471639`: `ordinary-session_start-tui` fails with
+  #   `TUI never reported its exit status`. Its saved screen contains `STARTUP-OK` and the resume hint.
+  #   Original `pi.stderr` reports `Bun v1.3.14 (0d9b296a) macOS Silicon`, macOS `14.8.9`,
+  #   `Elapsed: 8573ms`, feature `exited`, and `Segmentation fault at address 0xC`.
+  #   The decoded trace [here](https://bun.report/1.3.14/M_10d9b296mggQugggC______mk04Yuw4uhBu7l7H_2lkjlDurh5kD27p5tC+xt2yC+1+3H_2lkjlDurh5kDunr21Cusw11CA2AY)
+  #   resolves through `jsc.VirtualMachine.globalExit`, `Bun__Process__exit` and
+  #   `Bun::Process_functionReallyExit` / `Process_functionExit`.
+  # - PR #178, run `40667021371`, job `122744482131`: the failure is instead
+  #   `ordinary-session_start-rpc`, `subprocess.TimeoutExpired` after 60 seconds. Its TUI case passes.
+  #   The traceback's truncated `stderr_seq` contains the Bun `1.3.14` crash banner; the original full
+  #   timeout stderr was not archived. The `-9` return code is observed after Python's timeout kill,
+  #   not a successful runtime shutdown.
+  #
+  # Both include a curl-shim `Bad file descriptor` error. Bun's macOS crash reporter invokes curl
+  # ([here](https://github.com/oven-sh/bun/blob/0d9b296af33f2b851fcbf4df3e9ec89751734ba4/src/crash_handler/crash_handler.zig));
+  # that downstream error is not evidence that an extension's curl caused the crash. The historical
+  # artifacts lack pre-cleanup pane state and `*.exit`; they cannot distinguish a live crashed process
+  # from a dead wrapper or missing status file. RPC does not use that wrapper at all.
+  #
+  # A local rebuild of Gitlink `2bfb8e7c61d35167b09f8ce70693df39660fc197` with Bun `1.3.14` and frozen
+  # release model data passed 29 original TUI and 29 RPC startup calls, including two concurrent drivers.
+  # The initial two-case command was `PI_BIN=<rebuilt-pi> uv run --locked pytest
+  # 'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-tui]'
+  # 'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-rpc]'
+  # --stack stacks/local.json --runtime bun-standalone -q`: 2 passed. A diagnostic driver then invoked
+  # that unchanged scenario function on copied explicit fixtures: 12 serial pairs, then two concurrent
+  # drivers of 8 pairs each (qmd failure shim for the concurrent run), all passed. Recorded local logs:
+  # `/tmp/fix-tui-repro.log`, `/tmp/fix-tui-repeat.log`, `/tmp/fix-tui-stress-a.log` and
+  # `/tmp/fix-tui-stress-b.log`; these workstation logs are not durable CI artifacts.
+  # This is not a native-crash reproduction or a fix. Synthetic abort and timeout tests prove the
+  # original nonzero/timeout failure and raw evidence survive cleanup; no assertions, deadlines, Bun
+  # pins or runtime behavior are relaxed. The exact native trigger and a failing-CI pane-state capture
+  # remain unresolved. No capacity cancellation is classified as this failure.
+  #
+  # RPC EOF exit (#100): the 15s `RPC did not exit on EOF` timeout is a Bun `1.3.14` native exit crash, not a
+  # live-monitor shutdown bug, so EOF keeps its graceful contract and no test stops its monitor early. The
+  # captured failures hit session D (no monitors) and `test_children_die_when_pi_quits_mid_monitor[stop]`
+  # (monitor already stopped), while `[rpc]` EOF with a live monitor exits 0 and reaps its group on every
+  # passing run. Since Bun `1.4.4` (#197, 2026-10-29) the 73 PR runs among the latest 100 CI runs hold 61 passing macOS personal
+  # stack jobs and no EOF timeout or `Segmentation fault` in any failed run (measured on `ad747f42`). That is
+  # absence of recurrence, not a proven fix. `RpcProcess.__exit__` now puts the child's drained stderr in the
+  # `TimeoutError`, so a recurrence names the crash banner in the failure itself.
+  #
+  # Final privacy/cleanup proofs additionally reject internal parent/root links and a root `pi.stderr`
+  # FIFO without ever opening it for reading. Stale regular-file prechecks with a FIFO or final symlink
+  # replacement are refused through the descriptor checks; removing `O_NONBLOCK` fails a pre-open test
+  # assertion, so the mutant cannot hang the test. Short synthetic fields/Bearer values are injected
+  # across all seven artifact categories while the primary exception remains unchanged and no artifact
+  # set is published. Public metadata negative controls still pass. Removing ancestor checks, restoring
+  # plain `Path.read_bytes`, reverting the short-credential rule, or removing `O_NONBLOCK` each fails a
+  # focused mutant (workstation logs `/tmp/tui-finalprivacy-mutant-{ancestry,regular,short,nonblock}.log`).
+  #
+  # Blocker regression receipts:
+  #
+  # - Unsafe-byte injections cover markers, pane reports, raw stderr, screens, scripts, event logs and
+  #   session history for token signatures, URL credentials and known proxy passwords. No partial/stale
+  #   artifact tree is published; injected staging write failure preserves the primary assertion.
+  # - Missing-executable/server/I/O pane queries still attempt teardown. Invalid UTF-8 marker bytes
+  #   remain unchanged, produce an explicit model error field and retain the original decode failure.
+  #   Real fixture-generator and direct-startup-owner tests inject missing tmux, screen decode and
+  #   screenshot write errors: every owned pane is killed and the primary failure is retained.
+  #   An unavailable final screenshot cannot replace `wait_dead`'s exit-status assertion.
+  # - RPC evidence open/write/flush failures still drain 262144 stderr bytes plus a tail diagnostic;
+  #   the real child exits 17 without pipe blockage and bounded in-memory diagnostics retain the tail.
+  # - The startup proof prints the required startup message and observes exit 17 specifically. Its
+  #   exit-0 control succeeds. Mutating the observed exit 17 to 0 makes that regression fail with
+  #   `DID NOT RAISE AssertionError`, rather than accidentally testing the missing-message assertion.
+  # - Mutation checks disable scanning, restore the prior pane capture, restore the prior RPC writer,
+  #   and change the nonzero result to zero. All four are killed by the focused regressions. Local
+  #   logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts. Restoring the
+  #   old fixture teardown or final timeout screenshot separately also fails the caller regressions
+  #   (`/tmp/tui-mutant-teardown.log`, `/tmp/tui-mutant-wait-capture.log`).
+  #
+  # Both assembled stacks use `npm:@gotgenes/pi-anthropic-auth@3.4.3`, not the retained auth Gitlink.
+  # `test_auth_transport.py` records direct Anthropic and `router/default` OAuth requests: native bearer
+  # and Pi user agent, exact versioned billing block, section-shaped system prompt retained in `system[]`
+  # and unchanged first user text. API-key and unconfigured custom-provider requests stay unshaped.
+  # Refresh persistence/refusal and the missing-Node-preload fail-closed branch remain covered. No live
+  # subscription is used. Explicit pi-ai compat dispatch and legacy loops without `streamFn` bypass the
+  # provider wrapper; compaction/modelRegistry coverage is upstream-documented, not asserted here.
+  #
+  # The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
+  # `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
+  # No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
+  # own the ported assertions.
+  # The thirteen historical `DOTFILES` rows belong to dotfiles, not a distribution check. Eleven
+  # remain doctor checks; the two REA rows were retired in `nredd/dotfiles#58` and replaced with
+  # absence/cleanup regressions in dotfiles' `tests/rea-retirement.test.mjs`. See
+  # [here](../../integration/README.md) for inputs, package sets and deliberate headless exclusions.
+  #
+  # Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
+  # A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
+  # `stack` still tests the released Homebrew-shaped Node bundle. Fork release `v1.3.0-nredd.10`
+  # publishes the coding-agent and pi-tui npm tarballs, no standalone assets. Each running `stack` cell also builds the exact
+  # Gitlinked source using `.bun-version` (1.4.4), the official `scripts/build-binaries.sh`, and frozen
+  # release model data with `build:offline`. It does not depend on a future standalone release, commit
+  # binaries, or test a Node wrapper in place of the compiled executable.
+  #
+  # Bun scope:
+  #
+  # - Native execution on `xcode-27`, macOS 27 (darwin-arm64) and `ubuntu-24.04` (baseline linux-x64).
+  #   Each running cell builds once for its own stack
+  # - `--runtime bun-standalone` skips nothing in `integration/scenarios/test_auth_transport.py`: Bun
+  #   ignores the `NODE_OPTIONS --import` redirect, so `harness/runtime_hooks.py` also sets
+  #   `BUN_OPTIONS=--preload` and the compiled core loads the shared redirect and egress/readiness hook
+  #   before its entrypoint. The unchanged shaping, refresh and refusal assertions run in the ordinary
+  #   standalone D/E step for each stack (#14). The small native fixture in infrastructure units proves
+  #   hook admission and failures only
+  # - No other selected D/E case uses preloads, scaled timers or `--expose-gc`. Clock-driven behavior
+  #   moved to native suites, and the unused `providers/fast_timers.mjs` preload is deleted (#378);
+  #   `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`.
+  #   The render probe (`probes/render.ts`) picks its collector per runtime: Node's `--expose-gc` hook,
+  #   else `Bun.gc(true)` (compiled Bun has no such flag and ignores `NODE_OPTIONS`), else `gc: false`.
+  #   `render.test.ts` pins all three; `make check-probes` runs it
+  # - The adapter blocker is [here](https://github.com/nredd/pi-harness/issues/14). Previous references
+  #   to #58 are stale: no such issue exists in this repository. The timer migration removed one
+  #   dependency, not the remaining auth transport interception requirement
+  # - NOT RUN: linux-arm64 (no `ubuntu-24.04-arm` job added), darwin-x64, Windows, packed contracts
+  #   hosted by the standalone, quiet-runner benchmarks, live credentials and desktop/TCC helpers.
+  #   REA is retired, not an outstanding standalone acceptance requirement.
+  #   Source-built D/E coverage is not published-binary acceptance or a completed Bun checklist
 
   stack:
     if: ${{ !cancelled() }}

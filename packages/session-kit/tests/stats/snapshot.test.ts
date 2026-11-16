@@ -350,17 +350,21 @@ it("pure allowlist projection hashes fixture paths and keeps raw attribution", (
 });
 
 describe("actual portable bundled CLI", () => {
-	/** Pack the workspace artifact, then return the tarball-extracted executable path. */
+	/** Pack the prebuilt workspace artifact without running its shared-output prepack build. */
 	function packedArtifact(artifactDir: string): string {
 		const tarballs = join(artifactDir, "tarballs");
 		const extracted = join(artifactDir, "extracted");
 		mkdirSync(tarballs, { recursive: true });
 		mkdirSync(extracted, { recursive: true });
-		const packed = spawnSync("npm", ["pack", "--json", "--pack-destination", tarballs], {
+		const sharedBefore = statSync(resolve("dist/pi-stats-export.mjs"));
+		const packed = spawnSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", tarballs], {
 			cwd: resolve("."),
 			encoding: "utf8",
 		});
 		expect(packed.status, packed.stderr).toBe(0);
+		const sharedAfter = statSync(resolve("dist/pi-stats-export.mjs"));
+		expect(sharedAfter.ino).toBe(sharedBefore.ino);
+		expect(sharedAfter.mtimeMs).toBe(sharedBefore.mtimeMs);
 		const [result] = JSON.parse(packed.stdout) as { filename: string }[];
 		if (!result) throw new Error("npm pack returned no tarball");
 		const unpacked = spawnSync("tar", ["-xzf", join(tarballs, result.filename), "-C", extracted], {
@@ -538,10 +542,14 @@ describe("actual portable bundled CLI", () => {
 		expect(run(artifact, ["unknown"]).status).toBe(1);
 	});
 	it("build is byte reproducible and contains only Node builtin imports", () => {
+		const output = join(dir, "pi-stats-export.mjs");
 		const build = () => {
-			const result = spawnSync("npm", ["run", "build"], { cwd: resolve("."), encoding: "utf8" });
+			const result = spawnSync("npm", ["run", "build", "--", `--outfile=${output}`], {
+				cwd: resolve("."),
+				encoding: "utf8",
+			});
 			expect(result.status, result.stderr).toBe(0);
-			return readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");
+			return readFileSync(output, "utf8");
 		};
 		const before = build();
 		expect(build()).toBe(before);

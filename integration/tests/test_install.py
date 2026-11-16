@@ -2913,7 +2913,10 @@ def test_installer_workflow_covers_its_inputs() -> None:
 )
 def test_installer_workflow_token_policy(event: str, ref: str, head_repo: str, expected: str) -> None:
     """Only main pushes/dispatches and owner-reviewed same-repo PRs get a read-only fallback token."""
-    text = INSTALLER_WORKFLOW.read_text()
+    # Audit executable expressions, not policy comments describing same-repo trust.
+    text = "\n".join(
+        line for line in INSTALLER_WORKFLOW.read_text().splitlines() if not line.lstrip().startswith("#")
+    )
     workflow = yaml.safe_load(text)
     tokens = [
         (step.get("name"), name, value)
@@ -3073,7 +3076,7 @@ def test_acceptance_login_wraps_eager_parent_gh_lookup(
 
 def test_ci_documents_residual_gh_capability() -> None:
     """Environment hygiene must not be advertised as denying same-UID package credential access."""
-    for name in ("AGENTS.md", "docs/ci.md"):
+    for name in ("AGENTS.md", ".github/workflows/installer.yml"):
         text = (INTEGRATION.parent / name).read_text()
         assert "KNOWN RESIDUAL" in text
         assert "same-UID package code" in text

@@ -13,7 +13,7 @@ const ROOT = new URL("../../", import.meta.url);
 /** Imported fork -> `packages/<dir>` workspace and its declared `pi.extensions` entry. */
 const FORK_ENTRIES = {
 	"pi-plan-mode": { dir: "plan-mode", entry: "dist/index.ts" },
-	"rpiv-todo": { dir: "todo", entry: "index.ts" },
+	"rpiv-todo": { dir: "todo", entry: "src/index.ts" },
 	"pi-subagents": { dir: "subagents", entry: "src/index.ts" },
 } as const;
 const OWNED_ENTRIES = {

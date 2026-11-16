@@ -87,11 +87,11 @@ def drive(
 def test_todo_manifest_rejects_dependency_drift() -> None:
     """Runtime dependencies are exactly the declared set at the declared ranges."""
     manifest = json.loads((pc.REPO_ROOT / "packages/todo/package.json").read_text())
-    assert pc.audit_manifest(pc.TODO_CONTRACT, manifest, ["index.ts"]) == []
+    assert pc.audit_manifest(pc.TODO_CONTRACT, manifest, ["src/index.ts"]) == []
     problems = pc.audit_manifest(
         pc.TODO_CONTRACT,
         manifest | {"dependencies": {"@juicesharp/rpiv-config": "^2.13.8", "left-pad": "1.0.0"}},
-        ["index.ts"],
+        ["src/index.ts"],
     )
     assert any("left-pad" in problem for problem in problems)
     assert any("^2.13.9" in problem and "rpiv-config" in problem for problem in problems)
