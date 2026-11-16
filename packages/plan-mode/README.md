@@ -2,7 +2,7 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Maintained fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). Imported into [`nredd/pi-harness`](https://github.com/nredd/pi-harness) from [`nredd/pi-plan-mode`](https://github.com/nredd/pi-plan-mode) commit [`4c2bfc3459b07b294efab62e9a8a01849f67a831`](https://github.com/nredd/pi-plan-mode/commit/4c2bfc3459b07b294efab62e9a8a01849f67a831), retaining its history, authorship and MIT license. The source fork rebases the patch queue onto upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`), with the core fork's `v1.3.0-nredd.6` development host. Install the published npm package; `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the npm package.
+Maintained fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT). Imported into [`nredd/pi-harness`](https://github.com/nredd/pi-harness) from [`nredd/pi-plan-mode`](https://github.com/nredd/pi-plan-mode) commit [`4c2bfc3459b07b294efab62e9a8a01849f67a831`](https://github.com/nredd/pi-plan-mode/commit/4c2bfc3459b07b294efab62e9a8a01849f67a831), retaining its history, authorship and MIT license. The fork is based on upstream `@narumitw/pi-plan-mode@0.59.3` (release commit `9b8befda`). Install the published npm package. Current development uses the root workspace lock and pinned core release tarballs; `dist/` is generated, gitignored and included in published tarballs.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -52,21 +52,20 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install npm:@nredd/pi-plan-mode@0.59.3-nredd.2
+pi install npm:@nredd/pi-plan-mode
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e npm:@nredd/pi-plan-mode@0.59.3-nredd.2
+pi -e npm:@nredd/pi-plan-mode
 ```
 
 Build and try this package locally from the repository root:
 
 ```bash
-npm ci --ignore-scripts
-npm run build
-pi -e .
+make install-owned
+pi -e ./packages/plan-mode
 ```
 
 The package declares `dist/index.ts`, which is gitignored build output: run `make install-owned` (or `npm run build`) in a fresh checkout before Pi loads the package directory. Published tarballs ship it.
@@ -465,7 +464,10 @@ The generated runtime is built from `src/index.ts` and does not import back into
 
 Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay; builds regenerate it and it is never committed. Run `npm run check` locally; the typecheck covers source and tests and inherits `noUncheckedIndexedAccess` and `erasableSyntaxOnly` from the shared strict configuration. Fixtures resolve relative to the package rather than the runner's working directory. The shared `@nredd/pi-test-lib` supplies `createRecordingPi`, recording contexts, faux turns, and deferred promises; package-specific adapters live in `tests/fixtures/`. Both Vitest configurations use `definePackageConfig` from the root factory. Runtime-builder tests publish only into per-test temporary output directories, never the package's shared `dist/`: concurrent SDK tests discover the package through it. The build script accepts an optional output directory (`node scripts/build-runtime.mjs <output-directory>`) under a build-owned test directory; normal builds still publish to `dist/`.
 
-Documentation consolidation moved `docs/settings.md` into the settings reference below and `docs/command-workflows.md` into the command workflows reference below. No package `docs/` remains. The former `AGENTS.md` live-branch guideline is a comment at the fresh-session handoff in `src/fresh-implementation.ts`.
+Use the [settings reference](#pi-plan-mode-settings-reference) for configuration and the
+[command guide](#plan-command-workflows) for lifecycle and recovery. Gate this workspace from the root
+with `npm run check --workspace @nredd/pi-plan-mode`, then run root `make check`.
+Tests use the pinned host's exported session harness, not an installed Pi or operator credentials.
 
 ## 🔎 Keywords
 
