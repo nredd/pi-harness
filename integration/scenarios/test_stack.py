@@ -122,6 +122,7 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
     receipt = json.loads(report.read_text())
     expected = {"extensions": ["extensions/expanded-footer.ts"], "skills": [], "prompts": [], "themes": []}
     if name == "local":
+        expected["extensions"] = ["src/index.ts"]
         expected["skills"] = [
             f"skills/{skill}/SKILL.md"
             for skill in ("code-review", "coding-like-redd", "get-it-merged", "ship-issue")
