@@ -317,6 +317,28 @@ def test_import_escape_reports_each_specifier_once(repo: Path) -> None:
     ]
 
 
+def test_allowlisted_import_cannot_hide_another_same_specifier_escape(repo: Path) -> None:
+    """Keep an existing escape waiver from concealing a second import of the same specifier.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: The gate passes unchanged debt and rejects another occurrence.
+    """
+    source = f"{PACKAGE}/src/leak.ts"
+    text = 'import "../../y.ts";\n'
+    waived = f"{PACKAGE}: src/leak.ts: import-escape ../../y.ts"
+    write_tree(repo, {source: text, package_layout.ALLOWLIST: entries_for(waived)})
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    assert package_layout.run(repo, "main", lambda _line: None) == 0
+    write_tree(repo, {source: text + 'const extra = import("../../y.ts");\n'})
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{waived}: added import occurrence (1 -> 2)"]
+
+
 def test_structure_rules_beneath_a_banned_directory_wait_for_the_move(repo: Path) -> None:
     """Report a banned directory once for structure rules, not every file inside it.
 
@@ -698,6 +720,29 @@ def test_package_json_script_names(repo: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize("path", ["package.json", "scripts/renamed.mjs"])
+def test_renamed_sync_machinery_is_denied(repo: Path, path: str) -> None:
+    """Reject sync machinery under an accepted script name or a renamed source file.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Location concealing the retired sync command.
+
+    Returns:
+        None: The public gate rejects the renamed machinery.
+    """
+    command = "node scripts/check-upstream-sync.mjs"
+    text = (
+        json.dumps({"scripts": {"test:regression": command}})
+        if path == "package.json"
+        else 'const ledger = readFileSync("sync-patches.json", "utf8");\n'
+    )
+    write_tree(repo, {f"{PACKAGE}/{path}": text})
+    out: list[str] = []
+    assert package_layout.run(repo, None, out.append) == 1
+    assert out == [f"{PACKAGE}: {path}: upstream-sync: not allowlisted"]
+
+
 def test_removed_upstream_sync_scripts_are_denied(repo: Path) -> None:
     """Deny `test:upstream-sync` and `test:sync-reverts` despite the `test:` prefix.
 
@@ -746,8 +791,39 @@ def test_unreadable_manifest_file_is_reported(repo: Path) -> None:
     assert lines(repo) == [f"{PACKAGE}: package.json: unreadable FileNotFoundError"]
 
 
-def test_shared_packages_get_script_and_config_rules_only(repo: Path) -> None:
-    """Apply `package.json` script and Biome rules to `integration/inprocess`, but not the publish rules.
+@pytest.mark.parametrize("shared", [SHARED, "tests/lib"])
+@pytest.mark.parametrize(
+    ("path", "content", "rule"),
+    [
+        ("tool", b"\x7fELF\x00", "tracked-binary"),
+        ("prebuilt/tool", b"text", "tracked-binary"),
+        ("scripts/tool.sh", b"exit 0\n", "shell-script"),
+        ("tool", b"#!/usr/bin/env bash\n", "shell-script"),
+    ],
+)
+def test_shared_packages_reject_binaries_and_shell_scripts(
+    repo: Path, shared: str, path: str, content: bytes, rule: str
+) -> None:
+    """Apply repository-wide binary and shell bans to shared packages too.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        shared (str): Shared package root.
+        path (str): Package-relative file.
+        content (bytes): Binary or shell content.
+        rule (str): Expected safety rule.
+
+    Returns:
+        None: The public gate rejects unsafe tracked files.
+    """
+    write_bytes(repo, f"{shared}/{path}", content)
+    out: list[str] = []
+    assert package_layout.run(repo, None, out.append) == 1
+    assert out == [f"{shared}: {path}: {rule}: not allowlisted"]
+
+
+def test_shared_packages_skip_publish_layout_rules(repo: Path) -> None:
+    """Apply shared script/config/safety rules without imposing published package layout.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -770,7 +846,7 @@ def test_shared_packages_get_script_and_config_rules_only(repo: Path) -> None:
     assert lines(repo) == [f"{SHARED}: biome.json: biome-config", f"{SHARED}: package.json: script-name docs"]
 
 
-def test_shared_package_without_a_manifest_is_only_checked_for_config(repo: Path) -> None:
+def test_shared_package_does_not_require_a_manifest(repo: Path) -> None:
     """Accept a shared directory with no `package.json`.
 
     Parameters:
@@ -1085,6 +1161,33 @@ def test_renames_within_a_banned_entry_are_not_growth(repo: Path) -> None:
     out: list[str] = []
     assert package_layout.run(repo, "main", out.append) == 1
     assert out == [f"{PACKAGE}: test/m.test.ts: added-under-banned-entry (add it under `tests/` instead)"]
+
+
+def test_staged_renames_within_a_banned_entry_are_not_growth(repo: Path) -> None:
+    """Judge staged renames against the same index used by the tracked-file scan.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: A staged move within debt passes, but a new file and an incoming move fail.
+    """
+    waived = f"{PACKAGE}: test: top-level-entry"
+    write_tree(
+        repo,
+        {
+            f"{PACKAGE}/test/a.test.ts": "export const stable = 1;\n" * 20,
+            package_layout.ALLOWLIST: entries_for(waived),
+        },
+    )
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    git(repo, "mv", f"{PACKAGE}/test/a.test.ts", f"{PACKAGE}/test/b.test.ts")
+    assert package_layout.run(repo, "main", lambda _line: None) == 0
+    write_tree(repo, {f"{PACKAGE}/test/new.test.ts": "new\n"})
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{PACKAGE}: test/new.test.ts: {package_layout.ADDED_RULE}"]
 
 
 def test_a_mostly_rewritten_file_is_not_a_rename(repo: Path) -> None:
