@@ -54,6 +54,8 @@ the observation epoch advances. Desktop ref movement is unchanged.
 
 The upstream website is retired. Its prose is preserved below; source-bound website generators no longer run.
 The entry is `src/index.ts`. `test/` stays until #871 converts and moves the tests together.
+The integration `local` stack loads this entry from the worktree; `personal` retains
+`extensions/computer-use.ts` from published `0.7.0`. Startup timing baselines retain their historical paths.
 Build local native helpers with `make bridge`; `build` produces the macOS payload on macOS and is a no-op elsewhere.
 The published tarball still includes macOS helpers, built rather than committed.
 Upstream sync retirement belongs to #895, independently of this layout change. Historical upstream

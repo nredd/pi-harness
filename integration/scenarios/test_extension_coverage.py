@@ -152,6 +152,8 @@ def test_computer_use_headless_exclusion(sandbox: Sandbox) -> None:
     manifest = package_manifest(directory)
     assert manifest["pi"]["extensions"], manifest
     evidence = json.loads((sandbox.agent_dir / "stack-evidence.json").read_text())
+    expected_entry = "./src/index.ts" if evidence["stack"] == "local" else "./extensions/computer-use.ts"
+    assert manifest["pi"]["extensions"] == [expected_entry], manifest
     installed = next(item for item in evidence["packages"] if item["name"].endswith("pi-computer-use"))
     source = installed["source"]
     stack_path = Path(__file__).resolve().parents[1] / "stacks" / f"{evidence['stack']}.json"
