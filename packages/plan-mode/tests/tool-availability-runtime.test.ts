@@ -70,6 +70,7 @@ for (const fixture of fixtures) {
 				});
 				await loader.reload();
 				assert.deepEqual(loader.getExtensions().errors, []);
+				assert.equal(loader.getExtensions().extensions.length, 1);
 				const created = await createAgentSession({
 					cwd: root,
 					agentDir,
