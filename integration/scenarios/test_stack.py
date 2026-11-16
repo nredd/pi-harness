@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import time
 from typing import TYPE_CHECKING, Any
@@ -153,6 +154,86 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
         assert types == {"general-purpose", "Explore", "Plan"}, types
     else:
         assert specialists <= types, types
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "without_web", "expected"),
+    [
+        ("Explore", False, {"read", "grep", "find", "ls"}),
+        (
+            "architect",
+            False,
+            {
+                "read",
+                "grep",
+                "find",
+                "git_log",
+                "git_diff",
+                "git_show",
+                "git_status",
+                "web_search",
+                "fetch_content",
+                "get_search_content",
+                "source_check",
+            },
+        ),
+        ("architect", True, {"read", "grep", "find", "git_log", "git_diff", "git_show", "git_status"}),
+    ],
+)
+def test_runtime_agent_surfaces(
+    sandbox: Sandbox, agent_type: str, without_web: bool, expected: set[str]
+) -> None:
+    """Replay the owned agent-file fixtures through the selected release binary and installed stack.
+
+    Parameters:
+        sandbox (Sandbox): explicit installed package set and private home.
+        agent_type (str): shared Explore-shaped or architect-shaped fixture.
+        without_web (bool): negative control removing directory-entry package admission.
+        expected (set[str]): exact provider-visible child tools, excluding the refusal-only stand-in.
+    """
+    agents = sandbox.agent_dir / "agents"
+    agents.mkdir(exist_ok=True)
+    fixture = REPO_ROOT / "inprocess/tests/fixtures/agents" / f"{agent_type}.md"
+    shutil.copyfile(fixture, agents / fixture.name)
+    if without_web:
+        path = agents / fixture.name
+        path.write_text(path.read_text().replace("[pi-dev-tools, pi-web-access]", "[pi-dev-tools]"))
+    sandbox.patch_json("subagents.json", {"agentModels": {}, "modelTiers": {}, "maxSubagentDepth": 2})
+    sandbox.patch_json("web-search.json", {"toolActivation": "eager", "allowBrowserCookies": False})
+    script = {
+        "providers": {
+            "faux": {
+                "models": ["main"],
+                "steps": [
+                    {
+                        "tools": [
+                            {
+                                "name": "Agent",
+                                "args": {
+                                    "subagent_type": agent_type,
+                                    "description": "surface proof",
+                                    "prompt": "list tools",
+                                    "model": "faux/main",
+                                    "run_in_background": False,
+                                },
+                            }
+                        ]
+                    },
+                    {"listTools": True},
+                    {"text": "SURFACE-DONE"},
+                ],
+            }
+        }
+    }
+    result = run_headless(sandbox, script, ["run surface proof"], extra_args=["--no-approve"])
+    assert result.returncode == 0, result.transcript()
+    outcomes = [outcome for outcome in result.tool_outcomes() if outcome.name == "Agent"]
+    assert len(outcomes) == 1, result.transcript()
+    outcome = outcomes[0]
+    assert not outcome.is_error, outcome.text
+    offered = re.search(r"TOOLS ([A-Za-z_0-9,]+)", outcome.text)
+    assert offered, result.transcript()
+    assert set(offered[1].split(",")) - {"SubagentWorkflow"} == expected
 
 
 def test_tool_set(sandbox: Sandbox) -> None:
