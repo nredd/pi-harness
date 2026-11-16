@@ -1,0 +1,8 @@
+{
+	"maxConcurrent": 12,
+	"maxConcurrentForeground": 0,
+	"maxActiveSubagents": 14,
+	"nestedSubagentReserve": 2,
+	"maxSubagentDepth": 2,
+	"agentModels": { "code-reviewer": "@review" }
+}
