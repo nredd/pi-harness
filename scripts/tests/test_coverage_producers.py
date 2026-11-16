@@ -22,8 +22,8 @@ LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
 LAUNCHER_PACKAGE_ARGS = {
     "session-kit": (
-        " --exclude test/scenarios/home-injection.test.ts && "
-        f"{LAUNCHER} test/scenarios/home-injection.test.ts --coverage.enabled=false"
+        " --exclude tests/scenarios/home-injection.test.ts && "
+        f"{LAUNCHER} tests/scenarios/home-injection.test.ts --coverage.enabled=false"
     ),
 }
 BUN_COVERAGE_ARGS = [

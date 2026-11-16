@@ -7,7 +7,10 @@
  * Normal tests retain JS RegExp semantics and line ordering. close() kills and reaps the child
  * (including its worker); drain() waits for queued callbacks before the monitor's final output is delivered.
  * Every deadline runs on the injected `Clock`, the manager's, so a scheduler-controlled clock decides
- * when a worker counts as late rather than how loaded the host happens to be.
+ * when a worker counts as late rather than how loaded the host happens to be. Lines have the splitter's
+ * 4096-character cap. `BUN_BE_BUN=1` runs a compiled Bun host's child as an interpreter. Disposal
+ * immediately interrupts pending matches and awaits child cleanup. Conservative wakes can be false
+ * positives; timer deadlines depend on normal event-loop scheduling, not realtime guarantees.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { type Clock, realClock, type TimerHandle } from "../clock.ts";

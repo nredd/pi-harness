@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
 import { runTools } from "../../packages/dev-tools/tests/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
 const SSH = new URL("../../packages/dev-tools/tests/fixtures/ssh/fake-ssh", import.meta.url).pathname;
