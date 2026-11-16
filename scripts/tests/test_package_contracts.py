@@ -3417,7 +3417,20 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
 def test_computer_use_source_only_payload_is_explicitly_platform_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
 ) -> None:
-    """Only non-macOS source packs may omit both bridges; partial payloads always fail."""
+    """Only non-macOS source packs may omit both bridges; partial payloads always fail.
+
+    Parameters:
+        tmp_path (Path): Disposable packed-package directory.
+        monkeypatch (pytest.MonkeyPatch): Simulate the host and isolate the Pi/provider boundary.
+        platform (str): Host platform whose native-payload contract is exercised.
+
+    Returns:
+        None: Complete payloads are enforced or explicitly reported as source-only.
+
+    Raises:
+        AssertionError: A partial payload is accepted or platform-specific evidence is incorrect.
+        pc.ContractError: The source-only non-macOS fixture unexpectedly violates its contract.
+    """
     monkeypatch.setattr(pc, "host_platform", lambda: platform)
     packed = [
         name for name in pc.COMPUTER_USE_CONTRACT.packed_files if not name.startswith("prebuilt/macos/")
