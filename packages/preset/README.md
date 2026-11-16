@@ -108,7 +108,15 @@ router configuration files, `cacheWarming`, or the persisted compaction setting.
 ## Development layout
 
 Runtime TypeScript lives in `src/`. Tests live in `tests/`, with helper code in
-`tests/fixtures/`. Run `npm run check` for lint, types, Node and Bun tests plus the
+`tests/fixtures/`. Headless helpers use `@nredd/pi-test-lib/harness`; the neutral
+`tests/fixtures/usage.ts` keeps the router bus independent of the interactive host.
+The same three `footer-headless.test.ts` cases (RPC, print and JSON bindings) run on
+stock Pi `1.5.2` under Node and Bun. This is not a stock full-suite or typecheck claim:
+`tests/fixtures/footer.ts` still imports `createInteractiveHarness`, `InteractiveHarness`
+and `InteractiveHarnessOptions` from the fork's `/testing/interactive`, and
+`tests/scenarios/footer-model.test.ts` still imports its `InteractiveHarness` type.
+Those hosts depend on private `InteractiveMode` and TUI render flushing; private model-route
+and interactive behavior are unchanged. Run `npm run check` for lint, types, Node and Bun tests plus the
 packed-file contract. `CHANGELOG.md` tracks unreleased changes; earlier history remains
 in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
 

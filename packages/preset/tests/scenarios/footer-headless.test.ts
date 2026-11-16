@@ -1,14 +1,14 @@
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import {
 	createHarness,
 	createTestUiContext,
 	fauxAssistantMessage,
 	getAssistantTexts,
-} from "@earendil-works/pi-coding-agent/testing";
-import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { deferred } from "@nredd/pi-test-lib/deferred";
+} from "@nredd/pi-test-lib/harness";
 import { expect, it, vi } from "vitest";
 import { createExpandedFooter } from "../../src/index.ts";
-import { UsageBus } from "../fixtures/footer.ts";
+import { UsageBus } from "../fixtures/usage.ts";
 
 it("rpc binding never mounts quota polling", async () => {
 	const clock = new FakeClock();
