@@ -131,7 +131,7 @@ test("resource loader discovers the footer, skills, and themes without diagnosti
 		// Unfiltered: with a sandboxed HOME/agent dir nothing but the package may contribute.
 		assert.deepEqual(
 			extensions.extensions.map((e) => e.path),
-			[join(pkgRoot, "extensions/expanded-footer.ts")],
+			[join(pkgRoot, "src/index.ts")],
 		);
 
 		const skills = loader.getSkills();
@@ -180,7 +180,7 @@ test("packed package resources load through Pi after an isolated npm install", (
 		assert.deepEqual(loader.getSkills().diagnostics, []);
 		assert.deepEqual(
 			loader.getExtensions().extensions.map((entry) => entry.path),
-			[join(installed, "extensions/expanded-footer.ts")],
+			[join(installed, "src/index.ts")],
 		);
 		assert.deepEqual(
 			loader
@@ -197,7 +197,7 @@ test("footer-only source filters load the extension without skills, prompts or t
 		box.settingsManager.setPackages([
 			{
 				source: pkgRoot,
-				extensions: ["extensions/expanded-footer.ts"],
+				extensions: ["src/index.ts"],
 				skills: [],
 				prompts: [],
 				themes: [],
@@ -207,7 +207,7 @@ test("footer-only source filters load the extension without skills, prompts or t
 		assert.deepEqual(loader.getExtensions().errors, []);
 		assert.deepEqual(
 			loader.getExtensions().extensions.map((e) => e.path),
-			[join(pkgRoot, "extensions/expanded-footer.ts")],
+			[join(pkgRoot, "src/index.ts")],
 		);
 		assert.deepEqual(loader.getSkills().skills, []);
 		assert.deepEqual(loader.getPrompts().prompts, []);
@@ -242,7 +242,7 @@ test("package manager resolves the same resources and a package install root", (
 		const resolved = await manager.resolve(async () => "skip");
 		const enabled = (list: ResolvedResource[]): string[] =>
 			list.filter((r) => r.enabled && r.path.startsWith(pkgRoot)).map((r) => r.path);
-		assert.deepEqual(enabled(resolved.extensions), [join(pkgRoot, "extensions/expanded-footer.ts")]);
+		assert.deepEqual(enabled(resolved.extensions), [join(pkgRoot, "src/index.ts")]);
 		assert.deepEqual(
 			enabled(resolved.skills)
 				.map((p) => p.split("/").at(-2))

@@ -11,7 +11,7 @@ imposed on `@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, or `@nredd/pi-subscri
 
 Tested hosts: the package tests run on core `v1.3.0-nredd.10` (upstream `1.3.0` plus the fork's patch queue,
 the release tarballs pinned in `devDependencies`); `make check-package-contracts` installs the packed
-preset into exact stock Pi `1.3.0`. Peers are `*` per Pi's package rules.
+preset into exact stock Pi `1.3.0` and loads its footer and skills through that host's resource loader. Peers are `*` per Pi's package rules.
 
 ## Install only the footer
 
@@ -28,7 +28,10 @@ After `0.2.0` is published, add this object to `settings.json`'s `packages` arra
 ```
 
 Pi's package-source filters narrow its declared resources. The native discovery test exercises
-this exact filter against the real resource loader, without invoking a Pi binary.
+the workspace's `src/index.ts` filter against the real resource loader, without invoking a Pi binary.
+The example above remains the published `0.4.0` filter. Workspace builds now declare
+`./src/index.ts`; change the promoted filter to `src/index.ts` only when promoting a new
+preset version containing that entry. Do not apply the new filter to published `0.4.0`.
 
 **If pi-subagents is installed**, also set `"packageAgents": false` in `subagents.json` when
 agents remain locally managed. Its package-agent discovery is separate from Pi's four resource
@@ -101,6 +104,13 @@ uses `HOME`, then `USERPROFILE`, then the OS home; SDK callers can instead injec
 `createExpandedFooter`. It does not read `settings/personal-defaults.json`,
 router configuration files, `cacheWarming`, or the persisted compaction setting.
 
+## Development layout
+
+Runtime TypeScript lives in `src/`. Tests live in `test/`, with helper code in
+`test/fixtures/`. Run `npm run check` for lint, types, Node and Bun tests plus the
+packed-file contract. `CHANGELOG.md` tracks unreleased changes; earlier history remains
+in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
+
 ## Contents
 
 - `agents/`: `architect`, `code-reviewer`, `critic`, `debugger`, `general-purpose`,
@@ -109,7 +119,7 @@ router configuration files, `cacheWarming`, or the persisted compaction setting.
 - `skills/`: `code-review`, `ship-issue`, `get-it-merged`, `coding-like-redd`. Discovered by Pi
   through `pi.skills`. `coding-like-redd` is explicitly opinionated (Python/Rust conventions of the
   author) and is public, opt-in content
-- `extensions/expanded-footer.ts` with sibling `lib/footer-cache.ts` and `lib/footer-quota.ts`.
+- `src/index.ts` with sibling `src/footer-cache.ts` and `src/footer-quota.ts`.
   The quota row stays hidden unless a `router:rpc:usage` responder (the subscription router) answers
 - `themes/`: `belafonte-day`, `tokyonight-storm`. **Separately licensed**, see below
 - `settings/personal-defaults.json`: reference data only. Pi does not read it from a package. A
@@ -257,8 +267,8 @@ npm run check -w @nredd/pi-preset   # biome, strict tsc, full Vitest on Node and
 
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock, timeZone, homeDir })` optionally injects one clock, an IANA zone pinning reset labels, and a home for cwd presentation (all default to process values) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
-- `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
-- The footer now differs from its source snapshot by the optional factory/clock seam and routed physical model/thinking labels. `lib/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- `test/*.test.ts` and `test/fixtures/` are checked by strict TypeScript; the two footer helper suites remain JavaScript until their TypeScript migration. Everything under `src/` and `test/` is Biome-formatted.
+- The footer now differs from its source snapshot by the optional factory/clock seam and routed physical model/thinking labels. `src/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `src/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
 - All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,

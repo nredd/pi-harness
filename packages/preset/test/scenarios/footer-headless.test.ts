@@ -7,7 +7,7 @@ import {
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { expect, it, vi } from "vitest";
-import { createExpandedFooter } from "../../extensions/expanded-footer.ts";
+import { createExpandedFooter } from "../../src/index.ts";
 import { UsageBus } from "../fixtures/footer.ts";
 
 it("rpc binding never mounts quota polling", async () => {

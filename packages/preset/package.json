@@ -18,8 +18,8 @@
   ],
   "files": [
     "agents/",
-    "extensions/",
-    "lib/",
+    "src/",
+    "CHANGELOG.md",
     "licenses/",
     "settings/",
     "skills/",
@@ -49,7 +49,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/expanded-footer.ts"
+      "./src/index.ts"
     ],
     "skills": [
       "./skills"

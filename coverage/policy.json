@@ -6,6 +6,9 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "preset", "signal": "primary", "path": "packages/preset/extensions/expanded-footer.ts", "replacement": "packages/preset/src/index.ts", "reason": "Move the preset entry into src (#876); unchanged behavior and zero uncovered budgets." },
+    { "package": "preset", "signal": "primary", "path": "packages/preset/lib/footer-cache.ts", "replacement": "packages/preset/src/footer-cache.ts", "reason": "Move the footer cache helper into src (#876); unchanged behavior and zero uncovered budgets." },
+    { "package": "preset", "signal": "primary", "path": "packages/preset/lib/footer-quota.ts", "replacement": "packages/preset/src/footer-quota.ts", "reason": "Move the footer quota helper into src (#876); unchanged behavior and zero uncovered budgets." },
     { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-package-assets.mjs", "replacement": "scripts/package_contracts.py", "reason": "Consolidate exact tarball checks in PackageContract (#868); Python implementation and negative controls remain measured under python-scripts at zero uncovered budgets." },
     { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-package-assets.mjs", "replacement": "scripts/package_contracts.py", "reason": "Move duplicate asset checks to the authoritative PackageContract (#868), measured by python-scripts with zero uncovered budgets." },
     { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-commit-messages.mjs", "replacement": "scripts/check-commit-messages.mjs", "reason": "Move repository-wide commit policy to root scripts (#869), measured by import-audit with the same real-history and refusal tests and zero uncovered floors." },
@@ -98,7 +101,7 @@
     },
     "preset": {
       "root": "packages/preset",
-      "owned": ["extensions/**/*.ts", "lib/**/*.ts"],
+      "owned": ["src/**/*.ts"],
       "exclusions": [],
       "status": "measured",
       "note": "",

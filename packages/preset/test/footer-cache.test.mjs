@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import * as c from "../lib/footer-cache.ts";
+import * as c from "../src/footer-cache.ts";
 
 const T0 = Date.parse("2026-01-01T00:00:00Z");
 const TTL = 300;

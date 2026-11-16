@@ -12,8 +12,8 @@ import {
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { STATUS } from "@nredd/pi-test-lib/terminal";
-import { createExpandedFooter } from "../../extensions/expanded-footer.ts";
-import { USAGE_CHANNEL } from "../../lib/footer-quota.ts";
+import { USAGE_CHANNEL } from "../../src/footer-quota.ts";
+import { createExpandedFooter } from "../../src/index.ts";
 
 /** Router-shaped usage snapshot, with provider-scoped names and unknown-provider validation. */
 export function snapshot(

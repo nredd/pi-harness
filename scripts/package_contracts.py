@@ -45,6 +45,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import time
 from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
@@ -587,8 +588,9 @@ CONTRACTS = (
 PRESET_CONTRACT = PackageContract(
     name="@nredd/pi-preset",
     directory="preset",
-    resource_directories=("agents", "extensions", "lib", "licenses", "settings", "skills", "themes"),
+    resource_directories=("agents", "licenses", "settings", "skills", "themes"),
     packed_files=(
+        "CHANGELOG.md",
         "LICENSE",
         "NOTICE.md",
         "README.md",
@@ -601,9 +603,9 @@ PRESET_CONTRACT = PackageContract(
         "agents/principal-investigator.md",
         "agents/researcher.md",
         "agents/verifier.md",
-        "extensions/expanded-footer.ts",
-        "lib/footer-cache.ts",
-        "lib/footer-quota.ts",
+        "src/index.ts",
+        "src/footer-cache.ts",
+        "src/footer-quota.ts",
         "licenses/Apache-2.0-tokyonight.nvim.txt",
         "licenses/CC-BY-SA-4.0.txt",
         "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
@@ -621,7 +623,7 @@ PRESET_CONTRACT = PackageContract(
         "README.md",
         "package.json",
         "agents/code-reviewer.md",
-        "extensions/expanded-footer.ts",
+        "src/index.ts",
         "licenses/Apache-2.0-tokyonight.nvim.txt",
         "licenses/CC-BY-SA-4.0.txt",
         "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
@@ -629,10 +631,9 @@ PRESET_CONTRACT = PackageContract(
         "themes/tokyonight-storm.json",
     ),
     allowed=(
-        re.compile(r"^(LICENSE|NOTICE\.md|README\.md|package\.json)$"),
+        re.compile(r"^(LICENSE|NOTICE\.md|README\.md|CHANGELOG\.md|package\.json)$"),
         re.compile(r"^agents/[a-z-]+\.md$"),
-        re.compile(r"^extensions/[a-z-]+\.ts$"),
-        re.compile(r"^lib/[a-z-]+\.ts$"),
+        re.compile(r"^src/[a-z-]+\.ts$"),
         re.compile(r"^licenses/[A-Za-z0-9.-]+\.txt$"),
         re.compile(r"^settings/[a-z-]+\.json$"),
         re.compile(r"^skills/[a-z-]+/SKILL\.md$"),
@@ -4818,9 +4819,9 @@ def run_audit_gate(
 ) -> dict[str, object]:
     """Audit and install one packed package that has no standalone Pi behavior.
 
-    The preset ships agents and themes only, so there is nothing to execute through stock Pi alone.
-    Its packed bytes still get the full tarball audit (files, manifest, license expression) and the
-    clean-install closure check. Agent behavior in real children lives in the in-process suite.
+    The preset's packed footer is loaded by stock Pi's resource loader after the full tarball audit
+    (files, manifest, license expression) and clean-install closure check. Agent behavior in real
+    children lives in the in-process suite.
 
     Parameters:
         work (Path): Empty scratch directory.
@@ -4843,7 +4844,45 @@ def run_audit_gate(
         raise ContractError(
             f"Tarball audit failed for '{contract.name}':\n" + "\n".join(f"  - {p}" for p in problems)
         )
-    install_alone(artifact, sandbox, work / "install")
+    installed = install_alone(artifact, sandbox, work / "install")
+    if contract.directory == "preset":
+        ensure_stock_pi(DEFAULT_STOCK_PREFIX, sandbox)
+        run(
+            [
+                tools.node,
+                "--input-type=module",
+                "-e",
+                textwrap.dedent("""\
+                    import assert from 'node:assert/strict';
+                    import { pathToFileURL } from 'node:url';
+                    const [sdk, installed, cwd, agentDir] = process.argv.slice(1);
+                    const { DefaultResourceLoader, SettingsManager, VERSION } =
+                        await import(pathToFileURL(sdk));
+                    assert.equal(VERSION, '1.3.0');
+                    const settingsManager = SettingsManager.inMemory({ packages: [installed] });
+                    const loader = new DefaultResourceLoader({
+                        cwd, agentDir, settingsManager, noContextFiles: true,
+                    });
+                    await loader.reload();
+                    assert.deepEqual(loader.getExtensions().errors, []);
+                    assert.deepEqual(loader.getExtensions().extensions.map(e => e.path),
+                        [installed + '/src/index.ts']);
+                    assert.deepEqual(loader.getSkills().diagnostics, []);
+                    assert.deepEqual(loader.getSkills().skills.map(s => s.name).sort(),
+                        ['code-review', 'coding-like-redd', 'get-it-merged', 'ship-issue']);
+                    console.log('Packed preset loads in stock Pi ' + VERSION);
+                    """),
+                str(DEFAULT_STOCK_PREFIX / "node_modules" / STOCK_PI_PACKAGE / "dist/index.js"),
+                str(installed),
+                str(work / "install"),
+                str(sandbox.agent_dir),
+            ],
+            env=sandbox.env(),
+            cwd=work / "install",
+            timeout=30,
+            own_group=True,
+        )
+        LOGGER.info(f"Packed preset footer and skills loaded through stock Pi {STOCK_PI_VERSION}")
     if contract.node_probe:
         run(
             [tools.node, "--input-type=module", "-e", contract.node_probe],

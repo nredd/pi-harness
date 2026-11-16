@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { STATUS, WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { afterEach, expect, it } from "vitest";
-import { formatCwd } from "../../extensions/expanded-footer.ts";
+import { formatCwd } from "../../src/index.ts";
 import {
 	COLD,
 	DROP_COLD,

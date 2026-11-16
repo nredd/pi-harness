@@ -4,7 +4,7 @@ Personal exercises its exact published footer-only pin; local exercises the full
 preset. Never add a local preset to personal or silently replace its published footer.
 
 References:
-- https://github.com/nredd/pi-harness/blob/main/packages/preset/extensions/expanded-footer.ts
+- https://github.com/nredd/pi-harness/blob/main/packages/preset/src/index.ts
 """
 
 from __future__ import annotations

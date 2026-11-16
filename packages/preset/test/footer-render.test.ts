@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earend
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { expect, it, vi } from "vitest";
-import { createExpandedFooter, formatCwd } from "../extensions/expanded-footer.ts";
+import { createExpandedFooter, formatCwd } from "../src/index.ts";
 
 type Factory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 

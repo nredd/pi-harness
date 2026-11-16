@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
-import * as q from "../lib/footer-quota.ts";
+import * as q from "../src/footer-quota.ts";
 
 const NOW = 1_000_000;
 const win = (name, usedPercent, scope = "provider") => ({

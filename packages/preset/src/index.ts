@@ -13,11 +13,11 @@
  * cwd/branch/session-name line and the extension-status line are untouched.
  *
  * A quota row sits between the stats line and the statuses once the subscription
- * router answers `router:rpc:usage` (polled in the background, see lib/footer-quota.ts).
+ * router answers `router:rpc:usage` (polled in the background, see src/footer-quota.ts).
  * Without the router the row stays hidden.
  *
  * `hit N%` carries a prompt-cache marker (`warm`/`cold`, compact `w`/`c`) and, after a hit-rate
- * drop, a cause tag (see lib/footer-cache.ts). A one-shot timer repaints when the cache goes cold.
+ * drop, a cause tag (see src/footer-cache.ts). A one-shot timer repaints when the cache goes cold.
  */
 
 import { homedir } from "node:os";
@@ -29,8 +29,8 @@ import type {
 	MessageStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { analyzeCache, cacheTtlSeconds, formatCacheMarker } from "../lib/footer-cache.ts";
-import { createQuotaPoller, fitQuotaRows } from "../lib/footer-quota.ts";
+import { analyzeCache, cacheTtlSeconds, formatCacheMarker } from "./footer-cache.ts";
+import { createQuotaPoller, fitQuotaRows } from "./footer-quota.ts";
 
 /** Format token counts for compact footer display. Mirrors the stock footer's formatTokens. */
 function formatTokens(count: number): string {

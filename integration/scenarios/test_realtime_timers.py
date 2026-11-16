@@ -32,7 +32,7 @@ LOGGER = logging.getLogger(__name__)
 pytestmark = [pytest.mark.stack, pytest.mark.tui]
 # `/loop` refuses anything under 30s, so one tick needs a real 30s interval.
 INTERVAL_S = 30
-# The footer's `POLL_INTERVAL_MS` in `packages/preset/lib/footer-quota.ts`.
+# The footer's `POLL_INTERVAL_MS` in `packages/preset/src/footer-quota.ts`.
 POLL_INTERVAL_S = 60
 # First request follows `session_start` at once; the second is capped at the interval plus 15 s over
 # the measured 60.0 s gap. Event driven, so the bound only matters for a dead timer.

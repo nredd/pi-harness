@@ -37,7 +37,7 @@ test("metadata: public, versioned, correctly attributed", () => {
 test("pi manifest declares exactly the preset resources, all inside the package", () => {
 	const { pi } = manifest();
 	assert.deepEqual(pi, {
-		extensions: ["./extensions/expanded-footer.ts"],
+		extensions: ["./src/index.ts"],
 		skills: ["./skills"],
 		themes: ["./themes"],
 		subagents: { agents: ["./agents"] },

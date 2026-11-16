@@ -78,6 +78,6 @@ export function resourceFiles(): string[] {
 		"NOTICE.md",
 		"README.md",
 		"package.json",
-		...["agents", "extensions", "lib", "licenses", "settings", "skills", "themes"].flatMap(walk),
+		...["agents", "src", "licenses", "settings", "skills", "themes"].flatMap(walk),
 	].sort();
 }
