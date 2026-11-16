@@ -44,7 +44,7 @@ describe.skipIf(!live)("macos live helper checks (PI_COMPUTER_USE_LIVE=1 on macO
 
 		dir = mkdtempSync(path.join(os.tmpdir(), "pcu-alert-"));
 		const bin = path.join(dir, "alertapp");
-		execFileSync("swiftc", ["-o", bin, new URL("../scripts/fixtures/alert-app.swift", import.meta.url).pathname], { stdio: "inherit" });
+		execFileSync("swiftc", ["-o", bin, new URL("../tests/fixtures/alert-app.swift", import.meta.url).pathname], { stdio: "inherit" });
 		child = spawn(bin, [], { stdio: "ignore" });
 	}, FIXTURE_BUILD_TIMEOUT_MS);
 

@@ -19,7 +19,7 @@ import {
 	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
-} from "../scripts/check-async.mjs";
+} from "../tests/fixtures/check-async.mjs";
 
 const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
 // Cold Rust dependency compilation on a loaded runner needs minutes, not fixture seconds.

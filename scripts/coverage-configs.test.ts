@@ -166,12 +166,7 @@ const PRODUCERS: Producer[] = [
 
 /** Files at 0/0/0/0 on every OS; adding or dropping a pin must change this list too (#645). */
 const ZERO_UNCOVERED_FILES = [
-	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
-	"scripts/check-docs-platform.mjs",
-	"scripts/check-docs.mjs",
-	"scripts/docs-generators/generate-source-references.mjs",
-	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
@@ -182,6 +177,7 @@ const ZERO_UNCOVERED_FILES = [
 	"src/contract.ts",
 	"src/desktop.ts",
 	"src/find-params.ts",
+	"src/index.ts",
 	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
@@ -534,7 +530,7 @@ test("computer-use async verification pins the whole helper at zero L/F/B/S", as
 	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");
 	assert.ok(producer);
 	assert.deepEqual((await coverageOf(producer)).thresholds, {
-		"scripts/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+		"tests/fixtures/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
 	});
 });
 

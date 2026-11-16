@@ -20,7 +20,8 @@ const LIVE_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
 const packageDir = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
-	"..",
+	"../..",
+
 );
 
 const child = spawn(

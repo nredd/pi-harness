@@ -16,9 +16,9 @@ import {
 	reconstructStateFromBranch,
 	setComputerUseActivity,
 	shutdownComputerUseSession,
-} from "../src/bridge.ts";
-import { executeDesktopInput, executeDesktopScreenshot } from "../src/desktop.ts";
-import { getComputerUseConfig, getLoadedComputerUseConfig, loadComputerUseConfig } from "../src/config.ts";
+} from "./bridge.ts";
+import { executeDesktopInput, executeDesktopScreenshot } from "./desktop.ts";
+import { getComputerUseConfig, getLoadedComputerUseConfig, loadComputerUseConfig } from "./config.ts";
 
 const stateId = Type.String({ description: "Required state id owning every @e ref used by this operation" });
 const point = { x: Type.Number(), y: Type.Number() };

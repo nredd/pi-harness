@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runCheckCommand } from "../../scripts/check-async.mjs";
+import { runCheckCommand } from "../../tests/fixtures/check-async.mjs";
 
 // SDK-only imports took 135.65s locally under concurrent gates; one interrupted at 180s.
 // Preparation has its own visible 240s failure bound, not INV-8's 90s source-validation budget.

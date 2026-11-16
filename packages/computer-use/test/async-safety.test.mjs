@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, test, vi } from "vitest";
-import { deferred, runCheckCommand, stopCheckChild, within } from "../scripts/check-async.mjs";
+import { deferred, runCheckCommand, stopCheckChild, within } from "../tests/fixtures/check-async.mjs";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 

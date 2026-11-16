@@ -1,6 +1,6 @@
 // Opt-in live Linux X11 scenario: discovery, semantic/visual observation, background typing, focus
 // preservation, a grounded foreground click and a root-closing launch, all through the real tool executors.
-// It runs only inside the D-Bus session `scripts/check-linux-live.mjs` starts (`npm run test:linux-live`);
+// It runs only inside the D-Bus session `tests/fixtures/linux-live.mjs` starts (`npm run test:linux-live`);
 // everywhere else Vitest reports it skipped.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

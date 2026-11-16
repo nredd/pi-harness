@@ -4,11 +4,11 @@ import { test } from "vitest";
 
 test("registered tool schemas stay function-call compatible", async () => {
   const root = new URL("..", import.meta.url);
-  const files = ["extensions/computer-use.ts"];
+  const files = ["src/index.ts"];
 
   // Every registered tool must have an object-typed root schema (function-call validators reject anyOf roots).
   const registered = [];
-  const { default: register } = await import("../extensions/computer-use.ts");
+  const { default: register } = await import("../src/index.ts");
   register({ registerTool: (tool) => registered.push(tool), registerCommand() {}, on() {} });
   for (const tool of registered) {
     if (tool.parameters?.type !== "object") throw new Error(`Tool ${tool.name} root schema is not type:object`);

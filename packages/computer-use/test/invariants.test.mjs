@@ -7,14 +7,14 @@ import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
 import { afterAll, beforeAll, describe, test } from "vitest";
-import { runCheckCommand } from "../scripts/check-async.mjs";
+import { runCheckCommand } from "../tests/fixtures/check-async.mjs";
 import { prepareSwiftSdk, runPreparedSwift, SDK_HOOK_TIMEOUT_MS, SDK_IMPORTS } from "./support/swift-sdk.mjs";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
 const agentCursorSwift = fs.readFileSync(path.join(root, "native/macos/agent_cursor.swift"), "utf8");
 const activityGlowSwift = fs.readFileSync(path.join(root, "native/macos/activity_glow.swift"), "utf8");
-const extensionTs = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
+const extensionTs = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
 const macosHelperTs = fs.readFileSync(path.join(root, "src/platform/macos/helper.ts"), "utf8");
 const ts = fs.readFileSync(path.join(root, "src/bridge.ts"), "utf8");
 const noteTs = fs.readFileSync(path.join(root, "src/note.ts"), "utf8");
@@ -181,7 +181,7 @@ test("INV-10 resource-keyed scheduling", () => {
 });
 
 test("INV-11 unified agent contract", () => {
-	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
+	const extension = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
 	const tools = [...extension.matchAll(/\bname:\s*"([^"]+)"/g)].map((match) => match[1]);
 	const expected = ["find_roots", "observe_ui", "search_ui", "expand_ui", "inspect_ui", "act_ui", "read_text", "wait_for", "launch_browser", "navigate_browser", "evaluate_browser", "desktop_screenshot", "desktop_input"];
 	assert(JSON.stringify(tools) === JSON.stringify(expected), `unexpected public tool surface: ${tools.join(", ")}`);
@@ -190,7 +190,7 @@ test("INV-11 unified agent contract", () => {
 });
 
 test("INV-11a compact observe view", () => {
-	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
+	const extension = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
 	assert(extension.includes('detail: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("outline")]'), "observe_ui does not declare detail compact|outline");
 	assert(ts.includes("function renderStateView") && (ts.match(/renderStateView\(/g) ?? []).length >= 4 && (ts.match(/waitForViewText\(/g) ?? []).length >= 3, "full views do not route through renderStateView");
 	assert(/`Controls \([^`]*stateId \$\{stateId\}, root \$\{outline\.root\.ref\}/.test(ts), "controls header does not show stateId and root ref");
@@ -214,7 +214,7 @@ test("INV-14 native batches settle once", () => {
 });
 
 test("INV-15 semantic action postconditions", () => {
-	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
+	const extension = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
 	const actions = fs.readFileSync(path.join(root, "src/actions.ts"), "utf8");
 	const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
 	assert(extension.includes("expect: Type.Optional") && extension.includes("timeoutMs"), "act_ui does not expose a semantic postcondition");
@@ -263,7 +263,7 @@ test("INV-18 consolidated actions and diff-first resulting views", () => {
 	const actions = fs.readFileSync(path.join(root, "src/actions.ts"), "utf8");
 	const view = fs.readFileSync(path.join(root, "src/view.ts"), "utf8");
 	const macBackend = fs.readFileSync(path.join(root, "src/platform/macos/backend.ts"), "utf8");
-	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
+	const extension = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
 	assert(actions.includes("prepareAction") && actions.includes("canRetryInForeground"), "action preparation and safe recovery are not consolidated");
 	assert(!fs.existsSync(path.join(root, "src/interaction.ts")), "superseded interaction policy module still exists");
 	assert(!ts.includes("responseMode") && !extension.includes("responseMode"), "alternate confirmation-only action path still exists");

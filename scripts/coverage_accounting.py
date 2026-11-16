@@ -625,6 +625,10 @@ def is_test_path(path: Path) -> bool:
     Raises:
         None.
     """
+    # The relocated async process helper retains its independent measured signal (#870).
+    # Accept both package-relative and repository-relative paths used by inventory/report readers.
+    if path.as_posix().removeprefix("packages/computer-use/") == "tests/fixtures/check-async.mjs":
+        return False
     # Rust modules inside src belong to the instrumented source denominator, even when named
     # tests/fixtures. Only conventional test/fixture directories OUTSIDE src are excluded.
     # `tests/lib` is the shared helper workspace: owned, measured code, not a test tree. Its own

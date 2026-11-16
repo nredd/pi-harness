@@ -17,7 +17,7 @@ import {
 	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
-} from "../scripts/check-async.mjs";
+} from "../tests/fixtures/check-async.mjs";
 
 const NEGATIVE_CONTROL_TIMEOUT_MS = 1;
 const COMMAND_TIMEOUT_CONTROL_MS = 25;

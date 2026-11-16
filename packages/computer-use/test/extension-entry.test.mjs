@@ -1,4 +1,4 @@
-// `extensions/computer-use.ts` registration, `/computer-use` status and lifecycle hooks against a recording ExtensionAPI (nredd/pi-harness#703, Refs #645).
+// `src/index.ts` registration, `/computer-use` status and lifecycle hooks against a recording ExtensionAPI (nredd/pi-harness#703, Refs #645).
 // The host platform is a seam (`process.platform` is redefined per case) so the darwin-only arms run on every OS.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
 import { DEFAULT_BLOCKED_APPS } from "../src/config.ts";
-import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../extensions/computer-use.ts";
+import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../src/index.ts";
 
 vi.mock("../src/bridge.ts", async (importOriginal) => ({
 	...(await importOriginal()),

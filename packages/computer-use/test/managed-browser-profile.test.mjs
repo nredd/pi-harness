@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, test, vi } from "vitest";
 import { executeFind, executeLaunchBrowser, shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { currentPlatformBackend } from "../src/platform/index.ts";
 import { ResourceScheduler } from "../src/runtime.ts";
-import { deferred, within } from "../scripts/check-async.mjs";
+import { deferred, within } from "../tests/fixtures/check-async.mjs";
 
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));

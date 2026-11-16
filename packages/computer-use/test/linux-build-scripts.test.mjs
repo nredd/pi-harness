@@ -11,7 +11,7 @@ import {
 	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
-} from "../scripts/check-async.mjs";
+} from "../tests/fixtures/check-async.mjs";
 import { test } from "vitest";
 
 test("Linux build/setup scripts and process lifetime", async () => {
@@ -100,13 +100,13 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		crateFiles.sort(),
 		"package.json `files` must list exactly the crate sources (no target/ or tests/)",
 	);
-	assert.ok(pkg.files.includes("docs/content/docs"));
+	assert.ok(!pkg.files.some((file) => file.startsWith("docs/")));
 
 	// Rust and TypeScript must agree on the wire protocol and shared architecture contract.
 	const [protocolRs, architectureTs, linuxDoc] = await Promise.all([
 		fs.readFile(path.join(crateDir, "src", "protocol.rs"), "utf8"),
 		fs.readFile(path.join(rootDir, "src", "platform", "architecture.ts"), "utf8"),
-		fs.readFile(path.join(rootDir, "docs", "content", "docs", "how-to-guides", "linux.mdx"), "utf8"),
+		fs.readFile(path.join(rootDir, "README.md"), "utf8"),
 	]);
 	assert.equal(
 		protocolRs.match(/PROTOCOL_VERSION: u32 = (\d+)/)?.[1],

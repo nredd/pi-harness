@@ -1,6 +1,6 @@
 // act_ui on an unpaired root (no windowId) must succeed with a semantic successor, never root_not_capturable.
 import assert from "node:assert/strict";
-import { deferred, within } from "../scripts/check-async.mjs";
+import { deferred, within } from "../tests/fixtures/check-async.mjs";
 import { test } from "vitest";
 
 test("unpaired act roots and physical transaction lease", async () => {

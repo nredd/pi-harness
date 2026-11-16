@@ -1,8 +1,0 @@
-{
-  "title": "Platforms",
-  "icon": "MonitorCog",
-  "pages": [
-    "macos",
-    "windows"
-  ]
-}

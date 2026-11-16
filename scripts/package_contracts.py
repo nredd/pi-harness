@@ -650,7 +650,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "LICENSE",
         "README.md",
         "package.json",
-        "extensions/computer-use.ts",
+        "src/index.ts",
         "scripts/build-native.mjs",
         "scripts/setup-helper.mjs",
         "native/macos/activity_glow.swift",
@@ -678,10 +678,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
     # additionally parses each prebuilt's Mach-O header and mode from the tarball.
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
-        re.compile(r"^assets/reference/img\.jpg$"),
-        re.compile(r"^docs/README\.md$"),
-        re.compile(r"^docs/content/docs/(?:[a-z-]+/)*[a-z-]+\.(?:mdx|json)$"),
-        re.compile(r"^extensions/[a-z-]+\.ts$"),
+        re.compile(r"^src/[a-z-]+\.ts$"),
         re.compile(
             r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
         ),
@@ -713,44 +710,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
     packed_files=(
         "LICENSE",
         "README.md",
-        "assets/reference/img.jpg",
-        "docs/README.md",
-        "docs/content/docs/explanation/action-pipeline.mdx",
-        "docs/content/docs/explanation/architecture.mdx",
-        "docs/content/docs/explanation/index.mdx",
-        "docs/content/docs/explanation/meta.json",
-        "docs/content/docs/explanation/observation-pipeline.mdx",
-        "docs/content/docs/explanation/platform-boundary.mdx",
-        "docs/content/docs/explanation/state-and-scheduling.mdx",
-        "docs/content/docs/how-to-guides/develop-and-validate.mdx",
-        "docs/content/docs/how-to-guides/index.mdx",
-        "docs/content/docs/how-to-guides/linux.mdx",
-        "docs/content/docs/how-to-guides/meta.json",
-        "docs/content/docs/how-to-guides/troubleshooting.mdx",
-        "docs/content/docs/index.mdx",
-        "docs/content/docs/meta.json",
-        "docs/content/docs/reference/agent/contract.mdx",
-        "docs/content/docs/reference/agent/index.mdx",
-        "docs/content/docs/reference/agent/meta.json",
-        "docs/content/docs/reference/agent/tools.mdx",
-        "docs/content/docs/reference/codebase.mdx",
-        "docs/content/docs/reference/configuration.mdx",
-        "docs/content/docs/reference/index.mdx",
-        "docs/content/docs/reference/meta.json",
-        "docs/content/docs/reference/platforms/index.mdx",
-        "docs/content/docs/reference/platforms/macos/accessibility.mdx",
-        "docs/content/docs/reference/platforms/macos/actions.mdx",
-        "docs/content/docs/reference/platforms/macos/capture.mdx",
-        "docs/content/docs/reference/platforms/macos/implementation.mdx",
-        "docs/content/docs/reference/platforms/macos/index.mdx",
-        "docs/content/docs/reference/platforms/macos/meta.json",
-        "docs/content/docs/reference/platforms/macos/root-targeting.mdx",
-        "docs/content/docs/reference/platforms/meta.json",
-        "docs/content/docs/reference/platforms/windows.mdx",
-        "docs/content/docs/tutorials/getting-started.mdx",
-        "docs/content/docs/tutorials/index.mdx",
-        "docs/content/docs/tutorials/meta.json",
-        "extensions/computer-use.ts",
+        "src/index.ts",
         "native/linux/bridge-rs/Cargo.lock",
         "native/linux/bridge-rs/Cargo.toml",
         "native/linux/bridge-rs/src/atspi.rs",
@@ -2244,6 +2204,21 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
     Returns:
         list[str]: Violations; empty when the list conforms.
     """
+    # Non-macOS source-only dev/test packs cannot compile Swift. Published release packs are built
+    # on macOS and retain both helpers. A partial native payload is NEVER accepted.
+    if (
+        contract.directory == "computer-use"
+        and host_platform() != "darwin"
+        and not any(name.startswith("prebuilt/macos/") for name in files)
+    ):
+        LOGGER.info("NOT RUN packed macOS bridge check: source-only pack on a non-macOS host")
+        contract = replace(
+            contract,
+            required=tuple(name for name in contract.required if not name.startswith("prebuilt/macos/")),
+            packed_files=tuple(
+                name for name in contract.packed_files if not name.startswith("prebuilt/macos/")
+            ),
+        )
     problems = [f"missing required file '{name}'" for name in contract.required if name not in files]
     problems += [
         f"unexpected file '{name}'"
@@ -4047,7 +4022,7 @@ def host_platform() -> str:
 
 
 def computer_use_expected_tools(platform: str) -> frozenset[str]:
-    """Return the exact tools `extensions/computer-use.ts` registers on `platform`.
+    """Return the exact tools `src/index.ts` registers on `platform`.
 
     `desktop_screenshot` and `desktop_input` are registered on darwin only, so non-darwin hosts
     (CI's ubuntu-24.04 cell) must see the other 11 and neither desktop tool.
@@ -4197,7 +4172,15 @@ def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
     """
     platform = host_platform()
     expected = computer_use_expected_tools(platform)
-    helpers: dict[str, str] = {arch: check_macos_helper(ctx.artifact.path, arch) for arch in MACHO_CPU_TYPES}
+    with tarfile.open(ctx.artifact.path) as archive:
+        files = tarball_files(archive, ctx.artifact.path)
+    source_only = platform != "darwin" and not any(name.startswith("prebuilt/macos/") for name in files)
+    helpers: dict[str, str] = {
+        arch: "NOT RUN: source-only non-macOS pack"
+        if source_only
+        else check_macos_helper(ctx.artifact.path, arch)
+        for arch in MACHO_CPU_TYPES
+    }
     helper_sources = check_helper_sources_packed(ctx.artifact.path)
     project = ctx.work / "project"
     project.mkdir()
