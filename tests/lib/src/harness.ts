@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	type FauxModelDefinition,
 	type FauxProviderRegistration,
@@ -213,7 +213,8 @@ export interface HarnessOptions {
 	fauxProvider?: FauxProviderRegistration;
 	models?: FauxModelDefinition[];
 	settings?: Partial<Settings>;
-	tools?: AgentTool[];
+	/** The host's heterogeneous tool container, including schema-typed built-ins. */
+	tools?: Agent["state"]["tools"];
 	initialActiveToolNames?: string[];
 	allowedToolNames?: string[];
 	excludedToolNames?: string[];
