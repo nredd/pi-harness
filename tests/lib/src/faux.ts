@@ -1,6 +1,6 @@
 /** Scripted model turns and observations of the real host that executes them. */
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall, type Harness } from "./harness.ts";
 
 /** One scripted tool request. */
 export interface ToolCallSpec {

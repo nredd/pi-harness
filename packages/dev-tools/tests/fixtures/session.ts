@@ -5,12 +5,7 @@
  */
 
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import {
-	createHarness,
-	fauxAssistantMessage,
-	fauxToolCall,
-	type Harness,
-} from "@earendil-works/pi-coding-agent/testing";
+import { createHarness, fauxAssistantMessage, fauxToolCall, type Harness } from "@nredd/pi-test-lib/harness";
 
 export interface ToolCallSpec {
 	name: string;

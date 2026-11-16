@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { git, makeGitFixture } from "@nredd/pi-test-lib/git";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import extension from "../../src/index.ts";
 import { runTools, startSession } from "../fixtures/session.ts";
