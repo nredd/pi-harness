@@ -77,6 +77,19 @@ function view(combined: Awaited<ReturnType<typeof readback>>, at = now): string 
 }
 
 describe("captured Claude quota across CLI publication and stats readback", () => {
+	it("drops reset timestamps outside the canonical snapshot bound without breaking export", async () => {
+		capture({
+			observed_at: observed,
+			rate_limits: {
+				five_hour: { used_percentage: 99, resets_at: 8_700_000_000_000 },
+				seven_day: { used_percentage: 41.2, resets_at: 8_640_000_000_000 },
+			},
+		});
+		publish();
+		const combined = await readback();
+		expect(combined.quota).toHaveLength(1);
+		expect(combined.quota[0]).toMatchObject({ window: "7d", resetAt: 8_640_000_000_000_000 });
+	});
 	it("exports only allowlisted observations and preserves canonical stale/reset UI behavior", async () => {
 		capture({
 			observed_at: observed,

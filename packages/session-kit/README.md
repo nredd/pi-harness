@@ -753,15 +753,16 @@ the published snapshots. To drop a harness on purpose, export without it using
   process environment). Contract: `{observed_at:<epoch seconds>,rate_limits:{five_hour?:
   {used_percentage,resets_at},seven_day?:{used_percentage,resets_at}}}`. Observation time must be
   finite, positive and not in the future; percentages finite 0..100; resets positive safe-integer
-  epoch seconds also safely representable in milliseconds. Only these named windows become
+  epoch seconds within the canonical snapshot timestamp bound (8,640,000,000,000 seconds). Only these named windows become
   canonical `anthropic` quota (`5h`/`7d`, account `""`, plan `null`), never arbitrary fields or IDs.
   Missing, unreadable, malformed, non-file or over-64-KiB captures silently contribute no quota;
   invalid/absent windows are unknown, not zero. They never fail a transcript scan or replace its
   history. Partial captures do not retain a previous sibling; expired readings follow the reset
   display policy above, not old usage as current. Snapshot v2 and v1 import compatibility stay unchanged.
-  Source reader integration is #963; capture producer is nredd/dotfiles#144. Both must be released
-  and the producer configured before an installed exporter/viewer can consume captures. Merging
-  capture alone never enabled this reader. This change does not publish, activate or bump pins.
+  Source reader integration is #963; capture producer nredd/dotfiles#144 is merged. The reader must
+  still be published and the producer configured before an installed exporter/viewer can consume
+  captures. Merging capture alone never enabled this reader. This change does not publish, activate
+  or bump pins.
 - Codex: `sessions/` and `archived_sessions/` rollouts. `token_usage_record` rows are joined to
   `turn_context.model` by turn. `input` is `input_tokens` minus the cached and cache-write subsets.
   Turns without per-turn records (older Codex, including old turns of a resumed rollout) are

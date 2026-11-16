@@ -29,7 +29,7 @@ export async function readClaudeQuota(root: string, now = Date.now()): Promise<Q
 				typeof reset !== "number" ||
 				!Number.isSafeInteger(reset) ||
 				reset <= 0 ||
-				!Number.isSafeInteger(reset * 1000)
+				reset > 8_640_000_000_000
 			)
 				continue;
 			out.push({
