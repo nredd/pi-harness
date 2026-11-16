@@ -98,9 +98,7 @@ describe("applyAgentEvent", () => {
 	it("still applies a repeated started that adds a key or flips the wake", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker" });
 		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other" })).toBe(true);
-		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other", wakesParent: true })).toBe(
-			true,
-		);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other", wakesParent: true })).toBe(true);
 		expect(agentLookup(S).wakesParent?.("worker")).toBe(true);
 		// A new run (`runSeq`) is no repeat: the handoff below must match the latest one.
 		apply(SUBAGENT_STARTED_EVENT, { id: "h1", handle: "handoff", runSeq: 1 });
@@ -113,9 +111,7 @@ describe("applyAgentEvent", () => {
 		expect(stateOf("worker")).toBe("running");
 		// A new run of a settled agent is no repeat.
 		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" });
-		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other", wakesParent: true })).toBe(
-			true,
-		);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other", wakesParent: true })).toBe(true);
 		expect(stateOf("worker")).toBe("running");
 	});
 
@@ -231,8 +227,7 @@ describe("agentStateFor", () => {
 
 	it("slugs the owner like a handle, so a spawner name matches its handle", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit" });
-		for (const owner of ["Auth Audit", "auth  audit!", "--Auth.Audit--"])
-			expect(stateOf(owner), owner).toBe("running");
+		for (const owner of ["Auth Audit", "auth  audit!", "--Auth.Audit--"]) expect(stateOf(owner), owner).toBe("running");
 		expect(stateOf("authaudit")).toBeUndefined();
 	});
 

@@ -194,9 +194,7 @@ describe("formatContent — plan item details on get", () => {
 			}),
 		);
 		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).toBe(
-			["#1 [deferred] Migrate", "  plan item: Rollout", "    Move traffic.", "  deferred: blocked on infra"].join(
-				"\n",
-			),
+			["#1 [deferred] Migrate", "  plan item: Rollout", "    Move traffic.", "  deferred: blocked on infra"].join("\n"),
 		);
 	});
 

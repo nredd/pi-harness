@@ -48,8 +48,7 @@ function isTask(value: unknown): value is Task {
 	}
 	if (value.planProvenance !== undefined) {
 		const provenance = value.planProvenance;
-		if (!isRecord(provenance) || typeof provenance.planId !== "string" || !positiveId(provenance.taskId))
-			return false;
+		if (!isRecord(provenance) || typeof provenance.planId !== "string" || !positiveId(provenance.taskId)) return false;
 	}
 	if (value.metadata !== undefined && !isRecord(value.metadata)) return false;
 	if (value.blockedBy !== undefined && (!Array.isArray(value.blockedBy) || !value.blockedBy.every(positiveId)))

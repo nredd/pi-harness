@@ -243,8 +243,7 @@ export function applyTaskMutation(state: TaskState, action: TaskOpAction, params
 			if (params.reason !== undefined && newStatus !== "deferred") {
 				return errorResult(state, "reason only applies to a deferred task (status: deferred)");
 			}
-			const completing =
-				newStatus === "completed" && (current.status !== "completed" || params.evidence !== undefined);
+			const completing = newStatus === "completed" && (current.status !== "completed" || params.evidence !== undefined);
 			if (completing && !evidence) return errorResult(state, ERR_EVIDENCE_REQUIRED);
 			const deferring = newStatus === "deferred" && (current.status !== "deferred" || params.reason !== undefined);
 			if (deferring && !reason) return errorResult(state, ERR_REASON_REQUIRED);
@@ -301,9 +300,7 @@ export function applyTaskMutation(state: TaskState, action: TaskOpAction, params
 					toStatus: newStatus,
 					changed: taskChanged(current, updated),
 					task: updated,
-					...(newStatus === "deferred" && current.reason !== updated.reason
-						? { deferredReason: updated.reason }
-						: {}),
+					...(newStatus === "deferred" && current.reason !== updated.reason ? { deferredReason: updated.reason } : {}),
 				},
 			};
 		}

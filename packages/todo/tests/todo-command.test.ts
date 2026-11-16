@@ -15,7 +15,7 @@ function setup() {
 	return { tool, cmd };
 }
 
-async function seed(tool: ReturnType<typeof setup>["tool"], actions: Array<Record<string, unknown>>) {
+async function seed(tool: ReturnType<typeof setup>["tool"], actions: Record<string, unknown>[]) {
 	const ctx = createTodoCtx();
 	for (const p of actions) {
 		await tool.execute?.("tc", p as never, undefined as never, undefined as never, ctx as never);

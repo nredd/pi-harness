@@ -349,10 +349,7 @@ describe("changesState — which results persist a replay snapshot", () => {
 		["create", () => applyTaskMutation(emptyState(), "create", { subject: "a" })],
 		["delete", () => applyTaskMutation(stateWith(pending(1)), "delete", { id: 1 })],
 		["clear", () => applyTaskMutation(stateWith(pending(1)), "clear", {})],
-		[
-			"an effective update",
-			() => applyTaskMutation(stateWith(pending(1)), "update", { id: 1, status: "in_progress" }),
-		],
+		["an effective update", () => applyTaskMutation(stateWith(pending(1)), "update", { id: 1, status: "in_progress" })],
 	])("is true for %s", (_label, run) => {
 		expect(changesState(run().op)).toBe(true);
 	});

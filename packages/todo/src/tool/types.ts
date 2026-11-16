@@ -230,8 +230,7 @@ const OpFields = {
 	),
 	evidence: Type.Optional(
 		Type.String({
-			description:
-				"Required with status completed: the check that proves it (command + result, commit, or test name)",
+			description: "Required with status completed: the check that proves it (command + result, commit, or test name)",
 		}),
 	),
 	reason: Type.Optional(

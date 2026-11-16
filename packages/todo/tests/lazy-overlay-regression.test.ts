@@ -107,11 +107,9 @@ it("keeps overlay construction task-gated and ignores stale imports", async () =
 	);
 	await currentLifecycle.toolEnd({ toolName: "todo", isError: false } as never, currentCtx as never);
 
-	expect(currentCtx.ui.setWidget as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-		"rpiv-todos",
-		expect.any(Function),
-		{ placement: "aboveEditor" },
-	);
+	expect(currentCtx.ui.setWidget as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("rpiv-todos", expect.any(Function), {
+		placement: "aboveEditor",
+	});
 });
 
 it("drops a rejected overlay import memo so the next load retries", async () => {
@@ -255,9 +253,7 @@ it("tool_execution_end swallows a transient load failure and heals on the next e
 	// The tool succeeded, so a failed widget refresh must not reject the handler
 	// (which would surface as an extension error) — it warns and moves on.
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-	await expect(
-		lifecycle.toolEnd({ toolName: "todo", isError: false } as never, ctx as never),
-	).resolves.toBeUndefined();
+	await expect(lifecycle.toolEnd({ toolName: "todo", isError: false } as never, ctx as never)).resolves.toBeUndefined();
 	expect(warn).toHaveBeenCalledTimes(1);
 	expect(warn.mock.calls[0]?.[0]).toContain("transient overlay load failure");
 	warn.mockRestore();

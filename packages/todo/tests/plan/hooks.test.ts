@@ -244,7 +244,7 @@ describe("wrap-up reminder", () => {
 		const settle = handler("agent_before_settle");
 
 		const result = (await settle(settleEvent([user, assistant]), ctx)) as {
-			entries: Array<Record<string, unknown>>;
+			entries: Record<string, unknown>[];
 			continue: boolean;
 		};
 		expect(result.continue).toBe(true);
@@ -588,7 +588,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		const { handler, ctx } = await start(tasks({ id: 1 }, { id: 2, owner: "release-team" }));
 		const settle = handler("agent_before_settle");
 		const result = (await settle(settleEvent([user, assistant]), ctx)) as {
-			entries: Array<Record<string, unknown>>;
+			entries: Record<string, unknown>[];
 			continue: boolean;
 		};
 		expect(result.continue).toBe(true);
@@ -807,9 +807,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			entries: Array<{ customType: string }>;
 		};
 		expect(second.entries[0].customType).toBe(HELD_REMINDER_MESSAGE_TYPE);
-		expect(
-			await settle(settleEvent([user, assistant, planMarker, assistant, marker, assistant]), ctx),
-		).toBeUndefined();
+		expect(await settle(settleEvent([user, assistant, planMarker, assistant, marker, assistant]), ctx)).toBeUndefined();
 	});
 
 	it("does not remind in Plan mode or with nothing in_progress", async () => {
@@ -896,10 +894,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		return notices(h.ctx as never)[0]?.[0];
 	};
 	const remind = async (h: { handler: (n: string) => (...a: never[]) => unknown; ctx: unknown }) =>
-		(h.handler("agent_before_settle") as (...a: unknown[]) => Promise<unknown>)(
-			settleEvent([user, assistant]),
-			h.ctx,
-		);
+		(h.handler("agent_before_settle") as (...a: unknown[]) => Promise<unknown>)(settleEvent([user, assistant]), h.ctx);
 	/** Another start of the same session id, as `/reload` or a switch back and forth: shutdown, then session_start. */
 	const restart = async (h: Awaited<ReturnType<typeof start>>, reason: string) => {
 		await h.handler("session_shutdown")({ reason }, h.ctx);
@@ -1081,8 +1076,7 @@ describe("settling with nothing armed to wake the parent", () => {
 
 	it("matches an other-session survivor by its unnumbered spawner name, and ignores one heard before binding", async () => {
 		const early = setup();
-		for (const h of early.bus.get(SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT) ?? [])
-			void h({ id: "a1", handle: "worker" });
+		for (const h of early.bus.get(SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT) ?? []) void h({ id: "a1", handle: "worker" });
 		const { handler, ctx } = await start(
 			tasks({ id: 1, owner: "Auth Audit" }),
 			"fork",

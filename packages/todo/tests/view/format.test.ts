@@ -139,9 +139,7 @@ describe("owner segment", () => {
 		expect(
 			formatCommandTaskLine(task({ status: "in_progress", owner: "w", activeForm: "x" }), "◐", lookup("stopped")),
 		).toBe("  ◐ #1 quiet task @w ✗ stopped (x)");
-		expect(formatCommandTaskLine(task({ owner: "Sergii" }), "○", lookup(undefined))).toBe(
-			"  ○ #1 quiet task @Sergii",
-		);
+		expect(formatCommandTaskLine(task({ owner: "Sergii" }), "○", lookup(undefined))).toBe("  ○ #1 quiet task @Sergii");
 	});
 });
 

@@ -171,11 +171,7 @@ describe("plan reconciliation", () => {
 		).state;
 		first.tasks.find((task) => task.subject === "Verify migration")!.status = "completed";
 		first.tasks.find((task) => task.subject === "Verify migration")!.evidence = "verified A";
-		const { state } = applyPlanApproval(
-			first,
-			"p2",
-			"# Plan\n## Migration\nMigrate database B.\n- Verify migration\n",
-		);
+		const { state } = applyPlanApproval(first, "p2", "# Plan\n## Migration\nMigrate database B.\n- Verify migration\n");
 		expect(state.tasks.map((task) => [task.subject, task.status, task.evidence])).toEqual([
 			["Migration", "pending", undefined],
 			["Verify migration", "pending", undefined],
@@ -225,9 +221,7 @@ describe("plan reconciliation", () => {
 
 	it("does not carry legacy plan tasks without a versioned identity", () => {
 		const legacy: TaskState = {
-			tasks: [
-				{ id: 1, subject: "Ship it", status: "completed", source: "plan", planGroup: "Work", evidence: "old" },
-			],
+			tasks: [{ id: 1, subject: "Ship it", status: "completed", source: "plan", planGroup: "Work", evidence: "old" }],
 			nextId: 2,
 			plan: { id: "p1", title: "Plan" },
 		};

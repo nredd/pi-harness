@@ -99,12 +99,7 @@ describe("registerTodoTool -- historical renderer state", () => {
 			await call(tool, { action: "create", subject: "valid task" });
 			const context = { state: {}, invalidate: vi.fn() };
 			const malformed = { details: { error: "failed", tasks, nextId: 2 } };
-			tool.renderResult?.(
-				malformed as never,
-				{ expanded: false, isPartial: false } as never,
-				theme,
-				context as never,
-			);
+			tool.renderResult?.(malformed as never, { expanded: false, isPartial: false } as never, theme, context as never);
 			await Promise.resolve();
 			expect(context.state).toEqual({});
 			expect(context.invalidate).not.toHaveBeenCalled();

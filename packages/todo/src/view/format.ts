@@ -177,9 +177,7 @@ export function renderTodoCall(
 	if (args.ops) {
 		const count = `${args.ops.length} op${args.ops.length === 1 ? "" : "s"}`;
 		return new Text(
-			theme.fg("toolTitle", theme.bold("todo ")) +
-				theme.fg("muted", ACTION_GLYPH.batch) +
-				` ${theme.fg("dim", count)}`,
+			`${theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", ACTION_GLYPH.batch)} ${theme.fg("dim", count)}`,
 			0,
 			0,
 		);
@@ -190,10 +188,7 @@ export function renderTodoCall(
 
 	if (args.action === "create" && args.subject) {
 		text += ` ${theme.fg("dim", sanitizeTerminalText(args.subject))}`;
-	} else if (
-		(args.action === "update" || args.action === "get" || args.action === "delete") &&
-		args.id !== undefined
-	) {
+	} else if ((args.action === "update" || args.action === "get" || args.action === "delete") && args.id !== undefined) {
 		const subject = selectTaskSubjectById(state, args.id);
 		text += ` ${theme.fg("accent", subject ? sanitizeTerminalText(subject) : `#${args.id}`)}`;
 	} else if (args.action === "list" && args.status) {

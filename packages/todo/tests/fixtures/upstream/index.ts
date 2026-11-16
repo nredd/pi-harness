@@ -1,2 +1,8 @@
-export * from "./session.ts";
-export * from "./theme.ts";
+export {
+	buildSessionEntries,
+	makeCustomEntry,
+	makeMessageEntry,
+	makeTodoToolResult,
+	makeUserMessage,
+} from "./session.ts";
+export { makeTheme } from "./theme.ts";

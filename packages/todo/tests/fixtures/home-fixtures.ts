@@ -4,8 +4,24 @@ import { registerTodoTool as registerTodoToolAtHome } from "../../src/todo.ts";
 import { TodoOverlay as TodoOverlayAtHome } from "../../src/todo-overlay.ts";
 import { TEST_HOME } from "./setup.ts";
 
-export * from "../../src/todo.ts";
-export * from "../../src/todo-overlay.ts";
+export type { Task, TaskAction, TaskDetails, TaskStatus } from "../../src/todo.ts";
+export {
+	__resetState,
+	applyTaskCall,
+	applyTaskMutation,
+	DEFAULT_PROMPT_GUIDELINES,
+	DEFAULT_PROMPT_SNIPPET,
+	deriveBlocks,
+	detectCycle,
+	getNextId,
+	getTodos,
+	isTransitionValid,
+	registerTodosCommand,
+	setActiveRenderSession,
+	sid,
+	TOOL_NAME,
+} from "../../src/todo.ts";
+export { windowFor } from "../../src/todo-overlay.ts";
 
 export const registerTodoTool: typeof registerTodoToolAtHome = (pi, options = {}) =>
 	registerTodoToolAtHome(pi, { homeDir: TEST_HOME, ...options });

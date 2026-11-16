@@ -268,9 +268,7 @@ export function applyPlanApproval(state: TaskState, planId: string, markdown: st
 		removed.add(task.id);
 		return task.status !== "deleted";
 	});
-	const prior = state.plan?.id
-		? singletonByIdentity(priorTasks, (task) => task.planIdentity)
-		: new Map<string, Task>();
+	const prior = state.plan?.id ? singletonByIdentity(priorTasks, (task) => task.planIdentity) : new Map<string, Task>();
 	const parsed = parsePlanItems(markdown);
 	const incoming = singletonByIdentity(parsed, (item) => item.identity);
 	let nextId = state.nextId;

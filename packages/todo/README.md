@@ -977,4 +977,4 @@ when the live task changes; the existing historical-row tests remain unchanged.
 
 ## Package layout
 
-Runtime code and locales live under `src/`; tests mirror it under `tests/`, with injected-home fixtures under `tests/fixtures/`. The `rpiv-test-utils` alias still resolves the licensed session/theme fixtures in `tests/fixtures/upstream/`; Pi API/context doubles use `@nredd/pi-test-lib/pi`. The historical standalone-support notes above are preserved verbatim, not current path guidance. Upstream updates are manual ports.
+Runtime code and locales live under `src/`; tests mirror it under `tests/`, with injected-home fixtures under `tests/fixtures/`. The `rpiv-test-utils` alias still resolves the licensed session/theme fixtures in `tests/fixtures/upstream/`; Pi API/context doubles use `@nredd/pi-test-lib/pi`. The historical standalone-support notes above are preserved verbatim, not current path guidance. Upstream updates are manual ports. The root Biome override preserves the existing upstream non-null assertions, generic test-tool doubles, and control-character sanitization regexes; this layout change does not redesign their types or behavior.

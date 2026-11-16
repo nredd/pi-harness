@@ -148,22 +148,14 @@ describe("registerTodoTool — renderCall", () => {
 
 	it("update action renders '#id' when the task has not been registered yet", () => {
 		const { tool } = setup();
-		const node = tool.renderCall?.(
-			{ action: "update", id: 42 } as never,
-			theme,
-			undefined as never,
-		) as unknown as Text;
+		const node = tool.renderCall?.({ action: "update", id: 42 } as never, theme, undefined as never) as unknown as Text;
 		expect((node as unknown as { text: string }).text).toContain("#42");
 	});
 
 	it("update action renders the task subject when seeded", async () => {
 		const { tool } = setup();
 		await call(tool, { action: "create", subject: "seeded-subject" });
-		const node = tool.renderCall?.(
-			{ action: "update", id: 1 } as never,
-			theme,
-			undefined as never,
-		) as unknown as Text;
+		const node = tool.renderCall?.({ action: "update", id: 1 } as never, theme, undefined as never) as unknown as Text;
 		expect((node as unknown as { text: string }).text).toContain("seeded-subject");
 	});
 

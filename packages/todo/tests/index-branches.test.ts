@@ -40,7 +40,7 @@ function setup(importOverlay?: () => Promise<OverlayModule>) {
 }
 
 function fakeOverlay() {
-	const instances: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
+	const instances: Record<string, ReturnType<typeof vi.fn>>[] = [];
 	class Overlay {
 		setUICtx = vi.fn();
 		update = vi.fn();
@@ -68,9 +68,7 @@ describe("overlay refresh failures", () => {
 		await handler("session_start")({ reason: "startup" }, ctx);
 		await create(ctx);
 		await expect(handler("tool_execution_end")({ toolName: "todo", isError: false })).resolves.toBeUndefined();
-		expect(warn).toHaveBeenCalledWith(
-			"[rpiv-todo] overlay refresh failed (will retry on next update): plain failure",
-		);
+		expect(warn).toHaveBeenCalledWith("[rpiv-todo] overlay refresh failed (will retry on next update): plain failure");
 	});
 });
 
