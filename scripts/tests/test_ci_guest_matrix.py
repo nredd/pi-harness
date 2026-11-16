@@ -2262,11 +2262,13 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
     """
     tools = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
     uv = next(step for step in tools["runs"]["steps"] if "setup-uv@" in step.get("uses", ""))
-    bootstrap = (ROOT / "scripts/wsl2_setup.sh").read_text()
-    assert f"uv_version={uv['with']['version']}" in bootstrap
-    assert bootstrap.index("unset GH_TOKEN") < bootstrap.index("curl ")
-    assert "< .node-version" in bootstrap
-    assert "< .bun-version" in bootstrap
+    bootstrap = (ROOT / "scripts/wsl2_setup.py").read_text()
+    assert f'UV_VERSION = "{uv["with"]["version"]}"' in bootstrap
+    assert bootstrap.index('env.pop("GH_TOKEN", None)') < bootstrap.index(
+        "execute(env, run)", bootstrap.index("def main")
+    )
+    assert '(worktree / ".node-version").read_text()' in bootstrap
+    assert '(worktree / ".bun-version").read_text()' in bootstrap
     assert 'require("./package.json").packageManager' in bootstrap
     cfg = jobs()
     for job in OWNED_FAN_IN.values():

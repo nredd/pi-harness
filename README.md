@@ -84,6 +84,10 @@ make help                    # every target
 ## CI and release
 
 - What runs, what is NOT RUN, sharding, coverage and stack diagnostics: comments in [CI](.github/workflows/ci.yml)
+- WSL setup runs after apt guarantees Python3: `scripts/wsl2_setup.sh` is a compatible argv-forwarding
+  bootstrap over measured `scripts/wsl2_setup.py`. Hosted copy, baked-tool reuse, bounds and PATH receipts
+  are tested locally; real WSL execution remains CI proof. Pre-Python apt/DNS/host scripts and PowerShell
+  are not ported by this #695 slice.
 - Shared tool/cache setup, WSL bootstrap and capture: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml),
   [setup-ci-wsl](.github/actions/setup-ci-wsl/action.yml), [capture-ci-wsl](.github/actions/capture-ci-wsl/action.yml)
 - Other workflow policy: [installer](.github/workflows/installer.yml), [core forks](.github/workflows/forks.yml),

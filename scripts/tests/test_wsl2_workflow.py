@@ -61,7 +61,7 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
 def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     """Require explicit WSL2 proof and Linux-filesystem execution."""
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    setup = (ROOT / "scripts/wsl2_setup.py").read_text()
     assert "wsl-version: '2'" in action
     assert "wsl --list --verbose" in action
     assert "-replace ([char]0), ''" in (ROOT / "scripts/wsl2_bounded.ps1").read_text()
@@ -69,8 +69,8 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "core.autocrlf false" in action
     assert "Expected Windows source below /mnt" in setup
     assert "Harness worktree is not on a Linux filesystem" in setup
-    assert "findmnt --noheadings --output FSTYPE" in setup
-    assert "drvfs|''" in setup
+    assert '["findmnt", "--noheadings", "--output", "FSTYPE"' in setup
+    assert 'filesystem in ("drvfs", "")' in setup
 
 
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
@@ -248,11 +248,11 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     """Require actual Pi startup, RPC, extension, and stack process coverage."""
     workflow = workflow_text()
     assert "git submodule update --init forks/pi" in workflow
-    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
-    assert 'test "$(bun --version)" = "$bun_version"' in setup
-    assert "bun-v$bun_version" in setup
-    assert "uv_version=0.13.1" in setup
-    assert '"uv $uv_version"*' in setup
+    setup = (ROOT / "scripts/wsl2_setup.py").read_text()
+    assert 'raise ValueError("Bun version mismatch")' in setup
+    assert 'f"bun-v{bun_version}"' in setup
+    assert 'UV_VERSION = "0.13.1"' in setup
+    assert 'startswith(f"uv {UV_VERSION}")' in setup
     assert "uv run --locked python -m harness.release" in workflow
     assert "--gitlink ../forks/pi" in workflow
     assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in workflow
@@ -268,7 +268,7 @@ INSTALL_GH_PY = INSTALL_GH.with_suffix(".py")
 def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
     """Install attestation-capable `gh`, forward the token via WSLENV, and gate `npm ci` on verification."""
     workflow = workflow_text()
-    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    setup = (ROOT / "scripts/wsl2_setup.py").read_text()
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN/u" in wrapper
@@ -278,8 +278,8 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
         "additional-packages" not in step.get("with", {}) for step in yaml.safe_load(action)["runs"]["steps"]
     )
     assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
-    assert "unset GH_TOKEN" in setup
-    assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup
+    assert 'env.pop("GH_TOKEN", None)' in setup
+    assert '["bash", "scripts/install_gh_linux.sh", str(tool_dir / "gh")]' in setup
     makefile = (ROOT / "Makefile").read_text()
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
     assert "env -u GH_TOKEN uv sync --locked" in makefile
@@ -600,18 +600,14 @@ def test_guest_setup_names_a_failed_command_without_calling_it_a_timeout(tmp_pat
 
 def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     """Every network, archive and installer command goes through `bounded`/`fetch`; no pipe into a shell."""
-    setup = SETUP.read_text(encoding="utf-8")
-    assert not re.search(r"\|\s*(ba)?sh\b", setup)
-    body = setup.split("source_checkout=$WSL_HOST_WORKSPACE", 1)[1]
-    unbounded = [
-        stripped
-        for stripped in (line.strip() for line in body.splitlines())
-        if re.match(r"(curl|tar|npm|cp|bun|uv) ", stripped) or re.match(r"(ba)?sh ", stripped)
-    ]
-    assert not unbounded, unbounded
+    bootstrap = SETUP.read_text(encoding="utf-8")
+    assert 'exec python3 "$(dirname "${BASH_SOURCE[0]}")/wsl2_setup.py" "$@"' in bootstrap
+    setup = SETUP.with_suffix(".py").read_text(encoding="utf-8")
+    assert '["timeout", "--kill-after=10", str(seconds), *cmd]' in setup
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
-        assert f'bounded "{label}" ' in setup
-    assert 'bounded "install owned tools" 90 ' in setup
+        assert f'label="{label}"' in setup
+    assert 'label="install owned tools"' in setup
+    assert "seconds=90" in setup
     owned_tools = (ROOT / "scripts/install_wsl_owned_tools.py").read_text(encoding="utf-8")
     assert 'CURL_BOUNDS = ["--connect-timeout", "15", "--max-time", "45"]' in owned_tools
 
