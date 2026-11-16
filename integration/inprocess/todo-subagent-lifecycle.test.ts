@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type * as AgentRunner from "../../packages/subagents/src/agent-runner.ts";
-import { formatInProgressNotice } from "../../packages/todo/plan-hooks.ts";
-import { agentLookup, agentStateFor, applyAgentEvent, forgetAgents } from "../../packages/todo/state/agents.ts";
+import { agentLookup, agentStateFor, applyAgentEvent, forgetAgents } from "../../packages/todo/src/agents.ts";
+import { formatInProgressNotice } from "../../packages/todo/src/plan/hooks.ts";
 
 vi.mock("../../packages/subagents/src/agent-runner.ts", async () => {
 	const actual = await vi.importActual<typeof AgentRunner>("../../packages/subagents/src/agent-runner.ts");

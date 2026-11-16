@@ -51,7 +51,12 @@
   },
   "overrides": [
     {
-      "includes": ["packages/subagents/src/**/*.ts", "packages/subagents/tests/**/*.ts"],
+      "includes": [
+        "packages/subagents/src/**/*.ts",
+        "packages/subagents/tests/**/*.ts",
+        "packages/todo/src/**/*.ts",
+        "packages/todo/tests/**/*.ts"
+      ],
       "linter": {
         "rules": {
           "style": { "noNonNullAssertion": "off" },

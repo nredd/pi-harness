@@ -23,7 +23,14 @@ export default mergeConfig(config, { test: {
 		);
 		const result = spawnSync(
 			"bun",
-			["--bun", join(root, "node_modules/vitest/vitest.mjs"), "run", "todo.invalidation.test.ts", "--config", config],
+			[
+				"--bun",
+				join(root, "node_modules/vitest/vitest.mjs"),
+				"run",
+				"tests/todo-invalidation.test.ts",
+				"--config",
+				config,
+			],
 			{
 				cwd: join(root, "packages/todo"),
 				env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") },

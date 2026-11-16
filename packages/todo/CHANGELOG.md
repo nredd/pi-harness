@@ -7,6 +7,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Move the extension and locales to `src/`, and tests to `tests/`. Upstream updates are manual ports; the manifest owns the new entry path.
+
 ### Changed
 
 - `renderCall` reads the fork-only `probe` render-context field structurally, so it compiles and behaves the same on upstream 1.5 cores that omit it ([#918](https://github.com/nredd/pi-harness/issues/918))

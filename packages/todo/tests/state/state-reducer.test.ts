@@ -1,0 +1,587 @@
+import { describe, expect, it } from "vitest";
+import { isTransitionValid } from "../../src/state/invariants.ts";
+import type { TaskState } from "../../src/state/state.ts";
+import {
+	applyTaskCall,
+	applyTaskMutation,
+	changesState,
+	ERR_EVIDENCE_REQUIRED,
+	ERR_REASON_REQUIRED,
+} from "../../src/state/state-reducer.ts";
+import type { Task, TaskMutationParams, TaskOpAction } from "../../src/tool/types.ts";
+
+const emptyState = (): TaskState => ({ tasks: [], nextId: 1 });
+
+const stateWith = (...tasks: Task[]): TaskState => ({
+	tasks: [...tasks],
+	nextId: Math.max(0, ...tasks.map((t) => t.id)) + 1,
+});
+
+const task = (overrides: Partial<Task> & { id: number; subject: string }): Task => ({
+	status: "pending",
+	...overrides,
+});
+
+describe("applyTaskMutation — action fields", () => {
+	it.each<[TaskOpAction, TaskMutationParams, string]>([
+		["create", { subject: "new", status: "in_progress" }, "status"],
+		["create", { subject: "new", evidence: "tests passed" }, "evidence"],
+		["create", { subject: "new", reason: "later" }, "reason"],
+		["create", { subject: "new", addBlockedBy: [] }, "addBlockedBy"],
+		["update", { id: 1, status: "in_progress", blockedBy: [] }, "blockedBy"],
+		["update", { id: 1, owner: "worker", includeDeleted: false }, "includeDeleted"],
+		["list", { owner: "worker" }, "owner"],
+		["get", { id: 1, status: "in_progress" }, "status"],
+		["delete", { id: 1, reason: "later" }, "reason"],
+		["clear", { status: "completed" }, "status"],
+		["update", { id: 1, status: "in_progress", unknownField: true }, "unknownField"],
+	])("rejects ignored fields for %s: %j", (action, params, field) => {
+		const state = stateWith(task({ id: 1, subject: "original" }));
+		const result = applyTaskMutation(state, action, params);
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining(field) });
+		expect(result.state).toBe(state);
+	});
+
+	it("rejects an explicit null for an ignored field (only undefined is treated as absent)", () => {
+		const state = stateWith(task({ id: 1, subject: "original" }));
+		const params = { id: 1, owner: null } as unknown as TaskMutationParams;
+		const result = applyTaskMutation(state, "get", params);
+		expect(result.op).toMatchObject({ kind: "error", message: "owner is not supported for get" });
+		expect(result.state).toBe(state);
+	});
+
+	it("rolls back provisional mutations when a read supplies an ignored field", () => {
+		const state = emptyState();
+		const result = applyTaskCall(state, {
+			ops: [
+				{ action: "create", subject: "temporary" },
+				{ action: "list", owner: "worker" },
+			],
+		});
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining("ops[1]:") });
+		expect(result.state).toBe(state);
+	});
+});
+
+describe("applyTaskMutation — create", () => {
+	it("rejects empty subject", () => {
+		const result = applyTaskMutation(emptyState(), "create", { subject: "" });
+		expect(result.op).toEqual({ kind: "error", message: "subject required for create" });
+		expect(result.state.tasks).toHaveLength(0);
+		expect(result.state.nextId).toBe(1);
+	});
+
+	it("rejects dangling blockedBy", () => {
+		const result = applyTaskMutation(emptyState(), "create", { subject: "x", blockedBy: [99] });
+		expect(result.op).toEqual({ kind: "error", message: "blockedBy: #99 not found" });
+		expect(result.state.nextId).toBe(1);
+	});
+
+	it("rejects deleted blockedBy", () => {
+		const state = stateWith(task({ id: 1, subject: "done", status: "deleted" }));
+		const result = applyTaskMutation(state, "create", { subject: "new", blockedBy: [1] });
+		expect(result.op).toEqual({ kind: "error", message: "blockedBy: #1 is deleted" });
+	});
+
+	it("creates with next id and preserves immutability", () => {
+		const state = emptyState();
+		const result = applyTaskMutation(state, "create", { subject: "write tests" });
+		expect(result.state.tasks).toHaveLength(1);
+		expect(result.state.tasks[0]).toMatchObject({ id: 1, subject: "write tests", status: "pending" });
+		expect(result.state.nextId).toBe(2);
+		expect(result.state.tasks).not.toBe(state.tasks);
+		expect(result.op).toMatchObject({
+			kind: "create",
+			taskId: 1,
+			task: { id: 1, subject: "write tests", status: "pending" },
+		});
+	});
+});
+
+describe("applyTaskMutation — update", () => {
+	it.each([
+		{
+			currentStatus: "in_progress" as const,
+			status: "completed" as const,
+			evidence: "tests passed",
+			reason: "not deferred",
+		},
+		{ currentStatus: "pending" as const, subject: "rename", reason: "" },
+	])("rejects reason outside deferred, including an empty reason: %j", ({ currentStatus, ...params }) => {
+		const state = stateWith(task({ id: 1, subject: "original", status: currentStatus }));
+		const result = applyTaskMutation(state, "update", { id: 1, ...params });
+		expect(result.op).toEqual({
+			kind: "error",
+			message: "reason only applies to a deferred task (status: deferred)",
+		});
+		expect(result.state).toBe(state);
+	});
+
+	it("rolls back a batch when reason is supplied for a non-deferred task", () => {
+		const state = stateWith(task({ id: 1, subject: "original" }));
+		const result = applyTaskCall(state, {
+			ops: [
+				{ action: "create", subject: "must roll back" },
+				{ action: "update", id: 1, subject: "rename", reason: "" },
+			],
+		});
+		expect(result.op).toEqual({
+			kind: "error",
+			message: "ops[1]: reason only applies to a deferred task (status: deferred)",
+		});
+		expect(result.state).toBe(state);
+	});
+
+	it("rejects id-only update", () => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, "update", { id: 1 });
+		expect(result.op).toEqual({
+			kind: "error",
+			message:
+				"update requires at least one mutable field: subject, description, activeForm, status, evidence, reason, owner, metadata, addBlockedBy, or removeBlockedBy",
+		});
+	});
+
+	it("rejects illegal transition completed → in_progress", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "completed" }));
+		const result = applyTaskMutation(state, "update", { id: 1, status: "in_progress" });
+		expect(result.op).toEqual({ kind: "error", message: "illegal transition completed → in_progress" });
+	});
+
+	it("allows completed → deleted transition", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "completed" }));
+		const result = applyTaskMutation(state, "update", { id: 1, status: "deleted" });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "completed",
+			toStatus: "deleted",
+			changed: true,
+			task: { id: 1, subject: "x", status: "deleted" },
+		});
+		expect(result.state.tasks[0].status).toBe("deleted");
+	});
+
+	it("flags a no-effect status update (status set to its current value) as changed:false", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "pending" }));
+		const result = applyTaskMutation(state, "update", { id: 1, status: "pending" });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: false,
+			task: { id: 1, subject: "x", status: "pending" },
+		});
+	});
+
+	it("flags a re-sent identical field as changed:false", () => {
+		const state = stateWith(task({ id: 1, subject: "x", description: "d" }));
+		const result = applyTaskMutation(state, "update", { id: 1, subject: "x", description: "d" });
+		expect(result.op).toMatchObject({ kind: "update", changed: false });
+	});
+
+	it("flags re-sent addBlockedBy entries already present as changed:false", () => {
+		const state = stateWith(task({ id: 1, subject: "a", blockedBy: [2] }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 1, addBlockedBy: [2] });
+		expect(result.op).toMatchObject({ kind: "update", changed: false, task: { blockedBy: [2] } });
+	});
+
+	it("flags removeBlockedBy of an absent dependency as changed:false", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 1, removeBlockedBy: [2] });
+		expect(result.op).toMatchObject({ kind: "update", changed: false });
+	});
+
+	it("flags re-sent identical evidence as changed:false and new evidence as changed:true", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "completed", evidence: "tests passed" }));
+		const same = applyTaskMutation(state, "update", { id: 1, status: "completed", evidence: "tests passed" });
+		expect(same.op).toMatchObject({ kind: "update", changed: false });
+		const revised = applyTaskMutation(state, "update", { id: 1, status: "completed", evidence: "ran e2e" });
+		expect(revised.op).toMatchObject({ kind: "update", changed: true, task: { evidence: "ran e2e" } });
+	});
+
+	it("flags re-sent identical reason as changed:false and new reason as changed:true", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "deferred", reason: "blocked upstream" }));
+		const same = applyTaskMutation(state, "update", { id: 1, status: "deferred", reason: "blocked upstream" });
+		expect(same.op).toMatchObject({ kind: "update", changed: false });
+		const revised = applyTaskMutation(state, "update", { id: 1, status: "deferred", reason: "waiting on review" });
+		expect(revised.op).toMatchObject({ kind: "update", changed: true, task: { reason: "waiting on review" } });
+	});
+
+	it("flags a blockedBy-only update as changed:true even when status is unchanged", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 1, addBlockedBy: [2] });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: true,
+			task: { id: 1, subject: "a", status: "pending", blockedBy: [2] },
+		});
+	});
+
+	it("flags a subject-only update on a task with existing deps as changed:true (blockedBy unchanged)", () => {
+		// Equal-length blockedBy on both sides — the changed signal comes from subject,
+		// not the dependency list, which round-trips identically.
+		const state = stateWith(task({ id: 1, subject: "old", blockedBy: [2] }), task({ id: 2, subject: "dep" }));
+		const result = applyTaskMutation(state, "update", { id: 1, subject: "new" });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: true,
+			task: { id: 1, subject: "new", status: "pending", blockedBy: [2] },
+		});
+		expect(result.state.tasks[0].blockedBy).toEqual([2]);
+	});
+
+	it("flags swapping one dependency for another (same length) as changed:true", () => {
+		const state = stateWith(
+			task({ id: 1, subject: "a", blockedBy: [2] }),
+			task({ id: 2, subject: "b" }),
+			task({ id: 3, subject: "c" }),
+		);
+		const result = applyTaskMutation(state, "update", { id: 1, removeBlockedBy: [2], addBlockedBy: [3] });
+		expect(result.op).toMatchObject({
+			kind: "update",
+			id: 1,
+			fromStatus: "pending",
+			toStatus: "pending",
+			changed: true,
+			task: { id: 1, subject: "a", status: "pending", blockedBy: [3] },
+		});
+		expect(result.state.tasks[0].blockedBy).toEqual([3]);
+	});
+
+	it("rejects self-block via addBlockedBy", () => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, "update", { id: 1, addBlockedBy: [1] });
+		expect(result.op).toEqual({ kind: "error", message: "cannot block #1 on itself" });
+	});
+
+	it("rejects cycle in blockedBy graph", () => {
+		const state = stateWith(task({ id: 1, subject: "a", blockedBy: [2] }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 2, addBlockedBy: [1] });
+		expect(result.op).toEqual({ kind: "error", message: "addBlockedBy would create a cycle in the blockedBy graph" });
+	});
+
+	it("drops blockedBy field when merged set becomes empty", () => {
+		const state = stateWith(task({ id: 1, subject: "a", blockedBy: [2] }), task({ id: 2, subject: "b" }));
+		const result = applyTaskMutation(state, "update", { id: 1, removeBlockedBy: [2] });
+		const updated = result.state.tasks[0];
+		expect("blockedBy" in updated).toBe(false);
+	});
+
+	it("drops metadata key when value is null", () => {
+		const state = stateWith(task({ id: 1, subject: "x", metadata: { a: 1, b: 2 } }));
+		const result = applyTaskMutation(state, "update", { id: 1, metadata: { a: null } });
+		expect(result.state.tasks[0].metadata).toEqual({ b: 2 });
+	});
+
+	it("sets and overwrites metadata keys when value is non-null", () => {
+		// Covers the merged[k] = v branch (non-null partial merge): a is overwritten,
+		// b is preserved, c is added.
+		const state = stateWith(task({ id: 1, subject: "x", metadata: { a: 1, b: 2 } }));
+		const result = applyTaskMutation(state, "update", { id: 1, metadata: { a: 99, c: 3 } });
+		expect(result.state.tasks[0].metadata).toEqual({ a: 99, b: 2, c: 3 });
+	});
+
+	it("collapses metadata to undefined when every key is deleted", () => {
+		// Covers the Object.keys(merged).length ? merged : undefined branch where
+		// every existing key gets nulled out.
+		const state = stateWith(task({ id: 1, subject: "x", metadata: { a: 1 } }));
+		const result = applyTaskMutation(state, "update", { id: 1, metadata: { a: null } });
+		expect("metadata" in result.state.tasks[0]).toBe(false);
+	});
+});
+
+describe("applyTaskMutation — list/get/delete/clear", () => {
+	it("list emits Op with includeDeleted flag and optional statusFilter", () => {
+		const state = stateWith(
+			task({ id: 1, subject: "a", status: "pending" }),
+			task({ id: 2, subject: "b", status: "deleted" }),
+		);
+		const result = applyTaskMutation(state, "list", { includeDeleted: true, status: "deleted" });
+		expect(result.op).toEqual({ kind: "list", includeDeleted: true, statusFilter: "deleted" });
+		expect(result.state).toBe(state);
+	});
+
+	it("delete on already-deleted task errors", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "deleted" }));
+		const result = applyTaskMutation(state, "delete", { id: 1 });
+		expect(result.op).toEqual({ kind: "error", message: "#1 is already deleted" });
+	});
+
+	it("delete emits Op with id + subject", () => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, "delete", { id: 1 });
+		expect(result.op).toMatchObject({
+			kind: "delete",
+			id: 1,
+			subject: "x",
+			task: { id: 1, subject: "x", status: "deleted" },
+		});
+		expect(result.state.tasks[0].status).toBe("deleted");
+	});
+
+	it("clear emits Op with prior count and resets nextId to 1", () => {
+		const state = stateWith(task({ id: 5, subject: "x" }));
+		const result = applyTaskMutation(state, "clear", {});
+		expect(result.op).toEqual({ kind: "clear", count: 1, kept: 0 });
+		expect(result.state.tasks).toHaveLength(0);
+		expect(result.state.nextId).toBe(1);
+	});
+
+	it("get emits Op with the resolved task", () => {
+		const state = stateWith(task({ id: 1, subject: "alpha" }));
+		const result = applyTaskMutation(state, "get", { id: 1 });
+		expect(result.op).toEqual({ kind: "get", task: state.tasks[0] });
+	});
+});
+
+describe("changesState — which results persist a replay snapshot", () => {
+	const pending = (id: number, subject = "t"): Task => ({ id, subject, status: "pending" });
+
+	it.each([
+		["create", () => applyTaskMutation(emptyState(), "create", { subject: "a" })],
+		["delete", () => applyTaskMutation(stateWith(pending(1)), "delete", { id: 1 })],
+		["clear", () => applyTaskMutation(stateWith(pending(1)), "clear", {})],
+		["an effective update", () => applyTaskMutation(stateWith(pending(1)), "update", { id: 1, status: "in_progress" })],
+	])("is true for %s", (_label, run) => {
+		expect(changesState(run().op)).toBe(true);
+	});
+
+	it.each([
+		["list", "list", () => applyTaskMutation(stateWith(pending(1)), "list", {})],
+		["get", "get", () => applyTaskMutation(stateWith(pending(1)), "get", { id: 1 })],
+		[
+			"a no-effect update",
+			"update",
+			() => applyTaskMutation(stateWith(pending(1)), "update", { id: 1, status: "pending" }),
+		],
+		["an error", "error", () => applyTaskMutation(emptyState(), "update", { id: 99, status: "completed" })],
+	])("is false for %s", (_label, kind, run) => {
+		const { op } = run();
+		expect(op.kind).toBe(kind);
+		expect(changesState(op)).toBe(false);
+	});
+});
+
+describe("applyTaskCall — batch operation outcomes", () => {
+	it("retains each mutation's immutable task snapshot across clear and id reuse", () => {
+		const result = applyTaskCall(emptyState(), {
+			ops: [{ action: "create", subject: "first" }, { action: "clear" }, { action: "create", subject: "second" }],
+		});
+		expect(result.op).toMatchObject({
+			kind: "batch",
+			results: [
+				{ kind: "create", task: { id: 1, subject: "first", status: "pending" } },
+				{ kind: "clear", count: 1, kept: 0 },
+				{ kind: "create", task: { id: 1, subject: "second", status: "pending" } },
+			],
+		});
+	});
+
+	it("retains each deferred reason across repeated updates", () => {
+		const state: TaskState = {
+			tasks: [task({ id: 1, subject: "plan item", source: "plan" })],
+			nextId: 2,
+			plan: { id: "p1", title: "Plan" },
+		};
+		const result = applyTaskCall(state, {
+			ops: [
+				{ action: "update", id: 1, status: "deferred", reason: "needs design" },
+				{ action: "update", id: 1, status: "deferred", reason: "needs approval" },
+			],
+		});
+		expect(result.op).toMatchObject({
+			kind: "batch",
+			results: [
+				{ kind: "update", task: { status: "deferred", reason: "needs design" }, deferredReason: "needs design" },
+				{
+					kind: "update",
+					task: { status: "deferred", reason: "needs approval" },
+					deferredReason: "needs approval",
+				},
+			],
+		});
+	});
+});
+
+describe("isTransitionValid", () => {
+	it("is idempotent on same→same", () => {
+		expect(isTransitionValid("completed", "completed")).toBe(true);
+	});
+
+	it("rejects completed → in_progress", () => {
+		expect(isTransitionValid("completed", "in_progress")).toBe(false);
+	});
+
+	it("allows completed → deleted", () => {
+		expect(isTransitionValid("completed", "deleted")).toBe(true);
+	});
+});
+
+describe("applyTaskMutation — evidence and deferral", () => {
+	it("rejects completed without evidence, and with blank evidence", () => {
+		const state = stateWith(task({ id: 1, subject: "x", status: "in_progress" }));
+		for (const params of [
+			{ id: 1, status: "completed" as const },
+			{ id: 1, status: "completed" as const, evidence: "  " },
+		]) {
+			const result = applyTaskMutation(state, "update", params);
+			expect(result.op).toEqual({ kind: "error", message: ERR_EVIDENCE_REQUIRED });
+			expect(result.state).toBe(state);
+		}
+	});
+
+	it("completes with evidence and stores it", () => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, "update", { id: 1, status: "completed", evidence: " npm test: ok " });
+		expect(result.op).toMatchObject({ kind: "update", toStatus: "completed", changed: true });
+		expect(result.state.tasks[0]).toEqual({ id: 1, subject: "x", status: "completed", evidence: "npm test: ok" });
+	});
+
+	it("rejects evidence on a task that isn't being completed", () => {
+		const result = applyTaskMutation(stateWith(task({ id: 1, subject: "x" })), "update", { id: 1, evidence: "e" });
+		expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining("evidence only applies") });
+	});
+
+	it("defers with a reason, rejects without, and reopening clears the reason", () => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		expect(applyTaskMutation(state, "update", { id: 1, status: "deferred" }).op).toEqual({
+			kind: "error",
+			message: ERR_REASON_REQUIRED,
+		});
+		const deferred = applyTaskMutation(state, "update", { id: 1, status: "deferred", reason: "out of scope" }).state;
+		expect(deferred.tasks[0]).toMatchObject({ status: "deferred", reason: "out of scope" });
+		const reopened = applyTaskMutation(deferred, "update", { id: 1, status: "pending" }).state;
+		expect(reopened.tasks[0]).toEqual({ id: 1, subject: "x", status: "pending" });
+	});
+
+	it("never deletes a plan item, by delete or by status", () => {
+		const state = stateWith(task({ id: 1, subject: "x", source: "plan" }));
+		for (const result of [
+			applyTaskMutation(state, "delete", { id: 1 }),
+			applyTaskMutation(state, "update", { id: 1, status: "deleted" }),
+		]) {
+			expect(result.op).toMatchObject({ kind: "error", message: expect.stringContaining("can't be deleted") });
+		}
+	});
+
+	it("rejects a create that duplicates a plan item's subject, naming the id", () => {
+		const state = {
+			...stateWith(task({ id: 7, subject: "Add the  Widget", source: "plan" })),
+			plan: { id: "p1", title: "T" },
+		};
+		const result = applyTaskMutation(state, "create", { subject: "  add the widget " });
+		expect(result.op).toEqual({ kind: "error", message: "#7 is already a plan item; update it" });
+		expect(result.state.tasks).toHaveLength(1);
+	});
+
+	it("allows a duplicate subject without an active plan, or of a non-plan todo", () => {
+		const noPlan = stateWith(task({ id: 1, subject: "x", source: "plan" }));
+		expect(applyTaskMutation(noPlan, "create", { subject: "x" }).op.kind).toBe("create");
+		const plain = { ...stateWith(task({ id: 1, subject: "x" })), plan: { id: "p1", title: "T" } };
+		expect(applyTaskMutation(plain, "create", { subject: "x" }).op.kind).toBe("create");
+	});
+
+	it("keeps a plan item's text verbatim", () => {
+		const state = stateWith(task({ id: 1, subject: "x", source: "plan" }));
+		expect(applyTaskMutation(state, "update", { id: 1, subject: "y" }).op).toMatchObject({
+			kind: "error",
+			message: expect.stringContaining("approved plan's text"),
+		});
+		// Re-sending the same subject alongside a real change is fine.
+		expect(applyTaskMutation(state, "update", { id: 1, subject: "x", status: "in_progress" }).op).toMatchObject({
+			kind: "update",
+		});
+	});
+
+	it("clear keeps plan items and their ids, drops agent todos", () => {
+		const state: TaskState = {
+			tasks: [task({ id: 1, subject: "p", source: "plan", blockedBy: [2] }), task({ id: 2, subject: "a" })],
+			nextId: 3,
+			plan: { id: "p1", title: "T" },
+		};
+		const result = applyTaskMutation(state, "clear", {});
+		expect(result.op).toEqual({ kind: "clear", count: 1, kept: 1 });
+		expect(result.state).toEqual({
+			tasks: [{ id: 1, subject: "p", status: "pending", source: "plan" }],
+			nextId: 3,
+			plan: { id: "p1", title: "T" },
+		});
+	});
+});
+
+describe("applyTaskMutation — structural guards and optional fields", () => {
+	it.each(["update", "get", "delete"] as const)("%s without an id is rejected", (action) => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, action, action === "update" ? { owner: "w" } : {});
+		expect(result.op).toEqual({ kind: "error", message: `id required for ${action}` });
+		expect(result.state).toBe(state);
+	});
+
+	it.each(["get", "delete"] as const)("%s of an unknown id is rejected", (action) => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, action, { id: 9 });
+		expect(result.op).toEqual({ kind: "error", message: "#9 not found" });
+		expect(result.state).toBe(state);
+	});
+
+	it("create keeps description and metadata, copying metadata", () => {
+		const metadata = { k: 1 };
+		const result = applyTaskMutation(emptyState(), "create", { subject: "x", description: "why", metadata });
+		expect(result.state.tasks[0]).toMatchObject({ description: "why", metadata: { k: 1 } });
+		expect(result.state.tasks[0].metadata).not.toBe(metadata);
+	});
+
+	it("update rejects addBlockedBy on a missing or deleted task", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }), task({ id: 2, subject: "b", status: "deleted" }));
+		expect(applyTaskMutation(state, "update", { id: 1, addBlockedBy: [9] }).op).toEqual({
+			kind: "error",
+			message: "addBlockedBy: #9 not found",
+		});
+		expect(applyTaskMutation(state, "update", { id: 1, addBlockedBy: [2] }).op).toEqual({
+			kind: "error",
+			message: "addBlockedBy: #2 is deleted",
+		});
+	});
+
+	it("update starts metadata from nothing when the task has none", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }));
+		const result = applyTaskMutation(state, "update", { id: 1, metadata: { a: 1 } });
+		expect(result.state.tasks[0].metadata).toEqual({ a: 1 });
+	});
+
+	it("update refuses to change a plan item's description but accepts the same one", () => {
+		const state = stateWith(task({ id: 1, subject: "a", source: "plan", description: "d" }));
+		const changed = applyTaskMutation(state, "update", { id: 1, description: "other" });
+		expect(changed.op).toMatchObject({ kind: "error" });
+		expect(changed.state).toBe(state);
+		const same = applyTaskMutation(state, "update", { id: 1, description: "d", owner: "w" });
+		expect(same.op).toMatchObject({ kind: "update" });
+		expect(same.state.tasks[0].owner).toBe("w");
+	});
+
+	it("clear keeps plan items untouched when none depends on a dropped task", () => {
+		const state = stateWith(task({ id: 1, subject: "p", source: "plan" }), task({ id: 2, subject: "x" }));
+		const result = applyTaskMutation(state, "clear", {});
+		expect(result.op).toEqual({ kind: "clear", count: 1, kept: 1 });
+		expect(result.state.tasks).toEqual([state.tasks[0]]);
+		expect(result.state.tasks[0]).toBe(state.tasks[0]);
+	});
+
+	it("clear drops only blockers that did not survive", () => {
+		const state = stateWith(
+			task({ id: 1, subject: "p1", source: "plan" }),
+			task({ id: 2, subject: "p2", source: "plan", blockedBy: [1, 3] }),
+			task({ id: 3, subject: "x" }),
+		);
+		const result = applyTaskMutation(state, "clear", {});
+		expect(result.state.tasks[1].blockedBy).toEqual([1]);
+	});
+});

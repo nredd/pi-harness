@@ -3,7 +3,7 @@ import { type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding
 import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HELD_REMINDER_MESSAGE_TYPE, STATE_ENTRY_TYPE, type Task } from "../../packages/todo/tool/types.ts";
+import { HELD_REMINDER_MESSAGE_TYPE, STATE_ENTRY_TYPE, type Task } from "../../packages/todo/src/tool/types.ts";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
 interface Case {

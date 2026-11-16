@@ -343,8 +343,8 @@ const RESOLVED: Record<string, unknown> = {
 	},
 	"packages/todo/vitest.config.ts": {
 		test: {
-			include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
-			setupFiles: ["tests/lib/src/home-setup.ts", "packages/todo/.test-support/setup.ts"],
+			include: ["tests/**/*.test.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/todo/tests/fixtures/setup.ts"],
 			pool: "forks",
 			maxWorkers: 2,
 			hookTimeout: 30000,
@@ -353,7 +353,7 @@ const RESOLVED: Record<string, unknown> = {
 			clearMocks: true,
 			restoreMocks: true,
 		},
-		resolve: { alias: { "@juicesharp/rpiv-test-utils": "packages/todo/.test-support/upstream/index.ts" } },
+		resolve: { alias: { "@juicesharp/rpiv-test-utils": "packages/todo/tests/fixtures/upstream/index.ts" } },
 	},
 	"scripts/vitest.config.ts": {
 		test: {
