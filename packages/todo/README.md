@@ -7,8 +7,7 @@ Give the model a task list you can see. `pi-todo` adds a `todo` tool, a
 `/todos` command, and a live panel above the editor to
 [Pi Agent](https://github.com/badlogic/pi-mono), so you always know what the
 agent is doing now, what it finished, and what is queued. The list is rebuilt
-from the conversation itself, so it survives `/reload` and compaction — useful
-on long research → design → implement sessions.
+from the conversation itself, so it survives `/reload`, tree navigation and compaction.
 
 ## Fork changes
 
@@ -43,26 +42,10 @@ existing optional lazy-loader seam.
 
 ## Verification
 
-The workspace gate (from the repository root, or standalone in this directory):
-
-```sh
-npm ci --ignore-scripts
-# Put Bun 1.4.4 (see ../../.bun-version) on PATH.
-npm run check
-```
-
-`check` runs Biome, TypeScript, and all 625 Vitest tests (including every
-upstream test) on both Node and Bun. The two real interactive settled-row regressions
-run inside that same suite on both engines. The test host
-pins core `v1.3.0-nredd.11` release tarballs. Unpublished upstream session/theme helpers
-are retained under `tests/fixtures/upstream/`; provenance and historical test counts
-are preserved in the standalone-support section below. Tests inject temporary homes and use faux providers, never
-a pi process or credentials.
-
-Settled update/delete rows with a valid result snapshot retain that historical
-subject. Legacy/error rows without one still read the live store and now call
-`context.invalidate()` on foreground state changes, including replay and eviction.
-Weak subscriptions avoid retaining discarded rows; render probes have no effects.
+Run the [development gate](#standalone-test-support). Tests use temporary homes and faux providers,
+not operator credentials. Valid settled-result snapshots preserve their historical subjects;
+legacy/error rows without a valid snapshot follow live state through `context.invalidate()`.
+Weak subscriptions do not retain discarded rows, and render probes have no effects.
 
 ## Install
 
@@ -93,127 +76,79 @@ the full list grouped by status.
 
 ## What you get
 
-- **The plan stays on screen.** A panel above the editor shows every task with a
-  status glyph, the label of whatever is in progress, and a `Todos (done/total)`
-  heading — you never have to ask the agent where it is.
-- **Tasks survive `/reload` and compaction.** Every change records the full
-  post-mutation snapshot on the session branch, including changes made from a
-  codemode script, and the list is replayed from there. No disk writes, nothing
-  to lose.
-- **Finished work gets out of the way.** Completed rows stay visible for the rest
-  of the turn, then drop at the start of the next one; the panel disappears
-  entirely when the list empties.
-- **The overlay never eats your terminal.** Past the row budget it becomes a
-  window over the whole list: scroll it with the mouse wheel, and `↑ N above` /
-  `↓ N below` hints say what is out of view. Nothing is ever hidden.
-- **Task status reflects actual work.** Mark every started task `in_progress`,
-  including parallel work; assign `owner` to identify each worker. The owner shows
-  on the row as `@auth-audit`; when it names a top-level subagent of this session
-  (from [`pi-subagents`](https://github.com/nredd/pi-harness/tree/main/packages/subagents#events)
-  lifecycle events, per the [owner match rule](#owner-match-rule))
-  the row also shows that agent's live state, `queued`, `running`, `done`, `failed` or
-  `stopped`. An
-  `in_progress` todo whose agent failed or stopped is marked `✗ failed` or `✗ stopped`; the todo
-  stays `in_progress` until the parent completes it with evidence. Complete each
-  verified task immediately. Atomic batches may record independently verified
-  results together, but must not delay individual completions. There is no
-  global single-active-task limit. Plan text, completion evidence, and deferral
-  reasons remain protected.
-- **Requested changes cannot silently disappear.** Action-inapplicable fields
-  reject the call, including an entire `ops` batch. `create` always starts
-  `pending`; use an explicit `update` with its id to change status. Dependency
-  updates use `addBlockedBy` / `removeBlockedBy`, never `blockedBy`.
-- **The agent can sequence work, not just list it.** `blockedBy` dependencies are
-  validated before anything is written — dangling ids, deleted dependencies,
-  self-blocks, and cycles are all rejected.
-- **An approved plan becomes the list, verbatim (nredd fork).** With
-  [`pi-plan-mode`](https://github.com/nredd/pi-plan-mode), approving a plan seeds
-  one todo per actionable bullet, copied word for word and tagged `[plan]`;
-  context sections (`Summary`, `Not adopted`, `Assumptions`, ...) are skipped.
-  Approved text cannot be edited and plan items cannot be deleted; activity
-  labels, ownership, dependencies, and metadata remain editable. A revised
-  approved plan replaces them. Status and evidence carry forward only for an
-  unambiguous unchanged item, identified by its full heading path and work text.
-  Legacy items without that identity restart pending on their next reapproval.
-  See [reconciliation and migration](#plan-reconciliation).
-  The heading shows `N/M plan items open`.
-- **Done needs proof (nredd fork).** `completed` requires an `evidence` string
-  (command + result, commit, test name); `deferred` requires a `reason`, and
-  the user is notified when a plan item is deferred. Batches notify only final
-  deferrals, while each operation reports its own outcome and reason. See
-  [batch outcomes](#batch-outcomes). If a run tries to finish with plan
-  items open, the model gets one reminder listing them before it can wrap up.
-  Outside Plan mode, a run that settles with `in_progress` todos also reports them
-  (`agent_settled` in `plan-hooks.ts`), grouped by why each is still open: `owner agent failed
-  or stopped` (all named), `owner agent not found after resume`, `agent running for another session`, `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
-  then a count. `agent running` includes an owner agent still `queued`. `blocked` means a live
-  `blockedBy` dependency: one `in_progress` whose owner agent has not failed or stopped, or one
-  `pending` whose owner agent is running or queued with a verified completion notice. A todo is `held by the
-  parent` when it has no owner, a free-text owner, an agent that finished without the todo being
-  completed, or open blockers that are all dead (`deferred`, unowned `pending`, or abandoned), shown
-  as e.g. `(by #3 deferred)`. Each displayed todo names its owner even when no agent state is known,
-  alongside any blocker details, e.g. `(@release-team; by #3 deferred)`. An `Agent`-tool background spawn or resume is heard at `subagents:created`, so
-  it counts as running while still queued; spawns that skip `created` (cross-extension RPC, the
-  scheduler, `@handle`) are first heard at `subagents:started` and read `held` until then (or at `subagents:failed`, as `stopped`, if stopped while still queued). Its armed clause, `armed:
-  no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo)`, says only that todos arm
-  nothing themselves (with a monitored todo it reads `armed: monitor for #<id>`); the `subagents` and `session-kit` monitor notices say what does wake the
-  parent. Background agents still arm session-wide, since they wake the parent on completion; monitors can sit for up to 7 days, so they arm only the
-  todos they are linked to. Only a lifecycle event explicitly confirming an agent completion notice makes that owner a verified wake; foreground, silent RPC and older unknown agents warn on every settle. Abandoned, lost or silent work, and parent-held work while nothing is armed (below), is a warning repeated on every settle, so a stop with
-  owned work pending and nothing to wake the parent is never silent. When every todo waits on a running agent or a live dependency
-  it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blocker identity, status, owner or owner agent state
-  repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
-  `Run ended with 2 in_progress todos, armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
-  After a process restart (`session_start` reason `startup`), an `in_progress` todo whose `owner` was already set when the session started and
-  that no `subagents` event has named since is `owner agent not found after resume` (warning, every
-  settle, all named): children die with the process, so it is not parent-held. `/new`, `/resume`,
-  `/fork` and `/reload` are not that boundary: pi-subagents detaches still-running background agents.
-  On every `session_start`, and on `subagents:announce_survivors` (which this extension sends once the session is bound and again
-  at every settle), pi-subagents announces ALL running detached survivors in the process. Those registered under this session's
-  file (after `/reload`, or a `/resume` back into the session that spawned them) arrive as `subagents:started` and are `running` and
-  armed, with `subagents:completed` / `:failed` replayed when their results are delivered. Every other one arrives as `subagents:other_session_survivor` with the `sessionFile` it wakes: its result
-  spools there, not here. Only one registered under a file this session was forked from (its header's `parentSession`, then that
-  file's own, so a `/fork`, a fork of a fork, or a `/reload` in either) makes a todo it owns read
-  `agent running for another session, which it wakes instead of this one` (info, once); it is never armed here and never triggers the
-  held-work reminder. Only ancestors count, compared by the exact paths pi wrote (no normalization; an unreadable or moved ancestor ends the chain): a
-  survivor of any other session (`/new`, `/resume` of another session, a sibling fork, or a descendant of this session) is not
-  matched, because handles are per manager and a same-named dead owner must not hide behind it. That todo is `held` (or lost)
-  and reminds as usual, the safe direction. A repeated `started` for an agent already
-  running with the same identity changes nothing, so re-announcing a survivor never outranks a newer same-named agent. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
-  (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
-  agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
-  is armed: a running monitor started for it (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
-  `{ sessionId, id, name, wake, match?, todos? }`) or a background agent with a verified completion notice makes it an info
-  report, shown once like the other waiting groups. A monitor started with `todo: <id>` (or a list of ids, for one monitor serving several todos) arms only those todos, which reads
-  `waiting on a monitor, which wakes the parent: #<id> <subject> (monitor <name>)` (info); once the monitor stops or
-  expires with the todo still `in_progress` it is `held` again and warns. Other held todos still warn. A monitor
-  with no `todo` arms no todo (it may be unrelated to the held work; before, it silenced every held todo and the held-work
-  reminder), so link it with `todo: <id>`. `todo clear` (also inside an `ops` batch) drops links to cleared todos, and a tree navigation that changes the todos drops every link, since ids can be reused. Abandoned, lost and silent work always warn.
-  When todos are held or lost and nothing is armed, nothing can wake the parent, so `agent_before_settle`
-  appends one hidden `rpiv-todo-held-reminder` and requests one more request, once per prompt from a
-  person (a plan reminder is independent). The `context` hook swaps the live list for the marker on that
-  request only, like the plan reminder; it fires only if the todos are still held and unarmed then.
-  Reminders pause while Plan mode is active; old approved todos remain until a
-  replacement is approved. Exiting planning without approval resumes the old
-  obligations. Details in the
-  [tool reference](#plan-items).
-- **Parallel sessions stay separate.** Task state is keyed by session, so a
-  detached or child session can neither read nor overwrite the foreground list.
-  Stale shutdowns use captured session identity and never assume ownership of
-  the foreground. Replay skips malformed snapshots rather than replacing valid
-  tasks, while accepting valid historical tasks without newer evidence fields.
-  Owner agent state is display-only: a subagent never reads or writes the
-  parent's list, and only the parent completes its todo. Without `pi-subagents`
-  owners render without a state. An evicted agent keeps its last known state for
-  the rest of the session, until 256 more recently updated agents push it out;
-  agents are tracked per session, so after `/new` or
-  `/resume` a todo never shows another session's agent.
-- **Historical rows keep their own subjects.** Settled calls render from their
-  validated result snapshots, not the current task list, including after reload
-  and resize. Live owner agent state appears only on the overlay and `/todos`,
-  never in a tool result or a settled row. Partial results and renderer probes do not change cached history.
-- **Localized UI, no setup required.** Nine locales ship with the package and are
-  served by [`@juicesharp/rpiv-i18n`](https://www.npmjs.com/package/@juicesharp/rpiv-i18n),
-  a regular dependency.
+- Create one task per discrete step, then explicitly update its status. Parallel tasks may be
+  in progress; use owners and dependencies to show who is doing what.
+- Approved plans seed immutable work items. Complete with evidence or defer with a reason.
+  [Tool reference](#todo-tool-reference) covers atomic batches, transitions and plan reconciliation.
+- The panel follows the active session branch through reload, tree navigation and compaction.
+  Other sessions and child agents cannot read or overwrite the foreground list.
+- Scroll the complete list with the mouse wheel or expand tool output. Collapse with the heading
+  or configured shortcut. Completed rows leave the panel at the next turn; `/todos` still lists them.
+- Owner agent status is display-only. The parent must complete its todo, even when the agent is done.
+  [Display reference](#overlay-and-todos-display) covers matching, history, scrolling and localization.
+
+## Completion and unattended work
+
+Completion requires nonblank `evidence`; deferral requires a `reason`. Tell the user when a plan item
+is deferred. Batches report each operation's outcome but notify only final net plan deferrals.
+Open plan items trigger one wrap-up reminder per user prompt. Plan reminders and unattended-work
+reminders pause during Plan mode; old approved obligations resume if replanning ends without approval.
+
+Outside Plan mode, each settle reports remaining `in_progress` work without changing task status:
+
+| Group | Meaning and action |
+| --- | --- |
+| Owner failed/stopped | Every affected todo is named. Inspect the result and complete with evidence, retry or explicitly defer. |
+| Owner not found after resume | A process-startup owner has no subsequent lifecycle event. Children die on quit/restart; do not assume they survived. |
+| Agent running for another session | A survivor belongs to this branch's ancestor session, which receives its result. It is not armed here. |
+| Agent running without a completion notice | Foreground, silent RPC or unknown eligibility cannot promise a wake. The parent must arrange continuation. |
+| Blocked | A live dependency is `in_progress` with no failed/stopped owner, or `pending` with a running/queued owner and verified completion notice. |
+| Agent running | The matching owner is running or queued with a verified notice. Wait for its completion rather than polling. |
+| Held by the parent | No owner, free-text owner, finished owner, or only dead blockers (deferred, unowned pending, abandoned). The parent still owns the next action. |
+
+Reports show owners and blocker details even without known agent state. They list all failed/stopped
+and lost owners, otherwise up to three per group and a remaining count. Abandoned, lost and silent
+work warns on every settle. Parent-held work warns when nothing is armed; a verified background-agent
+completion wake makes it informational. Waiting-only reports are info and repeat only when grouping,
+owner, agent state, wake eligibility or blocker identity/status/owner changes, or after a new human prompt.
+
+A monitor arms *only* todos passed to `monitor_start({todo: id})` (or a list, up to 20), via
+`session-kit:monitor:started` / `:stopped` payload
+`{sessionId, id, name, wake, match?, todos?}`. Unlinked monitors arm none. Linked held work reads
+`waiting on a monitor, which wakes the parent`; stopping/expiry returns unfinished work to held.
+Other held todos still warn. `clear`, including in a batch, drops cleared links; branch navigation
+that changes todos drops all links because ids can be reused. Background agents arm session-wide;
+monitors may run for seven days and therefore must be linked to the work they continue.
+
+Held/lost work with no wake adds one hidden `rpiv-todo-held-reminder` and requests another turn,
+once per human prompt, independently of the plan reminder. The context hook substitutes the live
+list only on that request, and only if the work remains held and unarmed. A wake is not proof of
+completion; only the parent changes todo status with evidence.
+
+### Session switches and survivors
+
+`/new`, `/resume`, `/fork` and `/reload` are not process restarts: pi-subagents detaches background
+work and delivers to its spawning session. Todo asks `subagents:announce_survivors` when bound and
+at every settle. Same-session survivors announce `subagents:started` and remain running/armed until
+`:completed` / `:failed` is delivered. A queued Agent-tool spawn/resume is already known from
+`subagents:created`; RPC/scheduler/mention spawns are known only at `started`, or `failed` if stopped
+before starting. Until then their todos are held.
+
+Other survivors announce `subagents:other_session_survivor` with the `sessionFile` they wake.
+Only exact ancestor paths from persisted `parentSession` headers qualify as running for another
+session; no normalization is inferred, and an unreadable/moved ancestor ends the chain. Sibling,
+unrelated and descendant sessions cannot hide a dead same-named owner. Their todos remain held/lost
+and remind normally. Ancestor survivors are informational once, never armed here and never a reason
+for the held-work reminder. Repeated identical starts are no-ops, not newer owner matches.
+Announcements rebuild the survivor set so completed survivors disappear even after inactivity.
+An owner not named by an event, including a person/team label indistinguishable from a dead handle,
+is held, not automatically lost; startup loss applies only to owners already present at startup.
+
+Parallel session lists remain separate. Agent state is display-only and retained for up to 256
+recently updated agents per session; eviction retains last-known state until displaced. No child
+can complete or overwrite its parent's todos. Valid settled snapshots keep their own subjects,
+including reload/resize, and never gain live owner state. Partial results and render probes do not
+change cached history.
 
 ## Configuration
 
@@ -622,8 +557,8 @@ planProvenance: { planId: string, taskId: number }
 ```
 
 Both fields are part of the normal persisted task snapshot. Markdown fences are tracked by
-fence character, opening-run length, and container-relative indentation, so an inner
-````` fence cannot close an outer `~~~~` fence or create a fake todo. A nested fence ends
+fence character, opening-run length, and container-relative indentation. An inner backtick fence
+cannot close an outer tilde fence or create a fake todo. A nested fence ends
 when its list container ends; root four-space-indented code is not a Markdown fence.
 
 ## Configuration reference
@@ -916,10 +851,8 @@ when that package is installed. Bundled locales: `de`, `en`, `es`, `fr`, `pt`,
 LLM-facing output — the tool response envelope, reducer error messages, and the
 schema descriptions — stays English by design.
 
-The SDK is a soft optional peer, loaded through a dynamic import at module init.
-When it is absent, every call site returns its inline English literal and the
-extension stays online: no warning, no crash. Install it at any time with
-`pi install npm:@juicesharp/rpiv-i18n` and restart the session. To add or
+The i18n bridge loads dynamically and retains an English-only fallback if the SDK is absent.
+Normal installs receive the SDK as a hard dependency, not an optional peer. To add or
 override a translation, drop a `locales/<code>.json` file mirroring `en.json` —
 see the `@juicesharp/rpiv-i18n` README's "Contributing translations" section.
 
@@ -927,54 +860,41 @@ see the `@juicesharp/rpiv-i18n` README's "Contributing translations" section.
 
 MIT, retained from upstream -- see [LICENSE](https://github.com/nredd/pi-harness/blob/main/packages/todo/LICENSE).
 
-# Standalone test support
+## Standalone test support
 
-Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7`
-(`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`).
+Source provenance: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7`
+(`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`). Licensed, unchanged
+`tests/fixtures/upstream/{session,theme}.ts` come from upstream `packages/test-utils/`.
+The local barrel exports the used helpers; Pi API/context doubles use `@nredd/pi-test-lib/pi`.
+The Vitest configuration aliases unpublished `@juicesharp/rpiv-test-utils` to that barrel.
+Root `scripts/package_contracts.py` owns tarball membership and production-source completeness.
 
-`upstream/{session,theme}.ts` are unchanged copies from `packages/test-utils/`, with the upstream MIT
-license. Tarball membership and production-source completeness are checked centrally by
-`scripts/package_contracts.py`, not an upstream manifest walker. The local barrel exports only
-those helpers used by this package. The `ExtensionAPI`
-and context doubles are no longer vendored: `todo-host.ts` presets the shared recording doubles from
-`@nredd/pi-test-lib/pi` (#865), which also dropped the `rpiv-workflow` type dependency.
+From the repository root:
 
-`vitest.config.ts` (built by `scripts/vitest-package.ts`) aliases the unpublished `@juicesharp/rpiv-test-utils` to this
-barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
-cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home into
-config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:
-when its config is absent, the legacy fallback must use that same injected home.
-Tests never mutate `HOME` or `USERPROFILE`. `home-injection.test.ts` asserts zero
-real-home filesystem probes for both present and missing fallback configs. The redundant upstream
-ship-manifest test and walker are removed in favor of the central package contracts. Support files
-remain in their existing dot paths until the package layout migration.
+```sh
+make install-owned
+npm run check --workspace @nredd/pi-todo
+make check
+```
 
-Path audit: `config.ts` imports `homedir` for the call-time `loadConfig` default;
-its `XDG_CONFIG_HOME` read and `~/` expansion use the injected home. Both config
-candidates, including the always-legacy fallback, stay under that home unless an
-absolute XDG override explicitly points elsewhere. `getMaxWidgetLines`,
-`getCollapseOnResume` and `resolveCollapseKey` forward the home. This matches
-`@juicesharp/rpiv-config`'s one-way fallback: a present malformed XDG file returns
-its parse result and never falls back to legacy. The existing JSON loader remains
-upstream's `loadJsonConfig`, not a second parser.
+The workspace check runs Biome, strict TypeScript and the full Vitest suite on Node and pinned Bun,
+including upstream cases and both real interactive settled-row regressions. The development host is
+core `v1.3.0-nredd.11` release tarballs, not a live Pi process. From `packages/todo`, target tests with:
 
-Test census:
+```sh
+node ../../scripts/run-vitest.ts node tests/home-injection.test.ts tests/todo-parallel-guidance.test.ts
+```
 
-- Before bootstrap: `npm test` exits 127 (`vitest: command not found`), zero tests.
-- Stock split `7903c76b` with this support/config: 253 tests in 21 files pass.
-- Selected fork `3c62a0b` with this support/config: 377 tests in 26 files pass.
-- With the rendering regressions: 382 Vitest tests in 28 files pass.
-- After home injection (#171): 390 Vitest tests in 29 files pass.
-- After measured coverage closure: 408 Vitest tests in 29 files pass on Node and Bun.
-  `test:bun` runs the full suite through `scripts/run-vitest.ts bun`, including both
-  real interactive settled-row regressions, not a separate two-test native suite.
+Fixtures inject disposable homes into config, tool, extension and overlay callers without mutating
+`HOME` or `USERPROFILE`. `XDG_CONFIG_HOME` alone is insufficient: a missing XDG file
+must fall back into the same injected home, not the operator's. Present malformed XDG files never fall
+back. `home-injection.test.ts` checks zero real-home probes. Setup retains upstream state/i18n reset
+and config cleanup; the JSON loader stays upstream's `loadJsonConfig`.
 
-`settled-row.ts` mounts the real core interactive harness and VirtualTerminal,
-registering this fork's renderers with a snapshot-less legacy result. Both update
-and delete rows failed with `expected ... to contain 'changed subject'` before
-the fix and pass after it. Valid historical snapshots intentionally do not change
-when the live task changes; the existing historical-row tests remain unchanged.
+The real core interactive harness and VirtualTerminal check legacy snapshot-less update/delete rows
+refresh after the live subject changes. Valid historical snapshots intentionally remain unchanged.
+These are rendering regressions, not a reason to weaken result-history assertions.
 
 ## Package layout
 
-Runtime code and locales live under `src/`; tests mirror it under `tests/`, with injected-home fixtures under `tests/fixtures/`. The `rpiv-test-utils` alias still resolves the licensed session/theme fixtures in `tests/fixtures/upstream/`; Pi API/context doubles use `@nredd/pi-test-lib/pi`. The historical standalone-support notes above are preserved verbatim, not current path guidance. Upstream updates are manual ports. The root Biome override preserves the existing upstream non-null assertions, generic test-tool doubles, and control-character sanitization regexes; this layout change does not redesign their types or behavior.
+Runtime code and locales live under `src/`; tests mirror it under `tests/`, with injected-home fixtures under `tests/fixtures/`. The `rpiv-test-utils` alias still resolves the licensed session/theme fixtures in `tests/fixtures/upstream/`; Pi API/context doubles use `@nredd/pi-test-lib/pi`. Upstream updates are manual ports. The root Biome override preserves the existing upstream non-null assertions, generic test-tool doubles, and control-character sanitization regexes; this layout change does not redesign their types or behavior.

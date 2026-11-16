@@ -1,8 +1,13 @@
 # pi-subscription-router
 
-Published to npm as `@nredd/pi-subscription-router` (public). From `0.4.0`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-subscription-router@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.4.0` adds `createSubscriptionRouter(options)` (explicit `config` and `usage`, injectable `tracker` and `now`; the default export is unchanged).
-Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install
-below describes legacy deployment, not installation or candidate verification of this package.
+`router/<profile>` virtual models route requests across configured subscription models using cached
+quota, confirmed exhaustion and explicit per-profile policy. Start with [installation and configuration](#standalone-use),
+then [reset/recovery commands](#reset-schedules-and-free-codex-resets) or [routing policies](#routing-policies-v1).
+
+Published to npm as `@nredd/pi-subscription-router` (public). Releases from `0.4.0` use signed package
+tags, npm provenance and tarball/checksum/manifest releases through the monorepo
+[release workflow](../../docs/releases.md); earlier versions were published manually without provenance.
+Use the [monorepo development commands](../../README.md), not the archived standalone repository.
 
 ## Development
 
@@ -77,7 +82,7 @@ to remaining capacity and reset timing, without adding network reads or changing
 Install:
 
 ```sh
-pi install npm:@nredd/pi-subscription-router@0.4.1
+pi install npm:@nredd/pi-subscription-router
 ```
 
 Config lives in `<agentDir>/subscription-router.json` (`~/.pi/agent/` by default). No file means
@@ -368,8 +373,9 @@ Development:
 
 ```sh
 # From the monorepo root:
-make install
-npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
+make install-owned
+npm run check --workspace @nredd/pi-subscription-router  # Biome, types, full Node and Bun suites
+make check
 ```
 
 Journal permission tests explicitly set and verify insecure fixture modes after creation, so a restrictive
@@ -669,7 +675,7 @@ under both Vitest and Bun; it asserts physical dispatch and keeps the selected m
 virtual. Existing selection/router/usage suites cover confirmation, exact boundaries,
 eligibility and the remaining reset parsing cases.
 
-Phase 1 only records policy and tests it. Configurable `switchMargin` and cross-process
-anti-herding policy remain user decisions. No new switches or production changes are
-introduced here. Neither changing the margin nor random tie-breaking alone establishes
-a global capacity guarantee with delayed account-wide telemetry.
+Legacy `balanced` keeps its fixed 20% margin. Versioned policies support the explicit
+`switchMargin` described [here](#routing-policies-v1); cross-process anti-herding remains unimplemented.
+Neither changing the margin nor random tie-breaking alone establishes a global capacity guarantee
+with delayed account-wide telemetry.

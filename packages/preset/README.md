@@ -1,8 +1,9 @@
 # @nredd/pi-preset
 
-Published to npm as `@nredd/pi-preset` (public); `0.1.0` was the initial manual publication
-(see `releases/2026-10-18-npm-publication.json`). Version `0.2.0` prepares footer-only adoption;
-it must be published before configuring that pin. Nothing here changes a live Pi installation.
+Published to npm as `@nredd/pi-preset` (public). Install the footer with explicit resource filters;
+the rest of the preset is opt-in content, not an automatic machine-configuration installer.
+Releases use the monorepo [publication workflow](../../docs/releases.md); the initial `0.1.0`
+manual-publication receipt is `releases/2026-10-18-npm-publication.json`.
 
 The full managed preset is still not a supported release: no installer, no profile resolver, no activation path exists yet.
 
@@ -15,7 +16,7 @@ preset into exact stock Pi `1.3.0` and loads its footer and skills through that 
 
 ## Install only the footer
 
-After `0.2.0` is published, add this object to `settings.json`'s `packages` array:
+For published `0.4.0`, add this object to `settings.json`'s `packages` array:
 
 ```json
 {
@@ -241,10 +242,11 @@ is exactly the known managed link, and it happens only during explicit activatio
 
 ## Evidence and what is pending
 
-Executed in this workspace (see the gate below): footer helper assertions (preserved, except the quota expectations superseded by the reset-time/OpenAI-window change), real interactive
-footer scenarios (quota, cache, widths, lifecycle), headless mode bindings, static resource/schema/privacy/
-dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource discovery in a temporary
-`HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
+The [development gate](#development) covers footer helpers, real interactive footer scenarios
+(quota, cache, widths, lifecycle), headless bindings, resource/schema/privacy/dependency checks,
+packed-file allowlist/licenses and real Pi 1.3.0 resource discovery in a temporary home/agent directory.
+Node and Bun run the tests without live model calls or operator auth. Quota assertions use the
+current reset-time/OpenAI-window contract above, not the retired helper's display strings.
 
 Packed-tarball evidence (`make check-package-contracts`): the packed preset is audited and installed alone.
 The native preset package gate separately loads its installed skill/extension resources through Pi
@@ -268,8 +270,8 @@ npm run check -w @nredd/pi-preset   # biome, strict tsc, full Vitest on Node and
 - `tests/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock, timeZone, homeDir })` optionally injects one clock, an IANA zone pinning reset labels, and a home for cwd presentation (all default to process values) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
 - `tests/*.test.ts` and `tests/fixtures/` are checked by strict TypeScript, including the migrated footer helper assertions. Everything under `src/` and `tests/` is Biome-formatted.
-- The footer now differs from its source snapshot by the optional factory/clock seam and routed physical model/thinking labels. `src/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `src/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
-- All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `tests/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
+- The footer provides the optional factory/clock seam and routed physical model/thinking labels. `src/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `src/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `tests/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Retire duplicate local footer files through the configuration manager during explicit activation, not by loading both implementations.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.

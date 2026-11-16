@@ -1,12 +1,18 @@
 # pi-session-kit
 
-Development tests mirror `src/` under `tests/`; package-local fixtures live in `tests/fixtures/`.
-Shared doubles and clocks come from `@nredd/pi-test-lib`.
+Session-scoped tools for goals, loops, process monitoring, diffs, offline usage statistics,
+auto-titles, path rules and a read-only resource dashboard. Each runtime owns its work; no daemon,
+cross-pane supervisor or persistent cron is installed. Closing Pi stops active work.
 
-Published to npm as `@nredd/pi-session-kit` (public). From `0.4.0`, each version is cut by the monorepo `Publish` workflow from a signed `@nredd/pi-session-kit@<version>` tag, with npm provenance and a GitHub release carrying the tarball, checksums and manifest (`docs/releases.md`); earlier versions were published manually without provenance. `0.4.0` adds `createSessionKit(options)` (explicit `config`, `agentDir`, `monitorRoot`, injectable `clock` and `spawnMonitor`; the default export is unchanged) and fixes leaderless orphan-group sweeps at `ps` start-time resolution. `0.5.0` redesigns `/stats` around the full pane (pinned header, aligned stat cells, a Models table on wide panes) and gives every chart a clock- or calendar-aligned time axis, including the 5h and 24h hourly views.
-Use the [monorepo development commands](https://github.com/nredd/pi-harness/blob/main/README.md). The Git install and standalone harness
-references below describe the legacy deployment, not installation or candidate verification of
-this package. `0.6.0` keeps passive monitor output only in the monitor ring buffer rather than adding it to the transcript or model context; `monitor_read` is the explicit output surface, and match/exit/timeout wakes are compact summaries with a cursor. `0.7.0` adds the `/stats` Machines tab with per-machine producer export age, separate from the viewer's last import, and the collapsible monitors widget. `0.8.0` adds `/mon`.
+- [Install and configure](#install-and-config)
+- [Goals and loops](#goal-and-loop), [monitors](#monitor) and [process recovery limits](#monitor-process-and-matching-limits)
+- [Diff](#diff), [stats](#stats), [portable export/import](#offline-stats-and-portable-snapshots)
+- [Titles and rules](#titles-and-rules), [child restrictions](#subagents-and-verification)
+- [Resource dashboard](#mon-resource-dashboard), [development](#development)
+
+Published as `@nredd/pi-session-kit` under MIT. Versions from `0.4.0` use signed package
+tags, npm provenance and release tarballs/checksums/manifests through the monorepo
+[release workflow](https://github.com/nredd/pi-harness/blob/main/docs/releases.md); earlier versions were manual publications.
 
 ## Monitor process and matching limits
 
@@ -27,9 +33,7 @@ These exercise real TERM-resistant descendant processes, leader exit with closed
 
 The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
-Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
-registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
-session branch. Closing pi stops its work.
+Persisted goal state follows the active session branch; restored goals remain paused.
 
 `/mon` opens a read-only, full-pane view of local CPU, memory, load and processes, sampled
 every ~2s by the shared `@nredd/pi-resource-sampler` library only while it is open. Details and
@@ -41,7 +45,7 @@ and memory labels state their measurement basis) are in
 ## Install and config
 
 ```sh
-pi install npm:@nredd/pi-session-kit@0.8.0
+pi install npm:@nredd/pi-session-kit
 ```
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
@@ -277,66 +281,7 @@ No private subagent marker is imported. Existing tool permissions are not widene
 A prior settle handler's continuation (including a todo reminder) suppresses the goal nudge;
 the kit does not append a second reminder or request another continuation.
 
-The stats CLI reproducibility test builds into its per-test temporary directory, never the shared `dist/` read by concurrent tests. Packed-CLI tests package the prebuilt artifact with lifecycle scripts disabled so `prepack` cannot rebuild shared output.
-
-`test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
-covering goals, file-backed restore, child rename/reload, read-rule injection, titles,
-monitor output/wakes/cursors/caps/timeouts and loop scheduling with same-cwd session isolation.
-Command completion scenarios resolve public runner suggestions and execute the selected `/goal`,
-`/loop` and `/monitor` commands, checking persisted state, timer removal and the selected child.
-Loop resume starts from a provider-error pause: ticks stay quiet until the selected resume command
-restores dispatch. Git setup uses child-only scratch HOME/config and empty hooks/templates, with
-hostile config/template/hook controls; it never changes the parent process HOME.
-Pidfile age-boundary fixtures pin file/directory mtimes to the injected sweep clock and check the
-24-hour threshold under both past and future wall clocks.
-The interactive host/VirtualTerminal covers `/diff`, `/stats` and real `/name`, including width/resize
-matrices, chart glyph ports/colours and file-backed titles. Mounted command callbacks also verify
-live-theme invalidation, empty Models ranges, help page boundaries, source-failure reopening,
-stale deferred factories and stats load-error cleanup without replacing the interactive host. Stats histories use a fixed clock;
-`createSessionKit({ agentDir, clock })` scopes both offline loading and displayed time ranges.
-Terminal fixtures route input chunks through pi-tui's real `StdinBuffer`, matching ProcessTerminal's
-keypress splitting (complete keys only; lone Escape is flushed immediately). Stats scroll-to-clamp
-checks batch input and settle once; intermediate-frame checks still settle per step. Both hourly
-tabs and exact provider totals remain covered at every width. The full-render sweeps run one case per width
-(row count) or per range (stat grid), each asserting it checked something, so no single test owns hundreds of
-renders against the 20s bound; the hourly ranges pin `now` so they lay out a grid. Each stats-view body owns its fixture
-and disposes it in `finally`, so runner timeout teardown cannot race a still-running callback.
-Monitor scenarios use a shared fake clock and controlled children; native `test/monitor/` keeps real
-workers/processes, and process-group kill/orphan recovery stays in the assembled integration tier.
-Native `STAY` fixtures exit themselves when their parent changes and signal nothing. Only the
-worker-death fixture uses `STAY_GROUP`, which SIGKILLs its own detached group, addressed by its own
-pid; production commands and leader/descendant probes are not modified.
-Shell fixtures that outlive their test (`trap "" TERM` descendants, `sh -c` leaders with a background
-descendant in `manager.test.ts`, `pidfiles.test.ts`, `diff/git.test.ts`) loop on `STAY_SH`, which
-probes the worker's pid with `ps` and exits once it is gone, so an aborted gate leaves nothing
-behind. A probe that exits 143 (procps `ps` catches a group SIGTERM despite `trap "" TERM`) counts as
-alive, so a kill-path test cannot see its TERM-resistant descendant exit early. Other shell waits
-(the diff shim's readiness loop) also stop on `WORKER_ALIVE_SH`, so a timed out test whose temp dir
-is gone cannot spin forever. Fixtures one level down (the `sweep-child.ts` cleaner, the
-`stay.test.ts` owners) `STAY` on their own parent via `stayFor`. `stay.test.ts` covers both guards,
-including a stubbed `ps` that exits 143 (loop keeps running) or 1 (loop ends).
-The diff tests' SIGTERM-resistant shim prints a readiness marker after its trap and fork; only then
-does the test admit fake timeout clocks, so a SIGTERM cannot land before the trap.
-Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
-Vitest regression bypasses `scripts/run-vitest.ts`, so it reuses the launcher's
-`isolatedHomeEnv` (from `@nredd/pi-test-lib/isolated-home`) and checks the child saw that `HOME`. It covers both a SIGKILLed worker and a
-failed assertion (via the fixture's own `afterEach` dispose) and observes both the detached
-`STAY_GROUP` leader and an in-group descendant disappearing. Liveness there is read from process
-state, so an unreaped zombie (non-reaping PID 1) counts as dead.
-Native stop/dispose checks assert direct children are reaped when the operation resolves, then
-observe orphaned descendants disappearing with the existing bounded liveness check. Leader exit
-and pipe closure do not synchronize PID 1's reaping; on Linux, `kill(pid, 0)` can still succeed
-for a terminated zombie. No extra signal, fixed delay or larger timeout is needed.
-The native diff descendant timeout fixture gates its fake deadline on real stdout readiness, so
-slow process startup cannot race a fixed wall-clock deadline. Adapter fault tests cover monitor
-startup/sweep/widget failures, post-spawn errors, worker startup timeout, rejected sampler cleanup,
-first/latest dropped-match evidence, title-stream failure and real rule reinjection after tree
-navigation. Synthetic PIDs are never passed to real signal capabilities. Native Promise construction
-initializes the monitor exit resolver before child handlers register; synchronous close/error
-registration fixtures lock that ordering. The overwritten no-op resolver initializer is removed,
-not a reachable validation or lifecycle path.
-`npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.4.4).
-Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
+For verification commands and test boundaries, see [development](#development).
 
 ## /mon resource dashboard
 
@@ -449,40 +394,23 @@ no model tool, persists no history, sends no model messages and does no network 
 
 ### Verification
 
-- `npm run check` in `packages/session-kit`. The root lock pins a nested registry install
-  (`packages/session-kit/node_modules/@nredd/pi-resource-sampler`, exact `0.2.1` tarball and
-  integrity), so tests run the published bytes, not the same-version workspace that npm would
-  otherwise link. `source.test.ts` fails if resolution ever reaches the workspace.
-  - `test/mon/source.test.ts`: two actual host observations (warming, then measured), a real poll's
-    two updates, and mapping edge cases. In-flight close wraps the real sampler to hold its pending
-    sample, then requires that sample to reject with `AbortError`, no update, no child and no timer.
-    The check is timed by Node's `child_process` diagnostics channel, in the microtask after the
-    first helper spawned, so it holds for a late spawn and for a helper that already exited, and it
-    fails at once if no helper spawned. On macOS it requires that child (`vm_stat`) in the process
-    list, even as an unreaped zombie; Linux reads `/proc` in process and spawns only `getconf`, so
-    there the `AbortError` is the only provider evidence and no listed child is claimed.
-  - `test/mon/theme.test.ts`: actual built-in dark and light themes over an actual observation at
-    40x12, 60x20, 80x24 and 120x40.
-  - `test/scenarios/mon.test.ts` (Vitest and Bun): the real interactive Pi host and the real sampler;
-    two observations, resize matrix, close/Escape/reopen, close before the first sample and session
-    shutdown all leave no kit timer or child process. Registration, shutdown and close-before-sample
-    go through `createSessionKit`. The observation cases call `registerMon` directly, with the real
-    sampler wrapped only to observe each resolved scan,
-    then check the frame against that scan: its exact process count, and its `time budget` notice
-    when a loaded host runs out of the 250ms scan budget. They never poll frames for a full scan,
-    which only a later fake-clock tick could bring.
-  - `test/mon/{component,poll,index}.test.ts`: layout, identity, history, lifecycle interleavings
-    with fakes; `resource-fixture.ts` is type-checked against the package's `ResourceSnapshot`.
-- `make check-package-contracts` packs session-kit, installs it alone (sampler from npm, exact
-  lockfile closure) and drives it through stock Pi.
-- Real macOS terminal recordings exercise the packed, registry-backed view, resize, navigation,
-  close and reopen. Empty direct-child lists before and after close show only that no child was
-  observed at those instants; they do NOT prove an in-flight helper was cancelled or reaped.
-  In-flight cancellation/reaping evidence comes from the deterministic real-sampler tests above,
-  not those terminal snapshots. No Linux terminal recording is claimed.
-- Manual fixture preview (no sampling): `bun test/mon/terminal.ts dark|light`. It is labelled
-  `FIXTURE DATA` and uses `fixture-*` names, so a capture can never pass for host data; it is not
-  evidence of real measurements.
+Run the [workspace gate](#development). Real-sampler tests collect two host observations and test
+in-flight cancellation; fixture previews and before/after process-list snapshots are not equivalent
+cancellation/reaping evidence. Node and Bun exercise the real interactive host, resize, close/reopen,
+close-before-first-sample and shutdown. Mapping/layout tests use typed snapshots and fakes.
+
+The source test requires the nested published sampler install, never the same-version workspace link.
+The root packed-package contract installs the tarball alone through stock Pi with the registry sampler.
+No Linux terminal recording is claimed by these automated proofs.
+
+For a labelled manual preview without sampling, from `packages/session-kit`:
+
+```sh
+bun tests/mon/terminal.ts dark
+bun tests/mon/terminal.ts light
+```
+
+These display `FIXTURE DATA` and `fixture-*` names, not host measurements.
 
 ## Offline stats and portable snapshots
 
@@ -786,3 +714,43 @@ one agent directory. The combined global cache is bounded to 128 MiB; a larger i
 without replacing last-good data. There is no automatic discovery/network refresh or daemon. Reinitializing
 both the local parser cache and source history permanently loses that machine's local history;
 keep these installation files out of synced snapshots but do not routinely delete them.
+
+## Development
+
+From the repository root:
+
+```sh
+make install-owned
+npm run check --workspace @nredd/pi-session-kit
+make check
+make check-package-contracts
+```
+
+The workspace check runs Biome, strict TypeScript and the full Vitest suite on Node and pinned Bun.
+Tests mirror `src/` under `tests/`; package helpers/data live in `tests/fixtures/` and
+shared clocks/doubles in `@nredd/pi-test-lib`. Real core session/interactive harness scenarios
+cover file-backed restore, child rename/reload, command completions, rules, titles, loops,
+monitor wakes/cursors/caps/timeouts, diffs, stats and resource views without operator credentials.
+Cross-extension Plan/subagent/todo behavior remains in the root integration tier.
+
+Native process tests require macOS or Linux. From `packages/session-kit`:
+
+```sh
+node ../../scripts/run-vitest.ts node tests/diff/git.test.ts tests/monitor/pidfiles.test.ts tests/monitor/manager.test.ts tests/monitor/matcher.test.ts
+```
+
+They exercise TERM-resistant descendants, leader exit/closed pipes, concurrent/interrupted cleaners,
+recovery guards, identity changes, catastrophic regexes, final-match drain and disposal. Keep fixture
+parent-liveness guards and real readiness barriers: aborting a worker must not leave an infinite
+fixture process, and fake timeout clocks must not race native startup. Synthetic PIDs never reach
+real signals. Zombie observations are not evidence of a live process; direct children are reaped
+before native stop/dispose resolves and orphan disappearance is checked separately.
+
+Use one injected clock for lifecycle deadlines and fixed stats histories. Real terminal input is
+split through Pi's `StdinBuffer`; each fixture owns/disposes its host, including assertion failures.
+The nested worker-death regression uses the isolated-home launcher environment and checks both its
+owning process and detached group cleanup. Do not replace these with passing mocks or fixed sleeps.
+
+The stats CLI rebuild test writes to per-test temporary output, never shared `dist/`.
+Packed CLI tests disable lifecycle scripts and launch Node explicitly, including under Bun;
+byte-identical rebuilds verify the declared standalone Node artifact, not Bun's entry resolver.
