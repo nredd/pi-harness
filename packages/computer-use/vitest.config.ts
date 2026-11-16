@@ -9,9 +9,6 @@ import { definePackageConfig } from "../../scripts/vitest-package.ts";
 const ZERO_UNCOVERED_FILES = [
 	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
-	"scripts/check-sync-ledger.mjs",
-	"scripts/check-sync-reverts.mjs",
-	"scripts/check-upstream-sync.mjs",
 	"scripts/check-docs-platform.mjs",
 	"scripts/check-docs.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",

@@ -457,9 +457,6 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     [
         "check-docs-platform",
         "check-docs",
-        "check-sync-ledger",
-        "check-sync-reverts",
-        "check-upstream-sync",
     ],
 )
 def test_retained_computer_use_gates_are_measured(name: str) -> None:
@@ -537,7 +534,6 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
         "rust-coverage.test.mjs",
         "session-lifecycle.test.mjs",
         "swift-sdk.test.mjs",
-        "sync-ledger.test.mjs",
         "tool-schemas.test.mjs",
         "unpaired-act.test.mjs",
         "windows-build-scripts.test.mjs",

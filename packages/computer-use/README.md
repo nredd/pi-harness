@@ -89,11 +89,10 @@ This does not run the live overlay suite or prove physical pointer behavior.
 `LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
 self-process/managed-child AX handles and synthetic nodes, never queries AX attributes.
 The child is reaped before assertions; a source-level guard forbids AX queries/actions.
-The sync-revert controls mutate window equality, destination ownership, optional flags and child order. Unexecuted live code
-stays in the denominator; this slice does not claim whole-file coverage or change runtime behavior.
-`node scripts/check-sync-reverts.mjs --validate-only` checks the real revert-case inventory
-against the ledger without running mutations; the normal command still runs every applicable
-mutation.
+Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
+Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage or change
+runtime behavior. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
+The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 
 `npm test -- test/platform-linux.test.mjs --coverage.enabled=false` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),

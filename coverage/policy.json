@@ -6,6 +6,12 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Retire upstream-sync metadata validation (#895, #860); all runtime behavior suites remain, including the ordinary EPERM regression. No runtime source or uncovered budget is removed." },
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Retire the sync mutation runner (#895, #860); each applicable case already invokes an ordinary behavior regression which remains. The EPERM group-quiescence guard remains in async-safety.test.mjs; no runtime source or uncovered budget is removed." },
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Retire automated upstream comparison (#895, #860), upstream pulls are manual. The layout gate now denies retired sync signatures even under renamed commands and files; no runtime source or uncovered budget is removed." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Retire sync metadata validation (#895, #860), retaining the ordinary runtime regression suites and every zero-uncovered budget." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Retire sync mutation orchestration (#895, #860); its runtime tests already live under test/ and remain, including the EPERM regression. Every zero-uncovered budget remains." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Retire automated upstream comparison (#895, #860); the measured python-scripts layout gate denies renamed sync signatures and retains zero-uncovered budgets." },
     { "package": "todo", "signal": "bun", "path": "packages/todo/config.ts", "replacement": "packages/todo/src/config.ts", "reason": "Layout move, no source change (#874)." },
     { "package": "todo", "signal": "bun", "path": "packages/todo/index.ts", "replacement": "packages/todo/src/index.ts", "reason": "Layout move, no source change (#874)." },
     { "package": "todo", "signal": "bun", "path": "packages/todo/plan-hooks.ts", "replacement": "packages/todo/src/plan/hooks.ts", "reason": "Layout move, no source change (#874)." },
@@ -273,7 +279,7 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
@@ -343,7 +349,7 @@
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",

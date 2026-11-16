@@ -1,7 +1,7 @@
 """Gate the layout of every tracked package against the standard in nredd/pi-harness#860.
 
 Walks `git ls-files` for `packages/` (publish rules) plus the shared packages in `SHARED_PACKAGES`
-(script and config rules only) and prints one line per violation: `<package>: <path>: <rule>`. A shared
+(script, config, binary and shell rules), printing `<package>: <path>: <rule>` per violation. A shared
 package with no tracked files is a hard error (exit 2), so moving one without updating the gate cannot
 leave its tree silently unchecked.
 
@@ -34,7 +34,11 @@ magic number is `tracked-binary`. No standalone `.sh`, `.ps1`, `.bash` or `.cmd`
 (`shell-script`), nor an extensionless file whose `#!` line names sh, bash, zsh, fish, dash, ksh, pwsh or
 powershell (directly or via `env`); use a Makefile target.
 A PE is found by seeking to `e_lfanew` (at most 64 KiB).
-`test:upstream-sync` and `test:sync-reverts` are denied names.
+`test:upstream-sync` and `test:sync-reverts` are denied names. Script commands and code files are
+also checked textually for retired sync markers (`upstream-sync`, `sync-reverts`, `sync-ledger`,
+`sync-patches.json`), so renaming their entry points does not bypass the ban. Fixtures are exempt.
+With `--compare-ref`, repeated occurrences of a waived import escape cannot grow beyond the merge-base
+count. Rename detection uses the index, matching `git ls-files`, so staged moves are not growth.
 Import scanning is textual (`from`, `import`, `require`), so `new URL("../x", import.meta.url)` and
 `vi.mock("../x")` are not seen.
 
@@ -66,7 +70,7 @@ LOGGER = logging.getLogger(__name__)
 
 ALLOWLIST = "scripts/package_layout.json"
 PUBLISH_ROOT = "packages"
-# Same `package.json` script and config rules as a package, none of the publish rules.
+# Shared packages get script/config rules and the repository-wide binary/shell bans, not publish layout.
 SHARED_PACKAGES = ("integration/inprocess", "tests/lib")
 
 REQUIRED_FILES = (
@@ -142,6 +146,7 @@ PE_MAX_OFFSET = 64 * 1024
 BIOME_CONFIGS = frozenset({"biome.json", "biome.jsonc"})
 # `test:<signal>` is one name per extra `coverage/policy.json` signal, so any `test:` suffix is accepted.
 DENIED_SCRIPT_NAMES = frozenset({"test:upstream-sync", "test:sync-reverts"})
+SYNC_MACHINERY = re.compile(r"\b(?:upstream-sync|sync-reverts|sync-ledger|sync-patches\.json)\b")
 # `pretest` builds the gitignored `dist/` a test loads (#890), so it is a standard name.
 SCRIPT_NAMES = frozenset(
     {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"}
@@ -264,8 +269,8 @@ def misnamed_test(name: str) -> bool:
     return not stem.startswith(COVERAGE_TOOL_PREFIXES) and CAMPAIGN_TEST_NAME.search(stem) is not None
 
 
-def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
-    """Yield a violation per relative import in a source file that resolves outside its package.
+def code_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
+    """Yield retired sync signatures and relative imports resolving outside the package.
 
     Parameters:
         package (str): Package directory relative to the repository root.
@@ -273,7 +278,7 @@ def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
         root (Path): Repository root.
 
     Returns:
-        Iterable[Violation]: One per distinct leaving specifier; empty when the file is unreadable or absent.
+        Iterable[Violation]: Sync signatures and distinct leaving specifiers; empty for unreadable files.
     """
     source = root / package / path
     if not source.is_file():
@@ -283,6 +288,8 @@ def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
     except OSError as e:
         LOGGER.warning(f"Cannot read '{source}' for the import check: {e}")
         return
+    if SYNC_MACHINERY.search(text):
+        yield Violation(package, path, "upstream-sync")
     directory = posixpath.dirname(path)
     for specifier in sorted(set(RELATIVE_SPECIFIER.findall(text))):
         target = posixpath.normpath(posixpath.join(directory, specifier))
@@ -418,6 +425,26 @@ def is_shell_shebang(head: bytes) -> bool:
     return bool(words) and posixpath.basename(words[0]) in SHELL_INTERPRETERS
 
 
+def safety_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
+    """Yield binary and shell violations for published and shared packages alike.
+
+    Parameters:
+        package (str): Repository-relative package directory.
+        path (str): Package-relative path.
+        root (Path): Repository root.
+
+    Returns:
+        Iterable[Violation]: Binary violations everywhere, shell violations outside fixtures.
+    """
+    top = path.split("/", maxsplit=1)[0]
+    suffix = posixpath.splitext(path)[1].lower()
+    head = read_magic(package, path, root)
+    if top == "prebuilt" or is_binary(head, root / package / path):
+        yield Violation(package, path, "tracked-binary")
+    if not is_fixture(path) and (suffix in SHELL_SUFFIXES or is_shell_shebang(head)):
+        yield Violation(package, path, "shell-script")
+
+
 def content_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
     """Yield the rules that apply to a file even below a banned top-level entry.
 
@@ -432,21 +459,16 @@ def content_violations(package: str, path: str, root: Path) -> Iterable[Violatio
     Returns:
         Iterable[Violation]: Binary, shell script, test extension, test name and import escape violations.
     """
-    top = path.split("/", maxsplit=1)[0]
+    yield from safety_violations(package, path, root)
     suffix = posixpath.splitext(path)[1].lower()
-    head = read_magic(package, path, root)
-    if top == "prebuilt" or is_binary(head, root / package / path):
-        yield Violation(package, path, "tracked-binary")
     if is_fixture(path):
         return
-    if suffix in SHELL_SUFFIXES or is_shell_shebang(head):
-        yield Violation(package, path, "shell-script")
     if ".test." in path and misnamed_test(posixpath.basename(path)):
         yield Violation(package, path, "test-name")
     if path.endswith(STRAY_TEST_SUFFIXES):
         yield Violation(package, path, "test-extension")
     if suffix in CODE_SUFFIXES:
-        yield from import_escapes(package, path, root)
+        yield from code_violations(package, path, root)
 
 
 def top_level_violation(package: str, entry: str, is_directory: bool) -> Violation | None:
@@ -493,6 +515,10 @@ def script_violations(package: str, manifest: Path, publish: bool) -> Iterable[V
     for name in sorted(scripts if isinstance(scripts, dict) else ()):
         if name in DENIED_SCRIPT_NAMES or (name not in SCRIPT_NAMES and not name.startswith("test:")):
             yield Violation(package, "package.json", f"script-name {name}")
+    if isinstance(scripts, dict) and any(
+        isinstance(command, str) and SYNC_MACHINERY.search(command) for command in scripts.values()
+    ):
+        yield Violation(package, "package.json", "upstream-sync")
     pi = data.get("pi") if isinstance(data, dict) else None
     if publish and isinstance(pi, dict) and ("image" in pi or "video" in pi):
         yield Violation(package, "package.json", "pi-media")
@@ -505,7 +531,7 @@ def check_package(package: str, paths: list[str], root: Path, publish: bool) -> 
         package (str): Package directory relative to the repository root.
         paths (list[str]): Tracked package-relative POSIX paths.
         root (Path): Repository root.
-        publish (bool): Whether the publish rules apply (`packages/*`) or only the script and config rules.
+        publish (bool): Whether publish layout applies, beyond the shared script/config/safety rules.
 
     Returns:
         list[Violation]: Violations, unordered.
@@ -515,6 +541,8 @@ def check_package(package: str, paths: list[str], root: Path, publish: bool) -> 
     if "package.json" in tracked:
         found.extend(script_violations(package, root / package / "package.json", publish))
     if not publish:
+        for path in paths:
+            found.extend(safety_violations(package, path, root))
         found.extend(
             Violation(package, path, "biome-config")
             for path in paths
@@ -734,7 +762,7 @@ def base_renames(root: Path, reference: str) -> dict[str, str]:
         reference (str): Ref to compare against, e.g. `origin/main`.
 
     Returns:
-        dict[str, str]: Repository-relative new path -> old path, for renames Git detects.
+        dict[str, str]: Repository-relative new path -> old path, for renames Git detects in the index.
 
     Raises:
         ClassificationError: The ref or merge base cannot be resolved, or Git fails.
@@ -743,12 +771,12 @@ def base_renames(root: Path, reference: str) -> dict[str, str]:
     out = run_git(
         root,
         "diff",
+        "--cached",
         "--name-status",
         "-z",
         "--find-renames=90%",
         "--diff-filter=R",
         base,
-        "HEAD",
         "--",
         PUBLISH_ROOT,
         *SHARED_PACKAGES,
@@ -787,6 +815,39 @@ def growth_problems(
             if path.startswith(prefix) and not renames.get(path, "").startswith(prefix):
                 problems.add(Violation(package, path.removeprefix(f"{package}/"), ADDED_RULE).line())
     return sorted(problems)
+
+
+def import_growth_problems(
+    root: Path, violations: Iterable[Violation], base: tuple[str, set[str]]
+) -> list[str]:
+    """Reject extra occurrences of an already waived import escape since the merge base.
+
+    Parameters:
+        root (Path): Repository root.
+        violations (Iterable[Violation]): Current distinct violations.
+        base (tuple[str, set[str]]): Merge base SHA and its allowlist entries.
+
+    Returns:
+        list[str]: Diagnostics for waived specifiers whose occurrence count grew.
+
+    Raises:
+        ClassificationError: Git cannot read a waived source at the base.
+        OSError: A current waived source cannot be read.
+    """
+    sha, entries = base
+    problems: list[str] = []
+    for violation in violations:
+        if not violation.rule.startswith("import-escape ") or violation.line() not in entries:
+            continue
+        path = f"{violation.package}/{violation.path}"
+        specifier = violation.rule.removeprefix("import-escape ")
+        previous = RELATIVE_SPECIFIER.findall(run_git(root, "show", f"{sha}:{path}")).count(specifier)
+        current = RELATIVE_SPECIFIER.findall(
+            (root / path).read_text(encoding="utf-8", errors="replace")
+        ).count(specifier)
+        if current > previous:
+            problems.append(f"{violation.line()}: added import occurrence ({previous} -> {current})")
+    return problems
 
 
 def allowlist_problems(
@@ -836,10 +897,11 @@ def run(root: Path, compare_ref: str | None, emit: Callable[[str], object]) -> i
         base = base_entries(root, compare_ref) if compare_ref else None
         known = base_tracked(root, compare_ref) if compare_ref else None
         renames = base_renames(root, compare_ref) if compare_ref else None
-    except (ClassificationError, ValueError) as e:
+        import_growth = import_growth_problems(root, violations, base) if base else []
+    except (ClassificationError, OSError, ValueError) as e:
         LOGGER.error(f"Cannot check the package layout: {e}")
         return 2
-    problems = allowlist_problems(violations, text, entries, base)
+    problems = allowlist_problems(violations, text, entries, base) + import_growth
     if known is not None:
         problems += growth_problems(violations, tracked, known, renames)
     for problem in problems:

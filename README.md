@@ -45,6 +45,11 @@ make help                    # every target
 - `check-integration` needs the `forks/pi` Gitlink initialized
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
+- `check-scripts` enforces package layout with a shrinking allowlist. Retired sync markers are denied in
+  script commands and code even under renamed entry points; repeated occurrences of an allowlisted
+  import escape cannot grow versus the merge base. Shared `integration/inprocess` and `tests/lib` also
+  reject tracked binaries and standalone shell scripts. Growth detection includes staged renames in
+  the index, so a move within the same banned entry is not a new file.
 - Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
   config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
   set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
