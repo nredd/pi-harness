@@ -345,7 +345,7 @@ The interactive test host elsewhere in the monorepo remains fork-only; this does
 stock compatibility for every package or interactive internals.
 
 Before a tag, run the monorepo gates and the matching stack checks described in
-[`docs/release-verification.md`](../../docs/release-verification.md).
+[the root README](../../README.md#frozen-release-verification).
 
 ## Layout
 
