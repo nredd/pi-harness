@@ -645,7 +645,9 @@ export async function exportStats(
 	if (loaded.errors || loaded.badLines)
 		throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
+	const exportedAt = Date.now();
 	const scans = await loadHarnesses({
+		now: exportedAt,
 		harnesses: external,
 		roots: options.roots,
 		env: options.env,
@@ -654,7 +656,6 @@ export async function exportStats(
 		loadSqlite: options.loadSqlite,
 		salt: state.salt,
 	});
-	const exportedAt = Date.now();
 	const report: HarnessReport = {};
 	const calls = [...loaded.calls];
 	const sessionMetadata = [...sessionsOf(loaded)];
@@ -870,6 +871,7 @@ export async function loadCombined(
 		localStatus.pi = { found: true, lastEventMs: lastEvents(local.calls).pi, problems: [] };
 		try {
 			const scans = await loadHarnesses({
+				now,
 				harnesses: wanted,
 				roots: options.roots,
 				env: options.env,
