@@ -252,7 +252,14 @@ class FakeConnection {
  * @returns {Promise<FakeCdp>} The listening endpoint.
  * @throws {Error} If the port cannot be bound.
  */
-export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url = "about:blank", targets, echoClose = true } = {}) {
+export async function startFakeCdp({
+	port = 0,
+	id = "fake",
+	title = "Fake",
+	url = "about:blank",
+	targets,
+	echoClose = true,
+} = {}) {
 	const sockets = new Set();
 	const upgraded = [];
 	const connections = [];
@@ -270,8 +277,14 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 	const wsUrl = (path) => `ws://127.0.0.1:${boundPort}/devtools/${path}`;
 	// Discovery entry for one target; `webSocketDebuggerUrl: null` omits the field.
 	const describe = (target) => {
-		const info = { id: target.id, type: target.type ?? "page", title: target.title ?? "", url: target.url ?? "about:blank" };
-		if (target.webSocketDebuggerUrl !== null) info.webSocketDebuggerUrl = target.webSocketDebuggerUrl ?? wsUrl(`page/${target.id}`);
+		const info = {
+			id: target.id,
+			type: target.type ?? "page",
+			title: target.title ?? "",
+			url: target.url ?? "about:blank",
+		};
+		if (target.webSocketDebuggerUrl !== null)
+			info.webSocketDebuggerUrl = target.webSocketDebuggerUrl ?? wsUrl(`page/${target.id}`);
 		return info;
 	};
 
@@ -293,12 +306,25 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 
 	/** Built-in flat-session `Target` domain; user handlers take precedence. */
 	const builtins = {
-		"Target.getTargets": () => ({ targetInfos: targetList.map((target) => ({ targetId: target.id, type: target.type ?? "page", title: target.title ?? "", url: target.url ?? "about:blank", attached: false })) }),
+		"Target.getTargets": () => ({
+			targetInfos: targetList.map((target) => ({
+				targetId: target.id,
+				type: target.type ?? "page",
+				title: target.title ?? "",
+				url: target.url ?? "about:blank",
+				attached: false,
+			})),
+		}),
 		"Target.attachToTarget": (params, ctx) => {
-			if (!targetList.some((target) => target.id === params.targetId)) return cdpError("No target with given id found", -32602);
+			if (!targetList.some((target) => target.id === params.targetId))
+				return cdpError("No target with given id found", -32602);
 			const sessionId = `session-${nextSession++}`;
 			ctx.connection.sessions.set(sessionId, params.targetId);
-			ctx.connection.emit("Target.attachedToTarget", { sessionId, targetInfo: { targetId: params.targetId, type: "page", attached: true }, waitingForDebugger: false });
+			ctx.connection.emit("Target.attachedToTarget", {
+				sessionId,
+				targetInfo: { targetId: params.targetId, type: "page", attached: true },
+				waitingForDebugger: false,
+			});
 			return { sessionId };
 		},
 		"Target.detachFromTarget": (params, ctx) => {
@@ -327,7 +353,13 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 		const handler = handlers.get(request.method) ?? builtins[request.method];
 		let outcome = {};
 		try {
-			if (handler) outcome = await handler(params, { connection, request, sessionId: request.sessionId, targetId: connection.targetId });
+			if (handler)
+				outcome = await handler(params, {
+					connection,
+					request,
+					sessionId: request.sessionId,
+					targetId: connection.targetId,
+				});
 		} catch (error) {
 			outcome = cdpError(error instanceof Error ? error.message : String(error));
 		}
@@ -336,7 +368,8 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 		if (outcome === DISCONNECT) return connection.destroy();
 		if (outcome === CLOSE) return connection.close();
 		if (outcome === MALFORMED) return connection.sendRaw("{not json");
-		if (outcome instanceof CdpErrorReply) return connection.send({ id: request.id, error: { code: outcome.code, message: outcome.message }, ...tag });
+		if (outcome instanceof CdpErrorReply)
+			return connection.send({ id: request.id, error: { code: outcome.code, message: outcome.message }, ...tag });
 		connection.send({ id: request.id, result: outcome, ...tag });
 	};
 
@@ -393,8 +426,19 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 			return;
 		}
 		upgraded.push(socket);
-		const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"]}${WEBSOCKET_GUID}`).digest("base64");
-		socket.write(["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade", `Sec-WebSocket-Accept: ${accept}`, "", ""].join("\r\n"));
+		const accept = createHash("sha1")
+			.update(`${request.headers["sec-websocket-key"]}${WEBSOCKET_GUID}`)
+			.digest("base64");
+		socket.write(
+			[
+				"HTTP/1.1 101 Switching Protocols",
+				"Upgrade: websocket",
+				"Connection: Upgrade",
+				`Sec-WebSocket-Accept: ${accept}`,
+				"",
+				"",
+			].join("\r\n"),
+		);
 		const connection = new FakeConnection(socket, { kind: match[1], targetId: match[2] });
 		connections.push(connection);
 		serveWebsocket(connection);

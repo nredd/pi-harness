@@ -33,7 +33,8 @@ async function sessionWith(onTestFinished) {
 		fake,
 		details: clone(observed.result.details),
 		stateId: observed.stateId,
-		restore: (...entries) => fake.bridge.reconstructStateFromBranch({ ...fake.ctx, sessionManager: { getBranch: () => entries } }),
+		restore: (...entries) =>
+			fake.bridge.reconstructStateFromBranch({ ...fake.ctx, sessionManager: { getBranch: () => entries } }),
 	};
 }
 
@@ -47,7 +48,11 @@ test("a desktop result restores its state, target, capture and look", async ({ o
 	assert.equal(state.value.target.appName, "App1");
 	assert.equal(state.value.capture.stateId, stateId);
 	assert.equal(state.value.look.lookId, details.lookId);
-	assert.deepEqual(state.value.look.image, { jpegBase64: "", width: details.capture.width, height: details.capture.height });
+	assert.deepEqual(state.value.look.image, {
+		jpegBase64: "",
+		width: details.capture.width,
+		height: details.capture.height,
+	});
 });
 
 test("entries that are not tool results of this extension are ignored", async ({ onTestFinished }) => {
@@ -139,7 +144,16 @@ const findRoots = (windows) => message("find_roots", { tool: "find_roots", windo
  * @returns {object} Window detail.
  * @throws {never} Pure constructor.
  */
-const root = (over = {}) => ({ windowRef: "@r4", pid: 7, app: "App", bundleId: "com.example.app", windowTitle: "Main", windowId: 11, nativeWindowRef: "ax:w11", ...over });
+const root = (over = {}) => ({
+	windowRef: "@r4",
+	pid: 7,
+	app: "App",
+	bundleId: "com.example.app",
+	windowTitle: "Main",
+	windowId: 11,
+	nativeWindowRef: "ax:w11",
+	...over,
+});
 
 /**
  * Where the next issued root ref lands after restoring `entries`.
@@ -171,7 +185,18 @@ test("malformed root entries are skipped and non-@r refs do not move the index",
 			{ windowRef: "@r3", pid: "7" },
 			null,
 			root({ windowRef: "custom-ref", pid: 8 }),
-			root({ windowRef: "@r2", pid: 9, app: 5, bundleId: 5, windowTitle: 5, windowId: "x", nativeWindowRef: 5, framePoints: { x: "a", w: 0, h: -3 }, scaleFactor: 0, isMinimized: "no" }),
+			root({
+				windowRef: "@r2",
+				pid: 9,
+				app: 5,
+				bundleId: 5,
+				windowTitle: 5,
+				windowId: "x",
+				nativeWindowRef: 5,
+				framePoints: { x: "a", w: 0, h: -3 },
+				scaleFactor: 0,
+				isMinimized: "no",
+			}),
 		]),
 		message("find_roots", { tool: "find_roots", windows: "none" }),
 	);

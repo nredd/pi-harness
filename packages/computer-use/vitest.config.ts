@@ -7,12 +7,7 @@ import { definePackageConfig } from "../../scripts/vitest-package.ts";
  * no per-file pins, so Vitest enforces them: any regression fails `npm test` even inside the aggregate cap.
  */
 const ZERO_UNCOVERED_FILES = [
-	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
-	"scripts/check-docs-platform.mjs",
-	"scripts/check-docs.mjs",
-	"scripts/docs-generators/generate-source-references.mjs",
-	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
@@ -23,6 +18,7 @@ const ZERO_UNCOVERED_FILES = [
 	"src/contract.ts",
 	"src/desktop.ts",
 	"src/find-params.ts",
+	"src/index.ts",
 	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",

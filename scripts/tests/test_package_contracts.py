@@ -1540,6 +1540,26 @@ def _build_fixture(tmp_path: Path, build: str) -> Path:
     return source
 
 
+def test_pack_rejects_omitted_source_before_build(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """Reject an existing contracted source before invoking an expensive or failing build.
+
+    Parameters:
+        tmp_path (Path): Disposable package parent.
+        sandbox (pc.Sandbox): Scrubbed npm environment.
+
+    Returns:
+        None: The canonical payload diagnostic wins over the build failure.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(97)"')
+    manifest = json.loads((source / "package.json").read_text())
+    manifest["files"].append("!src/index.ts")
+    (source / "package.json").write_text(json.dumps(manifest))
+    with pytest.raises(pc.ContractError, match=r"missing required file 'src/index\.ts'") as failure:
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "Packed files" in str(failure.value)
+    assert not list((tmp_path / "out").iterdir())
+
+
 def test_pack_builds_before_packing(tmp_path: Path, sandbox: pc.Sandbox) -> None:
     """`--ignore-scripts` skips `prepack`, so `pack` itself must build the gitignored `dist/`.
 
@@ -3116,7 +3136,7 @@ def helper_tarball(
     Parameters:
         path (Path): Destination.
         overrides (dict[str, tuple[bytes, int]] | None): `arch -> (content, mode)` replacements.
-        drop (str | None): Arch whose helper is omitted.
+        drop (str | None): Arch whose helper is omitted, or `all` for a source-only pack.
         omit_source (str | None): Swift source left out of the tarball.
         setup_script (str | None): Replacement `setup-helper.mjs` text.
         build_script (str | None): Replacement `build-native.mjs` text.
@@ -3132,7 +3152,7 @@ def helper_tarball(
     }
     with tarfile.open(path, "w:gz") as tar:
         for arch, (data, mode) in entries.items():
-            if arch == drop:
+            if drop in (arch, "all"):
                 continue
             info = tarfile.TarInfo(f"package/prebuilt/macos/{arch}/bridge")
             info.size, info.mode = len(data), mode
@@ -3413,10 +3433,48 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
     assert "no release descriptor for '@nredd/nope'" in done.stderr
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_computer_use_source_only_payload_is_explicitly_platform_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    """Only non-macOS source packs may omit both bridges; partial payloads always fail.
+
+    Parameters:
+        tmp_path (Path): Disposable packed-package directory.
+        monkeypatch (pytest.MonkeyPatch): Simulate the host and isolate the Pi/provider boundary.
+        platform (str): Host platform whose native-payload contract is exercised.
+
+    Returns:
+        None: Complete payloads are enforced or explicitly reported as source-only.
+
+    Raises:
+        AssertionError: A partial payload is accepted or platform-specific evidence is incorrect.
+        pc.ContractError: The source-only non-macOS fixture unexpectedly violates its contract.
+    """
+    monkeypatch.setattr(pc, "host_platform", lambda: platform)
+    packed = [
+        name for name in pc.COMPUTER_USE_CONTRACT.packed_files if not name.startswith("prebuilt/macos/")
+    ]
+    problems = pc.audit_files(pc.COMPUTER_USE_CONTRACT, packed)
+    assert bool(problems) == (platform == "darwin")
+    assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "prebuilt/macos/arm64/bridge"])
+    tarball = helper_tarball(tmp_path / "source-only.tgz", drop="all")
+    if platform == "darwin":
+        with pytest.raises(pc.ContractError, match="prebuilt/macos/arm64/bridge"):
+            run_computer_use_scenario(
+                tmp_path, monkeypatch, platform=platform, tools=CU_ALL_TOOLS, tarball=tarball
+            )
+    else:
+        evidence = run_computer_use_scenario(
+            tmp_path, monkeypatch, platform=platform, tools=CU_NON_DARWIN_TOOLS, tarball=tarball
+        )
+        assert evidence["helpers"] == dict.fromkeys(CU_CPU, "NOT RUN: source-only non-macOS pack")
+
+
 def test_audit_files_computer_use_exact_payload() -> None:
     """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 91
+    assert len(packed) == 54
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])

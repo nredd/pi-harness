@@ -27,7 +27,7 @@ function permissionStatusSummary(status: PermissionStatus): string {
 	if (status.screenRecordingPreflight && !status.screenRecording) {
 		lines.push(
 			"(Screen Recording reads granted in the TCC database but a live capture probe failed — " +
-			"the grant likely belongs to a different app identity, or the helper needs a restart.)",
+				"the grant likely belongs to a different app identity, or the helper needs a restart.)",
 		);
 	}
 	return lines.join("; ");
@@ -44,7 +44,9 @@ function permissionPrompt(status: PermissionStatus, helperPath: string, hint?: s
 		`Important: ${SIGNING_MIGRATION_WARNING}`,
 		"",
 		"pi-computer-use.app is already listed in the pane(s) — enable its toggle, then choose Recheck.",
-	].filter(Boolean).join("\n");
+	]
+		.filter(Boolean)
+		.join("\n");
 }
 
 function missingPermissionMessage(kinds: PermissionKind[]): string {
@@ -61,21 +63,22 @@ async function checkPermissions(signal?: AbortSignal): Promise<PermissionStatus>
 		// Keep the preflight value separate: disagreement means stale per-process
 		// TCC cache or a grant row belonging to another app identity.
 		screenRecordingPreflight: toBoolean(result?.screenRecordingPreflight),
-		source: rawSource && typeof rawSource === "object"
-			? {
-				// macOS attributes Accessibility / Screen Recording grants to the
-				// responsible process at the top of the launch chain. "helper-app"
-				// is the canonical installed app via LaunchServices; "caller" means
-				// grants would attach to the launching app instead.
-				attribution: rawSource.attribution === "helper-app" ? "helper-app" : "caller",
-				pid: Math.trunc(toFiniteNumber(rawSource.pid, 0)) || undefined,
-				parentPid: Math.trunc(toFiniteNumber(rawSource.parentPid, 0)) || undefined,
-				executablePath: toOptionalString(rawSource.executablePath),
-				parentPath: toOptionalString(rawSource.parentPath),
-				parentBundleId: toOptionalString(rawSource.parentBundleId),
-				os: toOptionalString(rawSource.macOS),
-			}
-			: undefined,
+		source:
+			rawSource && typeof rawSource === "object"
+				? {
+						// macOS attributes Accessibility / Screen Recording grants to the
+						// responsible process at the top of the launch chain. "helper-app"
+						// is the canonical installed app via LaunchServices; "caller" means
+						// grants would attach to the launching app instead.
+						attribution: rawSource.attribution === "helper-app" ? "helper-app" : "caller",
+						pid: Math.trunc(toFiniteNumber(rawSource.pid, 0)) || undefined,
+						parentPid: Math.trunc(toFiniteNumber(rawSource.parentPid, 0)) || undefined,
+						executablePath: toOptionalString(rawSource.executablePath),
+						parentPath: toOptionalString(rawSource.parentPath),
+						parentBundleId: toOptionalString(rawSource.parentBundleId),
+						os: toOptionalString(rawSource.macOS),
+					}
+				: undefined,
 	};
 }
 
@@ -101,9 +104,7 @@ export async function ensureMacosReady(
 	const now = Date.now();
 	const cachedStatus = state.permissionStatus;
 	const canUseCachedPermissions =
-		cachedStatus?.accessibility &&
-		cachedStatus.screenRecording &&
-		now - state.lastPermissionCheckAt < 2_000;
+		cachedStatus?.accessibility && cachedStatus.screenRecording && now - state.lastPermissionCheckAt < 2_000;
 	if (canUseCachedPermissions) {
 		return { ...state, helperDiagnostics };
 	}
@@ -114,17 +115,20 @@ export async function ensureMacosReady(
 	if (!permissionStatus.accessibility || !permissionStatus.screenRecording) {
 		// Attribution "caller" means the helper is not running as the
 		// canonical installed app — grants would attach to the wrong identity.
-		const attributionHint = permissionStatus.source?.attribution === "caller"
-			? `Warning: the helper is not running as the installed pi-computer-use.app (executable: ${permissionStatus.source?.executablePath ?? "unknown"}). Grants made now would attach to the launching app instead. Restart Pi so the canonical helper is used.`
-			: undefined;
+		const attributionHint =
+			permissionStatus.source?.attribution === "caller"
+				? `Warning: the helper is not running as the installed pi-computer-use.app (executable: ${permissionStatus.source?.executablePath ?? "unknown"}). Grants made now would attach to the launching app instead. Restart Pi so the canonical helper is used.`
+				: undefined;
 		permissionStatus = await ensurePermissions(
 			ctx,
 			{
 				kinds: macosPermissionKinds,
 				copy: {
-					nonInteractiveError: (helperPath) => `pi-computer-use setup requires an interactive session. Start pi in interactive mode. ${GRANT_INSTRUCTIONS}\nHelper path: ${helperPath}`,
+					nonInteractiveError: (helperPath) =>
+						`pi-computer-use setup requires an interactive session. Start pi in interactive mode. ${GRANT_INSTRUCTIONS}\nHelper path: ${helperPath}`,
 					prompt: permissionPrompt,
-					incompleteError: (helperPath) => `pi-computer-use setup is incomplete. ${GRANT_INSTRUCTIONS} Helper path: ${helperPath}`,
+					incompleteError: (helperPath) =>
+						`pi-computer-use setup is incomplete. ${GRANT_INSTRUCTIONS} Helper path: ${helperPath}`,
 					readyMessage: "pi-computer-use is ready.",
 					stillMissing: missingPermissionMessage,
 				},

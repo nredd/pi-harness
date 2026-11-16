@@ -75,6 +75,10 @@ make help                    # every target
   raw sources. Computer-use, preset and todo also begin their own `npm run check` with
   `--packed-files-only --package <workspace-directory>` using the shared uv environment. This catches
   missing assets and newly added, unpacked production modules before their language/test gates.
+  Before building, the packer uses `npm pack --dry-run --ignore-scripts` to reject existing
+  `packed_files` omitted from the payload, so a missing native source does not wait for compilation.
+  Absent generated outputs remain the real post-build tarball audit's responsibility; the preflight
+  proves no successful payload on its own.
   Add moved shipped paths there, not in package-local tarball tests
 - Keep package-local `node_modules/` host copies absent: the in-process stack loader refuses a
   second host copy

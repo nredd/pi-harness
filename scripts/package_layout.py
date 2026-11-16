@@ -86,6 +86,7 @@ REQUIRED_FILES = (
 TOP_LEVEL_ENTRIES = frozenset(
     {
         *REQUIRED_FILES,
+        "Makefile",  # #860: package-local native build/sign steps replace standalone shell scripts.
         "src",
         "tests",
         "dist",

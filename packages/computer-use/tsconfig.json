@@ -3,8 +3,10 @@
   "compilerOptions": {
     // nredd/pi-harness#870: JSON imports, unchecked indexed access and parameter properties go with the TypeScript conversion
     "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
     "noUncheckedIndexedAccess": false,
     "erasableSyntaxOnly": false
   },
-  "include": ["extensions", "src", "test", "*.ts"]
+  "include": ["src", "test/**/*.ts", "*.ts", "scripts/make-signing-cert.mjs"]
 }

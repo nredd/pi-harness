@@ -8,7 +8,11 @@ export interface StoredState<T> {
 }
 
 export class StaleResourceStateError extends Error {
-	constructor(readonly resourceKey: string, readonly expectedEpoch: number, readonly actualEpoch: number) {
+	constructor(
+		readonly resourceKey: string,
+		readonly expectedEpoch: number,
+		readonly actualEpoch: number,
+	) {
 		super(`State is stale for ${resourceKey}: expected epoch ${expectedEpoch}, current epoch ${actualEpoch}.`);
 		this.name = "StaleResourceStateError";
 	}
@@ -70,17 +74,28 @@ export class ResourceScheduler {
 	}
 
 	async read<T>(resourceKey: string, work: (epoch: number) => Promise<T>): Promise<{ value: T; epoch: number }> {
-		return await this.enqueue(resourceKey, async (record) => ({ value: await work(record.epoch), epoch: record.epoch }));
+		return await this.enqueue(resourceKey, async (record) => ({
+			value: await work(record.epoch),
+			epoch: record.epoch,
+		}));
 	}
 
-	async readAt<T>(resourceKey: string, expectedEpoch: number, work: (epoch: number) => Promise<T>): Promise<{ value: T; epoch: number }> {
+	async readAt<T>(
+		resourceKey: string,
+		expectedEpoch: number,
+		work: (epoch: number) => Promise<T>,
+	): Promise<{ value: T; epoch: number }> {
 		return await this.enqueue(resourceKey, async (record) => {
 			if (record.epoch !== expectedEpoch) throw new StaleResourceStateError(resourceKey, expectedEpoch, record.epoch);
 			return { value: await work(record.epoch), epoch: record.epoch };
 		});
 	}
 
-	async write<T>(resourceKey: string, baseEpoch: number, work: (nextEpoch: number) => Promise<T>): Promise<{ value: T; epoch: number }> {
+	async write<T>(
+		resourceKey: string,
+		baseEpoch: number,
+		work: (nextEpoch: number) => Promise<T>,
+	): Promise<{ value: T; epoch: number }> {
 		return await this.enqueue(resourceKey, async (record) => {
 			if (record.epoch !== baseEpoch) throw new StaleResourceStateError(resourceKey, baseEpoch, record.epoch);
 			const nextEpoch = record.epoch + 1;
@@ -115,7 +130,9 @@ export class ResourceScheduler {
 		const record = this.resource(resourceKey);
 		const previous = record.tail;
 		let release!: () => void;
-		const next = new Promise<void>((resolve) => { release = resolve; });
+		const next = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		// `tail` only ever resolves (`next` is released in `finally`), so `previous` never rejects.
 		record.tail = previous.then(() => next);
 		await previous;

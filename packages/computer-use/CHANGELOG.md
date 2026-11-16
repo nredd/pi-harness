@@ -4,6 +4,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ## [Unreleased]
 
+- Move the entry to `src/index.ts`, retire the inherited website/media/workflows, preserve prose, and build native payloads instead of committing them (#870).
+
 ### Removed
 
 - `UPSTREAM.md` is no longer shipped or maintained. `docs/macos-root-targeting.md` moved into the README.
@@ -62,3 +64,606 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 - Tests: `check-linux-native`, `check-macos-helper-live` and `check-windows-build-scripts` are now `test/linux-native.test.mjs`, `test/macos-helper-live.test.mjs` and `test/windows-build-scripts.test.mjs`, with the same platform and opt-in gates, and `npm test` collects them (`windows-build-scripts` stays opt-in behind `PI_CU_WINDOWS_SCRIPTS=1`, set by `test:windows-scripts`) (so `npm run check` no longer chains `test:linux-native` or `test:macos-live`). The live Linux scenario moved to `test/linux-live.test.mjs`; `check-linux-live.mjs` now only starts the D-Bus session and runs it there. `test:macos-live` drives its own helper instance on the test home's socket instead of restarting the shared daemon (nredd/pi-harness#347).
 - Prepare `0.6.0` from upstream main `67e9e2f77643f84605b738a3198048a88e92190e`, retaining all desktop tools and Linux support. `observe_ui` now defaults to compact controls (`detail: "outline"` restores structure); opt-in macOS activity glow and upstream Linux/Windows fixes are included. See `UPSTREAM.md` for carried patches, checks, signing decisions, and rollback.
 - Linux: the package now ships the locked `native/linux/bridge-rs` crate source for the opt-in `PI_COMPUTER_USE_ALLOW_BUILD=1` build (`cargo build --locked` into `${XDG_CACHE_HOME:-~/.cache}/pi-computer-use/linux-bridge-target`). An existing helper is probed (protocol 4, architecture invariants) and accepted without setup; a stale or broken one is replaced and re-probed. Fixes a setup failure on every Pi load (nredd/pi-harness#140).
+
+
+## [0.1.7]
+
+
+<!-- Preserved release notes -->
+
+# v0.1.7 — The Stealth Frontier Update
+
+## User-facing value proposition
+
+People of Pi: `pi-computer-use` remains ahead of Codex computer use. v0.1.7 adds Pi-only wins:
+- AX-first `scroll`, `keypress`, and `drag`
+- Safari/Chrome URL entry without raw Enter
+- `/computer-use` browser + stealth config
+- frontier AX benchmarks
+
+## Changelog
+
+### AX-first execution improvements
+
+- Collapsed more Accessibility behavior into the existing tools, so agents keep using normal actions instead of choosing between AX-specific and coordinate/vision-specific tools.
+- `scroll` now tries AX scrolling by ref or hit-tested point before falling back to pointer scrolling.
+- `keypress` now tries semantic AX actions before raw keyboard input:
+  - Enter/Return: AX confirm or press
+  - Escape/Esc: AX cancel
+  - Space/Spacebar: AX press
+- `keypress` can now map Enter/Escape to likely default/cancel buttons in the current window when the focused element does not expose a semantic action.
+- `drag` can now adjust AX controls that expose increment/decrement actions, while preserving pointer drag fallback in default mode.
+- AX target hints now include additional capabilities such as `scroll` and `adjust`.
+
+### Browser stealth improvements
+
+- Browser address-field workflows now have an AX-first fast path using the normal tool sequence:
+  - `keypress({ keys: ["Command+L"] })`
+  - `type_text({ text })`
+  - `keypress({ keys: ["Enter"] })`
+- For Safari and Chromium-family browsers, the pending address is opened without raw Enter fallback when possible.
+- Browser address SOTA benchmark cases now pass as stealth-compatible for Safari and Google Chrome in the local validation run.
+
+### User-visible safety config
+
+- Added simple user/project config files:
+  - `~/.pi/agent/extensions/pi-computer-use.json`
+  - `.pi/computer-use.json`
+- Added `browser_use` config to allow or block browser control.
+- Added `stealth_mode` config to require background-safe AX execution.
+- Added `/computer-use` command to show effective config and config sources.
+- Added environment overrides:
+  - `PI_COMPUTER_USE_BROWSER_USE=0|1`
+  - `PI_COMPUTER_USE_STEALTH_MODE=0|1`
+  - `PI_COMPUTER_USE_STEALTH=1`
+  - `PI_COMPUTER_USE_STRICT_AX=1`
+
+### Robustness and diagnostics
+
+- Added stale AX-ref recovery for `click(ref)`, `set_text(ref)`, and `scroll(ref)` using refreshed role/label/capability/position matching.
+- Added structured image fallback reasons in tool result details, including fallback recovery, sparse AX coverage, unlabeled targets, duplicated labels, and browser wait verification.
+- Shortened post-action settle delays for AX-only operations to make stealth mode more responsive.
+- Tightened browser address pending-state handling so pending address text is scoped to the originating browser pid/window.
+
+### Benchmark and QA
+
+- Promoted `benchmarks/qa.ts` into a SOTA/Pareto-frontier benchmark rather than only a regression smoke test.
+- Added frontier capability probes for:
+  - AX scroll refs
+  - AX adjustable refs
+  - browser address AX workflows
+- Split core regression gates from frontier capability metrics:
+  - `coreAxOnlyRatio`
+  - `coreVisionFallbackRatio`
+  - `capabilityTotal`
+  - `capabilityExecuted`
+  - `capabilityPassRatio`
+  - `capabilityStealthRatio`
+- Strict browser bootstrap refusal is now treated as an expected skip, not a benchmark failure.
+- Removed the legacy manual QA script so the benchmark is the single QA authority.
+
+### Cleanup
+
+- Removed stale native AX helper paths that were no longer called.
+- Removed legacy manual QA script and README references to manual QA snapshots.
+
+## Validation snapshot
+
+Default benchmark:
+
+```json
+{
+  "executed": 22,
+  "passed": 22,
+  "failed": 0,
+  "coreAxOnlyRatio": 0.85,
+  "coreVisionFallbackRatio": 0.15,
+  "stealthCompatibleRatio": 0.682,
+  "capabilityTotal": 12,
+  "capabilityExecuted": 2,
+  "capabilityPassRatio": 1,
+  "capabilityStealthRatio": 1
+}
+```
+
+Strict/stealth benchmark:
+
+```json
+{
+  "executed": 10,
+  "passed": 10,
+  "failed": 0,
+  "axOnlyRatio": 1,
+  "coreAxOnlyRatio": 1,
+  "visionFallbackRatio": 0,
+  "coreVisionFallbackRatio": 0,
+  "stealthCompatibleRatio": 1
+}
+```
+
+Notable frontier cases:
+
+```text
+Safari-sota-address-ax         PASS  variant=stealth stealthCompatible=true
+Google Chrome-sota-address-ax  PASS  variant=stealth stealthCompatible=true
+```
+
+## Known benchmark fixture gaps
+
+- AX scroll and AX adjustment are implemented, but the current local app matrix did not expose suitable scroll/adjust refs during validation.
+- A future native benchmark fixture should add deterministic scrollable, adjustable, and popup/menu controls.
+
+
+
+## [0.2.0]
+
+
+<!-- Preserved release notes -->
+
+# v0.2.0 — The Confidence Release
+
+v0.2.0 focuses on reliability, release safety, and function-schema compatibility.
+
+## Highlights
+
+- Fixes the `drag` function schema error reported by function-call validators:
+  - `Invalid schema for function 'drag': [{'type': 'number'}, {'type': 'number'}] is not of type 'object', 'boolean'`
+- Removes tuple-style `drag.path` points from the public tool schemas so generated JSON Schema no longer emits array-form `items`.
+- Adds strict TypeScript checking via `npm run typecheck`.
+- Adds a schema compatibility regression check via `npm run test:schema`.
+- Adds `npm test` as the combined local verification command.
+- Adds GitHub Actions CI to run checks on pushes and pull requests.
+
+## Tool schema change
+
+`drag.path` should now be provided as object points:
+
+```json
+{
+  "path": [
+    { "x": 10, "y": 20 },
+    { "x": 100, "y": 200 }
+  ]
+}
+```
+
+Tuple-style points such as `[10, 20]` are no longer advertised in the tool schema because they can produce JSON Schema that some function-call providers reject.
+
+## Validation
+
+Validated locally with:
+
+```bash
+npm test
+```
+
+which runs:
+
+```bash
+npm run typecheck
+npm run test:schema
+```
+
+
+
+## [0.2.1]
+
+
+<!-- Preserved release notes -->
+
+# v0.2.1 — the window update
+
+## Changelog
+
+### App and window discovery
+
+- Added `list_apps()` so agents can inspect running apps before choosing a target.
+- Added `list_windows({ app | bundleId | pid })` so agents can inspect controllable windows, titles, ids, geometry, and focus/visibility flags.
+- `list_windows` now returns model-facing window refs such as `@w1`.
+- Window discovery results include enough context for the model to choose the intended target without guessing from partial titles.
+
+### Explicit window targeting
+
+- `screenshot` now accepts explicit window targets:
+  - `screenshot({ window: "@w1" })`
+  - `screenshot({ window: 12345 })`
+- Action tools now accept the same optional `window` selector, for example:
+  - `click({ window: "@w1", ref: "@e1" })`
+  - `keypress({ window: "@w1", keys: ["Enter"] })`
+- Batched actions can be scoped to a top-level `window`, and per-action window mismatches are rejected with clear guidance.
+- Tool results now include `target.windowRef` where available.
+
+### State safety and stale-target guidance
+
+- Replaced the public `captureId` field with `stateId`.
+- Action tools that depend on the latest inspected state now accept `stateId` for stale-state validation.
+- Tool result details now expose `capture.stateId` instead of `capture.captureId`.
+- Stale state errors now point the model toward refreshing the correct window, e.g. `screenshot({ window: "@w1" })`.
+- Stale AX-ref errors now explain that refs are scoped to the latest state and should be refreshed with `screenshot`.
+
+### Window layout and visual control
+
+- Added `arrange_window` for deterministic layouts before interaction.
+- `arrange_window` supports presets:
+  - `center_large`
+  - `left_half`
+  - `right_half`
+  - `top_half`
+  - `bottom_half`
+- `arrange_window` also supports explicit frames with `x`, `y`, `width`, and `height` in screen points.
+- Added native helper support for setting a target window frame through Accessibility.
+- Added screenshot attachment control through `image: "auto" | "always" | "never"`.
+
+### Multi-agent and multi-window safety groundwork
+
+- Added per-window write queues so writes targeting the same window are serialized internally.
+- This reduces the chance of conflicting writes when multiple flows target the same `@w` ref.
+- Current Pi execution still keeps a global runtime lock around helper readiness/shared state, so this is groundwork rather than full parallel multi-window execution.
+
+### Scroll diagnostics and recovery
+
+- Scroll failures now preserve the best available AX failure reason.
+- Strict AX scroll failures include the AX reason when one is available.
+- Coordinate fallback errors now provide clearer recovery guidance when an AX scroll path is unavailable.
+
+### Docs, benchmark, and cleanup
+
+- Updated README, usage docs, troubleshooting docs, and the computer-use skill for the new discovery/window/state workflow.
+- Updated the benchmark harness to use `stateId` instead of the removed `captureId` field.
+- Removed stale public `captureId` schemas and examples.
+- Bumped package version to `0.2.1`.
+
+## Validation snapshot
+
+Default benchmark:
+
+```json
+{
+  "executed": 9,
+  "passed": 9,
+  "failed": 0,
+  "coreAxOnlyRatio": 1,
+  "coreVisionFallbackRatio": 0,
+  "axExecutionRatio": 1,
+  "stealthCompatibleRatio": 1,
+  "avgLatencyMs": 442,
+  "avgNavigationLatencyMs": 519,
+  "avgTargetingLatencyMs": 288,
+  "batchPassRatio": 1
+}
+```
+
+Configured benchmark gates passed:
+
+```text
+coreAxOnlyRatio       1 >= 0.8
+avgLatencyMs          442ms <= 7500ms
+avgTargetingLatencyMs 288ms <= 4000ms
+```
+
+Notable cases:
+
+```text
+Finder-targeting            PASS  variant=stealth stealthCompatible=true
+Reminders-targeting         PASS  variant=stealth stealthCompatible=true
+Helium-targeting            PASS  variant=stealth stealthCompatible=true
+Helium-sota-address-ax      PASS  variant=stealth stealthCompatible=true
+```
+
+## Known follow-ups
+
+- Per-window write queues are in place, but Pi tool execution still uses a global runtime lock around helper readiness and shared state. A future release can split read-only discovery/screenshot paths from write paths to unlock more true parallel multi-window execution.
+- `image` mode is currently stored in runtime state during a tool call. This is safe with current sequential execution, but should become strictly per-call state before relaxing the global runtime lock.
+- AX scroll and AX adjustment are implemented, but the current local benchmark app matrix did not expose suitable scroll/adjust refs during validation.
+
+
+
+## [0.2.2]
+
+
+<!-- Preserved release notes -->
+
+Direct browser navigation and more reliable browser/window automation.
+
+## Features
+
+- Added `navigate_browser` to open a URL or search string directly in a targeted browser window.
+
+## Changelog
+
+- Added `navigate_browser` tool registration, docs, skill guidance, and bridge execution in `0e0111d`.
+- Fixed browser window targeting by using native window refs across AX, mouse, scroll, drag, arrange, and capture paths in `0e0111d`.
+- Fixed browser navigation stability with direct AppleScript-backed location opening in `0e0111d`.
+- Fixed browser Apple Events JavaScript failures by surfacing a model-readable “Allow JavaScript from Apple Events” hint in `c53ba0b`.
+- Fixed README Pi install/remove tag syntax from `#v0.2.1` to `@v0.2.1` in `41df92d`.
+- Chore release notes by removing the old v0.2.1 proposition section in `485ac98`.
+
+> “Don’t Panic.”
+
+
+
+## [0.2.3]
+
+
+<!-- Preserved release notes -->
+
+Stronger AX-only semantic targeting and smoother macOS setup recovery.
+
+## Features
+
+- Added richer AX extraction diagnostics for inspecting semantic target coverage against the underlying AX tree.
+- Added SSH-aware setup handling to guide remote sessions toward the GUI helper path when macOS permissions cannot apply to SSH-spawned helpers.
+
+## Resolved issues
+
+- Resolved [#10](https://github.com/injaneity/pi-computer-use/issues/10), where SSH-launched helpers could not satisfy macOS Accessibility/Screen Recording checks despite manual grants, by detecting SSH sessions and routing setup through the GUI helper path.
+- Resolved [#9](https://github.com/injaneity/pi-computer-use/issues/9) with clearer setup and recovery guidance for Screen Recording and Accessibility permission grants.
+
+## Changelog
+
+- Added model benchmark matrix artifacts and reporting in `273aedf`.
+- Added improved permission-granting setup UX in `dae7a24`.
+- Added SSH connection detection that launches the GUI helper instead of relying on the SSH helper in `17c1eb7`.
+- Fixed sparse AX target fallback so strong semantic text targets can remain image-free in `e38e6c8`.
+- Fixed Firefox and other browser address-bar targeting by treating `AXComboBox` as a browser text field in `e38e6c8`.
+- Refactored native AX target diagnostics, scoring, and text-input classification in `e38e6c8`.
+- Chore improved setup onboarding copy in `5c01578`.
+
+> “Time is an illusion. Lunchtime doubly so.”
+
+
+
+## [0.2.4]
+
+
+<!-- Preserved release notes -->
+
+Pi namespace migration release.
+
+## Changelog
+
+- Bumped `pi-computer-use` to `0.2.4`.
+- Updated Pi SDK peer dependencies and imports from `@mariozechner/*` to `@earendil-works/*`.
+- Updated README install examples and Pi package links for the new release.
+
+> “Mostly harmless.”
+
+
+
+## [0.2.5]
+
+
+<!-- Preserved release notes -->
+
+macOS 12 compatibility release for the native helper.
+
+## Changelog
+
+- Added separate native helper variants: a macOS 14+ modern helper with ScreenCaptureKit and a macOS 12+ legacy helper using CGWindow/screencapture capture paths.
+- Updated helper setup to select the appropriate helper variant automatically by macOS version, with `PI_COMPUTER_USE_HELPER_VARIANT=modern|legacy|auto` for troubleshooting.
+- Rebuilt and packaged variant-specific arm64 and x64 helper prebuilts.
+- Removed the bundled `computer-use` skill so model behavior is driven by tool descriptions, schemas, and helper feedback rather than packaged skill instructions.
+- Updated helper build and development docs for variant builds.
+
+> “The knack lies in learning how to throw yourself at the ground and miss.”
+
+
+
+## [0.3.0]
+
+
+<!-- Preserved release notes -->
+
+Optional CDP acceleration and codebase cleanup release.
+
+## Features
+
+- Optional Chrome DevTools Protocol backend for Chromium-family browsers: set `PI_COMPUTER_USE_CDP_PORT` to a browser's `--remote-debugging-port` to get event-driven `navigate_browser` and browser console output piggybacked on tool results, with no change to the tool surface.
+
+## Changelog
+
+- Added the opt-in CDP backend with window-aware tab matching and console/exception capture.
+- Hardened native bridge safeguards and tightened CDP and input guard cleanup.
+- Removed the orphaned isolated-browser-window bootstrap path and dead activation plumbing from the bridge, and collapsed duplicated tool executor layers (~500 lines removed with no behavior change).
+- Fixed the published package image path, which still pointed at `assets/img.jpg` after the file moved to `assets/reference/`.
+- Untracked a committed local session transcript and cleaned up stale `.gitignore` entries.
+- Aligned docs and tool prompt guidelines with the removed browser bootstrap behavior.
+
+> "He felt that his whole life was some kind of dream and he sometimes wondered whose it was and whether they were enjoying it."
+
+
+
+## [0.3.2]
+
+
+<!-- Preserved release notes -->
+
+Context-aware browser and desktop control release with leaner snapshots and stronger recovery tools.
+
+## Features
+
+- Context-first browser/desktop snapshots with explicit `browser_page` and `desktop_window` contexts, managed CDP browser launch, browser JavaScript evaluation, and browser-backed click/set_text/scroll/navigation.
+- Source-classified macOS AX targets distinguish desktop AX, browser chrome AX, and web-content AX so chrome-only browser trees trigger recovery instead of looking like useful document content.
+- Scoped desktop AX snapshots, paginated `read_text`, `wait_for`, action `responseMode: "confirmation"`, and reduced fallback screenshots improve token efficiency and recovery loops.
+
+## Changelog
+
+- added context discovery, CDP snapshots/actions, and managed browser contexts in `0811299`.
+- added browser/web-content AX source classification and browser-chrome-only diagnostics in `9d4b54d`.
+- added scoped AX tree snapshots and stronger model guidance for focused inspection in `0811299`.
+- added paginated/cached text extraction for desktop AX and browser contexts in `b446664`.
+- added compact AX text previews to prevent long target values from bloating tool results in `c8fa6f3`.
+- added `wait_for` for desktop AX and browser-context condition polling in `97a764f`.
+- added reduced automatic screenshot payloads with preserved coordinate scaling in `1435dd9`.
+- fixed ScreenCaptureKit helper builds so the deprecated `CGWindowListCreateImage` fallback is not compiled into the modern helper in `644b473`.
+- chore updated CI audit to omit auto-installed peer dependencies so release checks focus on this package's production dependency surface in `11b1f50`.
+
+> "Time is an illusion. Lunchtime doubly so."
+
+
+
+## [0.4.0]
+
+
+<!-- Preserved release notes -->
+
+Stable helper permissions and rebuilt observe/act architecture release.
+
+## Features
+
+- Reworked the computer-use flow around atomic `observe` snapshots, searchable folded outlines, scoped inspection, and helper-owned `act` transactions.
+- Moved macOS permission attribution to the canonical `/Applications/pi-computer-use.app` helper identity so Accessibility and Screen Recording grants attach to the right app.
+- Improved input delivery, grounding, helper-side preflight, execution feedback, and permission recovery guidance.
+- Added signed helper release packaging so installs can preserve macOS TCC grants across helper updates.
+
+## Changelog
+
+- added the rewritten computer-use look and act architecture in `c3b1da6`.
+- refactored helper app permissioning around the canonical signed app identity in `ed1098e`.
+- added improved input delivery and grounding in `d4f4fac`.
+- consolidated architecture documentation in `c44a6a6`.
+- simplified the computer-use introduction in `d45aabf`.
+- hardened CI checks and split the npm audit workflow in `25d85ff`.
+- added release staging for the signed helper before npm publication in `f1b22be`.
+- moved release publishing through npm trusted publishing in `d6ebbf0`.
+- chore prepared the v0.4.0 release in `606a621`.
+
+> "Don't Panic."
+
+
+
+## [0.4.1]
+
+
+<!-- Preserved release notes -->
+
+Root-forest desktop control architecture release.
+
+## Features
+
+- Reworked the public desktop flow around root refs, atomic observe snapshots, searchable folded outlines, scoped inspection, and typed helper-owned act transactions.
+- Added root delta reporting and adaptive settling so helpers can report appeared, closed, and focused roots without extra bridge-side sleeps.
+- Hardened macOS root handling for sheets, dialogs, menus, focused windows, transient root identity, and snapshot-authoritative delta settling.
+- Preserved stable macOS helper permissions across rebuilds and releases by avoiding unnecessary helper app replacement.
+
+## Changelog
+
+- fixed release workflow commit validation, changelog generation, and dependency metadata in `9b4e2ee` and `ee81b3d`.
+- split the platform backend seam and made observe/act result contracts explicit in `6d4d393`, `f42d47b`, `b497ab8`, `4e342fd`, and `fd76ef4`.
+- added the cubench Pi client for behavioral benchmarking in `42a9cb9`.
+- moved macOS permission handling behind the platform seam and restored permission constraints in `5ae0945` and `26376f3`.
+- removed the ignored `set_text` method parameter in `03822a7`.
+- refactored the desktop targeting model from windows to roots in `b1ae46e`.
+- completed the root-forest platform seam and macOS helper behavior in `deb29fc`.
+- preserved helper TCC grants when the signing identity is unchanged in `2c42013`.
+- fixed macOS transient root identity and sheet discovery in `212b74c` and `4c8da3a`.
+- added AXObserver-driven root deltas with snapshot fallback in `f179eea`.
+- optimized settle behavior when helpers report their own delta source in `d3ae90f`.
+- fixed macOS root deltas to use snapshot-authoritative CG-poll early exit in `022a280`.
+- chore prepared the v0.4.1 release.
+
+> "The ships hung in the sky in much the same way that bricks don't."
+
+
+
+## [0.4.2]
+
+
+<!-- Preserved release notes -->
+
+Windows root-forest bridge and release-pipeline support.
+
+## Features
+
+- Added first-class Windows support: a Rust UIA bridge, TypeScript Windows backend/helper integration, root-forest observation, screenshot capture, UIA grounding, act dispatch, and scoped root deltas.
+- Added Windows native build and install flow, including `build-native.mjs --platform windows`, postinstall prebuilt installation, optional source-build fallback, and release-pipeline injection of `prebuilt/windows/windows-bridge.exe`.
+- Kept the platform seam neutral while aligning macOS and Windows around `find_roots`, `observe_ui`, and `act_ui` root-forest contracts.
+- Expanded Windows documentation, troubleshooting, development notes, and README coverage.
+
+## Changelog
+
+- refactored platform contracts and call sites for a platform-neutral root-forest seam across `src/platform/*`, `src/bridge.ts`, `src/contract.ts`, and `extensions/computer-use.ts` in `ec6395c`.
+- fixed CI invariants for the simplified seam and bounded macOS semantic-tree walking in `ebfc888` and `4cf8b41`.
+- renamed public tools from `find`, `observe`, and `act` to `find_roots`, `observe_ui`, and `act_ui` across extension schemas, docs, and bridge code in `41b6f5b`.
+- added the Windows Rust bridge crate, protocol/state/ref tests, UIA traversal, capture, input dispatch, and window helpers under `native/windows/bridge-rs` in `8f429f3`, `c903522`, and `c04bb4f`.
+- wired Windows backend selection, helper spawning, setup/install behavior, build scripts, and static platform checks in `96664eb`, `0c9ec73`, `84743d5`, and `2f3f47b`.
+- fixed Windows UIA occlusion, ancestor comparison, delta scoping, ref lookup performance, seam annotations, and grounding metadata in `d8d7b41`, `174ad69`, and `495b4be`.
+- documented Windows root-forest acceptance, live UIA acceptance, configuration, troubleshooting, and README support in `b34f987`, `8e8ed9b`, and `3984f04`.
+- updated release validation and packaging so docs/perf commits are accepted, Rust build artifacts stay out of npm, and the release pipeline publishes `windows-bridge.exe` alongside macOS helper assets in `c563352`, `8877f00`, and `2f3f47b`.
+
+> "Don't Panic."
+
+
+
+## [0.4.3]
+
+
+<!-- Preserved release notes -->
+
+Simpler diff-first computer use with parallel tasks, a ghost cursor, and more reliable batched actions.
+
+## Features
+
+- Added a configurable native ghost cursor so agents can show pointer movement without taking over the user's physical cursor.
+- Added diff-first resulting views with stable references, explicit full-view fallbacks, and immutable resource-keyed state.
+- Added parallel native transports and resource-keyed scheduling so independent roots can progress concurrently.
+- Consolidated action preparation, execution, verification, and batching behind one agent-facing contract.
+
+## Changelog
+
+- added the macOS ghost cursor overlay with headless-safe configuration and native cursor ownership.
+- refactored observation state into focused action, state, and view modules while removing superseded compatibility paths.
+- added diff-first resulting views and authoritative post-action reconciliation for exact text entry.
+- improved web and coordinate action reliability by foregrounding only when pointer focus is required.
+- aligned strict headless behavior across macOS and Windows with accessibility-only initial actions.
+- added runtime, architecture-invariant, platform, packaging, and Cubench regression coverage.
+
+> "Time is an illusion. Lunchtime doubly so."
+
+
+
+## [0.5.0]
+
+
+<!-- Preserved release notes -->
+
+Linux computer use, safer native actions, and tighter state and output boundaries.
+
+## Features
+
+- Added Linux desktop support through AT-SPI2, with X11 window discovery, capture, focus, and guarded XTEST input.
+- Added native Linux x64 and arm64 helpers to npm and GitHub release artifacts.
+- Added Linux-aware managed browser discovery with explicit Chrome and Helium executable overrides.
+- Added pull-request CI for Linux x64 tests, linting, formatting, and builds, plus native arm64 builds.
+
+## Changelog
+
+- added background-first semantic Linux observation, action, text reading, waiting, and progressive disclosure.
+- added X11 window correlation, background capture, coordinate grounding, and foreground-only physical input fallback.
+- documented the semantic-only native Wayland boundary and read-only portal capability diagnostics.
+- improved post-action handling when an action closes its source root before a successor observation can be captured.
+- hardened root identity resolution, bounded tool output, JSON-safe wait details, serialized native boundaries, and macOS helper installation.
+- tightened the macOS ghost cursor lifecycle so it remains background-only and does not linger while idle.
+- updated build dependencies and GitHub Actions while removing unused bridge symbols.
+
+> "The future is already here — it's just not evenly distributed."
+
+
+
+## [0.5.1]
+
+
+<!-- Preserved release notes -->
+
+Windows helper packaging verification and release reliability.
+
+## Features
+
+- Added npm package verification for macOS, Windows, and Linux native helpers before publication.
+
+## Changelog
+
+- prevented releases from publishing when the Windows helper is absent from the npm tarball.
+- updated the development lockfile for the latest Pi dependency version.
+
+> "A release should verify the files it ships."

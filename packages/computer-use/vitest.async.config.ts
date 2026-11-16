@@ -10,7 +10,7 @@ export default definePackageConfig("computer-use-async", {
 		maxWorkers: 1,
 		testTimeout: 20_000,
 		coverage: {
-			thresholds: { "scripts/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 } },
+			thresholds: { "tests/fixtures/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 } },
 		},
 	},
 });

@@ -67,7 +67,18 @@ export interface UiCondition {
 }
 
 export interface UiAction {
-	action: "press" | "click" | "setText" | "typeText" | "paste" | "keypress" | "secondaryAction" | "selectText" | "scroll" | "drag" | "moveMouse";
+	action:
+		| "press"
+		| "click"
+		| "setText"
+		| "typeText"
+		| "paste"
+		| "keypress"
+		| "secondaryAction"
+		| "selectText"
+		| "scroll"
+		| "drag"
+		| "moveMouse";
 	ref?: string;
 	/** `secondaryAction`: accessibility action the element advertises, e.g. `AXShowMenu`. */
 	name?: string;

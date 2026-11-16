@@ -6,14 +6,27 @@ import path from "node:path";
 import { afterEach, test } from "vitest";
 
 const ENV = "PI_COMPUTER_USE_BLOCKED_APPS";
-const SYSTEM_AGENTS = ["com.apple.SecurityAgent", "com.apple.loginwindow", "com.apple.coreservices.uiagent", "com.apple.ScreenSaver.Engine"];
+const SYSTEM_AGENTS = [
+	"com.apple.SecurityAgent",
+	"com.apple.loginwindow",
+	"com.apple.coreservices.uiagent",
+	"com.apple.ScreenSaver.Engine",
+];
 
 afterEach(() => {
 	delete process.env[ENV];
 });
 
-test("blocked_apps config: defaults, user JSON, env and the always-blocked system agents", async ({ onTestFinished }) => {
-	const { DEFAULT_BLOCKED_APPS, ALWAYS_BLOCKED_BUNDLE_IDS, loadComputerUseConfig, isBlockedBundleId, effectiveBlockedBundleIds } = await import("../src/config.ts");
+test("blocked_apps config: defaults, user JSON, env and the always-blocked system agents", async ({
+	onTestFinished,
+}) => {
+	const {
+		DEFAULT_BLOCKED_APPS,
+		ALWAYS_BLOCKED_BUNDLE_IDS,
+		loadComputerUseConfig,
+		isBlockedBundleId,
+		effectiveBlockedBundleIds,
+	} = await import("../src/config.ts");
 	assert.deepEqual([...ALWAYS_BLOCKED_BUNDLE_IDS], SYSTEM_AGENTS);
 	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
@@ -29,7 +42,13 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 	const list = () => load().config.blocked_apps;
 
 	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], "default list applies with no config");
-	for (const id of ["com.apple.keychainaccess", "com.1password.1password", "com.apple.Terminal", "com.googlecode.iterm2"]) assert.ok(isBlockedBundleId(id), id);
+	for (const id of [
+		"com.apple.keychainaccess",
+		"com.1password.1password",
+		"com.apple.Terminal",
+		"com.googlecode.iterm2",
+	])
+		assert.ok(isBlockedBundleId(id), id);
 	assert.ok(isBlockedBundleId("COM.APPLE.TERMINAL"), "match is case-insensitive");
 	assert.ok(!isBlockedBundleId("com.apple.TextEdit") && !isBlockedBundleId(undefined));
 
@@ -40,9 +59,17 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 	// Env is additive: a repo can set it (.envrc, launch script), so it can add ids but never remove one.
 	writeFileSync(userFile, "{}");
 	process.env[ENV] = "com.example.A, com.example.B";
-	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS, "com.example.A", "com.example.B"], "env is unioned into the defaults");
+	assert.deepEqual(
+		list(),
+		[...DEFAULT_BLOCKED_APPS, "com.example.A", "com.example.B"],
+		"env is unioned into the defaults",
+	);
 	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["com.example.Vault"] }));
-	assert.deepEqual(list(), ["com.example.Vault", "com.example.A", "com.example.B"], "env is unioned into the user file list");
+	assert.deepEqual(
+		list(),
+		["com.example.Vault", "com.example.A", "com.example.B"],
+		"env is unioned into the user file list",
+	);
 	for (const blank of ["", "   ", ",", " , ,"]) {
 		process.env[ENV] = blank;
 		assert.deepEqual(list(), ["com.example.Vault"], `blank env ${JSON.stringify(blank)} is unset`);
@@ -77,7 +104,15 @@ test("blocked_apps: invalid entries are a config error that keeps the defaults",
 	mkdirSync(path.join(agentDir, "extensions"));
 	const userFile = path.join(agentDir, "extensions", "pi-computer-use.json");
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
-	for (const bad of [[{ id: "com.example.Vault" }], [123], [" "], [""], ["com.example.Vault", 7], "com.example.Vault", { a: 1 }]) {
+	for (const bad of [
+		[{ id: "com.example.Vault" }],
+		[123],
+		[" "],
+		[""],
+		["com.example.Vault", 7],
+		"com.example.Vault",
+		{ a: 1 },
+	]) {
 		writeFileSync(userFile, JSON.stringify({ blocked_apps: bad }));
 		const loaded = loadComputerUseConfig(cwd);
 		assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS], `${JSON.stringify(bad)} keeps defaults`);
@@ -124,52 +159,149 @@ test("project config can only add to blocked_apps, never remove", async ({ onTes
 test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
-	assert.deepEqual([...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]), SYSTEM_AGENTS);
-	assert.match(swift, /readSession: @escaping \(\) -> \[String: Any\]\? = \{ CGSessionCopyCurrentDictionary\(\) as\? \[String: Any\] \}/, "helper must read the actual session by default");
-	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: readSession\(\)\)/, "helper must refuse UI commands while locked");
-	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/, "helper must refuse blocked frontmost or focused apps for keys");
-	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
-	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 3, "act typeText, paste and keypress must refuse a blocked focused app under HID delivery");
-	assert.match(swift, /try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try withTemporaryClipboard/, "paste must refuse a blocked focused app before it touches the clipboard");
+	assert.deepEqual(
+		[...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]),
+		SYSTEM_AGENTS,
+	);
+	assert.match(
+		swift,
+		/readSession: @escaping \(\) -> \[String: Any\]\? = \{ CGSessionCopyCurrentDictionary\(\) as\? \[String: Any\] \}/,
+		"helper must read the actual session by default",
+	);
+	assert.match(
+		swift,
+		/lockedSessionRefusal\(cmd: cmd, session: readSession\(\)\)/,
+		"helper must refuse UI commands while locked",
+	);
+	assert.match(
+		swift,
+		/keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/,
+		"helper must refuse blocked frontmost or focused apps for keys",
+	);
+	assert.match(
+		swift,
+		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/,
+		"helper must refuse blocked apps before typing or keys",
+	);
+	assert.equal(
+		swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length,
+		3,
+		"act typeText, paste and keypress must refuse a blocked focused app under HID delivery",
+	);
+	assert.match(
+		swift,
+		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try withTemporaryClipboard/,
+		"paste must refuse a blocked focused app before it touches the clipboard",
+	);
 	const pasteBody = swift.match(/let restored = try withTemporaryClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
 	const recheckAt = pasteBody.indexOf("try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData)");
 	const postAt = pasteBody.indexOf("try postKeyCode(");
-	assert.ok(lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt, "paste must look up the layout key first and re-check the focused app immediately before cmd+v");
-	assert.ok(!pasteBody.slice(recheckAt, postAt).includes("currentKeyboardInputSource"), "nothing slow may sit between the last blocked-app check and the post");
-	assert.match(swift, /Keep the pasted text off Universal Clipboard[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the temporary paste item must stay off Universal Clipboard");
-	assert.match(swift, /else \{ return false \}\n\t+\/\/ Always host-only[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the restore must be host-only so a host-only secret is never republished as syncable");
-	assert.match(swift, /return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/, "the temporary clipboard must restore on every exit, including a refusal in the body");
+	assert.ok(
+		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
+		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",
+	);
+	assert.ok(
+		!pasteBody.slice(recheckAt, postAt).includes("currentKeyboardInputSource"),
+		"nothing slow may sit between the last blocked-app check and the post",
+	);
+	assert.match(
+		swift,
+		/Keep the pasted text off Universal Clipboard[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/,
+		"the temporary paste item must stay off Universal Clipboard",
+	);
+	assert.match(
+		swift,
+		/else \{ return false \}\n\t+\/\/ Always host-only[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/,
+		"the restore must be host-only so a host-only secret is never republished as syncable",
+	);
+	assert.match(
+		swift,
+		/return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/,
+		"the temporary clipboard must restore on every exit, including a refusal in the body",
+	);
 	const restoreHelper = swift.match(/func withRestoredClipboard[\s\S]*?\n\}\n/)?.[0] ?? "";
-	assert.match(restoreHelper, /catch \{\n\t\t_ = restore\(\)\n\t\tthrow error/, "a throwing write or body restores the clipboard before rethrowing");
-	assert.match(swift, /if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/, "web setText must wait for focus and refuse a blocked focused app before its HID keys");
+	assert.match(
+		restoreHelper,
+		/catch \{\n\t\t_ = restore\(\)\n\t\tthrow error/,
+		"a throwing write or body restores the clipboard before rethrowing",
+	);
+	assert.match(
+		swift,
+		/if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/,
+		"web setText must wait for focus and refuse a blocked focused app before its HID keys",
+	);
 	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
-	const keyboardOrder = ['guard delivery == "hid"', "focusTargetForPhysicalInput()", "try requireTargetFocus(pid: pid)", "try refuseBlockedKeyboardTarget("].map((needle) => keyboardHelper.indexOf(needle));
-	assert.ok(keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]), "act keyboard focus must settle on the target before the blocked-app check");
-	assert.match(keyboardHelper, /if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry refuseBlockedKeyboardTarget/, "preserveFocus skips only the focus wait, never the blocked-app check");
-	assert.match(swift, /Every vertex, not just the endpoints[\s\S]*?try refuseBlockedPoints\(vertices/, "desktop_input drag must check every path vertex");
+	const keyboardOrder = [
+		'guard delivery == "hid"',
+		"focusTargetForPhysicalInput()",
+		"try requireTargetFocus(pid: pid)",
+		"try refuseBlockedKeyboardTarget(",
+	].map((needle) => keyboardHelper.indexOf(needle));
+	assert.ok(
+		keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]),
+		"act keyboard focus must settle on the target before the blocked-app check",
+	);
+	assert.match(
+		keyboardHelper,
+		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry refuseBlockedKeyboardTarget/,
+		"preserveFocus skips only the focus wait, never the blocked-app check",
+	);
+	assert.match(
+		swift,
+		/Every vertex, not just the endpoints[\s\S]*?try refuseBlockedPoints\(vertices/,
+		"desktop_input drag must check every path vertex",
+	);
 	const coordinates = swift.match(/func executeCoordinates[\s\S]*?\n\t\tfunc refreshElement/)?.[0] ?? "";
 	const focusAt = coordinates.indexOf("focusTargetForPhysicalInput()");
 	const preflightAt = coordinates.indexOf("try preflight(point)");
 	assert.ok(focusAt > 0 && preflightAt > focusAt, "executeCoordinates must focus, then preflight");
-	assert.ok(!coordinates.slice(0, preflightAt).includes("refuseBlocked"), "act coordinate input must not refuse before focus and preflight");
+	assert.ok(
+		!coordinates.slice(0, preflightAt).includes("refuseBlocked"),
+		"act coordinate input must not refuse before focus and preflight",
+	);
 	for (const post of ["postMouseClick(", "postMouseMove(", "postScrollWheel(", "postMouseDrag("]) {
 		const postAt = coordinates.indexOf(`try ${post}`);
 		const refuseAt = coordinates.lastIndexOf("try refuseBlockedBeforePost(", postAt);
-		assert.ok(refuseAt > preflightAt && postAt > refuseAt, `act coordinate input must refuse a blocked app after preflight and immediately before ${post}`);
+		assert.ok(
+			refuseAt > preflightAt && postAt > refuseAt,
+			`act coordinate input must refuse a blocked app after preflight and immediately before ${post}`,
+		);
 		assert.ok(!coordinates.slice(refuseAt, postAt).includes("case "), `the pointer check must sit in the ${post} case`);
 	}
 	assert.match(coordinates, /try refuseBlockedBeforePost\(points\)/, "act drag must check every vertex");
-	assert.match(swift, /guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry refuseBlockedPoints\(/, "act pointer refusal is gated on HID delivery");
-	assert.match(swift, /private func refuseBlockedPoints[\s\S]*?let windows = onScreenWindowList\(\)[\s\S]*?for \(index, point\) in points\.enumerated\(\)[\s\S]*?windows: windows, axHitTest: hitIndices\.contains\(index\)/, "one window list per action, AX hit test at endpoints only");
-	assert.match(swift, /try refuseBlockedPoints\(vertices, blocked: blocked\)/, "desktop_input drag must share the per-action window list");
-	assert.match(swift, /SCContentFilter\(display: display, excludingApplications: excluded, exceptingWindows: \[\]\)/, "display capture must exclude blocked apps");
-	assert.match(swift, /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/, "pointer input must also hit-test through accessibility");
+	assert.match(
+		swift,
+		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry refuseBlockedPoints\(/,
+		"act pointer refusal is gated on HID delivery",
+	);
+	assert.match(
+		swift,
+		/private func refuseBlockedPoints[\s\S]*?let windows = onScreenWindowList\(\)[\s\S]*?for \(index, point\) in points\.enumerated\(\)[\s\S]*?windows: windows, axHitTest: hitIndices\.contains\(index\)/,
+		"one window list per action, AX hit test at endpoints only",
+	);
+	assert.match(
+		swift,
+		/try refuseBlockedPoints\(vertices, blocked: blocked\)/,
+		"desktop_input drag must share the per-action window list",
+	);
+	assert.match(
+		swift,
+		/SCContentFilter\(display: display, excludingApplications: excluded, exceptingWindows: \[\]\)/,
+		"display capture must exclude blocked apps",
+	);
+	assert.match(
+		swift,
+		/AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/,
+		"pointer input must also hit-test through accessibility",
+	);
 	assert.match(swift, /return \("screen_locked", "screen_locked:/);
 	assert.match(swift, /code: "app_blocked"/);
 });
 
-test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform backend seam", async ({ onTestFinished }) => {
+test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform backend seam", async ({
+	onTestFinished,
+}) => {
 	const { currentPlatformBackend } = await import("../src/platform/index.ts");
 	const { executeFind, executeObserve, executeAct, executeReadText } = await import("../src/bridge.ts");
 	const { parseLookResponse } = await import("../src/outline.ts");
@@ -198,16 +330,69 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	});
 	const roots = [window("com.example.Safe", 1), window("com.apple.Terminal", 2), window("com.apple.SecurityAgent", 3)];
 	const calls = { observe: 0, act: 0 };
-	const look = () => parseLookResponse({
-		lookId: `look${++calls.observe}`,
-		capturedAt: 1,
-		window: { windowId: 100, rootRef: "ax:w1", kind: "window", framePoints: roots[0].framePoints, scaleFactor: 1, isModal: false, role: "AXWindow", subrole: "AXStandardWindow", metadata: {} },
-		outline: { ref: "w", wireRef: "w", role: "AXWindow", subrole: "AXStandardWindow", title: "Main", label: "", value: "", actions: [], rect: { x: 0, y: 0, w: 300, h: 200 }, children: [{ ref: "b", wireRef: "b", role: "AXButton", subrole: "", title: "Go", label: "Go", value: "", actions: ["AXPress", "AXShowMenu"], rect: { x: 10, y: 10, w: 50, h: 20 }, children: [] }, { ref: "t", wireRef: "t", role: "AXTextField", subrole: "", title: "Name", label: "Name", value: "abc", actions: [], canSetValue: true, isTextInput: true, rect: { x: 10, y: 40, w: 50, h: 20 }, children: [] }] },
-		timings: { captureMs: 0, describeMs: 0, readTextMs: 0 },
-	});
+	const look = () =>
+		parseLookResponse({
+			lookId: `look${++calls.observe}`,
+			capturedAt: 1,
+			window: {
+				windowId: 100,
+				rootRef: "ax:w1",
+				kind: "window",
+				framePoints: roots[0].framePoints,
+				scaleFactor: 1,
+				isModal: false,
+				role: "AXWindow",
+				subrole: "AXStandardWindow",
+				metadata: {},
+			},
+			outline: {
+				ref: "w",
+				wireRef: "w",
+				role: "AXWindow",
+				subrole: "AXStandardWindow",
+				title: "Main",
+				label: "",
+				value: "",
+				actions: [],
+				rect: { x: 0, y: 0, w: 300, h: 200 },
+				children: [
+					{
+						ref: "b",
+						wireRef: "b",
+						role: "AXButton",
+						subrole: "",
+						title: "Go",
+						label: "Go",
+						value: "",
+						actions: ["AXPress", "AXShowMenu"],
+						rect: { x: 10, y: 10, w: 50, h: 20 },
+						children: [],
+					},
+					{
+						ref: "t",
+						wireRef: "t",
+						role: "AXTextField",
+						subrole: "",
+						title: "Name",
+						label: "Name",
+						value: "abc",
+						actions: [],
+						canSetValue: true,
+						isTextInput: true,
+						rect: { x: 10, y: 40, w: 50, h: 20 },
+						children: [],
+					},
+				],
+			},
+			timings: { captureMs: 0, describeMs: 0, readTextMs: 0 },
+		});
 	Object.assign(currentPlatformBackend, {
-		ensureReady: async () => ({ permissionStatus: { accessibility: true, screenRecording: true }, lastPermissionCheckAt: Date.now() }),
-		listApps: async () => roots.map((r) => ({ appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.isFocused })),
+		ensureReady: async () => ({
+			permissionStatus: { accessibility: true, screenRecording: true },
+			lastPermissionCheckAt: Date.now(),
+		}),
+		listApps: async () =>
+			roots.map((r) => ({ appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.isFocused })),
 		listRoots: async (query) => (query?.pid ? roots.filter((r) => r.pid === query.pid) : roots),
 		getFrontmost: async () => ({ appName: "Terminal", bundleId: "com.apple.Terminal", pid: 2, windowId: 200 }),
 		observe: async () => look(),
@@ -217,18 +402,38 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 		},
 		actBatch: async () => {
 			calls.act += 1;
-			return { outcome: "worked", performed: { delivery: "pid", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked" }] };
+			return {
+				outcome: "worked",
+				performed: { delivery: "pid", transaction: true, actionCount: 1 },
+				steps: [{ outcome: "worked" }],
+			};
 		},
 	});
-	const ctx = { cwd: mkdtempSync(path.join(os.tmpdir(), "cu-policy-")), hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
+	const ctx = {
+		cwd: mkdtempSync(path.join(os.tmpdir(), "cu-policy-")),
+		hasUI: false,
+		ui: { notify() {} },
+		sessionManager: { getBranch: () => [] },
+	};
 	const call = (fn, params) => fn("t", params, undefined, undefined, ctx);
-	const text = (r) => r.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+	const text = (r) =>
+		r.content
+			.filter((c) => c.type === "text")
+			.map((c) => c.text)
+			.join("\n");
 	const blocked = (code) => (error) => error.code === code && error.message.startsWith(`${code}:`);
 
 	// find_roots marks blocked roots; allowed ones stay unmarked.
 	const found = await call(executeFind, {});
 	assert.equal(found.details.windows.length, 3);
-	assert.deepEqual(found.details.windows.map((w) => [w.app, w.blocked]).sort(), [["SecurityAgent", true], ["Terminal", true], ["Safe", false]].sort());
+	assert.deepEqual(
+		found.details.windows.map((w) => [w.app, w.blocked]).sort(),
+		[
+			["SecurityAgent", true],
+			["Terminal", true],
+			["Safe", false],
+		].sort(),
+	);
 	assert.match(text(found), /Terminal .*blocked\)/);
 	assert.ok(!/Safe[^\n]*blocked/.test(text(found)), "allowed root must not be flagged");
 
@@ -247,7 +452,8 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	const stateId = text(observed).match(/stateId ([0-9a-f-]{36})/)[1];
 	const press = { stateId, actions: [{ action: "press", ref: text(observed).match(/(@e\d+) button/)[1] }] };
 	process.env[ENV] = "com.example.Safe";
-	const textRef = text(observed).match(/(@e\d+) textfield/)?.[1] ?? text(observed).match(/(@e\d+) [a-z]*[Tt]ext[a-z]*field/)?.[1];
+	const textRef =
+		text(observed).match(/(@e\d+) textfield/)?.[1] ?? text(observed).match(/(@e\d+) [a-z]*[Tt]ext[a-z]*field/)?.[1];
 	const buttonRef = text(observed).match(/(@e\d+) button/)[1];
 	assert.ok(textRef, `text field ref missing from:\n${text(observed)}`);
 	await assert.rejects(() => call(executeAct, press), blocked("app_blocked"));
@@ -262,16 +468,30 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 			Object.defineProperty(process, "platform", originalPlatform);
 		}
 	};
-	const newActions = [{ action: "secondaryAction", ref: buttonRef, name: "AXShowMenu" }, { action: "selectText", ref: textRef, start: 0, length: 1 }, { action: "paste", ref: textRef, text: "x" }];
+	const newActions = [
+		{ action: "secondaryAction", ref: buttonRef, name: "AXShowMenu" },
+		{ action: "selectText", ref: textRef, start: 0, length: 1 },
+		{ action: "paste", ref: textRef, text: "x" },
+	];
 	await withPlatform("darwin", async () => {
 		for (const action of newActions) {
-			await assert.rejects(() => call(executeAct, { stateId, actions: [action] }), blocked("app_blocked"), `${action.action} must refuse a blocked target`);
+			await assert.rejects(
+				() => call(executeAct, { stateId, actions: [action] }),
+				blocked("app_blocked"),
+				`${action.action} must refuse a blocked target`,
+			);
 		}
 	});
 	// A non-darwin backend has no implementation: coded unsupported_command, nothing delivered.
 	await withPlatform("linux", async () => {
 		for (const action of newActions) {
-			await assert.rejects(() => call(executeAct, { stateId, actions: [action] }), (error) => error.code === "unsupported_command" && new RegExp(`${action.action} is not supported on linux`).test(error.message), `${action.action} must be unsupported_command on linux`);
+			await assert.rejects(
+				() => call(executeAct, { stateId, actions: [action] }),
+				(error) =>
+					error.code === "unsupported_command" &&
+					new RegExp(`${action.action} is not supported on linux`).test(error.message),
+				`${action.action} must be unsupported_command on linux`,
+			);
 		}
 	});
 	assert.equal(calls.act, 0, "blocked act_ui must not deliver input");
@@ -280,53 +500,76 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 		readCalls.push(request);
 		return { text: "secret", offset: 0, limit: 10, totalChars: 6, hasMore: false };
 	};
-	await assert.rejects(() => call(executeReadText, { stateId, ref: text(observed).match(/(@e\d+) button/)[1] }), blocked("app_blocked"));
+	await assert.rejects(
+		() => call(executeReadText, { stateId, ref: text(observed).match(/(@e\d+) button/)[1] }),
+		blocked("app_blocked"),
+	);
 	assert.equal(readCalls.length, 0, "blocked read_text must not reach the helper");
-	assert.ok((await call(executeFind, { app: "Safe" })).details.windows.every((w) => w.blocked), "find_roots reflects the new list");
+	assert.ok(
+		(await call(executeFind, { app: "Safe" })).details.windows.every((w) => w.blocked),
+		"find_roots reflects the new list",
+	);
 
 	// The env var cannot opt out: `none` leaves Terminal blocked.
 	process.env[ENV] = "none";
 	await assert.rejects(() => call(executeObserve, { root: refOf("Terminal") }), blocked("app_blocked"));
 });
 
-test.skipIf(process.platform !== "darwin")("desktop_input sends the effective blocklist and surfaces the helper's coded refusals", async ({ onTestFinished }) => {
-	const { macosHelper } = await import("../src/platform/macos/helper.ts");
-	const { HelperCommandError } = await import("../src/platform/macos/helper.ts");
-	const { loadComputerUseConfig } = await import("../src/config.ts");
-	const { executeDesktopInput } = await import("../src/desktop.ts");
-	const command = macosHelper.command;
-	onTestFinished(() => {
-		macosHelper.command = command;
-	});
-	process.env[ENV] = "com.example.Vault";
-	loadComputerUseConfig(mkdtempSync(path.join(os.tmpdir(), "cu-policy-")));
-	const { effectiveBlockedBundleIds } = await import("../src/config.ts");
-	const expected = effectiveBlockedBundleIds();
-	assert.ok(SYSTEM_AGENTS.every((id) => expected.includes(id)) && expected.includes("com.example.Vault"));
-	const sent = [];
-	macosHelper.command = async (name, args) => {
-		sent.push({ name, args });
-		throw new HelperCommandError("app_blocked: 'Vault' is blocked", "app_blocked");
-	};
-	for (const params of [{ action: "activateApp", app: "Vault" }, { action: "typeText", text: "x" }, { action: "click", x: 1, y: 2 }]) {
-		await assert.rejects(() => executeDesktopInput("d", params), (error) => error.code === "app_blocked");
-	}
-	assert.equal(sent.length, 3);
-	for (const { args } of sent) assert.deepEqual(args.blockedBundleIds, expected);
+test.skipIf(process.platform !== "darwin")(
+	"desktop_input sends the effective blocklist and surfaces the helper's coded refusals",
+	async ({ onTestFinished }) => {
+		const { macosHelper } = await import("../src/platform/macos/helper.ts");
+		const { HelperCommandError } = await import("../src/platform/macos/helper.ts");
+		const { loadComputerUseConfig } = await import("../src/config.ts");
+		const { executeDesktopInput } = await import("../src/desktop.ts");
+		const command = macosHelper.command;
+		onTestFinished(() => {
+			macosHelper.command = command;
+		});
+		process.env[ENV] = "com.example.Vault";
+		loadComputerUseConfig(mkdtempSync(path.join(os.tmpdir(), "cu-policy-")));
+		const { effectiveBlockedBundleIds } = await import("../src/config.ts");
+		const expected = effectiveBlockedBundleIds();
+		assert.ok(SYSTEM_AGENTS.every((id) => expected.includes(id)) && expected.includes("com.example.Vault"));
+		const sent = [];
+		macosHelper.command = async (name, args) => {
+			sent.push({ name, args });
+			throw new HelperCommandError("app_blocked: 'Vault' is blocked", "app_blocked");
+		};
+		for (const params of [
+			{ action: "activateApp", app: "Vault" },
+			{ action: "typeText", text: "x" },
+			{ action: "click", x: 1, y: 2 },
+		]) {
+			await assert.rejects(
+				() => executeDesktopInput("d", params),
+				(error) => error.code === "app_blocked",
+			);
+		}
+		assert.equal(sent.length, 3);
+		for (const { args } of sent) assert.deepEqual(args.blockedBundleIds, expected);
 
-	// desktop_screenshot sends it too, so the helper can exclude the blocked apps from the capture.
-	sent.length = 0;
-	const { executeDesktopScreenshot } = await import("../src/desktop.ts");
-	macosHelper.command = async (name, args) => {
-		sent.push({ name, args });
-		return { displays: [{ index: 0, isMain: true, frame: { x: 0, y: 0, w: 100, h: 100 } }], display: 0, frame: { x: 0, y: 0, w: 100, h: 100 }, image: { jpegBase64: "", width: 100, height: 100 } };
-	};
-	await executeDesktopScreenshot("d", {}, undefined, undefined, undefined);
-	assert.equal(sent[0].name, "captureDisplay");
-	assert.deepEqual(sent[0].args.blockedBundleIds, expected);
-});
+		// desktop_screenshot sends it too, so the helper can exclude the blocked apps from the capture.
+		sent.length = 0;
+		const { executeDesktopScreenshot } = await import("../src/desktop.ts");
+		macosHelper.command = async (name, args) => {
+			sent.push({ name, args });
+			return {
+				displays: [{ index: 0, isMain: true, frame: { x: 0, y: 0, w: 100, h: 100 } }],
+				display: 0,
+				frame: { x: 0, y: 0, w: 100, h: 100 },
+				image: { jpegBase64: "", width: 100, height: 100 },
+			};
+		};
+		await executeDesktopScreenshot("d", {}, undefined, undefined, undefined);
+		assert.equal(sent[0].name, "captureDisplay");
+		assert.deepEqual(sent[0].args.blockedBundleIds, expected);
+	},
+);
 
-test("macOS act and actBatch send the effective blocklist so coordinate input is checked in the helper", async ({ onTestFinished }) => {
+test("macOS act and actBatch send the effective blocklist so coordinate input is checked in the helper", async ({
+	onTestFinished,
+}) => {
 	const { macosHelper } = await import("../src/platform/macos/helper.ts");
 	const { macosBackend } = await import("../src/platform/macos/backend.ts");
 	const { loadComputerUseConfig } = await import("../src/config.ts");
@@ -341,7 +584,14 @@ test("macOS act and actBatch send the effective blocklist so coordinate input is
 		sent.push({ name, args });
 		return { outcome: "worked", steps: [] };
 	};
-	const request = { lookId: "l1", pid: 1, target: { kind: "coordinates", x: 1, y: 2 }, policy: "foreground", action: "click", params: { delivery: "hid" } };
+	const request = {
+		lookId: "l1",
+		pid: 1,
+		target: { kind: "coordinates", x: 1, y: 2 },
+		policy: "foreground",
+		action: "click",
+		params: { delivery: "hid" },
+	};
 	await macosBackend.act(request);
 	await macosBackend.actBatch([request, request]);
 	const { effectiveBlockedBundleIds } = await import("../src/config.ts");

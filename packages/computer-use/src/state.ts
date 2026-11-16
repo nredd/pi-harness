@@ -2,7 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { CdpPageSnapshot } from "./cdp.ts";
 import type { ImageMode } from "./contract.ts";
 import type { WindowNote } from "./note.ts";
-import { restoreOutline, serializeOutline, type LookResponse, type Outline, type SerializedOutline } from "./outline.ts";
+import {
+	restoreOutline,
+	serializeOutline,
+	type LookResponse,
+	type Outline,
+	type SerializedOutline,
+} from "./outline.ts";
 import { StateStore, type StoredState } from "./runtime.ts";
 
 interface StateTargetSnapshot {
@@ -88,11 +94,24 @@ export class SavedStates {
 		if (record.value.kind === "browser") {
 			const outline = restoreOutline(record.value.outline);
 			return {
-				currentCapture: { stateId: record.stateId, width: 0, height: 0, scaleFactor: 1, timestamp: record.value.snapshot.capturedAt },
+				currentCapture: {
+					stateId: record.stateId,
+					width: 0,
+					height: 0,
+					scaleFactor: 1,
+					timestamp: record.value.snapshot.capturedAt,
+				},
 				currentLook: {
 					lookId: record.value.snapshot.snapshotId,
 					capturedAt: record.value.snapshot.capturedAt / 1000,
-					window: { windowId: 0, framePoints: { x: 0, y: 0, w: 1, h: 1 }, scaleFactor: 1, isModal: false, role: "document", subrole: "" },
+					window: {
+						windowId: 0,
+						framePoints: { x: 0, y: 0, w: 1, h: 1 },
+						scaleFactor: 1,
+						isModal: false,
+						role: "document",
+						subrole: "",
+					},
 					outline: outline.root,
 					timings: {},
 					parsedOutline: outline,
@@ -108,7 +127,11 @@ export class SavedStates {
 		return {
 			currentTarget: { ...record.value.target },
 			currentCapture: { ...record.value.capture },
-			currentStateTarget: { pid: record.value.target.pid, windowId: record.value.target.windowId, windowRef: record.value.target.windowRef },
+			currentStateTarget: {
+				pid: record.value.target.pid,
+				windowId: record.value.target.windowId,
+				windowRef: record.value.target.windowRef,
+			},
 			currentImageMode: record.value.imageMode,
 			currentLook: { ...record.value.look, outline: outline.root, parsedOutline: outline },
 			currentOutline: outline,

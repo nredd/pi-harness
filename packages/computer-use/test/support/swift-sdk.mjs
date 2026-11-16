@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runCheckCommand } from "../../scripts/check-async.mjs";
+import { runCheckCommand } from "../../tests/fixtures/check-async.mjs";
 
 // SDK-only imports took 135.65s locally under concurrent gates; one interrupted at 180s.
 // Preparation has its own visible 240s failure bound, not INV-8's 90s source-validation budget.
@@ -33,13 +33,7 @@ function digest(value) {
 async function inputsIdentity(compiler, sdk) {
 	const stat = await fs.stat(compiler, { bigint: true });
 	return {
-		compilerFile: [
-			stat.dev,
-			stat.ino,
-			stat.size,
-			stat.mtimeNs,
-			stat.ctimeNs,
-		].map(String),
+		compilerFile: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String),
 		sdkSettings: digest(await fs.readFile(path.join(sdk, "SDKSettings.json"))),
 	};
 }
@@ -49,10 +43,7 @@ async function compilerCommand(compiler, args, options) {
 	try {
 		return await runCheckCommand(compiler, args, options);
 	} catch (error) {
-		throw new Error(
-			`${error.message}\n${error.cause?.stdout ?? ""}${error.cause?.stderr ?? ""}`,
-			{ cause: error },
-		);
+		throw new Error(`${error.message}\n${error.cause?.stdout ?? ""}${error.cause?.stderr ?? ""}`, { cause: error });
 	}
 }
 
@@ -92,15 +83,7 @@ export async function prepareSwiftSdk({
 	).stdout.trim();
 	const moduleCache = path.join(scratch, "module-cache");
 	await fs.mkdir(moduleCache, { mode: 0o700 });
-	const args = Object.freeze([
-		"-target",
-		target,
-		"-sdk",
-		sdk,
-		"-parse-as-library",
-		"-module-cache-path",
-		moduleCache,
-	]);
+	const args = Object.freeze(["-target", target, "-sdk", sdk, "-parse-as-library", "-module-cache-path", moduleCache]);
 	const identity = Object.freeze({
 		compiler,
 		sdk,
@@ -130,14 +113,8 @@ export async function prepareSwiftSdk({
 			})
 		)
 			throw new Error("SDK preparation identity mismatch");
-		await fs.writeFile(
-			receipt,
-			JSON.stringify({ key, moduleCache, identity }),
-			{ flag: "wx", mode: 0o600 },
-		);
-		report(
-			`Swift SDK prepare ready key=${key} elapsed=${Math.round(performance.now() - started)}ms`,
-		);
+		await fs.writeFile(receipt, JSON.stringify({ key, moduleCache, identity }), { flag: "wx", mode: 0o600 });
+		report(`Swift SDK prepare ready key=${key} elapsed=${Math.round(performance.now() - started)}ms`);
 		return Object.freeze({
 			compiler,
 			moduleCache,
@@ -147,9 +124,7 @@ export async function prepareSwiftSdk({
 			receipt,
 		});
 	} catch (error) {
-		report(
-			`Swift SDK prepare failed key=${key} elapsed=${Math.round(performance.now() - started)}ms`,
-		);
+		report(`Swift SDK prepare failed key=${key} elapsed=${Math.round(performance.now() - started)}ms`);
 		throw error;
 	}
 }
@@ -168,9 +143,5 @@ export async function runPreparedSwift(prepared, args, options) {
 		JSON.stringify(receipt.identity) !== JSON.stringify(prepared.identity)
 	)
 		throw new Error("SDK preparation identity mismatch");
-	return compilerCommand(
-		prepared.compiler,
-		[...prepared.args, ...args],
-		options,
-	);
+	return compilerCommand(prepared.compiler, [...prepared.args, ...args], options);
 }

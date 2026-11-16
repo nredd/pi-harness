@@ -300,9 +300,9 @@ def test_async_helper_is_independently_measured_at_zero() -> None:
     assert package.status == "measured"
     assert package.goal == "report-only"
     assert package.root == "packages/computer-use"
-    assert package.owned == ["scripts/check-async.mjs"]
+    assert package.owned == ["tests/fixtures/check-async.mjs"]
     assert not package.exclusions
-    assert "scripts/check-async.mjs" not in inventory(ROOT, cfg.packages["computer-use-vitest"])
+    assert "tests/fixtures/check-async.mjs" not in inventory(ROOT, cfg.packages["computer-use-vitest"])
     assert not any(helper.path.endswith("/check-async.mjs") for helper in cfg.verification_helpers)
     signal = package.signals["primary"]
     assert signal.report == "coverage/async/lcov.info"
@@ -434,7 +434,7 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     "path",
     [
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
-        "packages/computer-use/scripts/check-linux-live.mjs",
+        "packages/computer-use/tests/fixtures/linux-live.mjs",
     ],
 )
 def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> None:
@@ -449,31 +449,12 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
-    assert helpers.get(path, "").strip(), path
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "check-docs-platform",
-        "check-docs",
-    ],
-)
-def test_retained_computer_use_gates_are_measured(name: str) -> None:
-    """Keep executable repository gates in both inventories, not helper exemptions.
-
-    Parameters:
-        name (str): Retained gate module measured under computer-use Vitest.
-    Returns:
-        None: Both inventories contain the gate and no helper exemption remains.
-    Raises:
-        AssertionError: A gate silently leaves the measured producer.
-    """
-    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
-    source = f"scripts/{name}.mjs"
-    for package in ["computer-use", "computer-use-vitest"]:
-        assert source in inventory(ROOT, cfg.packages[package])
-    assert not any(helper.path == f"packages/computer-use/{source}" for helper in cfg.verification_helpers)
+    assert path not in helpers
+    if path.endswith("pi-cubench-agent.mjs"):
+        assert not (ROOT / path).exists()
+    else:
+        assert is_test_path(Path(path))
+        assert (ROOT / path).is_file()
 
 
 def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> None:
@@ -574,7 +555,8 @@ def test_unaudited_languages_are_owned_pending_or_tracked_unmeasured() -> None:
         }:
             assert file in covered or is_test_path(Path(file)), file
     assert "packages/computer-use/native/macos/agent_cursor_tests.swift" not in covered
-    assert "packages/computer-use/scripts/make-signing-cert.sh" in covered
+    assert not (ROOT / "packages/computer-use/scripts/make-signing-cert.sh").exists()
+    assert "packages/computer-use/scripts/make-signing-cert.mjs" in covered
     assert "scripts/merge-pr.sh" in covered
     assert cfg.packages["shell-scripts"].status == "pending"
     assert "#695" in cfg.packages["shell-scripts"].note
@@ -598,12 +580,7 @@ INERT_BY_DECISION = {
     "Makefile",
     "benchmarks/comparison/Makefile",
     "integration/Makefile",
-    "packages/computer-use/.github/FUNDING.yml",
-    "packages/computer-use/.github/dependabot.yml",
-    "packages/computer-use/.github/workflows/ci.yml",
-    "packages/computer-use/.github/workflows/docs.yml",
-    "packages/computer-use/.github/workflows/npm-audit.yml",
-    "packages/computer-use/.github/workflows/publish-npm.yml",
+    "packages/computer-use/Makefile",
 }
 
 

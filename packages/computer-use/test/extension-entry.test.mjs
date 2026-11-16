@@ -1,4 +1,4 @@
-// `extensions/computer-use.ts` registration, `/computer-use` status and lifecycle hooks against a recording ExtensionAPI (nredd/pi-harness#703, Refs #645).
+// `src/index.ts` registration, `/computer-use` status and lifecycle hooks against a recording ExtensionAPI (nredd/pi-harness#703, Refs #645).
 // The host platform is a seam (`process.platform` is redefined per case) so the darwin-only arms run on every OS.
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +8,7 @@ import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
 import { DEFAULT_BLOCKED_APPS } from "../src/config.ts";
-import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../extensions/computer-use.ts";
+import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../src/index.ts";
 
 vi.mock("../src/bridge.ts", async (importOriginal) => ({
 	...(await importOriginal()),
@@ -32,12 +32,21 @@ const registeredNames = (pi) => pi.pi.registerTool.mock.calls.map(([tool]) => to
 /** A context that records `ui.notify`; `cwd` is the temp project directory. */
 function fakeCtx(over = {}) {
 	const notes = [];
-	return { cwd: path.join(root, "project"), hasUI: true, ui: { notify: (message, level) => notes.push({ message, level }) }, notes, ...over };
+	return {
+		cwd: path.join(root, "project"),
+		hasUI: true,
+		ui: { notify: (message, level) => notes.push({ message, level }) },
+		notes,
+		...over,
+	};
 }
 
 const writeProjectConfig = (value) => {
 	mkdirSync(path.join(root, "project", ".pi"), { recursive: true });
-	writeFileSync(path.join(root, "project", ".pi", "computer-use.json"), typeof value === "string" ? value : JSON.stringify(value));
+	writeFileSync(
+		path.join(root, "project", ".pi", "computer-use.json"),
+		typeof value === "string" ? value : JSON.stringify(value),
+	);
 };
 const writeUserConfig = (value) => {
 	mkdirSync(path.join(root, "agent", "extensions"), { recursive: true });
@@ -53,7 +62,8 @@ beforeEach(() => {
 	process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
 	vi.clearAllMocks();
 	// `clearAllMocks` keeps implementations: re-apply the defaults so a `mockRejectedValue` cannot leak into the next test.
-	for (const name of ["ensureComputerUseSetup", "setComputerUseActivity", "shutdownComputerUseSession"]) bridge[name].mockReset().mockResolvedValue(undefined);
+	for (const name of ["ensureComputerUseSetup", "setComputerUseActivity", "shutdownComputerUseSession"])
+		bridge[name].mockReset().mockResolvedValue(undefined);
 	bridge.reconstructStateFromBranch.mockReset();
 });
 
@@ -71,10 +81,18 @@ describe("registration", () => {
 		setPlatform("linux");
 		const pi = createRecordingPi();
 		extension(pi.pi);
-		assert.deepEqual(registeredNames(pi), COMPUTER_USE_TOOLS.map((tool) => tool.name));
+		assert.deepEqual(
+			registeredNames(pi),
+			COMPUTER_USE_TOOLS.map((tool) => tool.name),
+		);
 		assert.equal(pi.pi.registerTool.mock.calls.length, 11);
 		assert.ok([...pi.commands.keys()].includes("computer-use"));
-		assert.deepEqual([...pi.handlers.keys()].sort(), ["agent_end", "session_shutdown", "session_start", "tool_execution_start"]);
+		assert.deepEqual([...pi.handlers.keys()].sort(), [
+			"agent_end",
+			"session_shutdown",
+			"session_start",
+			"tool_execution_start",
+		]);
 	});
 
 	test("darwin additionally registers the desktop tools", () => {
@@ -82,7 +100,10 @@ describe("registration", () => {
 		const pi = createRecordingPi();
 		extension(pi.pi);
 		assert.deepEqual(registeredNames(pi).slice(-2), ["desktop_screenshot", "desktop_input"]);
-		assert.deepEqual(DESKTOP_TOOLS.map((tool) => tool.name), ["desktop_screenshot", "desktop_input"]);
+		assert.deepEqual(
+			DESKTOP_TOOLS.map((tool) => tool.name),
+			["desktop_screenshot", "desktop_input"],
+		);
 		assert.equal(pi.pi.registerTool.mock.calls.length, 13);
 		for (const tool of pi.tools.values()) assert.equal(tool.parameters.type, "object", `${tool.name} root schema`);
 	});
@@ -120,7 +141,16 @@ describe("/computer-use", () => {
 	});
 
 	test("user file flips every flag, empties the blocklist and the env override is listed", async () => {
-		writeUserConfig({ computer_use: { browser_use: "off", headless: "on", cursor_overlay: 0, activity_glow: "enabled", managed_browser: "helium", blocked_apps: [] } });
+		writeUserConfig({
+			computer_use: {
+				browser_use: "off",
+				headless: "on",
+				cursor_overlay: 0,
+				activity_glow: "enabled",
+				managed_browser: "helium",
+				blocked_apps: [],
+			},
+		});
 		process.env.PI_COMPUTER_USE_BROWSER_USE = "1";
 		const text = await run();
 		assert.match(text, /^browser_use: enabled$/m, "env wins over the user file");
@@ -142,9 +172,16 @@ describe("/computer-use", () => {
 		writeUserConfig({ blocked_apps: "com.example.vault" });
 		writeProjectConfig("{ not json");
 		const text = await run();
-		assert.match(text, /^blocked_apps error: .*pi-computer-use\.json: blocked_apps must be an array of bundle id strings; keeping the current list$/m);
+		assert.match(
+			text,
+			/^blocked_apps error: .*pi-computer-use\.json: blocked_apps must be an array of bundle id strings; keeping the current list$/m,
+		);
 		assert.match(text, /computer-use\.json: error: .+$/m);
-		assert.match(text, new RegExp(`^blocked_apps: ${DEFAULT_BLOCKED_APPS[0].replaceAll(".", "\\.")}`, "m"), "defaults stay in force");
+		assert.match(
+			text,
+			new RegExp(`^blocked_apps: ${DEFAULT_BLOCKED_APPS[0].replaceAll(".", "\\.")}`, "m"),
+			"defaults stay in force",
+		);
 	});
 });
 

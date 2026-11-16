@@ -1,6 +1,7 @@
 import type { PlatformRoot } from "./platform/types.ts";
 
-type RankedRoot = Pick<PlatformRoot,
+type RankedRoot = Pick<
+	PlatformRoot,
 	"windowId" | "windowRef" | "isModal" | "isFocused" | "isMain" | "isMinimized" | "isOnscreen" | "zOrder" | "title"
 >;
 

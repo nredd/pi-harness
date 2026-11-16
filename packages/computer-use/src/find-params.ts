@@ -2,7 +2,10 @@ import type { FindParams } from "./contract.ts";
 
 export function normalizeFindParams(params: FindParams | null | undefined): FindParams {
 	const rawParams = params ?? {};
-	if (rawParams.pid !== undefined && (!Number.isFinite(rawParams.pid) || !Number.isInteger(rawParams.pid) || rawParams.pid <= 0)) {
+	if (
+		rawParams.pid !== undefined &&
+		(!Number.isFinite(rawParams.pid) || !Number.isInteger(rawParams.pid) || rawParams.pid <= 0)
+	) {
 		throw new Error("find_roots.pid must be a positive integer when provided.");
 	}
 	return {

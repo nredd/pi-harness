@@ -14,11 +14,13 @@ async function clientFor(script) {
 	const children = [];
 	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 4, platform: "Linux" });
 	Object.assign(engine.handlers, script(children));
-	const spawn = createFakeSpawn({ "*": () => {
-		const child = createFakeChild({ engine });
-		children.push(child);
-		return child;
-	} });
+	const spawn = createFakeSpawn({
+		"*": () => {
+			const child = createFakeChild({ engine });
+			children.push(child);
+			return child;
+		},
+	});
 	vi.resetModules();
 	vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	const { LinuxHelperClient } = await import("../src/platform/linux/helper.ts");
@@ -45,11 +47,14 @@ describe("Linux helper client disconnects (#725)", () => {
 
 	test("a complete reply still in stdout when the helper exits resolves the command", async () => {
 		const { client } = await clientFor((children) => ({
-			last: effect(() => {
-				const child = children.at(-1);
-				child.emit("exit", 0, null);
-				setTimeout(() => child.emit("close", 0, null), 20);
-			}, ok({ done: true })),
+			last: effect(
+				() => {
+					const child = children.at(-1);
+					child.emit("exit", 0, null);
+					setTimeout(() => child.emit("close", 0, null), 20);
+				},
+				ok({ done: true }),
+			),
 		}));
 		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
 		assert.equal(client.child, undefined, "exit forgets the child so the next command respawns");

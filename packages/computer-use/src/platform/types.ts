@@ -165,18 +165,22 @@ export interface PlatformActRequestBase {
 	policy: PlatformDeliveryPolicy;
 }
 
-export type PlatformActRequest = PlatformActRequestBase & (
-	| { action: "press" | "click"; params: { button?: PlatformMouseButton; clickCount?: number } & PlatformActDeliveryParam }
-	| { action: "setText"; params: { text: string } & PlatformActDeliveryParam }
-	| { action: "typeText"; params: { text: string } & PlatformActDeliveryParam }
-	| { action: "paste"; params: { text: string } & PlatformActDeliveryParam }
-	| { action: "keypress"; params: { keys: string[] } & PlatformActDeliveryParam }
-	| { action: "secondaryAction"; params: { name: string } & PlatformActDeliveryParam }
-	| { action: "selectText"; params: { start: number; length: number } & PlatformActDeliveryParam }
-	| { action: "scroll"; params: { scrollX: number; scrollY: number } & PlatformActDeliveryParam }
-	| { action: "drag"; params: { path: PlatformPoint[] } & PlatformActDeliveryParam }
-	| { action: "moveMouse"; params: PlatformActDeliveryParam }
-);
+export type PlatformActRequest = PlatformActRequestBase &
+	(
+		| {
+				action: "press" | "click";
+				params: { button?: PlatformMouseButton; clickCount?: number } & PlatformActDeliveryParam;
+		  }
+		| { action: "setText"; params: { text: string } & PlatformActDeliveryParam }
+		| { action: "typeText"; params: { text: string } & PlatformActDeliveryParam }
+		| { action: "paste"; params: { text: string } & PlatformActDeliveryParam }
+		| { action: "keypress"; params: { keys: string[] } & PlatformActDeliveryParam }
+		| { action: "secondaryAction"; params: { name: string } & PlatformActDeliveryParam }
+		| { action: "selectText"; params: { start: number; length: number } & PlatformActDeliveryParam }
+		| { action: "scroll"; params: { scrollX: number; scrollY: number } & PlatformActDeliveryParam }
+		| { action: "drag"; params: { path: PlatformPoint[] } & PlatformActDeliveryParam }
+		| { action: "moveMouse"; params: PlatformActDeliveryParam }
+	);
 
 export interface PlatformReadTextRequest {
 	/** Observation that owns the element ref. Native backends must not resolve across observations. */
@@ -224,13 +228,29 @@ export interface ComputerUsePlatformBackend {
 	emptyRootsHint?(): string | undefined;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
 	focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult>;
-	observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse>;
+	observe(
+		request: PlatformObserveRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<LookResponse>;
 	act(request: PlatformActRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult>;
 	/** Execute one-resource actions with one root baseline and one final settle. */
-	actBatch?(requests: PlatformActRequest[], options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult>;
-	readText(args: PlatformReadTextRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformReadTextResponse>;
-	waitFor(args: PlatformWaitForRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformWaitForResponse>;
+	actBatch?(
+		requests: PlatformActRequest[],
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<HelperActResult>;
+	readText(
+		args: PlatformReadTextRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<PlatformReadTextResponse>;
+	waitFor(
+		args: PlatformWaitForRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<PlatformWaitForResponse>;
 	isBrowserApp(appName: string, bundleId?: string): boolean;
 	isChromeFamilyApp(appName: string, bundleId?: string): boolean;
-	openBrowserLocation(target: { appName: string; bundleId?: string }, url: string, signal?: AbortSignal): Promise<boolean>;
+	openBrowserLocation(
+		target: { appName: string; bundleId?: string },
+		url: string,
+		signal?: AbortSignal,
+	): Promise<boolean>;
 }

@@ -1,4 +1,3 @@
-
 import assert from "node:assert/strict";
 import path from "node:path";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
@@ -22,13 +21,25 @@ test("macOS helper path selection", async () => {
 	);
 
 	assert.equal(
-		resolveMacosHelperAppPath({ env: {}, homeDir, systemHelperAppPath, fileExists: () => true, directoryIsWritable: () => true }),
+		resolveMacosHelperAppPath({
+			env: {},
+			homeDir,
+			systemHelperAppPath,
+			fileExists: () => true,
+			directoryIsWritable: () => true,
+		}),
 		systemHelperAppPath,
 		"existing writable system installs should remain in place",
 	);
 
 	assert.equal(
-		resolveMacosHelperAppPath({ env: {}, homeDir, systemHelperAppPath, fileExists: () => true, directoryIsWritable: () => false }),
+		resolveMacosHelperAppPath({
+			env: {},
+			homeDir,
+			systemHelperAppPath,
+			fileExists: () => true,
+			directoryIsWritable: () => false,
+		}),
 		userHelperAppPath,
 		"standard users should migrate away from a non-writable system install",
 	);
