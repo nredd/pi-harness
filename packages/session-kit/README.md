@@ -536,6 +536,17 @@ locally and never exported. Run export before fetch/commit/push, then import the
 checkout. Git, locking concurrent sync runs, retrying pushes and network deadlines belong to the
 sync helper, not this data-only artifact.
 
+Incomplete pi scans still fail before publishing: prior shards, manifest and export state stay unchanged.
+The CLI reports totals plus at most 20 `pi-stats-scan: {"path":...,"line":...,"reason":...}`
+records on local stderr. Lines are physical, one-based (including skipped empty/NUL padding);
+`0` means a filesystem operation or an unavailable cached record, not a known line. Reasons are
+`invalid-record`, `read-directory`, `read-file`, `write-cache`, or `cached-invalid-record`.
+Paths are JSON-quoted, capped at 1024 characters and have terminal/bidi controls neutralized. No raw
+records, parser/OS exception text, prompts, message IDs or credentials are reported. These local
+locations never enter usage shards or manifests. Bad cached files are re-read to recover locations;
+deleted/former-root bad records remain fail-closed with an unknown line. Wrappers must explicitly
+forward this bounded protocol; forwarding arbitrary exporter stderr is not safe.
+
 CLI results:
 
 - Export: `{ "machineId": "<UUID>", "snapshotDir": "<OUT>/machines/<UUID>" }` on stdout, plus

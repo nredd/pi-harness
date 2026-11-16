@@ -15,7 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { agentDir } from "../agent-dir.ts";
-import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, num, timeOf } from "./jsonl.ts";
+import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, num, type ScanDiagnostic, timeOf } from "./jsonl.ts";
 import { nth } from "./nth.ts";
 export const CACHE_VERSION = 3;
 
@@ -84,6 +84,8 @@ export interface Session {
 }
 
 export interface Loaded {
+	/** At most 20 local-only locations. Never included in usage snapshots. */
+	diagnostics?: ScanDiagnostic[];
 	calls: Call[];
 	/** Top-level sessions with at least one counted call. Subagent children are excluded. */
 	sessions: Session[];
@@ -116,8 +118,11 @@ export class SessionParser {
 	private childName = false;
 	private markedChild = false;
 	private lines = 0;
+	private physicalLine = 0;
+	private readonly onBadLine: ((line: number) => void) | undefined;
 
-	constructor(size: number, mtimeMs: number) {
+	constructor(size: number, mtimeMs: number, onBadLine?: (line: number) => void) {
+		this.onBadLine = onBadLine;
 		this.out = {
 			size,
 			mtimeMs,
@@ -133,6 +138,7 @@ export class SessionParser {
 	}
 
 	accept(line: string): void {
+		this.physicalLine++;
 		if (!line || NUL_PADDING.test(line)) return;
 		// Cheap supersets, whitespace-agnostic: a false positive only costs a JSON.parse.
 		const isHeader = this.lines++ === 0;
@@ -141,7 +147,7 @@ export class SessionParser {
 		if (!isHeader && !isAssistant && !isInfo) {
 			// Every other entry only moves the session's end time: skip the JSON.parse, but still
 			// catch the usual damage (a truncated or spliced line) by its missing braces.
-			if (!looksLikeObject(line)) this.out.badLines++;
+			if (!looksLikeObject(line)) this.badLine();
 			else this.seen(timeOf(LEADING_TIMESTAMP.exec(line)?.[1]));
 			return;
 		}
@@ -149,11 +155,11 @@ export class SessionParser {
 		try {
 			entry = JSON.parse(line) as Record<string, unknown>;
 		} catch {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		const ts = timeOf(entry.timestamp);
@@ -189,6 +195,11 @@ export class SessionParser {
 		return this.out;
 	}
 
+	private badLine(): void {
+		this.out.badLines++;
+		this.onBadLine?.(this.physicalLine);
+	}
+
 	private seen(ts: number): void {
 		if (ts <= 0) return;
 		if (this.out.startMs === 0) this.out.startMs = ts;
@@ -206,7 +217,7 @@ export class SessionParser {
 				(v) => v !== undefined && (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0),
 			)
 		) {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		const input = num(usage.input);
@@ -218,7 +229,7 @@ export class SessionParser {
 		const cost =
 			typeof costValue === "number" ? num(costValue) : num((costValue as Record<string, unknown> | undefined)?.total);
 		if (cost < 0) {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		const ms = timeOf(message.timestamp) || entryTs;
@@ -244,8 +255,13 @@ export function parseSession(text: string, size = text.length, mtimeMs = 0): Fil
 }
 
 /** Stream a file through `SessionParser`. */
-export async function parseFile(path: string, size: number, mtimeMs: number): Promise<FileStats> {
-	const parser = new SessionParser(size, mtimeMs);
+export async function parseFile(
+	path: string,
+	size: number,
+	mtimeMs: number,
+	onBadLine?: (line: number) => void,
+): Promise<FileStats> {
+	const parser = new SessionParser(size, mtimeMs, onBadLine);
 	await feedFile(path, parser);
 	return parser.finish();
 }
@@ -364,11 +380,16 @@ export interface LoadOptions {
  * are kept, so pruning old sessions does not erase history; entries outside `root` stay cached but
  * are not reported.
  */
-export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
+export async function loadUsage(options: LoadOptions = {}): Promise<Loaded & { diagnostics: ScanDiagnostic[] }> {
 	const root = resolve(options.root ?? sessionsDir());
 	const cacheFile = options.cache ?? cachePath();
 	const { files, migrate } = await readCache(cacheFile);
-	const listed = await listJsonl(root);
+	const diagnostics: ScanDiagnostic[] = [];
+	const diagnose = (diagnostic: ScanDiagnostic): void => {
+		if (diagnostics.length < 20) diagnostics.push(diagnostic);
+	};
+	const parsed = new Set<string>();
+	const listed = await listJsonl(root, diagnose);
 	const paths = listed.paths;
 	let errors = listed.errors;
 	const stale: { path: string; size: number; mtimeMs: number }[] = [];
@@ -376,20 +397,23 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 		try {
 			const s = await stat(path);
 			const hit = files[path];
-			if (!hit || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
+			if (!hit || hit.badLines > 0 || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
 				stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
 		} catch {
 			errors++;
+			diagnose({ path, line: 0, reason: "read-file" });
 		}
 	}
 	let done = 0;
 	let dirty = migrate;
 	for (const { path, size, mtimeMs } of stale) {
 		try {
-			files[path] = await parseFile(path, size, mtimeMs);
+			files[path] = await parseFile(path, size, mtimeMs, (line) => diagnose({ path, line, reason: "invalid-record" }));
+			parsed.add(path);
 			dirty = true;
 		} catch {
 			errors++;
+			diagnose({ path, line: 0, reason: "read-file" });
 		}
 		options.onProgress?.(++done, stale.length);
 	}
@@ -399,6 +423,7 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 		} catch {
 			// The view can still render, but a producer must not claim durable history.
 			errors++;
+			diagnose({ path: cacheFile, line: 0, reason: "write-cache" });
 		}
 	}
 	// The cache is shared by every sessions dir this agent dir has used; only this root's files
@@ -407,7 +432,10 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 	const scoped = Object.fromEntries(
 		Object.entries(files).filter(([path]) => options.includeAllRoots || path.startsWith(prefix)),
 	);
-	return { ...flatten(scoped), errors };
+	for (const [path, file] of Object.entries(scoped)) {
+		if (file.badLines > 0 && !parsed.has(path)) diagnose({ path, line: 0, reason: "cached-invalid-record" });
+	}
+	return { ...flatten(scoped), errors, diagnostics };
 }
 
 /** Merge preserved session IDs, spanning all copies and propagating child attribution. */

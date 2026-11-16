@@ -44,11 +44,21 @@ export async function feedFile(path: string, parser: { accept(line: string): voi
 	}
 }
 
+/** Local-only scan location, never transcript data or an exception message. Line 0 means no record was read. */
+export interface ScanDiagnostic {
+	path: string;
+	line: number;
+	reason: "invalid-record" | "read-directory" | "read-file" | "write-cache" | "cached-invalid-record";
+}
+
 /**
  * Every `*.jsonl` under `root`. A missing root is an empty history; any other directory that cannot
  * be listed (EACCES, ...) is counted in `errors` so partial totals are never presented as complete.
  */
-export async function listJsonl(root: string): Promise<{ paths: string[]; errors: number }> {
+export async function listJsonl(
+	root: string,
+	onDiagnostic?: (diagnostic: ScanDiagnostic) => void,
+): Promise<{ paths: string[]; errors: number }> {
 	const out: string[] = [];
 	let errors = 0;
 	const walk = async (dir: string): Promise<void> => {
@@ -56,7 +66,10 @@ export async function listJsonl(root: string): Promise<{ paths: string[]; errors
 		try {
 			entries = await readdir(dir, { withFileTypes: true });
 		} catch (error) {
-			if (!(dir === root && (error as NodeJS.ErrnoException).code === "ENOENT")) errors++;
+			if (!(dir === root && (error as NodeJS.ErrnoException).code === "ENOENT")) {
+				errors++;
+				onDiagnostic?.({ path: dir, line: 0, reason: "read-directory" });
+			}
 			return;
 		}
 		for (const entry of entries) {

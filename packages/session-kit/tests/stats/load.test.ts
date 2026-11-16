@@ -371,6 +371,7 @@ describe("loadUsage", () => {
 			calls: [],
 			sessionMetadata: [],
 			sessions: [],
+			diagnostics: [],
 			errors: 0,
 			badLines: 0,
 		});
@@ -378,6 +379,7 @@ describe("loadUsage", () => {
 		writeFileSync(join(dir, "file"), "");
 		const loaded = await loadUsage({ root, cache: join(dir, "file", "cache.json") });
 		expect(loaded.calls).toHaveLength(1);
+		expect(loaded.diagnostics).toEqual([{ path: join(dir, "file", "cache.json"), line: 0, reason: "write-cache" }]);
 	});
 
 	it("counts a directory it cannot list instead of silently reporting less", async () => {
@@ -391,6 +393,21 @@ describe("loadUsage", () => {
 		} finally {
 			chmodSync(join(root, "locked"), 0o755);
 		}
+	});
+
+	it("bounds local diagnostics and identifies retained bad history without inventing a line", async () => {
+		const path = join(root, "bad.jsonl");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(path, Array.from({ length: 30 }, () => "{broken").join("\n"));
+		const first = await loadUsage({ root, cache });
+		expect(first.badLines).toBe(30);
+		expect(first.diagnostics).toHaveLength(20);
+		expect(first.diagnostics[0]).toEqual({ path, line: 1, reason: "invalid-record" });
+		expect(first.diagnostics[19]).toEqual({ path, line: 20, reason: "invalid-record" });
+		rmSync(path);
+		const retained = await loadUsage({ root, cache });
+		expect(retained.badLines).toBe(30);
+		expect(retained.diagnostics).toEqual([{ path, line: 0, reason: "cached-invalid-record" }]);
 	});
 
 	it("streams files bigger than one yield window", async () => {
