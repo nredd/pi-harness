@@ -43,7 +43,7 @@ it("binds the fixture's core imports to the exact lockfile artifacts, not a same
 		});
 	}
 	expect(typeof (await loadFork("rpiv-todo"))).toBe("function");
-	const todo = ["index.ts", "plan-hooks.ts", "state/agents.ts", "state/monitors.ts"].map((file) => ({
+	const todo = ["src/index.ts", "src/plan/hooks.ts", "src/agents.ts", "src/monitors.ts"].map((file) => ({
 		file: `packages/todo/${file}`,
 		sha256: createHash("sha256")
 			.update(readFileSync(new URL(`packages/todo/${file}`, root)))

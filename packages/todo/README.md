@@ -3,12 +3,6 @@
 [![npm version](https://img.shields.io/npm/v/@nredd/pi-todo.svg)](https://www.npmjs.com/package/@nredd/pi-todo)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-<div align="center">
-  <a href="https://github.com/nredd/pi-harness/tree/main/packages/todo">
-    <img src="https://raw.githubusercontent.com/nredd/pi-harness/main/packages/todo/docs/cover.png" alt="pi-todo — a persistent todo overlay for Pi Agent, showing a task panel with completed, in-progress, and pending rows" width="50%">
-  </a>
-</div>
-
 Give the model a task list you can see. `pi-todo` adds a `todo` tool, a
 `/todos` command, and a live panel above the editor to
 [Pi Agent](https://github.com/badlogic/pi-mono), so you always know what the
@@ -27,10 +21,9 @@ support described below. Retained packaging deltas:
   `nredd/pi-harness/packages/todo`. Links that credit upstream stay on `juicesharp/rpiv-mono`
 - `author` dropped from `package.json`; the retained upstream MIT `LICENSE` carries attribution
 - `@juicesharp/rpiv-i18n` is a hard `dependency` (`^2.13.9`), not an optional peer, and
-  `peerDependenciesMeta` is removed. The English-only fallback in `state/i18n-bridge.ts` is kept
+  `peerDependenciesMeta` is removed. The English-only fallback in `src/state/i18n-bridge.ts` is kept
   but unreachable in a normal install; only its comments changed to say so
-- `pi.image` points at `docs/cover.png` in this repository. The file is not packed
-  (`!docs/*.png`); the URL resolves once the package is on `main`
+- Remove gallery media and `pi.image`; runtime files live under `src/`
 - The persisted config path stays `~/.config/rpiv-todo/` and the i18n namespace stays
   `@juicesharp/rpiv-todo`, for compatibility with existing configs and sessions
 - There is no nested `package-lock.json`: the root workspace lock governs (`npm ci --ignore-scripts`).
@@ -54,16 +47,16 @@ The workspace gate (from the repository root, or standalone in this directory):
 
 ```sh
 npm ci --ignore-scripts
-# Put Bun 1.4.4 (see .bun-version) on PATH.
+# Put Bun 1.4.4 (see ../../.bun-version) on PATH.
 npm run check
 ```
 
-`check` runs Biome, strict TypeScript, and all 408 Vitest tests (including every
+`check` runs Biome, TypeScript, and all 625 Vitest tests (including every
 upstream test) on both Node and Bun. The two real interactive settled-row regressions
 run inside that same suite on both engines. The test host
-pins core `v1.3.0-nredd.10` release tarballs. Unpublished upstream mock helpers
-are vendored under `.test-support/`; provenance and test counts are documented
-[here](.test-support/README.md). Tests inject temporary homes and use faux providers, never
+pins core `v1.3.0-nredd.11` release tarballs. Unpublished upstream session/theme helpers
+are retained under `tests/fixtures/upstream/`; provenance and historical test counts
+are preserved in the standalone-support section below. Tests inject temporary homes and use faux providers, never
 a pi process or credentials.
 
 Settled update/delete rows with a valid result snapshot retain that historical
@@ -92,7 +85,7 @@ Then ask for something with several steps — "add a repository layer with tests
 and track it as todos". The model calls `todo` and the panel appears above your
 input box, updating as work moves:
 
-![Todo overlay panel: a Todos (2/7) heading above two struck-through completed rows, one in-progress row with its activity label, and four pending rows](https://raw.githubusercontent.com/nredd/pi-harness/main/packages/todo/docs/overlay.jpg)
+
 
 Click the heading's `▾`/`▸` marker to collapse or expand the panel. The
 `ctrl+shift+t` shortcut does the same thing. Resuming a session starts the panel collapsed (`collapseOnResume`). Run `/todos` at any time to print
@@ -933,3 +926,55 @@ see the `@juicesharp/rpiv-i18n` README's "Contributing translations" section.
 ## License
 
 MIT, retained from upstream -- see [LICENSE](https://github.com/nredd/pi-harness/blob/main/packages/todo/LICENSE).
+
+# Standalone test support
+
+Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7`
+(`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`).
+
+`upstream/{session,theme}.ts` are unchanged copies from `packages/test-utils/`, with the upstream MIT
+license. Tarball membership and production-source completeness are checked centrally by
+`scripts/package_contracts.py`, not an upstream manifest walker. The local barrel exports only
+those helpers used by this package. The `ExtensionAPI`
+and context doubles are no longer vendored: `todo-host.ts` presets the shared recording doubles from
+`@nredd/pi-test-lib/pi` (#865), which also dropped the `rpiv-workflow` type dependency.
+
+`vitest.config.ts` (built by `scripts/vitest-package.ts`) aliases the unpublished `@juicesharp/rpiv-test-utils` to this
+barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
+cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home into
+config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:
+when its config is absent, the legacy fallback must use that same injected home.
+Tests never mutate `HOME` or `USERPROFILE`. `home-injection.test.ts` asserts zero
+real-home filesystem probes for both present and missing fallback configs. The redundant upstream
+ship-manifest test and walker are removed in favor of the central package contracts. Support files
+remain in their existing dot paths until the package layout migration.
+
+Path audit: `config.ts` imports `homedir` for the call-time `loadConfig` default;
+its `XDG_CONFIG_HOME` read and `~/` expansion use the injected home. Both config
+candidates, including the always-legacy fallback, stay under that home unless an
+absolute XDG override explicitly points elsewhere. `getMaxWidgetLines`,
+`getCollapseOnResume` and `resolveCollapseKey` forward the home. This matches
+`@juicesharp/rpiv-config`'s one-way fallback: a present malformed XDG file returns
+its parse result and never falls back to legacy. The existing JSON loader remains
+upstream's `loadJsonConfig`, not a second parser.
+
+Test census:
+
+- Before bootstrap: `npm test` exits 127 (`vitest: command not found`), zero tests.
+- Stock split `7903c76b` with this support/config: 253 tests in 21 files pass.
+- Selected fork `3c62a0b` with this support/config: 377 tests in 26 files pass.
+- With the rendering regressions: 382 Vitest tests in 28 files pass.
+- After home injection (#171): 390 Vitest tests in 29 files pass.
+- After measured coverage closure: 408 Vitest tests in 29 files pass on Node and Bun.
+  `test:bun` runs the full suite through `scripts/run-vitest.ts bun`, including both
+  real interactive settled-row regressions, not a separate two-test native suite.
+
+`settled-row.ts` mounts the real core interactive harness and VirtualTerminal,
+registering this fork's renderers with a snapshot-less legacy result. Both update
+and delete rows failed with `expected ... to contain 'changed subject'` before
+the fix and pass after it. Valid historical snapshots intentionally do not change
+when the live task changes; the existing historical-row tests remain unchanged.
+
+## Package layout
+
+Runtime code and locales live under `src/`; tests mirror it under `tests/`, with injected-home fixtures under `tests/fixtures/`. The `rpiv-test-utils` alias still resolves the licensed session/theme fixtures in `tests/fixtures/upstream/`; Pi API/context doubles use `@nredd/pi-test-lib/pi`. The historical standalone-support notes above are preserved verbatim, not current path guidance. Upstream updates are manual ports.

@@ -227,7 +227,7 @@ def test_packed_only_selects_package(tmp_path: Path, monkeypatch: pytest.MonkeyP
     [
         ("computer-use", "native/macos/agent_cursor_motion.swift", "agent_cursor_motion.swift"),
         ("preset", "themes/", "themes/belafonte-day.json"),
-        ("todo", "", "production source 'state/critic-unpacked.ts' requires packed"),
+        ("todo", "", "production source 'src/state/critic-unpacked.ts' requires packed"),
     ],
 )
 def test_package_check_rejects_disposable_payload_mutation(
@@ -269,7 +269,11 @@ def test_package_check_rejects_disposable_payload_mutation(
         manifest["files"].remove(omitted)
         path.write_text(json.dumps(manifest))
     else:
-        (package / "state/critic-unpacked.ts").write_text("export const unpacked = true;\n")
+        (package / "src/state/critic-unpacked.ts").write_text("export const unpacked = true;\n")
+        path = package / "package.json"
+        manifest = json.loads(path.read_text())
+        manifest["files"].append("!src/state/critic-unpacked.ts")
+        path.write_text(json.dumps(manifest))
     done = subprocess.run(
         [pc.locate_tools().npm, "run", "check"],
         cwd=package,
