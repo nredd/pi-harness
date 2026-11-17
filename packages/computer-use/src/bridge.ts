@@ -3213,7 +3213,8 @@ function managedBrowserArgs({
 async function canonicalProfileRoot(root: string): Promise<string> {
 	const absolute = path.resolve(root);
 	try {
-		return await realpath(absolute);
+		// Resolve before lexical normalization: `link/..` follows the link's filesystem parent.
+		return await realpath(root);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return absolute;
 		throw error;
@@ -3222,7 +3223,8 @@ async function canonicalProfileRoot(root: string): Promise<string> {
 
 /** Compare directory ancestry by filesystem identity, retaining alias parents and filesystem case semantics. */
 async function profilePathContains(parent: Stats, descendant: string): Promise<boolean> {
-	for (let entry = path.resolve(descendant); ; entry = path.dirname(entry)) {
+	const absolute = path.isAbsolute(descendant) ? descendant : `${process.cwd()}${path.sep}${descendant}`;
+	for (let entry = absolute; ; entry = path.dirname(entry)) {
 		try {
 			const info = await stat(entry);
 			if (info.dev === parent.dev && info.ino === parent.ino) return true;

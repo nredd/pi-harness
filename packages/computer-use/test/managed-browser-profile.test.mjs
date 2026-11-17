@@ -1039,6 +1039,31 @@ describe("persistent profile opt-in", () => {
 			},
 		);
 
+		test.each([true, false])(
+			"preserves filesystem parent traversal through a symlink (root exists: %s)",
+			async (exists) => {
+				const declaredParent = path.join(root, "declared-parent");
+				const resolvedParent = path.join(root, "resolved-parent");
+				fs.mkdirSync(declaredParent, { mode: 0o700 });
+				fs.mkdirSync(path.join(resolvedParent, "deep"), { recursive: true, mode: 0o700 });
+				fs.chmodSync(resolvedParent, 0o700);
+				const alias = path.join(declaredParent, "link");
+				fs.symlinkSync(path.join(resolvedParent, "deep"), alias);
+				if (exists) fs.mkdirSync(path.join(resolvedParent, "config"), { mode: 0o700 });
+				process.env.XDG_CONFIG_HOME = `${alias}/../config`;
+				await assert.rejects(testing.persistentBrowserProfile(resolvedParent), /default browser/);
+				assert.equal(await testing.persistentBrowserProfile(profile), profile);
+			},
+		);
+
+		test("resolves relative configuration roots by filesystem ancestry", async () => {
+			const configRoot = path.join(home, "relative-config");
+			fs.mkdirSync(configRoot, { mode: 0o700 });
+			process.env.CHROME_CONFIG_HOME = path.relative(process.cwd(), configRoot);
+			await assert.rejects(testing.persistentBrowserProfile(configRoot), /default browser/);
+			assert.equal(await testing.persistentBrowserProfile(profile), profile);
+		});
+
 		test("retains macOS default-parent protection when all children are symlinked elsewhere", async () => {
 			const parent = path.join(home, "Library/Application Support/Google");
 			const target = path.join(root, "relocated-macos");
