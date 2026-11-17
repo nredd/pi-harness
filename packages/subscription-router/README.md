@@ -17,26 +17,11 @@ recording Pi doubles come from `@nredd/pi-test-lib`. The byte-pinned legacy orac
 formatting, linting and assists there. Snapshot provenance and oracle rules are below;
 `tests/policy-compatibility.test.ts` and `tests/policy-differential.test.ts` keep warning headers.
 
-### Cancellation acceptance graph (release-blocked)
+### Cancellation ownership
 
-The ordinary `npm run check` still exercises the released dependency graph, with its existing
-`tests/*.test.ts` and `tests/scenarios/*.test.ts` inventory explicit in `vitest.config.ts`.
-The additional `npm run test:acceptance` selects `tests/acceptance/` and the child stack proofs
-through a fixed inventory in `vitest.acceptance.config.ts` for the corrected
-core active-run signal and cancellation-before-settle-commit contract. It must run on both Node
-and Bun **alongside**, not instead of, the complete package gate on an isolated candidate install.
-The released graph retains its full root gate, including `@nredd/pi-stack-tests` and official
-release-artifact identity contracts. Candidate acceptance additionally runs the two new real-child
-stack scenarios in its fixed inventory. The real-child proofs live in the existing in-process stack suite,
-`tests/inprocess/router-{failover,ownership}.test.ts`, alongside its disk-loaded router fixtures.
-It deliberately fails on the current `v1.3.0-nredd.11` pin; no test is conditionally skipped or
-changed to pass on that pin. This source change is release-blocked until a reviewed core release
-contains [the cancellation fix](https://github.com/nredd/pi/pull/112) and coordinated dependency
-validation passes. Core PR merge alone does not publish those bytes. No production dependency,
-lockfile or Gitlink is changed here.
-
-Candidate verification uses an isolated immutable-tarball install, not a core checkout or shared
-`node_modules`. Record its exact source and artifact identities separately from released pins.
+Recovery relies on core's active-run `ctx.signal` (core `v1.3.0-nredd.12` or later; `.11` and
+older hosts lack it and can commit a stale recovery after an abort). The real-child proofs live in
+the in-process stack suite, `tests/inprocess/router-{failover,ownership}.test.ts`.
 Core's ordinary retry omission happens *before* retry routing; invalidating that retry prevents
 new recovery edits, not rollback of an earlier committed edit.
 
@@ -221,11 +206,10 @@ budgets and edits remain session-owned, including when siblings share one runtim
 running child settles with error rather than becoming scheduled work; pre-dispatch wait/fail,
 parking, reset expiry and manual-resume semantics are unchanged.
 
-With the corrected core contract, terminal recovery announces the confirmed source and forecast
+Terminal recovery announces the confirmed source and forecast
 destination once. It never hides partial text, thinking or tool calls. Confirmation must still
 precede the context edit and continuation; manual changes or aborts while it waits suppress both
-the edit and notice. Older core hosts lack the complete terminal cancellation contract; the
-additional candidate acceptance gate above is required before shipping this behavior.
+the edit and notice. Hosts older than core `v1.3.0-nredd.12` lack the cancellation signal this depends on.
 
 Usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
 auth has no subscription window and is never blocked. Codex window names follow the reported

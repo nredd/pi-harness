@@ -37,12 +37,11 @@
     "typecheck": "tsc --noEmit",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
-    "test:acceptance": "node ../../scripts/run-vitest.ts node --config vitest.acceptance.config.ts && node ../../scripts/run-vitest.ts bun --config vitest.acceptance.config.ts --coverage.reportsDirectory=coverage/candidate-bun",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz",
-    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+    "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.12/earendil-works-pi-ai-1.3.0.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.12/earendil-works-pi-coding-agent-1.3.0.tgz",
     "@nredd/pi-test-lib": "0.0.0",
     "typebox": "1.3.27"
   },
