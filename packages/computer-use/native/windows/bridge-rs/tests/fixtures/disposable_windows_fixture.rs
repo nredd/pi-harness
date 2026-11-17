@@ -426,15 +426,26 @@ mod native {
             (cursor_after.x, cursor_after.y)
         );
         assert_eq!(unsafe { GetForegroundWindow() }, foreground_before);
+        // Valid public path plus malicious reserved fields proves actual-exe isolation,
+        // independently of the malformed-path refusal above.
+        let mut valid_attack = act_args.clone();
+        valid_attack["action"] = json!("drag");
+        valid_attack["params"] = json!({"path":[{"x":0.55,"y":0.5}]});
+        valid_attack["resolvedPath"] = json!([{"x":0,"y":0},{"x":100000,"y":100000}]);
+        valid_attack["resolvedPoint"] = json!({"x":100000,"y":100000});
+        assert_eq!(
+            helper.success("act", valid_attack)["performed"]["delivery"],
+            "hid"
+        );
         let fixture_input = PhysicalLease::acquire().expect("resume owned fixture capture tests");
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
-        while CLICKS.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+        while CLICKS.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(
             CLICKS.load(Ordering::SeqCst),
-            1,
-            "only the disposable current target receives input"
+            2,
+            "only the disposable current target receives click and valid drag"
         );
         assert!(
             unsafe { ShowWindow(HWND(fixture.hwnd as *mut _), SW_MINIMIZE) }.as_bool(),
@@ -557,8 +568,8 @@ mod native {
         );
         assert_eq!(
             CLICKS.load(Ordering::SeqCst),
-            1,
-            "removed target cannot replay the earlier click"
+            2,
+            "removed target cannot replay the earlier click or drag"
         );
         drop(helper);
 

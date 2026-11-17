@@ -49,13 +49,55 @@ pub fn parse_act_request(args: &Value) -> Result<ParsedActRequest, ProtocolError
     } else {
         return Err(invalid("act target must include ref or x/y"));
     };
+    let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
+    if !params.is_object() {
+        return Err(invalid("act params must be an object"));
+    }
+    match action.as_str() {
+        "setText" | "typeText" if params.get("text").and_then(Value::as_str).is_none() => {
+            return Err(invalid("text must be an explicit string"))
+        }
+        "press" | "click" => {
+            if let Some(button) = params.get("button") {
+                if !matches!(button.as_str(), Some("left" | "right" | "middle")) {
+                    return Err(invalid("Unsupported mouse button"));
+                }
+            }
+        }
+        "keypress" => {
+            if !params
+                .get("keys")
+                .and_then(Value::as_array)
+                .is_some_and(|keys| {
+                    !keys.is_empty()
+                        && keys
+                            .iter()
+                            .all(|key| key.as_str().is_some_and(|name| !name.is_empty()))
+                })
+            {
+                return Err(invalid("keys must contain only nonempty strings"));
+            }
+        }
+        "scroll" => {
+            for axis in ["scrollX", "scrollY"] {
+                if params
+                    .get(axis)
+                    .is_some_and(|value| !value.as_f64().is_some_and(f64::is_finite))
+                {
+                    return Err(invalid("Scroll deltas must be finite numbers"));
+                }
+            }
+        }
+        "drag" | "moveMouse" | "setText" | "typeText" => {}
+        _ => return Err(invalid("Unsupported action")),
+    }
     Ok(ParsedActRequest {
         look_id,
         pid: args.get("pid").and_then(Value::as_u64),
         action,
         policy,
         target,
-        params: args.get("params").cloned().unwrap_or_else(|| json!({})),
+        params,
     })
 }
 
@@ -579,7 +621,7 @@ mod tests {
                     ErrorCode::ForegroundRequired
                 };
                 let args = json!({"lookId":"look_1","action":action,"policy":policy,
-                    "target":{"x":1,"y":2},"resolvedPoint":{"x":1,"y":2}});
+                    "target":{"x":1,"y":2},"resolvedPoint":{"x":1,"y":2},"params":{"text":"explicit text","keys":["enter"],"path":[{"x":0,"y":0}],"scrollY":1}});
                 let mut delivered = false;
                 let error = act_with(&args, |_, _, _| {
                     delivered = true;

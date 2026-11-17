@@ -46,7 +46,9 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   text fallback additionally requires an edit
   control. It does not click again after that verification or type into the previously focused field.
 - Every input executable is rebuilt from public request fields. Caller `resolved*` fields are
-  discarded, including nested params. Every actual rounded drag vertex (start, waypoints, end) is
+  discarded, including nested params. Text writes require an explicit string (empty is supported
+  only when explicit); invalid button names, mixed/non-string key arrays and nonnumeric scroll
+  deltas refuse during parsing before any mutation. Every actual rounded drag vertex (start, waypoints, end) is
   checked before the first mutation for live containment and hit-tested ownership. Coordinate paths
   use observed image pixels, reject stale window geometry and never clamp out-of-range vertices.
   Ref drag paths use `params.path` fractions in `[0,1]` of the current live control, starting at its

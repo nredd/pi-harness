@@ -1274,7 +1274,7 @@ fn resolved_executable(
             .get("path")
             .and_then(Value::as_array)
             .filter(|path| !path.is_empty() && path.len() <= 1024)
-            .ok_or_else(|| invalid("drag requires1...1024 path vertices"))?;
+            .ok_or_else(|| invalid("drag requires 1...1024 path vertices"))?;
         for point in path {
             let x = point
                 .get("x")
@@ -1730,6 +1730,19 @@ fn cancelled() -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_params_refuse_before_any_field_can_be_cleared_or_clicked() {
+        for (action, params) in [
+            ("setText", json!({})),
+            ("typeText", json!({"text":null})),
+            ("click", json!({"button":"unexpected"})),
+            ("keypress", json!({"keys":["ctrl",42]})),
+        ] {
+            assert!(input::parse_act_request(&json!({"lookId":"look","action":action,"policy":"foreground","target":{"ref":"ref"},"params":params})).is_err());
+        }
+        assert!(input::parse_act_request(&json!({"lookId":"look","action":"setText","target":{"ref":"ref"},"params":{"text":""}})).is_ok(),"explicit empty value remains supported");
+    }
 
     #[test]
     fn attacker_resolution_is_discarded_and_ref_drag_is_built_from_live_bounds() {
