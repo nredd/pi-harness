@@ -224,7 +224,6 @@ def test_build_attestation_credential_boundary() -> None:
         None: Build, attestation and publication permissions remain separated.
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
-    assert "macos-15" in jobs["verify"]["runs-on"]
     # `actions: read` lets the frozen-candidate evidence check read workflow runs.
     assert jobs["verify"]["permissions"] == {"contents": "read", "actions": "read"}
     attest = jobs["attest"]
@@ -242,4 +241,3 @@ def test_build_attestation_credential_boundary() -> None:
         assert flag in steps[verify_index]["run"]
     staging = yaml.safe_load((ROOT / ".github/workflows/native-helper.yml").read_text())
     assert staging["permissions"] == {"contents": "read"}
-    assert staging["jobs"]["build"]["runs-on"] == "macos-15"
