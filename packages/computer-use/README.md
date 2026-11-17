@@ -17,8 +17,10 @@ macOS 14+ ships per-architecture helpers. Setup installs at `~/Applications/pi-c
 existing stable keychain identity. Grant Accessibility and Screen Recording to that app. We do not
 switch to upstream's CI self-signed bundle: changing signer would require a TCC re-grant.
 
-Linux ships its locked Rust crate source, not a binary. Run inside the graphical user's AT-SPI2
-session. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
+Linux ships its locked Rust crate source, not a binary. Native desktop observation/input must run
+inside the graphical user's AT-SPI2 session. CDP browser pages (`launch_browser`, `navigate_browser`,
+`evaluate_browser` and state-scoped observation/query/action tools on browser states) do not require
+AT-SPI or a desktop session; without a display, the managed Linux browser runs headless. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
 than the npm install directory, and need Cargo plus a C linker. See the
 [Linux guide](#linux). Windows source remains in the repository;
 Windows helpers and crate sources are not packed. If the Linux helper's input stream fails, in-flight
@@ -44,6 +46,13 @@ They share a scoped physical-input lock with `act_ui`; background semantic work 
 The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.
 `observe_ui` now defaults to compact controls; `detail: "outline"` returns the structural view.
 Upstream's opt-in `activity_glow` is retained and defaults to false.
+
+`launch_browser` uses a fresh temporary profile by default. An explicit user-global
+`managed_browser_profile` can reuse a dedicated owner-only, non-default directory outside Git
+checkouts. It holds live credentials: do not commit, sync or share it. Pi never imports personal
+profiles or signs in automatically. See the [configuration reference](#preserved-configuration)
+for opt-in, permission checks, locking, crash recovery and platform limits. Launch results report
+the selected executable; observations warn on possible login walls, not proof of authentication.
 
 On CDP browser states, `act_ui` `moveMouse` requires explicit `x`/`y` coordinates; a `ref`
 target fails with `invalid_args` rather than sending absent coordinates. Browser `keypress` requires
@@ -2022,6 +2031,14 @@ Default: `"chrome"`
 
 Selects `"helium"` or `"chrome"` for `launch_browser`. The debugging port is always allocated internally and isn't part of the model-facing contract.
 
+### `managed_browser_profile`
+
+Default: `null` (fresh temporary profile for every launch).
+
+Only the **user-global** config may set this option; project config cannot opt into or redirect a credential-bearing profile. Set an absolute path (or `~/...`) to a dedicated, pre-created directory outside every Git checkout. On POSIX it must be owned by the current user with mode `0700`, not a symlink (including ancestor components), and not a browser's default data directory, its ancestors or descendants. Use a canonical path if the home directory is an alias. For example, create `~/.pi/computer-use-profile` with `mkdir -m 700 ~/.pi/computer-use-profile`, then set `"managed_browser_profile": "~/.pi/computer-use-profile"` in the global file. Native Windows persistent profiles are refused because POSIX modes do not establish an owner-only Windows ACL; temporary profiles remain available.
+
+This directory holds **live credentials**, cookies and browsing history. Never commit, sync or share it. A user may sign in manually once, with separate explicit consent, then later launches reuse that dedicated profile. Pi does not import an existing personal browser profile, inspect credentials, or perform login automatically. Close other browsers using the directory before launch. Pi acquires an atomic `.pi-computer-use.lock` directory and refuses existing Pi leases or Chromium `SingletonLock`, `SingletonCookie` or `SingletonSocket` entries, including dangling symlinks. It never removes Chromium locks or steals a stale lease. Normal shutdown and failed launches stop the browser and release Pi's lease, but never delete this profile. A hard Pi exit kills the browser and leaves the lease fail-closed; a host crash may also leave Chromium locks. Verify that every process using this dedicated profile has stopped before manually resolving stale locks (`rmdir <profile>/.pi-computer-use.lock` for an empty Pi lease). Chromium's own lock is the final arbitration with browsers launched outside Pi. Remove it manually to revoke local reuse; server-side sessions may need separate revocation. This is a guard against mistakes, not isolation from other processes running as the same user.
+
 ### `headless`
 
 Default: `false`
@@ -2104,7 +2121,7 @@ On Linux, `launch_browser` launches the managed browser headless (`--headless=ne
 
 `PI_COMPUTER_USE_CDP_PORT` enables Chrome DevTools Protocol support for Chromium-family browsers. Launch the browser with `--remote-debugging-port=<port>` and set this variable to the same port.
 
-Use a dedicated, non-default profile with `--user-data-dir=<directory>`. Chrome 136 and later ignore remote-debugging switches for the default data directory as a security measure. `launch_browser` already creates a private temporary CDP profile for each launch (a fresh owner-only directory under the system temp dir, removed when the browser exits or Pi quits) and binds discovery to a randomly allocated loopback port. An aborted launch waiting behind another managed-browser lifecycle step does not start a browser. Session shutdown waits for admitted launches to enter that lifecycle and stops their managed browser.
+Use a dedicated, non-default profile with `--user-data-dir=<directory>`. Chrome 136 and later ignore remote-debugging switches for the default data directory as a security measure. By default, `launch_browser` creates a private temporary CDP profile for each launch (a fresh owner-only directory under the system temp dir, removed when the browser exits or Pi quits) and binds discovery to a randomly allocated loopback port. An aborted launch waiting behind another managed-browser lifecycle step does not start a browser. Session shutdown waits for admitted launches to enter that lifecycle and stops their managed browser.
 
 When CDP is active, discovered pages participate in the same root and state system as desktop UI. `launch_browser` configures CDP automatically and returns an observed page state. `navigate_browser` and `evaluate_browser` accept only CDP browser-page states; native browser windows continue to use the normal desktop observe/act tools.
 

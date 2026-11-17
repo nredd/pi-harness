@@ -1,9 +1,9 @@
 // `src/config.ts` file, env and `blocked_apps` loading: every boolean spelling, bad shapes and missing files (nredd/pi-harness#703, Refs #645).
 import assert from "node:assert/strict";
+import * as nodeFs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as nodeFs from "node:fs";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import {
 	ALWAYS_BLOCKED_BUNDLE_IDS,
@@ -73,6 +73,7 @@ describe("defaults", () => {
 			desktop_control: true,
 			activity_glow: false,
 			managed_browser: "chrome",
+			managed_browser_profile: null,
 			blocked_apps: [...DEFAULT_BLOCKED_APPS],
 		});
 		assert.deepEqual(
@@ -178,6 +179,21 @@ describe("managed_browser", () => {
 		assert.equal(loadComputerUseConfig(cwd()).config.managed_browser, "helium");
 		process.env.PI_COMPUTER_USE_MANAGED_BROWSER = "safari";
 		assert.equal(loadComputerUseConfig(cwd()).config.managed_browser, "chrome");
+	});
+});
+
+describe("managed_browser_profile", () => {
+	test("only user-global config can opt into a persistent credential-bearing profile (#674)", () => {
+		writeJson(projectFile(), { managed_browser_profile: "/repo-controlled" });
+		assert.equal(loadComputerUseConfig(cwd()).config.managed_browser_profile, null);
+		for (const value of [null, 42, "", "   "]) {
+			writeJson(userFile(), { managed_browser_profile: value });
+			assert.equal(loadComputerUseConfig(cwd()).config.managed_browser_profile, null);
+		}
+		writeJson(userFile(), { computer_use: { managed_browser_profile: " ~/dedicated-profile " } });
+		assert.equal(loadComputerUseConfig(cwd()).config.managed_browser_profile, "~/dedicated-profile");
+		writeJson(projectFile(), { computer_use: { managed_browser_profile: "/repo-controlled" } });
+		assert.equal(loadComputerUseConfig(cwd()).config.managed_browser_profile, "~/dedicated-profile");
 	});
 });
 
