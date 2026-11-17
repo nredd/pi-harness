@@ -195,6 +195,21 @@ def test_complete_retained_artifacts(change: str) -> None:
         gate.validate_execution(SHA, run, jobs, artifacts)
 
 
+@pytest.mark.parametrize("shard", ["scripts", "python"])
+def test_macos_partition_requires_each_selected_shard(shard: str) -> None:
+    """Refuse a green fan-in with either independent Python producer job missing.
+
+    Parameters:
+        shard (str): Selected macOS shard removed from the execution evidence.
+    """
+    run, jobs, artifacts = evidence()
+    name = f"owned shard (macos-14, {shard})"
+    assert name in {job["name"] for job in jobs}
+    jobs = [job for job in jobs if job["name"] != name]
+    with pytest.raises(ValueError, match="verification job"):
+        gate.validate_execution(SHA, run, jobs, artifacts)
+
+
 def test_required_job_names_are_pinned() -> None:
     """Name every required cell literally, so dropping one cannot pass via `expected_jobs()` fixtures.
 
@@ -212,6 +227,7 @@ def test_required_job_names_are_pinned() -> None:
         "owned shard (macos-14, subagents)",
         "owned shard (macos-14, computer-use)",
         "owned shard (macos-14, ts)",
+        "owned shard (macos-14, scripts)",
         "owned shard (macos-14, python)",
         "owned shard (wsl2, subagents-computer-use)",
         "owned shard (wsl2, ts)",

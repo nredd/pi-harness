@@ -89,7 +89,12 @@ make help                    # every target
 
 ## CI and release
 
-- What runs, what is NOT RUN, sharding, coverage and stack diagnostics: comments in [CI](.github/workflows/ci.yml)
+- What runs, what is NOT RUN, sharding, coverage and stack diagnostics: comments in [CI](.github/workflows/ci.yml).
+  macOS runs `check-scripts` in its own shard, separate from `check-integration` and `check-benchmark`,
+  within the unchanged 30-minute budgets. Both full release/harness coverage passes and all Node/Bun
+  producers remain mandatory; the required `owned` check fans in their independent artifacts.
+  Windows build-routing failures retain bounded child output tails and exit/deadline provenance;
+  the native build deadline is still 120 seconds, not a claim that a cold-build cause is proven.
 - WSL setup runs after apt guarantees Python3: `scripts/wsl2_setup.sh` is a compatible argv-forwarding
   bootstrap over measured `scripts/wsl2_setup.py`. Hosted copy, baked-tool reuse, bounds and PATH receipts
   are tested locally; real WSL execution remains CI proof. Pre-Python apt/DNS/host scripts and PowerShell

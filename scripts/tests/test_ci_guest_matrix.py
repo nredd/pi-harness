@@ -1182,6 +1182,19 @@ def test_owned_shards_run_exactly_the_gates_the_plan_lists(os_name: str, gates: 
     assert set().union(*executed.values()) == gates
 
 
+def test_partition_preserves_native_budget_and_both_full_coverage_runs() -> None:
+    """Keep native shard deadlines, worker limits and both full coverage invocations intact."""
+    for job in OWNED_SHARD_JOBS.values():
+        assert jobs()[job]["timeout-minutes"] == "${{ matrix.os == 'wsl2' && 45 || 30 }}"
+    makefile = (ROOT / "Makefile").read_text()
+    assert "pytest $(3) -n 2 --dist loadfile" in makefile
+    assert "$(call PY_GATE,release,,-c pyproject.toml ../tests/integration/tests,pi_release)" in makefile
+    assert "$(call PY_GATE,tests/integration,,tests,harness)" in makefile
+    integration = makefile.split("check-integration:  ##", 1)[1].split("\ncheck-probes:", 1)[0]
+    assert "$(MAKE) check-probes" in integration
+    assert "$(MAKE) check-providers" in integration
+
+
 def test_only_the_computer_use_shards_add_the_arm64_target() -> None:
     """Install the aarch64 target where computer-use's Linux checks run, nowhere else."""
     for os_name in OWNED_SHARD_JOBS:
@@ -1621,6 +1634,38 @@ def test_fan_in_merges_each_shard_report_at_its_repository_path(tmp_path: Path) 
     )
     assert (workspace / "scripts/coverage/primary/lcov.info").read_text() == "coverage-ubuntu-24.04-python\n"
     assert (workspace / "tests/integration/probes/coverage/primary/lcov.info").is_file()
+
+
+def test_macos_partition_keeps_the_complete_python_artifact_union(tmp_path: Path) -> None:
+    """Merge both independent Python suites and every JS/benchmark report without overwrites.
+
+    Parameters:
+        tmp_path (Path): Disposable directory.
+    """
+    reports = {
+        "scripts": [
+            "scripts/coverage/python/lcov.info",
+            "scripts/coverage/primary/lcov.info",
+        ],
+        "python": [
+            "release/coverage/python/lcov.info",
+            "tests/integration/coverage/python/lcov.info",
+            "tests/integration/probes/coverage/primary/lcov.info",
+            "tests/integration/providers/coverage/primary/lcov.info",
+            "tests/integration/providers/coverage/bun/lcov.info",
+            "tests/benchmarks/comparison/coverage/python/lcov.info",
+        ],
+    }
+    entries = {entry["shard"]: entry for entry in shard_entries("macos-14", Trigger(event="push"))}
+    assert entries["scripts"]["gates"] == "check-scripts"
+    assert entries["python"]["gates"] == "check-integration check-benchmark"
+    completed, workspace = run_merge(
+        tmp_path, {f"coverage-macos-14-{name}": paths for name, paths in reports.items()}
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    for name, paths in reports.items():
+        for path in paths:
+            assert (workspace / path).read_text() == f"coverage-macos-14-{name}\n"
 
 
 def test_fan_in_refuses_a_report_two_shards_produced(tmp_path: Path) -> None:

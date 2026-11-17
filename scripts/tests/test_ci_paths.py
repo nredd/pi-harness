@@ -1001,10 +1001,19 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
             },
             {
                 "os": "macos-14",
+                "shard": "scripts",
+                "runner": "xcode-27",
+                "guest": "macos",
+                "gates": "check-scripts",
+                "workspaces": "",
+                "skipped_gates": "",
+            },
+            {
+                "os": "macos-14",
                 "shard": "python",
                 "runner": "xcode-27",
                 "guest": "macos",
-                "gates": "check-scripts check-integration check-benchmark",
+                "gates": "check-integration check-benchmark",
                 "workspaces": "",
                 "skipped_gates": "check-benchmark",
             },
@@ -1310,7 +1319,7 @@ def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Pa
 WORKSPACES = ci_paths.npm_workspaces(ci_paths.REPO_ROOT)
 SHARD_NAMES = {
     "ubuntu-24.04": ("subagents", "computer-use", "ts", "python"),
-    "macos-14": ("subagents", "computer-use", "ts", "python"),
+    "macos-14": ("subagents", "computer-use", "ts", "scripts", "python"),
     "wsl2": ("subagents-computer-use", "ts"),
 }
 
@@ -1346,8 +1355,27 @@ def test_owned_shards_run_every_workspace_exactly_once_in_npm_order(repo: Path, 
     assert all(entry["workspaces"] == "" for entry in entries if "check-ts" not in entry["gates"].split())
 
 
+def test_macos_scripts_have_an_independent_budget_without_dropping_gates(repo: Path) -> None:
+    """Separate the 19-minute scripts gate from both full integration coverage runs.
+
+    Parameters:
+        repo (Path): Disposable repository.
+    """
+    cell = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PUSH)["owned (macos-14)"]
+    scripts = next(shard for shard in cell.shards if "check-scripts" in shard.gates)
+    integration = next(shard for shard in cell.shards if "check-integration" in shard.gates)
+    assert scripts.name != integration.name
+    assert scripts.gates == ("check-scripts",)
+    assert integration.gates == ("check-integration", "check-benchmark")
+    assert [gate for shard in cell.shards for gate in shard.gates if gate != "check-ts"] == [
+        "check-scripts",
+        "check-integration",
+        "check-benchmark",
+    ]
+
+
 def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> None:
-    """Pin the shard split: four Ubuntu shards, four macOS shards, two WSL shards.
+    """Pin the shard split: four Ubuntu shards, five macOS shards, two WSL shards.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -1370,7 +1398,8 @@ def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> No
         for workspace in WORKSPACES
         if workspace not in {"packages/subagents", "packages/computer-use"}
     ]
-    assert mac["python"]["gates"] == "check-scripts check-integration check-benchmark"
+    assert mac["scripts"]["gates"] == "check-scripts"
+    assert mac["python"]["gates"] == "check-integration check-benchmark"
     wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
     assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
     assert wsl["ts"]["gates"] == "check-ts check-probes check-providers check-import-audit"
@@ -1566,6 +1595,7 @@ def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs
         "subagents": (),
         "computer-use": (),
         "ts": (),
+        "scripts": (),
         "python": expected,
     }
     # A cell never skips a gate it does not plan: Ubuntu and WSL have no benchmark producer at all.

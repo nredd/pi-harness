@@ -47,7 +47,8 @@ OWNED_SHARDS = {
         "subagents": ("check-ts",),
         "computer-use": ("check-ts",),
         "ts": ("check-ts",),
-        "python": ("check-scripts", "check-integration", "check-benchmark"),
+        "scripts": ("check-scripts",),
+        "python": ("check-integration", "check-benchmark"),
     },
     "wsl2": {
         "subagents-computer-use": ("check-ts",),

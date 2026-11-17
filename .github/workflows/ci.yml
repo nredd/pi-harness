@@ -160,7 +160,7 @@ jobs:
   #
   # The twelve required check names are listed [here](../../README.md#required-checks).
   #
-  # Capacity: full PR CI requests six macOS jobs (four `owned` shards, `contracts`, `stack (macos-14, local)`) and three Windows jobs only with WSL inputs (two `owned` shards, `contracts`). Before #350 it requested three macOS jobs, and before that four of each, every run. The `owned` fan-ins are Ubuntu jobs that start after their shards. Ubuntu now builds the standalone twice, once per stack cell, where it used to build once and run both stacks serially. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid another build and two stack installs. Bun failures fail their own stack cell.
+  # Capacity: full PR CI requests seven macOS jobs (five `owned` shards, `contracts`, `stack (macos-14, local)`) and three Windows jobs only with WSL inputs (two `owned` shards, `contracts`). Before #350 it requested three macOS jobs, and before that four of each, every run. The `owned` fan-ins are Ubuntu jobs that start after their shards. Ubuntu now builds the standalone twice, once per stack cell, where it used to build once and run both stacks serially. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid another build and two stack installs. Bun failures fail their own stack cell.
   #
   # Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI).
 
@@ -301,7 +301,7 @@ jobs:
   # | Cell | Shards | Why |
   # | --- | --- | --- |
   # | `owned (ubuntu-24.04)` | `subagents`; `computer-use`; `ts` (every other workspace); `python` (`check-scripts`, `check-integration`) | The issue's four units: about 196s, 157s, 254s and 271s of gate time, against 883s in one job |
-  # | `owned (macos-14)` | `subagents`; `computer-use`; `ts` (every other workspace); `python` (`check-scripts`, `check-integration`, `check-benchmark`) | One `ts` job ran every workspace in 15-28 min of a 30 min budget (#660), `packages/subagents` alone about 10-11 min and `packages/computer-use` about 5-6 min, so macOS mirrors the Ubuntu split: about 680s, 360s and 480s of estimated hosted job time (about 75s of setup included; `CELL_SECONDS` values derived from run 42799667706, re-measure after this lands) plus the 462s `python` shard. This trades the old "at most two" macOS shards for four: the three `check-ts` shards run concurrently, so the cell finishes in about the longest shard. |
+  # | `owned (macos-14)` | `subagents`; `computer-use`; `ts` (every other workspace); `scripts` (`check-scripts`); `python` (`check-integration`, `check-benchmark`) | Run 44008954118 spent 19m01s in scripts, then passed both full 2831-case release/harness coverage runs (228s/181s), but hit the unchanged 30m limit during probes. Separate scripts/import-audit from integration/probes/providers and benchmark; keep every gate, both independent coverage passes and the two-worker cap. No new timing estimate is treated as measured pool capacity. |
   # | `owned (wsl2)` | `subagents-computer-use`; `ts` (every other workspace, `check-probes`, `check-providers`, `check-import-audit`) | About 461s and 324s of gate time. Each Windows job pays about 3.5 min of WSL guest setup before its first gate, so a third shard would buy about 2.5 min on a cell that already finishes inside the macOS critical path |
   #
   # Computer-use's macOS Swift invariants explicitly prepare SDK-only imports in their private per-run
@@ -425,6 +425,7 @@ jobs:
         # `defaults.run.shell` cannot read `runner.os`, so the plan's `host` picks it: a hosted wsl2 shard reaches its
         # guest through `wsl.exe`, a pooled one (`native`) already runs inside the linux-arm64 distro.
         shell: ${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
+    # Partition the native gates, never extend their 30-minute budget. WSL retains its existing guest bound.
     timeout-minutes: &owned-shard-timeout ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps: &owned-shard-steps
       - name: Select and verify Git Bash on the Windows host
@@ -590,6 +591,8 @@ jobs:
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
+      # The macOS scripts shard owns scripts/python + import-audit reports; python owns release/harness,
+      # probes/providers and benchmark. Dynamic artifact names and downloads include both without a second list.
       # Reports only: the fan-in accounts for the whole cell. A shard that produces no report (computer-use) uploads
       # nothing, and the fan-in's accounting fails on any report the policy expects and no shard produced.
       - name: Preserve this shard's coverage reports

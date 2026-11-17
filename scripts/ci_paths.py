@@ -145,7 +145,10 @@ OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
         Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
         Shard("computer-use", (CHECK_TS,), ("packages/computer-use",)),
         Shard("ts", (CHECK_TS,)),
-        Shard("python", ("check-scripts", "check-integration", "check-benchmark")),
+        # CI 44008954118: scripts took 19m01s before two full coverage suites and the JS producers.
+        # Give scripts its own unchanged 30-minute job budget; keep the integration recipe intact.
+        Shard("scripts", ("check-scripts",)),
+        Shard("python", ("check-integration", "check-benchmark")),
     ),
     "wsl2": (
         Shard("subagents-computer-use", (CHECK_TS,), ("packages/computer-use", "packages/subagents")),
