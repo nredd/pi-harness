@@ -95,6 +95,8 @@ make help                    # every target
   macOS runs `check-scripts` in its own shard, separate from `check-integration` and `check-benchmark`,
   within the unchanged 30-minute budgets. Both full release/harness coverage passes and all Node/Bun
   producers remain mandatory; the required `owned` check fans in their independent artifacts.
+  The admitted `probes/bun` and `import-audit/bun` signals keep their independent zero-miss
+  enforcement at `tests/integration/probes/coverage/bun` and `scripts/coverage/bun`.
   Windows build-routing failures retain bounded child output tails and exit/deadline provenance;
   the native build deadline is still 120 seconds, not a claim that a cold-build cause is proven.
 - WSL setup runs after apt guarantees Python3: `scripts/wsl2_setup.sh` is a compatible argv-forwarding

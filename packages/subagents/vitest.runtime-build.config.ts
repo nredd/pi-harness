@@ -1,7 +1,7 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
 // No home guard: this producer never read one.
-export default definePackageConfig("subagents-runtime-tooling", {
+const config = definePackageConfig("subagents-runtime-tooling", {
 	provider: "istanbul",
 	reportsDirectory: "coverage/runtime-build-tooling",
 	homeGuard: false,
@@ -16,3 +16,5 @@ export default definePackageConfig("subagents-runtime-tooling", {
 		},
 	},
 });
+
+export default config;

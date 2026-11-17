@@ -205,7 +205,16 @@
     {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/native-timers.ts", "replacement": "tests/inprocess/native-timers.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/support.ts", "replacement": "tests/inprocess/support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/todo-support.ts", "replacement": "tests/inprocess/todo-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/core-artifacts.ts", "replacement": "tests/inprocess/verification/core-artifacts.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."}
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/core-artifacts.ts", "replacement": "tests/inprocess/verification/core-artifacts.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/anthropic-block-types.mjs","replacement":"tests/integration/probes/anthropic-block-types.mjs","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/latency.ts","replacement":"tests/integration/probes/latency.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/render.ts","replacement":"tests/integration/probes/render.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/session-kit-child-scope.ts","replacement":"tests/integration/probes/session-kit-child-scope.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/stack-resources.ts","replacement":"tests/integration/probes/stack-resources.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/transcript-types.ts","replacement":"tests/integration/probes/transcript-types.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/inprocess/vitest.config.ts","replacement":"tests/inprocess/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/probes/vitest.config.ts","replacement":"tests/integration/probes/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/providers/vitest.config.ts","replacement":"tests/integration/providers/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."}
   ],
   "enforcement_changes": [],
   "verification_helpers": [
@@ -615,10 +624,16 @@
       ],
       "exclusions": [],
       "status": "measured",
-      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root verification scripts measured in process on Node and Bun by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. Named config initializers retain real executable statement maps on both engines. The Vitest root is the repository root so both reports cover configurations outside `scripts/`, with the complete owned inventory at zero L/F/B/S. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "scripts/coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "scripts/coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
@@ -629,10 +644,16 @@
       "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Every executable probe runs in process under `check-probes`: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Joins the 100-percent goal at 0/0.",
+      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }

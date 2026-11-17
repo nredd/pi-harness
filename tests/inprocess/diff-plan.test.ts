@@ -5,7 +5,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { git } from "@nredd/pi-test-lib/git";
 import { STATUS } from "@nredd/pi-test-lib/terminal";
 import { afterEach, expect, it } from "vitest";
-import { configFor, TerminalFixture } from "../../packages/session-kit/tests/fixtures/session.ts";
+import { configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
+import { TerminalFixture } from "../../packages/session-kit/tests/fixtures/terminal.ts";
 import { isolateStackHome, loadFork } from "./support.ts";
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;

@@ -249,7 +249,8 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
         recipe = makefile.split(f"{target}:", 1)[1].split("\n\n", 1)[0]
         assert recipe.count(f"cd {directory} && env -i ") == 2
         assert f"node {launcher} node --coverage\n" in recipe
-        assert recipe.endswith(f"node {launcher} bun --coverage.enabled=false")
+        suffix = " --coverage.reportsDirectory=scripts/coverage/bun" if target == "check-import-audit" else ""
+        assert recipe.endswith(f"node {launcher} bun{suffix}")
     assert (
         "cd tests/integration/providers && node ../../../scripts/run-vitest.ts node --coverage\n" in makefile
     )

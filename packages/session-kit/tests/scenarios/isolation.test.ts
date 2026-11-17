@@ -1,6 +1,6 @@
-import { fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { nextEvent } from "@nredd/pi-test-lib/faux";
+import { fauxAssistantMessage, getMessageText } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { configFor, goalStates, heldResponse, ScenarioFixture, spoken, tick } from "../fixtures/session.ts";
 

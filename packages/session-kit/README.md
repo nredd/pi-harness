@@ -761,6 +761,20 @@ cover file-backed restore, child rename/reload, command completions, rules, titl
 monitor wakes/cursors/caps/timeouts, diffs, stats and resource views without operator credentials.
 Cross-extension Plan/subagent/todo behavior remains in the root integration tier.
 
+`tests/fixtures/session.ts` uses the public-SDK `@nredd/pi-test-lib/harness`; only
+`tests/fixtures/terminal.ts` imports the fork interactive host. The same fixed 38-case scope
+runs on fork and stock Pi 1.5.2, on Node and Bun: `tests/fixture-boundary.test.ts`,
+`tests/monitor/extension-boundaries.test.ts`, and `tests/scenarios/{goal,goal-restore,loop,monitor,
+child-identity,isolation,rules,command-callbacks}.test.ts`. These cover goal continuation,
+evidence/restore, loop scheduling/isolation, monitor lifecycle/failure/cleanup, child rename/reload,
+command completions and rules. Pass those ten files to `node ../../scripts/run-vitest.ts node
+--coverage.enabled=false` (replace the engine argument `node` with `bun` for Bun).
+The graph controls follow the shared helpers and reject the real terminal fixture's fork export.
+The full fork suite remains mandatory. Terminal scenarios still require the fork's
+`/testing/interactive` (`InteractiveMode`, runtime replacement, `TUI.flushRender` and virtual
+terminal disposal); title routing also uses `registerVirtualModel`. This fixed headless scope
+is not a full-package stock-compatibility claim.
+
 Native process tests require macOS or Linux. From `packages/session-kit`:
 
 ```sh

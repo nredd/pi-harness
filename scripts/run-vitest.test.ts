@@ -196,7 +196,9 @@ test("offline Make gates run both engines without replacing primary coverage", (
 		const recipe = makefile.split(`${target}:`)[1]?.split("\n\n")[0];
 		assert.ok(recipe);
 		assert.ok(recipe.includes(`node ${launcher} node --coverage`));
-		assert.ok(recipe.includes(`node ${launcher} bun --coverage.enabled=false`));
+		const directory = target === "check-import-audit" ? " --coverage.reportsDirectory=scripts/coverage/bun" : "";
+		assert.ok(recipe.endsWith(`node ${launcher} bun${directory}`));
+		assert.doesNotMatch(recipe, /coverage\.enabled=false/);
 		assert.equal(recipe.match(/env -i PATH="\$\$PATH" HOME="\$\$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1/g)?.length, 2);
 		assert.equal(recipe.match(/trap 'rm -rf "\$\$sandbox"' EXIT/g)?.length, 2);
 		assert.doesNotMatch(recipe, /PI_CU_LIVE|PI_COMPUTER_USE_LIVE|\*\.test/);

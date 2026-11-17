@@ -1646,11 +1646,13 @@ def test_macos_partition_keeps_the_complete_python_artifact_union(tmp_path: Path
         "scripts": [
             "scripts/coverage/python/lcov.info",
             "scripts/coverage/primary/lcov.info",
+            "scripts/coverage/bun/lcov.info",
         ],
         "python": [
             "release/coverage/python/lcov.info",
             "tests/integration/coverage/python/lcov.info",
             "tests/integration/probes/coverage/primary/lcov.info",
+            "tests/integration/probes/coverage/bun/lcov.info",
             "tests/integration/providers/coverage/primary/lcov.info",
             "tests/integration/providers/coverage/bun/lcov.info",
             "tests/benchmarks/comparison/coverage/python/lcov.info",
