@@ -55,21 +55,42 @@ export function formatCwd(cwd: string, home?: string, environment: NodeJS.Proces
 	return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
 }
 
-type UsageTotals = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+type UsageTotals = {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+	pricedCount: number;
+	unpricedCount: number;
+};
 
 function emptyTotals(): UsageTotals {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, pricedCount: 0, unpricedCount: 0 };
 }
 
 function addUsage(
 	totals: UsageTotals,
-	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } },
+	usage: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		cost: { total: number; unpriced?: true; unpricedCalls?: number; pricedCalls?: number };
+	},
 ) {
 	totals.input += usage.input;
 	totals.output += usage.output;
 	totals.cacheRead += usage.cacheRead;
 	totals.cacheWrite += usage.cacheWrite;
 	totals.cost += usage.cost.total;
+	// Core's aggregate marker makes total a priced subtotal, not a free request.
+	if (usage.cost.unpriced) {
+		totals.unpricedCount += usage.cost.unpricedCalls ?? 1;
+		totals.pricedCount += usage.cost.pricedCalls ?? (usage.cost.total > 0 ? 1 : 0);
+	} else if (usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0 || usage.cost.total > 0) {
+		totals.pricedCount++;
+	}
 }
 
 /** Request boundaries contain no identity/payload data; ordering establishes selection ownership. */
@@ -300,8 +321,14 @@ export function createExpandedFooter(
 										: `CH${latestCacheHitRate.toFixed(1)}%${marker}`,
 								);
 							}
-							if (totals.cost || usingSubscription) {
-								const costStr = `$${totals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+							if (totals.cost || totals.unpricedCount || usingSubscription) {
+								const priced = `$${totals.cost.toFixed(3)}`;
+								const cost = totals.unpricedCount
+									? totals.pricedCount
+										? `${priced} + ${totals.unpricedCount} unpriced`
+										: "unknown"
+									: priced;
+								const costStr = `${cost}${usingSubscription ? " (sub)" : ""}`;
 								parts.push(full ? `cost ${costStr}` : costStr);
 							}
 							parts.push(full ? contextSegmentFull : contextSegmentPlain);

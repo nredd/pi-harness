@@ -33,8 +33,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resumeAgent } from "../../src/agent-runner.ts";
 import { PendingUsagePool } from "../../src/usage.ts";
 import { fauxModelBackend } from "../fixtures/faux-model-backend.ts";
 import { registerFauxProvider } from "../fixtures/pi-ai.ts";
@@ -57,9 +59,24 @@ describe("subagent usage reaches the parent session's stats (real pi)", () => {
 	});
 
 	/** A real session, in memory, on a faux model. */
-	async function realSession() {
+	async function realSession(responses?: AssistantMessage[]) {
 		const model = faux.getModel();
 		const backend = fauxModelBackend(model);
+		if (responses) {
+			// Explicit offline transport: faux's default transport replaces recorded usage with estimates.
+			backend.modelRuntime.streamSimple = () => {
+				const message = responses.shift();
+				if (!message) throw new Error("No scripted response");
+				const stream = createAssistantMessageEventStream();
+				if (message.stopReason === "error" || message.stopReason === "aborted") {
+					stream.push({ type: "error", reason: message.stopReason, error: message });
+				} else {
+					stream.push({ type: "done", reason: "stop", message });
+				}
+				stream.end(message);
+				return stream;
+			};
+		}
 		const { session } = await createAgentSession({
 			cwd,
 			sessionManager: SessionManager.inMemory(cwd),
@@ -113,6 +130,49 @@ describe("subagent usage reaches the parent session's stats (real pi)", () => {
 			session.dispose?.();
 		}
 	});
+
+	it.each(["error", "aborted"] as const)(
+		"preserves unpriced spend through a real %s response and resume",
+		async (stopReason) => {
+			const pool = new PendingUsagePool();
+			const usage = {
+				input: 12,
+				output: 3,
+				cacheRead: 5,
+				cacheWrite: 0,
+				totalTokens: 20,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, unpriced: true as const },
+			};
+			const message = {
+				role: "assistant" as const,
+				content: [],
+				api: faux.api,
+				provider: "faux",
+				model: "faux-1",
+				timestamp: 1,
+				usage,
+				stopReason,
+				errorMessage: "synthetic provider failure",
+			};
+			const session = await realSession([
+				message,
+				{
+					...message,
+					stopReason: "stop",
+					errorMessage: undefined,
+					usage: { ...usage, cost: { ...usage.cost, unpriced: undefined } },
+				},
+			]);
+			try {
+				await resumeAgent(session, "go", { type: "general-purpose", onAssistantUsage: (u) => pool.add(u) });
+				expect(pool.drain()?.cost).toMatchObject({ unpriced: true, unpricedCalls: 1, pricedCalls: 0, total: 0 });
+				await resumeAgent(session, "continue", { type: "general-purpose", onAssistantUsage: (u) => pool.add(u) });
+				expect(pool.drain()?.cost).not.toHaveProperty("unpriced");
+			} finally {
+				session.dispose();
+			}
+		},
+	);
 
 	it("leaves the context-window percentage alone", async () => {
 		// pi takes context usage from assistant messages; a tool result counts only
