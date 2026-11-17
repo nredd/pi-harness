@@ -50,6 +50,28 @@ export function parseArgs(args, platform = process.platform) {
 	return { crate, output };
 }
 
+/** Hash every source/test and locked build input without changing coverage selection.
+ * @param {string} crateRoot Native crate directory.
+ * @returns {Record<string, string>} Stable relative-path SHA256 inventory.
+ */
+export function collectSourceHashes(crateRoot) {
+	const files = (directory) =>
+		readdirSync(path.join(crateRoot, directory), { withFileTypes: true }).flatMap((entry) => {
+			const name = `${directory}/${entry.name}`;
+			if (entry.isDirectory()) return files(name);
+			if (entry.isFile()) return [name];
+			throw new Error(`Unsupported native source input: ${name}`);
+		});
+	return Object.fromEntries(
+		["Cargo.toml", "Cargo.lock", ...files("src"), ...files("tests")].sort().map((name) => [
+			name,
+			createHash("sha256")
+				.update(readFileSync(path.join(crateRoot, name)))
+				.digest("hex"),
+		]),
+	);
+}
+
 /** Collect tests once, then render LCOV, JSON and a per-file summary from that run.
  * @param {string[]} args CLI arguments.
  * @param {typeof spawnSync} spawn Process runner, injectable for deterministic tests.
@@ -73,22 +95,7 @@ export function runCoverage(args, spawn = spawnSync) {
 	const crateRoot = path.join(root, "native", crate, "bridge-rs");
 	const manifest = path.join(crateRoot, "Cargo.toml");
 	// Bind the raw profile to every shipped source and locked build input, not only mapped files.
-	const sourceHashes = Object.fromEntries(
-		[
-			"Cargo.toml",
-			"Cargo.lock",
-			...["src", "tests"].flatMap((directory) =>
-				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
-			),
-		]
-			.sort()
-			.map((name) => [
-				name,
-				createHash("sha256")
-					.update(readFileSync(path.join(crateRoot, name)))
-					.digest("hex"),
-			]),
-	);
+	const sourceHashes = collectSourceHashes(crateRoot);
 	const env = {
 		...process.env,
 		CARGO_TARGET_DIR: path.join(run, "target"),

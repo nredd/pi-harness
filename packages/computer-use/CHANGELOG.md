@@ -35,6 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Hash nested Rust fixture sources recursively instead of reading `tests/fixtures` as a file in native coverage; retain all locked/source inputs without changing coverage selection (#983).
+
 - Reject malformed native Windows text, button, key and scroll params before mutation; prove caller-resolved path isolation through the real helper with a valid owned drag (#983).
 
 - Rebuild native Windows input without caller `resolved*` fields, admit every drag vertex against current ownership, and forbid implicit action restore/foreground. Preserve UIA focus uncertainty and propagate all hit/ancestor identity failures (#983).

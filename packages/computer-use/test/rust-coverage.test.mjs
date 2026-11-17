@@ -1,12 +1,62 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
-import { parseArgs, runCoverage, TOOL_VERSION } from "../scripts/rust-coverage.mjs";
+import { collectSourceHashes, parseArgs, runCoverage, TOOL_VERSION } from "../scripts/rust-coverage.mjs";
+
+test("hashes nested Windows fixture files, never their directory entries", () => {
+	const crateRoot = fileURLToPath(new URL("../native/windows/bridge-rs/", import.meta.url));
+	const hashes = collectSourceHashes(crateRoot);
+	const nested = "tests/fixtures/disposable_windows_fixture.rs";
+	assert.equal(
+		hashes[nested],
+		createHash("sha256")
+			.update(readFileSync(path.join(crateRoot, nested)))
+			.digest("hex"),
+	);
+	assert.equal(Object.hasOwn(hashes, "tests/fixtures"), false);
+	assert.deepEqual(Object.keys(hashes), Object.keys(hashes).sort());
+	assert.equal(
+		hashes["Cargo.toml"],
+		createHash("sha256")
+			.update(readFileSync(path.join(crateRoot, "Cargo.toml")))
+			.digest("hex"),
+	);
+});
+
+test("source hashes include nested changes and reject linked inputs", () => {
+	const crateRoot = mkdtempSync(path.join(os.tmpdir(), "cu-source-hashes-"));
+	try {
+		mkdirSync(path.join(crateRoot, "src", "empty"), { recursive: true });
+		mkdirSync(path.join(crateRoot, "tests", "fixtures", "nested"), { recursive: true });
+		for (const name of ["Cargo.toml", "Cargo.lock", "src/lib.rs", "tests/fixtures/nested/owned.rs"])
+			writeFileSync(path.join(crateRoot, name), name);
+		const before = collectSourceHashes(crateRoot);
+		assert.deepEqual(Object.keys(before), ["Cargo.lock", "Cargo.toml", "src/lib.rs", "tests/fixtures/nested/owned.rs"]);
+		writeFileSync(path.join(crateRoot, "tests/fixtures/nested/owned.rs"), "changed");
+		assert.notEqual(
+			collectSourceHashes(crateRoot)["tests/fixtures/nested/owned.rs"],
+			before["tests/fixtures/nested/owned.rs"],
+		);
+		symlinkSync(path.join(crateRoot, "src"), path.join(crateRoot, "tests", "linked"), "junction");
+		assert.throws(() => collectSourceHashes(crateRoot), /Unsupported native source input: tests\/linked/);
+	} finally {
+		rmSync(crateRoot, { recursive: true, force: true });
+	}
+});
 
 test("validates crate/arguments and resolves output paths without shell interpolation", () => {
 	assert.deepEqual(parseArgs(["--crate", "linux", "--output", "space ; $dir"], "darwin"), {
@@ -87,7 +137,9 @@ test("collects tests once with locked manifests and renders all formats from iso
 			"Cargo.lock",
 			"Cargo.toml",
 			...["src", "tests"].flatMap((directory) =>
-				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
+				readdirSync(path.join(crateRoot, directory), { recursive: true })
+					.filter((name) => statSync(path.join(crateRoot, directory, name)).isFile())
+					.map((name) => `${directory}/${name}`.replaceAll("\\", "/")),
 			),
 		].sort();
 		assert.deepEqual(Object.keys(metadata.sourceHashes), inputs);

@@ -178,7 +178,10 @@ starts, restarts and stops its own helper instance on the test home's socket, ne
 `test/macos-helper-live.test.mjs` and the TCC-granted smoke are owner-only and NOT RUN in CI.
 
 `npm run coverage:rust` needs Rust `1.97.1` with `llvm-tools-preview` and `cargo-llvm-cov` `0.9.1`, with
-that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot):
+that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot). The producer hashes
+`Cargo.toml`, `Cargo.lock` and every file recursively under `src/` and `tests/`, including nested
+fixture sources. Directory entries are not file inputs; linked/special inputs fail explicitly rather
+than escape the crate or disappear from metadata. This inventory does not select or exclude LLVM regions:
 
 ```sh
 rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
