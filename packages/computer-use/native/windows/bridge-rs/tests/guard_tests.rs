@@ -46,6 +46,31 @@ fn successful_post_delivery_observation_is_preserved() {
 }
 
 #[test]
+fn capture_failure_is_uncertain_only_after_a_real_transition() {
+    let plain = ProtocolError::new("render failed", ErrorCode::CaptureFailed);
+    let idle: Result<(), _> = windows_bridge::guard::observe_capture(false, || Err(plain));
+    assert!(
+        !idle.unwrap_err().outcome_uncertain(),
+        "front window read is not a mutation"
+    );
+    let moved: Result<(), _> = windows_bridge::guard::observe_capture(true, || {
+        Err(ProtocolError::new(
+            "render failed",
+            ErrorCode::CaptureFailed,
+        ))
+    });
+    assert!(moved.unwrap_err().outcome_uncertain());
+    assert_eq!(
+        windows_bridge::guard::observe_capture(false, || Ok(7)).unwrap(),
+        7
+    );
+    assert_eq!(
+        windows_bridge::guard::observe_capture(true, || Ok(7)).unwrap(),
+        7
+    );
+}
+
+#[test]
 fn partial_text_readback_cannot_be_acknowledged_as_refusal() {
     let error =
         windows_bridge::guard::verify_written_text("complete text", "complete").unwrap_err();

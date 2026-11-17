@@ -409,6 +409,36 @@ mod native {
             click["performed"]["delivery"], "hid",
             "non-invokable control must use the production fallback"
         );
+        // Read-only image look of an already-front, restored window: no transition,
+        // so success is expected and a render problem could never be a mutation.
+        let front = unsafe { GetForegroundWindow() };
+        assert_eq!(
+            front,
+            HWND(fixture.hwnd as *mut _),
+            "fixture is already in front"
+        );
+        let image_look =
+            helper.success("look", json!({"windowId":fixture.hwnd,"includeImage":true}));
+        assert!(
+            image_look["image"]["jpegBase64"]
+                .as_str()
+                .is_some_and(|png| png.len() > 100),
+            "already-front look returns a real image even for uniform content"
+        );
+        assert_eq!(
+            unsafe { GetForegroundWindow() },
+            front,
+            "read-only look must not move focus"
+        );
+        // Keyboard input aimed at a coordinate is refused before any mutation.
+        let keyboard_point = helper.request(
+            "act",
+            json!({"lookId":image_look["lookId"],"action":"typeText","policy":"foreground","target":{"x":10,"y":10},"params":{"text":"x"}}),
+        );
+        assert_eq!(keyboard_point["ok"], false);
+        assert!(keyboard_point["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("cannot target a coordinate")));
         let mut cursor_before = windows::Win32::Foundation::POINT::default();
         // SAFETY: initialized writable POINT, read-only desktop observation.
         unsafe { GetCursorPos(&mut cursor_before) }.expect("cursor before refused drag");

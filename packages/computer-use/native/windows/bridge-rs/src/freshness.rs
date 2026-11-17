@@ -15,6 +15,7 @@ pub struct Freshness {
     baseline_fingerprint: Option<u64>,
     transition_required: bool,
     previous: Option<Frame>,
+    settled: bool,
 }
 
 impl Freshness {
@@ -30,6 +31,7 @@ impl Freshness {
             baseline_fingerprint: fingerprint,
             transition_required,
             previous: None,
+            settled: false,
         }
     }
 
@@ -42,7 +44,14 @@ impl Freshness {
                 .is_some_and(|baseline| baseline != frame.fingerprint);
         let fresh = !self.transition_required || changed;
         let accepted = fresh && self.previous == Some(frame);
+        self.settled = self.previous == Some(frame);
         self.previous = Some(frame);
         accepted
+    }
+
+    /// Whether the last two completed renders matched, even without change evidence.
+    /// Callers may accept this only at their deadline, with an explicit warning.
+    pub fn settled(&self) -> bool {
+        self.settled
     }
 }

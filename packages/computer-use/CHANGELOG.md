@@ -35,6 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Native Windows capture is uncertain only after a real transition, accepts uniform light windows and identical active/inactive frames, refuses keyboard input aimed at coordinates, and stops on malformed UIA RuntimeIds (#983).
+
 - Hash nested Rust fixture sources recursively instead of reading `tests/fixtures` as a file in native coverage; retain all locked/source inputs without changing coverage selection (#983).
 
 - Reject malformed native Windows text, button, key and scroll params before mutation; prove caller-resolved path isolation through the real helper with a valid owned drag (#983).

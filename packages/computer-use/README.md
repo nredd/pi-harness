@@ -37,12 +37,18 @@ install a helper, change accessibility settings or grant privileges. #673 remain
 - Protocol `4` and architecture `1` remain compatible. Diagnostics advertise
   `capabilities: ["fail-closed-live-target-v1"]`. The coordinated WSL client must require this
   capability before accepting a helper; an owner-pinned SHA alone does not make an older executable safe.
+  The literal is a STATIC claim in `diagnostics()`, not derived at runtime from the routes. It is guarded
+  by the production-seam tests in `tests/guard_tests.rs` (live identity, every vertex, hit ancestry,
+  focus/read-back uncertainty, capture transition) and `src/main.rs` unit tests (reserved-field stripping,
+  keyboard-at-point refusal, strict RuntimeIds), plus the actual-helper fixture. Removing a guard
+  without removing the literal is a review error, not something the helper detects.
 - Ref fallback resolves the observed RuntimeId again, reads current bounds and checks the selected
   window/session/desktop, token integrity and hit-tested ownership before input. Missing, disabled,
   offscreen, occluded, reused or inaccessible elements refuse. No error falls back to screenshot
   coordinates, and no uncertain mutating result is replayed. A reused AutomationId cannot revive a ref.
   A failed pattern-availability query is an error, not an absent pattern or permission to fall back.
-  Read-only value patterns refuse before writing. Ref keyboard fallback verifies live keyboard focus;
+  Read-only value patterns refuse before writing. Keyboard text/keys (`typeText`, `keypress`, `setText`) aimed at an x/y point are refused with `coordinate_blocked`
+  (nothing would focus the checked point); target a ref instead. Ref keyboard fallback verifies live keyboard focus;
   text fallback additionally requires an edit
   control. It does not click again after that verification or type into the previously focused field.
 - Every input executable is rebuilt from public request fields. Caller `resolved*` fields are
@@ -69,6 +75,11 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   foreground/minimized state. UIA control focus happens only after full read-only admission;
   mutating-call or focus read-back failure terminates without acknowledgement, as does any failed
   revalidation after successful focus.
+  A capture failure is uncertain (terminal, no ack) only after a real restore/focus
+  transition; a failed read-only render of an already-front window is a plain `capture_failed`. Only a
+  (near-)black render is treated as a failed compositor copy: a uniform light window is valid. A window that
+  looks identical active and inactive is accepted after two matching renders at the 1.5 s deadline with a
+  `capture_unchanged_after_transition` warning. Malformed or empty UIA RuntimeIds stop the look.
   Window images use selected-window `PrintWindow` rendering, not an occluder's screen pixels. Capture
   requires two matching completed renders, plus changed frame or rectangle evidence after activation
   or restoration, within 1.5 seconds. Missing freshness, moving windows, blank/failed renders and captures

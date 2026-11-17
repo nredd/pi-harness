@@ -561,7 +561,7 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         image_h,
         fw,
         fh,
-    );
+    )?;
     if let Some(scope_ref) = scope_ref.as_deref() {
         outline = scoped_outline_root(outline, scope_ref);
     }
@@ -631,11 +631,11 @@ fn outline_from_elements(
     image_h: f64,
     fw: f64,
     fh: f64,
-) -> (Value, HashMap<String, ElementRecord>) {
+) -> Result<(Value, HashMap<String, ElementRecord>), ProtocolError> {
     let mut records = HashMap::new();
     let sx = image_w / fw.max(1.0);
     let sy = image_h / fh.max(1.0);
-    let nodes = elements.iter().map(|raw| {
+    let nodes = elements.iter().map(|raw| -> Result<(String, String, Value), ProtocolError> {
         let bounds = raw.get("bounds").unwrap_or(&Value::Null);
         let screen_x = number_at(bounds, "x", 0.0);
         let screen_y = number_at(bounds, "y", 0.0);
@@ -649,8 +649,8 @@ fn outline_from_elements(
         let reference = if native_reference.is_empty() { String::new() } else { format!("win:{look_id}:{native_reference}") };
         let role = raw.get("role").and_then(Value::as_str).unwrap_or("unknown").to_owned();
         let automation_id = raw.get("automationId").and_then(Value::as_str).unwrap_or("").to_owned();
-        let runtime_id: Vec<i32> = raw.get("runtimeId").and_then(Value::as_array).map(|items| items.iter().filter_map(|item| item.as_i64().map(|n| n as i32)).collect()).unwrap_or_default();
-        let parent_runtime_id: Vec<i32> = raw.get("parentRuntimeId").and_then(Value::as_array).map(|items| items.iter().filter_map(|item| item.as_i64().map(|n| n as i32)).collect()).unwrap_or_default();
+        let runtime_id = parse_runtime_id(raw, "runtimeId", false)?;
+        let parent_runtime_id = parse_runtime_id(raw, "parentRuntimeId", true)?;
         let is_secure = raw.get("isPassword").and_then(Value::as_bool).unwrap_or(false);
         let displayed_value = if is_secure { "" } else { raw.get("value").and_then(Value::as_str).unwrap_or("") };
         let text = if displayed_value.is_empty() { raw.get("label").and_then(Value::as_str).unwrap_or("") } else { displayed_value }.to_owned();
@@ -684,10 +684,10 @@ fn outline_from_elements(
             "text": if text.is_empty() { json!([]) } else { json!([{ "string": text, "confidence": 1, "rect": rect }]) },
             "children": []
         });
-        (runtime_key(&runtime_id), runtime_key(&parent_runtime_id), node)
-    }).collect::<Vec<_>>();
+        Ok((runtime_key(&runtime_id), runtime_key(&parent_runtime_id), node))
+    }).collect::<Result<Vec<_>, _>>()?;
     let children = nest_outline_nodes(&nodes);
-    (
+    Ok((
         json!({
             "ref": root_ref,
             "role": root.get("role").and_then(Value::as_str).unwrap_or("Window"),
@@ -713,7 +713,33 @@ fn outline_from_elements(
             "children": children
         }),
         records,
-    )
+    ))
+}
+
+/// Strict UIA identity: every entry must be an i32 and a RuntimeId must be nonempty.
+/// A malformed element stops the look instead of being silently dropped or defaulted.
+fn parse_runtime_id(raw: &Value, key: &str, optional: bool) -> Result<Vec<i32>, ProtocolError> {
+    let malformed = || ProtocolError::new(format!("Malformed UIA {key}"), ErrorCode::InternalError);
+    let Some(value) = raw.get(key).filter(|value| !value.is_null()) else {
+        return if optional {
+            Ok(Vec::new())
+        } else {
+            Err(malformed())
+        };
+    };
+    let items = value.as_array().ok_or_else(malformed)?;
+    let ids = items
+        .iter()
+        .map(|item| {
+            item.as_i64()
+                .and_then(|n| i32::try_from(n).ok())
+                .ok_or_else(malformed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.is_empty() && !optional {
+        return Err(malformed());
+    }
+    Ok(ids)
 }
 
 fn runtime_key(runtime_id: &[i32]) -> String {
@@ -871,6 +897,7 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
     let mut response = match &parsed.target {
         input::ActTarget::Ref(reference) => act_on_ref(args, &parsed, &record, reference)?,
         input::ActTarget::Point { x, y } => {
+            input::refuse_keyboard_at_point(&parsed)?;
             if !record.has_image {
                 return Err(ProtocolError::new(
                     "Coordinate targeting is unavailable for this outline-only root",
@@ -1730,6 +1757,48 @@ fn cancelled() -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_runtime_ids_stop_the_look() {
+        let ok = json!({"runtimeId":[42,1]});
+        assert_eq!(
+            parse_runtime_id(&ok, "runtimeId", false).unwrap(),
+            vec![42, 1]
+        );
+        assert!(parse_runtime_id(&ok, "parentRuntimeId", true)
+            .unwrap()
+            .is_empty());
+        for bad in [
+            json!({}),
+            json!({"runtimeId":[]}),
+            json!({"runtimeId":[1,"x"]}),
+            json!({"runtimeId":[1.5]}),
+            json!({"runtimeId":[4294967296i64]}),
+            json!({"runtimeId":"1"}),
+        ] {
+            assert!(parse_runtime_id(&bad, "runtimeId", false).is_err(), "{bad}");
+        }
+        assert!(parse_runtime_id(
+            &json!({"parentRuntimeId":[1,null]}),
+            "parentRuntimeId",
+            true
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn keyboard_actions_at_a_point_are_refused() {
+        for action in ["typeText", "keypress", "setText"] {
+            let parsed = input::parse_act_request(&json!({"lookId":"l","action":action,"policy":"foreground","target":{"x":1,"y":2},"params":{"text":"t","keys":["a"]}})).unwrap();
+            let error = input::refuse_keyboard_at_point(&parsed).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CoordinateBlocked);
+            assert!(!error.outcome_uncertain());
+        }
+        let click = input::parse_act_request(&json!({"lookId":"l","action":"click","policy":"foreground","target":{"x":1,"y":2},"params":{}})).unwrap();
+        assert!(input::refuse_keyboard_at_point(&click).is_ok());
+        let by_ref = input::parse_act_request(&json!({"lookId":"l","action":"typeText","policy":"foreground","target":{"ref":"r"},"params":{"text":"t"}})).unwrap();
+        assert!(input::refuse_keyboard_at_point(&by_ref).is_ok());
+    }
 
     #[test]
     fn malformed_params_refuse_before_any_field_can_be_cleared_or_clicked() {

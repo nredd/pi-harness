@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
-	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -138,7 +138,12 @@ test("collects tests once with locked manifests and renders all formats from iso
 			"Cargo.toml",
 			...["src", "tests"].flatMap((directory) =>
 				readdirSync(path.join(crateRoot, directory), { recursive: true })
-					.filter((name) => statSync(path.join(crateRoot, directory, name)).isFile())
+					.filter((name) => {
+						// Like the producer, never follow links: an input symlink is a failure.
+						const entry = lstatSync(path.join(crateRoot, directory, name));
+						assert.equal(entry.isSymbolicLink(), false, `${directory}/${name} must not be a symlink`);
+						return entry.isFile();
+					})
 					.map((name) => `${directory}/${name}`.replaceAll("\\", "/")),
 			),
 		].sort();

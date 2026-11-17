@@ -18,6 +18,19 @@ pub fn observe_after_delivery<T>(
     })
 }
 
+/// Capture is read-only unless a restore/focus transition really happened.
+/// A failure after a real transition is uncertain; otherwise it is a plain refusal.
+pub fn observe_capture<T>(
+    transition_performed: bool,
+    read: impl FnOnce() -> Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
+    if transition_performed {
+        observe_after_delivery(read)
+    } else {
+        read()
+    }
+}
+
 /// A delivered value write must not invite replay when read-back differs.
 pub fn verify_written_text(expected: &str, actual: &str) -> Result<(), ProtocolError> {
     if expected != actual {

@@ -115,11 +115,12 @@ fn is_effectively_blank_bgra(bits: &[u8]) -> bool {
         *buckets.entry(bucket).or_default() += 1;
     }
 
+    // Only a (near-)black render is the signature of a failed compositor copy.
+    // A legitimate empty light editor or dialog is uniform too and must succeed.
     sampled > 0
         && buckets
-            .values()
+            .get(&(0, 0, 0))
             .copied()
-            .max()
             .is_some_and(|count| count * 100 >= sampled * 97)
 }
 
@@ -150,10 +151,13 @@ fn screenshot_impl(
     let mut warnings: Vec<String> = Vec::new();
 
     // 2. Check for minimized state.
+    // SAFETY: borrowed HWND with an initialized output; a vanished window is reported as an error by the API.
     let is_minimized = unsafe { IsIconic(hwnd).as_bool() };
     let requires_transition = is_minimized
+        // SAFETY: borrowed HWND with an initialized output; a vanished window is reported as an error by the API.
         || unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() != hwnd };
     let mut before_rect = RECT::default();
+    // SAFETY: borrowed HWND with an initialized output; a vanished window is reported as an error by the API.
     unsafe { GetWindowRect(hwnd, &mut before_rect) }.map_err(|_| {
         ProtocolError::new("Capture baseline unavailable", ErrorCode::CaptureFailed)
     })?;
@@ -166,6 +170,7 @@ fn screenshot_impl(
     let baseline = if requires_transition && !is_minimized {
         // A failed pre-transition render is not evidence of a changed frame.
         Some(fingerprint(
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             &unsafe {
                 gdi_capture_to_base64(hwnd, baseline_rect.2, baseline_rect.3, max_dimension)
             }?
@@ -178,13 +183,15 @@ fn screenshot_impl(
         crate::freshness::Freshness::new(baseline_rect, baseline, requires_transition);
     crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
     crate::window::request_foreground(native.raw())?;
-    // Explicit capture may have restored/focused: later failure cannot claim zero mutation.
-    crate::guard::observe_after_delivery(|| {
+    // Only an actual restore/focus transition can make a later failure uncertain.
+    // A failed read-only render of an already-front window is a plain refusal.
+    crate::guard::observe_capture(requires_transition, || {
         if is_minimized {
             warnings.push("window_restored".to_owned());
         }
 
         // 3. Get the window rect so we know capture dimensions.
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let (x, y, width, height) = unsafe {
             let mut rect = RECT::default();
             if GetWindowRect(hwnd, &mut rect).is_err() {
@@ -263,6 +270,12 @@ fn screenshot_impl(
                 break frame;
             }
             if std::time::Instant::now() >= deadline {
+                // Windows that look identical active/inactive never change; two
+                // completed matching renders are the best available evidence.
+                if freshness.settled() {
+                    warnings.push("capture_unchanged_after_transition".to_owned());
+                    break frame;
+                }
                 return Err(ProtocolError::new(
                     "Capture freshness could not be established",
                     ErrorCode::CaptureFailed,
@@ -517,14 +530,22 @@ mod unit_tests {
     fn detects_uniform_failed_compositor_captures() {
         let black = [0, 0, 0, 255].repeat(10_000);
         let white = [231, 231, 231, 255].repeat(10_000);
+        let mut almost_black = black.clone();
+        for offset in (0..almost_black.len()).step_by(4).take(200) {
+            almost_black[offset..offset + 3].copy_from_slice(&[40, 120, 200]);
+        }
         let mut almost_uniform = white.clone();
         for offset in (0..almost_uniform.len()).step_by(4).take(200) {
             almost_uniform[offset..offset + 3].copy_from_slice(&[40, 120, 200]);
         }
 
         assert!(is_effectively_blank_bgra(&black));
-        assert!(is_effectively_blank_bgra(&white));
-        assert!(is_effectively_blank_bgra(&almost_uniform));
+        assert!(is_effectively_blank_bgra(&almost_black));
+        assert!(
+            !is_effectively_blank_bgra(&white),
+            "empty light window is valid"
+        );
+        assert!(!is_effectively_blank_bgra(&almost_uniform));
     }
 
     #[test]

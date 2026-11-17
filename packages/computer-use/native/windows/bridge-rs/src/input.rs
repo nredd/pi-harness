@@ -124,6 +124,21 @@ pub fn executable_request(request: &ParsedActRequest) -> Value {
         "policy":request.policy,"target":target,"params":public_params(&request.params)})
 }
 
+/// Keyboard text/keys have no pointer target: a validated point is never focused
+/// or read back, so such input would go to whatever control already has focus.
+/// Callers must target a ref, whose control is focused and verified first.
+pub fn refuse_keyboard_at_point(request: &ParsedActRequest) -> Result<(), ProtocolError> {
+    if matches!(request.target, ActTarget::Point { .. })
+        && matches!(request.action.as_str(), "typeText" | "keypress" | "setText")
+    {
+        return Err(ProtocolError::new(
+            "Keyboard input cannot target a coordinate; target a ref so its control is focused and verified",
+            ErrorCode::CoordinateBlocked,
+        ));
+    }
+    Ok(())
+}
+
 pub fn policy_allows_raw_input(request: &ParsedActRequest) -> Result<(), ProtocolError> {
     if request.policy != "foreground" {
         Err(ProtocolError::new(
@@ -290,6 +305,7 @@ mod native {
             }
             "moveMouse" => {
                 let (x, y) = point.ok_or_else(|| invalid("moveMouse requires resolvedPoint"))?;
+                // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
                 unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
                 ok("unknown", "coordinates", "hid")
             }
@@ -383,6 +399,7 @@ mod native {
     }
 
     fn send(inputs: &[INPUT]) -> Result<(), ProtocolError> {
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent == inputs.len() as u32 {
             Ok(())
@@ -443,6 +460,7 @@ mod native {
     }
 
     fn click(x: i32, y: i32, button: &str) -> Result<(), ProtocolError> {
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
         let (down, up) = match button {
             "right" => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
@@ -456,11 +474,13 @@ mod native {
         if points.len() < 2 {
             return Err(invalid("drag requires at least two points"));
         }
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         unsafe { SetCursorPos(points[0].0, points[0].1) }.map_err(input_failed)?;
         with_input_cleanup(
             || {
                 send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
                 for &(x, y) in &points[1..] {
+                    // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
                     unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
                 }
                 Ok(())
@@ -470,6 +490,7 @@ mod native {
     }
 
     fn scroll(x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
         let mut inputs = Vec::new();
         if dy != 0.0 {

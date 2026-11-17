@@ -49,6 +49,18 @@ fn already_active_static_window_needs_two_completed_renders() {
 }
 
 #[test]
+fn identical_active_and_inactive_window_settles_without_claiming_change() {
+    let mut freshness = Freshness::new(RECT, Some(10), true);
+    assert!(!freshness.observe(OLD));
+    assert!(!freshness.settled(), "one render is not settled");
+    assert!(
+        !freshness.observe(OLD),
+        "change evidence still never arrives"
+    );
+    assert!(freshness.settled());
+}
+
+#[test]
 fn changing_animation_never_claims_stable_capture() {
     let mut freshness = Freshness::new(RECT, Some(10), true);
     for fingerprint in 11..50 {

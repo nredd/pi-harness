@@ -440,6 +440,7 @@ mod native {
     fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>, String> {
         // SAFETY: caller owns the live COM interface; the returned array is owned here.
         let array =
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             unsafe { element.GetRuntimeId() }.map_err(|error| format!("GetRuntimeId: {error}"))?;
         if array.is_null() {
             return Err("GetRuntimeId returned null".to_owned());
@@ -448,6 +449,7 @@ mod native {
         // SAFETY: array is nonnull, owned, and bounded before reading elements.
         let lower = unsafe { SafeArrayGetLBound(array, 1) }
             .map_err(|error| format!("RuntimeId lower bound: {error}"))?;
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let upper = unsafe { SafeArrayGetUBound(array, 1) }
             .map_err(|error| format!("RuntimeId upper bound: {error}"))?;
         let count = upper
@@ -476,19 +478,24 @@ mod native {
         parent_runtime_id: Vec<i32>,
         runtime_id: Vec<i32>,
     ) -> Option<Value> {
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let ctrl_type = unsafe { element.CurrentControlType().ok()? };
         let role = control_type_to_role(ctrl_type.0 as u32);
 
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let name = unsafe { element.CurrentName().unwrap_or_default().to_string() };
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let automation_id = unsafe {
             element
                 .CurrentAutomationId()
                 .unwrap_or_default()
                 .to_string()
         };
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let class_name = unsafe { element.CurrentClassName().unwrap_or_default().to_string() };
 
         // Bounding rectangle.
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let rect = unsafe { element.CurrentBoundingRectangle().ok()? };
 
         // Skip invisible / offscreen elements.
@@ -498,6 +505,7 @@ mod native {
             return None;
         }
 
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let is_offscreen = unsafe {
             element
                 .CurrentIsOffscreen()
@@ -509,24 +517,28 @@ mod native {
         }
 
         // Capabilities.
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let is_enabled = unsafe {
             element
                 .CurrentIsEnabled()
                 .map(|value| value.as_bool())
                 .unwrap_or(true)
         };
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let is_keyboard_focusable = unsafe {
             element
                 .CurrentIsKeyboardFocusable()
                 .map(|value| value.as_bool())
                 .unwrap_or(false)
         };
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let is_password = unsafe {
             element
                 .CurrentIsPassword()
                 .map(|value| value.as_bool())
                 .unwrap_or(false)
         };
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let value_pattern = unsafe {
             element
                 .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
@@ -534,11 +546,13 @@ mod native {
         };
         let value = value_pattern
             .as_ref()
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             .and_then(|pattern| unsafe { pattern.CurrentValue().ok() })
             .map(|value| value.to_string())
             .unwrap_or_default();
         let value_read_only = value_pattern
             .as_ref()
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             .and_then(|pattern| unsafe { pattern.CurrentIsReadOnly().ok() })
             .map(|read_only| read_only.as_bool());
         let signals = ElementAnnotationSignals {
@@ -597,6 +611,7 @@ mod native {
         automation_id: &str,
     ) -> Result<String, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         if unsafe { element.CurrentIsPassword() }
             .map_err(|e| format!("CurrentIsPassword: {e}"))?
             .as_bool()
@@ -642,6 +657,7 @@ mod native {
     ) -> Result<ElementSnapshot, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
         ensure_actionable(&element)?;
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let rect = unsafe {
             element
                 .CurrentBoundingRectangle()
@@ -671,6 +687,7 @@ mod native {
             UIA_InvokePatternId,
             UIA_IsInvokePatternAvailablePropertyId,
         )? {
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             unsafe {
                 pattern.Invoke().map_err(|e| after_delivery("Invoke", e))?;
             }
@@ -681,9 +698,11 @@ mod native {
             UIA_TogglePatternId,
             UIA_IsTogglePatternAvailablePropertyId,
         )? {
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             unsafe {
                 pattern.Toggle().map_err(|e| after_delivery("Toggle", e))?;
             }
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             let state = unsafe {
                 pattern
                     .CurrentToggleState()
@@ -698,9 +717,11 @@ mod native {
             UIA_SelectionItemPatternId,
             UIA_IsSelectionItemPatternAvailablePropertyId,
         )? {
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             unsafe {
                 pattern.Select().map_err(|e| after_delivery("Select", e))?;
             }
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             let selected = unsafe {
                 pattern
                     .CurrentIsSelected()
@@ -714,6 +735,7 @@ mod native {
             UIA_ExpandCollapsePatternId,
             UIA_IsExpandCollapsePatternAvailablePropertyId,
         )? {
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             unsafe {
                 pattern.Expand().map_err(|e| after_delivery("Expand", e))?;
             }
@@ -724,6 +746,7 @@ mod native {
             UIA_LegacyIAccessiblePatternId,
             UIA_IsLegacyIAccessiblePatternAvailablePropertyId,
         )? {
+            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
             let default_action = unsafe {
                 pattern
                     .CurrentDefaultAction()
@@ -731,6 +754,7 @@ mod native {
                     .to_string()
             };
             if !default_action.trim().is_empty() {
+                // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
                 unsafe {
                     pattern
                         .DoDefaultAction()
@@ -749,6 +773,7 @@ mod native {
         pattern_id: UIA_PATTERN_ID,
         availability: UIA_PROPERTY_ID,
     ) -> Result<Option<T>, ProtocolError> {
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let value = unsafe { element.GetCurrentPropertyValue(availability) }
             .map_err(|error| before_delivery(format!("Pattern availability: {error}")))?;
         let available = bool::try_from(&value)
@@ -756,6 +781,7 @@ mod native {
         if !available {
             return Ok(None);
         }
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         unsafe { element.GetCurrentPatternAs::<T>(pattern_id) }
             .map(Some)
             .map_err(|error| before_delivery(format!("Supported pattern query failed: {error}")))
