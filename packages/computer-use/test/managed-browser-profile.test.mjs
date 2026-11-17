@@ -21,11 +21,20 @@ const gate = vi.hoisted(() => ({
 	outcomes: [],
 	spawnParent: "",
 	spawnError: undefined,
+	statTarget: "",
+	statCalls: 0,
+	statFailureAt: 0,
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal();
 	return {
 		...actual,
+		stat: async (...args) => {
+			if (String(args[0]) === gate.statTarget && ++gate.statCalls === gate.statFailureAt) {
+				throw Object.assign(new Error("synthetic metadata permission failure"), { code: "EACCES" });
+			}
+			return await actual.stat(...args);
+		},
 		rm: async (...args) => {
 			if (String(args[0]) !== gate.target && !gate.spawnParent) return await actual.rm(...args);
 			if (String(args[0]) === gate.target) {
@@ -1001,6 +1010,113 @@ describe("persistent profile opt-in", () => {
 			await assert.rejects(testing.persistentBrowserProfile(candidate), /default browser/);
 		});
 
+		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME", "implicit"])(
+			"rejects %s ancestry even when every browser child is relocated",
+			async (variable) => {
+				const parent = path.join(home, "config-parent");
+				const configRoot = variable === "implicit" ? path.join(home, ".config") : path.join(parent, "config");
+				fs.mkdirSync(configRoot, { recursive: true, mode: 0o700 });
+				fs.chmodSync(path.dirname(configRoot), 0o700);
+				const relocated = path.join(root, "relocated-browsers");
+				fs.mkdirSync(relocated, { mode: 0o700 });
+				for (const name of ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"]) {
+					fs.symlinkSync(relocated, path.join(configRoot, name));
+				}
+				if (variable !== "implicit") process.env[variable] = configRoot;
+				const nested = path.join(configRoot, "nested");
+				fs.mkdirSync(nested, { mode: 0o700 });
+				for (const candidate of [configRoot, path.dirname(configRoot), nested, `${configRoot}/nested/../`]) {
+					await assert.rejects(testing.persistentBrowserProfile(candidate), /default browser/);
+				}
+				const alias = path.join(root, "config-root-alias");
+				fs.symlinkSync(configRoot, alias);
+				await assert.rejects(testing.persistentBrowserProfile(alias), /symlink/);
+				if (variable !== "implicit") {
+					process.env[variable] = `${alias}/nested/../`;
+					await assert.rejects(testing.persistentBrowserProfile(configRoot), /default browser/);
+				}
+				assert.equal(await testing.persistentBrowserProfile(profile), profile);
+			},
+		);
+
+		test("retains macOS default-parent protection when all children are symlinked elsewhere", async () => {
+			const parent = path.join(home, "Library/Application Support/Google");
+			const target = path.join(root, "relocated-macos");
+			fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+			fs.mkdirSync(target, { mode: 0o700 });
+			for (const channel of ["Chrome", "Chrome Canary", "Chrome Beta", "Chrome Dev"]) {
+				fs.symlinkSync(target, path.join(parent, channel));
+			}
+			await assert.rejects(testing.persistentBrowserProfile(parent), /default browser/);
+			assert.equal(await testing.persistentBrowserProfile(profile), profile);
+		});
+
+		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])(
+			"honours filesystem case identity for %s",
+			async (variable) => {
+				const configuredRoot = path.join(home, "Config");
+				const alternate = path.join(home, "config");
+				fs.mkdirSync(configuredRoot, { mode: 0o700 });
+				process.env[variable] = configuredRoot;
+				if (fs.existsSync(alternate)) {
+					await assert.rejects(testing.persistentBrowserProfile(alternate), /default browser/);
+				} else {
+					fs.mkdirSync(alternate, { mode: 0o700 });
+					assert.equal(await testing.persistentBrowserProfile(alternate), alternate);
+				}
+			},
+		);
+
+		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME", "HOME"])(
+			"preserves %s alias-parent ancestry",
+			async (variable) => {
+				const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-alias-parent-")));
+				const originalParent = path.join(root, "alias-parent");
+				fs.mkdirSync(originalParent, { mode: 0o700 });
+				const alias = path.join(originalParent, "linked-root");
+				fs.symlinkSync(external, alias);
+				try {
+					if (variable === "HOME") vi.spyOn(os, "homedir").mockReturnValue(alias);
+					else process.env[variable] = alias;
+					await assert.rejects(testing.persistentBrowserProfile(originalParent), /default browser/);
+					const dedicated = path.join(external, "fresh-profile");
+					fs.mkdirSync(dedicated, { mode: 0o700 });
+					if (variable === "HOME") assert.equal(await testing.persistentBrowserProfile(dedicated), dedicated);
+					else assert.equal(await testing.persistentBrowserProfile(profile), profile);
+				} finally {
+					fs.rmSync(external, { recursive: true, force: true });
+				}
+			},
+		);
+
+		test("refuses HOME ancestors even when all default browser directories point outside them", async () => {
+			const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-external-defaults-")));
+			try {
+				const defaults = [
+					".config/google-chrome",
+					".config/google-chrome-beta",
+					".config/google-chrome-unstable",
+					".config/chromium",
+					".config/helium",
+					"Library/Application Support/Google/Chrome",
+					"Library/Application Support/Google/Chrome Canary",
+					"Library/Application Support/Google/Chrome Beta",
+					"Library/Application Support/Google/Chrome Dev",
+					"Library/Application Support/Chromium",
+					"Library/Application Support/net.imput.helium",
+				];
+				for (const relative of defaults) {
+					const directory = path.join(home, relative);
+					fs.mkdirSync(path.dirname(directory), { recursive: true });
+					fs.symlinkSync(external, directory);
+				}
+				await assert.rejects(testing.persistentBrowserProfile(root), /default browser/);
+				assert.equal(await testing.persistentBrowserProfile(profile), profile);
+			} finally {
+				fs.rmSync(external, { recursive: true, force: true });
+			}
+		});
+
 		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])(
 			"rejects Chrome channel default roots under %s",
 			async (variable) => {
@@ -1013,6 +1129,21 @@ describe("persistent profile opt-in", () => {
 				}
 			},
 		);
+
+		test.each([1, 2])("fails closed on metadata failure during root check %s", async (failureAt) => {
+			const directory = path.join(home, "metadata-error");
+			fs.mkdirSync(directory, { mode: 0o700 });
+			process.env.XDG_CONFIG_HOME = directory;
+			gate.statTarget = directory;
+			gate.statCalls = 0;
+			gate.statFailureAt = failureAt;
+			try {
+				await assert.rejects(testing.persistentBrowserProfile(profile), { code: "EACCES" });
+				assert.equal(gate.statCalls, failureAt);
+			} finally {
+				gate.statTarget = "";
+			}
+		});
 
 		test("fails closed when a configured root cannot be resolved for a reason other than absence", async () => {
 			const file = path.join(home, "not-a-directory");

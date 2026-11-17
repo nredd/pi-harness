@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, rmdirSync, rmSync } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { constants as fsConstants, rmdirSync, rmSync, type Stats } from "node:fs";
+import { access, lstat, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -3220,6 +3220,19 @@ async function canonicalProfileRoot(root: string): Promise<string> {
 	}
 }
 
+/** Compare directory ancestry by filesystem identity, retaining alias parents and filesystem case semantics. */
+async function profilePathContains(parent: Stats, descendant: string): Promise<boolean> {
+	for (let entry = path.resolve(descendant); ; entry = path.dirname(entry)) {
+		try {
+			const info = await stat(entry);
+			if (info.dev === parent.dev && info.ino === parent.ino) return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (path.dirname(entry) === entry) return false;
+	}
+}
+
 /** Validate an operator-created profile without reading any profile contents or changing its permissions. */
 async function persistentBrowserProfile(configured: string): Promise<string> {
 	if (process.platform === "win32")
@@ -3241,41 +3254,49 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 	const canonical = await realpath(directory);
 	const home = await realpath(os.homedir());
 	// Resolve directory metadata only, never enumerate or open browser profile contents.
-	const configuredRoots = await Promise.all(
-		[path.join(home, ".config"), process.env.XDG_CONFIG_HOME, process.env.CHROME_CONFIG_HOME]
-			.filter((root): root is string => Boolean(root))
-			.map(canonicalProfileRoot),
-	);
-	const defaults = await Promise.all(
-		[
-			path.join(home, "Library/Application Support/Google/Chrome"),
-			path.join(home, "Library/Application Support/Chromium"),
-			path.join(home, "Library/Application Support/Google/Chrome Canary"),
-			path.join(home, "Library/Application Support/Google/Chrome Beta"),
-			path.join(home, "Library/Application Support/Google/Chrome Dev"),
-			path.join(home, "Library/Application Support/net.imput.helium"),
-			path.join(home, ".config/google-chrome"),
-			path.join(home, ".config/chromium"),
-			path.join(home, ".config/google-chrome-beta"),
-			path.join(home, ".config/google-chrome-unstable"),
-			path.join(home, ".config/helium"),
-			...configuredRoots.flatMap((root) =>
-				["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"].map((name) =>
-					path.join(root, name),
-				),
+	const configuredRootPaths = [
+		path.join(home, ".config"),
+		process.env.XDG_CONFIG_HOME,
+		process.env.CHROME_CONFIG_HOME,
+	].filter((root): root is string => Boolean(root));
+	const configuredRoots = await Promise.all(configuredRootPaths.map(canonicalProfileRoot));
+	const defaultPaths = [
+		path.join(home, "Library/Application Support/Google/Chrome"),
+		path.join(home, "Library/Application Support/Chromium"),
+		path.join(home, "Library/Application Support/Google/Chrome Canary"),
+		path.join(home, "Library/Application Support/Google/Chrome Beta"),
+		path.join(home, "Library/Application Support/Google/Chrome Dev"),
+		path.join(home, "Library/Application Support/net.imput.helium"),
+		path.join(home, ".config/google-chrome"),
+		path.join(home, ".config/chromium"),
+		path.join(home, ".config/google-chrome-beta"),
+		path.join(home, ".config/google-chrome-unstable"),
+		path.join(home, ".config/helium"),
+		...configuredRoots.flatMap((root) =>
+			["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"].map((name) =>
+				path.join(root, name),
 			),
-		].map(canonicalProfileRoot),
-	);
-	if (
-		canonical === home ||
-		defaults.some(
-			(root) =>
-				canonical === root || canonical.startsWith(`${root}${path.sep}`) || root.startsWith(`${canonical}${path.sep}`),
-		)
-	)
-		throw new Error(
-			"managed_browser_profile must not use a default browser data directory (or its ancestor/descendants).",
-		);
+		),
+	];
+	const defaults = await Promise.all(defaultPaths.map(canonicalProfileRoot));
+	const refusal =
+		"managed_browser_profile must not use a default browser data directory (or its ancestor/descendants).";
+	// HOME may contain a dedicated profile, but HOME itself and its ancestors must never become one.
+	if ((await profilePathContains(info, home)) || (await profilePathContains(info, os.homedir())))
+		throw new Error(refusal);
+	// Keep declared paths as well as resolved targets: a symlinked child must not erase its parent's protection.
+	// Configuration roots are independently protected, even when every recognized child points elsewhere.
+	for (const root of [...configuredRootPaths, ...configuredRoots, ...defaultPaths, ...defaults]) {
+		if (await profilePathContains(info, root)) throw new Error(refusal);
+		let rootInfo: Stats;
+		try {
+			rootInfo = await stat(root);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
+		}
+		if (await profilePathContains(rootInfo, canonical)) throw new Error(refusal);
+	}
 	// Walk metadata only. A checkout's .git may be a directory or a worktree marker file.
 	for (let parent = canonical; ; parent = path.dirname(parent)) {
 		try {
