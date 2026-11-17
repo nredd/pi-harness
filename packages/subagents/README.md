@@ -2276,6 +2276,29 @@ Formatting and linting use the root `biome.json`. Four scoped rules retain the f
 
 `prepublishOnly` is removed because publishing is owned by the monorepo release workflow, not a package-local shortcut: `scripts/release_descriptors.py` runs this workspace's `check`, and `scripts/npm_release.py` packs once and exercises those bytes through stock Pi before `.github/workflows/publish.yml` publishes the verified tarball. `prepack` still builds local tarballs. Use the release workflow, not direct `npm publish`, for publication.
 
+### Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of prepending to `CHANGELOG.md`. The issue is a
+positive ASCII decimal without leading zeroes; categories are `added`, `changed`, `fixed`,
+`refactored`, `removed`, `deprecated` and `security`. Each file is exactly one UTF-8 `- ` bullet
+on one line ending in LF, with no surrounding whitespace or control characters. Include its
+matching `[#932](https://github.com/nredd/pi-harness/issues/932)`-shaped issue link; other existing
+references and attribution stay in the bullet. One file per issue/category; update that file
+when the same issue has more to say. Nested paths, extra files, symlinks and duplicate bullets
+are refused. Issue numbers are checked syntactically, not against GitHub's live API.
+
+From the repository root, `make check-changelog-fragments` validates without writing and runs
+under `make check-scripts` / `make check`. `make fold-changelog` explicitly inserts fragments
+into `[Unreleased]`, then removes only consumed files. It does not choose a version, create a
+release heading, publish, tag or run automatically during publication. Review and commit the
+fold separately before a release. See the root [release contract](../../docs/releases.md#changelog-fragments).
+
+The initial migration moves 49 exact historical bullets. Eighteen bullets remain in
+`[Unreleased]`: the repeated issue/category groups `330.fixed` (five), `436.fixed` (two),
+`548.fixed` (two), `264.fixed` (two), six unattributed bullets and the PR-only `#196` bullet.
+The nonbullet `#900` breaking warning also remains verbatim. No historical issue IDs were
+invented, and released sections are untouched. Other packages are not migrated yet.
+
 ### Contributing
 
 Use the root [development guide](../../README.md) and [repository rules](../../AGENTS.md).
