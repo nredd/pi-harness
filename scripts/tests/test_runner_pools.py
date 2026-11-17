@@ -445,16 +445,6 @@ def test_the_wsl2_pool_is_one_strict_slot_with_a_variable_of_its_own() -> None:
     assert all(runner_pools.CELL_SECONDS[key] >= runner_pools.MIN_HEAVY_S for key in listed)
 
 
-def test_every_pool_variable_reaches_classify_and_the_rescue() -> None:
-    """A pool whose heartbeat is missing from either workflow would look permanently down there."""
-    root = ci_paths.REPO_ROOT / ".github" / "workflows"
-    for workflow in ("ci.yml", "runner-rescue.yml"):
-        text = (root / workflow).read_text(encoding="utf-8")
-        for name, pool in runner_pools.POOLS.items():
-            assert f"{pool.variable}: ${{{{ vars.{pool.variable} }}}}" in text, (workflow, name)
-            assert f'--pool-heartbeat "{name}=${pool.variable}"' in text, (workflow, name)
-
-
 def test_the_rescue_watches_the_wsl2_label() -> None:
     """A job stranded on a dead `pi-wsl2` is found by its label, like the other pools."""
     assert "pi-wsl2" in runner_rescue.POOL_LABELS

@@ -50,12 +50,17 @@ class Pool:
     run_cap: int = 0
 
 
-# Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
-# started in a median 30 s (p90 141 s). `pi-macos` has three slots and queues up to three more cells, uncapped
-# per run: every trusted macOS cell prefers it while its beat is fresh and not draining; a dead or draining
-# pool (and a fork PR) falls back to hosted `xcode-27`, and the rescue workflow moves stranded jobs. Disk
-# pressure is not modelled here: the host publishes `<epoch>:drain` when storage is low (nredd/ci-runners#5),
-# which already fails closed to hosted. Hosted Linux queues for seconds: strict.
+# Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos`
+# jobs started in a median 30 s (p90 141 s). `pi-macos` has three slots and queues up to three more cells,
+# with no per-run cap, so an idle pool (`<epoch>:3`) takes up to six cells from one run and a busy one fewer
+# (free + depth, floored at 0); a count-less beat is one cell. Listed cells of at least `MIN_HEAVY_S` prefer
+# it while its beat is fresh and not draining; shorter or unlisted cells, a stale/`0`/drain beat and fork PRs
+# stay on hosted `xcode-27`. Tradeoff: N runs classified inside one beat interval each read the same count
+# and can each claim up to six cells, so cells may wait behind three slots while hosted idles, and a host
+# that dies after classify strands its cells until the rescue workflow moves them. `macos-15` is retired:
+# `native-helper` and the computer-use publish verify use hosted `xcode-27` and are not pool-routed. Disk
+# pressure is not modelled here: the host publishes `<epoch>:drain` when storage is low
+# (nredd/ci-runners#5), which already fails closed to hosted. Hosted Linux queues for seconds: strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
     "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 3, queue_depth=3),
@@ -78,13 +83,14 @@ CellKey = tuple[str, str, str]
 # is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
     # Every macOS cell that does real work. Hosted macOS is the longest pole (p90 queue ~1 h), and
-    # `pi-macos` has two slots plus a queue (`POOLS`), and one PR takes at most `run_cap` of them.
+    # `pi-macos` has three slots plus a queue of three (`POOLS`), with no per-run cap. The macOS `scripts`
+    # shard (~1140 s, run 44008954118) is deliberately NOT listed: it has not passed on the pool image (only
+    # `ts` is known to), and as the longest cell it would take the first slot. List it after one pool pass.
     ("owned", "macos-14", "subagents"): 680,
     ("owned", "macos-14", "computer-use"): 360,
     ("owned", "macos-14", "ts"): 480,
     ("stack", "macos-14", "local"): 711,
     ("owned", "macos-14", "python"): 462,
-    ("owned", "macos-14", "scripts"): 1140,
     ("contracts", "macos-14", ""): 331,
     ("owned", "ubuntu-24.04", "ts"): 428,
     # UNMEASURED best estimates for the ARM64 WSL2 pool (#736): a pooled cell skips the ~3.5 min guest setup
@@ -215,12 +221,12 @@ def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -
 
     Returns:
         dict[str, int]: Pool name -> free slots plus the pool's `queue_depth`, floored at 0 and capped at its
-            `run_cap` when it has one, for every pool that is up (a live, full pool maps to 0 unless it
-            allows queueing); empty when `trusted` is false. A beat without a count reports no backlog, so
-            it earns no queue allowance: capacity is its one free slot. The negative backlog in a counted
-            beat limits runs that classify after the writer publishes it, but runs inside one beat interval
-            all read the same count, so a burst of N runs can still put up to N times that capacity on the
-            pool; the per-run cap and small depth bound each run's share, not the burst.
+            `run_cap` when it has one (none today), for every pool that is up (a live, full pool maps to 0
+            unless it allows queueing); empty when `trusted` is false. A beat without a count reports no
+            backlog, so it earns no queue allowance: capacity is its one free slot. The negative backlog in a
+            counted beat limits runs that classify after the writer publishes it, but runs inside one beat
+            interval all read the same count, so a burst of N runs can still put up to N times that capacity
+            on the pool; the depth (and a `run_cap`, if one is set) bound each run's share, not the burst.
     """
     if not trusted:
         return {}
