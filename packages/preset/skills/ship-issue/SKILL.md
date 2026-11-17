@@ -39,8 +39,10 @@ cwd repo.
 
 Never work in the user's checkout. One issue, one worktree.
 
-- `git -C <repo> fetch origin` then `git -C <repo> worktree prune` (stale `prunable` entries
-  accumulate)
+- `git -C <repo> fetch origin`, then run the deployment's configured merged-worktree sweep if
+  one exists; otherwise remove only clean, fully pushed worktrees and branches of MERGED PRs,
+  never with `--force` and never `git branch -D` by hand. Preserve worktrees still in use or
+  borrowed by another checkout, and report retained paths and reasons
 - Branch: `<prefix>/issue-<N>`. `<prefix>` is the repo's documented branch-prefix convention
   (check `AGENTS.md` / `CONTRIBUTING.md` and recent branches), else the operator's GitHub login
   (`gh api user --jq .login`). Append a short kebab slug from the title when the bare number is
@@ -168,12 +170,13 @@ spawned by a parent for this issue. Never hand off to yourself.
 - Delegated worker: keep auto-merge off, do not merge or arm it. Once the substantive work is done, return the PR URL, final SHA, exact review handles, and concrete CI run IDs or monitor command to the parent, once. Never declare the overall task done
 - Do NOT remove the worktree before the PR lands. The parent uses the repository's safe worktree cleanup helper after merge when available; a delegated worker leaves its worktree for that sweep. Never force-remove a worktree or discard another worker's changes
 - Before cleanup, remove only your own named untracked scratch, never unclaimed paths or modified tracked files. Report retained worktrees and the reason
+- For work where no PR will ever exist (abandoned, duplicate, parked or deferred), use the deployment's configured sweep's explicit no-PR mode only if it supports one, e.g. `--no-pr --worktree <path>`. Run from a cwd outside that worktree and report the helper's verdict verbatim. Do not assume those flags exist on other commands; without a configured safe no-PR mode, retain the worktree and name its owner. Preserve dirty or unpushed work, borrowed submodule objects and remote branches
 - Without native monitors, the parent follows `/skill:get-it-merged` step 1's bounded foreground fallback. Workers never poll. Report the next owner and exact resume command rather than claiming a continuation monitor exists
 
 ## 10. Report
 
-Short. Issue -> branch -> PR URL -> gate result -> review outcome -> the worktree cleanup
-follow-up. No closing summary paragraph, no restating the plan back.
+Short. Issue -> branch -> PR URL -> gate result -> review outcome -> retained worktree path
+and reason, or the configured sweep's actual cleanup verdict. No closing summary paragraph, no restating the plan back.
 
 ## Guardrails
 
