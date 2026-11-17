@@ -133,6 +133,8 @@ jobs:
         run: npm run build:daemon --workspace packages/env
       - name: Test (isolated HOME, no credentials)
         run: ./test.sh
+      # Authenticate the root core overrides before npm installs child-verification dependencies.
+      # Keep the token on this preflight only; installed packages and child probes must not inherit it.
       - name: Verify root core overrides before child install
         working-directory: .
         env:
