@@ -17,7 +17,7 @@ import pytest
 from harness.anthropic_mock import AUTH_GUARD_EXTENSION, AnthropicMock, anthropic_env
 from harness.headless import run_headless
 from harness.paths import ARTIFACTS_DIR, REPO_ROOT
-from harness.request_ledger import request_ledger
+from harness.request_ledger import request_ledger, stable_owner
 from harness.sandbox import build_sandbox
 
 if TYPE_CHECKING:
@@ -115,7 +115,10 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
     for index, request in enumerate(requests):
         child = index == 1
         metadata = {} if child else evidence[0 if index == 0 else 1]
-        owners = {tool["name"]: tool["sourceInfo"]["source"] for tool in metadata.get("tools", [])}
+        owners = {
+            tool["name"]: stable_owner(_normalized(tool["sourceInfo"]["source"], box), Path("/workspace"))
+            for tool in metadata.get("tools", [])
+        }
         provenance = metadata.get("provenance", {})
         ledger = request_ledger(
             request.raw_body,
@@ -125,6 +128,8 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
             parent=requests[0].raw_body if child else None,
         )
         assert sum(ledger["buckets"].values()) == len(request.raw_body.encode())
+        assert ledger["buckets"]["serialization_overhead"] >= 0
+        assert not [key for key in ledger["buckets"] if "/Users" in key or str(box.root) in key]
         rows.append(
             {
                 "run": run,
@@ -138,7 +143,7 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
         stable_rows.append(
             request_ledger(
                 stable,
-                owners={name: _normalized(owner, box) for name, owner in owners.items()},
+                owners=owners,
                 provenance={_normalized(value, box): category for value, category in provenance.items()},
                 previous=_normalized(requests[index - 1].raw_body, box) if index else None,
                 parent=_normalized(requests[0].raw_body, box) if child else None,
