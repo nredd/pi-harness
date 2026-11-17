@@ -125,7 +125,7 @@ class PtyFleet:
                 try:
                     kill_owned_group(proc.pid, TEARDOWN_S)
                     killed.append(proc)
-                except OSError as error:
+                except (OSError, subprocess.TimeoutExpired) as error:
                     errors.append(error)
             deadline = time.monotonic() + TEARDOWN_S
             for proc in killed:

@@ -477,10 +477,13 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   kills owned groups before reaping their leaders and closes all masters, including partial
   startup and cancellation. Output tails are bounded at 64 KiB per child.
 - Calibration first runs a real fast synchronous writer with and without the same cap. It
-  refuses absent writes, low uncapped throughput, failure to deliver the capped rate, or no
-  observed increase in completed write duration. Retain the raw calibration JSON, not just a
+  refuses absent writes, a writer heartbeat older than 0.5 seconds at the window end, low
+  uncapped throughput, failure to deliver the capped rate, or no observed increase in completed
+  write duration. Retain the raw calibration JSON, not just a
   claimed cap. A hung writer, exited child, absent measured probe windows, missing terminal
-  output or fewer than four input-to-paint samples per child fails the experiment.
+  output or fewer than four input-to-paint samples per child fails the experiment. Probe windows
+  must be contiguous (2 ms timestamp-rounding tolerance), with start/end coverage within one
+  second; a recent final heartbeat cannot hide an omitted interior interval.
 - The report separates actual delivered bytes/s from probe write volume, event-loop lag,
   synchronous write duration and raw input-to-paint samples. Input-to-paint is stdin receipt
   to the *next write invocation*, not terminal display or the rendering of that exact input.

@@ -10,6 +10,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 import pytest
@@ -161,6 +162,8 @@ def test_cell_assembles_existing_fixtures_and_refuses_missing_delivery(
         "slow-cap",
         "fast-cap",
         "no-pressure",
+        "stale-progress",
+        "nonfinite-progress",
     ],
 )
 def test_calibration_requires_distinguishing_controls(
@@ -191,7 +194,11 @@ def test_calibration_requires_distinguishing_controls(
                 rate = 1
             elif failure == "fast-cap" and cap:
                 rate = 100000
-            record = {"writes": 100, "max_write_ms": 100 if cap else 1}
+            record = {"writes": 100, "max_write_ms": 100 if cap else 1, "last_write_s": time.monotonic()}
+            if failure == "stale-progress":
+                record["last_write_s"] -= 1.2
+            elif failure == "nonfinite-progress":
+                record["last_write_s"] = float("nan")
             if failure == "zero-writes":
                 record["writes"] = 0
             elif failure == "zero-block":
@@ -210,3 +217,56 @@ def test_calibration_requires_distinguishing_controls(
     else:
         with pytest.raises(RuntimeError):
             calibrate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "failure", ["interior-gap", "overlap", "late-start", "invalid-window", "invalid-stamp", "none"]
+)
+def test_probe_window_continuity(tmp_path: Path, failure: str) -> None:
+    """A recent last heartbeat cannot hide an omitted interior interval."""
+    data = records()
+    data.append(records()[1])
+    data[2]["t"] = 3000
+    if failure == "interior-gap":
+        data[2]["t"] = 4000
+    elif failure == "overlap":
+        data[2]["t"] = 2500
+    elif failure == "late-start":
+        data = [data[0], data[2]]
+        data[1]["t"] = 4000
+    elif failure == "invalid-window":
+        data[1]["window_s"] = float("-inf")
+    elif failure == "invalid-stamp":
+        data[1]["t"] = float("inf")
+    out = tmp_path / "probe.jsonl"
+    save(out, data)
+    if failure == "none":
+        assert probe_metrics([out], 1000, 3000)["combined"]["bytes_per_s"] == 100
+    else:
+        with pytest.raises(RuntimeError, match="Missing measured latency windows"):
+            probe_metrics([out], 1000, 4000)
+
+
+def test_real_writer_stalling_after_initial_progress_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alive writer can supply valid output and then hang; that is not calibration."""
+    writer = dedent("""\
+        import json, os, sys, time
+        started = time.monotonic()
+        maximum = 0.0
+        writes = 0
+        while time.monotonic() - started < 1.2:
+            before = time.monotonic()
+            os.write(1, b'x' * 4096)
+            maximum = max(maximum, (time.monotonic() - before) * 1000)
+            writes += 1
+            with open(sys.argv[1], 'w') as out:
+                json.dump({'writes': writes, 'max_write_ms': maximum,
+                           'last_write_s': time.monotonic()}, out)
+        time.sleep(30)
+        """)
+    monkeypatch.setattr(pty_bench, "WRITER", writer)
+    with pytest.raises(RuntimeError, match="writer stalled"):
+        calibrate(tmp_path)

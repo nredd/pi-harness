@@ -167,7 +167,7 @@ def test_input_readiness_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         fleet.send(0, b"hello\n")
 
 
-@pytest.mark.parametrize("failure", ["signal", "wait"])
+@pytest.mark.parametrize("failure", ["signal", "signal-timeout", "wait"])
 def test_cleanup_errors_do_not_abandon_other_children(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -183,6 +183,8 @@ def test_cleanup_errors_do_not_abandon_other_children(
         """Kill the real test child, then inject a reported refusal for one group."""
         result = original_kill(pgid, timeout)
         if pgid == fleet.children[0].pid:
+            if failure == "signal-timeout":
+                raise subprocess.TimeoutExpired("ps", timeout)
             raise PermissionError("signal refused")
         return result
 
@@ -190,16 +192,23 @@ def test_cleanup_errors_do_not_abandon_other_children(
         """Model a bounded reaping failure after the real kill."""
         raise subprocess.TimeoutExpired("test-child", timeout)
 
-    if failure == "signal":
+    if failure in ("signal", "signal-timeout"):
         monkeypatch.setattr(pty_driver, "kill_owned_group", kill)
-        expected = PermissionError
+        expected = PermissionError if failure == "signal" else subprocess.TimeoutExpired
     else:
         monkeypatch.setattr(fleet.children[0], "wait", wait)
         expected = subprocess.TimeoutExpired
-    with pytest.raises(expected):
-        fleet.close()
-    original_wait(timeout=2)
-    assert fleet.children[1].returncode is not None
-    for fd in fleet.masters:
-        with pytest.raises(OSError, match="Bad file descriptor"):
-            os.fstat(fd)
+    try:
+        with pytest.raises(expected):
+            fleet.close()
+        original_wait(timeout=2)
+        assert fleet.children[1].returncode is not None
+        for fd in fleet.masters:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(fd)
+    finally:
+        monkeypatch.setattr(fleet.children[0], "wait", original_wait)
+        for proc in fleet.children:
+            if proc.returncode is None:
+                original_kill(proc.pid, 2)
+                proc.wait(timeout=2)
