@@ -362,7 +362,8 @@ describe("router/default startup, quota dispatch and resume", () => {
 
 		it("loads the real router package through the packages setting", async () => {
 			const s = await launch({ router: "package" });
-			// #911: package-loaded virtual models must remain available during startup.
+			// `router/default` is selected, with no fallback message, when the router loads through `packages`
+			// (core nredd/pi#101/#102, v1.3.0-nredd.12; deterministic guard: `virtual-models.test.ts` there).
 			expect(s.selected()).toBe(VIRTUAL);
 			expect(s.modelFallbackMessage).toBeUndefined();
 			expect(s.extensionPaths.map((path) => path.replaceAll("\\", "/"))).toEqual([
