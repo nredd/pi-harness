@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import platform
 import re
 import shutil
@@ -21,6 +22,7 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -65,7 +67,17 @@ def run(argv: list[str], cwd: Path) -> str:
         OSError: The tool is missing or cannot execute.
         subprocess.SubprocessError: Execution fails or exceeds five minutes.
     """
-    result = subprocess.check_output(argv, cwd=cwd, text=True, stderr=subprocess.STDOUT, timeout=300)
+    with tempfile.TemporaryDirectory() as home:
+        env = os.environ | {
+            "HOME": home,
+            "USERPROFILE": home,
+            "XDG_CACHE_HOME": str(Path(home) / ".cache"),
+            "XDG_CONFIG_HOME": str(Path(home) / ".config"),
+            "POWERSHELL_TELEMETRY_OPTOUT": "1",
+        }
+        result = subprocess.check_output(
+            argv, cwd=cwd, env=env, text=True, stderr=subprocess.STDOUT, timeout=300
+        )
     if "ls-files" not in argv:
         LOGGER.info(result.strip())
     return result
@@ -188,6 +200,30 @@ def composite_sources(root: Path, owned: list[Path], scratch: Path, shellcheck: 
                 raise ValueError(f"Unsupported composite shell: '{step['shell']}'")
 
 
+def workflow_shell(step: dict[str, Any], job: dict[str, Any], workflow: dict[str, Any]) -> str:
+    """Resolve declared shell precedence, then the Windows/non-Windows implicit default.
+
+    Parameters:
+        step (dict): Workflow step.
+        job (dict): Parent job, including its runner and matrix.
+        workflow (dict): Parent workflow.
+    Returns:
+        str: Effective shell declaration; expressions remain inert data.
+    """
+    declared = step.get(
+        "shell",
+        job.get("defaults", {})
+        .get("run", {})
+        .get("shell", workflow.get("defaults", {}).get("run", {}).get("shell")),
+    )
+    if declared is not None:
+        return declared
+    runners = str(job["runs-on"])
+    if "matrix." in runners:
+        runners += str(job.get("strategy", {}).get("matrix", {}))
+    return "pwsh" if "windows" in runners.lower() else "bash"
+
+
 def lint(root: Path, prefix: Path) -> None:
     """Lint tracked source and embedded composite-action shell, never execute it.
 
@@ -201,9 +237,7 @@ def lint(root: Path, prefix: Path) -> None:
         subprocess.SubprocessError: Any native lint diagnostic fails the gate.
     """
     tools = verify(prefix)
-    files = run([str(Path(shutil.which("git") or "/usr/bin/git").resolve()), "ls-files", "-z"], root).split(
-        "\0"
-    )
+    files = run(["/usr/bin/git", "ls-files", "-z"], root).split("\0")
     # The core Gitlink is independently gated. Everything else is checked, including fixtures.
     owned = [root / file for file in files if file and not file.startswith("forks/")]
     shells = [path for path in owned if path.suffix in {".sh", ".bash"}]
@@ -240,7 +274,7 @@ def lint(root: Path, prefix: Path) -> None:
             data = yaml.safe_load(path.read_text())
             for job_name, job in data["jobs"].items():
                 for index, step in enumerate(job.get("steps", [])):
-                    if "run" in step and step.get("shell") == "pwsh":
+                    if "run" in step and workflow_shell(step, job, data).split()[0] in {"pwsh", "powershell"}:
                         script = EXPRESSION.sub("synthetic", step["run"])
                         (ps_sources / f"{path.stem}-{job_name}-{index}.ps1").write_text(script)
         analyzer = prefix / "analyzer/PSScriptAnalyzer.psd1"

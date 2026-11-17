@@ -10,21 +10,22 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import shutil
 import subprocess
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import native_lint
 
 PREFIX = native_lint.ROOT / ".native-lint"
-GIT = str(Path(shutil.which("git") or "/usr/bin/git").resolve())
+GIT = "/usr/bin/git"
 
 
 @pytest.fixture
@@ -144,6 +145,56 @@ def test_empty_inventory_refusal(repository: Path, missing: str) -> None:
     subprocess.check_output([GIT, "-C", str(repository), "rm", "-f", missing])
     with pytest.raises(ValueError, match="Empty"):
         native_lint.lint(repository, PREFIX)
+
+
+@pytest.mark.parametrize("origin", ["workflow", "job", "windows", "matrix"])
+def test_inherited_powershell_refusal(repository: Path, origin: str) -> None:
+    """Parse inherited and implicit Windows shells, not only explicit step shells.
+
+    Parameters:
+        repository (Path): Disposable tracked repository.
+        origin (str): Source of the effective shell.
+    Returns:
+        None.
+    """
+    workflow: dict[str, Any] = {
+        "on": "push",
+        "jobs": {"test": {"runs-on": "ubuntu-24.04", "steps": [{"run": "function Broken {"}]}},
+    }
+    job: dict[str, Any] = workflow["jobs"]["test"]
+    if origin == "workflow":
+        workflow["defaults"] = {"run": {"shell": "pwsh"}}
+    elif origin == "job":
+        workflow["defaults"] = {"run": {"shell": "bash"}}
+        job["defaults"] = {"run": {"shell": "pwsh"}}
+    elif origin == "windows":
+        job["runs-on"] = "windows-2025"
+    else:
+        job["runs-on"] = "${{ matrix.os }}"
+        job["strategy"] = {"matrix": {"os": ["windows-2025"]}}
+        # actionlint assumes Bash for this dynamic runner; reach the native PowerShell parser too.
+        job["steps"] = [{"run": "if true; then echo hello; fi"}]
+    (repository / ".github/workflows/valid.yml").write_text(yaml.safe_dump(workflow))
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        native_lint.lint(repository, PREFIX)
+    diagnostic = "MissingOpenParenthesisInIfStatement" if origin == "matrix" else "MissingEndCurlyBrace"
+    assert diagnostic in caught.value.output
+
+
+def test_step_shell_overrides_defaults(repository: Path) -> None:
+    """A declared Bash step must not be parsed as its inherited PowerShell default.
+
+    Parameters:
+        repository (Path): Disposable tracked repository.
+    Returns:
+        None.
+    """
+    (repository / ".github/workflows/valid.yml").write_text(
+        "on: push\ndefaults:\n  run:\n    shell: pwsh\njobs:\n  test:\n"
+        "    runs-on: windows-2025\n    defaults:\n      run:\n        shell: pwsh\n"
+        "    steps:\n      - shell: bash\n        run: 'value=hello; echo \"$value\"'\n"
+    )
+    native_lint.lint(repository, PREFIX)
 
 
 def test_missing_tool_refusal(tmp_path: Path) -> None:

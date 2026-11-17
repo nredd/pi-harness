@@ -52,8 +52,9 @@ make help                    # every target
   version checks reject stale tools. `make install-lint-tools` rebuilds the isolated prefix.
 - `check-scripts` first runs `check-native-lint`. It requires the installed prefix, runs ShellCheck on
   tracked `.sh`/`.bash` files, actionlint with ShellCheck on workflows, and PSScriptAnalyzer plus the
-  PowerShell parser on tracked PowerShell and extracted composite/workflow `pwsh` blocks. Composite
-  Bash blocks also run through ShellCheck. Expressions in extracted blocks become inert synthetic
+  PowerShell parser on tracked PowerShell and extracted composite/workflow `pwsh` blocks, including
+  job/workflow shell defaults and implicit Windows PowerShell. Step overrides take precedence. Tools
+  run with disposable home/cache directories. Composite Bash blocks also run through ShellCheck. Expressions in extracted blocks become inert synthetic
   text, not executed commands. Analyzer Error/Warning diagnostics block, except `PSAvoidUsingWriteHost`
   (CI diagnostics must not pollute function success output) and `PSUseShouldProcessForStateChangingFunctions`
   (noninteractive disposable fixture constructors). Only the actual custom runner labels are declared.
