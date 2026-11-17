@@ -1,6 +1,6 @@
-import { fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { settled, toolCall } from "@nredd/pi-test-lib/faux";
+import { fauxAssistantMessage, getMessageText } from "@nredd/pi-test-lib/harness";
 import { expect, test } from "vitest";
 import { complete, GATE_ERROR, QUESTION, SessionFixture, state } from "./fixtures/session-support.ts";
 

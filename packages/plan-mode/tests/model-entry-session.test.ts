@@ -1,11 +1,6 @@
-import {
-	createTestUiContext,
-	fauxAssistantMessage,
-	fauxToolCall,
-	getMessageText,
-} from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { settled, toolCall } from "@nredd/pi-test-lib/faux";
+import { createTestUiContext, fauxAssistantMessage, fauxToolCall, getMessageText } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { expect, test } from "vitest";
 import { MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.ts";

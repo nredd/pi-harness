@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, keyHint, keyText } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.ts";
@@ -66,6 +66,13 @@ test("plain planning state has no above-editor widget, only a colored footer chi
 	assert.equal(context.widgets.get("plan-mode-plan"), undefined);
 	assert.equal(context.statuses.get("plan-mode"), "[accent]plan active[/accent]");
 	assert.deepEqual(calls, [{ role: "accent", text: "plan active" }]);
+
+	// A host whose theme is not initialized still gets an unstyled status.
+	theme.fg = () => {
+		throw new Error("Theme not initialized");
+	};
+	updatePlanModeUi(context.ctx, state, () => "unused");
+	assert.equal(context.statuses.get("plan-mode"), "plan active");
 });
 
 test("a ready plan keeps its one-line widget and switches the footer chip to ready", () => {
@@ -180,18 +187,19 @@ test("the proposed-plan renderer collapses to `Title · heading` and expands to 
 		fg: (role: string, text: string) => `[${role}]${text}[/${role}]`,
 		bold: (text: string) => `[b]${text}[/b]`,
 	} as unknown as Theme;
-	const collapsed = renderPlanMessage(planMessage(), { expanded: false, outputPad: 1 }, liveTheme).render(80);
+	const options = { expanded: false, outputPad: 1, keyText, keyHint };
+	const collapsed = renderPlanMessage(planMessage(), options, liveTheme).render(80);
 	assert.deepEqual(collapsed, ["[b]Proposed Plan[/b][muted] · [/muted]Ship the thing"]);
 
 	const headingless = renderPlanMessage(
 		planMessage({ details: { version: 1, title: "Saved Plan", plan: "" } }),
-		{ expanded: false, outputPad: 1 },
+		options,
 		liveTheme,
 	).render(80);
 	assert.deepEqual(headingless, ["[b]Saved Plan[/b]"]);
 
 	initTheme("dark");
-	const expanded = renderPlanMessage(planMessage(), { expanded: true, outputPad: 0 }, liveTheme)
+	const expanded = renderPlanMessage(planMessage(), { ...options, expanded: true, outputPad: 0 }, liveTheme)
 		.render(80)
 		.map(stripTerminalSequences)
 		.join("\n");

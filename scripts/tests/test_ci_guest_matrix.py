@@ -2654,4 +2654,6 @@ def test_the_smoke_workflow_covers_the_wsl2_pool_for_same_repo_runs_only() -> No
     assert "vars.PI_WSL2_HEARTBEAT != ''" in job["if"]
     assert "head.repo.full_name == github.repository" in job["if"]
     assert any(step.get("run") == "bash scripts/wsl2_smoke.sh" for step in job["steps"])
-    assert "scripts/wsl2_smoke.sh" in workflow[True]["pull_request"]["paths"]
+    assert {"scripts/wsl2_smoke.sh", "scripts/wsl2_smoke.py", "scripts/wsl2_exec.py"} <= set(
+        workflow[True]["pull_request"]["paths"]
+    )

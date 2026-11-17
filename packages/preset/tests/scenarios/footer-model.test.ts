@@ -1,9 +1,9 @@
 /** Physical request metadata reaches the real replacement footer without changing selection. */
 import { type ExtensionFactory, type ModelRouteContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import type { InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { deferred } from "@nredd/pi-test-lib/deferred";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";

@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
-import { createTestUiContext, fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
 import { settled, toolCall } from "@nredd/pi-test-lib/faux";
+import { createTestUiContext, fauxAssistantMessage, getMessageText } from "@nredd/pi-test-lib/harness";
 import { expect, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import { SessionFixture } from "./fixtures/session-support.ts";

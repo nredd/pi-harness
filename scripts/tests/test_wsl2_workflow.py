@@ -1203,9 +1203,9 @@ def run_smoke(
     commands.mkdir()
     refuse = (
         (
-            'case "$*" in *"/443"*) '
+            'case "$*" in *"--tcp api.github.com 443"*) '
             + ("" if control else "exit 124 ")
-            + ';; *"/dev/tcp/"*) exit 124 ;; esac\n'
+            + ';; *"--tcp "*) exit 124 ;; esac\n'
         )
         if blocked
         else ""
@@ -1362,7 +1362,9 @@ def test_smoke_fails_on_a_reachable_private_target(tmp_path: Path) -> None:
 
 def test_smoke_hardcodes_no_host_or_dev_address() -> None:
     """Host and dev addresses come from the environment; the script names only generic ranges."""
-    addresses = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", SMOKE.read_text(encoding="utf-8")))
+    addresses = set(
+        re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", SMOKE.with_suffix(".py").read_text(encoding="utf-8"))
+    )
     assert addresses == {
         "192.168.1.1",
         "10.0.0.1",

@@ -532,14 +532,70 @@ describe("actual portable bundled CLI", () => {
 		expect(Object.values(cached.machines)).toHaveLength(1);
 	});
 	it("fails malformed scans and arguments without publishing a manifest", () => {
-		seed(a, ["{broken"]);
+		const path = seed(a, ["", "\u0000\u0000", `${CANARY}{broken`]);
 		const artifact = packedArtifact(join(dir, "packed"));
 		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(failed.status).toBe(1);
 		expect(failed.stdout).toBe("");
 		expect(failed.stderr).toContain("Incomplete local scan");
+		expect(failed.stderr).toContain(JSON.stringify({ path, line: 5, reason: "invalid-record" }));
+		expect(failed.stderr).not.toContain(CANARY);
 		expect(run(artifact, ["export", "--output", repo, "--output", repo]).status).toBe(1);
 		expect(run(artifact, ["unknown"]).status).toBe(1);
+	});
+	it("neutralizes every Unicode Bidi_Control in real filename diagnostics", () => {
+		const controls = "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";
+		const path = join(a, "sessions", `bad${controls}\u009b\n.jsonl`);
+		sessionFile(path, { startMs: at("2026-09-30"), lines: [`${CANARY}{broken`] });
+		const artifact = packedArtifact(join(dir, "packed"));
+		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
+		expect(failed.status).toBe(1);
+		expect(failed.stdout).toBe("");
+		expect(failed.stderr).toContain(
+			JSON.stringify({
+				path: join(a, "sessions", "bad�������������\n.jsonl"),
+				line: 2,
+				reason: "invalid-record",
+			}),
+		);
+		for (const control of controls) expect(failed.stderr).not.toContain(control);
+		expect(failed.stderr).not.toContain(CANARY);
+		expect(failed.stderr.trim().split("\n")).toHaveLength(2);
+	});
+	it("retains published bytes on bounded scan diagnostics, including cached damage and filesystem failures", () => {
+		const path = seed(a);
+		const artifact = packedArtifact(join(dir, "packed"));
+		const good = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
+		expect(good.status, good.stderr).toBe(0);
+		const snapshot = JSON.parse(good.stdout).snapshotDir;
+		const published = () =>
+			Object.fromEntries(readdirSync(snapshot).map((f) => [f, readFileSync(join(snapshot, f), "utf8")]));
+		const before = published();
+		const statePath = join(a, "pi-session-kit", "export-state.json");
+		const state = readFileSync(statePath, "utf8");
+		writeFileSync(path, `\n\u0000\u0000\n${Array.from({ length: 30 }, () => `\u0000${CANARY}`).join("\n")}\n`);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
+			expect(failed.status).toBe(1);
+			expect(failed.stdout).toBe("");
+			const details = failed.stderr
+				.trim()
+				.split("\n")
+				.slice(1)
+				.map((s) => JSON.parse(s.slice("pi-stats-scan: ".length)));
+			expect(details).toHaveLength(20);
+			expect(details[0]).toEqual({ path, line: 3, reason: "invalid-record" });
+			expect(details[19]).toEqual({ path, line: 22, reason: "invalid-record" });
+			expect(failed.stderr).not.toContain(CANARY);
+			expect(published()).toEqual(before);
+			expect(readFileSync(statePath, "utf8")).toBe(state);
+		}
+		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo, "--sessions-dir", path]);
+		expect(failed.status).toBe(1);
+		expect(failed.stderr).toContain(JSON.stringify({ path, line: 0, reason: "read-directory" }));
+		expect(failed.stderr).not.toContain(CANARY);
+		expect(published()).toEqual(before);
+		expect(readFileSync(statePath, "utf8")).toBe(state);
 	});
 	it("build is byte reproducible and contains only Node builtin imports", () => {
 		const output = join(dir, "pi-stats-export.mjs");

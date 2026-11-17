@@ -81,6 +81,11 @@ export PATH="$(dirname "$(rustup which --toolchain 1.97.1 cargo)"):$PATH"
 `npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
 compiler worker. It covers analytic geometry, clock/lifecycle checks and the clamp mutation control.
 This does not run the live overlay suite or prove physical pointer behavior.
+`native/macos/headless_tests.swift` directly asserts complete `appBlockedMessage` literals for a
+named bundle, nil (`unknown bundle id`), an empty bundle and a quoted Unicode application name.
+These pure string checks do not discover applications or exercise live refusal callers, UI,
+capture, input or permissions. All five production Swift sources stay unchanged. LLVM regions
+are not branch outcomes or statements; the full-source producer retains unexecuted live code.
 
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
 `native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
@@ -230,7 +235,7 @@ Non-pointer actions on the same tool:
 
 ### Tests
 
-`npm test -- test/macos-observe-target.test.mjs --coverage.enabled=false`, `test/macos-native-pure.test.mjs` (compiles the `PURE` region of `bridge.swift`),
+`npm test -- test/macos-observe-target.test.mjs --coverage.enabled=false`, `test/macos-native-pure.test.mjs` (links all five production Swift files into the headless assertion binary),
 `test/act-outcomes.test.mjs`, `test/desktop-tools.test.mjs`, `test/unpaired-act.test.mjs` (stubbed backend: unpaired successor, delta refs, lock
 scope). `PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false` drives the real helper against an `NSAlert` fixture
 (`windowElement`, `look`, `act`, `axWaitFor`, `desktopInput` parsing, `activateApp`, clipboard round trip with

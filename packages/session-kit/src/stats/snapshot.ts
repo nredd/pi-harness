@@ -639,13 +639,29 @@ export async function exportStats(
 			"Cannot establish which harnesses were last published (unreadable snapshot, no recorded set); " +
 				"pass --replace-harnesses to publish anyway",
 		);
-	const loaded: Loaded = wanted.has("pi")
+	const loaded = wanted.has("pi")
 		? await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true })
-		: { calls: [], sessions: [], errors: 0, badLines: 0 };
-	if (loaded.errors || loaded.badLines)
-		throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
+		: { calls: [], sessions: [], errors: 0, badLines: 0, diagnostics: [] };
+	if (loaded.errors || loaded.badLines) {
+		// Fixed, bounded stderr protocol for local callers. Never serialize Loaded or raw exceptions:
+		// both can contain transcript-derived values. JSON quoting prevents terminal/newline injection.
+		const details = loaded.diagnostics.map(
+			(diagnostic) =>
+				`pi-stats-scan: ${JSON.stringify({
+					...diagnostic,
+					path: diagnostic.path
+						.slice(0, 1024)
+						.replace(/[\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "\ufffd"),
+				})}`,
+		);
+		throw new Error(
+			[`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`, ...details].join("\n"),
+		);
+	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
+	const exportedAt = Date.now();
 	const scans = await loadHarnesses({
+		now: exportedAt,
 		harnesses: external,
 		roots: options.roots,
 		env: options.env,
@@ -654,7 +670,6 @@ export async function exportStats(
 		loadSqlite: options.loadSqlite,
 		salt: state.salt,
 	});
-	const exportedAt = Date.now();
 	const report: HarnessReport = {};
 	const calls = [...loaded.calls];
 	const sessionMetadata = [...sessionsOf(loaded)];
@@ -870,6 +885,7 @@ export async function loadCombined(
 		localStatus.pi = { found: true, lastEventMs: lastEvents(local.calls).pi, problems: [] };
 		try {
 			const scans = await loadHarnesses({
+				now,
 				harnesses: wanted,
 				roots: options.roots,
 				env: options.env,
