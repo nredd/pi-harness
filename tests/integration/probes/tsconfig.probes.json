@@ -16,6 +16,8 @@
     "latency.test.ts",
     "latency.ts",
     "process-lifecycle.test.ts",
+    "request-ledger.test.ts",
+    "request-ledger.ts",
     "render.test.ts",
     "render.ts",
     "session-kit-child-scope.test.ts",

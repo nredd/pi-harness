@@ -52,11 +52,13 @@ class RecordedRequest:
         path (str): request path.
         headers (dict[str, str]): lower-cased header names.
         body (dict[str, Any] | str): parsed JSON, or the decoded form body of a token request.
+        raw_body (str): exact decoded messages body, including original JSON whitespace.
     """
 
     path: str
     headers: dict[str, str]
     body: dict[str, Any] | str
+    raw_body: str = ""
 
 
 @dataclass
@@ -69,12 +71,15 @@ class AnthropicMock:
         token_replies (list[tuple[int, dict[str, Any]]]): queued `(status, json)` token replies;
             an exhausted queue answers 500 so an unexpected refresh is visible, not silent.
         message_status (int): status for `/v1/messages`; non-200 sends an error body.
+        message_tools (list[dict[str, Any] | None]): FIFO tool-use replies (`name`, `input`);
+            None or an exhausted queue produces the ordinary text reply. Usage is synthetic.
     """
 
     messages: list[RecordedRequest] = field(default_factory=list)
     tokens: list[RecordedRequest] = field(default_factory=list)
     token_replies: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
     message_status: int = 200
+    message_tools: list[dict[str, Any] | None] = field(default_factory=list)
     _server: ThreadingHTTPServer | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -156,13 +161,18 @@ class AnthropicMock:
             _send_json(request, status, reply)
         elif request.path.startswith("/v1/messages"):
             with self._lock:
-                self.messages.append(RecordedRequest(request.path, headers, _json_or_text(raw_body)))
+                self.messages.append(
+                    RecordedRequest(request.path, headers, _json_or_text(raw_body), raw_body)
+                )
+                tool = self.message_tools.pop(0) if self.message_tools else None
             if self.message_status != 200:
                 _send_json(
                     request, self.message_status, {"type": "error", "error": {"type": "authentication_error"}}
                 )
-            else:
+            elif tool is None:
                 _send_stream(request)
+            else:
+                _send_stream(request, tool)
         else:
             _send_json(request, 404, {"error": f"unscripted path {request.path}"})
 
@@ -199,11 +209,12 @@ def _send_json(request: BaseHTTPRequestHandler, status: int, body: dict[str, Any
     request.wfile.write(payload)
 
 
-def _send_stream(request: BaseHTTPRequestHandler) -> None:
-    """Answer a `/v1/messages` request with a one-text-block SSE stream saying `REPLY_TEXT`.
+def _send_stream(request: BaseHTTPRequestHandler, tool: dict[str, Any] | None = None) -> None:
+    """Answer with one scripted tool-use block or the ordinary `REPLY_TEXT` SSE stream.
 
     Parameters:
         request (BaseHTTPRequestHandler): live request.
+        tool (dict[str, Any] | None): scripted tool name/input, absent for a text reply.
     """
     events = [
         (
@@ -239,6 +250,24 @@ def _send_stream(request: BaseHTTPRequestHandler) -> None:
         ),
         ("message_stop", {"type": "message_stop"}),
     ]
+    if tool is not None:
+        events[1] = (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "ledger_call", "name": tool["name"], "input": {}},
+            },
+        )
+        events[2] = (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool["input"])},
+            },
+        )
+        events[4][1]["delta"]["stop_reason"] = "tool_use"
     payload = "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
     request.send_response(200)
     request.send_header("content-type", "text/event-stream")
