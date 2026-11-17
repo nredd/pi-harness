@@ -751,11 +751,11 @@ Current-rate API-equivalent value:
 - The shared engine requires assessed rates and exact provider/model identities. It does
   not guess private aliases or apply another provider's prices to a similarly named model.
   It uses the root `pi-ai` host peer, not a subpath that stock extension loaders may not
-  bridge. The packed stock-Pi contract exercises this actual extension-loading boundary.
+  bridge. The packed stock-Pi extension-loading boundary is NOT exercised by this change.
   Custom overrides must provide their own assessment. Unavailable models, old hosts without
   the new core estimator, unsupported non-token charges and unaudited rates stay unpriced.
-- This depends on the core pricing enhancement in `nredd/pi#46`; the package pins are NOT
-  changed here. A coherent core/package release is required to enable pricing. Older hosts
+- This depends on the core pricing engine published in `v1.3.0-nredd.12` (`nredd/pi#46`); the
+  package pins are NOT changed here. Older hosts
   continue to display recorded costs and explicit unknown current-value coverage. The
   release owner must run `make check-stats-pricing` on the matching candidate: it fails
   without the shared estimator and runs the actual default-engine contracts on Node and

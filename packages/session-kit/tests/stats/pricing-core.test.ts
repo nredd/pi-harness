@@ -48,7 +48,7 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-// nredd/pi-harness#799: legacy hosts intentionally show unknown; a coherent release MUST supply core46.
+// nredd/pi-harness#799: legacy hosts intentionally show unknown; a coherent release MUST supply the core estimator (nredd/pi#46, published in v1.3.0-nredd.12).
 it("requires the matching shared estimator when release admission is requested", () => {
 	if (process.env.PI_PRICING_CORE_REQUIRED === "1")
 		expect(available, "Matching core estimator is required before releasing current-rate pricing").toBe(true);
