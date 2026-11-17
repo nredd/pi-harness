@@ -766,6 +766,22 @@ describe("agent-runner usage callback wiring", () => {
 		]);
 	});
 
+	it.each([
+		[{ total: 0, unpriced: true }, 0, 1],
+		[{ total: 2, unpriced: true }, 1, 1],
+		[{ total: 2, unpriced: true, unpricedCalls: 4, pricedCalls: 3 }, 3, 4],
+	])("forwards core unpriced markers %j", async (cost, pricedCalls, unpricedCalls) => {
+		const { session, listeners } = createSession("OK");
+		createAgentSession.mockResolvedValue({ session });
+		const seen: any[] = [];
+		session.prompt = vi.fn(async () => {
+			emitMessageEnd(listeners, { input: 50, cost });
+			session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
+		});
+		await runAgent(ctx, "Explore", "go", { pi, onAssistantUsage: (u) => seen.push(u) });
+		expect(seen[0]).toMatchObject({ unpriced: true, cost: cost.total, pricedCalls, unpricedCalls });
+	});
+
 	it("runAgent normalizes partial usage objects to 0 for missing fields", async () => {
 		const { session, listeners } = createSession("OK");
 		createAgentSession.mockResolvedValue({ session });

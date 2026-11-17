@@ -101,13 +101,15 @@ jobs:
         run: |
           # The fork's `check` runs Biome with --write; CI runs the same steps with Biome check-only.
           # Fail loudly if the fork changes its check list instead of silently drifting from it.
-          expected='node scripts/biome-check.mjs --write && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
+          expected='node scripts/worktree.mjs check && node scripts/biome-check.mjs --write && npm run check:binary-release && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
           actual=$(node -p 'require("./package.json").scripts.check')
           if [ "$actual" != "$expected" ]; then
             echo "::error::forks/pi changed its check script; update this step: $actual"
             exit 1
           fi
+          node scripts/worktree.mjs check
           node scripts/biome-check.mjs
+          npm run check:binary-release
           npm run check:pinned-deps
           npm run check:runtime-deps
           npm run check:ts-imports

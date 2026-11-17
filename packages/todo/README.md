@@ -879,7 +879,7 @@ make check
 
 The workspace check runs Biome, strict TypeScript and the full Vitest suite on Node and pinned Bun,
 including upstream cases and both real interactive settled-row regressions. The development host is
-core `v1.3.0-nredd.11` release tarballs, not a live Pi process. From `packages/todo`, target tests with:
+core `v1.3.0-nredd.12` release tarballs, not a live Pi process. From `packages/todo`, target tests with:
 
 ```sh
 node ../../scripts/run-vitest.ts node tests/home-injection.test.ts tests/todo-parallel-guidance.test.ts

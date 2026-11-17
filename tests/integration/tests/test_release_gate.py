@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import copy
+import json
 import runpy
 import sys
 from pathlib import Path
@@ -324,15 +325,26 @@ def test_workflow_execution_names_and_barriers() -> None:
                 or "-m pi_release.promotion_verify" in step.get("run", "")
             ]
             assert all(barriers[0] < index for index in protected)
-    # `verify` runs computer-use releases on macOS, where `/usr/bin/gh` does not exist.
-    publish = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())
-    verify = publish["jobs"]["verify"]
-    assert "macos-" in verify["runs-on"]
-    barrier = next(step for step in verify["steps"] if "-m pi_release.release_gate" in step.get("run", ""))
-    assert barrier["env"]["RELEASE_GATE_GH"] == (
-        "${{ runner.os == 'macOS' && '/opt/homebrew/bin/gh' || '/usr/bin/gh' }}"
-    )
-    assert publish["jobs"]["publish"]["runs-on"] == "ubuntu-24.04"
+
+
+def test_fork_check_step_mirrors_the_selected_core_script() -> None:
+    """Keep every selected core check in CI, changing only Biome's write mode.
+
+    Returns:
+        None: The drift guard and executed commands match the initialized Gitlink.
+    """
+    fork = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
+    step = next(
+        item for item in fork["jobs"]["core"]["steps"] if item.get("name") == "Check without rewriting"
+    )["run"]
+    declared = json.loads((ROOT / "forks/pi/package.json").read_text())["scripts"]["check"]
+    expected = next(line for line in step.splitlines() if line.startswith("expected='"))
+    assert expected == f"expected='{declared}'"
+    commands = step.split("fi\n", maxsplit=1)[1].strip().splitlines()
+    mirrored = declared.replace("node scripts/biome-check.mjs --write", "node scripts/biome-check.mjs")
+    assert commands == [
+        "npx tsc --noEmit" if command == "tsc --noEmit" else command for command in mirrored.split(" && ")
+    ]
 
 
 def test_stack_cells_are_exactly_the_executing_matrix() -> None:

@@ -118,6 +118,33 @@ def test_ledger_charges_the_larger_source_and_enforces_the_cap(tmp_path: Path) -
         ledger.require_headroom()
 
 
+@pytest.mark.parametrize("source", ["events", "sessions"])
+def test_ledger_refuses_unknown_spend_from_either_real_input(source: str, tmp_path: Path) -> None:
+    """Unpriced child history or failed response events must stop the hard-cap ledger."""
+    box = make_box(tmp_path)
+    message = {
+        "role": "assistant",
+        "stopReason": "error",
+        "usage": {"cost": {"total": 0, "unpriced": True, "unpricedCalls": 3}},
+    }
+    events = []
+    if source == "events":
+        events.append({"type": "message_end", "message": message})
+    else:
+        child = box.agent_dir / "sessions" / "child.jsonl"
+        child.parent.mkdir()
+        child.write_text(json.dumps({"type": "message", "message": message}) + "\n")
+    ledger = live.CostLedger()
+    with pytest.raises(AssertionError, match="3 unpriced calls; cap cannot be enforced"):
+        ledger.charge("failure", run_with(events), box)
+    assert ledger.unpriced == 3
+    with pytest.raises(AssertionError, match="spend unknown"):
+        ledger.require_headroom()
+    assert live.message_unpriced_calls({"role": "user"}) == 0
+    assert live.message_unpriced_calls({"role": "assistant"}) == 0
+    assert live.message_unpriced_calls({"role": "assistant", "usage": {"cost": {"unpriced": True}}}) == 1
+
+
 def test_session_cost_skips_non_message_and_non_object_lines(tmp_path: Path) -> None:
     """Only `message` entries are priced; other entry types and non-object JSON add nothing."""
     box = make_box(tmp_path)

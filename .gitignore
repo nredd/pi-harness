@@ -1,4 +1,5 @@
 node_modules/
+/.native-lint/
 .venv/
 __pycache__/
 *.egg-info/

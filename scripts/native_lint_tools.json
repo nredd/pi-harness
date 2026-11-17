@@ -1,0 +1,74 @@
+{
+  "darwin-arm64": {
+    "shellcheck": {
+      "url": "https://files.pythonhosted.org/packages/61/ac/2a84c37171c0cf5a10ea4b0a27d43eb0a1d29bd98b49c2c5ffe17ad24bbe/shellcheck_py-0.11.0.1-py2.py3-none-macosx_11_0_arm64.whl",
+      "sha256": "6b88d0a244c82ed07e06a53e444da841f69330ca59ae15d4a66c391655dae7a0"
+    },
+    "actionlint": {
+      "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+      "sha256": "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"
+    },
+    "pwsh": {
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.4.22/powershell-7.4.22-osx-arm64.tar.gz",
+      "sha256": "afd9b5dc4aa1934f4a2bab906efc443f7e576e4ba501f3d355b121e3f6ec3c1a"
+    },
+    "analyzer": {
+      "url": "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.24.0/PSScriptAnalyzer.1.24.0.nupkg",
+      "sha256": "e86c97d44bb1bc8a1de35e753b85ea1d938f6f9f881639a181507e079bca4556"
+    }
+  },
+  "darwin-x86_64": {
+    "shellcheck": {
+      "url": "https://files.pythonhosted.org/packages/54/27/d75b03e5458cefdb6d3b674566cd20476c3e4d3fe6cc9d68b7e3b854b296/shellcheck_py-0.11.0.1-py2.py3-none-macosx_10_9_x86_64.whl",
+      "sha256": "b6a3fee28efda2e16e38d6e6d59faf7224300256456639727370d404730849e8"
+    },
+    "actionlint": {
+      "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz",
+      "sha256": "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644"
+    },
+    "pwsh": {
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.4.22/powershell-7.4.22-osx-x64.tar.gz",
+      "sha256": "09a7af0ec9ecac489725e9c22343c6ca33ee35d02a448f6ee20f596fdd2e2446"
+    },
+    "analyzer": {
+      "url": "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.24.0/PSScriptAnalyzer.1.24.0.nupkg",
+      "sha256": "e86c97d44bb1bc8a1de35e753b85ea1d938f6f9f881639a181507e079bca4556"
+    }
+  },
+  "linux-x86_64": {
+    "shellcheck": {
+      "url": "https://files.pythonhosted.org/packages/96/55/250e0e3367613a5c22bd82e33b16b889287d81ab0f7dda67e6514a4cccf4/shellcheck_py-0.11.0.1-py2.py3-none-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "1b274df81de5b000ff78db433e7328b87e52e3c38481c60f8e488c3095beef05"
+    },
+    "actionlint": {
+      "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+      "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    },
+    "pwsh": {
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.4.22/powershell-7.4.22-linux-x64.tar.gz",
+      "sha256": "9de443bef974f219c98a33b0f4096aace7f30b42188f37a1b14c5da7e82c8a6a"
+    },
+    "analyzer": {
+      "url": "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.24.0/PSScriptAnalyzer.1.24.0.nupkg",
+      "sha256": "e86c97d44bb1bc8a1de35e753b85ea1d938f6f9f881639a181507e079bca4556"
+    }
+  },
+  "linux-aarch64": {
+    "shellcheck": {
+      "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz",
+      "sha256": "12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+    },
+    "actionlint": {
+      "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz",
+      "sha256": "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6"
+    },
+    "pwsh": {
+      "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.4.22/powershell-7.4.22-linux-arm64.tar.gz",
+      "sha256": "ef95973facf60cf735f6d8caef3383394b9e8200cbd078d6068f7e14ca6b9078"
+    },
+    "analyzer": {
+      "url": "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.24.0/PSScriptAnalyzer.1.24.0.nupkg",
+      "sha256": "e86c97d44bb1bc8a1de35e753b85ea1d938f6f9f881639a181507e079bca4556"
+    }
+  }
+}

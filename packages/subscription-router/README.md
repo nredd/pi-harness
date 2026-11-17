@@ -17,6 +17,14 @@ recording Pi doubles come from `@nredd/pi-test-lib`. The byte-pinned legacy orac
 formatting, linting and assists there. Snapshot provenance and oracle rules are below;
 `tests/policy-compatibility.test.ts` and `tests/policy-differential.test.ts` keep warning headers.
 
+### Cancellation ownership
+
+Recovery relies on core's active-run `ctx.signal` (core `v1.3.0-nredd.12` or later; `.11` and
+older hosts lack it and can commit a stale recovery after an abort). The real-child proofs live in
+the in-process stack suite, `tests/inprocess/router-{failover,ownership}.test.ts`.
+Core's ordinary retry omission happens *before* retry routing; invalidating that retry prevents
+new recovery edits, not rollback of an earlier committed edit.
+
 ### Legacy routing receipts
 
 Both golden suites use the original implementation at
@@ -173,6 +181,35 @@ recoverable length/overflow retries are unchanged, including partial attempts co
 A retryable partial quota error is confirmed and marked before refusing failover; terminal partial
 quota errors are refused before confirmation. Prior successful tool turns remain in context and
 are not re-executed by router recovery.
+
+Continuous failover requires a routed binding, e.g. a subagent tier `deep: ["router/deep"]`.
+A static list of physical tier members selects once at admission; neither that list nor a manual
+physical pin gains implicit cross-provider recovery. A routed child keeps its agent/session,
+virtual selection, tools and completed results. Actual physical response/activity metadata and
+effective thinking follow the destination; core retains responsibility for thinking clamping,
+context limits and compaction. Failure to compact does not authorize truncation or tool replay;
+a provider context error remains explicit if ordinary core recovery cannot finish.
+
+The default remains hybrid: cached eligibility before each request and fresh confirmation after
+quota-looking failures. Low remaining quota alone is not exhaustion. Authentication, permission,
+model, billing and transport errors do not independently prove subscription exhaustion. There is
+no predictive switch, new recovery engine, cross-tier or paid API fallback.
+
+Recovery captures the requesting session's selection generation, durable model-change identity
+and cancellation signal before awaiting confirmation. The durable identity also guards requesters
+using a shared route without loading their own router extension. Manual pins, another profile, away-and-back selection, session replacement
+or cancellation invalidate its permission to omit context, continue, record a routing decision or
+announce a switch. A stale retry route ends explicitly with a selection-changed error rather than
+dispatching under the new selection. Physical response metadata updates do not invalidate selection. Valid shared
+quota observations remain shared; a cancelled collector still cannot confirm a block. Recovery
+budgets and edits remain session-owned, including when siblings share one runtime. An exhausted
+running child settles with error rather than becoming scheduled work; pre-dispatch wait/fail,
+parking, reset expiry and manual-resume semantics are unchanged.
+
+Terminal recovery announces the confirmed source and forecast
+destination once. It never hides partial text, thinking or tool calls. Confirmation must still
+precede the context edit and continuation; manual changes or aborts while it waits suppress both
+the edit and notice. Hosts older than core `v1.3.0-nredd.12` lack the cancellation signal this depends on.
 
 Usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
 auth has no subscription window and is never blocked. Codex window names follow the reported

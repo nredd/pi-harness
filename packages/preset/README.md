@@ -50,6 +50,9 @@ local themes, skills, agents and their configuration. Restart sessions after act
 - TUI only, installed on `session_start`; print, JSON and RPC modes never mount it or poll.
 - Cwd/home abbreviation, branch, session name; usage totals for assistant/tool-result messages,
   standalone usage, compaction and branch summaries; sorted, whitespace-sanitized statuses.
+- Unpriced usage keeps its tokens but contributes no invented spend: mixed totals show the priced
+  subtotal plus `N unpriced`; wholly unpriced totals show `unknown`, including on subscriptions.
+  Free requests with billable tokens count as priced; zero-usage failures count as neither.
 - Word labels when they fit with the selected model, compact labels otherwise. Every row is
   width-bounded, including provider, model and thinking-level labels. Context warnings are
   strictly above 70%/90%; `(auto)` is always displayed, not the live compaction toggle.

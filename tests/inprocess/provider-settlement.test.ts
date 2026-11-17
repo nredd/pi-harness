@@ -171,9 +171,9 @@ describe("provider to settlement diagnostics", () => {
 		async (item) => {
 			responses = [[completed([item])]];
 			await h.session.prompt("terminal-only fixture");
-			// Current core ignores terminal output except reasoning signatures. This is a diagnostic,
-			// not an endorsement of the malformed stream or evidence that a live provider sent one.
-			expect(trace).toContainEqual({ stage: "message", stop: "stop", blocks: [] });
+			// Core #47 (documented by #115) rejects terminal output without finalized stream items.
+			// This malformed fixture is not evidence that a live provider sent such a stream.
+			expect(trace).toContainEqual({ stage: "message", stop: "error", blocks: [] });
 			expect(executions).toBe(0);
 			expect(requests).toBe(1);
 		},

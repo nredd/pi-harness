@@ -3,8 +3,8 @@
 set -euo pipefail
 expected=${PI_CI_GIT_BASH:?Git Bash selection receipt is missing}
 resolved=$(cygpath -w "$(command -v bash)")
-expected=$(printf '%s' "${expected%.exe}" | tr '\\' '/' | tr '[:upper:]' '[:lower:]')
-resolved=$(printf '%s' "${resolved%.exe}" | tr '\\' '/' | tr '[:upper:]' '[:lower:]')
+expected=$(printf '%s' "${expected%.exe}" | tr "\\\\" '/' | tr '[:upper:]' '[:lower:]')
+resolved=$(printf '%s' "${resolved%.exe}" | tr "\\\\" '/' | tr '[:upper:]' '[:lower:]')
 # Git's bin/bash.exe launcher may resolve its actual usr/bin/bash.exe binary.
 alternate="${expected%/bin/bash}/usr/bin/bash"
 if [ "$resolved" != "$expected" ] && [ "$resolved" != "$alternate" ]; then
