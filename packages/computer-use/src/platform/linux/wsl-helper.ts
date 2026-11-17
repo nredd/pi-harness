@@ -76,6 +76,8 @@ export class WslHelperClient implements WindowsHelperTransport {
 	private reply?: Reply;
 	private readonly lifetime = new AbortController();
 	private queued = 0;
+	private compatible = false;
+	private compatibilityRefused = false;
 
 	constructor(private readonly config: WslHostHelperConfig) {}
 
@@ -228,6 +230,7 @@ export class WslHelperClient implements WindowsHelperTransport {
 		let identity: { dev: number; ino: number } | undefined;
 		let sent = false;
 		let answered = false;
+		let checkingCompatibility = false;
 		this.queued++;
 		try {
 			await bounded(this.ensureInstalled(signal), signal);
@@ -251,49 +254,80 @@ export class WslHelperClient implements WindowsHelperTransport {
 			}
 			this.check(signal);
 			const child = this.process();
-			return await new Promise<T>((resolve, reject) => {
-				const cleanup = () => signal.removeEventListener("abort", abort);
-				const abort = () => {
-					cleanup();
-					reject(
-						new Error(
-							deadline.aborted
-								? `WSL host command '${cmd}' timed out; input lease retained.`
-								: "Operation aborted; input lease retained.",
-						),
-					);
-					this.dispose();
-				};
-				this.reply = {
-					id,
-					resolve: (value) => {
-						answered = true;
+			const send = (requestId: string, requestFrame: string) =>
+				new Promise<unknown>((resolve, reject) => {
+					answered = false;
+					const cleanup = () => signal.removeEventListener("abort", abort);
+					const abort = () => {
 						cleanup();
-						resolve(value as T);
-					},
-					reject: (error, acknowledged = false) => {
-						answered = acknowledged;
-						cleanup();
-						reject(error);
-					},
-				};
-				signal.addEventListener("abort", abort, { once: true });
-				sent = true;
-				child.stdin.write(frame, (error) => {
-					if (error) {
-						this.reply?.reject(error);
+						reject(
+							new Error(
+								deadline.aborted
+									? `WSL host command '${cmd}' timed out; input lease retained.`
+									: "Operation aborted; input lease retained.",
+							),
+						);
 						this.dispose();
-					}
+					};
+					this.reply = {
+						id: requestId,
+						resolve: (value) => {
+							answered = true;
+							cleanup();
+							resolve(value);
+						},
+						reject: (error, acknowledged = false) => {
+							answered = acknowledged;
+							cleanup();
+							reject(error);
+						},
+					};
+					signal.addEventListener("abort", abort, { once: true });
+					sent = true;
+					child.stdin.write(requestFrame, (error) => {
+						if (error) {
+							this.reply?.reject(error);
+							this.dispose();
+						}
+					});
 				});
-			});
+			if (this.compatibilityRefused) throw new Error("WSL host helper transport is closed.");
+			if (!this.compatible) {
+				checkingCompatibility = true;
+				const diagnosticsId = randomUUID();
+				const diagnostics = (await send(
+					diagnosticsId,
+					`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id: diagnosticsId, cmd: "diagnostics", args: {} })}\n`,
+				)) as { capabilities?: unknown } | null;
+				const capabilities = diagnostics?.capabilities;
+				if (
+					!Array.isArray(capabilities) ||
+					!capabilities.every((capability) => typeof capability === "string") ||
+					!capabilities.includes("fail-closed-live-target-v1")
+				) {
+					throw new Error(
+						"WSL host helper requires diagnostics capability fail-closed-live-target-v1; provision a compatible helper.",
+					);
+				}
+				this.compatible = true;
+				checkingCompatibility = false;
+			}
+			this.check(signal);
+			return (await send(id, frame)) as T;
 		} catch (error) {
+			if (checkingCompatibility) this.compatibilityRefused = true;
 			if (sent && !answered) this.dispose();
 			throw error;
 		} finally {
 			this.queued--;
 			// Timeout/disconnect/abort after send leaves host execution uncertain. NEVER steal or age out a lease.
-			if (acquired && identity && (!sent || answered) && !signal.aborted)
-				await bounded(this.releaseLease(identity, signal), signal);
+			try {
+				if (acquired && identity && (!sent || answered) && !signal.aborted)
+					await bounded(this.releaseLease(identity, signal), signal);
+			} finally {
+				// Release an acknowledged diagnostics-only lease before terminal shutdown.
+				if (checkingCompatibility) this.dispose();
+			}
 		}
 	}
 

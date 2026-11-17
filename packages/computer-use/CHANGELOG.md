@@ -36,6 +36,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Refuse WSL helpers without the exact `fail-closed-live-target-v1` diagnostics capability before sending any requested command. Missing or malformed capabilities close permanently after diagnostics-only cleanup; executable pins and protocol versions do not authorize older unsafe fallback semantics. Native hardening remains separate under #983 and Windows/WSL acceptance is not established (#673).
 - Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).
 
 - Windows helper commands now reject promptly with `Operation aborted.` for post-write cancellation, clear the pending request, timer and listener on every completion/write-error path, and ignore late replies. This cancels the local wait, not native work already sent (nredd/pi-harness#750).

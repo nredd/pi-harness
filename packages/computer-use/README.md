@@ -54,8 +54,13 @@ Windows pixel coordinates, including negative monitor origins, pass through unch
 launches still run in the Linux guest; whole-desktop tools remain macOS-only.
 
 The executable must be canonical, executable, regular, at most 64MiB and match the pin before
-*each* request. Readiness also checks protocol v4 and existing architecture invariants. Keep its
-parent and the lease parent writable only by the trusted desktop owner, on a local host volume.
+*each* request. Before sending any requested command, the initial `diagnostics` response must
+advertise `fail-closed-live-target-v1` in a well-formed array of strings named `capabilities`.
+Additional string capabilities are ignored. Missing, malformed or unsupported-only capabilities
+refuse terminally: only diagnostics is sent, the acknowledged lease is removed and the helper
+is stopped. It cannot restart behind existing observations. A SHA-256 pin, protocol v4 and
+architecture v1 do not establish these safety semantics; existing architecture checks still apply.
+Keep its parent and the lease parent writable only by the trusted desktop owner, on a local host volume.
 This is not Authenticode verification, credential isolation or protection against same-user
 replacement between verification and execution. `CI` refuses opt-in. Nothing enables interop,
 installs tools, grants privileges, changes the screen-reader flag or falls back to PowerShell.
@@ -81,7 +86,7 @@ replacement. Filesystem calls cannot be cancelled: only the caller's wait is bou
 operations may need manual recovery.
 
 Verification and remaining release gate:
-- `test/wsl-host-helper.test.mjs` uses real disposable POSIX subprocesses and synthetic JSON,
+- `test/wsl2-diagnostics.test.mjs` uses real disposable POSIX subprocesses and synthetic JSON,
   with filesystem fault injection. It does not execute a Windows helper or touch a desktop.
 - Windows cross-compilation/type checking is not a native runtime run. Existing native CI tests
   do not establish WSL interop, UIA, DPI/capture or foreground/session behavior.
@@ -95,7 +100,11 @@ Verification and remaining release gate:
 - Source limitations remain: the existing helper does not enable screen-reader discovery or
   capture frame-change polling, and its desktop/session preflight and coordinate fallback still
   need native acceptance/hardening. This transport does not resolve those acceptance requirements.
-  Do not close #673 or remove its release gate on synthetic tests.
+  The older helper lacks the required capability and is intentionally refused even with a valid
+  owner-supplied pin. Native source hardening and capability emission are tracked in
+  [#983](https://github.com/nredd/pi-harness/issues/983); both changes and native acceptance
+  must be integrated before admitting this transport. Do not close #673 or remove its release
+  gate on synthetic tests.
 
 ## Tools
 
