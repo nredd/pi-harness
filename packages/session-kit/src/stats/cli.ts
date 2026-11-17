@@ -23,6 +23,8 @@ const FLAGS = [
 ];
 /** Flags without a value. */
 const SWITCHES = ["--replace-harnesses"];
+/** The only flags the read-only `subagents` report accepts. */
+const SUBAGENTS_FLAGS = ["--agent-dir", "--sessions-dir"];
 /** Flags that only an export accepts. */
 const EXPORT_ONLY = [...SWITCHES, "--sessions-dir", "--harness", "--claude-dir", "--codex-dir", "--opencode-db"];
 
@@ -52,10 +54,12 @@ export async function main(): Promise<void> {
 	const dir = resolve(options.get("--agent-dir") ?? agentDir());
 	const output = options.get("--output");
 	const input = options.get("--input");
-	if (
-		command === "subagents" &&
-		[...options.keys()].every((flag) => flag === "--agent-dir" || flag === "--sessions-dir")
-	) {
+	if (command === "subagents") {
+		const invalid = [...options.keys()].find((flag) => !SUBAGENTS_FLAGS.includes(flag));
+		if (invalid !== undefined)
+			throw new Error(
+				`usage: flag '${invalid}' is not valid for subagents; valid flags: ${SUBAGENTS_FLAGS.join(", ")}`,
+			);
 		const result = await reportSubagents(resolve(options.get("--sessions-dir") ?? resolve(dir, "sessions")));
 		console.log(JSON.stringify(result));
 	} else if (command === "export" && output !== undefined && input === undefined) {

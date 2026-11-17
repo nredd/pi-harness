@@ -120,9 +120,20 @@ export class SessionParser {
 	private lines = 0;
 	private physicalLine = 0;
 	private readonly onBadLine: ((line: number) => void) | undefined;
+	private readonly onCall: ((call: CallTuple, cost: unknown) => void) | undefined;
 
-	constructor(size: number, mtimeMs: number, onBadLine?: (line: number) => void) {
+	/**
+	 * @param onCall Optional observer, called with each accepted call's tuple (the same array stored in
+	 * `FileStats.calls`) and its raw recorded `usage.cost`, so a caller can bind a price to the exact call.
+	 */
+	constructor(
+		size: number,
+		mtimeMs: number,
+		onBadLine?: (line: number) => void,
+		onCall?: (call: CallTuple, cost: unknown) => void,
+	) {
 		this.onBadLine = onBadLine;
+		this.onCall = onCall;
 		this.out = {
 			size,
 			mtimeMs,
@@ -162,6 +173,11 @@ export class SessionParser {
 			this.badLine();
 			return;
 		}
+		this.acceptEntry(entry);
+	}
+
+	/** Handle one already-parsed JSON object entry (callers that parse lines themselves skip a second parse). */
+	acceptEntry(entry: Record<string, unknown>): void {
 		const ts = timeOf(entry.timestamp);
 		this.seen(ts);
 		if (entry.type === "session") {
@@ -242,8 +258,10 @@ export class SessionParser {
 			this.out.modelPairs?.push([provider, model]);
 			this.modelIndex.set(name, index);
 		}
-		this.out.calls.push([ms, index, input, output, cacheRead, cacheWrite, cost]);
+		const tuple: CallTuple = [ms, index, input, output, cacheRead, cacheWrite, cost];
+		this.out.calls.push(tuple);
 		this.out.entryIds?.push(entryId);
+		this.onCall?.(tuple, costValue);
 	}
 }
 

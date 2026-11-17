@@ -192,3 +192,15 @@ it("adds a local-only portable CLI mode and refuses export/input flags", async (
 		process.argv = argv;
 	}
 });
+
+it("names an unsupported subagents flag in a clear usage error", async () => {
+	const argv = process.argv;
+	try {
+		process.argv = ["node", "stats", "subagents", "--output", join(root, "out")];
+		await expect(main()).rejects.toThrow("flag '--output' is not valid for subagents");
+		process.argv = ["node", "stats", "subagents", "--replace-harnesses"];
+		await expect(main()).rejects.toThrow("flag '--replace-harnesses' is not valid for subagents");
+	} finally {
+		process.argv = argv;
+	}
+});

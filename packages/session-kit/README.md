@@ -185,6 +185,14 @@ contribute to unmatched counts. Historical custom names may differ from the conf
 unrecorded workflow membership stays `unknown`. Usage-only remote snapshots cannot recover this
 metadata and are deliberately excluded.
 
+Review lane and `retry-repeat` are INFERRED heuristic labels, not recorded facts: pi records no
+review lane or retry reason. The agent names (`code-reviewer`, `critic`), the `Axis:` prompt headers
+and the last full 40-hex SHA in a prompt are conventions the report matches, and a prompt that
+deviates is classified `review-unknown` or `other`. Each price is bound to its exact parsed call; a
+call whose price cannot be bound is counted unpriced in `priceFallbacks` (diagnostic reason
+`price-fallback`), never guessed or shown as free. `subagents` rejects any flag other than
+`--agent-dir` and `--sessions-dir`, naming the offender.
+
 Review traffic is kept separate: `review-standards` and `review-spec` require explicit `Axis:`
 prompt evidence; `review-critic` identifies critic sessions. These describe the mandated review
 lanes, not proof of policy compliance. `retry-repeat` contains resumed runs and another review of
