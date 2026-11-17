@@ -1,0 +1,102 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
+import { afterEach, describe, expect, it } from "vitest";
+import { psInfo } from "../../src/monitor/pidfiles.ts";
+import { signalGroup } from "../../src/monitor/process.ts";
+import { published, running, tempDir, waitFor } from "../fixtures/monitor/helpers.ts";
+
+interface WorkerReady {
+	workerPid: number;
+	monitorPid: number;
+	targetPid: number;
+	descendantPid: number;
+	token: string;
+	home: string | undefined;
+}
+
+const config = join(import.meta.dirname, "../fixtures/monitor/worker-death.vitest.config.ts");
+// `vitest` resolves to `<pkg>/dist/index.js`; its CLI entry sits at the package root.
+const vitest = join(dirname(dirname(fileURLToPath(import.meta.resolve("vitest")))), "vitest.mjs");
+let runner: ChildProcess | undefined;
+let ready: WorkerReady | undefined;
+
+/** SIGKILL a still-running group member only if its group and command prove this test owns it. */
+async function killOwned(pid: number, pgid: number, token: string): Promise<void> {
+	if (!(await running(pid))) return;
+	const info = await psInfo(pid);
+	if (info?.pgid !== pgid || !info.command.includes(token))
+		throw new Error(`refusing to kill unowned process ${pid} in group ${pgid}`);
+	signalGroup(pgid, "SIGKILL");
+	await waitFor(async () => !(await running(pid)));
+}
+
+async function stopOwnedMonitor(): Promise<void> {
+	if (!ready) return;
+	await killOwned(ready.monitorPid, ready.monitorPid, ready.token);
+	await killOwned(ready.descendantPid, ready.monitorPid, ready.token);
+}
+
+afterEach(async () => {
+	try {
+		await stopOwnedMonitor();
+	} finally {
+		runner?.kill("SIGKILL");
+		runner = undefined;
+		ready = undefined;
+	}
+});
+
+describe("monitor worker death", () => {
+	it.each(["SIGKILL", "assertion failure"])(
+		"reaps an owned monitor after worker %s",
+		async (failure) => {
+			const tmp = tempDir();
+			const token = randomUUID();
+			const readyPath = join(tmp.dir, "ready.json");
+			const targetPath = join(tmp.dir, "target.pid");
+			const childPath = join(tmp.dir, "child.pid");
+			const ackPath = join(tmp.dir, "ack");
+			// The nested Vitest bypasses `scripts/run-vitest.ts`, so it gets the same isolated home here.
+			const home = join(tmp.dir, "home");
+			mkdirSync(home);
+			try {
+				runner = spawn(process.execPath, [vitest, "run", "--config", config, "--coverage.enabled=false"], {
+					cwd: join(import.meta.dirname, "../.."),
+					env: {
+						...process.env,
+						...isolatedHomeEnv(home),
+						MONITOR_WORKER_READY: readyPath,
+						MONITOR_WORKER_ROOT: tmp.dir,
+						MONITOR_WORKER_TARGET: targetPath,
+						MONITOR_WORKER_CHILD: childPath,
+						MONITOR_WORKER_ACK: ackPath,
+						MONITOR_WORKER_TOKEN: token,
+						MONITOR_WORKER_FAIL: failure === "assertion failure" ? "1" : "0",
+					},
+					// Piped so `published` can report why the nested run exited early.
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+				await published(readyPath, runner);
+				ready = JSON.parse(readFileSync(readyPath, "utf8")) as WorkerReady;
+				expect(ready.token).toBe(token);
+				expect(ready.home).toBe(home);
+				expect(ready.targetPid).toBe(ready.monitorPid);
+				expect(await running(ready.monitorPid)).toBe(true);
+				expect(await running(ready.descendantPid)).toBe(true);
+				writeFileSync(ackPath, "");
+				if (failure === "SIGKILL") {
+					process.kill(ready.workerPid, "SIGKILL");
+				}
+				const { monitorPid, descendantPid } = ready;
+				await waitFor(async () => !(await running(monitorPid)) && !(await running(descendantPid)));
+			} finally {
+				tmp.cleanup();
+			}
+		},
+		15_000,
+	);
+});

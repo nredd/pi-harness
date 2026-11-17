@@ -88,7 +88,9 @@ async function daemonRunsOldBinary(pid: number): Promise<boolean> {
 		const elapsed = await new Promise<string>((resolve, reject) => {
 			const child = spawn("ps", ["-o", "etime=", "-p", String(pid)], { stdio: ["ignore", "pipe", "ignore"] });
 			let out = "";
-			child.stdout.on("data", (chunk) => { out += chunk; });
+			child.stdout.on("data", (chunk) => {
+				out += chunk;
+			});
 			child.on("error", reject);
 			child.on("close", () => resolve(out.trim()));
 		});
@@ -198,14 +200,25 @@ export class MacosHelperClient {
 	}
 
 	async launchDaemon(signal?: AbortSignal): Promise<void> {
-		if (usingExternalHelperSocket) throw new HelperTransportError(`External helper socket is unavailable at ${HELPER_SOCKET_PATH}.`);
+		if (usingExternalHelperSocket)
+			throw new HelperTransportError(`External helper socket is unavailable at ${HELPER_SOCKET_PATH}.`);
 		await mkdir(path.dirname(HELPER_SOCKET_PATH), { recursive: true });
 		// Open the resolved bundle directly so a legacy system-wide copy with the
 		// same bundle id cannot win LaunchServices resolution.
-		await runProcess("open", ["-n", "-g", HELPER_APP_PATH, "--args", "serve", "--socket", HELPER_SOCKET_PATH], COMMAND_TIMEOUT_MS, signal);
+		await runProcess(
+			"open",
+			["-n", "-g", HELPER_APP_PATH, "--args", "serve", "--socket", HELPER_SOCKET_PATH],
+			COMMAND_TIMEOUT_MS,
+			signal,
+		);
 	}
 
-	async daemonCommand<T>(cmd: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+	async daemonCommand<T>(
+		cmd: string,
+		args: Record<string, unknown>,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<T> {
 		// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.
 		throwIfAborted(signal);
 		return await new Promise<T>((resolve, reject) => {
@@ -222,8 +235,19 @@ export class MacosHelperClient {
 				signal?.removeEventListener("abort", onAbort);
 				finish();
 			};
-			const timer = setTimeout(() => settle(() => { socket.destroy(); reject(new HelperTransportError(`Daemon command '${cmd}' timed out after ${timeoutMs}ms.`)); }), timeoutMs);
-			const onAbort = () => settle(() => { socket.destroy(); reject(new Error("Operation aborted.")); });
+			const timer = setTimeout(
+				() =>
+					settle(() => {
+						socket.destroy();
+						reject(new HelperTransportError(`Daemon command '${cmd}' timed out after ${timeoutMs}ms.`));
+					}),
+				timeoutMs,
+			);
+			const onAbort = () =>
+				settle(() => {
+					socket.destroy();
+					reject(new Error("Operation aborted."));
+				});
 			const onConnect = () => socket.write(`${JSON.stringify({ id, cmd, ...args })}\n`);
 			const onData = (chunk: string) => {
 				buffer += chunk;
@@ -234,7 +258,13 @@ export class MacosHelperClient {
 					try {
 						const parsed = JSON.parse(buffer.slice(0, newline));
 						if (parsed.ok === true) resolve(parsed.result as T);
-						else reject(new HelperCommandError(parsed?.error?.message ?? `Daemon command '${cmd}' failed.`, parsed?.error?.code));
+						else
+							reject(
+								new HelperCommandError(
+									parsed?.error?.message ?? `Daemon command '${cmd}' failed.`,
+									parsed?.error?.code,
+								),
+							);
 					} catch (error) {
 						reject(error);
 					}
@@ -242,7 +272,11 @@ export class MacosHelperClient {
 			};
 			const onError = (error: Error) => settle(() => reject(new HelperTransportError(error.message)));
 			// The helper crashed or dropped the socket before a full reply line: fail now, not at the timeout.
-			const onDisconnect = () => settle(() => { socket.destroy(); reject(new HelperTransportError(`Helper disconnected before replying to '${cmd}'.`, "helper_disconnected")); });
+			const onDisconnect = () =>
+				settle(() => {
+					socket.destroy();
+					reject(new HelperTransportError(`Helper disconnected before replying to '${cmd}'.`, "helper_disconnected"));
+				});
 			signal?.addEventListener("abort", onAbort, { once: true });
 			socket.setEncoding("utf8");
 			socket.on("connect", onConnect);
@@ -273,7 +307,11 @@ export class MacosHelperClient {
 		return false;
 	}
 
-	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
+	async command<T>(
+		cmd: string,
+		args: Record<string, unknown> = {},
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<T> {
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		if (!(await this.ensureDaemon(options?.signal))) {
 			throw new HelperTransportError(`pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`);
@@ -300,7 +338,9 @@ export class MacosHelperClient {
 		const diagnostics = {
 			protocolVersion: Math.trunc(toFiniteNumber(result?.protocolVersion, 0)),
 			architectureVersion: Math.trunc(toFiniteNumber(result?.architectureVersion, 0)),
-			invariants: Array.isArray(result?.invariants) ? result.invariants.filter((value: unknown): value is string => typeof value === "string") : [],
+			invariants: Array.isArray(result?.invariants)
+				? result.invariants.filter((value: unknown): value is string => typeof value === "string")
+				: [],
 			pid: Math.trunc(toFiniteNumber(result?.pid, 0)),
 			parentPid: Math.trunc(toFiniteNumber(result?.parentPid, 0)) || undefined,
 			parentAppName: toOptionalString(result?.parentAppName),
@@ -319,7 +359,12 @@ export class MacosHelperClient {
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
 		let diagnostics = await this.diagnosticsCommand(signal);
 		const executableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
-		if (diagnostics.protocolVersion === HELPER_PROTOCOL_VERSION && executableMatches && !(await daemonRunsOldBinary(diagnostics.pid))) return diagnostics;
+		if (
+			diagnostics.protocolVersion === HELPER_PROTOCOL_VERSION &&
+			executableMatches &&
+			!(await daemonRunsOldBinary(diagnostics.pid))
+		)
+			return diagnostics;
 
 		// The helper daemon outlives Pi, so restarting/reloading Pi alone does not
 		// replace a stale daemon or one launched from the legacy system location.
@@ -426,7 +471,13 @@ class MacosActivityGlowConnection {
 				try {
 					const response = JSON.parse(buffer.slice(0, newline));
 					if (response.id === id && response.ok === true) resolve();
-					else reject(new HelperCommandError(response?.error?.message ?? "Activity glow command failed.", response?.error?.code));
+					else
+						reject(
+							new HelperCommandError(
+								response?.error?.message ?? "Activity glow command failed.",
+								response?.error?.code,
+							),
+						);
 				} catch (error) {
 					reject(error);
 				}

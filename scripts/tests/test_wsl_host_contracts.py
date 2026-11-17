@@ -116,7 +116,7 @@ def test_guest_commit_gate_receives_event_payload(tmp_path: Path) -> None:
     payload = tmp_path / "host event.json"
     payload.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "head": {"sha": head}}}))
     step = tmp_path / "step.sh"
-    gate = ROOT / "packages/computer-use/scripts/check-commit-messages.mjs"
+    gate = ROOT / "scripts/check-commit-messages.mjs"
     step.write_text(f'"{node}" "{gate}"\n')
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     declaration = next(line for line in wrapper.splitlines() if line.startswith("$env:WSLENV = "))
@@ -143,12 +143,12 @@ def test_adapter_failure_labels_name_each_hop_without_environment_dumping() -> N
     """Keep host, PowerShell, and guest diagnostics bounded to their failed hop."""
     host = (ROOT / "scripts/wsl2_host.sh").read_text()
     shell = (ROOT / "scripts/wsl2_shell.ps1").read_text()
-    guest = (ROOT / "scripts/wsl2_run.sh").read_text()
+    guest = (ROOT / "scripts/wsl2_run.py").read_text()
     assert "wsl2-host: pwsh command not found" in host
     assert "wsl2-shell: wslpath failed with status $status" in shell
     assert shell.index("$status = $LASTEXITCODE") < shell.index("$adapter = $adapterOutput.Trim()")
     assert "wsl2-shell: guest dispatch failed with status $status" in shell
-    assert "wsl2-run: guest-step failed with status %s" in guest
+    assert "wsl2-run: guest-step failed with status {status}" in guest
     assert "Get-ChildItem Env:" not in host + shell + guest
 
 

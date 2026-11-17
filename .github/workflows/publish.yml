@@ -11,6 +11,20 @@ concurrency:
 
 permissions: {}
 
+# Policy: Verified-byte publication and OIDC policy
+# `.github/workflows/publish.yml`, pushes of tags matching `@nredd/*@*`:
+#
+# | Job | Runs | Permissions |
+# | --- | --- | --- |
+# | `verify (ubuntu-24.04)` | `scripts/npm_release.py` validates package/version, tag commit ancestry on freshly fetched `origin/main`, and npm absence; installs, checks the selected package with pinned Bun, packs once, runs applicable contracts on those exact bytes, generates SHA-256/SHA-512 identity and release manifest, uploads the artifact | `contents: read` |
+# | `publish (ubuntu-24.04)` | Environment `npm`; downloads and validates the artifact, asserts/prints Node >=22.14.0 and npm >=11.5.1, publishes the verified tarball via trusted publishing; checks npm integrity, runs `npm audit signatures` in a one-package throwaway install, and binds the fetched DSSE provenance to the tarball, workflow, tag and commit. Matching existing bytes skip publication; different bytes fail | `contents: read`, `id-token: write` |
+# | `release (ubuntu-24.04)` | Creates a verified-tag GitHub release with the original tarball, checksum, identity and manifest attached | `contents: write` |
+#
+# The jobs have bounded timeouts and per-tag concurrency without cancellation. No npm tokens, no rebuild
+# in publish, no manual dispatch. External trusted-publisher/environment/tag protections and failed-job
+# recovery are documented [here](../../docs/releases.md#owned-npm-packages). Only a real tag-triggered publication
+# can prove the external OIDC binding, automatic provenance and registry acceptance end to end.
+
 jobs:
   verify:
     # Swift compiles both architectures on macOS; no signing keys or desktop setup.
@@ -59,24 +73,24 @@ jobs:
           # Trusted absolute `gh`: the computer-use cell runs on macOS, where the runner image ships it in Homebrew.
           RELEASE_GATE_GH: ${{ runner.os == 'macOS' && '/opt/homebrew/bin/gh' || '/usr/bin/gh' }}
         run: >-
-          PYTHONPATH=integration uv run --locked --project integration python -m harness.release_gate
+          PYTHONPATH=tests/integration uv run --locked --project tests/integration python -m pi_release.release_gate
           --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - name: Resolve and validate release tag
         id: target
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: uv run --locked --project integration python scripts/npm_release.py preflight --tag "$RELEASE_TAG"
+        run: uv run --locked --project tests/integration python scripts/npm_release.py preflight --tag "$RELEASE_TAG"
       - name: Verify root core overrides before install
         env:
           GH_TOKEN: ${{ github.token }}
-        run: PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
+        run: PYTHONPATH=release python3 -m pi_release.release --verify-root-overrides --root .
       - name: Install, check package, pack once, exercise tarball and generate manifest
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           # Tag pushes have no comparison base; check the tagged commit itself.
           COMMIT_RANGE: ${{ github.sha }}~1..${{ github.sha }}
         run: >-
-          uv run --locked --project integration python scripts/npm_release.py verify
+          uv run --locked --project tests/integration python scripts/npm_release.py verify
           --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -136,14 +150,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ github.sha }}
         run: >-
-          PYTHONPATH=integration uv run --locked --project integration python -m harness.release_gate
+          PYTHONPATH=tests/integration uv run --locked --project tests/integration python -m pi_release.release_gate
           --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - name: Assert toolchain, verify bytes, refuse duplicate publication
         id: candidate
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: >-
-          uv run --locked --project integration python scripts/npm_release.py publish-check
+          uv run --locked --project tests/integration python scripts/npm_release.py publish-check
           --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"
       - name: Verify CI-built tarball provenance at the exact tag and source
         env:
@@ -164,7 +178,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: >-
-          uv run --locked --project integration python scripts/npm_release.py registry-check
+          uv run --locked --project tests/integration python scripts/npm_release.py registry-check
           --tag "$RELEASE_TAG" --artifact-dir "$RUNNER_TEMP/npm-release"
 
   release:

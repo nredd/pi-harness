@@ -15,9 +15,18 @@ import realOs from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { afterEach, describe, test, vi } from "vitest";
-import { defaultDeps, dispatch, isEntrypoint, main, reapProcessGroup, runCancellable, withDirectoryLock } from "../scripts/setup-helper.mjs";
+import {
+	defaultDeps,
+	dispatch,
+	isEntrypoint,
+	main,
+	reapProcessGroup,
+	runCancellable,
+	withDirectoryLock,
+} from "../scripts/setup-helper.mjs";
 
-const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+const LSREGISTER =
+	"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const RELEASE_BASE = "https://github.com/injaneity/pi-computer-use/releases/download/v1.2.3";
 const ZIP_URL = `${RELEASE_BASE}/pi-computer-use.app.zip`;
 const SUMS_URL = `${RELEASE_BASE}/SHA256SUMS`;
@@ -64,7 +73,10 @@ async function makeApp(appPath, exe, plist = "<plist/>") {
  * @throws {never} Failures read as absent.
  */
 async function present(file) {
-	return realFs.access(file).then(() => true, () => false);
+	return realFs.access(file).then(
+		() => true,
+		() => false,
+	);
 }
 
 /**
@@ -103,7 +115,13 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 	await realFs.mkdir(dirs.tmp, { recursive: true });
 	await put(path.join(dirs.root, "package.json"), JSON.stringify({ version: "1.2.3" }));
 	if (sources) {
-		for (const file of ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]) {
+		for (const file of [
+			"activity_glow.swift",
+			"agent_cursor.swift",
+			"agent_cursor_motion.swift",
+			"bridge.swift",
+			"helper_entry.swift",
+		]) {
 			await put(path.join(dirs.root, "native", "macos", file), "// swift");
 		}
 	}
@@ -190,7 +208,10 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			throw sysError("not found", "ENOENT");
 		}
 		if (command === "openssl") {
-			if (args[0] === "req") state.lockSeen = await realFs.readdir(osFake.tmpdir()).then((names) => names.filter((name) => name.endsWith(".lock")));
+			if (args[0] === "req")
+				state.lockSeen = await realFs
+					.readdir(osFake.tmpdir())
+					.then((names) => names.filter((name) => name.endsWith(".lock")));
 			const key = args.includes("-legacy") ? "legacy" : args[0];
 			if (state.opensslFail.has(key)) throw new Error(`openssl ${key} failed`);
 			return { stdout: "", stderr: "" };
@@ -291,10 +312,19 @@ describe("CLI wiring", () => {
 		const real = (target) => (target === "/link/setup.mjs" ? "/real/setup.mjs" : target);
 		assert.equal(isEntrypoint("/link/setup.mjs", "file:///real/setup.mjs", real), true);
 		assert.equal(isEntrypoint("/other.mjs", "file:///real/setup.mjs", real), false);
-		assert.equal(isEntrypoint(undefined, "file:///real/setup.mjs", () => assert.fail("must not resolve")), false);
-		assert.equal(isEntrypoint("", "file:///real/setup.mjs", () => assert.fail("must not resolve")), false);
+		assert.equal(
+			isEntrypoint(undefined, "file:///real/setup.mjs", () => assert.fail("must not resolve")),
+			false,
+		);
+		assert.equal(
+			isEntrypoint("", "file:///real/setup.mjs", () => assert.fail("must not resolve")),
+			false,
+		);
 		// Default resolver: this test file is not the setup script.
-		assert.equal(isEntrypoint(import.meta.filename, new URL("../scripts/setup-helper.mjs", import.meta.url).href), false);
+		assert.equal(
+			isEntrypoint(import.meta.filename, new URL("../scripts/setup-helper.mjs", import.meta.url).href),
+			false,
+		);
 	});
 
 	test("dispatch runs main only for the entry script", async () => {
@@ -348,7 +378,10 @@ describe("CLI wiring", () => {
 		const win = await makeHost({ platform: "win32" });
 		rec = await runMain(win, ["--postinstall"]);
 		assert.deepEqual(rec.exit, [0]);
-		assert.match(rec.warn[0], /^\[pi-computer-use\] postinstall helper setup skipped: No Windows prebuilt helper found at /);
+		assert.match(
+			rec.warn[0],
+			/^\[pi-computer-use\] postinstall helper setup skipped: No Windows prebuilt helper found at /,
+		);
 	});
 
 	test("a non-Error rejection is stringified", async () => {
@@ -401,7 +434,10 @@ describe("Windows helper", () => {
 		const host = await makeHost({ platform: "win32" });
 		const rec = await runMain(host, []);
 		assert.deepEqual(rec.exit, [1]);
-		assert.match(rec.error[0], /No Windows prebuilt helper found at .*build-native\.mjs --platform windows.*PI_COMPUTER_USE_ALLOW_BUILD=1/);
+		assert.match(
+			rec.error[0],
+			/No Windows prebuilt helper found at .*build-native\.mjs --platform windows.*PI_COMPUTER_USE_ALLOW_BUILD=1/,
+		);
 		assert.deepEqual(host.rec.spawn, []);
 	});
 
@@ -417,7 +453,10 @@ describe("Windows helper", () => {
 			let rec = await runMain(host, argv);
 			assert.deepEqual(rec.spawn[0].slice(0, 3), ["cargo", "build", "--release"]);
 			assert.equal(rec.spawn[0][4], path.join(host.dirs.root, "native", "windows", "bridge-rs", "Cargo.toml"));
-			assert.equal(rec.log[0], "[pi-computer-use] Windows prebuilt helper missing; attempting source build with cargo...");
+			assert.equal(
+				rec.log[0],
+				"[pi-computer-use] Windows prebuilt helper missing; attempting source build with cargo...",
+			);
 			assert.equal(rec.log[1], `[pi-computer-use] built and installed Windows helper at ${host.dirs.winDest}`);
 			assert.equal(await realFs.readFile(host.dirs.winDest, "utf8"), "exe");
 			rec = await runMain(host, argv);
@@ -448,7 +487,13 @@ describe("Windows helper", () => {
 		delete host.deps.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH;
 		await put(path.join(host.dirs.root, "prebuilt", "windows", "windows-bridge.exe"), "w");
 		await runMain(host, []);
-		assert.equal(await realFs.readFile(path.join(host.dirs.home, ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe"), "utf8"), "w");
+		assert.equal(
+			await realFs.readFile(
+				path.join(host.dirs.home, ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe"),
+				"utf8",
+			),
+			"w",
+		);
 	});
 
 	test("a rename blocked by a running helper names the fix and removes the temp copy", async () => {
@@ -459,7 +504,8 @@ describe("Windows helper", () => {
 		let rec = await runMain(host, []);
 		assert.deepEqual(rec.exit, [1]);
 		assert.match(rec.error[0], /^Cannot update helper at .*the existing helper process is still running/);
-		const tempCopies = async () => (await realFs.readdir(path.dirname(host.dirs.winDest))).filter((name) => name.includes(".tmp-"));
+		const tempCopies = async () =>
+			(await realFs.readdir(path.dirname(host.dirs.winDest))).filter((name) => name.includes(".tmp-"));
 		assert.equal((await tempCopies()).length, 1, "the copy whose rm was denied remains");
 		host.state.failRm = () => false;
 		host.state.renameError = sysError("io", "EIO");
@@ -519,9 +565,14 @@ describe("Linux helper", () => {
 			host.state.cargoWrites = path.join(target, "release", "linux-bridge");
 			let rec = await runMain(host, argv);
 			assert.deepEqual(host.rec.cargo[0], [
-				"cargo", "build", "--locked", "--release",
-				"--manifest-path", path.join(host.dirs.root, "native", "linux", "bridge-rs", "Cargo.toml"),
-				"--target-dir", target,
+				"cargo",
+				"build",
+				"--locked",
+				"--release",
+				"--manifest-path",
+				path.join(host.dirs.root, "native", "linux", "bridge-rs", "Cargo.toml"),
+				"--target-dir",
+				target,
 			]);
 			assert.match(rec.log[0], /building from source with cargo \(target dir .*linux-bridge-target\)/);
 			assert.equal(rec.log[1], `[pi-computer-use] built and installed Linux helper at ${host.dirs.linuxDest}`);
@@ -535,9 +586,22 @@ describe("Linux helper", () => {
 		delete host.deps.env.XDG_CACHE_HOME;
 		delete host.deps.env.PI_COMPUTER_USE_LINUX_HELPER_PATH;
 		await put(path.join(host.dirs.root, "native", "linux", "bridge-rs", "Cargo.toml"), "[package]");
-		host.state.cargoWrites = path.join(host.dirs.home, ".cache", "pi-computer-use", "linux-bridge-target", "release", "linux-bridge");
+		host.state.cargoWrites = path.join(
+			host.dirs.home,
+			".cache",
+			"pi-computer-use",
+			"linux-bridge-target",
+			"release",
+			"linux-bridge",
+		);
 		await runMain(host, []);
-		assert.equal(await realFs.readFile(path.join(host.dirs.home, ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge"), "utf8"), "cargo built");
+		assert.equal(
+			await realFs.readFile(
+				path.join(host.dirs.home, ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge"),
+				"utf8",
+			),
+			"cargo built",
+		);
 	});
 
 	test("a failing cargo build is reported", async () => {
@@ -592,7 +656,10 @@ describe("macOS sealed app installs", () => {
 		assert.deepEqual(rec.spawn[0], ["codesign", "--verify", "--strict", universal(host)]);
 		// Regex metacharacters, spaces and parens in the bundle path match literally under `pkill -f`.
 		const escaped = `${path.join(host.dirs.app, "Contents", "MacOS", "bridge").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
-		assert.deepEqual(rec.exec.find(([command]) => command === "pkill"), ["pkill", "-f", escaped]);
+		assert.deepEqual(
+			rec.exec.find(([command]) => command === "pkill"),
+			["pkill", "-f", escaped],
+		);
 		assert.match(escaped, /app dir \\\(1\\\)\\\+x/);
 		assert.equal(rec.exec.filter(([command]) => command === "pgrep").length, 3, "polls until pgrep stops matching");
 		assert.equal(host.rec.sleep, 2);
@@ -600,7 +667,11 @@ describe("macOS sealed app installs", () => {
 
 		rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] pre-signed helper app (arm64) already current at ${host.dirs.app}`);
-		assert.deepEqual(rec.spawn.map(([command]) => command), [LSREGISTER], "nothing is verified, killed or copied when current");
+		assert.deepEqual(
+			rec.spawn.map(([command]) => command),
+			[LSREGISTER],
+			"nothing is verified, killed or copied when current",
+		);
 	});
 
 	test("a changed Info.plist alone reinstalls; the per-arch bundle is used without a universal one", async () => {
@@ -635,7 +706,10 @@ describe("macOS sealed app installs", () => {
 		assert.deepEqual(rec.exit, [1]);
 		assert.equal(rec.error[0], `Command failed (1): codesign --verify --strict ${universal(host)}`);
 		assert.equal(await present(host.dirs.app), false);
-		assert.equal(rec.spawn.some(([command]) => command === "/usr/bin/ditto"), false);
+		assert.equal(
+			rec.spawn.some(([command]) => command === "/usr/bin/ditto"),
+			false,
+		);
 	});
 
 	test("a failing lsregister is ignored", async () => {
@@ -666,32 +740,54 @@ describe("macOS local helper install and signing", () => {
 		host.state.which.codesign = false;
 		let rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] installed helper app (arm64) at ${host.dirs.app}`);
-		assert.deepEqual(rec.spawn.find(([command]) => command === "codesign"), ["codesign", "--force", "--deep", "-i", "com.injaneity.pi-computer-use", "--timestamp=none", "--sign", "-", host.dirs.app]);
+		assert.deepEqual(
+			rec.spawn.find(([command]) => command === "codesign"),
+			[
+				"codesign",
+				"--force",
+				"--deep",
+				"-i",
+				"com.injaneity.pi-computer-use",
+				"--timestamp=none",
+				"--sign",
+				"-",
+				host.dirs.app,
+			],
+		);
 		assert.match(rec.warn[0], /signed helper ad-hoc; macOS may require permission review/);
 		const plist = await realFs.readFile(path.join(host.dirs.app, "Contents", "Info.plist"), "utf8");
 		// Byte-exact: an installed bundle is compared against this text to decide "already current".
-		assert.equal(plist, [
-			'<?xml version="1.0" encoding="UTF-8"?>',
-			'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-			'<plist version="1.0"><dict>',
-			"<key>CFBundleIdentifier</key><string>com.injaneity.pi-computer-use</string>",
-			"<key>CFBundleName</key><string>pi-computer-use</string>",
-			"<key>CFBundleDisplayName</key><string>pi-computer-use</string>",
-			"<key>CFBundleExecutable</key><string>bridge</string>",
-			"<key>CFBundlePackageType</key><string>APPL</string>",
-			"<key>CFBundleShortVersionString</key><string>1.2.3</string>",
-			"<key>CFBundleVersion</key><string>1.2.3</string>",
-			"<key>LSMinimumSystemVersion</key><string>14.0</string>",
-			"<key>LSUIElement</key><true/>",
-			"</dict></plist>\n",
-		].join("\n"));
+		assert.equal(
+			plist,
+			[
+				'<?xml version="1.0" encoding="UTF-8"?>',
+				'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+				'<plist version="1.0"><dict>',
+				"<key>CFBundleIdentifier</key><string>com.injaneity.pi-computer-use</string>",
+				"<key>CFBundleName</key><string>pi-computer-use</string>",
+				"<key>CFBundleDisplayName</key><string>pi-computer-use</string>",
+				"<key>CFBundleExecutable</key><string>bridge</string>",
+				"<key>CFBundlePackageType</key><string>APPL</string>",
+				"<key>CFBundleShortVersionString</key><string>1.2.3</string>",
+				"<key>CFBundleVersion</key><string>1.2.3</string>",
+				"<key>LSMinimumSystemVersion</key><string>14.0</string>",
+				"<key>LSUIElement</key><true/>",
+				"</dict></plist>\n",
+			].join("\n"),
+		);
 		assert.equal((await realFs.stat(path.join(host.dirs.app, "Contents", "MacOS", "bridge"))).mode & 0o777, 0o755);
 		const hash = createHash("sha256").update("bin v1").digest("hex");
-		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "Resources", "source.sha256"), "utf8"), `${hash}\n`);
+		assert.equal(
+			await realFs.readFile(path.join(host.dirs.app, "Contents", "Resources", "source.sha256"), "utf8"),
+			`${hash}\n`,
+		);
 
 		rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] helper app (arm64) already current at ${host.dirs.app}`);
-		assert.equal(rec.spawn.some(([command]) => command === "codesign"), false);
+		assert.equal(
+			rec.spawn.some(([command]) => command === "codesign"),
+			false,
+		);
 	});
 
 	test("ad-hoc replacement is refused unless allowed by flag or environment", async () => {
@@ -732,7 +828,10 @@ describe("macOS local helper install and signing", () => {
 		host.state.codesignInfo = { stdout: "Signature size=9\n", stderr: "" };
 		rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] helper app (arm64) already current at ${host.dirs.app}`);
-		assert.equal(rec.spawn.some(([command]) => command === "codesign"), false);
+		assert.equal(
+			rec.spawn.some(([command]) => command === "codesign"),
+			false,
+		);
 	});
 
 	test("an ad-hoc probe that errors is judged by its output, and a bare error is not ad-hoc", async () => {
@@ -760,7 +859,10 @@ describe("macOS local helper install and signing", () => {
 		const host = await makeHost({ env: { PI_COMPUTER_USE_NO_SIGN: "1" } });
 		await prebuiltBinary(host, "arm64", "bin");
 		let rec = await runMain(host, []);
-		assert.equal(rec.spawn.some(([command]) => command === "codesign"), false);
+		assert.equal(
+			rec.spawn.some(([command]) => command === "codesign"),
+			false,
+		);
 		assert.match(rec.log[0], /installed helper app/);
 		rec = await runMain(host, []);
 		assert.match(rec.log[0], /already current/);
@@ -774,7 +876,11 @@ describe("macOS local helper install and signing", () => {
 		assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", DEV_FPR]);
 		assert.deepEqual(rec.warn, []);
 		assert.equal(rec.log.length, 1);
-		assert.equal(rec.exec.some(([command, ...args]) => command === "which"), false, "no local lookup when a Developer ID exists");
+		assert.equal(
+			rec.exec.some(([command, ...args]) => command === "which"),
+			false,
+			"no local lookup when a Developer ID exists",
+		);
 	});
 
 	test("a Developer ID listing with no matching line falls through, as does a failing security", async () => {
@@ -797,7 +903,10 @@ describe("macOS local helper install and signing", () => {
 		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-");
 		// The identity is resolved twice (to pick the install path, then to sign), each failing the same way.
 		const warning = "[pi-computer-use] could not create a valid local signing identity: import denied";
-		assert.deepEqual(rec.warn.filter((line) => line.includes("could not create")), [warning, warning]);
+		assert.deepEqual(
+			rec.warn.filter((line) => line.includes("could not create")),
+			[warning, warning],
+		);
 		// Per resolution: Developer ID lookup, local lookup, once more before the lock and once inside it.
 		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 8);
 		assert.deepEqual(host.state.lockSeen, ["pi-computer-use-local-signing-user.lock"]);
@@ -816,11 +925,12 @@ describe("macOS local helper install and signing", () => {
 
 		const local = await makeHost();
 		await prebuiltBinary(local, "arm64", "bin");
-		local.state.localListing = () => [
-			`  1) ${"C".repeat(40)} "Some Other Identity" (CSSMERR_TP_NOT_TRUSTED)`,
-			`  2) ${LOCAL_FPR} "${LOCAL_CN}" (CSSMERR_TP_NOT_TRUSTED)`,
-			`  3) ${"E".repeat(40)} "${LOCAL_CN}" (CSSMERR_TP_NOT_TRUSTED)`,
-		].join("\n");
+		local.state.localListing = () =>
+			[
+				`  1) ${"C".repeat(40)} "Some Other Identity" (CSSMERR_TP_NOT_TRUSTED)`,
+				`  2) ${LOCAL_FPR} "${LOCAL_CN}" (CSSMERR_TP_NOT_TRUSTED)`,
+				`  3) ${"E".repeat(40)} "${LOCAL_CN}" (CSSMERR_TP_NOT_TRUSTED)`,
+			].join("\n");
 		rec = await runMain(local, []);
 		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], LOCAL_FPR);
 	});
@@ -831,13 +941,21 @@ describe("macOS local helper install and signing", () => {
 		host.state.localListing = () => localListing();
 		const rec = await runMain(host, []);
 		assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", LOCAL_FPR]);
-		assert.equal(rec.log[0], `[pi-computer-use] signed ${host.dirs.app} with local identity '${LOCAL_CN}'. macOS may still require permission review after local rebuilds.`);
+		assert.equal(
+			rec.log[0],
+			`[pi-computer-use] signed ${host.dirs.app} with local identity '${LOCAL_CN}'. macOS may still require permission review after local rebuilds.`,
+		);
 		assert.equal(rec.warn.length, 0);
 	});
 
 	test("with no local identity and no openssl or keychain, signing falls back to ad-hoc", async () => {
 		for (const [label, tweak] of [
-			["no openssl", (host) => { host.state.which.openssl = false; }],
+			[
+				"no openssl",
+				(host) => {
+					host.state.which.openssl = false;
+				},
+			],
 			["no keychain", () => {}],
 		]) {
 			const host = await makeHost();
@@ -845,7 +963,11 @@ describe("macOS local helper install and signing", () => {
 			tweak(host);
 			const rec = await runMain(host, []);
 			assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-", label);
-			assert.equal(rec.exec.some(([command]) => command === "openssl"), false, label);
+			assert.equal(
+				rec.exec.some(([command]) => command === "openssl"),
+				false,
+				label,
+			);
 		}
 	});
 
@@ -864,17 +986,30 @@ describe("macOS local helper install and signing", () => {
 			};
 			const rec = await runMain(host, []);
 			const openssl = rec.exec.filter(([command]) => command === "openssl");
-			assert.deepEqual(openssl.map(([, sub]) => sub), ["req", "pkcs12"]);
+			assert.deepEqual(
+				openssl.map(([, sub]) => sub),
+				["req", "pkcs12"],
+			);
 			assert.ok(openssl[1].includes("-legacy"));
 			const imports = rec.exec.find(([command, sub]) => command === "security" && sub === "import");
 			assert.equal(imports[3], "-k");
 			assert.equal(imports[4], path.join(host.dirs.home, "Library", "Keychains", keychain));
 			assert.deepEqual(imports.slice(-3), ["-A", "-T", "/usr/bin/codesign"]);
 			assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", LOCAL_FPR]);
-			const leftovers = (await realFs.readdir(host.dirs.tmp)).filter((name) => name.startsWith("pi-computer-use-signing-"));
+			const leftovers = (await realFs.readdir(host.dirs.tmp)).filter((name) =>
+				name.startsWith("pi-computer-use-signing-"),
+			);
 			assert.deepEqual(leftovers, [], "scratch key material is removed");
-			assert.deepEqual(host.state.lockSeen, ["pi-computer-use-local-signing-501.lock"], "creation runs under the uid-named lock");
-			assert.equal(await present(path.join(host.dirs.tmp, "pi-computer-use-local-signing-501.lock")), false, "lock released");
+			assert.deepEqual(
+				host.state.lockSeen,
+				["pi-computer-use-local-signing-501.lock"],
+				"creation runs under the uid-named lock",
+			);
+			assert.equal(
+				await present(path.join(host.dirs.tmp, "pi-computer-use-local-signing-501.lock")),
+				false,
+				"lock released",
+			);
 		});
 	}
 
@@ -902,10 +1037,32 @@ describe("macOS local helper install and signing", () => {
 
 	test("creation failures warn and fall back to ad-hoc, for Error and non-Error causes", async () => {
 		const cases = [
-			["both pkcs12 attempts fail", (host) => { host.state.opensslFail = new Set(["legacy", "pkcs12"]); }, /could not create a valid local signing identity: openssl pkcs12 failed$/],
-			["security import fails", (host) => { host.state.securityImportFail = new Error("import denied"); }, /could not create a valid local signing identity: import denied$/],
-			["security import fails with a string", (host) => { host.state.securityImportFail = "plain string"; }, /could not create a valid local signing identity: plain string$/],
-			["imported cert is not a code-signing identity", () => {}, /could not create a valid local signing identity: Imported local signing certificate is not a valid code-signing identity\.$/],
+			[
+				"both pkcs12 attempts fail",
+				(host) => {
+					host.state.opensslFail = new Set(["legacy", "pkcs12"]);
+				},
+				/could not create a valid local signing identity: openssl pkcs12 failed$/,
+			],
+			[
+				"security import fails",
+				(host) => {
+					host.state.securityImportFail = new Error("import denied");
+				},
+				/could not create a valid local signing identity: import denied$/,
+			],
+			[
+				"security import fails with a string",
+				(host) => {
+					host.state.securityImportFail = "plain string";
+				},
+				/could not create a valid local signing identity: plain string$/,
+			],
+			[
+				"imported cert is not a code-signing identity",
+				() => {},
+				/could not create a valid local signing identity: Imported local signing certificate is not a valid code-signing identity\.$/,
+			],
 		];
 		for (const [label, tweak, pattern] of cases) {
 			const host = await makeHost();
@@ -926,7 +1083,11 @@ describe("macOS local helper install and signing", () => {
 		let lookups = 0;
 		host.state.localListing = () => (++lookups >= 3 ? localListing() : "");
 		const rec = await runMain(host, []);
-		assert.equal(rec.exec.some(([command]) => command === "openssl"), false, "nothing is created");
+		assert.equal(
+			rec.exec.some(([command]) => command === "openssl"),
+			false,
+			"nothing is created",
+		);
 		assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", LOCAL_FPR]);
 	});
 
@@ -942,9 +1103,20 @@ describe("macOS local helper install and signing", () => {
 			return "";
 		};
 		const rec = await runMain(host, []);
-		assert.deepEqual(rec.warn.filter((line) => line.includes("could not create")), []);
-		assert.equal(rec.exec.some(([command]) => command === "openssl"), false, "nothing is created");
-		assert.equal(rec.exec.some(([command, sub]) => command === "security" && sub === "import"), false, "no import into a stale path");
+		assert.deepEqual(
+			rec.warn.filter((line) => line.includes("could not create")),
+			[],
+		);
+		assert.equal(
+			rec.exec.some(([command]) => command === "openssl"),
+			false,
+			"nothing is created",
+		);
+		assert.equal(
+			rec.exec.some(([command, sub]) => command === "security" && sub === "import"),
+			false,
+			"no import into a stale path",
+		);
 		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-");
 	});
 
@@ -971,24 +1143,37 @@ describe("macOS release download", () => {
 	/** @param {object} host Host. @param {(extractDir: string) => Promise<void>} layout Archive layout. @returns {void} @throws {never} Pure. */
 	function serveRelease(host, layout) {
 		host.state.fetchRoutes.set(ZIP_URL, () => new Response(ZIP_BYTES));
-		host.state.fetchRoutes.set(SUMS_URL, () => new Response(`# comment\nnot a checksum line\n${ZIP_SHA.toUpperCase()}  *dist/pi-computer-use.app.zip\n${"0".repeat(64)}  other.zip\n`));
+		host.state.fetchRoutes.set(
+			SUMS_URL,
+			() =>
+				new Response(
+					`# comment\nnot a checksum line\n${ZIP_SHA.toUpperCase()}  *dist/pi-computer-use.app.zip\n${"0".repeat(64)}  other.zip\n`,
+				),
+		);
 		host.state.archive = layout;
 	}
 	const direct = (host) => async (dir) => makeApp(path.join(dir, "pi-computer-use.app"), "release exe");
-	const leftovers = async (host) => (await realFs.readdir(host.dirs.tmp)).filter((name) => name.startsWith("pi-computer-use-release-helper-"));
+	const leftovers = async (host) =>
+		(await realFs.readdir(host.dirs.tmp)).filter((name) => name.startsWith("pi-computer-use-release-helper-"));
 
 	test("downloads, verifies the checksum, extracts and installs, then cleans the temp dir", async () => {
 		const host = await makeHost();
 		serveRelease(host, direct(host));
 		const rec = await runMain(host, []);
 		assert.deepEqual(rec.exit, []);
-		assert.equal(rec.log[0], `[pi-computer-use] installed signed helper app from GitHub Release v1.2.3 (pi-computer-use.app.zip) at ${host.dirs.app}`);
+		assert.equal(
+			rec.log[0],
+			`[pi-computer-use] installed signed helper app from GitHub Release v1.2.3 (pi-computer-use.app.zip) at ${host.dirs.app}`,
+		);
 		assert.deepEqual(host.rec.fetch, [SUMS_URL, ZIP_URL]);
 		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "release exe");
 		assert.deepEqual(await leftovers(host), []);
 
 		const second = await runMain(host, []);
-		assert.match(second.log[0], /signed helper app from GitHub Release v1\.2\.3 \(pi-computer-use\.app\.zip\) already current/);
+		assert.match(
+			second.log[0],
+			/signed helper app from GitHub Release v1\.2\.3 \(pi-computer-use\.app\.zip\) already current/,
+		);
 	});
 
 	test("a nested archive layout is searched, skipping files and empty directories", async () => {
@@ -1008,14 +1193,29 @@ describe("macOS release download", () => {
 		serveRelease(host, direct(host));
 		host.state.fetchRoutes.set(ZIP_URL, () => new Response("tampered bytes"));
 		const rec = await runMain(host, []);
-		assert.match(rec.warn[0], new RegExp(`^\\[pi-computer-use\\] signed helper release download unavailable: No signed helper release asset found for v1\\.2\\.3: SHA256 mismatch for pi-computer-use\\.app\\.zip: expected ${ZIP_SHA}, got [0-9a-f]{64}$`));
-		assert.equal(rec.spawn.some(([command]) => command === "/usr/bin/ditto"), false, "no extraction of an unverified archive");
+		assert.match(
+			rec.warn[0],
+			new RegExp(
+				`^\\[pi-computer-use\\] signed helper release download unavailable: No signed helper release asset found for v1\\.2\\.3: SHA256 mismatch for pi-computer-use\\.app\\.zip: expected ${ZIP_SHA}, got [0-9a-f]{64}$`,
+			),
+		);
+		assert.equal(
+			rec.spawn.some(([command]) => command === "/usr/bin/ditto"),
+			false,
+			"no extraction of an unverified archive",
+		);
 		assert.deepEqual(await leftovers(host), []);
 		assert.match(rec.error[0], /^No prebuilt helper found for arm64 at /);
 	});
 
 	test("a missing or empty SHA256SUMS skips verification; a throwing checksum fetch does too", async () => {
-		for (const sums of [undefined, new Response("", { status: 200 }), () => { throw new Error("network down"); }]) {
+		for (const sums of [
+			undefined,
+			new Response("", { status: 200 }),
+			() => {
+				throw new Error("network down");
+			},
+		]) {
 			const host = await makeHost();
 			serveRelease(host, direct(host));
 			if (sums === undefined) host.state.fetchRoutes.delete(SUMS_URL);
@@ -1029,19 +1229,30 @@ describe("macOS release download", () => {
 		const bodies = [
 			["404", () => new Response("nope", { status: 404, statusText: "Not Found" }), "HTTP 404 Not Found"],
 			["no body", () => new Response(null, { status: 200 }), "empty response body"],
-			["truncated", () => new Response(new ReadableStream({
-				start(controller) {
-					controller.enqueue(new Uint8Array([1, 2, 3]));
-					controller.error(new Error("terminated"));
-				},
-			})), "terminated"],
+			[
+				"truncated",
+				() =>
+					new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.enqueue(new Uint8Array([1, 2, 3]));
+								controller.error(new Error("terminated"));
+							},
+						}),
+					),
+				"terminated",
+			],
 		];
 		for (const [label, route, message] of bodies) {
 			const host = await makeHost();
 			serveRelease(host, direct(host));
 			host.state.fetchRoutes.set(ZIP_URL, route);
 			const rec = await runMain(host, []);
-			assert.equal(rec.warn[0], `[pi-computer-use] signed helper release download unavailable: No signed helper release asset found for v1.2.3: ${message}`, label);
+			assert.equal(
+				rec.warn[0],
+				`[pi-computer-use] signed helper release download unavailable: No signed helper release asset found for v1.2.3: ${message}`,
+				label,
+			);
 			assert.match(rec.error[0], /^No prebuilt helper found for arm64 at .*npm run build:native/, label);
 			assert.deepEqual(await leftovers(host), [], label);
 		}
@@ -1049,14 +1260,18 @@ describe("macOS release download", () => {
 
 	test("a throwing asset fetch is reported as a failed download", async () => {
 		const host = await makeHost();
-		host.state.fetchRoutes.set(ZIP_URL, () => { throw new Error("socket hang up"); });
+		host.state.fetchRoutes.set(ZIP_URL, () => {
+			throw new Error("socket hang up");
+		});
 		const rec = await runMain(host, []);
 		assert.match(rec.warn[0], /No signed helper release asset found for v1\.2\.3: socket hang up$/);
 	});
 
 	test("a non-Error thrown by the asset fetch is stringified", async () => {
 		const host = await makeHost();
-		host.state.fetchRoutes.set(ZIP_URL, () => { throw "socket reset"; });
+		host.state.fetchRoutes.set(ZIP_URL, () => {
+			throw "socket reset";
+		});
 		const rec = await runMain(host, []);
 		assert.match(rec.warn[0], /No signed helper release asset found for v1\.2\.3: socket reset$/);
 	});
@@ -1065,7 +1280,10 @@ describe("macOS release download", () => {
 		const host = await makeHost();
 		serveRelease(host, async (dir) => put(path.join(dir, "other.txt"), "x"));
 		const rec = await runMain(host, []);
-		assert.match(rec.warn[0], /No signed helper release asset found for v1\.2\.3: missing pi-computer-use\.app in pi-computer-use\.app\.zip$/);
+		assert.match(
+			rec.warn[0],
+			/No signed helper release asset found for v1\.2\.3: missing pi-computer-use\.app in pi-computer-use\.app\.zip$/,
+		);
 	});
 
 	test("a failing extraction is reported with temp cleanup tolerating its own failure", async () => {
@@ -1081,7 +1299,10 @@ describe("macOS release download", () => {
 		const host = await makeHost();
 		await put(path.join(host.dirs.root, "package.json"), JSON.stringify({}));
 		const rec = await runMain(host, []);
-		assert.match(rec.warn[0], /signed helper release download unavailable: Could not read package version from .*package\.json\.$/);
+		assert.match(
+			rec.warn[0],
+			/signed helper release download unavailable: Could not read package version from .*package\.json\.$/,
+		);
 		assert.deepEqual(host.rec.fetch, []);
 	});
 
@@ -1113,15 +1334,27 @@ describe("macOS source build fallback", () => {
 			assert.ok(xcrun.join(" ").includes(`-framework ${framework}`));
 		}
 		assert.ok(xcrun.includes(path.join(host.dirs.root, "native", "macos", "bridge.swift")));
-		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "built binary");
-		assert.equal((await realFs.readdir(host.dirs.tmp)).some((name) => name.includes("module-cache") || name.startsWith("pi-computer-use-bridge-")), false, "module cache and temp binary are removed");
+		assert.equal(
+			await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"),
+			"built binary",
+		);
+		assert.equal(
+			(await realFs.readdir(host.dirs.tmp)).some(
+				(name) => name.includes("module-cache") || name.startsWith("pi-computer-use-bridge-"),
+			),
+			false,
+			"module cache and temp binary are removed",
+		);
 
 		rec = await runMain(host, ["--allow-build"]);
 		assert.equal(rec.log[1], `[pi-computer-use] built helper app; installed app already current at ${host.dirs.app}`);
 	});
 
 	test("the runtime flag and environment variable also enable the build, and signing runs when not disabled", async () => {
-		for (const [argv, env] of [[["--runtime"], {}], [[], { PI_COMPUTER_USE_ALLOW_BUILD: "1" }]]) {
+		for (const [argv, env] of [
+			[["--runtime"], {}],
+			[[], { PI_COMPUTER_USE_ALLOW_BUILD: "1" }],
+		]) {
 			const host = await makeHost({ env: { PI_COMPUTER_USE_CODESIGN_IDENTITY: "Dev", ...env } });
 			const rec = await runMain(host, argv);
 			assert.deepEqual(rec.exit, []);
@@ -1138,7 +1371,10 @@ describe("macOS source build fallback", () => {
 		const rec = await runMain(host, ["--allow-build"]);
 		assert.deepEqual(rec.exit, [1]);
 		assert.match(rec.error[0], /^Native helper source not found at .*activity_glow\.swift$/);
-		assert.equal(rec.spawn.some(([command]) => command === "xcrun"), false);
+		assert.equal(
+			rec.spawn.some(([command]) => command === "xcrun"),
+			false,
+		);
 	});
 
 	test("a failing swiftc removes the module cache and reports the failure", async () => {
@@ -1147,13 +1383,19 @@ describe("macOS source build fallback", () => {
 		const rec = await runMain(host, ["--allow-build"]);
 		assert.deepEqual(rec.exit, [1]);
 		assert.match(rec.error[0], /^Command failed \(2\): xcrun swiftc -target arm64-apple-macosx14\.0/);
-		assert.equal((await realFs.readdir(host.dirs.tmp)).some((name) => name.includes("module-cache")), false);
+		assert.equal(
+			(await realFs.readdir(host.dirs.tmp)).some((name) => name.includes("module-cache")),
+			false,
+		);
 	});
 
 	test("without a build flag the missing-helper error names the remedy", async () => {
 		const host = await makeHost();
 		const rec = await runMain(host, []);
-		assert.match(rec.error[0], /^No prebuilt helper found for arm64 at .*prebuilt\/macos\/arm64\/bridge\. Run 'npm run build:native' to build locally\.$/);
+		assert.match(
+			rec.error[0],
+			/^No prebuilt helper found for arm64 at .*prebuilt\/macos\/arm64\/bridge\. Run 'npm run build:native' to build locally\.$/,
+		);
 		assert.match(rec.warn[0], /signed helper release download unavailable: .*HTTP 404 Not Found/);
 	});
 });
@@ -1253,25 +1495,39 @@ describe("runCancellable in process", () => {
 		captureHandlers();
 		const probeFailure = sysError("io error", "EIO");
 		let child = fakeChild();
-		let run = start(child, () => { throw probeFailure; });
+		let run = start(child, () => {
+			throw probeFailure;
+		});
 		child.emit("close", 0, null);
 		await assert.rejects(run.promise, (actual) => actual === probeFailure);
 		child = fakeChild();
-		run = start(child, () => { throw probeFailure; });
+		run = start(child, () => {
+			throw probeFailure;
+		});
 		child.emit("close", 1, null);
-		await assert.rejects(run.promise, (actual) => actual instanceof AggregateError
-			&& actual.errors[1] === probeFailure
-			&& /^Command failed \(1\): tool a b; process-group cleanup also failed\.$/.test(actual.message));
+		await assert.rejects(
+			run.promise,
+			(actual) =>
+				actual instanceof AggregateError &&
+				actual.errors[1] === probeFailure &&
+				/^Command failed \(1\): tool a b; process-group cleanup also failed\.$/.test(actual.message),
+		);
 	});
 
 	test("the exit backstop kills a live group once, and never a reaped or unownable one", async () => {
 		const handlers = captureHandlers();
 		const signalled = [];
-		const live = (pid, signal) => { signalled.push([pid, signal]); return true; };
+		const live = (pid, signal) => {
+			signalled.push([pid, signal]);
+			return true;
+		};
 		let child = fakeChild();
 		let run = start(child, live);
 		handlers.get("exit")();
-		assert.deepEqual(signalled, [[-4_000_001, 0], [-4_000_001, "SIGKILL"]]);
+		assert.deepEqual(signalled, [
+			[-4_000_001, 0],
+			[-4_000_001, "SIGKILL"],
+		]);
 		// The reaping probes never reach ESRCH; the fast clock ends the budget at once.
 		fastForwardClock();
 		child.emit("close", 0, null);
@@ -1281,7 +1537,11 @@ describe("runCancellable in process", () => {
 		signalled.length = 0;
 		child = fakeChild();
 		let alive = true;
-		const dying = (pid, signal) => { signalled.push([pid, signal]); if (!alive) gone(); return true; };
+		const dying = (pid, signal) => {
+			signalled.push([pid, signal]);
+			if (!alive) gone();
+			return true;
+		};
 		run = start(child, dying);
 		alive = false;
 		child.emit("close", 0, null);
@@ -1304,7 +1564,10 @@ describe("runCancellable in process", () => {
 		const handlers = captureHandlers();
 		const calls = [];
 		const child = fakeChild();
-		const run = start(child, (pid, signal) => { calls.push(signal); throw sysError("boom", "EIO"); });
+		const run = start(child, (pid, signal) => {
+			calls.push(signal);
+			throw sysError("boom", "EIO");
+		});
 		handlers.get("exit")();
 		handlers.get("exit")();
 		assert.deepEqual(calls, [0], "the first failure revokes the backstop");
@@ -1316,7 +1579,17 @@ describe("runCancellable in process", () => {
 		const handlers = captureHandlers();
 		const calls = [];
 		const child = fakeChild();
-		const run = start(child, (pid, signal) => { calls.push(signal); if (signal === 0) throw sysError("eperm", "EPERM"); return true; }, () => { throw new Error("ps timed out"); });
+		const run = start(
+			child,
+			(pid, signal) => {
+				calls.push(signal);
+				if (signal === 0) throw sysError("eperm", "EPERM");
+				return true;
+			},
+			() => {
+				throw new Error("ps timed out");
+			},
+		);
 		handlers.get("exit")();
 		assert.deepEqual(calls, [0]);
 		fastForwardClock();
@@ -1338,24 +1611,38 @@ describe("runCancellable in process", () => {
 		fastForwardClock();
 		const sent = [];
 		let dead = false;
-		await reapProcessGroup(4_000_002, (pid, signal) => {
-			sent.push(signal);
-			if (dead) gone();
-			if (signal === "SIGKILL") dead = true;
-			return true;
-		}, () => []);
-		assert.deepEqual(sent.filter((signal) => typeof signal === "string"), ["SIGTERM", "SIGKILL"]);
+		await reapProcessGroup(
+			4_000_002,
+			(pid, signal) => {
+				sent.push(signal);
+				if (dead) gone();
+				if (signal === "SIGKILL") dead = true;
+				return true;
+			},
+			() => [],
+		);
+		assert.deepEqual(
+			sent.filter((signal) => typeof signal === "string"),
+			["SIGTERM", "SIGKILL"],
+		);
 	});
 
 	test("a group that exits between the TERM stage and the KILL is not signalled again", async () => {
 		fastForwardClock();
 		const sent = [];
-		await reapProcessGroup(4_000_002, (pid, signal) => {
-			sent.push(signal);
-			if (signal === "SIGKILL") gone();
-			return true;
-		}, () => []);
-		assert.deepEqual(sent.filter((signal) => typeof signal === "string"), ["SIGTERM", "SIGKILL"]);
+		await reapProcessGroup(
+			4_000_002,
+			(pid, signal) => {
+				sent.push(signal);
+				if (signal === "SIGKILL") gone();
+				return true;
+			},
+			() => [],
+		);
+		assert.deepEqual(
+			sent.filter((signal) => typeof signal === "string"),
+			["SIGTERM", "SIGKILL"],
+		);
 	});
 
 	test("a group that outlives SIGKILL rejects, and the exit backstop stays armed for it", async () => {
@@ -1363,7 +1650,10 @@ describe("runCancellable in process", () => {
 		fastForwardClock();
 		const sent = [];
 		const child = fakeChild();
-		const run = start(child, (pid, signal) => { sent.push(signal); return true; });
+		const run = start(child, (pid, signal) => {
+			sent.push(signal);
+			return true;
+		});
 		child.emit("close", 0, null);
 		await assert.rejects(run.promise, /^Error: Process group 4000001 remained non-empty after SIGKILL cleanup\.$/);
 		sent.length = 0;
@@ -1379,7 +1669,10 @@ describe("runCancellable in process", () => {
 		handlers.get("SIGINT")("SIGINT");
 		handlers.get("SIGTERM")("SIGUSR9");
 		await vi.waitFor(() => assert.equal(exit.mock.calls.length, 2));
-		assert.deepEqual(exit.mock.calls.map(([code]) => code), [128 + realOs.constants.signals.SIGINT, 143]);
+		assert.deepEqual(
+			exit.mock.calls.map(([code]) => code),
+			[128 + realOs.constants.signals.SIGINT, 143],
+		);
 		child.emit("close", 0, null);
 		await run.promise;
 	});
@@ -1389,7 +1682,9 @@ describe("runCancellable in process", () => {
 		const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined);
 		const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		const child = fakeChild();
-		const run = start(child, () => { throw sysError("probe failed", "EIO"); });
+		const run = start(child, () => {
+			throw sysError("probe failed", "EIO");
+		});
 		handlers.get("SIGHUP")("SIGHUP");
 		await vi.waitFor(() => assert.equal(exit.mock.calls.length, 1));
 		assert.deepEqual(errors.mock.calls[0], ["Process-group cleanup failed: probe failed"]);
@@ -1411,9 +1706,14 @@ describe("withDirectoryLock", () => {
 
 	test("runs the callback under the lock and releases it, even when the callback throws", async () => {
 		const lock = path.join(await scratch(), "l.lock");
-		assert.equal(await withDirectoryLock(lock, async () => (await present(lock) ? "held" : "free")), "held");
+		assert.equal(await withDirectoryLock(lock, async () => ((await present(lock)) ? "held" : "free")), "held");
 		assert.equal(await present(lock), false);
-		await assert.rejects(withDirectoryLock(lock, async () => { throw new Error("inside"); }), /inside/);
+		await assert.rejects(
+			withDirectoryLock(lock, async () => {
+				throw new Error("inside");
+			}),
+			/inside/,
+		);
 		assert.equal(await present(lock), false);
 	});
 
@@ -1421,8 +1721,14 @@ describe("withDirectoryLock", () => {
 		const dir = await scratch();
 		const lock = path.join(dir, "l.lock");
 		await realFs.mkdir(lock);
-		await assert.rejects(withDirectoryLock(lock, async () => "x", { waitMs: 30, retryMs: 5 }), /^Error: Timed out waiting for local signing identity lock at /);
-		await assert.rejects(withDirectoryLock(path.join(dir, "missing", "l.lock"), async () => "x"), /ENOENT/);
+		await assert.rejects(
+			withDirectoryLock(lock, async () => "x", { waitMs: 30, retryMs: 5 }),
+			/^Error: Timed out waiting for local signing identity lock at /,
+		);
+		await assert.rejects(
+			withDirectoryLock(path.join(dir, "missing", "l.lock"), async () => "x"),
+			/ENOENT/,
+		);
 	});
 
 	test("a stale lock is broken even when the first removal fails, and a failing release is tolerated", async () => {
@@ -1442,7 +1748,11 @@ describe("withDirectoryLock", () => {
 
 		vi.restoreAllMocks();
 		vi.spyOn(realFs, "rm").mockRejectedValue(sysError("busy", "EBUSY"));
-		assert.equal(await withDirectoryLock(lock, async () => "again"), "again", "a failed release does not fail the callback");
+		assert.equal(
+			await withDirectoryLock(lock, async () => "again"),
+			"again",
+			"a failed release does not fail the callback",
+		);
 		assert.equal(await present(lock), true, "the lock is left behind for the stale sweep");
 	});
 

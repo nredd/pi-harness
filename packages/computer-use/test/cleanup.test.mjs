@@ -4,7 +4,16 @@ import { EventEmitter } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { test, vi } from "vitest";
-import { GROUP_KILL_WAIT_MS, GROUP_TERM_GRACE_MS, PS_TIMEOUT_MS, isOwnableGroup, listGroupStates, reapProcessGroup, runCancellable, zombieOnlyListing } from "../scripts/setup-helper.mjs";
+import {
+	GROUP_KILL_WAIT_MS,
+	GROUP_TERM_GRACE_MS,
+	PS_TIMEOUT_MS,
+	isOwnableGroup,
+	listGroupStates,
+	reapProcessGroup,
+	runCancellable,
+	zombieOnlyListing,
+} from "../scripts/setup-helper.mjs";
 
 const execute = promisify(execFile);
 const setupUrl = new URL("../scripts/setup-helper.mjs", import.meta.url).href;
@@ -30,10 +39,14 @@ async function verifySyscallErrors() {
 			let calls = 0;
 			await assert.rejects(
 				// A fixed listing (never seen, empty) keeps a loaded `ps` from turning EPERM into extra probes.
-				reapProcessGroup(424242, () => {
-					if (calls++ === failAt) throw error;
-					return true;
-				}, () => []),
+				reapProcessGroup(
+					424242,
+					() => {
+						if (calls++ === failAt) throw error;
+						return true;
+					},
+					() => [],
+				),
 				(actual) => actual === error,
 			);
 			assert.equal(calls, failAt + 1, "no syscall follows inconclusive ownership");
@@ -133,7 +146,10 @@ async function verifyPersistentGroup() {
 	// An exit-time EPERM no listing explains gets no KILL: it may be a credential boundary.
 	const unexplained = await cleanupWrapper("exit-unexplained", 7);
 	assert.equal(unexplained.code, 1);
-	assert.deepEqual(unexplained.trace.filter((signal) => signal !== 0), ["SIGTERM", "SIGKILL"]);
+	assert.deepEqual(
+		unexplained.trace.filter((signal) => signal !== 0),
+		["SIGTERM", "SIGKILL"],
+	);
 	assert.equal(unexplained.trace.at(-1), 0, "the exit-time probe ran, then nothing was signalled");
 	const gone = await cleanupWrapper("fallback-gone");
 	assert.equal(gone.code, 0);
@@ -206,7 +222,10 @@ async function verifyDrainingZombieGroup() {
 	}
 	// Members seen at the start that vanish before `ps` runs were reaped mid-probe: keep probing, to ESRCH.
 	const listings = [["Z"], []];
-	const vanished = scriptedKill([["EPERM", ""], ["ESRCH", ""]]);
+	const vanished = scriptedKill([
+		["EPERM", ""],
+		["ESRCH", ""],
+	]);
 	await reapProcessGroup(424242, vanished.kill, () => listings.shift() ?? []);
 	assert.equal(vanished.calls.length, 2);
 	const persistent = scriptedKill([["EPERM", ""]]);
@@ -214,7 +233,10 @@ async function verifyDrainingZombieGroup() {
 	const { kill, calls } = scriptedKill([["EPERM", ""]]);
 	await assert.rejects(reapProcessGroup(424242, kill, zombies), /remained non-empty after SIGKILL/);
 	assert.ok(calls.length > 2, "a persistent zombie-only group keeps being probed");
-	assert.ok(calls.some(([, signal]) => signal === "SIGKILL"), "the budget escalates to SIGKILL before giving up");
+	assert.ok(
+		calls.some(([, signal]) => signal === "SIGKILL"),
+		"the budget escalates to SIGKILL before giving up",
+	);
 }
 
 /** @returns {Promise<void>} Verifies EPERM stays fatal unless the listing proves a non-empty all-zombie group. @throws {Error} On assertion failure. */
@@ -223,10 +245,14 @@ async function verifyRealPermissionFailure() {
 		const error = Object.assign(new Error("EPERM"), { code: "EPERM" });
 		const calls = [];
 		await assert.rejects(
-			reapProcessGroup(424242, (pid, signal) => {
-				calls.push([pid, signal]);
-				throw error;
-			}, listStates),
+			reapProcessGroup(
+				424242,
+				(pid, signal) => {
+					calls.push([pid, signal]);
+					throw error;
+				},
+				listStates,
+			),
 			(actual) => actual === error,
 		);
 		assert.deepEqual(calls, [[-424242, 0]], "no signal follows an EPERM that is not a draining group");
@@ -234,10 +260,14 @@ async function verifyRealPermissionFailure() {
 	const error = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	let calls = 0;
 	await assert.rejects(
-		reapProcessGroup(424242, () => {
-			if (calls++ === 1) throw error;
-			return true;
-		}, () => ["S"]),
+		reapProcessGroup(
+			424242,
+			() => {
+				if (calls++ === 1) throw error;
+				return true;
+			},
+			() => ["S"],
+		),
 		(actual) => actual === error,
 	);
 	assert.equal(calls, 2, "a signal-time EPERM with a live member is a permission failure");
@@ -260,49 +290,101 @@ function listingAfterTimeouts(failures, states) {
 /** @returns {Promise<void>} A failed listing is unknown, not a verdict: probe and re-list without signalling until one explains the EPERM. @throws {Error} On assertion failure. */
 async function verifyUnknownListingKeepsDraining() {
 	// Probe side: the snapshot and the first post-EPERM listing time out, the next shows the zombie, then ESRCH.
-	const probe = scriptedKill([["EPERM", ""], ["EPERM", ""], ["ESRCH", ""]]);
+	const probe = scriptedKill([
+		["EPERM", ""],
+		["EPERM", ""],
+		["ESRCH", ""],
+	]);
 	await reapProcessGroup(424242, probe.kill, listingAfterTimeouts(2, ["Z"]));
-	assert.deepEqual(probe.calls, [[-424242, 0], [-424242, 0], [-424242, 0]], "only probes while the EPERM is unexplained");
+	assert.deepEqual(
+		probe.calls,
+		[
+			[-424242, 0],
+			[-424242, 0],
+			[-424242, 0],
+		],
+		"only probes while the EPERM is unexplained",
+	);
 	// Signal side: SIGTERM's EPERM meets a timed-out listing; the next probe's listing explains it.
-	const signal = scriptedKill([["ok", ""], ["EPERM", ""], ["EPERM", ""], ["ESRCH", ""]]);
+	const signal = scriptedKill([
+		["ok", ""],
+		["EPERM", ""],
+		["EPERM", ""],
+		["ESRCH", ""],
+	]);
 	await reapProcessGroup(424242, signal.kill, listingAfterTimeouts(2, ["ZN"]));
-	assert.deepEqual(signal.calls, [[-424242, 0], [-424242, "SIGTERM"], [-424242, 0], [-424242, 0]]);
+	assert.deepEqual(signal.calls, [
+		[-424242, 0],
+		[-424242, "SIGTERM"],
+		[-424242, 0],
+		[-424242, 0],
+	]);
 	// A listing that recovers to show a live member rejects at once with the first, unexplained EPERM.
 	const first = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	const calls = [];
 	await assert.rejects(
-		reapProcessGroup(424242, (pid, sig) => {
-			calls.push([pid, sig]);
-			throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
-		}, listingAfterTimeouts(3, ["S"])),
+		reapProcessGroup(
+			424242,
+			(pid, sig) => {
+				calls.push([pid, sig]);
+				throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
+			},
+			listingAfterTimeouts(3, ["S"]),
+		),
 		(actual) => actual === first,
 	);
-	assert.deepEqual(calls, [[-424242, 0], [-424242, 0], [-424242, 0]], "the first successful listing decides");
+	assert.deepEqual(
+		calls,
+		[
+			[-424242, 0],
+			[-424242, 0],
+			[-424242, 0],
+		],
+		"the first successful listing decides",
+	);
 	// A positive probe never explains an EPERM: with `ps` still failing, the EPERM surfaces after one budget.
 	const unexplained = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	const mixed = [];
 	await assert.rejects(
-		reapProcessGroup(424242, (pid, sig) => {
-			mixed.push([pid, sig]);
-			if (mixed.length === 2) throw unexplained;
-			return true;
-		}, listingAfterTimeouts(Number.POSITIVE_INFINITY, [])),
+		reapProcessGroup(
+			424242,
+			(pid, sig) => {
+				mixed.push([pid, sig]);
+				if (mixed.length === 2) throw unexplained;
+				return true;
+			},
+			listingAfterTimeouts(Number.POSITIVE_INFINITY, []),
+		),
 		(actual) => actual === unexplained,
 	);
-	assert.deepEqual(mixed.slice(0, 2), [[-424242, 0], [-424242, "SIGTERM"]]);
-	assert.ok(mixed.slice(2).every(([, sig]) => sig === 0), "no signal follows an unexplained EPERM");
+	assert.deepEqual(mixed.slice(0, 2), [
+		[-424242, 0],
+		[-424242, "SIGTERM"],
+	]);
+	assert.ok(
+		mixed.slice(2).every(([, sig]) => sig === 0),
+		"no signal follows an unexplained EPERM",
+	);
 	// A positive probe re-lists while an EPERM is pending, so a recovered listing with a live member decides at once.
 	const pending = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	const relisted = [];
 	await assert.rejects(
-		reapProcessGroup(424242, (pid, sig) => {
-			relisted.push([pid, sig]);
-			if (relisted.length === 2) throw pending;
-			return true;
-		}, listingAfterTimeouts(2, ["S"])),
+		reapProcessGroup(
+			424242,
+			(pid, sig) => {
+				relisted.push([pid, sig]);
+				if (relisted.length === 2) throw pending;
+				return true;
+			},
+			listingAfterTimeouts(2, ["S"]),
+		),
 		(actual) => actual === pending,
 	);
-	assert.deepEqual(relisted, [[-424242, 0], [-424242, "SIGTERM"], [-424242, 0]]);
+	assert.deepEqual(relisted, [
+		[-424242, 0],
+		[-424242, "SIGTERM"],
+		[-424242, 0],
+	]);
 }
 
 /** @returns {Promise<void>} Verifies the real `ps` listing: live members, zombies and absence. @throws {Error} On assertion failure. */
@@ -340,7 +422,11 @@ function sleepSync(ms) {
  */
 function processRow(pid) {
 	try {
-		return execFileSync("/bin/ps", ["-o", "pid=,ppid=,pgid=,stat=", "-p", String(pid)], { encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" }).trim();
+		return execFileSync("/bin/ps", ["-o", "pid=,ppid=,pgid=,stat=", "-p", String(pid)], {
+			encoding: "utf8",
+			timeout: 5000,
+			killSignal: "SIGKILL",
+		}).trim();
 	} catch (error) {
 		return `no row: ps -p ${pid} failed (${error.status ?? error.code ?? error.message})`;
 	}
@@ -375,7 +461,8 @@ function trackedListStates(listStates = listGroupStates) {
  */
 async function zombieOnlyGroup() {
 	// perl forks a setpgrp'd leader that exits at once, then reaps it only on SIGUSR1. Stdin EOF also exits.
-	const script = '$|=1; my $p=fork(); if(!$p){setpgrp(0,0); exit 0} $SIG{USR1}=sub{waitpid($p,0); exit 0}; print "$p\\n"; my $eof=<STDIN>; exit 3;';
+	const script =
+		'$|=1; my $p=fork(); if(!$p){setpgrp(0,0); exit 0} $SIG{USR1}=sub{waitpid($p,0); exit 0}; print "$p\\n"; my $eof=<STDIN>; exit 3;';
 	const holder = spawn("/usr/bin/perl", ["-e", script], { stdio: ["pipe", "pipe", "inherit"] });
 	const reaped = new Promise((resolve) => holder.once("close", resolve));
 	// ChildProcess.kill never signals once the holder has exited and been reaped, so release is idempotent.
@@ -383,7 +470,9 @@ async function zombieOnlyGroup() {
 	try {
 		const pgid = await new Promise((resolve, reject) => {
 			holder.once("error", reject);
-			holder.once("exit", (code, signal) => reject(new Error(`premise: holder exited (${code ?? signal}) before reporting its group`)));
+			holder.once("exit", (code, signal) =>
+				reject(new Error(`premise: holder exited (${code ?? signal}) before reporting its group`)),
+			);
 			holder.stdout.once("data", (chunk) => resolve(Number(String(chunk).trim())));
 		});
 		assert.ok(Number.isInteger(pgid) && pgid > 1, `premise: holder reported no usable group: ${pgid}`);
@@ -400,14 +489,19 @@ async function zombieOnlyGroup() {
 			}
 			// Build the message only on failure: `processRow` is another synchronous `ps`.
 			if (Date.now() >= deadline) {
-				assert.fail(`premise: group ${pgid} not zombie-only within ${ZOMBIE_READY_MS}ms; last non-empty listing [${lastListing}], leader row "${processRow(pgid)}", ${tracked.describe()}`);
+				assert.fail(
+					`premise: group ${pgid} not zombie-only within ${ZOMBIE_READY_MS}ms; last non-empty listing [${lastListing}], leader row "${processRow(pgid)}", ${tracked.describe()}`,
+				);
 			}
 			await delay(10);
 		}
 		// Ownership before any real group syscall: the zombie leads its own group and is the holder's child.
 		const row = processRow(pgid);
 		const [pid, ppid, group] = row.split(/\s+/).map(Number);
-		assert.ok(pid === pgid && ppid === holder.pid && group === pgid, `premise: group ${pgid} is not the holder's (${holder.pid}) zombie leader: "${row}"`);
+		assert.ok(
+			pid === pgid && ppid === holder.pid && group === pgid,
+			`premise: group ${pgid} is not the holder's (${holder.pid}) zombie leader: "${row}"`,
+		);
 		return { pgid, holder, release, reaped };
 	} catch (error) {
 		release();
@@ -441,7 +535,11 @@ async function reapNamingPsFailures(pgid, kill = process.kill.bind(process), lis
 async function verifyRealDarwinZombieGroup() {
 	const { pgid, release, reaped } = await zombieOnlyGroup();
 	try {
-		assert.throws(() => process.kill(-pgid, 0), { code: "EPERM" }, "premise: Darwin refuses to signal a zombie-only group");
+		assert.throws(
+			() => process.kill(-pgid, 0),
+			{ code: "EPERM" },
+			"premise: Darwin refuses to signal a zombie-only group",
+		);
 		let released = false;
 		await reapNamingPsFailures(pgid, (pid, signal) => {
 			try {
@@ -480,7 +578,9 @@ async function verifyRealReapBeforeListing() {
 					assert.equal(error.code, "EPERM", "premise: only EPERM or ESRCH while the zombie drains");
 				}
 				if (Date.now() >= deadline) {
-					assert.fail(`premise: holder ${holder.pid} never reaped group ${group} within ${ZOMBIE_READY_MS}ms; leader row "${processRow(group)}"`);
+					assert.fail(
+						`premise: holder ${holder.pid} never reaped group ${group} within ${ZOMBIE_READY_MS}ms; leader row "${processRow(group)}"`,
+					);
 				}
 				sleepSync(1);
 			}
@@ -510,10 +610,14 @@ async function verifyBroadcastGroupRejected() {
 	for (const pgid of [1, 0, -1]) {
 		const calls = [];
 		await assert.rejects(
-			reapProcessGroup(pgid, (...call) => {
-				calls.push(call);
-				return true;
-			}, () => assert.fail("listing must not run for an invalid group")),
+			reapProcessGroup(
+				pgid,
+				(...call) => {
+					calls.push(call);
+					return true;
+				},
+				() => assert.fail("listing must not run for an invalid group"),
+			),
 			/owned positive process-group ID above 1/,
 		);
 		assert.deepEqual(calls, [], `pgid ${pgid} must make no kill call`);
@@ -528,32 +632,45 @@ async function verifyInconclusiveListing() {
 		() => Object.assign(new Error("spawnSync /bin/ps ETIMEDOUT"), { code: "ETIMEDOUT" }),
 		() => Object.assign(new Error("ps killed"), { code: "ETIMEDOUT", signal: "SIGKILL" }),
 	];
-	await Promise.all(failures.map(async (failure) => {
-		const first = Object.assign(new Error("EPERM"), { code: "EPERM" });
-		const calls = [];
-		let listings = 0;
-		await assert.rejects(
-			reapProcessGroup(424242, (pid, signal) => {
-				calls.push([pid, signal]);
-				throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
-			}, () => {
-				listings++;
-				throw failure();
-			}),
-			(actual) => actual === first,
-		);
-		assert.ok(calls.length > 1, "an unexplained EPERM keeps being probed until the budget ends");
-		assert.ok(calls.every(([pid, signal]) => pid === -424242 && signal === 0), "no signal follows an unexplained EPERM");
-		assert.equal(listings, calls.length + 1, "every probe re-lists, after the start-of-cleanup snapshot");
-	}));
+	await Promise.all(
+		failures.map(async (failure) => {
+			const first = Object.assign(new Error("EPERM"), { code: "EPERM" });
+			const calls = [];
+			let listings = 0;
+			await assert.rejects(
+				reapProcessGroup(
+					424242,
+					(pid, signal) => {
+						calls.push([pid, signal]);
+						throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
+					},
+					() => {
+						listings++;
+						throw failure();
+					},
+				),
+				(actual) => actual === first,
+			);
+			assert.ok(calls.length > 1, "an unexplained EPERM keeps being probed until the budget ends");
+			assert.ok(
+				calls.every(([pid, signal]) => pid === -424242 && signal === 0),
+				"no signal follows an unexplained EPERM",
+			);
+			assert.equal(listings, calls.length + 1, "every probe re-lists, after the start-of-cleanup snapshot");
+		}),
+	);
 	// A never-observed empty listing is a verdict, not a failure: it rejects at once.
 	const neverSeen = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	const calls = [];
 	await assert.rejects(
-		reapProcessGroup(424242, (pid, signal) => {
-			calls.push([pid, signal]);
-			throw neverSeen;
-		}, () => []),
+		reapProcessGroup(
+			424242,
+			(pid, signal) => {
+				calls.push([pid, signal]);
+				throw neverSeen;
+			},
+			() => [],
+		),
 		(actual) => actual === neverSeen,
 	);
 	assert.deepEqual(calls, [[-424242, 0]]);
@@ -562,10 +679,14 @@ async function verifyInconclusiveListing() {
 	const error = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	let probes = 0;
 	await assert.rejects(
-		reapProcessGroup(424242, () => {
-			if (probes++ >= 2) throw error;
-			return true;
-		}, () => []),
+		reapProcessGroup(
+			424242,
+			() => {
+				if (probes++ >= 2) throw error;
+				return true;
+			},
+			() => [],
+		),
 		(actual) => actual === error,
 	);
 	assert.equal(probes, 3);
@@ -583,13 +704,17 @@ async function verifyStageBudgetCap(t) {
 	const first = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	const calls = [];
 	await assert.rejects(
-		reapProcessGroup(424242, (pid, signal) => {
-			calls.push([pid, signal]);
-			throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
-		}, () => {
-			clock += PS_TIMEOUT_MS;
-			throw Object.assign(new Error("spawnSync /bin/ps ETIMEDOUT"), { code: "ETIMEDOUT" });
-		}),
+		reapProcessGroup(
+			424242,
+			(pid, signal) => {
+				calls.push([pid, signal]);
+				throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
+			},
+			() => {
+				clock += PS_TIMEOUT_MS;
+				throw Object.assign(new Error("spawnSync /bin/ps ETIMEDOUT"), { code: "ETIMEDOUT" });
+			},
+		),
 		(actual) => actual === first,
 	);
 	const budget = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
@@ -597,7 +722,10 @@ async function verifyStageBudgetCap(t) {
 	// SIGKILL is withheld while the EPERM is pending, so only the TERM stage's last probe and the KILL stage's
 	// first can run past the budget. An uncapped KILL stage would keep its own 500ms from wherever TERM ended.
 	assert.ok(clock - budget <= 2 * PS_TIMEOUT_MS, `slow listings overran the ${budget}ms budget by ${clock - budget}ms`);
-	assert.ok(calls.every(([pid, signal]) => pid === -424242 && signal === 0), "no signal follows an unexplained EPERM");
+	assert.ok(
+		calls.every(([pid, signal]) => pid === -424242 && signal === 0),
+		"no signal follows an unexplained EPERM",
+	);
 }
 
 /**
@@ -611,7 +739,16 @@ function fakeChild(pid) {
 
 /** @returns {Promise<void>} Verifies `runCancellable` never reaps or probes a child pid that cannot be an owned group. @throws {Error} On assertion failure. */
 async function verifyUnownableChild() {
-	assert.deepEqual([undefined, Number.NaN, 1.5, -2, -1, 0, 1, 2].map(isOwnableGroup), [false, false, false, false, false, false, false, true]);
+	assert.deepEqual([undefined, Number.NaN, 1.5, -2, -1, 0, 1, 2].map(isOwnableGroup), [
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		false,
+		true,
+	]);
 	const signals = ["SIGTERM", "SIGINT", "SIGHUP", "exit"];
 	const before = signals.map((signal) => process.listenerCount(signal));
 	for (const pid of [1, 0, -1]) {
@@ -628,7 +765,10 @@ async function verifyUnownableChild() {
 		child.emit("close", 0, null);
 		await assert.rejects(running, /owned positive process-group ID above 1/);
 		assert.deepEqual(calls, [], `close-time cleanup of pid ${pid} must make no kill call`);
-		assert.deepEqual(signals.map((signal) => process.listenerCount(signal)), before);
+		assert.deepEqual(
+			signals.map((signal) => process.listenerCount(signal)),
+			before,
+		);
 	}
 }
 
@@ -655,8 +795,12 @@ process.exit(0);
 /** @returns {Promise<void>} Verifies the exit-time backstop is live for an ownable pid and silent for 1, 0 and -1. @throws {Error} On assertion failure. */
 async function verifyUnownableExitBackstop() {
 	// Control first, so silence below is not vacuous: an ownable pid gets a probe, then the exit KILL.
-	assert.deepEqual(await exitBackstopTrace(424242), [[-424242, 0], [-424242, "SIGKILL"]]);
-	for (const pid of [1, 0, -1]) assert.deepEqual(await exitBackstopTrace(pid), [], `pid ${pid} must get no exit-time kill`);
+	assert.deepEqual(await exitBackstopTrace(424242), [
+		[-424242, 0],
+		[-424242, "SIGKILL"],
+	]);
+	for (const pid of [1, 0, -1])
+		assert.deepEqual(await exitBackstopTrace(pid), [], `pid ${pid} must get no exit-time kill`);
 }
 
 // Only Darwin answers EPERM for a zombie-only group; elsewhere Vitest reports these real-group cases as skipped.
@@ -675,7 +819,10 @@ test("listGroupStates reads live, reaped and absent members from ps", verifyList
 testDarwin("real Darwin zombie-only group drains to ESRCH", verifyRealDarwinZombieGroup);
 testDarwin("real Darwin zombie-only group that never drains is not reaped", verifyRealPersistentZombieGroup);
 test("pgid 1 is rejected before any kill (injected kill only)", verifyBroadcastGroupRejected);
-test("EPERM with a failing listing rejects after the budget; a never-observed group at once", verifyInconclusiveListing);
+test(
+	"EPERM with a failing listing rejects after the budget; a never-observed group at once",
+	verifyInconclusiveListing,
+);
 test("slow listings cannot carry a stage past the overall budget", verifyStageBudgetCap);
 test("runCancellable never reaps an unownable child pid (injected kill only)", verifyUnownableChild);
 test("runCancellable exit backstop skips an unownable child pid (recording kill only)", verifyUnownableExitBackstop);

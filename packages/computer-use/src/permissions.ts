@@ -61,7 +61,7 @@ function allGranted(status: PermissionStatus, kinds: PermissionKindCopy[]): bool
 }
 
 function missingKinds(status: PermissionStatus, kinds: PermissionKindCopy[]): PermissionKind[] {
-	return kinds.flatMap(({ kind }) => granted(status, kind) ? [] : [kind]);
+	return kinds.flatMap(({ kind }) => (granted(status, kind) ? [] : [kind]));
 }
 
 export async function ensurePermissions(
@@ -83,12 +83,12 @@ export async function ensurePermissions(
 		throwIfAborted(signal);
 
 		const missing = missingKinds(status, bridge.kinds);
-		const options = bridge.kinds
-			.filter(({ kind }) => missing.includes(kind))
-			.map(({ openOption }) => openOption);
+		const options = bridge.kinds.filter(({ kind }) => missing.includes(kind)).map(({ openOption }) => openOption);
 		options.push("Recheck (restarts helper)", "Cancel");
 
-		const choice = await ctx.ui.select(bridge.copy.prompt(status, helperPath, bridge.permissionHint), options, { signal });
+		const choice = await ctx.ui.select(bridge.copy.prompt(status, helperPath, bridge.permissionHint), options, {
+			signal,
+		});
 		if (!choice || choice === "Cancel") throw new Error(bridge.copy.incompleteError(helperPath));
 
 		const selected = bridge.kinds.find(({ openOption }) => choice === openOption);

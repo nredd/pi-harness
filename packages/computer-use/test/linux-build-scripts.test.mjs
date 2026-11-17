@@ -11,7 +11,7 @@ import {
 	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
-} from "../scripts/check-async.mjs";
+} from "../tests/fixtures/check-async.mjs";
 import { test } from "vitest";
 
 test("Linux build/setup scripts and process lifetime", async () => {
@@ -24,29 +24,13 @@ test("Linux build/setup scripts and process lifetime", async () => {
 
 	const scriptsDir = fileURLToPath(new URL("../scripts", import.meta.url));
 	const rootDir = path.resolve(scriptsDir, "..");
-	const [
-		buildSource,
-		setupSource,
-		packageSource,
-		helperSource,
-		waylandSource,
-		nativeSource,
-	] = await Promise.all([
+	const [buildSource, setupSource, packageSource, helperSource, waylandSource, nativeSource] = await Promise.all([
 		fs.readFile(path.join(scriptsDir, "build-native.mjs"), "utf8"),
 		fs.readFile(path.join(scriptsDir, "setup-helper.mjs"), "utf8"),
 		fs.readFile(path.join(rootDir, "package.json"), "utf8"),
-		fs.readFile(
-			path.join(rootDir, "src", "platform", "linux", "helper.ts"),
-			"utf8",
-		),
-		fs.readFile(
-			path.join(rootDir, "native", "linux", "bridge-rs", "src", "wayland.rs"),
-			"utf8",
-		),
-		fs.readFile(
-			path.join(rootDir, "native", "linux", "bridge-rs", "src", "main.rs"),
-			"utf8",
-		),
+		fs.readFile(path.join(rootDir, "src", "platform", "linux", "helper.ts"), "utf8"),
+		fs.readFile(path.join(rootDir, "native", "linux", "bridge-rs", "src", "wayland.rs"), "utf8"),
+		fs.readFile(path.join(rootDir, "native", "linux", "bridge-rs", "src", "main.rs"), "utf8"),
 	]);
 	const pkg = JSON.parse(packageSource);
 	assert.match(buildSource, /explicitPlatform === "linux"/);
@@ -59,23 +43,14 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		setupSource,
 		/allowLinuxBuildFallback = args\.has\("--allow-build"\) \|\| env\.PI_COMPUTER_USE_ALLOW_BUILD === "1"/,
 	);
-	assert.match(
-		helperSource,
-		/\.pi", "agent", "helpers", "pi-computer-use", "linux-bridge"/,
-	);
+	assert.match(helperSource, /\.pi", "agent", "helpers", "pi-computer-use", "linux-bridge"/);
 	assert.match(waylandSource, /pub async fn probe/);
-	assert.doesNotMatch(
-		waylandSource,
-		/start_remote_desktop|ActivePortalSession|NotifyPointer/,
-	);
+	assert.doesNotMatch(waylandSource, /start_remote_desktop|ActivePortalSession|NotifyPointer/);
 	assert.doesNotMatch(nativeSource, /x11_window\.unwrap_or\(root\.pid/);
-	assert.match(
-		nativeSource,
-		/"readText": \{"requested":read_text,"executed":false\}/,
-	);
+	assert.match(nativeSource, /"readText": \{"requested":read_text,"executed":false\}/);
 	// Linux ships the locked crate source (exact files, never the directory) and no prebuilt.
-	assert.match(setupSource, /"cargo", \["build", "--locked", "--release"/);
-	assert.match(setupSource, /"--target-dir", linuxBuildTargetDir/);
+	assert.match(setupSource, /"cargo",\s*\[\s*"build",\s*"--locked",\s*"--release"/);
+	assert.match(setupSource, /"--target-dir",\s*linuxBuildTargetDir/);
 	assert.ok(!pkg.files.includes("native/linux/bridge-rs"));
 	assert.ok(!pkg.files.includes("prebuilt/linux"));
 	const crateDir = path.join(rootDir, "native", "linux", "bridge-rs");
@@ -84,15 +59,8 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		recursive: true,
 		withFileTypes: true,
 	})) {
-		const relative = path
-			.relative(crateDir, path.join(entry.parentPath, entry.name))
-			.split(path.sep)
-			.join("/");
-		if (
-			entry.isFile() &&
-			!/^(target|tests)\//.test(relative) &&
-			relative !== ".gitignore"
-		)
+		const relative = path.relative(crateDir, path.join(entry.parentPath, entry.name)).split(path.sep).join("/");
+		if (entry.isFile() && !/^(target|tests)\//.test(relative) && relative !== ".gitignore")
 			crateFiles.push(`native/linux/bridge-rs/${relative}`);
 	}
 	assert.deepEqual(
@@ -100,13 +68,13 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		crateFiles.sort(),
 		"package.json `files` must list exactly the crate sources (no target/ or tests/)",
 	);
-	assert.ok(pkg.files.includes("docs/content/docs"));
+	assert.ok(!pkg.files.some((file) => file.startsWith("docs/")));
 
 	// Rust and TypeScript must agree on the wire protocol and shared architecture contract.
 	const [protocolRs, architectureTs, linuxDoc] = await Promise.all([
 		fs.readFile(path.join(crateDir, "src", "protocol.rs"), "utf8"),
 		fs.readFile(path.join(rootDir, "src", "platform", "architecture.ts"), "utf8"),
-		fs.readFile(path.join(rootDir, "docs", "content", "docs", "how-to-guides", "linux.mdx"), "utf8"),
+		fs.readFile(path.join(rootDir, "README.md"), "utf8"),
 	]);
 	assert.equal(
 		protocolRs.match(/PROTOCOL_VERSION: u32 = (\d+)/)?.[1],
@@ -119,36 +87,18 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		"architecture versions drifted",
 	);
 	const rustInvariants = [
-		...(nativeSource.match(/"invariants": \[([^\]]*)\]/)?.[1] ?? "").matchAll(
-			/"([a-z-]+)"/g,
-		),
+		...(nativeSource.match(/"invariants": \[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([a-z-]+)"/g),
 	].map((match) => match[1]);
 	const tsInvariants = [
-		...(
-			architectureTs.match(/REQUIRED_PLATFORM_INVARIANTS = \[([^\]]*)\]/)?.[1] ??
-			""
-		).matchAll(/"([a-z-]+)"/g),
+		...(architectureTs.match(/REQUIRED_PLATFORM_INVARIANTS = \[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([a-z-]+)"/g),
 	].map((match) => match[1]);
 	assert.ok(tsInvariants.length > 0);
-	assert.deepEqual(
-		rustInvariants,
-		tsInvariants,
-		"Rust and TS architecture invariants drifted",
-	);
-	assert.match(
-		linuxDoc,
-		/PI_COMPUTER_USE_ALLOW_BUILD=1/,
-		"docs/linux.md must document the opt-in source build",
-	);
+	assert.deepEqual(rustInvariants, tsInvariants, "Rust and TS architecture invariants drifted");
+	assert.match(linuxDoc, /PI_COMPUTER_USE_ALLOW_BUILD=1/, "the Linux guide must document the opt-in source build");
 	assert.match(linuxDoc, /cargo/);
-	assert.equal(
-		pkg.scripts["build:linux"],
-		"node scripts/build-native.mjs --platform linux",
-	);
+	assert.equal(pkg.scripts["build:linux"], "node scripts/build-native.mjs --platform linux");
 
-	const tempDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "pi-computer-use-linux-scripts-"),
-	);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-scripts-"));
 	const helperDest = path.join(tempDir, "linux-bridge");
 	let setupChild;
 	try {
@@ -159,10 +109,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 			fs.mkdir(fixtureHelperPathDir, { recursive: true }),
 		]);
 		await Promise.all([
-			fs.copyFile(
-				path.join(scriptsDir, "setup-helper.mjs"),
-				path.join(fixtureScriptsDir, "setup-helper.mjs"),
-			),
+			fs.copyFile(path.join(scriptsDir, "setup-helper.mjs"), path.join(fixtureScriptsDir, "setup-helper.mjs")),
 			fs.copyFile(
 				path.join(rootDir, "src", "platform", "macos", "helper-path.mjs"),
 				path.join(fixtureHelperPathDir, "helper-path.mjs"),
@@ -178,17 +125,13 @@ test("Linux build/setup scripts and process lifetime", async () => {
 			new Promise(
 				/** @returns {void} Spawns and captures initial setup. @throws {Error} Invalid spawn arguments reject this promise. */
 				(resolve, reject) => {
-					const child = spawn(
-						process.execPath,
-						[fixtureEntry, "--platform", "linux"],
-						{
-							env: {
-								...process.env,
-								PI_COMPUTER_USE_LINUX_HELPER_PATH: helperDest,
-							},
-							stdio: ["ignore", "pipe", "pipe"],
+					const child = spawn(process.execPath, [fixtureEntry, "--platform", "linux"], {
+						env: {
+							...process.env,
+							PI_COMPUTER_USE_LINUX_HELPER_PATH: helperDest,
 						},
-					);
+						stdio: ["ignore", "pipe", "pipe"],
+					});
 					setupChild = child;
 					let output = "";
 					child.stdout.on(
@@ -263,12 +206,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		const groupDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-cancel-"));
 		const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
 
-		const {
-			GROUP_TERM_GRACE_MS,
-			GROUP_KILL_WAIT_MS,
-			reapProcessGroup,
-			runCancellable,
-		} = await import(setupUrl);
+		const { GROUP_TERM_GRACE_MS, GROUP_KILL_WAIT_MS, reapProcessGroup, runCancellable } = await import(setupUrl);
 		const reapBudgetMs = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
 		assert.ok(
 			reapBudgetMs < OUTER_SETUP_BACKSTOP_MS,
@@ -296,10 +234,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		 * @throws {never} Probe errors are classified by `alive`.
 		 */
 		const settled = async (pid) => {
-			for (
-				const deadline = Date.now() + PROCESS_SETTLE_TIMEOUT_MS;
-				alive(pid) && Date.now() < deadline;
-			)
+			for (const deadline = Date.now() + PROCESS_SETTLE_TIMEOUT_MS; alive(pid) && Date.now() < deadline; )
 				await new Promise(
 					/** @returns {NodeJS.Timeout} Schedules a bounded fixture-exit probe. @throws {never} No errors. */
 					(resolve) => setTimeout(resolve, POLL_INTERVAL_MS),
@@ -313,10 +248,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		 * @throws {Error} If no valid marker is readable before the parent deadline.
 		 */
 		const waitForReady = async (file) => {
-			for (
-				const deadline = Date.now() + READINESS_TIMEOUT_MS;
-				Date.now() < deadline;
-			) {
+			for (const deadline = Date.now() + READINESS_TIMEOUT_MS; Date.now() < deadline; ) {
 				const pid = Number(await fs.readFile(file, "utf8").catch(() => ""));
 				if (Number.isInteger(pid) && pid > 0) return pid;
 				await new Promise(
@@ -405,12 +337,10 @@ await running;
 				],
 				`${name}: expected TERM then KILL escalation`,
 			);
-			for (const event of signals)
-				assert.equal(event.error, undefined, `${name}: signal syscall failed`);
+			for (const event of signals) assert.equal(event.error, undefined, `${name}: signal syscall failed`);
 			// Date.now() in the reaper has millisecond precision; allow only its rounding, not scheduler guesses.
 			assert.ok(
-				signals[1].at - signals[0].at >=
-					GROUP_TERM_GRACE_MS - TERM_GRACE_ROUNDING_ALLOWANCE_MS,
+				signals[1].at - signals[0].at >= GROUP_TERM_GRACE_MS - TERM_GRACE_ROUNDING_ALLOWANCE_MS,
 				`${name}: SIGKILL preceded the TERM grace: ${JSON.stringify(signals)}`,
 			);
 		};
@@ -418,17 +348,14 @@ await running;
 		let fixtureFailure;
 		try {
 			await within(
-				assert.rejects(
-					runCancellable("pi-cu-definitely-missing-tool", []),
-					(error) => {
-						assert.match(
-							error.message,
-							/'pi-cu-definitely-missing-tool' was not found on PATH\. Install the Rust toolchain/,
-						);
-						assert.doesNotMatch(error.message, /prebuilt\/linux/);
-						return true;
-					},
-				),
+				assert.rejects(runCancellable("pi-cu-definitely-missing-tool", []), (error) => {
+					assert.match(
+						error.message,
+						/'pi-cu-definitely-missing-tool' was not found on PATH\. Install the Rust toolchain/,
+					);
+					assert.doesNotMatch(error.message, /prebuilt\/linux/);
+					return true;
+				}),
 				"missing build tool to reject with its install hint",
 				SETUP_COMPLETION_TIMEOUT_MS,
 			);
@@ -443,11 +370,7 @@ await running;
 				(error) => error.code === "EPERM",
 				"permission-denied group probes must surface cleanup uncertainty",
 			);
-			assert.deepEqual(
-				calls,
-				[[-424242, 0]],
-				"permission-denied probes must not signal a potentially foreign group",
-			);
+			assert.deepEqual(calls, [[-424242, 0]], "permission-denied probes must not signal a potentially foreign group");
 			const unexpectedCalls = [];
 			await assert.rejects(
 				reapProcessGroup(424243, (pid, signal) => {
@@ -475,11 +398,9 @@ await running;
 				const observer = `${base}.observer.mjs`;
 				const wrapperReady = `${base}.wrapper`;
 				await writeSignalReadinessObserver(observer, wrapperReady);
-				const child = spawn(
-					process.execPath,
-					["--import", observer, wrapper, fixture, base, behavior],
-					{ stdio: ["ignore", "pipe", "pipe"] },
-				);
+				const child = spawn(process.execPath, ["--import", observer, wrapper, fixture, base, behavior], {
+					stdio: ["ignore", "pipe", "pipe"],
+				});
 				let output = "";
 				child.stdout.on("data", (chunk) => {
 					output += chunk;
@@ -503,10 +424,7 @@ await running;
 				let descendant;
 				try {
 					leader = await waitForReady(`${base}.leader`);
-					descendant =
-						behavior === "reaped"
-							? undefined
-							: await waitForReady(`${base}.desc`);
+					descendant = behavior === "reaped" ? undefined : await waitForReady(`${base}.desc`);
 					assert.equal(
 						await waitForReady(wrapperReady),
 						child.pid,
@@ -518,8 +436,7 @@ await running;
 					});
 				}
 				assert.ok(alive(leader), `${name}: ready leader must be alive`);
-				if (descendant)
-					assert.ok(alive(descendant), `${name}: ready descendant must be alive`);
+				if (descendant) assert.ok(alive(descendant), `${name}: ready descendant must be alive`);
 				/**
 				 * Trigger the acknowledged fixture boundary and await its close event.
 				 * @returns {Promise<object>} Wrapper exit status.
@@ -528,11 +445,7 @@ await running;
 				const completion = (async () => {
 					if (behavior === "exits-first" || behavior === "failed-quiescence" || behavior === "failed-quiescence-error")
 						await fs.writeFile(`${base}.release`, "go");
-					else
-						assert.ok(
-							child.kill("SIGTERM"),
-							`${name}: wrapper must receive TERM`,
-						);
+					else assert.ok(child.kill("SIGTERM"), `${name}: wrapper must receive TERM`);
 					return await closed;
 				})();
 				const result = await within(
@@ -542,23 +455,29 @@ await running;
 				);
 				assert.equal(
 					result.code,
-					behavior === "exits-first" ? 0 : behavior === "failed-quiescence" || behavior === "failed-quiescence-error" ? 1 : 143,
+					behavior === "exits-first"
+						? 0
+						: behavior === "failed-quiescence" || behavior === "failed-quiescence-error"
+							? 1
+							: 143,
 					`${name}: ${JSON.stringify(result)} ${output}`,
 				);
 				const trace = JSON.parse(await fs.readFile(`${base}.trace`, "utf8"));
-				if (behavior === "waits" || behavior === "exits-first")
-					assertEscalated(name, trace, leader);
+				if (behavior === "waits" || behavior === "exits-first") assertEscalated(name, trace, leader);
 				else if (behavior === "failed-quiescence" || behavior === "failed-quiescence-error") {
 					const signals = trace.filter((event) => event.signal !== 0);
 					assert.deepEqual(
 						signals.map((event) => [event.pid, event.signal]),
-						[[-leader, "SIGTERM"], [-leader, "SIGKILL"], [-leader, "SIGKILL"]],
+						[
+							[-leader, "SIGTERM"],
+							[-leader, "SIGKILL"],
+							[-leader, "SIGKILL"],
+						],
 						"failed cleanup must retain the exit-hook KILL fallback",
 					);
 					assert.equal(signals[1].suppressed, true, "the regression must keep the final probe positive");
 					assert.match(output, /remained non-empty after SIGKILL cleanup/);
-					if (behavior === "failed-quiescence-error")
-						assert.match(output, /Command failed \(7\):/);
+					if (behavior === "failed-quiescence-error") assert.match(output, /Command failed \(7\):/);
 				} else {
 					assert.deepEqual(
 						trace
@@ -582,22 +501,10 @@ await running;
 						);
 				}
 				if (descendant) {
-					assert.equal(
-						await settled(descendant),
-						true,
-						`${name}: descendant ${descendant} survived the wrapper`,
-					);
+					assert.equal(await settled(descendant), true, `${name}: descendant ${descendant} survived the wrapper`);
 				}
-				assert.equal(
-					await settled(leader),
-					true,
-					`${name}: leader ${leader} survived`,
-				);
-				assert.equal(
-					alive(-leader),
-					false,
-					`${name}: process group ${leader} still has members`,
-				);
+				assert.equal(await settled(leader), true, `${name}: leader ${leader} survived`);
+				assert.equal(alive(-leader), false, `${name}: process group ${leader} still has members`);
 			}
 		} catch (error) {
 			fixtureFailure = error;
@@ -609,7 +516,8 @@ await running;
 					...children.map(
 						({ child, closed, name }) =>
 							/** @returns {Promise<void>} Stops only a still-owned wrapper, which reaps its own live group. @throws {Error} On bounded cleanup failure. */
-							() => stopCheckChild(child, closed, `failed ${name} fixture`),
+							() =>
+								stopCheckChild(child, closed, `failed ${name} fixture`),
 					),
 					/** @returns {Promise<void>} Removes disposable fixture state. @throws {Error} On removal failure. */
 					() => fs.rm(groupDir, { recursive: true, force: true }),

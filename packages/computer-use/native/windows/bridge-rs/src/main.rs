@@ -1289,7 +1289,10 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
         .and_then(Value::as_str)
         .map(|s| s.trim().to_lowercase());
     let gone = args.get("gone").and_then(Value::as_bool).unwrap_or(false);
-    let scope_exact = args.get("scopeExact").and_then(Value::as_bool).unwrap_or(false);
+    let scope_exact = args
+        .get("scopeExact")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let scope_runtime_id = match (
         args.get("lookId").and_then(Value::as_str),
         args.get("scopeRef").and_then(Value::as_str),
@@ -1318,22 +1321,44 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
             .filter_map(|element| {
                 let runtime = element.get("runtimeId")?.as_array()?;
                 let parent = element.get("parentRuntimeId")?.as_array()?;
-                Some((serde_json::to_string(runtime).ok()?, serde_json::to_string(parent).ok()?))
+                Some((
+                    serde_json::to_string(runtime).ok()?,
+                    serde_json::to_string(parent).ok()?,
+                ))
             })
             .collect();
-        let scope_key = scope_runtime_id.as_ref().and_then(|id| serde_json::to_string(id).ok());
+        let scope_key = scope_runtime_id
+            .as_ref()
+            .and_then(|id| serde_json::to_string(id).ok());
         let found = elements.iter().any(|element| {
             if let Some(scope_key) = &scope_key {
-                let Some(mut current) = element.get("runtimeId").and_then(Value::as_array).and_then(|id| serde_json::to_string(id).ok()) else { return false; };
+                let Some(mut current) = element
+                    .get("runtimeId")
+                    .and_then(Value::as_array)
+                    .and_then(|id| serde_json::to_string(id).ok())
+                else {
+                    return false;
+                };
                 let mut within_scope = false;
                 for _ in 0..64 {
-                    if &current == scope_key { within_scope = true; break; }
-                    if scope_exact { break; }
-                    let Some(parent) = parents.get(&current) else { break; };
-                    if parent == &current { break; }
+                    if &current == scope_key {
+                        within_scope = true;
+                        break;
+                    }
+                    if scope_exact {
+                        break;
+                    }
+                    let Some(parent) = parents.get(&current) else {
+                        break;
+                    };
+                    if parent == &current {
+                        break;
+                    }
                     current = parent.clone();
                 }
-                if !within_scope { return false; }
+                if !within_scope {
+                    return false;
+                }
             }
             let candidate_text = ["value", "label", "name", "title"]
                 .iter()

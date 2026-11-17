@@ -4,13 +4,11 @@ Pi-independent, dependency-free ESM library for passive host resource dashboards
 `@nredd/pi-resource-sampler` is not a Pi extension. No tools, timers, hooks, output or policy are
 registered. Runs on Node >=22.14 and Bun.
 
-Sampler `0.2.0` adds native Darwin interval CPU/footprint and host used/swap metrics. Its
-consumer pins are exact registry dependencies, never workspace links.
-
-Unreleased after `0.2.0`: published `0.2.0` lists `/proc` with `opendir`, so on Linux any PID exiting
-mid-listing rejects the whole listing (`lstat` ENOENT on the `DT_UNKNOWN` entry). That scan returns no
-processes (`process-collection-unavailable`) and, as a baseline, leaves every next-scan process
-`warming` (#499). This source lists names only; it needs a release and consumer pin bumps.
+Current `0.2.1` provides native Darwin interval CPU/footprint and host used/swap metrics, plus
+names-only Linux `/proc` enumeration. Consumers pin exact registry dependencies, never workspace links.
+Avoid `0.2.0` on Linux: its `opendir` listing can fail when a PID exits mid-iteration, losing the
+process list and next-sample CPU baseline. The current names-only enumeration skips that process
+rather than failing the scan.
 
 Upgrade from `0.1.0`, which is unsafe: on Darwin it reported `ps -c -o comm`, the basename of argv[0],
 so a launcher-chosen argv[0] or Node `process.title` (e.g. `npm exec <package> mcp`) leaked into
@@ -57,7 +55,7 @@ Semantics:
   with identical parent/name and nondecreasing CPU. Each observation has its own monotonic timestamp.
   Identity/parent/name changes, negative deltas, nonpositive/nonfinite intervals and native intervals
   over 60s warm instead of fabricating CPU. Native CPU counters are Mach ticks converted using the
-  kernel timebase (125/3 ns per tick on this Apple Silicon Mac), NOT assumed nanoseconds.
+  kernel-reported timebase, NOT assumed nanoseconds.
 - `processes[].footprint` is an optional Darwin metric from `ri_phys_footprint`, including compressed
   memory. Native `rssBytes` comes from `ri_resident_size`. Inaccessible/exited/reused PIDs or exhausted
   native budgets retain the enumerated metadata/RSS row with unavailable CPU/footprint; unsupported
@@ -128,8 +126,7 @@ Bounds:
   immediate SIGKILL on abort/deadline/cap, and resolve only on close. No persistent children or workers.
 - Unsupported platforms keep native host metrics but report process coverage unavailable.
 
-macOS measurement/definition comparison, native ABI evidence and future publication checklist:
-[here](../../docs/mon-accuracy.md). Process `rssBytes` still excludes compressed pages; it is not
+Process `rssBytes` still excludes compressed pages; it is not
 Activity Monitor's physical footprint; use the separate `footprint` metric for that comparison.
 Names remain executable names, so Pi commonly appears as `node`.
 
@@ -147,7 +144,7 @@ Native failure tests inject fixed bindings through the same lazy loader seam use
 and `nativeCalls(host)` takes a fake `process` (platform, arch, `versions.bun`, `getBuiltinModule`)
 with recording `bun:ffi`/`node:ffi` fakes, never a patched global. Both adapters and the per-PID
 loop therefore run on every OS without the runtime's real FFI; macOS also runs the real libproc path.
-`test/runtime.test.ts` runs under both engines: it starts a child whose argv[0], argv, environment, process title and (Linux) comm hold a
+`tests/runtime.test.ts` runs under both engines: it starts a child whose argv[0], argv, environment, process title and (Linux) comm hold a
 random secret, proves the 0.1.0 source exposes it, then requires the child in the snapshot and no
 12-character fragment of the secret, plus three real CPU samples. Everything after spawn, readiness
 included, is followed by SIGTERM, then SIGKILL, with a bounded wait for the runtime's exit status

@@ -33,54 +33,77 @@ LOGGER = logging.getLogger(__name__)
 
 GIT = "/usr/bin/git"
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TESTED_DOCUMENTATION = frozenset({"README.md", "packages/preset/README.md"})
+TESTED_DOCUMENTATION = frozenset(
+    {
+        "AGENTS.md",
+        "README.md",
+        "docs/coverage.md",
+        "docs/install.md",
+        "packages/computer-use/README.md",
+        "packages/plan-mode/README.md",
+        "packages/preset/README.md",
+        "packages/session-kit/README.md",
+        "packages/todo/README.md",
+    }
+)
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
 TOOLCHAIN_INPUTS = frozenset(
     {"Makefile", "package.json", ".npmrc", ".gitmodules", ".node-version", ".bun-version", ".python-version"}
 )
 WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     ".gitattributes",
-    # The guest's probes and import-audit Vitest configs read their coverage inventory from it.
+    # The guest's probes and import-audit Vitest configs read their coverage inventory from it, through the
+    # shared factory.
     "coverage/policy.json",
     "package-lock.json",
-    "integration/pyproject.toml",
-    "integration/uv.lock",
-    "scripts/check-biome-paths.mjs",
-    "scripts/check-biome-paths.test.mjs",
+    "tests/integration/pyproject.toml",
+    "tests/integration/uv.lock",
+    "release/pyproject.toml",
+    "release/uv.lock",
+    "scripts/check-commit-messages.mjs",
+    "scripts/tests/commit-messages.test.mjs",
+    "scripts/tests/commit-policy.test.mjs",
     "scripts/coverage-configs.test.ts",
     "scripts/import_audit.test.ts",
     "scripts/import_audit.ts",
+    "scripts/install_gh_linux.py",
     "scripts/install_gh_linux.sh",
+    "scripts/install_wsl_owned_tools.py",
     "scripts/install_wsl_owned_tools.sh",
     "scripts/router_contract.mjs",
     "scripts/router_contract.test.mjs",
     "scripts/run-vitest.test.ts",
     "scripts/run-vitest.ts",
+    "scripts/vitest-package.ts",
     "scripts/vitest.config.ts",
+    # `run-vitest.ts` imports `isolatedHomeEnv` from it.
+    "tests/lib/src/isolated-home.ts",
 }
 WSL_INPUT_PREFIXES = (
     ".github/",
-    "integration/probes/",
-    "integration/providers/",
+    "tests/integration/probes/",
+    "tests/integration/providers/",
     "scripts/wsl2_",
     "scripts/ci",
 )
 STACK_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "package-lock.json",
-    "integration/conftest.py",
-    "integration/pyproject.toml",
-    "integration/uv.lock",
+    "tests/integration/conftest.py",
+    "tests/integration/pyproject.toml",
+    "tests/integration/uv.lock",
+    "release/pyproject.toml",
+    "release/uv.lock",
 }
-# `packages/` is absent on purpose: `harness.stack` maps those paths into `local` only.
+# `packages/` is absent on purpose: `pi_release.stack` maps those paths into `local` only.
 STACK_INPUT_PREFIXES = (
     ".github/",
     "forks/",
-    "integration/golden/",
-    "integration/harness/",
-    "integration/probes/",
-    "integration/providers/",
-    "integration/scenarios/",
-    "integration/stacks/",
+    "tests/integration/golden/",
+    "tests/integration/harness/",
+    "tests/integration/probes/",
+    "tests/integration/providers/",
+    "tests/integration/scenarios/",
+    "release/",
     "scripts/wsl2_",
 )
 EVENT_PULL_REQUEST = "pull_request"
@@ -106,11 +129,11 @@ class Shard:
     workspaces: tuple[str, ...] = ()
 
 
-# Shard units and timings are in #350 and docs/ci.md. Native cells run every Python gate; WSL keeps only the
-# LCOV producers (Ubuntu runs the Python unit suites). macOS stays at two shards: a public repo gets 5
-# concurrent macOS runners, shared by every PR. WSL stays at two: each Windows job pays ~3.5 min of guest
-# setup, and two shards already finish inside the macOS critical path. `check-benchmark` marks the shard that
-# carries the macOS benchmark steps.
+# Shard units and timings are in #350 and .github/workflows/ci.yml. Native cells run every Python gate;
+# WSL keeps only the LCOV producers (Ubuntu runs the Python unit suites). macOS mirrors Ubuntu's four
+# shards to keep the TypeScript work inside the job budget. WSL stays at two: each Windows job pays
+# ~3.5 min of guest setup, and two shards already finish inside the macOS critical path. `check-benchmark`
+# marks the shard that carries the macOS benchmark steps.
 OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
     "ubuntu-24.04": (
         Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
@@ -122,7 +145,10 @@ OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
         Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
         Shard("computer-use", (CHECK_TS,), ("packages/computer-use",)),
         Shard("ts", (CHECK_TS,)),
-        Shard("python", ("check-scripts", "check-integration", "check-benchmark")),
+        # CI 44008954118: scripts took 19m01s before two full coverage suites and the JS producers.
+        # Give scripts its own unchanged 30-minute job budget; keep the integration recipe intact.
+        Shard("scripts", ("check-scripts",)),
+        Shard("python", ("check-integration", "check-benchmark")),
     ),
     "wsl2": (
         Shard("subagents-computer-use", (CHECK_TS,), ("packages/computer-use", "packages/subagents")),
@@ -182,7 +208,7 @@ SUBJECT_PATTERN = re.compile(rf"(?:[a-z][a-z0-9-]*: )?[A-Z][^\n]*[^.{JS_WHITESPA
 BENCHMARK_INPUT_FILES = frozenset(
     {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml", "scripts/ci_paths.py"}
 )
-BENCHMARK_INPUT_PREFIXES = ("benchmarks/comparison/", ".github/actions/setup-ci-tools/")
+BENCHMARK_INPUT_PREFIXES = ("tests/benchmarks/comparison/", ".github/actions/setup-ci-tools/")
 # Gates a pull request skips when it changes none of their `INPUT_CLASSES` inputs. Every push runs them, which
 # still catches runner and image drift. The shard steps and the fan-in's coverage accounting both read the
 # plan's `skipped_gates`, so a skipped producer's signal reports NOT RUN instead of a missing report.
@@ -400,12 +426,40 @@ def is_documentation_path(path: str) -> bool:
     """
     if path in TESTED_DOCUMENTATION:
         return False
-    if path == "PLAN.md" or (path.startswith("docs/") and path.endswith(".md")):
+    if path.startswith("docs/") and path.endswith(".md"):
         return True
     if "/" not in path and path.endswith(".md"):
         return True
     parts = path.split("/")
     return len(parts) == 3 and parts[0] == "packages" and parts[2] in {"README.md", "CHANGELOG.md"}
+
+
+def changes_package_doc_presence(repo: Path, paths: tuple[str, ...], base: str, head: str) -> bool:
+    """Return whether a changed `packages/<name>/README.md` or `CHANGELOG.md` was added or deleted.
+
+    A package doc edit is docs-only, but adding or deleting one changes which required files a package
+    has, which `scripts/package_layout.py` gates, so that diff must run `check-scripts`.
+
+    Parameters:
+        repo (Path): Existing Git working tree.
+        paths (tuple[str, ...]): Changed paths.
+        base (str): Earlier Git revision.
+        head (str): Later Git revision.
+
+    Returns:
+        bool: Whether any changed package doc is absent at `base` or at `head`.
+
+    Raises:
+        ClassificationError: Git cannot list a revision.
+    """
+    docs = [path for path in paths if path.startswith("packages/") and is_documentation_path(path)]
+    if not docs:
+        return False
+    at_base, at_head = (
+        set(run_git(repo, "ls-tree", "--name-only", "-z", rev, "--", *docs).split("\0"))
+        for rev in (base, head)
+    )
+    return any(path not in at_base or path not in at_head for path in docs)
 
 
 def is_wsl_input(path: str) -> bool:
@@ -433,7 +487,7 @@ def is_stack_input(path: str) -> bool:
 
 
 def is_benchmark_input(path: str) -> bool:
-    """Return whether one changed path reaches the `benchmarks/comparison` unit gate.
+    """Return whether one changed path reaches the `tests/benchmarks/comparison` unit gate.
 
     Parameters:
         path (str): Git-relative path with POSIX separators.
@@ -481,9 +535,18 @@ def classify(repo: Path, base: str, head: str) -> ChangeClassification:
     except ClassificationError as e:
         LOGGER.error(f"Failed to classify changed paths: {e}")
         return ChangeClassification(paths=(), docs_only=False, inputs=dict.fromkeys(INPUT_CLASSES, True))
+    try:
+        docs_only = (
+            bool(paths)
+            and all(map(is_documentation_path, paths))
+            and not changes_package_doc_presence(repo, paths, base, head)
+        )
+    except ClassificationError as e:
+        LOGGER.error(f"Failed to classify changed paths: {e}")
+        return ChangeClassification(paths=(), docs_only=False, inputs=dict.fromkeys(INPUT_CLASSES, True))
     return ChangeClassification(
         paths=paths,
-        docs_only=bool(paths) and all(map(is_documentation_path, paths)),
+        docs_only=docs_only,
         inputs={name: not paths or any(map(predicate, paths)) for name, predicate in INPUT_CLASSES.items()},
     )
 
@@ -501,7 +564,7 @@ def utf16_length(text: str) -> int:
 
 
 def is_valid_subject(subject: str) -> bool:
-    """Mirror `validSubject` in `packages/computer-use/scripts/check-commit-messages.mjs`.
+    """Mirror `validSubject` in `scripts/check-commit-messages.mjs`.
 
     Parameters:
         subject (str): Commit subject.

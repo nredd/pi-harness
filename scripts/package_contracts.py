@@ -45,6 +45,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import time
 from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
@@ -80,8 +81,8 @@ from faux_provider import (
 # imported from the source tree. Module-level, so every importer (`npm_release.py` in `publish.yml`,
 # the stock gate, tests) gets it with no `PYTHONPATH` at each call site. Appended, so nothing in
 # `scripts/` is shadowed.
-sys.path.append(str(Path(__file__).resolve().parents[1] / "integration"))
-from harness import process_group
+sys.path.append(str(Path(__file__).resolve().parents[1] / "release"))
+from pi_release import process_group
 
 LOGGER = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ class PackageContract:
         packed_files (tuple[str, ...]): Exact packed paths, when the package has a fixed public payload.
         library (bool): Compiled ESM library, with no Pi entrypoint or host dependency permissions.
         node_probe (str): Fixed ESM consumer program executed against the isolated installed tarball.
+        resource_directories (tuple[str, ...]): Non-src resource trees whose every file must ship.
         packed_patterns (tuple[tuple[re.Pattern[str], int], ...]): (pattern, exact count) pairs for packed
             paths with build-hashed names; together with `packed_files` they must cover the tarball exactly.
     """
@@ -169,6 +171,7 @@ class PackageContract:
     node_probe: str = ""
     standalone_artifacts: frozenset[str] = frozenset()
     packed_files: tuple[str, ...] = ()
+    resource_directories: tuple[str, ...] = ()
     packed_patterns: tuple[tuple[re.Pattern[str], int], ...] = ()
 
 
@@ -218,7 +221,7 @@ async function exitedWithin(child, ms) {
     } finally { timer.abort(); }
 }
 /**
- * Terminate/reap with SIGTERM then SIGKILL, like integration/inprocess/support.ts.
+ * Terminate/reap with SIGTERM then SIGKILL, like tests/inprocess/support.ts.
  * @param {import('node:child_process').ChildProcess} child Owned child handle.
  * @returns {Promise<void>} Cleanup completion; rejects if the child survives SIGKILL.
  */
@@ -405,6 +408,35 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-dev-tools",
         directory="dev-tools",
+        packed_files=(
+            "LICENSE",
+            "README.md",
+            "package.json",
+            "src/cargo/index.ts",
+            "src/cargo/parse.ts",
+            "src/core/filelock.ts",
+            "src/core/index.ts",
+            "src/core/lock.ts",
+            "src/core/output.ts",
+            "src/core/process.ts",
+            "src/core/result.ts",
+            "src/core/tool.ts",
+            "src/git/commit-message.ts",
+            "src/git/guard.ts",
+            "src/git/index.ts",
+            "src/git/merge.ts",
+            "src/git/push-remote.ts",
+            "src/git/run.ts",
+            "src/git/status.ts",
+            "src/git/worktree.ts",
+            "src/index.ts",
+            "src/py/index.ts",
+            "src/py/parse.ts",
+            "src/resource/index.ts",
+            "src/ssh/exec.ts",
+            "src/ssh/hosts.ts",
+            "src/ssh/index.ts",
+        ),
         required=("LICENSE", "README.md", "package.json", "src/index.ts"),
         allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
         exposes_tools=frozenset({"git_status", "resource_snapshot"}),
@@ -413,21 +445,88 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-session-kit",
         directory="session-kit",
-        # The README links both docs, so a tarball without them would ship dead links.
+        packed_files=(
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "dist/pi-stats-export.mjs",
+            "package.json",
+            "src/agent-dir.ts",
+            "src/child.ts",
+            "src/clock.ts",
+            "src/config.ts",
+            "src/diff/component.ts",
+            "src/diff/git.ts",
+            "src/diff/index.ts",
+            "src/diff/parse.ts",
+            "src/diff/view.ts",
+            "src/goal/index.ts",
+            "src/goal/state.ts",
+            "src/goal/subagents.ts",
+            "src/index.ts",
+            "src/loop/index.ts",
+            "src/loop/state.ts",
+            "src/mon/component.ts",
+            "src/mon/index.ts",
+            "src/mon/model.ts",
+            "src/mon/poll.ts",
+            "src/mon/source.ts",
+            "src/monitor/coalescer.ts",
+            "src/monitor/index.ts",
+            "src/monitor/manager.ts",
+            "src/monitor/matcher.ts",
+            "src/monitor/messages.ts",
+            "src/monitor/output.ts",
+            "src/monitor/pidfiles.ts",
+            "src/monitor/process.ts",
+            "src/monitor/ring.ts",
+            "src/monitor/splitter.ts",
+            "src/monitor/types.ts",
+            "src/monitor/validate.ts",
+            "src/monitor/widget.ts",
+            "src/output.ts",
+            "src/rules/index.ts",
+            "src/rules/logic.ts",
+            "src/shared.ts",
+            "src/stats/aggregate.ts",
+            "src/stats/chart.ts",
+            "src/stats/cli.ts",
+            "src/stats/component.ts",
+            "src/stats/days.ts",
+            "src/stats/format.ts",
+            "src/stats/freshness.ts",
+            "src/stats/harness/claude-quota.ts",
+            "src/stats/harness/claude.ts",
+            "src/stats/harness/codex.ts",
+            "src/stats/harness/common.ts",
+            "src/stats/harness/index.ts",
+            "src/stats/harness/opencode.ts",
+            "src/stats/harness/scan.ts",
+            "src/stats/heatmap.ts",
+            "src/stats/index.ts",
+            "src/stats/jsonl.ts",
+            "src/stats/library.ts",
+            "src/stats/load.ts",
+            "src/stats/nth.ts",
+            "src/stats/palette.ts",
+            "src/stats/quota.ts",
+            "src/stats/snapshot.ts",
+            "src/stats/ticks.ts",
+            "src/titles/aliases.ts",
+            "src/titles/index.ts",
+            "src/titles/logic.ts",
+        ),
         required=(
             "LICENSE",
             "README.md",
             "package.json",
             "src/index.ts",
             "dist/pi-stats-export.mjs",
-            "docs/stats-snapshots.md",
-            "docs/mon-dashboard.md",
         ),
         allowed=(
             re.compile(r"^(LICENSE|README\.md|CHANGELOG\.md|package\.json)$"),
             re.compile(r"^src/.+\.(ts|md)$"),
             re.compile(r"^dist/pi-stats-export\.mjs$"),
-            re.compile(r"^docs/(stats-snapshots|mon-dashboard)\.md$"),
         ),
         exposes_tools=frozenset({"monitor_start", "monitor_read", "monitor_stop"}),
         runtime_dependencies=((RESOURCE_SAMPLER_CONTRACT.name, RESOURCE_SAMPLER_VERSION),),
@@ -436,6 +535,32 @@ CONTRACTS = (
     PackageContract(
         name="@nredd/pi-subscription-router",
         directory="subscription-router",
+        packed_files=(
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "examples/policies.json",
+            "examples/subscription-router.json",
+            "package.json",
+            "schemas/codex-reset-journal.schema.json",
+            "schemas/subscription-router.schema.json",
+            "src/codex-contract.ts",
+            "src/codex-reset-command.ts",
+            "src/codex-resets.ts",
+            "src/codex-session.ts",
+            "src/config.ts",
+            "src/exhaustion.ts",
+            "src/index.ts",
+            "src/model-ref.ts",
+            "src/policy.ts",
+            "src/recovery.ts",
+            "src/reset-journal.ts",
+            "src/reset-view.ts",
+            "src/resets.ts",
+            "src/router.ts",
+            "src/selection.ts",
+            "src/usage.ts",
+        ),
         required=(
             "LICENSE",
             "README.md",
@@ -445,15 +570,12 @@ CONTRACTS = (
             "examples/policies.json",
             "schemas/subscription-router.schema.json",
             "schemas/codex-reset-journal.schema.json",
-            "docs/policies.md",
-            "docs/fairness.md",
         ),
         allowed=(
             re.compile(r"^(LICENSE|README\.md|CHANGELOG\.md|package\.json)$"),
             re.compile(r"^src/.+\.ts$"),
             re.compile(r"^examples/(subscription-router|policies)\.json$"),
             re.compile(r"^schemas/(subscription-router|codex-reset-journal)\.schema\.json$"),
-            re.compile(r"^docs/(policies|fairness)\.md$"),
         ),
         exposes_tools=frozenset({"subscription_usage"}),
     ),
@@ -467,13 +589,42 @@ CONTRACTS = (
 PRESET_CONTRACT = PackageContract(
     name="@nredd/pi-preset",
     directory="preset",
+    resource_directories=("agents", "licenses", "settings", "skills", "themes"),
+    packed_files=(
+        "CHANGELOG.md",
+        "LICENSE",
+        "NOTICE.md",
+        "README.md",
+        "package.json",
+        "agents/architect.md",
+        "agents/code-reviewer.md",
+        "agents/critic.md",
+        "agents/debugger.md",
+        "agents/general-purpose.md",
+        "agents/principal-investigator.md",
+        "agents/researcher.md",
+        "agents/verifier.md",
+        "src/index.ts",
+        "src/footer-cache.ts",
+        "src/footer-quota.ts",
+        "licenses/Apache-2.0-tokyonight.nvim.txt",
+        "licenses/CC-BY-SA-4.0.txt",
+        "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
+        "settings/personal-defaults.json",
+        "skills/code-review/SKILL.md",
+        "skills/coding-like-redd/SKILL.md",
+        "skills/get-it-merged/SKILL.md",
+        "skills/ship-issue/SKILL.md",
+        "themes/belafonte-day.json",
+        "themes/tokyonight-storm.json",
+    ),
     required=(
         "LICENSE",
         "NOTICE.md",
         "README.md",
         "package.json",
         "agents/code-reviewer.md",
-        "extensions/expanded-footer.ts",
+        "src/index.ts",
         "licenses/Apache-2.0-tokyonight.nvim.txt",
         "licenses/CC-BY-SA-4.0.txt",
         "licenses/MIT-enkia-tokyo-night-vscode-theme.txt",
@@ -481,10 +632,9 @@ PRESET_CONTRACT = PackageContract(
         "themes/tokyonight-storm.json",
     ),
     allowed=(
-        re.compile(r"^(LICENSE|NOTICE\.md|README\.md|package\.json)$"),
+        re.compile(r"^(LICENSE|NOTICE\.md|README\.md|CHANGELOG\.md|package\.json)$"),
         re.compile(r"^agents/[a-z-]+\.md$"),
-        re.compile(r"^extensions/[a-z-]+\.ts$"),
-        re.compile(r"^lib/[a-z-]+\.ts$"),
+        re.compile(r"^src/[a-z-]+\.ts$"),
         re.compile(r"^licenses/[A-Za-z0-9.-]+\.txt$"),
         re.compile(r"^settings/[a-z-]+\.json$"),
         re.compile(r"^skills/[a-z-]+/SKILL\.md$"),
@@ -500,9 +650,8 @@ COMPUTER_USE_CONTRACT = PackageContract(
     required=(
         "LICENSE",
         "README.md",
-        "UPSTREAM.md",
         "package.json",
-        "extensions/computer-use.ts",
+        "src/index.ts",
         "scripts/build-native.mjs",
         "scripts/setup-helper.mjs",
         "native/macos/activity_glow.swift",
@@ -530,11 +679,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
     # additionally parses each prebuilt's Mach-O header and mode from the tarball.
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
-        re.compile(r"^assets/reference/img\.jpg$"),
-        re.compile(r"^UPSTREAM\.md$"),
-        re.compile(r"^docs/(?:README|macos-root-targeting)\.md$"),
-        re.compile(r"^docs/content/docs/(?:[a-z-]+/)*[a-z-]+\.(?:mdx|json)$"),
-        re.compile(r"^extensions/[a-z-]+\.ts$"),
+        re.compile(r"^src/[a-z-]+\.ts$"),
         re.compile(
             r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
         ),
@@ -566,46 +711,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
     packed_files=(
         "LICENSE",
         "README.md",
-        "UPSTREAM.md",
-        "assets/reference/img.jpg",
-        "docs/README.md",
-        "docs/content/docs/explanation/action-pipeline.mdx",
-        "docs/content/docs/explanation/architecture.mdx",
-        "docs/content/docs/explanation/index.mdx",
-        "docs/content/docs/explanation/meta.json",
-        "docs/content/docs/explanation/observation-pipeline.mdx",
-        "docs/content/docs/explanation/platform-boundary.mdx",
-        "docs/content/docs/explanation/state-and-scheduling.mdx",
-        "docs/content/docs/how-to-guides/develop-and-validate.mdx",
-        "docs/content/docs/how-to-guides/index.mdx",
-        "docs/content/docs/how-to-guides/linux.mdx",
-        "docs/content/docs/how-to-guides/meta.json",
-        "docs/content/docs/how-to-guides/troubleshooting.mdx",
-        "docs/content/docs/index.mdx",
-        "docs/content/docs/meta.json",
-        "docs/content/docs/reference/agent/contract.mdx",
-        "docs/content/docs/reference/agent/index.mdx",
-        "docs/content/docs/reference/agent/meta.json",
-        "docs/content/docs/reference/agent/tools.mdx",
-        "docs/content/docs/reference/codebase.mdx",
-        "docs/content/docs/reference/configuration.mdx",
-        "docs/content/docs/reference/index.mdx",
-        "docs/content/docs/reference/meta.json",
-        "docs/content/docs/reference/platforms/index.mdx",
-        "docs/content/docs/reference/platforms/macos/accessibility.mdx",
-        "docs/content/docs/reference/platforms/macos/actions.mdx",
-        "docs/content/docs/reference/platforms/macos/capture.mdx",
-        "docs/content/docs/reference/platforms/macos/implementation.mdx",
-        "docs/content/docs/reference/platforms/macos/index.mdx",
-        "docs/content/docs/reference/platforms/macos/meta.json",
-        "docs/content/docs/reference/platforms/macos/root-targeting.mdx",
-        "docs/content/docs/reference/platforms/meta.json",
-        "docs/content/docs/reference/platforms/windows.mdx",
-        "docs/content/docs/tutorials/getting-started.mdx",
-        "docs/content/docs/tutorials/index.mdx",
-        "docs/content/docs/tutorials/meta.json",
-        "docs/macos-root-targeting.md",
-        "extensions/computer-use.ts",
+        "src/index.ts",
         "native/linux/bridge-rs/Cargo.lock",
         "native/linux/bridge-rs/Cargo.toml",
         "native/linux/bridge-rs/src/atspi.rs",
@@ -672,6 +778,101 @@ COMPUTER_USE_CONTRACT = PackageContract(
 SUBAGENTS_CONTRACT = PackageContract(
     name="@nredd/pi-subagents",
     directory="subagents",
+    packed_files=(
+        "LICENSE",
+        "README.md",
+        "dist/index.ts",
+        "dist/index.ts.map",
+        "package.json",
+        "src/abortable.ts",
+        "src/agent-color.ts",
+        "src/agent-file-toggle.ts",
+        "src/agent-manager.ts",
+        "src/agent-runner.ts",
+        "src/agent-source-badge.ts",
+        "src/agent-types.ts",
+        "src/child-context.ts",
+        "src/clock.ts",
+        "src/completion-outbox.ts",
+        "src/context.ts",
+        "src/cross-extension-rpc.ts",
+        "src/custom-agents.ts",
+        "src/default-agents.ts",
+        "src/detached-results.ts",
+        "src/enabled-models.ts",
+        "src/enterprise-local.ts",
+        "src/env.ts",
+        "src/error-message.ts",
+        "src/events.ts",
+        "src/git-path.ts",
+        "src/group-join.ts",
+        "src/home-paths.ts",
+        "src/index.ts",
+        "src/invocation-config.ts",
+        "src/memory.ts",
+        "src/mention-clone.ts",
+        "src/mention.ts",
+        "src/model-call.ts",
+        "src/model-explanation.ts",
+        "src/model-resolver.ts",
+        "src/model-scope.ts",
+        "src/model-selection.ts",
+        "src/model-tiers.ts",
+        "src/nested-tools.ts",
+        "src/notification-result.ts",
+        "src/output-file.ts",
+        "src/package-resources.ts",
+        "src/plan-mode-children.ts",
+        "src/process-budget.ts",
+        "src/prompts.ts",
+        "src/quota-admission.ts",
+        "src/resource-loader.ts",
+        "src/saved-agent-record.ts",
+        "src/schedule-store.ts",
+        "src/schedule.ts",
+        "src/settings.ts",
+        "src/skill-loader.ts",
+        "src/stale-ctx.ts",
+        "src/startup-error.ts",
+        "src/status-note.ts",
+        "src/structured-output.ts",
+        "src/types.ts",
+        "src/ui/agent-mention.ts",
+        "src/ui/agent-row.ts",
+        "src/ui/agent-widget.ts",
+        "src/ui/conversation-viewer.ts",
+        "src/ui/fallback-flag.ts",
+        "src/ui/fleet-list.ts",
+        "src/ui/fleet-state.ts",
+        "src/ui/notification-view.ts",
+        "src/ui/schedule-menu.ts",
+        "src/ui/select-item.ts",
+        "src/ui/viewer-keys.ts",
+        "src/ui/workflow-card.ts",
+        "src/ui/workflow-dialog.ts",
+        "src/ui/workflow-menu.ts",
+        "src/usage.ts",
+        "src/workflow/collisions.ts",
+        "src/workflow/entry.ts",
+        "src/workflow/host.ts",
+        "src/workflow/journal.ts",
+        "src/workflow/json-schema.ts",
+        "src/workflow/meta.ts",
+        "src/workflow/progress.ts",
+        "src/workflow/runtime.ts",
+        "src/workflow/saved.ts",
+        "src/workflow/task.ts",
+        "src/workflow/tool-description.ts",
+        "src/workflow/worker-source.ts",
+        "src/worktree.ts",
+        "src/xml.ts",
+    ),
+    packed_patterns=(
+        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]{8}\.ts$"), 1),
+        (re.compile(r"^dist/chunks/chunk-[A-Z0-9]{8}\.ts\.map$"), 1),
+        (re.compile(r"^dist/chunks/conversation-viewer-[A-Z0-9]{8}\.ts$"), 1),
+        (re.compile(r"^dist/chunks/conversation-viewer-[A-Z0-9]{8}\.ts\.map$"), 1),
+    ),
     required=("LICENSE", "README.md", "package.json", "src/index.ts", "dist/index.ts"),
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
@@ -699,7 +900,6 @@ PLAN_MODE_CONTRACT = PackageContract(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
         re.compile(r"^src/.+\.ts$"),
         re.compile(r"^dist/.+\.(ts|js|map)$"),
-        re.compile(r"^docs/.+\.md$"),
     ),
     exposes_tools=frozenset({"plan_mode_question", "plan_mode_complete"}),
     runtime_dependencies=(("@narumitw/pi-tui-kit", "^0.65.2"),),
@@ -709,8 +909,6 @@ PLAN_MODE_CONTRACT = PackageContract(
         "README.md",
         "dist/index.ts",
         "dist/index.ts.map",
-        "docs/command-workflows.md",
-        "docs/settings.md",
         "package.json",
         "src/active-implementation-menu.ts",
         "src/child-policy.ts",
@@ -765,15 +963,55 @@ PLAN_MODE_CONTRACT = PackageContract(
 TODO_CONTRACT = PackageContract(
     name="@nredd/pi-todo",
     directory="todo",
-    required=("LICENSE", "README.md", "package.json", "index.ts", "todo.ts", "state/store.ts"),
+    packed_files=(
+        "CHANGELOG.md",
+        "LICENSE",
+        "README.md",
+        "src/config.ts",
+        "src/index.ts",
+        "src/locales/de.json",
+        "src/locales/en.json",
+        "src/locales/es.json",
+        "src/locales/fr.json",
+        "src/locales/pt-BR.json",
+        "src/locales/pt.json",
+        "src/locales/ru.json",
+        "src/locales/uk.json",
+        "src/locales/zh.json",
+        "package.json",
+        "src/plan/hooks.ts",
+        "src/agents.ts",
+        "src/state/i18n-bridge.ts",
+        "src/state/invariants.ts",
+        "src/state/lineage.ts",
+        "src/monitors.ts",
+        "src/plan/reconcile.ts",
+        "src/state/replay.ts",
+        "src/state/selectors.ts",
+        "src/state/state-reducer.ts",
+        "src/state/state.ts",
+        "src/state/store.ts",
+        "src/state/task-graph.ts",
+        "src/todo-overlay.ts",
+        "src/todo.ts",
+        "src/tool/response-envelope.ts",
+        "src/tool/sanitize.ts",
+        "src/tool/types.ts",
+        "src/view/format.ts",
+    ),
+    required=(
+        "CHANGELOG.md",
+        "LICENSE",
+        "README.md",
+        "package.json",
+        "src/index.ts",
+        "src/todo.ts",
+        "src/state/store.ts",
+    ),
     allowed=(
-        re.compile(r"^(LICENSE|README\.md|package\.json)$"),
-        re.compile(r"^(config|index|plan-hooks|todo|todo-overlay)\.ts$"),
-        re.compile(r"^locales/[A-Za-z-]+\.json$"),
-        re.compile(r"^state/[a-z0-9-]+\.ts$"),
-        re.compile(r"^tool/[a-z-]+\.ts$"),
-        re.compile(r"^view/[a-z-]+\.ts$"),
-        re.compile(r"^docs/[a-z0-9.-]+\.md$"),
+        re.compile(r"^(CHANGELOG\.md|LICENSE|README\.md|package\.json)$"),
+        re.compile(r"^src/.+\.ts$"),
+        re.compile(r"^src/locales/[A-Za-z-]+\.json$"),
     ),
     exposes_tools=frozenset({"todo"}),
     runtime_dependencies=(
@@ -781,6 +1019,17 @@ TODO_CONTRACT = PackageContract(
         ("@juicesharp/rpiv-i18n", "^2.13.9"),
     ),
     own_license=True,
+)
+
+
+ALL_CONTRACTS = (
+    *CONTRACTS,
+    RESOURCE_SAMPLER_CONTRACT,
+    PRESET_CONTRACT,
+    COMPUTER_USE_CONTRACT,
+    SUBAGENTS_CONTRACT,
+    PLAN_MODE_CONTRACT,
+    TODO_CONTRACT,
 )
 
 
@@ -891,14 +1140,21 @@ class StatsShardRef(BaseModel):
         return self
 
 
+StatsHarness = Literal["pi", "claude", "codex", "opencode"]
+STATS_HARNESS_VERSION = 2  # First snapshot version with `harness`, null `cost`, `quota` and `lastGoodAt`.
+
+
 class StatsManifest(BaseModel):
     model_config = PROTOCOL_MODEL
-    version: int = Field(ge=1, le=1, description="Snapshot schema version, exactly 1")
+    version: int = Field(ge=1, le=2, description="Snapshot schema version: 1 (legacy) or 2")
     machineId: UuidV4 = Field(description="Persistent installation UUID, matching its directory")
     label: Annotated[str, StringConstraints(min_length=1, max_length=1024)] = Field(
         description="Installation label"
     )
     exportedAt: int = Field(gt=0, le=STATS_MAX_MS, description="Export time, UTC Unix milliseconds")
+    lastGoodAt: dict[StatsHarness, Annotated[int, Field(gt=0, le=STATS_MAX_MS)]] | None = Field(
+        default=None, description="v2 only: when each harness was last read cleanly, at most `exportedAt`"
+    )
     shards: list[StatsShardRef] = Field(description="One shard reference per month")
 
     @model_validator(mode="after")
@@ -916,10 +1172,29 @@ class StatsManifest(BaseModel):
             raise ValueError(f"duplicate month in shards: {months}")
         return self
 
+    @model_validator(mode="after")
+    def _freshness_matches_version(self) -> Self:
+        """Require `lastGoodAt` exactly for v2, never after the export itself.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If `lastGoodAt` is present in v1, absent in v2, or later than `exportedAt`.
+        """
+        if (self.version >= STATS_HARNESS_VERSION) != (self.lastGoodAt is not None):
+            raise ValueError(
+                f"lastGoodAt is required for version 2 and absent for version 1, got {self.version}"
+            )
+        if self.lastGoodAt and any(at > self.exportedAt for at in self.lastGoodAt.values()):
+            raise ValueError("lastGoodAt is later than exportedAt")
+        return self
+
 
 class StatsEvent(BaseModel):
     model_config = PROTOCOL_MODEL
     id: Sha256Hex = Field(description="Opaque stable event fingerprint")
+    harness: StatsHarness | None = Field(default=None, description="v2 only: tool that wrote the usage")
     entryId: str | None = Field(description="Preserved entry identity, absent for legacy events")
     sessionId: Sha256Hex = Field(description="Opaque session identity, never a source path")
     ms: int = Field(gt=0, le=STATS_MAX_MS, description="UTC event instant in milliseconds")
@@ -929,7 +1204,9 @@ class StatsEvent(BaseModel):
     output: int = Field(ge=0, description="Output tokens")
     cacheRead: int = Field(ge=0, description="Cache-read tokens")
     cacheWrite: int = Field(ge=0, description="Cache-write tokens")
-    cost: float = Field(ge=0, allow_inf_nan=False, description="Notional event cost")
+    cost: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = Field(
+        description="Notional event cost; `null` (v2 only) when none is recorded"
+    )
 
 
 class StatsSession(BaseModel):
@@ -940,19 +1217,81 @@ class StatsSession(BaseModel):
     child: bool = Field(description="Whether this session belongs to a subagent")
 
 
+class StatsQuota(BaseModel):
+    model_config = PROTOCOL_MODEL
+    harness: StatsHarness = Field(description="Tool that observed the reading")
+    provider: NonEmptyText = Field(description="Router provider name")
+    limitId: NonEmptyText = Field(description="Provider-native limit bucket")
+    window: NonEmptyText = Field(description="Router window name, e.g. `5h`, `7d`")
+    usedPercent: float = Field(ge=0, allow_inf_nan=False, description="Percent of the window used")
+    resetAt: int = Field(gt=0, le=STATS_MAX_MS, description="Window reset, UTC Unix milliseconds")
+    durationMs: int = Field(gt=0, le=STATS_MAX_MS, description="Window length in milliseconds")
+    observedAt: int = Field(gt=0, le=STATS_MAX_MS, description="Reading time, UTC Unix milliseconds")
+    planType: NonEmptyText | None = Field(description="Plan, when reported")
+    account: Annotated[str, StringConstraints(pattern=r"^([0-9a-f]{64})?$")] = Field(
+        description="Salted account hash, or empty when the harness exposes none"
+    )
+
+
 class StatsShard(BaseModel):
     model_config = PROTOCOL_MODEL
-    version: int = Field(ge=1, le=1, description="Month-shard schema version")
+    version: int = Field(ge=1, le=2, description="Month-shard schema version: 1 (legacy) or 2")
     machineId: UuidV4 = Field(description="Producer installation UUID")
     month: SnapshotMonth = Field(description="UTC month covered by this shard")
     events: list[StatsEvent] = Field(description="Usage-only assistant events")
     sessions: list[StatsSession] = Field(description="Usage-only session metadata")
+    quota: list[StatsQuota] | None = Field(default=None, description="v2 only: quota readings of the month")
+
+    @model_validator(mode="after")
+    def _fields_match_version(self) -> Self:
+        """Require the v2 fields exactly for v2 shards.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If a v1 shard carries a v2 field, or a v2 shard lacks one.
+        """
+        v2 = self.version >= STATS_HARNESS_VERSION
+        if v2 != (self.quota is not None):
+            raise ValueError(f"quota is required for version 2 and absent for version 1, got {self.version}")
+        for event in self.events:
+            if v2 != (event.harness is not None):
+                raise ValueError(
+                    f"event harness is required for version 2 and absent for version 1, got {self.version}"
+                )
+            if not v2 and event.cost is None:
+                raise ValueError("null event cost requires version 2")
+        return self
+
+
+class StatsHarnessStatus(BaseModel):
+    model_config = PROTOCOL_MODEL
+    found: bool = Field(description="The harness's data root exists")
+    problems: list[str] = Field(description="Count-only diagnostics")
+    failed: Literal["kept", "lost"] | None = Field(
+        default=None, description="Scan incomplete: last published contents kept, or unreadable and dropped"
+    )
+    consecutiveFailures: int | None = Field(default=None, ge=1, description="Failed exports in a row")
 
 
 class StatsExportResult(BaseModel):
     model_config = PROTOCOL_MODEL
     machineId: UuidV4 = Field(description="Installation UUID that exported")
     snapshotDir: NonEmptyText = Field(description="`<OUT>/machines/<UUID>` directory written")
+    harnesses: dict[Literal["claude", "codex", "opencode"], StatsHarnessStatus] | None = Field(
+        default=None, description="Per requested non-pi harness status"
+    )
+    warnings: list[NonEmptyText] | None = Field(
+        default=None, description="Notes that did not stop publication"
+    )
+
+
+class StatsStale(BaseModel):
+    model_config = PROTOCOL_MODEL
+    machineId: UuidV4 = Field(description="Producer whose harness is stale")
+    harness: StatsHarness = Field(description="Harness last read cleanly long before its snapshot")
+    lastGoodAt: int = Field(gt=0, le=STATS_MAX_MS, description="Last clean read, UTC Unix milliseconds")
 
 
 class StatsImportResult(BaseModel):
@@ -961,6 +1300,7 @@ class StatsImportResult(BaseModel):
     retained: int = Field(ge=0, description="Machines kept from earlier imports")
     problems: list[str] = Field(description="Coverage problems found")
     importedAt: int = Field(ge=0, le=STATS_MAX_MS, description="Last successful import, Unix milliseconds")
+    stale: list[StatsStale] = Field(description="Harnesses more than 2 days behind their snapshot")
 
 
 class ToolContentBlock(BaseModel):
@@ -1493,7 +1833,7 @@ def run_own_group(
 
     The group is signalled only while the leader is unreaped (`returncode` unset, read without a
     `poll` that could reap it): until then its pid, the group id, cannot be reused, like
-    `integration/harness/headless.py`. The kill follows `harness.process_group.kill_owned_group`:
+    `tests/integration/harness/headless.py`. The kill follows `pi_release.process_group.kill_owned_group`:
     `ESRCH`, or the `EPERM` macOS answers for a group holding only the exited, unreaped leader, is
     gone when `/bin/ps` shows no live member, and the original exception surfaces. If `communicate`
     already reaped the leader (its SIGINT grace wait can), the id may be reused, so nothing is
@@ -1655,10 +1995,32 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 # --- tarball audit --------------------------------------------------------------------------------
 
 
+def parse_pack_report(stdout: str, contract: PackageContract) -> NpmPackEntry:
+    """Validate the single-package report shared by preview and real npm packs.
+
+    Parameters:
+        stdout (str): Captured `npm pack --json` output.
+        contract (PackageContract): Package named in failure diagnostics.
+
+    Returns:
+        NpmPackEntry: The single validated report entry.
+
+    Raises:
+        ContractError: If npm does not report exactly one valid package.
+    """
+    try:
+        (entry,) = TypeAdapter(list[NpmPackEntry]).validate_json(stdout)
+    except (ValidationError, ValueError) as e:
+        raise ContractError(
+            f"Unparseable `npm pack --json` output for '{contract.name}': {stdout[:500]}"
+        ) from e
+    return entry
+
+
 def pack(
     contract: PackageContract, dest: Path, sandbox: Sandbox, package_dir: Path | None = None
 ) -> PackedArtifact:
-    """Run `npm pack` for one workspace package.
+    """Build, then run `npm pack` for one workspace package.
 
     Parameters:
         contract (PackageContract): Package to pack.
@@ -1673,18 +2035,40 @@ def pack(
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
+    # Reject omitted existing contract files before expensive builds. Absent generated outputs
+    # are checked only against the real post-build tarball, never required by this preflight.
+    preview = run(
+        [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--dry-run"],
+        env=sandbox.env(),
+        cwd=package_dir,
+        timeout=NPM_TIMEOUT_S,
+    )
+    preview_files = {item.path for item in parse_pack_report(preview.stdout, contract).files}
+    omitted = [
+        name for name in contract.packed_files if (package_dir / name).is_file() and name not in preview_files
+    ]
+    if omitted:
+        raise ContractError(
+            f"Packed files for '{contract.name}':\n"
+            + "\n".join(f"missing required file '{name}'" for name in omitted)
+        )
+    # `--ignore-scripts` skips `prepack`. Remove old outputs so deleted sources cannot survive a build.
+    dist = package_dir / "dist"
+    if dist.exists():
+        shutil.rmtree(dist)
+    run(
+        [sandbox.tools.npm, "run", "build", "--if-present"],
+        env=sandbox.env(),
+        cwd=package_dir,
+        timeout=NPM_TIMEOUT_S,
+    )
     done = run(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--pack-destination", dest],
         env=sandbox.env(),
         cwd=package_dir,
         timeout=NPM_TIMEOUT_S,
     )
-    try:
-        (report,) = TypeAdapter(list[NpmPackEntry]).validate_json(done.stdout)
-    except (ValidationError, ValueError) as e:
-        raise ContractError(
-            f"Unparseable `npm pack --json` output for '{contract.name}': {done.stdout[:500]}"
-        ) from e
+    report = parse_pack_report(done.stdout, contract)
     path = dest / report.filename
     data = path.read_bytes()
     digest = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
@@ -1855,6 +2239,21 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
     Returns:
         list[str]: Violations; empty when the list conforms.
     """
+    # Non-macOS source-only dev/test packs cannot compile Swift. Published release packs are built
+    # on macOS and retain both helpers. A partial native payload is NEVER accepted.
+    if (
+        contract.directory == "computer-use"
+        and host_platform() != "darwin"
+        and not any(name.startswith("prebuilt/macos/") for name in files)
+    ):
+        LOGGER.info("NOT RUN packed macOS bridge check: source-only pack on a non-macOS host")
+        contract = replace(
+            contract,
+            required=tuple(name for name in contract.required if not name.startswith("prebuilt/macos/")),
+            packed_files=tuple(
+                name for name in contract.packed_files if not name.startswith("prebuilt/macos/")
+            ),
+        )
     problems = [f"missing required file '{name}'" for name in contract.required if name not in files]
     problems += [
         f"unexpected file '{name}'"
@@ -1886,6 +2285,112 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
             if name not in counts
         ]
     return problems
+
+
+def audit_source_files(
+    package_dir: Path,
+    files: Sequence[str],
+    *,
+    library: bool = False,
+    resource_directories: tuple[str, ...] = (),
+) -> list[str]:
+    """Require production sources in the pack and forbid test payloads.
+
+    Parameters:
+        package_dir (Path): Workspace root, including source-only development files.
+        files (Sequence[str]): Actual npm tarball paths.
+        library (bool): Compiled libraries ship matching JavaScript and declaration outputs.
+        resource_directories (tuple[str, ...]): Resource trees whose complete disk contents must ship.
+
+    Returns:
+        list[str]: Missing production files and forbidden test payloads.
+    """
+    problems = [
+        f"test or fixture file '{name}' must not ship"
+        for name in files
+        if set(PurePosixPath(name).parts) & {"test", "tests", "fixtures"}
+        or name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs"))
+    ]
+    for directory in resource_directories:
+        for resource in sorted((package_dir / directory).rglob("*")):
+            name = resource.relative_to(package_dir).as_posix()
+            if resource.is_file() and name not in files:
+                problems.append(f"resource file '{name}' is not packed")
+    source_root = package_dir / "src"
+    # Todo's upstream layout still has root-level modules. Preserve its production walker
+    # until its independent src/ migration; skip development directories, not production ones.
+    legacy_layout = not source_root.is_dir()
+    root = package_dir if legacy_layout else source_root
+    excluded = {"test", "tests", "fixtures"} | ({"node_modules", "docs", "dist"} if legacy_layout else set())
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(package_dir)
+        if legacy_layout and any(part.startswith(".") for part in relative.parts):
+            continue
+        if set(relative.parts) & excluded:
+            continue
+        if not path.is_file():
+            continue
+        if path.name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs")):
+            continue
+        if path.name == "test-fixtures.ts" or (legacy_layout and path.name == "vitest.config.ts"):
+            continue
+        # Packages without src/ (preset, todo) also carry development scripts/configs.
+        # Todo's old walker required every production .ts module, not JavaScript tooling.
+        if legacy_layout and (package_dir.name != "todo" or path.suffix != ".ts"):
+            continue
+        expected = (
+            (
+                f"dist/{path.relative_to(source_root).with_suffix('.js').as_posix()}",
+                f"dist/{path.relative_to(source_root).with_suffix('.d.ts').as_posix()}",
+            )
+            if library
+            else (relative.as_posix(),)
+        )
+        for name in expected:
+            if name not in files:
+                problems.append(f"production source '{relative.as_posix()}' requires packed '{name}'")
+    return problems
+
+
+def run_packed_files_gate(
+    work: Path, supplied: Mapping[str, Path] | None = None, *, only: Sequence[str] | None = None
+) -> dict[str, list[str]]:
+    """Check workspace payloads without installing or launching stock Pi.
+
+    Supplied tarballs restrict the gate to those packages and are never repacked.
+
+    Parameters:
+        work (Path): Scratch directory for disposable tarballs and npm environment.
+        supplied (Mapping[str, Path] | None): Existing tarballs keyed by package directory.
+        only (Sequence[str] | None): Selected workspace directories, or all when absent.
+
+    Returns:
+        dict[str, list[str]]: Actual shipped files per package directory.
+
+    Raises:
+        ContractError: If a file contract or production source rule fails.
+    """
+    sandbox = Sandbox(work / "base", locate_tools())
+    tarballs = work / "tarballs"
+    tarballs.mkdir()
+    report: dict[str, list[str]] = {}
+    for contract in ALL_CONTRACTS:
+        if only is not None and contract.directory not in only:
+            continue
+        if supplied and contract.directory not in supplied:
+            continue
+        artifact = select_artifact(contract, tarballs, sandbox, supplied or {})
+        problems = audit_files(contract, artifact.files)
+        problems += audit_source_files(
+            REPO_ROOT / "packages" / contract.directory,
+            artifact.files,
+            library=contract.library,
+            resource_directories=contract.resource_directories,
+        )
+        if problems:
+            raise ContractError(f"Packed files for '{contract.name}':\n" + "\n".join(problems))
+        report[contract.directory] = list(artifact.files)
+    return report
 
 
 def audit_chunk_graph(
@@ -3552,7 +4057,7 @@ def host_platform() -> str:
 
 
 def computer_use_expected_tools(platform: str) -> frozenset[str]:
-    """Return the exact tools `extensions/computer-use.ts` registers on `platform`.
+    """Return the exact tools `src/index.ts` registers on `platform`.
 
     `desktop_screenshot` and `desktop_input` are registered on darwin only, so non-darwin hosts
     (CI's ubuntu-24.04 cell) must see the other 11 and neither desktop tool.
@@ -3702,7 +4207,15 @@ def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
     """
     platform = host_platform()
     expected = computer_use_expected_tools(platform)
-    helpers: dict[str, str] = {arch: check_macos_helper(ctx.artifact.path, arch) for arch in MACHO_CPU_TYPES}
+    with tarfile.open(ctx.artifact.path) as archive:
+        files = tarball_files(archive, ctx.artifact.path)
+    source_only = platform != "darwin" and not any(name.startswith("prebuilt/macos/") for name in files)
+    helpers: dict[str, str] = {
+        arch: "NOT RUN: source-only non-macOS pack"
+        if source_only
+        else check_macos_helper(ctx.artifact.path, arch)
+        for arch in MACHO_CPU_TYPES
+    }
     helper_sources = check_helper_sources_packed(ctx.artifact.path)
     project = ctx.work / "project"
     project.mkdir()
@@ -3844,7 +4357,10 @@ def inspect_stats_snapshot(directory: Path, machine_id: str, forbidden: Sequence
             )
             text = data.decode()
             shard = parse_stats_json(StatsShard, text, "month shard")
-            require((shard.machineId, shard.month) == (machine_id, ref.month), "export shard header mismatch")
+            require(
+                (shard.machineId, shard.month, shard.version) == (machine_id, ref.month, manifest.version),
+                "export shard header mismatch",
+            )
             events += len(shard.events)
         require(events > 0, "export produced no usage events")
         exported = "\n".join(texts)
@@ -3880,7 +4396,9 @@ def inspect_stats_cache(viewer: Path, manifest: StatsManifest, snapshot_dir: Pat
     )
     machine = machines[manifest.machineId]
     require(isinstance(machine, dict), "import cache machine is not an object")
-    require(machine.get("manifest") == manifest.model_dump(), "import cache changed the manifest")
+    require(
+        machine.get("manifest") == manifest.model_dump(exclude_none=True), "import cache changed the manifest"
+    )
     expected = [json.loads((snapshot_dir / ref.file).read_text()) for ref in manifest.shards]
     require(machine.get("shards") == expected, "import cache changed or duplicated month events")
     return machines
@@ -4325,9 +4843,9 @@ def run_audit_gate(
 ) -> dict[str, object]:
     """Audit and install one packed package that has no standalone Pi behavior.
 
-    The preset ships agents and themes only, so there is nothing to execute through stock Pi alone.
-    Its packed bytes still get the full tarball audit (files, manifest, license expression) and the
-    clean-install closure check. Agent behavior in real children lives in the in-process suite.
+    The preset's packed footer is loaded by stock Pi's resource loader after the full tarball audit
+    (files, manifest, license expression) and clean-install closure check. Agent behavior in real
+    children lives in the in-process suite.
 
     Parameters:
         work (Path): Empty scratch directory.
@@ -4350,7 +4868,45 @@ def run_audit_gate(
         raise ContractError(
             f"Tarball audit failed for '{contract.name}':\n" + "\n".join(f"  - {p}" for p in problems)
         )
-    install_alone(artifact, sandbox, work / "install")
+    installed = install_alone(artifact, sandbox, work / "install")
+    if contract.directory == "preset":
+        ensure_stock_pi(DEFAULT_STOCK_PREFIX, sandbox)
+        run(
+            [
+                tools.node,
+                "--input-type=module",
+                "-e",
+                textwrap.dedent("""\
+                    import assert from 'node:assert/strict';
+                    import { pathToFileURL } from 'node:url';
+                    const [sdk, installed, cwd, agentDir] = process.argv.slice(1);
+                    const { DefaultResourceLoader, SettingsManager, VERSION } =
+                        await import(pathToFileURL(sdk));
+                    assert.equal(VERSION, '1.3.0');
+                    const settingsManager = SettingsManager.inMemory({ packages: [installed] });
+                    const loader = new DefaultResourceLoader({
+                        cwd, agentDir, settingsManager, noContextFiles: true,
+                    });
+                    await loader.reload();
+                    assert.deepEqual(loader.getExtensions().errors, []);
+                    assert.deepEqual(loader.getExtensions().extensions.map(e => e.path),
+                        [installed + '/src/index.ts']);
+                    assert.deepEqual(loader.getSkills().diagnostics, []);
+                    assert.deepEqual(loader.getSkills().skills.map(s => s.name).sort(),
+                        ['code-review', 'coding-like-redd', 'get-it-merged', 'ship-issue']);
+                    console.log('Packed preset loads in stock Pi ' + VERSION);
+                    """),
+                str(DEFAULT_STOCK_PREFIX / "node_modules" / STOCK_PI_PACKAGE / "dist/index.js"),
+                str(installed),
+                str(work / "install"),
+                str(sandbox.agent_dir),
+            ],
+            env=sandbox.env(),
+            cwd=work / "install",
+            timeout=30,
+            own_group=True,
+        )
+        LOGGER.info(f"Packed preset footer and skills loaded through stock Pi {STOCK_PI_VERSION}")
     if contract.node_probe:
         run(
             [tools.node, "--input-type=module", "-e", contract.node_probe],
@@ -4387,10 +4943,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--work-dir", type=Path, help="Scratch directory (must be empty or absent); default: a temporary one"
     )
     parser.add_argument("--keep", action="store_true", help="Keep the scratch directory after the run")
+    parser.add_argument(
+        "--packed-files-only", action="store_true", help="Check every workspace payload without stock Pi"
+    )
     parser.add_argument("--tarball", action="append", default=[], metavar="DIRECTORY=PATH")
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     parser.add_argument(
-        "--package", action="append", choices=[c.directory for c in CONTRACTS], help="Restrict to one package"
+        "--package",
+        action="append",
+        choices=[c.directory for c in ALL_CONTRACTS],
+        help="Restrict to one package",
     )
     parser.add_argument(
         "--audit-preset", action="store_true", help="Only audit and install the packed `@nredd/pi-preset`"
@@ -4420,6 +4982,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="pi-package-contracts-"))
     work.mkdir(parents=True, exist_ok=True)
     try:
+        if args.packed_files_only:
+            packed = run_packed_files_gate(
+                work.resolve(), parse_tarballs(args.tarball, ALL_CONTRACTS), only=args.package
+            )
+            text = json.dumps(packed, indent=2, sort_keys=True) + "\n"
+            if args.report:
+                args.report.write_text(text)
+            sys.stdout.write(text)
+            LOGGER.info(f"packed-file contracts: {len(packed)} passed")
+            return 0
         if args.audit_preset or args.audit_resource_sampler:
             contract = RESOURCE_SAMPLER_CONTRACT if args.audit_resource_sampler else PRESET_CONTRACT
             evidence = run_audit_gate(work.resolve(), contract)

@@ -8,59 +8,69 @@ name: Installer
 'on':
   pull_request:
     paths:
-      - integration/harness/runtime_lock.py
-      - integration/stacks/runtime-locks.json
-      - integration/tests/test_runtime_lock.py
-      - integration/harness/install_paths.py
-      - integration/harness/credentials.py
-      - integration/harness/files.py
+      - release/pi_release/runtime_lock.py
+      - release/stacks/runtime-locks.json
+      - tests/integration/tests/test_runtime_lock.py
+      - release/pi_release/install_paths.py
+      - release/pi_release/credentials.py
+      - release/pi_release/files.py
       - .github/workflows/installer.yml
       - .node-version
-      - integration/Makefile
-      - integration/conftest.py
-      - integration/harness/__init__.py
-      - integration/harness/install.py
-      - integration/harness/interactive.py
-      - integration/harness/isolation.py
-      - integration/harness/paths.py
-      - integration/harness/power.py
-      - integration/harness/process_group.py
-      - integration/harness/promotion.py
-      - integration/harness/release.py
-      - integration/harness/sandbox.py
-      - integration/harness/stack.py
-      - integration/harness/tmux.py
-      - integration/pyproject.toml
-      - integration/scenarios/installer/**
-      - integration/uv.lock
+      - tests/integration/Makefile
+      - tests/integration/conftest.py
+      - tests/integration/harness/__init__.py
+      - release/pi_release/install.py
+      - tests/integration/harness/interactive.py
+      - tests/integration/harness/isolation.py
+      - tests/integration/harness/paths.py
+      - tests/integration/harness/power.py
+      - release/pi_release/process_group.py
+      - release/pi_release/promotion.py
+      - release/pi_release/release.py
+      - tests/integration/harness/sandbox.py
+      - release/pi_release/stack.py
+      - tests/integration/harness/tmux.py
+      - tests/integration/pyproject.toml
+      - tests/integration/scenarios/installer/**
+      - tests/integration/uv.lock
+      - release/pyproject.toml
+      - release/uv.lock
+      - release/pi_release/__init__.py
+      - release/pi_release/paths.py
+      - release/pi_release/settings.py
   push:
     branches: [main]
     paths:
-      - integration/harness/runtime_lock.py
-      - integration/stacks/runtime-locks.json
-      - integration/tests/test_runtime_lock.py
-      - integration/harness/install_paths.py
-      - integration/harness/credentials.py
-      - integration/harness/files.py
+      - release/pi_release/runtime_lock.py
+      - release/stacks/runtime-locks.json
+      - tests/integration/tests/test_runtime_lock.py
+      - release/pi_release/install_paths.py
+      - release/pi_release/credentials.py
+      - release/pi_release/files.py
       - .github/workflows/installer.yml
       - .node-version
-      - integration/Makefile
-      - integration/conftest.py
-      - integration/harness/__init__.py
-      - integration/harness/install.py
-      - integration/harness/interactive.py
-      - integration/harness/isolation.py
-      - integration/harness/paths.py
-      - integration/harness/power.py
-      - integration/harness/process_group.py
-      - integration/harness/promotion.py
-      - integration/harness/release.py
-      - integration/harness/sandbox.py
-      - integration/harness/stack.py
-      - integration/harness/tmux.py
-      - integration/pyproject.toml
-      - integration/scenarios/installer/**
-      - integration/uv.lock
+      - tests/integration/Makefile
+      - tests/integration/conftest.py
+      - tests/integration/harness/__init__.py
+      - release/pi_release/install.py
+      - tests/integration/harness/interactive.py
+      - tests/integration/harness/isolation.py
+      - tests/integration/harness/paths.py
+      - tests/integration/harness/power.py
+      - release/pi_release/process_group.py
+      - release/pi_release/promotion.py
+      - release/pi_release/release.py
+      - tests/integration/harness/sandbox.py
+      - release/pi_release/stack.py
+      - tests/integration/harness/tmux.py
+      - tests/integration/pyproject.toml
+      - tests/integration/scenarios/installer/**
+      - tests/integration/uv.lock
+      - release/pyproject.toml
+      - release/uv.lock
+      - release/pi_release/__init__.py
+      - release/pi_release/paths.py
+      - release/pi_release/settings.py
   workflow_dispatch:
     inputs:
       stack_sha:
@@ -75,6 +85,17 @@ concurrency:
 permissions: {}
 
 jobs:
+  # Policy: Installer acceptance and residual credential capability
+  # `.github/workflows/installer.yml`, PRs and `main` pushes that change the installer or the harness modules it reuses, plus manual dispatch with a `stack_sha`:
+  #
+  # | Job | Runs | Proves |
+  # | --- | --- | --- |
+  # | `installer (ubuntu-24.04, xcode-27)` | `make -C tests/integration installer` with `INSTALLER_SPEC` set to this exact commit (`git+https://...@<sha>#subdirectory=release`) and `STACK_SHA` the published promotion. The installer reads no token. On `main` pushes/dispatches and owner-reviewed same-repo pull requests (`head.repo.full_name == github.repository`), `GH_TOKEN` is set for the fallback when hosted runner IPs hit GitHub's anonymous 60 requests/hour limit. Job permissions are only `contents: read` and `attestations: read` (needed to fetch attestations); no write permissions are granted. Only the separate `Authenticate gh attestation fallback` step sees `GH_TOKEN`: it pipes the token to `gh auth login --with-token --insecure-storage` with `GH_TOKEN` unset in that child and a temporary `GH_CONFIG_DIR`. `--insecure-storage` deliberately confines the ephemeral login to that private plaintext config rather than an OS keychain, so removing the directory removes the login. `make` and pytest receive only the nonsecret directory path (`INSTALLER_GH_CONFIG_DIR`), not a token. Acceptance wraps `gh` alone to set `GH_CONFIG_DIR` to that path; `uvx`, Git, package builds and other installer children receive neither variable nor token. An always-running cleanup removes the login directory. Fork PRs and non-main dispatches stay anonymous and fail if the limit refuses them (`test_installer_workflow_token_policy` pins and evaluates the expression; `test_installer_workflow_token_permissions_are_read_only` pins permissions and checkout credential stripping). Triggers cover the installer's `harness` import closure, `conftest.py`, `.node-version`, `Makefile`, `pyproject.toml` and `uv.lock` (checked by `test_installer_workflow_covers_its_inputs`). | The documented one-shot `uvx` command in throwaway HOMEs: missing prerequisites, an unpromoted SHA, real `gh` rejecting tampered bytes and a foreign signer/ref, a fresh install equal to the snapshot (order, filters, disabled computer-use, owned npm integrity), a no-op rerun, consent and preservation with an existing setup, and a SIGKILL during staging then a clean rerun. See [install](../../docs/install.md). |
+  #
+  # TRUST assumption: same-repo PR branches are owner-reviewed code. Same-repo `pull_request` workflows are not fork-sandboxed: a branch author can edit the PR's workflow to request write permissions or reference secrets. The read-only block constrains this submitted workflow only; it is not a security boundary against arbitrary same-repo PR code. KNOWN RESIDUAL: same-UID package code inherits the PATH-prepended `gh` shim through `uvx`, the installer, `pi install`, npm/package scripts and Git children that preserve PATH. `make`/pytest also receive `INSTALLER_GH_CONFIG_DIR`; stripping it and the token variables from other child environments does not remove the capability. A child can invoke the shim to authenticate or read its embedded config path and plaintext `hosts.yml`. This is known credential-capability leakage, not merely a theoretical filesystem permission concern. It remains within the same-repo trust assumption: the submitted job token is read-only, but branch authors already control their workflow. No claim of package-script credential isolation is made. The sentinel subprocess test `test_acceptance_token_environment_is_clean_but_gh_capability_remains` demonstrates both clean environments and successful same-UID credential retrieval using the real CLI and a real-format `hosts.yml`.
+  #
+  # It is not a required check and has no docs-only bypass; it only starts when its paths change.
+
   installer:
     name: installer (${{ matrix.os }})
     permissions:
@@ -99,14 +120,14 @@ jobs:
         with:
           version: "0.13.1"
       - name: Install harness dependencies
-        working-directory: integration
+        working-directory: tests/integration
         run: uv sync --locked
       # TRUST assumption: same-repo branches are owner-reviewed; their authors could change this
       # workflow to request writes or secrets; these permissions constrain this submitted workflow,
       # not arbitrary same-repo PR code. Fork PRs and non-main dispatches stay anonymous.
       # Only this login step sees the token. Acceptance uses a gh-only config shim, so make,
       # pytest, uvx, Git and package builds never inherit its environment value. The PATH shim
-      # still grants same-UID package code the login capability (KNOWN RESIDUAL in docs/ci.md).
+      # still grants same-UID package code the login capability (KNOWN RESIDUAL policy above).
       # Hosted IPs share the anonymous
       # 60 requests/hour limit. `test_installer_workflow_token_policy` pins the expression.
       - name: Authenticate gh attestation fallback
@@ -120,9 +141,9 @@ jobs:
       - name: Run the documented one-shot command in throwaway HOMEs
         env:
           INSTALLER_GH_CONFIG_DIR: ${{ runner.temp }}/installer-gh
-          INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=integration
+          INSTALLER_SPEC: git+https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}#subdirectory=release
           STACK_SHA: ${{ inputs.stack_sha || '24889f7896be7157bf9077a41465a3b29620879f' }}
-        run: make -C integration installer
+        run: make -C tests/integration installer
       - name: Remove temporary gh login
         if: always()
         env:

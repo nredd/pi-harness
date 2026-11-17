@@ -3,10 +3,10 @@
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
 `runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321, plus the root
-`run-vitest.ts`, `check-biome-paths.mjs` and `router_contract.mjs` helpers since #379),
-`probes` (every executable `integration/probes` source, 0/0 since #377) and
+`run-vitest.ts` and `router_contract.mjs` helpers since #379),
+`probes` (every executable `tests/integration/probes` source, 0/0 since #377) and
 `inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals,
-and `python-benchmarks` (`benchmarks/comparison`, darwin only, 0/0 since #387).
+and `python-benchmarks` (`tests/benchmarks/comparison`, darwin only, 0/0 since #387).
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
 `goal: "report-only"` identifies verification infrastructure (helpers and
@@ -25,7 +25,6 @@ Rust modules anywhere under `src`, including nested test/fixture modules, remain
 source inventory. Only conservative module/re-export-only source can validate an absent LLVM map.
 Explicit `skip_os` and `skip_hosts` declare unsupported cells as NOT RUN; selected cells still fail
 on missing reports. Adding skipped platforms to an established signal fails the base ratchet.
-See the native Linux producer and attribution limitations [here](../packages/computer-use/docs/rust-coverage.md).
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -42,7 +41,7 @@ current policy rejects the key, and only the base-policy read drops it so a ratc
 older commit still parses.
 `enforce_target` is enabled now that eligible runtime tooling/examples are measured with complete
 primary reports. Their source-complete
-producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:dist`
+producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:runtime-build`
 and `packages/subagents/coverage/workflow-examples/lcov.info` from `test:workflow-examples`.
 Workflow examples are instrumented only after metadata validation, including their literal metadata
 initializers, then executed by the real worker/VM with nested scripts sharing counters. Collection is
@@ -74,7 +73,7 @@ without its reporter still fails validation and writes `coverage/summary.json` w
 `max_uncovered.<os>.statements` follows `branches`: the base ratchet only lets it go down, dropping a key the
 base had is a weakening, and `target.statements` is 0, so every 100-percent primary is held to 0 uncovered
 statements. Every enforced primary and Bun Vitest signal caps 0. `computer-use-vitest` caps its measured
-per-OS uncovered statements (see [computer-use-coverage.md](computer-use-coverage.md)).
+per-OS uncovered statements.
 
 It fails closed. With `target.statements` set, an enforced Istanbul/V8 signal needs the `json-summary`
 reporter and a cap (`Missing statement cap`); a cap without a readable, non-empty summary, or a summary
@@ -93,7 +92,7 @@ Statement units differ (Istanbul AST statements, V8 AST remap), so caps compare 
 JSON `signals` map carries the branch delta. The base ratchet treats it like lines: a cap can only go
 down, and dropping a `branches` key the base had is a weakening. `target.branches` is 0, so every
 100-percent primary signal is held to 0 uncovered branches regardless of its own cap. Every enforced primary and
-Bun signal's cap is 0 as well. Session-kit remains report-only against a zero target, not a zero-coverage receipt (see below).
+Bun signal's cap is 0 as well. Session-kit enforces its full-source Bun zero floor after hosted admission (see below).
 
 It fails closed both ways. A signal whose report has branch records (`BRDA`) needs a cap on that OS
 (`Missing branch cap`), and a capped signal whose report has executable lines but no branch records
@@ -119,7 +118,7 @@ tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child(
 tests now pin all three. Caps are references, not waivers: they never rise, and `target.branches` is 0.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
-zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's transitional `max_uncovered`
+zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
 percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
@@ -127,14 +126,38 @@ on WSL2 and the cell is explicitly **Linux-like, enforced**: its Ubuntu fan-in a
 against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwin` for the darwin ones (each from the plan's `coverage_os`). Native Windows coverage is not measured. WSL contract scenarios
 remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
-fail closed, including when the global target is enabled. `enforce_target: true` applies after every
-eligible pending inventory is measured, and holds every eligible primary signal to zero on every
-OS with no per-file or per-OS exception. That flip applies to primary signals;
-independent runtime signals retain their declared enforcement modes. Primary signals of eligible packages always remain
-`enforced`; the 100% goal is measured by PRIMARY signals, not the Bun compatibility subset.
-Eligible pending packages then fail, too; owner-excluded/report-only domains do not.
+fail closed, including when the global target is enabled. With `enforce_target: true`, the target
+overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
+use their explicit per-OS caps, not that target override; every currently declared Bun signal is
+`enforced` at zero uncovered lines/functions/branches/statements and measures its full owned inventory.
+`probes` and `import-audit` currently run Bun compatibility with coverage disabled, so neither has an
+independent Bun coverage signal yet (#320). Computer-use's Bun/native scope remains owned by #645.
+Primary signals of eligible packages remain `enforced`; pending eligible inventory also fails.
+Owner-excluded/report-only goals do not acquire the primary target override. Report-only means
+counter excess is informational, not that reporting is optional: every selected signal still needs
+complete, valid reports and per-OS references. Producer-side thresholds may independently fail a
+report-only signal, as `computer-use-async` does.
 
 ## Independent signals
+
+`check-probes` and `check-import-audit` retain these independent full-suite signals (#972):
+
+| Signal | Producer | Reports, relative to the repository |
+| --- | --- | --- |
+| `probes/bun` | `check-probes`, `run-vitest.ts bun`, Istanbul | `integration/probes/coverage/bun/{lcov.info,coverage-summary.json}` |
+| `import-audit/bun` | `check-import-audit`, `run-vitest.ts bun --coverage.reportsDirectory=scripts/coverage/bun`, Istanbul | `scripts/coverage/bun/{lcov.info,coverage-summary.json}` |
+
+Both run the same explicit test files and full owned inventory as Node/V8, without exclusions or
+subsets. Their caps and per-file Vitest thresholds require zero L/F/B/S misses on both OSes;
+Node's `coverage/primary` reports are retained separately. Config initializers use a named `const`
+before the default export: Istanbul emits no statement for a bare `export default factory(...)`,
+which otherwise makes executable configs appear empty in V8 and disappear from Istanbul LCOV.
+`coverage-configs.test.ts` checks real statement maps as well as resolved options. The render probe's
+injected runtime facts let either engine exercise Node/Bun identity and GC/no-GC paths without
+mutating Bun's immutable global. Real disposable producer tests retain an unimported gate as
+uncovered, exercise its success/refusal paths, and reject missing/malformed LCOV or statement
+summaries. Hosted receipts must bind these reports to the PR's own final HEAD; historical primary
+artifacts are not evidence for these new signals. Computer-use Bun/native work remains #645.
 
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
 recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
@@ -148,7 +171,7 @@ real-loader tests rather than deleting assertions to repair counters. Istanbul c
 Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, over all 23 executable modules.
 Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
 Other primary producers retain V8. Since #347 that includes the import-audit and probe helpers:
-`scripts/vitest.config.ts` and `integration/probes/vitest.config.ts` replace c8 + `node --test`, run
+`scripts/vitest.config.ts` and `tests/integration/probes/vitest.config.ts` replace c8 + `node --test`, run
 through `scripts/run-vitest.ts node --coverage` with the shared home guard. Vitest transforms and
 runs the measured source itself, so Node's compile cache no longer reaches it: the
 `NODE_DISABLE_COMPILE_CACHE=1` that c8 needed (#321) is gone, and the measured counters are unchanged with
@@ -161,9 +184,7 @@ same way. `run-vitest.ts` exports `main(argv, env)`; `run-vitest.test.ts` fakes 
 asserts engine selection, the appended Bun coverage arguments and the exact opt-out, real home
 creation and removal, toolchain homes, the step summary, and rejection of a bad engine. Its
 `dispatch(isMain)` is asserted in process for both arms, and the real entry stays with the subprocess
-tests in `launcher.test.ts` and `test_coverage_producers.py`. `check-biome-paths.mjs` stays a top-level CLI that its test re-imports
-per case with its own argv, like `anthropic-block-types.mjs`, against real Biome, faking `spawnSync`
-only for a spawn error and a signal-killed child. `router_contract.mjs` exports the per-scenario
+tests in `launcher.test.ts` and `test_coverage_producers.py`. `router_contract.mjs` exports the per-scenario
 synthetic utilization so every scenario runs in process; its two placeholder imports are virtual
 mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of `run-vitest.ts` and
 `import_audit.ts` were the signal's last two uncovered branches (#418, #539): each is now an exported
@@ -171,8 +192,10 @@ mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of 
 calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
 optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
 and linux. Since #380 it also owns all 15 Vitest producer configurations (`packages/*/vitest*.config.ts`,
-`packages/todo/.vitest.config.ts`, `integration/{inprocess,probes,providers}/vitest.config.ts` and
-`scripts/vitest.config.ts`), and the pending `coverage-configurations` package is deleted (reclassified
+`tests/inprocess/vitest.config.ts`, `tests/integration/{probes,providers}/vitest.config.ts` and
+`scripts/vitest.config.ts`; since #863 each is one
+`definePackageConfig` call from `scripts/vitest-package.ts`, which is owned in this signal at 0/0/0/0, and todo's
+config lost its dot prefix), and the pending `coverage-configurations` package is deleted (reclassified
 file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
 imports each one as a module and asserts the resolved `test.coverage`: provider, the `text`, `lcov` + `json-summary`
 reporters, `reportsDirectory`, `reportOnFailure`, and `include`/`exclude` equal to the config's own policy
@@ -204,7 +227,7 @@ including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts`
 0 as well: tests cover foreign-API and non-assistant traffic, unindexed and malformed deltas, a close
 failure at the size limit and the default agent dir under a set and an unset `HOME`, and the dead
 `?? "unknown"` and empty-window guards are folded into `blockType()` and `percentile()`.
-`providers` is in the goal and enforced at 0/0 since #378: `check-providers` runs `integration/providers/vitest.config.ts`
+`providers` is in the goal and enforced at 0/0 since #378: `check-providers` runs `tests/integration/providers/vitest.config.ts`
 (forks, the shared home guard) over all eight sources on Node and Bun. `faux.ts` and `usage_fixture.ts` stream every
 scripted step shape against a recording registry with a fake clock, `extension_inventory.ts` reads a
 fake registry, and `preloads.test.ts` imports the auth preloads in its own forked worker against a
@@ -230,25 +253,25 @@ darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), w
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
 [#376](https://github.com/nredd/pi-harness/issues/376), see below. `subagents` runs its full suite on Bun 1.4.4 and is `enforced`
 at 0/0/0 on darwin and linux since #320, measured on darwin only so far (macOS: Node 4361 passed / 8 skipped,
-Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. The other one (session-kit)
-explicitly declares `enforcement: "report-only"`, with a reason linked to #320. It now runs the full
-Vitest suite under Bun, including the CLI source, rather than the native scenario subset. Its zero
-references remain pending hosted admission. Follow-up #824 covers omitted public arguments to
+Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. `session-kit` enforces zero line, function, branch and statement misses on its full Vitest-on-Bun suite, including the CLI source. Complete Node and Bun reports from hosted run `43395812528` measured all 53 executable sources with zero misses on macOS, Ubuntu and WSL/Linux ([admission](https://github.com/nredd/pi-harness/pull/829#issuecomment-6849824406)). WSL is Linux, not native Windows. Follow-up #824 covers omitted public arguments to
 `freshnessLines`, `machineIdentity` and `loadCombined` with real local-history/cache fixtures under
 disposable agent directories. The fourth missed default was unreachable: private `StatsView.help`
 has one caller, `render`, which always supplies its string-valued `hint`; only the unused default is
 removed, preserving rendered output and pricing behavior. Full local Node/Bun reports now measure
 53 executable files, 3608 lines / 836 functions / 3039 branches / 4317 statements, all covered.
 The static `stats/library.ts` facade is classified below; its three target modules remain measured.
-Bun now follows the complete owned inventory without a subset. Promotion remains blocked on this
-follow-up's own hosted macOS/Linux zero receipts, not a local-only pass. An omitted `enforcement` defaults to
+Bun follows the complete owned inventory without a subset, including future pricing sources. This coverage enforcement does not admit the separate pricing release graph or certify its price inventory. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
 Istanbul for router, preset, sampler, todo, plan-mode, dev-tools, subagents, session-kit and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text`, `lcov` and `json-summary` reporters (Vitest's dotted options) and
-`coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
+`coverage/bun`, so each `test:bun` passes only package arguments. The bare `--coverage` goes
+*first*, before the package arguments: Vitest's CLI parser turns a bare `--coverage` into `{ enabled: true }` and
+drops every `--coverage.*` field parsed before it, which erased a caller's extra reporter (e.g. `json`) when it was
+appended last. The mandatory provider, reporters and directory stay last, so a caller can add reporters but not
+weaken the instrument; a caller's own bare `--coverage` is dropped. The sampler retains one
 worker. The launcher also sets `PI_EXPECT_BUN_RUNTIME=1`, which subagents' real-loader test reads to prove it ran on
 the pinned Bun. Session-kit uses the same disposable-home launcher and shared home guard as the other
 suites. Its published sampler's real spawn is observed through an inlined builtin seam rather than
@@ -366,11 +389,12 @@ each file. Blanket globs, missing files, duplicate entries and overlap with owne
 source fail. Classification also applies to imported LCOV records. A verification label does
 not waive the base-tree ratchet: moving previously owned production into this classification
 still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` files such as
-`scripts/check-biome-paths.test.mjs` and `scripts/router_contract.test.mjs` need their own verification-helper entry; classifying the
+`scripts/router_contract.test.mjs` needs their own verification-helper entry; classifying the
 implementation helper does not implicitly classify its regression test.
 
 `computer-use-async/primary` (#759) independently measures the whole
-`packages/computer-use/scripts/check-async.mjs`, not the 35-file runtime slice.
+`packages/computer-use/tests/fixtures/check-async.mjs`, not the runtime slice. Its exact inventory
+classification preserves measurement despite the conventional fixture-directory location.
 `npm run test:async --workspace @nredd/pi-computer-use` runs retained real-process
 `async.test.mjs` checks, real preload marker-write refusal in `async-observer.test.mjs`,
 and deterministic `async-safety.test.mjs` boundary tests with one worker, emitting `packages/computer-use/coverage/async/lcov.info`. The package's
@@ -379,27 +403,40 @@ Missing selected-host reports fail accounting, never become zero counters. Its
 verification-only goal/signal is report-only, while Vitest independently enforces
 100% lines/functions/branches/statements for this exact file. Runtime caps are unchanged.
 
-On darwin, the existing 14 async tests measured L/F/B/S misses of 4/0/13/7
-(101/17/55/108 total). Adding deterministic syscall, stream and timer cases measures
-0/0/0/0 over those same denominators. The tests assert completed-PID ownership,
-probe-only group cleanup, EPERM polling, TERM/KILL failure retention, no-shell argv,
-independent byte caps and primary/cleanup error identity. The sync-revert mutation
-that treats EPERM as quiescence must fail. Generated preload text is emitted by the
-measured helper, but its execution in Node subprocesses is *behavior evidence*, not
-separate instrumented preload coverage. The other nine computer-use verification
-helpers remain unmeasured under #697; no all-layer 100% claim follows from this slice.
+The async tests assert completed-PID ownership, probe-only group cleanup, EPERM polling,
+TERM/KILL failure retention, no-shell argv, independent byte caps and primary/cleanup error identity.
+The ordinary persistent-EPERM regression remains after retirement of the sync-revert mutation runner.
+Generated preload execution in Node subprocesses is *behavior evidence*, not separate instrumented
+preload coverage. Historical pre-move denominators do not establish current-path measurements.
 
-Shipped runtime code is NEVER a verification helper. In particular, computer-use's published
-`setup-helper.mjs`, `build-native.mjs` and `src/platform/macos/helper-path.mjs` remain owned,
-measurement-pending production source because computer-use has no standard coverage runner.
-Its non-shipped `check-*.mjs` assertion scripts (except measured `check-async.mjs`) and
-`pi-cubench-agent.mjs` benchmark harness have individual verification reasons. Runtime builder scripts
-and runnable workflow examples are explicitly pending source, not verification exemptions.
+Shipped runtime code is NEVER a verification helper. Computer-use's published `setup-helper.mjs`,
+`build-native.mjs` and `src/platform/macos/helper-path.mjs` are owned and measured by
+`computer-use-vitest`. The original gate inventory has explicit measured, replaced, retired or
+verification-only dispositions, not a blanket unmeasured-helper exception (#697):
+
+- The root `scripts/check-commit-messages.mjs` is measured by `import-audit`; the duplicate package
+  asset checker was replaced by measured `scripts/package_contracts.py`.
+- Sync-ledger/upstream-sync/mutation runners and inherited website/doc generators and checkers were
+  retired, not excluded or replaced with fabricated coverage. The unused cubench manual driver was deleted.
+- The opt-in `packages/computer-use/tests/fixtures/linux-live.mjs` launcher remains unmeasured
+  verification tooling in conventional test scope. That disposition is not proof of measured cleanup/refusal paths.
+- Subagents' real build wrapper and the shared runtime builder remain measured, as do runnable workflow
+  examples. The obsolete committed-dist checker was deleted; deterministic two-build equality and
+  build/output refusal tests retain the applicable guarantee without restoring committed `dist/`.
+- The exact `verification_helpers` list contains the non-shipped router contract test, the core-pin
+  lookup helper (selection/cache/digest behavior lives in measured `core-artifacts.ts`), and the shared
+  Vitest setup entry (Vitest excludes its own `setupFiles`; `home-guard.ts` is measured).
+
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
-`src/stats/cli.ts` remains owned and measured.
+`src/stats/cli.ts` remains owned and measured. None of these dispositions establishes all-layer 100% coverage.
+Swift's LLVM report does not produce branches or statements; Rust's native LLVM report omits branch
+counts and has no separate statement counter. Regions are retained as regions, never fabricated
+branches or statements. Explicit unsupported OS/host cells are NOT RUN, not zero misses; selected
+native reports remain mandatory. Native attribution and thin live-adapter exceptions stay with #645
+and the native coverage owners.
 
-`computer-use` retains the complete native/documentation inventory; Windows Rust and the documentation
-site remain **not measured, tracked**. Native Ubuntu Linux Rust is measured separately by the
+`computer-use` retains the complete native inventory; Windows Rust remains **not measured, tracked**.
+The inherited documentation site and its generators were retired (#870), not left as unmeasured source. Native Ubuntu Linux Rust is measured separately by the
 report-only/excluded `computer-use-linux-native` signal (#758); regions are not branches or statements,
 and inline/source test hits do not establish runtime coverage. The separate `computer-use-swift` report-only/excluded
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
@@ -408,11 +445,10 @@ It preserves actual per-file LLVM lines/functions/regions and profile/toolchain 
 Regions are not branches or statements; no `BRDA` is fabricated. Missing selected-host reports
 fail closed; Linux/WSL2 explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
-or policy exemptions. These misses remain in raw reports. See the real-source command, initial
-local per-file baseline and remaining policy work [here](computer-use-coverage.md#swift-measurement). Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
-policy entry (same root) measures the 36 executable JS/TS runtime/producer modules with Istanbul: `src`,
-`extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs`, `swift-coverage.mjs` and the documentation
-generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
+or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
+policy entry (same root) measures its executable JS/TS runtime/producer inventory with Istanbul,
+including `src`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and `swift-coverage.mjs`,
+with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
@@ -420,26 +456,29 @@ measured uncovered counts for lines, functions, branches and statements (darwin 
 linux **0 / 0 / 0 / 0**). The earlier `1 / 0 / 1 / 1` receipt from run `43173083073` is historical.
 Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
-Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and
+The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
 their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
-the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
-that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
-measured by the enforced ratchet signal above. The plan for lifting the exclusion (TS and Swift, seams, phases) is [here](computer-use-coverage.md). The opt-in Rust report is never collected by normal checks; its
+the global flip. The optional `scripts/rust-coverage.mjs` tooling is
+measured by the enforced ratchet signal above. The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
 `dev-tools` emits primary Istanbul after #155/#195. Since #320 its Bun report comes from the same
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Every Vitest producer configuration is measured since #380 (see the `import-audit` paragraph above). Python `scripts/*.py` (`python-scripts`) and
-`integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
-the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root> --cov-fail-under=100` writing LCOV to
-`scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
-deliberately not `coverage/primary`, which is import-audit's report. The `--cov` source is the project
-root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory. For `scripts` that root includes `scripts/tests/`, so the test files themselves must reach 100%; `--cov-fail-under=100` applies to both `check-scripts` and `check-integration` (`harness`).
+Every Vitest producer configuration is measured since #380 (see the `import-audit` paragraph above). Python `scripts/*.py` (`python-scripts`),
+`release/pi_release/*.py` (`python-release`) and `tests/integration/harness/*.py` (`python-harness`)
+are measured by the shared `PY_GATE` Makefile recipe: ruff, ty, then
+`pytest -n 2 --dist loadfile --cov=<project root> --cov-fail-under=100`, writing independent LCOV to
+`scripts/coverage/python/lcov.info`, `release/coverage/python/lcov.info` and
+`tests/integration/coverage/python/lcov.info`. `check-integration` runs the retained infrastructure
+suite from both uv projects, independently measuring product and harness code. These paths are
+not `coverage/primary`, which is import-audit's report. The `--cov` sources are `.`, `pi_release`
+and `harness`; policy `owned` globs stay the only source inventory. For `scripts`, the measured
+root includes `scripts/tests/`, so test files themselves must also reach 100%.
 `scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
-`coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
+`coverage_accounting.py` count. `pytest-cov` is locked in `tests/integration/pyproject.toml`.
 Measurement can report an OS with no reference floor; enforcement still requires one. Summary totals
 consume the integer counters emitted by `account`, not the package, signal, OS or file labels.
 `parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
@@ -447,13 +486,13 @@ consume the integer counters emitted by `account`, not the package, signal, OS o
 file with no executable lines; for any other producer a bare record is a truncated report and fails. The same
 `coverage.py` dialect covers what `branch = true` writes (#387): a module without functions carries no `FNF`/`FNH`,
 read as zero functions, and `BRDA` names each branch by its destination (`jump to line 12`) instead of a number. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
-pytest (`docs/ci.md`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
+pytest (`.github/workflows/ci.yml`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
 `skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
 a skipped host.
 
-`benchmarks/comparison` (`python-benchmarks`, #387) is measured by its own `make check-benchmark`: pytest-cov with
-`branch = true` and `fail_under = 100` in its `pyproject.toml` (coverage.py 7.17.1, as `integration/`), writing LCOV to
-`benchmarks/comparison/coverage/python/lcov.info`.
+`tests/benchmarks/comparison` (`python-benchmarks`, #387) is measured by its own `make check-benchmark`: pytest-cov with
+`branch = true` and `fail_under = 100` in its `pyproject.toml` (coverage.py 7.17.1, as `tests/integration/`), writing LCOV to
+`tests/benchmarks/comparison/coverage/python/lcov.info`.
 Its enforced `primary` signal is 0/0 on darwin only and declares `skip_hosts: ["linux", "wsl2"]`: the `native_runtime`
 test needs Seatbelt, so only the macOS cell runs the producer. The CI step is path-gated (#315), so the signal also
 declares `gate: "check-benchmark"`. `scripts/ci_paths.py` lists a skipped gate in the cell's `skipped_gates`, the fan-in
@@ -463,8 +502,8 @@ declares, so a typo cannot skip nothing silently, and a test keeps every `PATH_G
 skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`).
 
 Both Python packages are `100-percent` with an enforced `primary` signal at 0 uncovered lines, functions and
-branches on each OS (#386; #420 removed the last `python-scripts` partial arc). `integration/harness/__init__.py` is a
-docstring-only module that coverage.py reports as fully covered on import, and `integration/conftest.py` is a
+branches on each OS (#386; #420 removed the last `python-scripts` partial arc). `tests/integration/harness/__init__.py` is a
+docstring-only module that coverage.py reports as fully covered on import, and `tests/integration/conftest.py` is a
 conventional pytest test file (outside `owned` and the inventory audit), so `python-harness` declares no exclusions.
 
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
@@ -586,7 +625,8 @@ Use `signal: "owned"` for production membership; compatibility subsets require t
 signal entry when they lose membership too. A measured package can never be removed; a pending one
 (no signals, so no budget) can, once every file it owned has an entry here, e.g. `probe-boundaries`
 in #377. For a deletion or genuine role change, omit
-`replacement` (or use null). A replacement must exist in the current inventory for that scope.
+`replacement` (or use null). A replacement must exist in the current inventory for that signal, in any
+package, so shared code may move across packages.
 Entries name exact files, not waiver globs. Old historical entries cannot authorize a new loss;
 duplicate, unrelated or invalid new entries fail. Reclassification never permits budget increases
 or an unsupported exclusion category. Review it as an explicit source-accounting change, not as a
@@ -611,9 +651,9 @@ diff (no policy files are modified, and measurement mode is explicitly **not a g
 gh run download <run-id> -R nredd/pi-harness -n coverage-ubuntu-24.04 -D /tmp/cov-linux
 gh run download <run-id> -R nredd/pi-harness -n coverage-macos-14 -D /tmp/cov-darwin
 gh run download <run-id> -R nredd/pi-harness -n coverage-wsl2 -D /tmp/cov-wsl2
-uv run --locked --project integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json
-uv run --locked --project integration python scripts/coverage_accounting.py --measure --os darwin --reports-root /tmp/cov-darwin --summary /tmp/measured-darwin.json
-uv run --locked --project integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-wsl2 --summary /tmp/measured-wsl2.json
+uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json
+uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure --os darwin --reports-root /tmp/cov-darwin --summary /tmp/measured-darwin.json
+uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-wsl2 --summary /tmp/measured-wsl2.json
 ```
 
 Use a checkout matching the artifact's production source and inventory. `--reports-root` reads the
@@ -648,7 +688,7 @@ Darwin `resource-sampler/primary` diagnostic uncovered branches changed 53 -> 54
 runs, while its gated uncovered lines/functions stayed 58/2. That branch was the late-stdout
 guard (`if (!complete) return` in the stdout `data` handler of `src/collect.ts`), which only ran
 when stream delivery raced cancellation. The controlled cancellation/data-event fixture in
-`packages/resource-sampler/test/sampler.test.ts` now forces that branch by emitting late stdout
+`packages/resource-sampler/tests/sampler.test.ts` now forces that branch by emitting late stdout
 after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
 [here](https://github.com/nredd/pi-harness/issues/164)). That race-dependent branch is why the
 sampler's starting branch caps came from hosted counts rather than a single local run; #417 drove them
@@ -673,10 +713,13 @@ tests cover the branch but cannot fail without it. Measured on darwin; hosted CI
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
 `support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts`, `todo-support.ts` and
-`verification/home-guard.ts`. The first two `test-helper` exclusions and the `home-guard.ts`
-verification-helper entry are gone. `verification/home-setup.ts` stays a verification helper:
+`verification/core-artifacts.ts`. The HOME guard moved to `tests/lib/src/home-guard.ts` (#864, `test-lib` in the policy, 0/0/0/0 on both
+signals from its own tests). The first two `test-helper` exclusions and the `home-guard.ts`
+verification-helper entry are gone. `tests/lib/src/home-setup.ts` stays a verification helper:
 Vitest hard-excludes a config's own `setupFiles` from coverage, so it is now a one-call entry and the
-guard it installs (`installHomeGuard`) is measured in `home-guard.ts`. Before #376, main `f2d607eb`
+guard it installs (`installHomeGuard`) is measured in `tests/lib/src/home-guard.ts`. `verification/core-pins.ts`
+likewise stays a verification helper: it only reads the lockfile, `releases/` and the home directory,
+while pin selection, cache search order and tarball authentication are measured in `core-artifacts.ts` (#843). Before #376, main `f2d607eb`
 measured primary 15 / 4 darwin, 25 / 8 linux and Bun 17 / 4, 27 / 8 (run `41781117332`); the Linux
 delta was the macOS-only `caffeinate` teardown in `support.ts`. `stopWake()` and
 `isolateStackHome()` now take an injected `Deadline` and wake spawner, so `support.test.ts` drives
@@ -695,7 +738,7 @@ and Bun are 0 uncovered branches on darwin and on linux (ubuntu-24.04 and wsl2, 
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary
 fetched during the Node pass is not available to Bun. Ubuntu and macOS owned CI
-install them before tests with SHA-pinned `taiki-e/install-action` (no apt mirror on the path, see `docs/ci.md`)
+install them before tests with SHA-pinned `taiki-e/install-action` (no apt mirror on the path, see `.github/workflows/ci.yml`)
 with exact `ripgrep@14.1.1` and `fd-find@10.5.0` versions (its cargo-binstall fallback for these
 crates). `BINSTALL_DISABLE_STRATEGIES=compile` makes a missing prebuilt fail the step instead of
 compiling from source; `fd-find` before 10.4.2 has no binstall metadata matching its release
@@ -716,4 +759,4 @@ to claim a clean gate.
 
 The Python benchmark's combined statement/branch gate is 100% (#387): still in `make check`, and in CI on `main` pushes and on PRs that touch `benchmark_inputs` (NOT RUN otherwise). Instrumented runs
 must not refresh performance baselines. Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
-The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](ci.md) for platform boundaries.
+The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](../.github/workflows/ci.yml) for platform boundaries.

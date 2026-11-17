@@ -28,14 +28,25 @@ async function loadWsl({ exists = false, version } = {}) {
 }
 
 /** A probe with every input quiet unless overridden. */
-const probe = (overrides = {}) => ({ env: () => ({}), hasInteropEntry: () => false, procVersion: () => "", ...overrides });
+const probe = (overrides = {}) => ({
+	env: () => ({}),
+	hasInteropEntry: () => false,
+	procVersion: () => "",
+	...overrides,
+});
 
 describe("isWsl with an injected probe", () => {
 	test("WSL_DISTRO_NAME or WSL_INTEROP is enough, without reading the kernel", async () => {
 		const { isWsl } = await loadWsl();
 		const never = () => assert.fail("must short-circuit on the environment");
-		assert.equal(isWsl(probe({ env: () => ({ WSL_DISTRO_NAME: "Ubuntu" }), hasInteropEntry: never, procVersion: never })), true);
-		assert.equal(isWsl(probe({ env: () => ({ WSL_INTEROP: "/run/WSL/1_interop" }), hasInteropEntry: never, procVersion: never })), true);
+		assert.equal(
+			isWsl(probe({ env: () => ({ WSL_DISTRO_NAME: "Ubuntu" }), hasInteropEntry: never, procVersion: never })),
+			true,
+		);
+		assert.equal(
+			isWsl(probe({ env: () => ({ WSL_INTEROP: "/run/WSL/1_interop" }), hasInteropEntry: never, procVersion: never })),
+			true,
+		);
 	});
 
 	test("an empty environment value does not count", async () => {
@@ -45,7 +56,10 @@ describe("isWsl with an injected probe", () => {
 
 	test("the WSLInterop binfmt entry is enough, without reading the kernel", async () => {
 		const { isWsl } = await loadWsl();
-		assert.equal(isWsl(probe({ hasInteropEntry: () => true, procVersion: () => assert.fail("must short-circuit") })), true);
+		assert.equal(
+			isWsl(probe({ hasInteropEntry: () => true, procVersion: () => assert.fail("must short-circuit") })),
+			true,
+		);
 	});
 
 	test("a Microsoft or WSL kernel string matches case-insensitively", async () => {

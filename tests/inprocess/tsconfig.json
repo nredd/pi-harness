@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // nredd/pi-harness#867: imports package sources that still use parameter properties (#878, #879, #880)
+    "erasableSyntaxOnly": false
+  },
+  "include": ["**/*.ts"],
+  // Typed by `tsconfig.loose.json`: they import sources that do not pass `noUncheckedIndexedAccess`.
+  "exclude": [
+    "plan-mode-children.test.ts",
+    "plan-mode-subagents.test.ts",
+    "router-rebinding.test.ts",
+    "todo-subagent-lifecycle.test.ts"
+  ]
+}

@@ -4,12 +4,12 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ModelFallback } from "./model-resolver.js";
-import type { ModelSelection } from "./model-selection.js";
-import type { TierDisclosure } from "./model-tiers.js";
-import type { PlanGate, PlanToolPolicy } from "./plan-mode-children.js";
-import type { BudgetLease } from "./process-budget.js";
-import type { LifetimeUsage } from "./usage.js";
+import type { ModelFallback } from "./model-resolver.ts";
+import type { ModelSelection } from "./model-selection.ts";
+import type { TierDisclosure } from "./model-tiers.ts";
+import type { PlanGate, PlanToolPolicy } from "./plan-mode-children.ts";
+import type { BudgetLease } from "./process-budget.ts";
+import type { LifetimeUsage } from "./usage.ts";
 
 export type { ThinkingLevel };
 
@@ -37,69 +37,69 @@ export type IsolationMode = "worktree" | "off";
 
 /** Unified agent configuration — used for both default and user-defined agents. */
 export interface AgentConfig {
-  name: string;
-  /** UI name. `display_name` wins; Claude Code's `name` is accepted as a fallback. */
-  displayName?: string;
-  /** Claude Code-compatible name color (named color or #RRGGBB). */
-  color?: string;
-  description: string;
-  builtinToolNames?: string[];
-  /** Raw `ext:` selector entries from the `tools:` CSV, e.g. ["ext:foo", "ext:bar/x"].
-   * Presence of any entry flips extension tools to an explicit allowlist. */
-  extSelectors?: string[];
-  /** Tool denylist — these tools are removed even if `builtinToolNames` or extensions include them. */
-  disallowedTools?: string[];
-  /** true = inherit all, string[] = only listed, false = none */
-  extensions: true | string[] | false;
-  /** Extension-name denylist applied after the `extensions:` include set. Exclude wins.
-   * Plain canonical names only (case-insensitive); no paths, no wildcard. */
-  excludeExtensions?: string[];
-  /** true = inherit all, string[] = only listed, false = none */
-  skills: true | string[] | false;
-  model?: string;
-  thinking?: ThinkingLevel;
-  maxTurns?: number;
-  /** Persist this subagent as a normal pi session instead of keeping it in memory only. */
-  persistSession?: boolean;
-  /** Write the subagent's .output transcript. Defaults to true; false suppresses only that transcript. */
-  outputTranscript?: boolean;
-  /** Optional session directory used when persistSession is true. Omitted = pi's normal session location. */
-  sessionDir?: string;
-  /**
-   * Nested delegation, off by default: undefined = no nested tools;
-   * "all" = any enabled agent; string[] = only those agent types.
-   */
-  allowedSubagents?: "all" | string[];
-  systemPrompt: string;
-  promptMode: "replace" | "append";
-  /** Default for spawn: fork parent conversation. undefined = caller decides. */
-  inheritContext?: boolean;
-  /** Default for spawn: run in background. undefined = caller decides. */
-  runInBackground?: boolean;
-  /** Default for spawn: no extension tools. undefined = caller decides. */
-  isolated?: boolean;
-  /** Persistent memory scope — agents with memory get a persistent directory and MEMORY.md */
-  memory?: MemoryScope;
-  /**
-   * Isolation mode — "worktree" runs the agent in a temporary git worktree,
-   * "off" refuses one even when the caller asks (frontmatter outranks params).
-   */
-  isolation?: IsolationMode;
-  /** true = this is an embedded default agent (informational) */
-  isDefault?: boolean;
-  /** false = agent is hidden from the registry */
-  enabled?: boolean;
-  /**
-   * Where this agent was loaded from. `"package"` means an installed pi package
-   * declared it (see package-resources.ts) — those files live under pi's install
-   * root, so `/agents` treats them as read-only and offers Eject instead of Edit.
-   */
-  source?: "default" | "project" | "global" | "package";
-  /** Path of the .md it was loaded from. Unset for embedded defaults. */
-  sourcePath?: string;
+	name: string;
+	/** UI name. `display_name` wins; Claude Code's `name` is accepted as a fallback. */
+	displayName?: string;
+	/** Claude Code-compatible name color (named color or #RRGGBB). */
+	color?: string;
+	description: string;
+	builtinToolNames?: string[];
+	/** Raw `ext:` selector entries from the `tools:` CSV, e.g. ["ext:foo", "ext:bar/x"].
+	 * Presence of any entry flips extension tools to an explicit allowlist. */
+	extSelectors?: string[];
+	/** Tool denylist — these tools are removed even if `builtinToolNames` or extensions include them. */
+	disallowedTools?: string[];
+	/** true = inherit all, string[] = only listed, false = none */
+	extensions: true | string[] | false;
+	/** Extension-name denylist applied after the `extensions:` include set. Exclude wins.
+	 * Plain canonical names only (case-insensitive); no paths, no wildcard. */
+	excludeExtensions?: string[];
+	/** true = inherit all, string[] = only listed, false = none */
+	skills: true | string[] | false;
+	model?: string;
+	thinking?: ThinkingLevel;
+	maxTurns?: number;
+	/** Persist this subagent as a normal pi session instead of keeping it in memory only. */
+	persistSession?: boolean;
+	/** Write the subagent's .output transcript. Defaults to true; false suppresses only that transcript. */
+	outputTranscript?: boolean;
+	/** Optional session directory used when persistSession is true. Omitted = pi's normal session location. */
+	sessionDir?: string;
+	/**
+	 * Nested delegation, off by default: undefined = no nested tools;
+	 * "all" = any enabled agent; string[] = only those agent types.
+	 */
+	allowedSubagents?: "all" | string[];
+	systemPrompt: string;
+	promptMode: "replace" | "append";
+	/** Default for spawn: fork parent conversation. undefined = caller decides. */
+	inheritContext?: boolean;
+	/** Default for spawn: run in background. undefined = caller decides. */
+	runInBackground?: boolean;
+	/** Default for spawn: no extension tools. undefined = caller decides. */
+	isolated?: boolean;
+	/** Persistent memory scope — agents with memory get a persistent directory and MEMORY.md */
+	memory?: MemoryScope;
+	/**
+	 * Isolation mode — "worktree" runs the agent in a temporary git worktree,
+	 * "off" refuses one even when the caller asks (frontmatter outranks params).
+	 */
+	isolation?: IsolationMode;
+	/** true = this is an embedded default agent (informational) */
+	isDefault?: boolean;
+	/** false = agent is hidden from the registry */
+	enabled?: boolean;
+	/**
+	 * Where this agent was loaded from. `"package"` means an installed pi package
+	 * declared it (see package-resources.ts) — those files live under pi's install
+	 * root, so `/agents` treats them as read-only and offers Eject instead of Edit.
+	 */
+	source?: "default" | "project" | "global" | "package";
+	/** Path of the .md it was loaded from. Unset for embedded defaults. */
+	sourcePath?: string;
 }
 
-export type JoinMode = 'async' | 'group' | 'smart';
+export type JoinMode = "async" | "group" | "smart";
 
 /**
  * Display mode for the persistent above-editor agent widget.
@@ -108,7 +108,7 @@ export type JoinMode = 'async' | 'group' | 'smart';
  *   Agent tool result, #118); show background/queued/scheduled/RPC.
  * - `off`: hide the widget entirely.
  */
-export type WidgetMode = 'all' | 'background' | 'off';
+export type WidgetMode = "all" | "background" | "off";
 
 /**
  * How much of the conversation viewer's transcript is rendered as Markdown.
@@ -123,7 +123,7 @@ export type WidgetMode = 'all' | 'background' | 'off';
  * - `all`: tool results render as Markdown too, for tools that genuinely emit
  *   it (#210's `ctx_execute`), accepting the rewrites above on ones that don't.
  */
-export type ViewerMarkdownMode = 'off' | 'assistant' | 'all';
+export type ViewerMarkdownMode = "off" | "assistant" | "all";
 
 /**
  * How `@handle message` starts an agent that is not already running.
@@ -136,7 +136,7 @@ export type ViewerMarkdownMode = 'off' | 'assistant' | 'all';
  * Messaging a running agent and resuming a finished one are direct in every
  * mode — Claude Code only differs from us on the *new* invocation.
  */
-export type AgentMentionMode = 'model' | 'direct' | 'off';
+export type AgentMentionMode = "model" | "direct" | "off";
 
 /**
  * What survives a record's eviction so `@handle` keeps working. The live record
@@ -144,233 +144,238 @@ export type AgentMentionMode = 'model' | 'direct' | 'off';
  * and this is the little that is needed to find and describe it again.
  */
 export interface AgentTombstone {
-  handle: string;
-  alias?: string;
-  id: string;
-  type: SubagentType;
-  description: string;
-  /** Always set — a record with no session file is never tombstoned. */
-  sessionFile: string;
-  /** The evicted run's tier and fallback, handed back when `@handle` reopens it. */
-  modelTier?: TierDisclosure;
-  modelFallback?: ModelFallback;
-  completedAt: number;
+	handle: string;
+	alias?: string;
+	id: string;
+	type: SubagentType;
+	description: string;
+	/** Always set — a record with no session file is never tombstoned. */
+	sessionFile: string;
+	/** The evicted run's tier and fallback, handed back when `@handle` reopens it. */
+	modelTier?: TierDisclosure;
+	modelFallback?: ModelFallback;
+	completedAt: number;
 }
 
 /**
  * What `@handle` resolved to: an agent still in memory, or the remains of one
  * whose conversation can be reopened from disk.
  */
-export type MentionResolution =
-  | { kind: "live"; record: AgentRecord }
-  | { kind: "tombstone"; entry: AgentTombstone };
+export type MentionResolution = { kind: "live"; record: AgentRecord } | { kind: "tombstone"; entry: AgentTombstone };
 
 /** Which concurrency pool a run is charged to. */
 export type Pool = "background" | "foreground";
 
 export interface AgentRecord {
-  id: string;
-  type: SubagentType;
-  /**
-   * Typeable name for the `@handle message` prompt mention, derived from the
-   * agent type and numbered when siblings collide (`explore`, `explore-2`).
-   * Top-level agents only — nested children are hidden from every top-level
-   * surface, so nothing can address them.
-   */
-  handle?: string;
-  /**
-   * A second, memorable handle from the spawner's `name` (`@auth-audit`), drawn
-   * from the same namespace as `handle` so the two can never collide. Purely
-   * additive: `handle` is assigned regardless, so a named agent stays reachable
-   * by its type and `@explore` never comes to mean "start another one".
-   */
-  alias?: string;
-  /**
-   * `handleBase(name)` before collision numbering: `auth-audit` for an alias of
-   * `auth-audit-2`. Announced as `nameBase` so a listener matching the spawner's
-   * `name` finds a retry rather than the failed first try still holding the name.
-   */
-  nameBase?: string;
-  description: string;
-  status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
-  /**
-   * Set when the agent that spawned this one stopped it with `stop_subagent`
-   * (#443). Unset on a `stopped` record means a human stopped it (a viewer's
-   * `x`, the stop-all chord, `/agents`, or the RPC), which the status notes
-   * word differently.
-   */
-  stoppedBy?: "parent";
-  result?: string;
-  error?: string;
-  toolUses: number;
-  startedAt: number;
-  completedAt?: number;
-  session?: AgentSession;
-  abortController?: AbortController;
-  promise?: Promise<string>;
-  /**
-   * A caller is awaiting this agent inline (`spawnAndWait`) — what
-   * `maxConcurrentForeground` bounds. Distinct from `isBackground === false`,
-   * which says only that the agent has an inline result surface: a detached
-   * cross-extension RPC spawn is foreground by that measure and yet blocks
-   * nobody, so it takes no slot.
-   *
-   * Cleared when the inline caller stops waiting: by `sendToBackground`, or
-   * when the run settles.
-   */
-  blocking?: boolean;
-  /**
-   * The concurrency pool this run's slot is charged to, set once when it
-   * starts. `settleRun` releases exactly this; `sendToBackground` is the only
-   * thing that moves it, together with the counters.
-   */
-  chargedPool?: Pool;
-  /**
-   * This run's process-wide budget lease (`process-budget.ts`), held from
-   * admission until the run settles. Spawns and resumes alike; cleared on release.
-   */
-  budgetLease?: BudgetLease;
-  /**
-   * Removes the listener that stops this run when its caller's signal aborts.
-   * At most one is armed at a time — queueing arms one, starting replaces it.
-   */
-  detachParentAbort?: () => void;
-  /**
-   * Present only while the record is "queued": resolves when it leaves the
-   * queue, started or aborted. `spawnAndWait` waits on this because a queued
-   * record has no `promise` yet. Always resolves, never rejects — a rejection
-   * would escape into the caller's tool `execute` and take down pi's whole
-   * Promise.all tool batch.
-   */
-  startGate?: Promise<void>;
-  groupId?: string;
-  joinMode?: JoinMode;
-  /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
-  resultConsumed?: boolean;
-  /**
-   * Set when the completion notice was sent to the parent, whole or clipped, failures
-   * included. Unlike `resultConsumed` it does not mean FleetView acknowledged it; the
-   * reap notice only asks "did the parent ever see this?".
-   */
-  noticeDelivered?: boolean;
-  /**
-   * The latest run actually began executing (the runner was started on a live signal).
-   * Positive evidence the reap notice requires: a record that was stopped in the queue,
-   * refused, or failed before the runner started never ran, so evicting it loses nothing.
-   * Reset on every resume.
-   */
-  ranThisRun?: boolean;
-  /** When `resultConsumed` was set; the GC keeps a consumed record for a short window from here. */
-  consumedAt?: number;
-  /** Steering messages queued before the session was ready. */
-  pendingSteers?: string[];
-  /**
-   * The Plan restriction its runs are under (#437): set at spawn, re-decided at
-   * each resume, read by the child's tool hooks on every call.
-   */
-  planGate?: PlanGate;
-  /** Asks the parent's pi-plan-mode again, for a resume. */
-  planQuery?: () => PlanToolPolicy | undefined;
-  /** Worktree info if the agent is running in an isolated worktree. */
-  worktree?: { path: string; branch: string; baseSha: string; repoRoot: string; workPath: string };
-  /** Worktree cleanup result after agent completion. */
-  worktreeResult?: { hasChanges: boolean; branch?: string; path?: string; error?: string };
-  /** The tool_use_id from the original Agent tool call. */
-  toolCallId?: string;
-  /** Path to the streaming output transcript file. */
-  outputFile?: string;
-  /**
-   * The agent's pi session file, when it was persisted (`persist_session`, or
-   * the `rememberAgents` default). Captured so a mention can reopen the
-   * conversation after the record itself has been evicted; undefined for an
-   * in-memory session, which leaves nothing to reopen.
-   */
-  sessionFile?: string;
-  /** Cleanup function for the output file stream subscription. */
-  outputCleanup?: () => void;
-  /**
-   * Lifetime usage breakdown, accumulated via `message_end` events. Survives
-   * compaction. Total = input + output + cacheWrite (cacheRead deliberately
-   * excluded — see issue #38). Initialized to zeros at spawn.
-   */
-  lifetimeUsage: LifetimeUsage;
-  /** Number of times this agent's session has compacted. Initialized to 0 at spawn. */
-  compactionCount: number;
-  /**
-   * Whether this agent runs in the background. Tri-state, initialized at spawn
-   * from `SpawnOptions.isBackground` and flipped `false` → `true` (once, never
-   * back) by `sendToBackground`: `true` = background, `false` =
-   * foreground (has an inline Agent tool-result surface), `undefined` = the
-   * caller never declared it (e.g. a cross-extension RPC spawn, which is detached
-   * and has no inline surface). The widget's background-only filter keys off this
-   * — and excludes only explicit `false`, so `undefined` agents stay visible.
-   * Reliable across ALL spawn paths, unlike the UI-only `invocation` snapshot,
-   * which only the Agent-tool path populates.
-   */
-  isBackground?: boolean;
-  /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
-  invocation?: AgentInvocation;
-  /**
-   * Set when a configured model did not resolve and the agent runs on the parent
-   * model. The single source for every disclosure surface; a resume reuses it
-   * as is, never recomputes it from the resuming call's config.
-   */
-  modelFallback?: ModelFallback;
-  /**
-   * This record's selection, retained across live resumes and physical relabelling.
-   * An evicted-session reopen selects anew; current fallback disclosure always
-   * comes from that selection.
-   */
-  modelSelection?: ModelSelection;
-  /** Actual run's tier provenance, preserved through eviction and replay. */
-  modelTier?: TierDisclosure;
-  /** Prior evicted run's outcome, never the continuation's selection or disclosure. */
-  previousModelTier?: TierDisclosure;
-  /** Prior evicted run's fallback, retained separately from the continuation's current disclosure. */
-  previousModelFallback?: ModelFallback;
-  /**
-   * The evicted id this record reopened (#330), announced as `previousId` on its
-   * lifecycle events so a listener keyed by the old id follows the conversation.
-   */
-  previousId?: string;
-  /**
-   * Order of this record's spawn among the manager's spawns and settles, set once at
-   * creation (before any queueing) and announced as `spawnSeq` on lifecycle events.
-   */
-  spawnSeq?: number;
-  /** Order of this record's latest settle on the same counter, announced as `settleSeq`. */
-  settleSeq?: number;
-  /** Nesting depth: top-level subagent = 1. */
-  depth: number;
-  /**
-   * The validated `StructuredOutput` payload, as canonical JSON.
-   *
-   * Set only when the spawn asked for a schema. Separate from `result` because
-   * `result` is prose for a reader — previewed in the widget, written to the
-   * transcript, and appended to with the worktree branch note — and JSON that
-   * has been appended to no longer parses.
-   */
-  structuredJson?: string;
-  /** Whether the child needed the extra structured-output prompt. */
-  structuredRetried?: boolean;
-  /** Parent agent ID for ownership-scoped nested controls. */
-  parentAgentId?: string;
-  /**
-   * The workflow run that owns this child, when a workflow spawned it.
-   *
-   * Owned the same way a nested child is owned by its parent: filtered out of
-   * every top-level surface, and outside the `maxConcurrent` pool. See
-   * `isTopLevelAgent`.
-   */
-  workflowId?: string;
-  /** Effective inherited nesting cap for this branch. */
-  maxSubagentDepth?: number;
-  /**
-   * Session id of the root (main) session this branch descends from. Nested
-   * spawns inherit it so their transcripts file under the same session
-   * directory as their ancestors' instead of the child session's own id.
-   */
-  rootSessionId?: string;
+	id: string;
+	type: SubagentType;
+	/**
+	 * Typeable name for the `@handle message` prompt mention, derived from the
+	 * agent type and numbered when siblings collide (`explore`, `explore-2`).
+	 * Top-level agents only — nested children are hidden from every top-level
+	 * surface, so nothing can address them.
+	 */
+	handle?: string;
+	/**
+	 * A second, memorable handle from the spawner's `name` (`@auth-audit`), drawn
+	 * from the same namespace as `handle` so the two can never collide. Purely
+	 * additive: `handle` is assigned regardless, so a named agent stays reachable
+	 * by its type and `@explore` never comes to mean "start another one".
+	 */
+	alias?: string;
+	/**
+	 * `handleBase(name)` before collision numbering: `auth-audit` for an alias of
+	 * `auth-audit-2`. Announced as `nameBase` so a listener matching the spawner's
+	 * `name` finds a retry rather than the failed first try still holding the name.
+	 */
+	nameBase?: string;
+	description: string;
+	status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
+	/**
+	 * Set when the agent that spawned this one stopped it with `stop_subagent`
+	 * (#443). Unset on a `stopped` record means a human stopped it (a viewer's
+	 * `x`, the stop-all chord, `/agents`, or the RPC), which the status notes
+	 * word differently.
+	 */
+	stoppedBy?: "parent";
+	result?: string;
+	error?: string;
+	toolUses: number;
+	startedAt: number;
+	completedAt?: number;
+	session?: AgentSession;
+	abortController?: AbortController;
+	promise?: Promise<string>;
+	/**
+	 * A caller is awaiting this agent inline (`spawnAndWait`) — what
+	 * `maxConcurrentForeground` bounds. Distinct from `isBackground === false`,
+	 * which says only that the agent has an inline result surface: a detached
+	 * cross-extension RPC spawn is foreground by that measure and yet blocks
+	 * nobody, so it takes no slot.
+	 *
+	 * Cleared when the inline caller stops waiting: by `sendToBackground`, or
+	 * when the run settles.
+	 */
+	blocking?: boolean;
+	/**
+	 * The concurrency pool this run's slot is charged to, set once when it
+	 * starts. `settleRun` releases exactly this; `sendToBackground` is the only
+	 * thing that moves it, together with the counters.
+	 */
+	chargedPool?: Pool;
+	/**
+	 * This run's process-wide budget lease (`process-budget.ts`), held from
+	 * admission until the run settles. Spawns and resumes alike; cleared on release.
+	 */
+	budgetLease?: BudgetLease;
+	/**
+	 * Removes the listener that stops this run when its caller's signal aborts.
+	 * At most one is armed at a time — queueing arms one, starting replaces it.
+	 */
+	detachParentAbort?: () => void;
+	/**
+	 * Present only while the record is "queued": resolves when it leaves the
+	 * queue, started or aborted. `spawnAndWait` waits on this because a queued
+	 * record has no `promise` yet. Always resolves, never rejects — a rejection
+	 * would escape into the caller's tool `execute` and take down pi's whole
+	 * Promise.all tool batch.
+	 */
+	startGate?: Promise<void>;
+	groupId?: string;
+	joinMode?: JoinMode;
+	/** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
+	resultConsumed?: boolean;
+	/**
+	 * Set when the completion notice was sent to the parent, whole or clipped, failures
+	 * included. Unlike `resultConsumed` it does not mean FleetView acknowledged it; the
+	 * reap notice only asks "did the parent ever see this?".
+	 */
+	noticeDelivered?: boolean;
+	/**
+	 * The latest run actually began executing (the runner was started on a live signal).
+	 * Positive evidence the reap notice requires: a record that was stopped in the queue,
+	 * refused, or failed before the runner started never ran, so evicting it loses nothing.
+	 * Reset on every resume.
+	 */
+	ranThisRun?: boolean;
+	/** When `resultConsumed` was set; the GC keeps a consumed record for a short window from here. */
+	consumedAt?: number;
+	/** Steering messages queued before the session was ready. */
+	pendingSteers?: string[];
+	/**
+	 * The Plan restriction its runs are under (#437): set at spawn, re-decided at
+	 * each resume, read by the child's tool hooks on every call.
+	 */
+	planGate?: PlanGate;
+	/** Asks the parent's pi-plan-mode again, for a resume. */
+	planQuery?: () => PlanToolPolicy | undefined;
+	/** Worktree info if the agent is running in an isolated worktree. */
+	worktree?: { path: string; branch: string; baseSha: string; repoRoot: string; workPath: string };
+	/** Worktree cleanup result after agent completion. */
+	worktreeResult?: { hasChanges: boolean; branch?: string; path?: string; error?: string };
+	/** The tool_use_id from the original Agent tool call. */
+	toolCallId?: string;
+	/** Path to the streaming output transcript file. */
+	outputFile?: string;
+	/**
+	 * The agent's pi session file, when it was persisted (`persist_session`, or
+	 * the `rememberAgents` default). Captured so a mention can reopen the
+	 * conversation after the record itself has been evicted; undefined for an
+	 * in-memory session, which leaves nothing to reopen.
+	 */
+	sessionFile?: string;
+	/** Cleanup function for the output file stream subscription. */
+	outputCleanup?: () => void;
+	/**
+	 * Lifetime usage breakdown, accumulated via `message_end` events. Survives
+	 * compaction. Total = input + output + cacheWrite (cacheRead deliberately
+	 * excluded — see issue #38). Initialized to zeros at spawn.
+	 */
+	lifetimeUsage: LifetimeUsage;
+	/** Number of times this agent's session has compacted. Initialized to 0 at spawn. */
+	compactionCount: number;
+	/**
+	 * Whether this agent runs in the background. Tri-state, initialized at spawn
+	 * from `SpawnOptions.isBackground` and flipped `false` → `true` (once, never
+	 * back) by `sendToBackground`: `true` = background, `false` =
+	 * foreground (has an inline Agent tool-result surface), `undefined` = the
+	 * caller never declared it (e.g. a cross-extension RPC spawn, which is detached
+	 * and has no inline surface). The widget's background-only filter keys off this
+	 * — and excludes only explicit `false`, so `undefined` agents stay visible.
+	 * Reliable across ALL spawn paths, unlike the UI-only `invocation` snapshot,
+	 * which only the Agent-tool path populates.
+	 */
+	isBackground?: boolean;
+	/** Resolved spawn params, captured for UI display. Fixed at spawn time. */
+	invocation?: AgentInvocation;
+	/**
+	 * The thinking level the caller asked for, snapshotted when the session was
+	 * created (before `invocation.thinking` takes the session level). `undefined`
+	 * means no ask. Never cleared: each response re-derives `requestedThinking`
+	 * from it.
+	 */
+	askedThinking?: EffectiveThinkingLevel;
+	/**
+	 * Set when a configured model did not resolve and the agent runs on the parent
+	 * model. The single source for every disclosure surface; a resume reuses it
+	 * as is, never recomputes it from the resuming call's config.
+	 */
+	modelFallback?: ModelFallback;
+	/**
+	 * This record's selection, retained across live resumes and physical relabelling.
+	 * An evicted-session reopen selects anew; current fallback disclosure always
+	 * comes from that selection.
+	 */
+	modelSelection?: ModelSelection;
+	/** Actual run's tier provenance, preserved through eviction and replay. */
+	modelTier?: TierDisclosure;
+	/** Prior evicted run's outcome, never the continuation's selection or disclosure. */
+	previousModelTier?: TierDisclosure;
+	/** Prior evicted run's fallback, retained separately from the continuation's current disclosure. */
+	previousModelFallback?: ModelFallback;
+	/**
+	 * The evicted id this record reopened (#330), announced as `previousId` on its
+	 * lifecycle events so a listener keyed by the old id follows the conversation.
+	 */
+	previousId?: string;
+	/**
+	 * Order of this record's spawn among the manager's spawns and settles, set once at
+	 * creation (before any queueing) and announced as `spawnSeq` on lifecycle events.
+	 */
+	spawnSeq?: number;
+	/** Order of this record's latest settle on the same counter, announced as `settleSeq`. */
+	settleSeq?: number;
+	/** Nesting depth: top-level subagent = 1. */
+	depth: number;
+	/**
+	 * The validated `StructuredOutput` payload, as canonical JSON.
+	 *
+	 * Set only when the spawn asked for a schema. Separate from `result` because
+	 * `result` is prose for a reader — previewed in the widget, written to the
+	 * transcript, and appended to with the worktree branch note — and JSON that
+	 * has been appended to no longer parses.
+	 */
+	structuredJson?: string;
+	/** Whether the child needed the extra structured-output prompt. */
+	structuredRetried?: boolean;
+	/** Parent agent ID for ownership-scoped nested controls. */
+	parentAgentId?: string;
+	/**
+	 * The workflow run that owns this child, when a workflow spawned it.
+	 *
+	 * Owned the same way a nested child is owned by its parent: filtered out of
+	 * every top-level surface, and outside the `maxConcurrent` pool. See
+	 * `isTopLevelAgent`.
+	 */
+	workflowId?: string;
+	/** Effective inherited nesting cap for this branch. */
+	maxSubagentDepth?: number;
+	/**
+	 * Session id of the root (main) session this branch descends from. Nested
+	 * spawns inherit it so their transcripts file under the same session
+	 * directory as their ancestors' instead of the child session's own id.
+	 */
+	rootSessionId?: string;
 }
 
 /**
@@ -381,61 +386,63 @@ export interface AgentRecord {
 export type EffectiveThinkingLevel = ThinkingLevel | "off";
 
 export interface AgentInvocation {
-  /** Short display name for tight rows, e.g. "haiku 4.5". Always set once known. */
-  modelName?: string;
-  /** Canonical `provider/id`, for surfaces with room to disambiguate providers. */
-  modelId?: string;
-  /** The level actually in effect, once a session exists to report one. */
-  thinking?: EffectiveThinkingLevel;
-  /**
-   * What the caller asked for, kept only when they did not get it — pi clamped
-   * the level to the model's capabilities, or an agent file's frontmatter
-   * outranked the parameter (#182). The snapshot exists to answer "did the spawn
-   * honor my instructions?" (#62), which it cannot do if the request is lost, so
-   * neither `requested*` field is overwritten once set.
-   */
-  requestedThinking?: EffectiveThinkingLevel;
-  maxTurns?: number;
-  isolated?: boolean;
-  inheritContext?: boolean;
-  runInBackground?: boolean;
-  isolation?: IsolationMode;
-  /** The run is under Plan mode's policy because its parent was planning (#437). */
-  planMode?: boolean;
+	/** Short display name for tight rows, e.g. "haiku 4.5". Always set once known. */
+	modelName?: string;
+	/** Canonical `provider/id`, for surfaces with room to disambiguate providers. */
+	modelId?: string;
+	/** The level actually in effect, once a session exists to report one. */
+	thinking?: EffectiveThinkingLevel;
+	/**
+	 * What the caller asked for, set only while the latest response (or the
+	 * session, before one lands) differs from it — pi clamped the level to the
+	 * model's capabilities, or an agent file's frontmatter outranked the
+	 * parameter (#182). It answers "did the spawn honor my instructions?" (#62).
+	 * On a router-backed agent it follows the latest response: a later turn that
+	 * runs at the asked level clears it, and a later clamp sets it again. Absent
+	 * when nothing was asked.
+	 */
+	requestedThinking?: EffectiveThinkingLevel;
+	maxTurns?: number;
+	isolated?: boolean;
+	inheritContext?: boolean;
+	runInBackground?: boolean;
+	isolation?: IsolationMode;
+	/** The run is under Plan mode's policy because its parent was planning (#437). */
+	planMode?: boolean;
 }
 
 /** Details attached to custom notification messages for visual rendering. */
 export interface NotificationDetails {
-  id: string;
-  description: string;
-  status: string;
-  toolUses: number;
-  turnCount: number;
-  maxTurns?: number;
-  totalTokens: number;
-  /**
-   * Estimated cost in USD, from pi's per-message `usage.cost.total`. Always
-   * populated (0 when the model has no pricing); the renderer decides whether
-   * to show it, per the `showCost` setting.
-   */
-  totalCost?: number;
-  durationMs: number;
-  outputFile?: string;
-  error?: string;
-  /** Set for a failed agent whose transcript survived: `resume agent <id> to continue` (status-note.ts `resumeHint`). */
-  resumeHint?: string;
-  /** The `Note:` line when the agent ran on the parent model because its configured one did not resolve. */
-  modelNote?: string;
-  modelTier?: TierDisclosure;
-  resultPreview: string;
-  /** Additional agents in a group notification. */
-  others?: NotificationDetails[];
+	id: string;
+	description: string;
+	status: string;
+	toolUses: number;
+	turnCount: number;
+	maxTurns?: number;
+	totalTokens: number;
+	/**
+	 * Estimated cost in USD, from pi's per-message `usage.cost.total`. Always
+	 * populated (0 when the model has no pricing); the renderer decides whether
+	 * to show it, per the `showCost` setting.
+	 */
+	totalCost?: number;
+	durationMs: number;
+	outputFile?: string;
+	error?: string;
+	/** Set for a failed agent whose transcript survived: `resume agent <id> to continue` (status-note.ts `resumeHint`). */
+	resumeHint?: string;
+	/** The `Note:` line when the agent ran on the parent model because its configured one did not resolve. */
+	modelNote?: string;
+	modelTier?: TierDisclosure;
+	resultPreview: string;
+	/** Additional agents in a group notification. */
+	others?: NotificationDetails[];
 }
 
 export interface EnvInfo {
-  isGitRepo: boolean;
-  branch: string;
-  platform: string;
+	isGitRepo: boolean;
+	branch: string;
+	platform: string;
 }
 
 /**
@@ -444,44 +451,65 @@ export interface EnvInfo {
  * Stored at `<cwd>/.pi/subagent-schedules/<sessionId>.json`. Session-scoped:
  * survives `/resume` but resets on `/new`, mirroring pi-chonky-tasks.
  */
+/** Cross-process claim on a scheduled job's live run(s). */
+export interface RunOwner {
+	pid: number;
+	/** Epoch ms; the owner renews it while running, so a crashed owner's claim lapses. */
+	leaseUntil: number;
+}
+
 export interface ScheduledSubagent {
-  id: string;
-  /** Unique within store. Defaults to `description`. */
-  name: string;
-  description: string;
-  /** Raw user input — cron expr | "+10m" | ISO | "5m". */
-  schedule: string;
-  scheduleType: "cron" | "once" | "interval";
-  /** Computed at create time for interval/once. */
-  intervalMs?: number;
+	id: string;
+	/** Unique within store. Defaults to `description`. */
+	name: string;
+	description: string;
+	/** Raw user input — cron expr | "+10m" | ISO | "5m". */
+	schedule: string;
+	scheduleType: "cron" | "once" | "interval";
+	/** Computed at create time for interval/once. */
+	intervalMs?: number;
+	/** ISO deadline for a repeating job: no fire at or after it. */
+	until?: string;
 
-  // spawn params (subset of Agent tool params; no inherit_context, no resume)
-  subagent_type: SubagentType;
-  prompt: string;
-  model?: string;
-  thinking?: ThinkingLevel;
-  max_turns?: number;
-  isolated?: boolean;
-  isolation?: IsolationMode;
+	// spawn params (subset of Agent tool params; no inherit_context, no resume)
+	subagent_type: SubagentType;
+	prompt: string;
+	model?: string;
+	thinking?: ThinkingLevel;
+	max_turns?: number;
+	isolated?: boolean;
+	isolation?: IsolationMode;
 
-  // state
-  enabled: boolean;
-  /** ISO timestamp. */
-  createdAt: string;
-  lastRun?: string;
-  lastStatus?: "success" | "error" | "running";
-  /**
-   * Parked by quota admission: re-check admission at fire time and re-park at
-   * the new reset while the model is still blocked. See `quota-admission.ts`.
-   */
-  quotaParked?: boolean;
-  /** Refreshed on every fire and on store load. */
-  nextRun?: string;
-  runCount: number;
+	// state
+	enabled: boolean;
+	/** ISO timestamp. */
+	createdAt: string;
+	lastRun?: string;
+	lastStatus?: "success" | "error" | "running";
+	/**
+	 * The process owning the live run(s), claimed under the store lock when a fire
+	 * starts and cleared when the last one settles. Live while `pid` is alive and
+	 * `leaseUntil` (epoch ms, renewed by the owner) is in the future.
+	 */
+	runOwner?: RunOwner;
+	/**
+	 * Epoch ms of the last claimed fire slot: `createdAt + k * intervalMs` for an
+	 * interval, the cron tick, or the one-shot target. A claim must be for a later slot,
+	 * so processes sharing the session fire each slot once. Cleared when `schedule` changes.
+	 */
+	lastSlot?: number;
+	/**
+	 * Parked by quota admission: re-check admission at fire time and re-park at
+	 * the new reset while the model is still blocked. See `quota-admission.ts`.
+	 */
+	quotaParked?: boolean;
+	/** Refreshed on every fire and on store load. */
+	nextRun?: string;
+	runCount: number;
 }
 
 export interface ScheduleStoreData {
-  /** For future migrations. */
-  version: 1;
-  jobs: ScheduledSubagent[];
+	/** For future migrations. */
+	version: 1;
+	jobs: ScheduledSubagent[];
 }

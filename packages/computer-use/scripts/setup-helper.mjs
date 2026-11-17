@@ -39,7 +39,11 @@ export const PS_TIMEOUT_MS = 250;
  * @throws {Error} When `ps` cannot run, is killed, or exceeds `PS_TIMEOUT_MS`.
  */
 export function listGroupStates(pgid) {
-	const table = execFileSync("/bin/ps", ["-axo", "pgid=,stat="], { encoding: "utf8", timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" });
+	const table = execFileSync("/bin/ps", ["-axo", "pgid=,stat="], {
+		encoding: "utf8",
+		timeout: PS_TIMEOUT_MS,
+		killSignal: "SIGKILL",
+	});
 	return table.split("\n").flatMap((line) => {
 		const [group, state] = line.trim().split(/\s+/);
 		return Number(group) === pgid ? [state] : [];
@@ -168,12 +172,18 @@ export async function reapProcessGroup(pgid, kill = process.kill.bind(process), 
 	const budgetEnd = Date.now() + GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
 	/** @type {OwnedGroup} */
 	const owned = { seen: false };
-	try { owned.seen = listStates(pgid).length > 0; } catch { /* unknown membership stays strict */ }
+	try {
+		owned.seen = listStates(pgid).length > 0;
+	} catch {
+		/* unknown membership stays strict */
+	}
 	const signalGroup = (signal) => {
 		// An unexplained EPERM revokes signalling until a listing explains it; the probes keep watching.
 		if (owned.pending) return true;
-		try { kill(-pgid, signal); return true; }
-		catch (error) {
+		try {
+			kill(-pgid, signal);
+			return true;
+		} catch (error) {
 			if (error?.code === "ESRCH") return false;
 			if (error?.code !== "EPERM") throw error;
 			// Nothing signalable is left in a draining group; the probes below wait for it to drain.
@@ -206,22 +216,30 @@ export async function reapProcessGroup(pgid, kill = process.kill.bind(process), 
  * when this script is terminated (the Pi session's setup deadline sends SIGTERM). Inconclusive cleanup
  * rejects rather than claiming no compiler survived; credential boundaries revoke further signalling.
  */
-export async function runCancellable(command, commandArgs, { kill = process.kill.bind(process), listStates = listGroupStates, spawnChild = spawn } = {}) {
+export async function runCancellable(
+	command,
+	commandArgs,
+	{ kill = process.kill.bind(process), listStates = listGroupStates, spawnChild = spawn } = {},
+) {
 	await new Promise((resolve, reject) => {
 		const child = spawnChild(command, commandArgs, { stdio: "inherit", detached: true });
 		let reaping;
 		let reaped = false;
 		let maySignal = isOwnableGroup(child.pid);
 		const ownedKill = (pid, signal) => {
-			try { return kill(pid, signal); }
-			catch (error) {
+			try {
+				return kill(pid, signal);
+			} catch (error) {
 				// ESRCH releases the ID; every other syscall failure makes ownership inconclusive.
 				// Neither permits an exit-time retry against a possibly foreign/recycled group.
 				maySignal = false;
 				throw error;
 			}
 		};
-		const reap = () => (reaping ??= reapProcessGroup(child.pid, ownedKill, listStates).then(() => { reaped = true; }));
+		const reap = () =>
+			(reaping ??= reapProcessGroup(child.pid, ownedKill, listStates).then(() => {
+				reaped = true;
+			}));
 		const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
 		// Last resort if we are exiting some other way: never leave the group running.
 		// Once reaped the group is empty and its id may be reused, so it must never be signalled again.
@@ -231,8 +249,11 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 				// Only a listing-explained or signalable group gets the exit KILL; an unexplained EPERM gets none.
 				/** @type {OwnedGroup} */
 				const owned = { seen: false };
-				if (processGroupAlive(child.pid, ownedKill, listStates, owned) && !owned.pending) ownedKill(-child.pid, "SIGKILL");
-			} catch { /* already reported by bounded cleanup, or exit-time ownership is inconclusive */ }
+				if (processGroupAlive(child.pid, ownedKill, listStates, owned) && !owned.pending)
+					ownedKill(-child.pid, "SIGKILL");
+			} catch {
+				/* already reported by bounded cleanup, or exit-time ownership is inconclusive */
+			}
 		};
 		const onTerminate = (signal) => {
 			// Repeated signals while reaping must not fall through to the default action.
@@ -250,16 +271,19 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 		};
 		child.on("error", (error) => {
 			cleanup();
-			reject(error.code === "ENOENT"
-				? new Error(`'${command}' was not found on PATH. Install the Rust toolchain (https://rustup.rs) and a C linker (e.g. build-essential).`)
-				: error);
+			reject(
+				error.code === "ENOENT"
+					? new Error(
+							`'${command}' was not found on PATH. Install the Rust toolchain (https://rustup.rs) and a C linker (e.g. build-essential).`,
+						)
+					: error,
+			);
 		});
 		child.on("close", (code, signal) => {
 			// A failed spawn has no group and its error handler already rejected; `reapProcessGroup` refuses any
 			// ID that is not ownable before a listing or syscall, so this reap only settles the rejection.
-			const commandError = code === 0
-				? undefined
-				: new Error(`Command failed (${code ?? signal}): ${command} ${commandArgs.join(" ")}`);
+			const commandError =
+				code === 0 ? undefined : new Error(`Command failed (${code ?? signal}): ${command} ${commandArgs.join(" ")}`);
 			reap().then(
 				() => {
 					cleanup();
@@ -269,9 +293,14 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 				(cleanupError) => {
 					// Retain the backstop only while probes remain positive and permission is known.
 					cleanup({ preserveExitFallback: maySignal });
-					reject(commandError
-						? new AggregateError([commandError, cleanupError], `${commandError.message}; process-group cleanup also failed.`)
-						: cleanupError);
+					reject(
+						commandError
+							? new AggregateError(
+									[commandError, cleanupError],
+									`${commandError.message}; process-group cleanup also failed.`,
+								)
+							: cleanupError,
+					);
 				},
 			);
 		});
@@ -279,7 +308,8 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 }
 
 export function parseCodeSigningIdentities(output, commonName = localCodeSignCommonName) {
-	return output.split("\n")
+	return output
+		.split("\n")
 		.map((line) => line.match(/^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"/i))
 		.filter((match) => match?.[2] === commonName)
 		.map((match) => match[1].toUpperCase());
@@ -314,9 +344,8 @@ export async function withDirectoryLock(lockPath, callback, { waitMs = 15_000, s
 }
 
 export async function ensureIdentityOnce(findIdentity, createIdentity, withLock) {
-	return (await findIdentity()) ?? await withLock(async () => (await findIdentity()) ?? await createIdentity());
+	return (await findIdentity()) ?? (await withLock(async () => (await findIdentity()) ?? (await createIdentity())));
 }
-
 
 /**
  * Everything `main` reads from the host. Production wiring is `defaultDeps`; tests inject fakes.
@@ -349,24 +378,56 @@ export async function ensureIdentityOnce(findIdentity, createIdentity, withLock)
  * @throws {Error} When `resolveMacosHelperAppPath` cannot probe the filesystem.
  */
 function createSetup(argv, deps) {
-	const { platform, hostArch, env, pid, uid, rootDir, fs, os, spawn, execFile, runCancellable, fetch, createWriteStream, pipeline, now, sleep, console } = deps;
+	const {
+		platform,
+		hostArch,
+		env,
+		pid,
+		uid,
+		rootDir,
+		fs,
+		os,
+		spawn,
+		execFile,
+		runCancellable,
+		fetch,
+		createWriteStream,
+		pipeline,
+		now,
+		sleep,
+		console,
+	} = deps;
 	const helperAppPath = resolveMacosHelperAppPath({ env, homeDir: os.homedir() });
 	const helperAppExecutablePath = path.join(helperAppPath, "Contents", "MacOS", "bridge");
 	const helperSourceHashPath = path.join(helperAppPath, "Contents", "Resources", "source.sha256");
 	const windowsCrateDir = path.join(rootDir, "native", "windows", "bridge-rs");
-	const windowsHelperDestPath = env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH || path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe");
+	const windowsHelperDestPath =
+		env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH ||
+		path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe");
 	const linuxCrateDir = path.join(rootDir, "native", "linux", "bridge-rs");
-	const linuxHelperDestPath = env.PI_COMPUTER_USE_LINUX_HELPER_PATH || path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
+	const linuxHelperDestPath =
+		env.PI_COMPUTER_USE_LINUX_HELPER_PATH ||
+		path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
 	// The packed crate lives in the (often root-owned, read-only) npm install, so cargo builds into the user's cache.
-	const linuxBuildTargetDir = path.join(env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "pi-computer-use", "linux-bridge-target");
-	const helperSourcePaths = ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]
-		.map((file) => path.join(rootDir, "native", "macos", file));
+	const linuxBuildTargetDir = path.join(
+		env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"),
+		"pi-computer-use",
+		"linux-bridge-target",
+	);
+	const helperSourcePaths = [
+		"activity_glow.swift",
+		"agent_cursor.swift",
+		"agent_cursor_motion.swift",
+		"bridge.swift",
+		"helper_entry.swift",
+	].map((file) => path.join(rootDir, "native", "macos", file));
 	const packageJsonPath = path.join(rootDir, "package.json");
 	const localSigningLockPath = path.join(os.tmpdir(), `pi-computer-use-local-signing-${uid ?? "user"}.lock`);
 
 	const args = new Set(argv);
 	const isPostinstall = args.has("--postinstall");
-	const allowBuildFallback = args.has("--allow-build") || args.has("--runtime") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
+	const allowBuildFallback =
+		args.has("--allow-build") || args.has("--runtime") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
 	const allowLinuxBuildFallback = args.has("--allow-build") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
 	const allowAdhocUpdate = args.has("--allow-adhoc-update") || env.PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE === "1";
 
@@ -434,7 +495,9 @@ function createSetup(argv, deps) {
 		} catch (err) {
 			await fs.rm(tempPath, { force: true }).catch(() => {});
 			if (err.code === "EPERM") {
-				throw new Error(`Cannot update helper at ${destinationPath} — the existing helper process is still running. Close the helper process and re-run this script.`);
+				throw new Error(
+					`Cannot update helper at ${destinationPath} — the existing helper process is still running. Close the helper process and re-run this script.`,
+				);
 			}
 			throw err;
 		}
@@ -472,7 +535,9 @@ function createSetup(argv, deps) {
 	}
 
 	async function releaseChecksums(tag) {
-		const response = await fetch(githubReleaseUrl(tag, "SHA256SUMS"), { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+		const response = await fetch(githubReleaseUrl(tag, "SHA256SUMS"), {
+			signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		});
 		if (!response.ok) return new Map();
 		const text = await response.text();
 		const checksums = new Map();
@@ -522,7 +587,9 @@ function createSetup(argv, deps) {
 			return { appPath, tempDir, assetName: releaseAssetName, tag };
 		} catch (error) {
 			await fs.rm(tempDir, { force: true, recursive: true }).catch(() => {});
-			throw new Error(`No signed helper release asset found for ${tag}: ${error instanceof Error ? error.message : String(error)}`);
+			throw new Error(
+				`No signed helper release asset found for ${tag}: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 
@@ -558,7 +625,9 @@ function createSetup(argv, deps) {
 		const keychain = await loginKeychainPath();
 		if (!keychain) return undefined;
 
-		return await ensureIdentityOnce(findLocalSigningIdentity, createLocalSigningIdentity, (callback) => withDirectoryLock(localSigningLockPath, callback));
+		return await ensureIdentityOnce(findLocalSigningIdentity, createLocalSigningIdentity, (callback) =>
+			withDirectoryLock(localSigningLockPath, callback),
+		);
 	}
 
 	async function createLocalSigningIdentity() {
@@ -569,33 +638,78 @@ function createSetup(argv, deps) {
 		const password = `pi-computer-use-local-${pid}-${now()}`;
 		try {
 			const configPath = path.join(tempDir, "req.cnf");
-			await fs.writeFile(configPath, [
-				"[req]",
-				"distinguished_name=dn",
-				"x509_extensions=ext",
-				"prompt=no",
-				"[dn]",
-				`CN=${localCodeSignCommonName}`,
-				"[ext]",
-				"basicConstraints=critical,CA:FALSE",
-				"keyUsage=critical,digitalSignature",
-				"extendedKeyUsage=critical,codeSigning",
-				"",
-			].join("\n"));
+			await fs.writeFile(
+				configPath,
+				[
+					"[req]",
+					"distinguished_name=dn",
+					"x509_extensions=ext",
+					"prompt=no",
+					"[dn]",
+					`CN=${localCodeSignCommonName}`,
+					"[ext]",
+					"basicConstraints=critical,CA:FALSE",
+					"keyUsage=critical,digitalSignature",
+					"extendedKeyUsage=critical,codeSigning",
+					"",
+				].join("\n"),
+			);
 			const keyPath = path.join(tempDir, "key.pem");
 			const certPath = path.join(tempDir, "cert.pem");
 			const p12Path = path.join(tempDir, "id.p12");
-			await execFile("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-keyout", keyPath, "-out", certPath, "-days", "3650", "-nodes", "-config", configPath]);
-			await execFile("openssl", ["pkcs12", "-export", "-legacy", "-inkey", keyPath, "-in", certPath, "-out", p12Path, "-passout", `pass:${password}`, "-name", localCodeSignCommonName])
-				.catch(async () => {
-					await execFile("openssl", ["pkcs12", "-export", "-inkey", keyPath, "-in", certPath, "-out", p12Path, "-passout", `pass:${password}`, "-name", localCodeSignCommonName]);
-				});
+			await execFile("openssl", [
+				"req",
+				"-x509",
+				"-newkey",
+				"rsa:2048",
+				"-keyout",
+				keyPath,
+				"-out",
+				certPath,
+				"-days",
+				"3650",
+				"-nodes",
+				"-config",
+				configPath,
+			]);
+			await execFile("openssl", [
+				"pkcs12",
+				"-export",
+				"-legacy",
+				"-inkey",
+				keyPath,
+				"-in",
+				certPath,
+				"-out",
+				p12Path,
+				"-passout",
+				`pass:${password}`,
+				"-name",
+				localCodeSignCommonName,
+			]).catch(async () => {
+				await execFile("openssl", [
+					"pkcs12",
+					"-export",
+					"-inkey",
+					keyPath,
+					"-in",
+					certPath,
+					"-out",
+					p12Path,
+					"-passout",
+					`pass:${password}`,
+					"-name",
+					localCodeSignCommonName,
+				]);
+			});
 			await execFile("security", ["import", p12Path, "-k", keychain, "-P", password, "-A", "-T", "/usr/bin/codesign"]);
 			const identity = await findLocalSigningIdentity();
 			if (!identity) throw new Error("Imported local signing certificate is not a valid code-signing identity.");
 			return identity;
 		} catch (error) {
-			console.warn(`[pi-computer-use] could not create a valid local signing identity: ${error instanceof Error ? error.message : String(error)}`);
+			console.warn(
+				`[pi-computer-use] could not create a valid local signing identity: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			return undefined;
 		} finally {
 			await fs.rm(tempDir, { force: true, recursive: true }).catch(() => {});
@@ -616,9 +730,13 @@ function createSetup(argv, deps) {
 		const commandArgs = ["--force", "--deep", "-i", identifier, "--timestamp=none", "--sign", identity, outputPath];
 		await run("codesign", commandArgs);
 		if (identity === "-") {
-			console.warn("[pi-computer-use] warning: signed helper ad-hoc; macOS may require permission review after native helper changes. Release installs should use a Developer ID-signed helper app.");
-		} else if (identity === await findLocalSigningIdentity()) {
-			console.log(`[pi-computer-use] signed ${outputPath} with local identity '${localCodeSignCommonName}'. macOS may still require permission review after local rebuilds.`);
+			console.warn(
+				"[pi-computer-use] warning: signed helper ad-hoc; macOS may require permission review after native helper changes. Release installs should use a Developer ID-signed helper app.",
+			);
+		} else if (identity === (await findLocalSigningIdentity())) {
+			console.log(
+				`[pi-computer-use] signed ${outputPath} with local identity '${localCodeSignCommonName}'. macOS may still require permission review after local rebuilds.`,
+			);
 		}
 		return identity;
 	}
@@ -632,7 +750,8 @@ function createSetup(argv, deps) {
 	}
 
 	async function registerHelperApp() {
-		const lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+		const lsregister =
+			"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 		if (!(await exists(lsregister))) return;
 		await run(lsregister, ["-f", helperAppPath]).catch(() => {});
 	}
@@ -649,7 +768,10 @@ function createSetup(argv, deps) {
 		const pattern = `${helperAppExecutablePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
 		await execFile("pkill", ["-f", pattern]).catch(() => {});
 		for (let attempt = 0; attempt < 20; attempt += 1) {
-			const alive = await execFile("pgrep", ["-f", pattern]).then(() => true, () => false);
+			const alive = await execFile("pgrep", ["-f", pattern]).then(
+				() => true,
+				() => false,
+			);
 			if (!alive) return;
 			await sleep(100);
 		}
@@ -661,7 +783,9 @@ function createSetup(argv, deps) {
 		const sourceInfoPath = path.join(sourceAppPath, "Contents", "Info.plist");
 		const existingExecutable = await fs.readFile(helperAppExecutablePath).catch(() => undefined);
 		const sourceExecutable = await fs.readFile(sourceExecutablePath);
-		const existingInfo = await fs.readFile(path.join(helperAppPath, "Contents", "Info.plist"), "utf8").catch(() => undefined);
+		const existingInfo = await fs
+			.readFile(path.join(helperAppPath, "Contents", "Info.plist"), "utf8")
+			.catch(() => undefined);
 		const sourceInfo = await fs.readFile(sourceInfoPath, "utf8");
 		if (existingExecutable?.equals(sourceExecutable) && existingInfo === sourceInfo) {
 			await registerHelperApp();
@@ -708,7 +832,7 @@ function createSetup(argv, deps) {
 			// in place so local builds have a consistent identity. macOS may still
 			// require permission review after native code changes.
 			const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
-			if (signingIdentity !== "-" && await helperHasAdhocSignature()) {
+			if (signingIdentity !== "-" && (await helperHasAdhocSignature())) {
 				await signHelper(helperAppPath, helperBundleId);
 				await registerHelperApp();
 				return true;
@@ -719,7 +843,9 @@ function createSetup(argv, deps) {
 
 		const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 		if (signingIdentity === "-" && existingSourceHash !== undefined && !allowAdhocUpdate) {
-			throw new Error("Refusing to replace an installed helper with an ad-hoc signed rebuild because macOS may reset Accessibility/Screen Recording grants. Use a pre-signed helper app, install a Developer ID identity, or set PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 for local development.");
+			throw new Error(
+				"Refusing to replace an installed helper with an ad-hoc signed rebuild because macOS may reset Accessibility/Screen Recording grants. Use a pre-signed helper app, install a Developer ID identity, or set PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 for local development.",
+			);
 		}
 
 		await fs.mkdir(path.dirname(helperAppExecutablePath), { recursive: true });
@@ -775,9 +901,11 @@ function createSetup(argv, deps) {
 		const prebuiltPath = path.join(rootDir, "prebuilt", "windows", "windows-bridge.exe");
 		if (await exists(prebuiltPath)) {
 			const { changed } = await copyIfChanged(prebuiltPath, windowsHelperDestPath);
-			console.log(changed
-				? `[pi-computer-use] installed Windows helper from prebuilt to ${windowsHelperDestPath}`
-				: `[pi-computer-use] Windows helper already up to date at ${windowsHelperDestPath}`);
+			console.log(
+				changed
+					? `[pi-computer-use] installed Windows helper from prebuilt to ${windowsHelperDestPath}`
+					: `[pi-computer-use] Windows helper already up to date at ${windowsHelperDestPath}`,
+			);
 			return;
 		}
 
@@ -787,9 +915,11 @@ function createSetup(argv, deps) {
 			const { exePath, binPath } = windowsBinaryPath();
 			const cargoOutput = (await exists(exePath)) ? exePath : (await exists(binPath)) ? binPath : exePath;
 			const { changed } = await copyIfChanged(cargoOutput, windowsHelperDestPath);
-			console.log(changed
-				? `[pi-computer-use] built and installed Windows helper at ${windowsHelperDestPath}`
-				: `[pi-computer-use] Windows helper already up to date at ${windowsHelperDestPath}`);
+			console.log(
+				changed
+					? `[pi-computer-use] built and installed Windows helper at ${windowsHelperDestPath}`
+					: `[pi-computer-use] Windows helper already up to date at ${windowsHelperDestPath}`,
+			);
 			return;
 		}
 
@@ -804,20 +934,41 @@ function createSetup(argv, deps) {
 		const prebuiltPath = path.join(rootDir, "prebuilt", "linux", arch, "linux-bridge");
 		if (await exists(prebuiltPath)) {
 			const { changed } = await copyIfChanged(prebuiltPath, linuxHelperDestPath);
-			console.log(changed ? `[pi-computer-use] installed Linux helper (${arch}) from prebuilt to ${linuxHelperDestPath}` : `[pi-computer-use] Linux helper already up to date at ${linuxHelperDestPath}`);
+			console.log(
+				changed
+					? `[pi-computer-use] installed Linux helper (${arch}) from prebuilt to ${linuxHelperDestPath}`
+					: `[pi-computer-use] Linux helper already up to date at ${linuxHelperDestPath}`,
+			);
 			return;
 		}
 		if (allowLinuxBuildFallback) {
 			if (platform !== "linux") throw new Error("The Linux helper source fallback must be built on Linux.");
-			if (!(await exists(path.join(linuxCrateDir, "Cargo.toml")))) throw new Error(`Linux helper source not found at ${linuxCrateDir}; reinstall @nredd/pi-computer-use.`);
-			console.log(`[pi-computer-use] Linux prebuilt helper missing; building from source with cargo (target dir ${linuxBuildTargetDir})...`);
-			await runCancellable("cargo", ["build", "--locked", "--release", "--manifest-path", path.join(linuxCrateDir, "Cargo.toml"), "--target-dir", linuxBuildTargetDir]);
+			if (!(await exists(path.join(linuxCrateDir, "Cargo.toml"))))
+				throw new Error(`Linux helper source not found at ${linuxCrateDir}; reinstall @nredd/pi-computer-use.`);
+			console.log(
+				`[pi-computer-use] Linux prebuilt helper missing; building from source with cargo (target dir ${linuxBuildTargetDir})...`,
+			);
+			await runCancellable("cargo", [
+				"build",
+				"--locked",
+				"--release",
+				"--manifest-path",
+				path.join(linuxCrateDir, "Cargo.toml"),
+				"--target-dir",
+				linuxBuildTargetDir,
+			]);
 			const cargoOutput = path.join(linuxBuildTargetDir, "release", "linux-bridge");
 			const { changed } = await copyIfChanged(cargoOutput, linuxHelperDestPath);
-			console.log(changed ? `[pi-computer-use] built and installed Linux helper at ${linuxHelperDestPath}` : `[pi-computer-use] Linux helper already up to date at ${linuxHelperDestPath}`);
+			console.log(
+				changed
+					? `[pi-computer-use] built and installed Linux helper at ${linuxHelperDestPath}`
+					: `[pi-computer-use] Linux helper already up to date at ${linuxHelperDestPath}`,
+			);
 			return;
 		}
-		throw new Error(`No Linux prebuilt helper found for ${arch} at ${prebuiltPath}. Run node scripts/build-native.mjs --platform linux to build, or set PI_COMPUTER_USE_ALLOW_BUILD=1 to build at install time.`);
+		throw new Error(
+			`No Linux prebuilt helper found for ${arch} at ${prebuiltPath}. Run node scripts/build-native.mjs --platform linux to build, or set PI_COMPUTER_USE_ALLOW_BUILD=1 to build at install time.`,
+		);
 	}
 
 	async function setup() {
@@ -836,7 +987,9 @@ function createSetup(argv, deps) {
 				console.warn("[pi-computer-use] skipping helper setup: platform is not macOS.");
 				return;
 			}
-			throw new Error("pi-computer-use helper is supported on macOS, Windows, and Linux. Use the matching --platform option.");
+			throw new Error(
+				"pi-computer-use helper is supported on macOS, Windows, and Linux. Use the matching --platform option.",
+			);
 		}
 
 		const arch = normalizeArch(hostArch);
@@ -844,9 +997,7 @@ function createSetup(argv, deps) {
 		// arches, produced by .github/workflows/release.yml) over
 		// per-arch bundles, over loose binaries (dev fallback).
 		const universalAppPath = prebuiltAppPathForArch("universal");
-		const prebuiltAppPath = (await exists(universalAppPath))
-			? universalAppPath
-			: prebuiltAppPathForArch(arch);
+		const prebuiltAppPath = (await exists(universalAppPath)) ? universalAppPath : prebuiltAppPathForArch(arch);
 		const prebuiltPath = prebuiltPathForArch(arch);
 		const prebuiltAppExists = await exists(prebuiltAppPath);
 		const prebuiltExists = await exists(prebuiltPath);
@@ -885,7 +1036,9 @@ function createSetup(argv, deps) {
 			}
 			return;
 		} catch (error) {
-			console.warn(`[pi-computer-use] signed helper release download unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			console.warn(
+				`[pi-computer-use] signed helper release download unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 
 		if (allowBuildFallback) {

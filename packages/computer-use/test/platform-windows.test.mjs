@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { assertPlatformArchitecture, PLATFORM_ARCHITECTURE_VERSION, REQUIRED_PLATFORM_INVARIANTS } from "../src/platform/architecture.ts";
+import {
+	assertPlatformArchitecture,
+	PLATFORM_ARCHITECTURE_VERSION,
+	REQUIRED_PLATFORM_INVARIANTS,
+} from "../src/platform/architecture.ts";
 import { test } from "vitest";
 
 test("Windows backend and shared platform contract", async () => {

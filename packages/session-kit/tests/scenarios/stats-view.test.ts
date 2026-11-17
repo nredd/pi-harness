@@ -1,0 +1,318 @@
+import { join } from "node:path";
+import { WIDTHS } from "@nredd/pi-test-lib/terminal";
+import { expect, it } from "vitest";
+import type { QuotaObservation } from "../../src/stats/harness/common.ts";
+import { importStats } from "../../src/stats/snapshot.ts";
+import {
+	AXIS_COLUMN,
+	chart,
+	danglingPorts,
+	footer,
+	history,
+	hourly,
+	layout,
+	MODELS,
+	publishMachine,
+	seed,
+	selectFilter,
+	selectTotal,
+	start,
+} from "../fixtures/stats.ts";
+import { RESIZES, TerminalFixture } from "../fixtures/terminal.ts";
+
+/** Own teardown inside the test body: runner timeouts do not cancel an async callback. */
+function statsTest<Args extends unknown[]>(
+	body: (fixture: TerminalFixture, ...args: Args) => Promise<void>,
+): (...args: Args) => Promise<void> {
+	return async (...args) => {
+		const fixture = new TerminalFixture();
+		try {
+			await body(fixture, ...args);
+		} finally {
+			await fixture.dispose();
+		}
+	};
+}
+
+it.each(WIDTHS)(
+	"stats width matrix navigates and restores footer at %i",
+	statsTest(async (fixture, width: number) => {
+		seed(fixture);
+		await start(fixture, width);
+		await fixture.open("/stats");
+		let shown = layout(fixture);
+		expect(shown).toContain("Less ░ ▒ ▓ █ More");
+		expect(shown).toMatch(/Favorite model +anthropic\/claude-opus-5-5/);
+		for (const excluded of ["unreadable", "faux", "router"]) expect(shown).not.toContain(excluded);
+		await fixture.key("j".repeat(30));
+		chart(layout(fixture));
+		await fixture.key("\t");
+		shown = layout(fixture);
+		expect(shown).toContain("• anthropic ");
+		chart(shown);
+		expect(shown.includes("• openai-codex") || shown.includes("of 4 models"), shown).toBe(true);
+		expect(shown).toContain("by provider");
+		await fixture.key("r");
+		expect(layout(fixture)).toContain("Tokens per day");
+		await fixture.key("m");
+		shown = layout(fixture);
+		expect(shown).toMatch(/filter: anthropic\b/);
+		expect(shown).toContain("by model");
+		expect(shown).not.toContain("gpt-6.1-sol");
+		await fixture.key("M");
+		expect(layout(fixture)).toContain("filter: All models");
+		await fixture.close();
+		footer(fixture);
+	}),
+);
+
+it(
+	"stats tabs survive virtual resize",
+	statsTest(async (fixture) => {
+		seed(fixture);
+		await start(fixture);
+		await fixture.open("/stats");
+		for (const [width, height] of RESIZES) {
+			fixture.requireHost().resize(width, height);
+			await fixture.requireHost().settle();
+			layout(fixture);
+			await fixture.key("\t");
+			layout(fixture);
+		}
+		await fixture.close("\x1b");
+		footer(fixture);
+	}),
+);
+
+it(
+	"short viewport reaches final model without false hints",
+	statsTest(async (fixture) => {
+		seed(fixture);
+		await start(fixture, 80, 20);
+		await fixture.open("/stats");
+		await fixture.key("\t");
+		expect(layout(fixture)).toMatch(/models below|of 4 models/);
+		const seen = new Set<string>();
+		for (let i = 0; i < 60; i++) {
+			const shown = layout(fixture);
+			for (const match of shown.matchAll(/• (claude-[\w-]+|gpt-[\w.-]+) \(/g)) seen.add(match[1] ?? "");
+			expect(shown).not.toContain("Infinity");
+			await fixture.key("j");
+		}
+		expect([...seen].sort()).toEqual(MODELS.map(([, model]) => model).sort());
+		const shown = layout(fixture);
+		expect(shown).toContain("gpt-5.6-terra");
+		expect(shown.split("\n").at(-1)?.split("tab tabs")[0]).not.toContain("↓");
+		await fixture.close();
+		footer(fixture);
+	}),
+);
+
+it(
+	"fullscreen chart fills available rows with connected ports",
+	statsTest(async (fixture) => {
+		seed(fixture);
+		await start(fixture, 130, 38);
+		await fixture.open("/stats");
+		for (const tab of ["Overview", "Models"]) {
+			if (tab === "Models") {
+				await fixture.key("\t");
+				expect(layout(fixture)).toContain("• anthropic ");
+			}
+			const rows = fixture.requireHost().viewport();
+			const plot = rows.filter((row) => "┤│".includes(row[AXIS_COLUMN] ?? " "));
+			expect(plot.length, rows.join("\n")).toBeGreaterThanOrEqual(6);
+			expect(danglingPorts(plot.map((row) => row.slice(AXIS_COLUMN + 1))), tab).toEqual([]);
+			if (tab === "Overview") {
+				// Pricing/coverage and its detail-navigation hint consume five rows; fill the remaining tick steps.
+				expect(rows.join("\n")).toContain("Current-rate API-equivalent estimate");
+				expect(rows.join("\n")).toContain("Pricing coverage:");
+				expect(plot).toHaveLength(11);
+				const caption = rows.findIndex((row) => row.includes("total: peak"));
+				expect(caption).toBeGreaterThan(-1);
+				expect(rows.slice(caption + 1, -1).filter((row) => !row.trim()).length).toBeLessThan(5);
+			}
+		}
+		await fixture.close();
+		footer(fixture);
+	}),
+);
+
+it(
+	"batched input reaches the same scroll clamps as individual keys",
+	statsTest(async (fixture) => {
+		seed(fixture);
+		await start(fixture, 60, 20);
+		await fixture.open("/stats");
+		const top = layout(fixture);
+		for (let i = 0; i < 40; i++) await fixture.key("j");
+		const bottom = layout(fixture);
+		expect(bottom).not.toBe(top);
+		await fixture.key("k".repeat(60));
+		expect(layout(fixture)).toBe(top);
+		// Exercise the raw host path, not a loop hidden in the fixture key helper.
+		const host = fixture.requireHost();
+		host.input("j".repeat(40));
+		await host.settle();
+		expect(layout(fixture)).toBe(bottom);
+		await fixture.key("j");
+		expect(layout(fixture)).toBe(bottom);
+		host.input("k".repeat(60));
+		await host.settle();
+		expect(layout(fixture)).toBe(top);
+		await fixture.key("k");
+		expect(layout(fixture)).toBe(top);
+		await fixture.close();
+	}),
+);
+
+/** Both tabs expose hourly axes and remain navigable before returning to top of Overview. */
+async function hourlyTabs(fixture: TerminalFixture): Promise<void> {
+	await fixture.key("j".repeat(40));
+	expect(layout(fixture)).toContain("Tokens per hour");
+	chart(layout(fixture));
+	await fixture.key("\t");
+	expect(layout(fixture)).toContain("Tokens per hour");
+	chart(layout(fixture));
+	await fixture.key("\x1b[B\x1b[Ajk");
+	layout(fixture);
+	await fixture.key("\t");
+	expect(layout(fixture)).toContain("Viewer last import:");
+	await fixture.key("\t");
+	await fixture.key("k".repeat(60));
+	expect(layout(fixture)).toMatch(/Total tokens +\d/);
+}
+
+it.each(WIDTHS)(
+	"hourly ranges paint exact filtered totals at every width %i",
+	statsTest(async (fixture, width: number) => {
+		history(fixture.agentDir, hourly(fixture.clock.now()));
+		await start(fixture, width);
+		await fixture.open("/stats");
+		const shown = layout(fixture);
+		expect(shown).toMatch(/Total tokens +546\b/);
+		expect(shown).toMatch(/local.only|never.synced/i);
+		for (const [total, anthropic, codex] of [
+			[78, 26, 52],
+			[260, 104, 156],
+			[546, 234, 312],
+		]) {
+			if (total === undefined) throw new Error("Missing range total");
+			await selectTotal(fixture, total);
+			if (total !== 546) await hourlyTabs(fixture);
+			expect(await selectFilter(fixture, "anthropic")).toMatch(new RegExp(`Total tokens +${anthropic}\\b`));
+			expect(await selectFilter(fixture, "openai-codex")).toMatch(new RegExp(`Total tokens +${codex}\\b`));
+			await selectFilter(fixture, "All models");
+		}
+		await fixture.close("\x1b");
+		footer(fixture);
+	}),
+);
+
+it(
+	"chart spans the pane with contrasting providers",
+	statsTest(async (fixture) => {
+		seed(fixture);
+		await start(fixture, 130, 38);
+		await fixture.open("/stats");
+		const host = fixture.requireHost();
+		const rows = host.viewport();
+		const baseline = rows.find((row) => row[AXIS_COLUMN] === "└") ?? "";
+		expect(baseline.length).toBe(host.terminal.columns);
+		const legend = rows.findIndex((row) => row.includes("anthropic") && row.includes("●"));
+		expect(legend).toBeGreaterThan(-1);
+		const bullets = host.terminal.getStyledLine(legend).filter((cell) => cell.text === "●");
+		expect(bullets).toHaveLength(2);
+		expect(bullets[0]?.foregroundMode).not.toBe(0);
+		expect(bullets[1]?.foregroundMode).not.toBe(0);
+		expect(bullets[0]?.foreground).not.toBe(bullets[1]?.foreground);
+		await fixture.close();
+		footer(fixture);
+	}),
+);
+
+const REMOTE = "44444444-4444-4444-8444-444444444444";
+
+/** pi history plus a second machine that exports Claude, Codex and OpenCode usage and quota. */
+async function seedHarnesses(fixture: TerminalFixture): Promise<void> {
+	seed(fixture);
+	const now = fixture.clock.now();
+	const reading = (extra: Partial<QuotaObservation>): QuotaObservation => ({
+		harness: "codex",
+		provider: "openai-codex",
+		limitId: "codex",
+		window: "7d",
+		usedPercent: 47.3,
+		resetAt: now + 3 * 3_600_000,
+		durationMs: 604_800_000,
+		observedAt: now - 12 * 60_000,
+		planType: "pro",
+		account: "",
+		...extra,
+	});
+	publishMachine(
+		join(fixture.root, "repo"),
+		REMOTE,
+		now,
+		[
+			{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", days: 1, tokens: 400_000 },
+			{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", days: 2, tokens: 300_000 },
+			{ harness: "codex", provider: "openai-codex", model: "gpt-6.1-sol", days: 1, tokens: 200_000 },
+			{ harness: "opencode", provider: "anthropic", model: "claude-sonnet-5-5", days: 3, tokens: 100_000, cost: 1.5 },
+		],
+		[reading({}), reading({ window: "5h", durationMs: 18_000_000, resetAt: now - 5 * 60_000, usedPercent: 99 })],
+		{ claude: now, codex: now, opencode: now - 4 * 24 * 3_600_000 },
+	);
+	await importStats(fixture.agentDir, join(fixture.root, "repo"));
+}
+
+it.each(WIDTHS)(
+	"stats harness filter, quota block and Machines status at %i columns",
+	statsTest(async (fixture, width: number) => {
+		await seedHarnesses(fixture);
+		await start(fixture, width);
+		await fixture.open("/stats");
+		let shown = layout(fixture);
+		expect(shown).toMatch(/harness: All/);
+		expect(shown).toContain("h harness");
+		expect(shown).toContain("by harness");
+		// 8 tokens in the numbers are unpriced Claude/Codex: the total says so instead of showing $0
+		expect(shown).toMatch(/Notional cost +\$[\d.k]+ \+ \d+ unpriced/);
+		// quota: live window with reading age, expired window as reset, Claude has no local reading
+		expect(shown).toContain("Quota");
+		expect(shown).toMatch(/openai-codex\/codex 7d/);
+		expect(shown).toContain("47.3%");
+		expect(shown).toContain("observed 12m ago via codex");
+		expect(shown).toContain("no newer reading");
+		expect(shown).not.toContain("99%");
+		expect(shown).toContain("no local reading");
+		// h walks pi, claude, codex, opencode, All; each shows only its own usage
+		for (const [harness, expected] of [
+			["pi", /by provider/],
+			["claude", /Favorite model +anthropic\/claude-opus-5-5/],
+			["codex", /Favorite model +openai-codex\/gpt-6\.1-sol/],
+			["opencode", /Favorite model +anthropic\/claude-sonnet-5-5/],
+			["All", /by harness/],
+		] as const) {
+			await fixture.key("h");
+			shown = layout(fixture);
+			expect(shown, harness).toMatch(new RegExp(`harness: ${harness}`));
+			expect(shown, harness).toMatch(expected);
+			// the quota block is account-wide: every harness view still shows it
+			expect(shown, harness).toContain("openai-codex/codex 7d");
+		}
+		await fixture.key("H");
+		expect(layout(fixture)).toMatch(/harness: opencode/);
+		await fixture.key("h");
+		await fixture.key("\t");
+		shown = layout(fixture);
+		expect(shown.includes("Harness") || shown.includes("· pi,claude")).toBe(true);
+		await fixture.key("\t");
+		shown = layout(fixture);
+		expect(shown).toMatch(/claude: last read cleanly/);
+		expect(shown).toMatch(/opencode: STALE, not read cleanly since/);
+		expect(shown).toMatch(/codex: last read cleanly/);
+		await fixture.close();
+		footer(fixture);
+	}),
+);

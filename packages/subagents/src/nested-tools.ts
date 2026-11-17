@@ -1,40 +1,34 @@
 import type { Model } from "@earendil-works/pi-ai";
 import {
-  type AgentSession,
-  defineTool,
-  type ExtensionAPI,
-  type ExtensionContext,
-  type ToolDefinition,
+	type AgentSession,
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { abortable } from "./abortable.js";
+import { abortable } from "./abortable.ts";
 import {
-  buildAgentRegistry,
-  getAgentConfigIn,
-  getAvailableTypesIn,
-  resolveEnabledTypeIn,
-  resolveTypeIn,
-} from "./agent-types.js";
-import { loadCustomAgents } from "./custom-agents.js";
-import { errorMessage } from "./error-message.js";
-import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
+	buildAgentRegistry,
+	getAgentConfigIn,
+	getAvailableTypesIn,
+	resolveEnabledTypeIn,
+	resolveTypeIn,
+} from "./agent-types.ts";
+import { loadCustomAgents } from "./custom-agents.ts";
+import { errorMessage } from "./error-message.ts";
+import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.ts";
+import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.ts";
 import {
-  createOutputFilePath,
-  getOutputTranscriptDefault,
-  streamToOutputFile,
-  writeInitialEntry,
-} from "./output-file.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
-import type {
-  AgentConfig,
-  AgentInvocation,
-  AgentRecord,
-  IsolationMode,
-  ThinkingLevel,
-} from "./types.js";
-import { addUsage } from "./usage.js";
-import { isWorktreeIsolationEnabled } from "./worktree.js";
+	createOutputFilePath,
+	getOutputTranscriptDefault,
+	streamToOutputFile,
+	writeInitialEntry,
+} from "./output-file.ts";
+import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.ts";
+import type { AgentConfig, AgentInvocation, AgentRecord, IsolationMode, ThinkingLevel } from "./types.ts";
+import { addUsage } from "./usage.ts";
+import { isWorktreeIsolationEnabled } from "./worktree.ts";
 
 /**
  * Hard ceiling on nesting for every branch: main session = 0, its subagents = 1,
@@ -44,8 +38,12 @@ import { isWorktreeIsolationEnabled } from "./worktree.js";
  */
 let maxSubagentDepth = 2;
 
-export function getMaxSubagentDepth(): number { return maxSubagentDepth; }
-export function setMaxSubagentDepth(n: number): void { maxSubagentDepth = Math.max(0, Math.floor(n)); }
+export function getMaxSubagentDepth(): number {
+	return maxSubagentDepth;
+}
+export function setMaxSubagentDepth(n: number): void {
+	maxSubagentDepth = Math.max(0, Math.floor(n));
+}
 
 const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent", "stop_subagent"] as const;
 
@@ -56,13 +54,13 @@ const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent", "st
  * session that no longer exists and the work would be aborted with its owner.
  */
 export const NESTED_BACKGROUND_ERROR =
-  "Background agents are not available inside a subagent: when you finish, this session ends and nothing is left to receive the result. "
-  + "Omit run_in_background; the call blocks and returns the child's result inline.";
+	"Background agents are not available inside a subagent: when you finish, this session ends and nothing is left to receive the result. " +
+	"Omit run_in_background; the call blocks and returns the child's result inline.";
 
 /** Same reasoning for workflow tools, which run in the background and notify on completion. */
 export const NESTED_WORKFLOW_ERROR =
-  "Workflows are not available inside a subagent: a workflow runs in the background and reports to the session that started it, "
-  + "and this session ends when you return your answer. Do the work directly, or call Agent in the foreground.";
+	"Workflows are not available inside a subagent: a workflow runs in the background and reports to the session that started it, " +
+	"and this session ends when you return your answer. Do the work directly, or call Agent in the foreground.";
 
 /**
  * `NESTED_WORKFLOW_ERROR` for a child that was never given `Agent` (depth cap,
@@ -70,85 +68,84 @@ export const NESTED_WORKFLOW_ERROR =
  * sends it hunting, and then shelling out to a CLI that escapes every limit.
  */
 export const NESTED_WORKFLOW_NO_AGENT_ERROR =
-  "Workflows are not available inside a subagent: a workflow runs in the background and reports to the session that started it, "
-  + "and this session ends when you return your answer. Nested subagents are disabled for this session, so there is no Agent tool either. "
-  + "Do the work directly.";
+	"Workflows are not available inside a subagent: a workflow runs in the background and reports to the session that started it, " +
+	"and this session ends when you return your answer. Nested subagents are disabled for this session, so there is no Agent tool either. " +
+	"Do the work directly.";
 
 interface NestedSpawnOptions {
-  homeDir?: string;
-  description: string;
-  model?: Model<any>;
-  modelSelection?: ModelSelection;
-  maxTurns?: number;
-  isolated?: boolean;
-  inheritContext?: boolean;
-  thinkingLevel?: ThinkingLevel;
-  isBackground?: boolean;
-  isolation?: IsolationMode;
-  invocation?: AgentInvocation;
-  signal?: AbortSignal;
-  onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
-  onSessionCreated?: (session: AgentSession) => void;
-  onPrepare?: (id: string) => void;
-  depth: number;
-  parentAgentId: string;
-  maxSubagentDepth: number;
-  configCwd?: string;
-  /** Trust decision for `configCwd`; always set together with it. */
-  configProjectTrusted?: boolean;
-  rootSessionId?: string;
+	homeDir?: string;
+	description: string;
+	model?: Model<any>;
+	modelSelection?: ModelSelection;
+	maxTurns?: number;
+	isolated?: boolean;
+	inheritContext?: boolean;
+	thinkingLevel?: ThinkingLevel;
+	isBackground?: boolean;
+	isolation?: IsolationMode;
+	invocation?: AgentInvocation;
+	signal?: AbortSignal;
+	onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+	onSessionCreated?: (session: AgentSession) => void;
+	onPrepare?: (id: string) => void;
+	depth: number;
+	parentAgentId: string;
+	maxSubagentDepth: number;
+	configCwd?: string;
+	/** Trust decision for `configCwd`; always set together with it. */
+	configProjectTrusted?: boolean;
+	rootSessionId?: string;
 }
 
 export interface NestedAgentManager {
-  spawn(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    type: string,
-    prompt: string,
-    options: NestedSpawnOptions,
-  ): string;
-  /** Resolves once the spawned agent is running; rejects on a startup failure. */
-  awaitStartup(id: string): Promise<void>;
-  spawnAndWait(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    type: string,
-    prompt: string,
-    options: Omit<NestedSpawnOptions, "isBackground">,
-  ): Promise<{ id: string; record: AgentRecord }>;
-  getRecord(id: string): AgentRecord | undefined;
-  resume(id: string, prompt: string, signal?: AbortSignal, options?: { maxTurns?: number }): Promise<AgentRecord | undefined>;
-  /** Stop a running or queued agent; false when it was neither. */
-  abort(id: string, by?: AgentRecord["stoppedBy"]): boolean;
+	spawn(pi: ExtensionAPI, ctx: ExtensionContext, type: string, prompt: string, options: NestedSpawnOptions): string;
+	/** Resolves once the spawned agent is running; rejects on a startup failure. */
+	awaitStartup(id: string): Promise<void>;
+	spawnAndWait(
+		pi: ExtensionAPI,
+		ctx: ExtensionContext,
+		type: string,
+		prompt: string,
+		options: Omit<NestedSpawnOptions, "isBackground">,
+	): Promise<{ id: string; record: AgentRecord }>;
+	getRecord(id: string): AgentRecord | undefined;
+	resume(
+		id: string,
+		prompt: string,
+		signal?: AbortSignal,
+		options?: { maxTurns?: number },
+	): Promise<AgentRecord | undefined>;
+	/** Stop a running or queued agent; false when it was neither. */
+	abort(id: string, by?: AgentRecord["stoppedBy"]): boolean;
 }
 
 export interface NestedToolContext {
-  /** Home shared by this branch's user-resource discovery. */
-  homeDir?: string;
-  manager: NestedAgentManager;
-  pi: ExtensionAPI;
-  parentAgentId: string;
-  depth: number;
-  maxSubagentDepth: number;
-  /** "all" = any enabled agent; string[] = only those types. Never empty. */
-  allowedSubagents: "all" | string[];
-  /** Root used for agent/config discovery; may differ from the agent's working directory. */
-  configCwd: string;
-  /**
-   * The spawning session's project-trust decision for `configCwd`, as the runner
-   * resolved it for the child's own settings. Gates project agent files in the
-   * registry built here; read from the session's state it would answer for the
-   * child's cwd, which is untrusted for a cross-directory spawn.
-   */
-  projectTrusted: boolean;
+	/** Home shared by this branch's user-resource discovery. */
+	homeDir?: string;
+	manager: NestedAgentManager;
+	pi: ExtensionAPI;
+	parentAgentId: string;
+	depth: number;
+	maxSubagentDepth: number;
+	/** "all" = any enabled agent; string[] = only those types. Never empty. */
+	allowedSubagents: "all" | string[];
+	/** Root used for agent/config discovery; may differ from the agent's working directory. */
+	configCwd: string;
+	/**
+	 * The spawning session's project-trust decision for `configCwd`, as the runner
+	 * resolved it for the child's own settings. Gates project agent files in the
+	 * registry built here; read from the session's state it would answer for the
+	 * child's cwd, which is untrusted for a cross-directory spawn.
+	 */
+	projectTrusted: boolean;
 }
 
 function textResult(text: string, isError = false) {
-  return { content: [{ type: "text" as const, text }], isError, details: {} };
+	return { content: [{ type: "text" as const, text }], isError, details: {} };
 }
 
 function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): record is AgentRecord {
-  return record?.parentAgentId === parentAgentId;
+	return record?.parentAgentId === parentAgentId;
 }
 
 /**
@@ -165,50 +162,53 @@ function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): rec
 type ResultPosition = "inline" | "fetched";
 
 function formatRecord(record: AgentRecord, position: ResultPosition): string {
-  // Read off the record, so a fetched or resumed child reports what ran, not
-  // what the current call would have configured.
-  const note = [modelSelectionNote(record), modelIdentityNote(record)].filter(Boolean).join("\n");
-  return note ? `${note}\n\n${formatOutcome(record, position)}` : formatOutcome(record, position);
+	// Read off the record, so a fetched or resumed child reports what ran, not
+	// what the current call would have configured.
+	const note = [modelSelectionNote(record), modelIdentityNote(record)].filter(Boolean).join("\n");
+	return note ? `${note}\n\n${formatOutcome(record, position)}` : formatOutcome(record, position);
 }
 
 function formatOutcome(record: AgentRecord, position: ResultPosition): string {
-  if (record.status === "error") {
-    return `Agent failed: ${record.error ?? "unknown error"}${partialOutputSuffix(record)}`;
-  }
-  if (record.status === "queued" || record.status === "running") {
-    return `Agent ${record.id} is ${record.status}.`;
-  }
-  // A truncated run must not read as a finished one. The top-level path carries
-  // this in its result headline; a nested result has no headline, so the note
-  // leads — appended, it would look like part of the child's own output.
-  const text = record.result?.trim() || record.error?.trim() || "No output.";
-  const note = position === "inline"
-    ? getForegroundOutcomeNote(record.status, record.stoppedBy)
-    : getStatusNote(record.status, record.stoppedBy);
-  return note ? `Nested agent${note}.\n\n${text}` : text;
+	if (record.status === "error") {
+		return `Agent failed: ${record.error ?? "unknown error"}${partialOutputSuffix(record)}`;
+	}
+	if (record.status === "queued" || record.status === "running") {
+		return `Agent ${record.id} is ${record.status}.`;
+	}
+	// A truncated run must not read as a finished one. The top-level path carries
+	// this in its result headline; a nested result has no headline, so the note
+	// leads — appended, it would look like part of the child's own output.
+	const text = record.result?.trim() || record.error?.trim() || "No output.";
+	const note =
+		position === "inline"
+			? getForegroundOutcomeNote(record.status, record.stoppedBy)
+			: getStatusNote(record.status, record.stoppedBy);
+	return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 
 type NestedRegistryScope = Pick<NestedToolContext, "homeDir" | "configCwd" | "projectTrusted">;
 
 function loadNestedRegistry(scope: NestedRegistryScope): Map<string, AgentConfig> {
-  return buildAgentRegistry(loadCustomAgents(scope.configCwd, false, { projectTrusted: scope.projectTrusted, homeDir: scope.homeDir }));
+	return buildAgentRegistry(
+		loadCustomAgents(scope.configCwd, false, { projectTrusted: scope.projectTrusted, homeDir: scope.homeDir }),
+	);
 }
 
 function allowedTypeSet(
-  registry: Map<string, AgentConfig>,
-  allowedSubagents: NestedToolContext["allowedSubagents"],
+	registry: Map<string, AgentConfig>,
+	allowedSubagents: NestedToolContext["allowedSubagents"],
 ): Set<string> | undefined {
-  return allowedSubagents === "all"
-    ? undefined
-    : new Set(allowedSubagents.map(name => resolveTypeIn(registry, name) ?? name));
+	return allowedSubagents === "all"
+		? undefined
+		: new Set(allowedSubagents.map((name) => resolveTypeIn(registry, name) ?? name));
 }
 
 function availableNestedTypes(
-  registry: Map<string, AgentConfig>,
-  allowedSubagents: NestedToolContext["allowedSubagents"],
+	registry: Map<string, AgentConfig>,
+	allowedSubagents: NestedToolContext["allowedSubagents"],
 ): string[] {
-  const allowed = allowedTypeSet(registry, allowedSubagents);
-  return getAvailableTypesIn(registry).filter(name => allowed === undefined || allowed.has(name));
+	const allowed = allowedTypeSet(registry, allowedSubagents);
+	return getAvailableTypesIn(registry).filter((name) => allowed === undefined || allowed.has(name));
 }
 
 /**
@@ -218,295 +218,307 @@ function availableNestedTypes(
  * inject the tools, the same as `allowed_subagents` being unset (#331, #333).
  */
 export function hasNestableTypes(
-  allowedSubagents: NestedToolContext["allowedSubagents"],
-  scope: NestedRegistryScope,
+	allowedSubagents: NestedToolContext["allowedSubagents"],
+	scope: NestedRegistryScope,
 ): boolean {
-  return availableNestedTypes(loadNestedRegistry(scope), allowedSubagents).length > 0;
+	return availableNestedTypes(loadNestedRegistry(scope), allowedSubagents).length > 0;
 }
 
 /** Build child-safe orchestration tools scoped to one parent agent instance. */
 export function createNestedSubagentTools(context: NestedToolContext): ToolDefinition[] {
-  // Agents resolve from a registry built for THIS branch's config root (under
-  // worktree isolation, the copy). Never via registerAgents — that is
-  // process-global state shared with the main session and every other agent.
-  const loadRegistry = () => loadNestedRegistry(context);
-  const allowedTypesIn = (registry: Map<string, AgentConfig>) => allowedTypeSet(registry, context.allowedSubagents);
-  const availableIn = (registry: Map<string, AgentConfig>) => availableNestedTypes(registry, context.allowedSubagents);
-  // Never the literal "none": a model reads it as a type name and calls it (#331, #333).
-  const listAvailable = (registry: Map<string, AgentConfig>): string => {
-    const names = availableIn(registry);
-    return names.length > 0 ? names.join(", ") : "no agent types are currently available";
-  };
+	// Agents resolve from a registry built for THIS branch's config root (under
+	// worktree isolation, the copy). Never via registerAgents — that is
+	// process-global state shared with the main session and every other agent.
+	const loadRegistry = () => loadNestedRegistry(context);
+	const allowedTypesIn = (registry: Map<string, AgentConfig>) => allowedTypeSet(registry, context.allowedSubagents);
+	const availableIn = (registry: Map<string, AgentConfig>) => availableNestedTypes(registry, context.allowedSubagents);
+	// Never the literal "none": a model reads it as a type name and calls it (#331, #333).
+	const listAvailable = (registry: Map<string, AgentConfig>): string => {
+		const names = availableIn(registry);
+		return names.length > 0 ? names.join(", ") : "no agent types are currently available";
+	};
 
-  const agentTool = defineTool({
-    name: NESTED_TOOL_NAMES[0],
-    label: "Agent",
-    description:
-      "Launch a child-safe nested subagent for bounded delegated work. " +
-      "Only use agent types allowed by this parent agent; nesting is depth-limited.",
-    parameters: Type.Object({
-      prompt: Type.String({ description: "Self-contained task for the nested agent." }),
-      description: Type.String({ description: "Short 3-5 word task description." }),
-      subagent_type: Type.String({ description: `Allowed nested agent type. Available: ${listAvailable(loadRegistry())}.` }),
-      model: Type.Optional(Type.String({ description: "Optional configured @tier or provider/model override; explicit values win over agentModels and the definition." })),
-      thinking: Type.Optional(Type.String({ description: "Optional thinking level." })),
-      max_turns: Type.Optional(Type.Number({ minimum: 1 })),
-      run_in_background: Type.Optional(
-        Type.Boolean({
-          description: "Not supported inside a subagent: nested spawns always block and return the child's result inline. Passing true returns an error.",
-        }),
-      ),
-      resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
-      isolated: Type.Optional(Type.Boolean()),
-      inherit_context: Type.Optional(Type.Boolean()),
-      ...isolationParam(isWorktreeIsolationEnabled()),
-    }),
-    execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-      if (params.run_in_background === true) return textResult(NESTED_BACKGROUND_ERROR, true);
-      if (params.resume) {
-        const existing = context.manager.getRecord(params.resume);
-        if (!ownsRecord(existing, context.parentAgentId)) {
-          return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
-        }
-        // Two resumes of one child in the same turn (parallel tool calls) would
-        // run two prompts on one session; the manager refuses the second, and
-        // this says why instead of a generic failure.
-        if (existing.status === "running" || existing.status === "queued") {
-          return textResult(
-            `Nested agent "${params.resume}" is still ${existing.status}; it can only be resumed once its current run finishes.`,
-            true,
-          );
-        }
-        // Frontmatter authoritative, as on the spawn path; the manager falls
-        // back to the limit the child was spawned with, then the default.
-        const resumed = await context.manager.resume(params.resume, params.prompt, signal, {
-          maxTurns: getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns ?? params.max_turns,
-        });
-        return resumed
-          ? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
-          : textResult(`Failed to resume nested agent "${params.resume}".`, true);
-      }
+	const agentTool = defineTool({
+		name: NESTED_TOOL_NAMES[0],
+		label: "Agent",
+		description:
+			"Launch a child-safe nested subagent for bounded delegated work. " +
+			"Only use agent types allowed by this parent agent; nesting is depth-limited.",
+		parameters: Type.Object({
+			prompt: Type.String({ description: "Self-contained task for the nested agent." }),
+			description: Type.String({ description: "Short 3-5 word task description." }),
+			subagent_type: Type.String({
+				description: `Allowed nested agent type. Available: ${listAvailable(loadRegistry())}.`,
+			}),
+			model: Type.Optional(
+				Type.String({
+					description:
+						"Optional configured @tier or provider/model override; explicit values win over agentModels and the definition.",
+				}),
+			),
+			thinking: Type.Optional(Type.String({ description: "Optional thinking level." })),
+			max_turns: Type.Optional(Type.Number({ minimum: 1 })),
+			run_in_background: Type.Optional(
+				Type.Boolean({
+					description:
+						"Not supported inside a subagent: nested spawns always block and return the child's result inline. Passing true returns an error.",
+				}),
+			),
+			resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
+			isolated: Type.Optional(Type.Boolean()),
+			inherit_context: Type.Optional(Type.Boolean()),
+			...isolationParam(isWorktreeIsolationEnabled()),
+		}),
+		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+			if (params.run_in_background === true) return textResult(NESTED_BACKGROUND_ERROR, true);
+			if (params.resume) {
+				const existing = context.manager.getRecord(params.resume);
+				if (!ownsRecord(existing, context.parentAgentId)) {
+					return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
+				}
+				// Two resumes of one child in the same turn (parallel tool calls) would
+				// run two prompts on one session; the manager refuses the second, and
+				// this says why instead of a generic failure.
+				if (existing.status === "running" || existing.status === "queued") {
+					return textResult(
+						`Nested agent "${params.resume}" is still ${existing.status}; it can only be resumed once its current run finishes.`,
+						true,
+					);
+				}
+				// Frontmatter authoritative, as on the spawn path; the manager falls
+				// back to the limit the child was spawned with, then the default.
+				const resumed = await context.manager.resume(params.resume, params.prompt, signal, {
+					maxTurns: getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns ?? params.max_turns,
+				});
+				return resumed
+					? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
+					: textResult(`Failed to resume nested agent "${params.resume}".`, true);
+			}
 
-      if (context.depth >= context.maxSubagentDepth) {
-        return textResult(
-          `Nested subagent call blocked (depth=${context.depth}, max=${context.maxSubagentDepth}). Complete the task directly.`,
-          true,
-        );
-      }
+			if (context.depth >= context.maxSubagentDepth) {
+				return textResult(
+					`Nested subagent call blocked (depth=${context.depth}, max=${context.maxSubagentDepth}). Complete the task directly.`,
+					true,
+				);
+			}
 
-      // Reloaded per call so new agent files are picked up without a restart.
-      const registry = loadRegistry();
-      const rawType = params.subagent_type;
-      // Strict resolve, never the fallback policy: a project-level
-      // `fallbackSubagent` must not hand a nested caller an agent its allowlist
-      // never named. The list stays allowlist-filtered so a typo can't enumerate
-      // agents this parent may not reach.
-      const resolvedType = resolveEnabledTypeIn(registry, rawType);
-      if (resolvedType === undefined) {
-        if (availableIn(registry).length === 0) {
-          return textResult(
-            `No nested agent types are available to this parent, so Agent cannot spawn anything. Do the work yourself, inline.`,
-            true,
-          );
-        }
-        return textResult(
-          `Unknown or disabled nested agent type: "${rawType}". Allowed: ${availableIn(registry).join(", ")}.`,
-          true,
-        );
-      }
-      const allowed = allowedTypesIn(registry);
-      if (allowed !== undefined && !allowed.has(resolvedType)) {
-        return textResult(
-          `Nested agent type "${resolvedType}" is not allowed for this parent. Allowed: ${[...allowed].join(", ")}.`,
-          true,
-        );
-      }
+			// Reloaded per call so new agent files are picked up without a restart.
+			const registry = loadRegistry();
+			const rawType = params.subagent_type;
+			// Strict resolve, never the fallback policy: a project-level
+			// `fallbackSubagent` must not hand a nested caller an agent its allowlist
+			// never named. The list stays allowlist-filtered so a typo can't enumerate
+			// agents this parent may not reach.
+			const resolvedType = resolveEnabledTypeIn(registry, rawType);
+			if (resolvedType === undefined) {
+				if (availableIn(registry).length === 0) {
+					return textResult(
+						`No nested agent types are available to this parent, so Agent cannot spawn anything. Do the work yourself, inline.`,
+						true,
+					);
+				}
+				return textResult(
+					`Unknown or disabled nested agent type: "${rawType}". Allowed: ${availableIn(registry).join(", ")}.`,
+					true,
+				);
+			}
+			const allowed = allowedTypesIn(registry);
+			if (allowed !== undefined && !allowed.has(resolvedType)) {
+				return textResult(
+					`Nested agent type "${resolvedType}" is not allowed for this parent. Allowed: ${[...allowed].join(", ")}.`,
+					true,
+				);
+			}
 
-      const config = getAgentConfigIn(registry, resolvedType);
-      // Foreground regardless of `backgroundByDefault` — see the reasoning on
-      // ResolveOptions. An explicit `true` here still opts in.
-      const invocation = resolveAgentInvocationConfig(config, params, {
-        worktreeAllowed: isWorktreeIsolationEnabled(),
-        defaultRunInBackground: false,
-      });
-      const selection = selectModel({
-        homeDir: context.homeDir,
-        agentType: resolvedType, definitionModel: config?.model, paramModel: params.model,
-        parentModel: ctx.model, registry: ctx.modelRegistry, cwd: context.configCwd, agentLabel: config?.displayName,
-      });
-      if (typeof selection === "string") return textResult(selection, true);
-      const model = selection.model;
+			const config = getAgentConfigIn(registry, resolvedType);
+			// Foreground regardless of `backgroundByDefault` — see the reasoning on
+			// ResolveOptions. An explicit `true` here still opts in.
+			const invocation = resolveAgentInvocationConfig(config, params, {
+				worktreeAllowed: isWorktreeIsolationEnabled(),
+				defaultRunInBackground: false,
+			});
+			const selection = selectModel({
+				homeDir: context.homeDir,
+				agentType: resolvedType,
+				definitionModel: config?.model,
+				paramModel: params.model,
+				parentModel: ctx.model,
+				registry: ctx.modelRegistry,
+				cwd: context.configCwd,
+				agentLabel: config?.displayName,
+			});
+			if (typeof selection === "string") return textResult(selection, true);
+			const model = selection.model;
 
-      // The whole branch shares the root session's transcript directory; read it
-      // off the owning parent rather than this child session's own id.
-      const rootSessionId = context.manager.getRecord(context.parentAgentId)?.rootSessionId;
-      const childDepth = context.depth + 1;
-      const options: NestedSpawnOptions = {
-        homeDir: context.homeDir,
-        description: params.description,
-        model,
-        modelSelection: selection,
-        maxTurns: invocation.maxTurns,
-        isolated: invocation.isolated,
-        inheritContext: invocation.inheritContext,
-        thinkingLevel: invocation.thinking,
-        isolation: invocation.isolation,
-        invocation: {
-          thinking: invocation.thinking,
-          maxTurns: invocation.maxTurns,
-          isolated: invocation.isolated,
-          inheritContext: invocation.inheritContext,
-          isolation: invocation.isolation,
-        },
-        // Nested children are hidden from every reporting surface, so their spend
-        // would otherwise be unattributable. Fold it into every ancestor's record:
-        // the top-level one appears in lifecycle events, completion notifications,
-        // and `/agents`, and those all read `lifetimeUsage`. The whole chain is
-        // walked, not just the immediate parent — a spawn callback only fires for
-        // that child's OWN turns, so stopping at one level would hide a
-        // great-grandchild from the only record anyone can see. (The live
-        // widget/fleet counters read their own per-agent activity tracker, which
-        // still sees only the top-level agent's own turns.)
-        onAssistantUsage: (usage) => {
-          for (let id: string | undefined = context.parentAgentId; id !== undefined; ) {
-            const ancestor = context.manager.getRecord(id);
-            if (!ancestor) break;
-            addUsage(ancestor.lifetimeUsage, usage);
-            id = ancestor.parentAgentId;
-          }
-        },
-        depth: childDepth,
-        parentAgentId: context.parentAgentId,
-        maxSubagentDepth: context.maxSubagentDepth,
-        configCwd: context.configCwd,
-        configProjectTrusted: context.projectTrusted,
-        rootSessionId,
-      };
+			// The whole branch shares the root session's transcript directory; read it
+			// off the owning parent rather than this child session's own id.
+			const rootSessionId = context.manager.getRecord(context.parentAgentId)?.rootSessionId;
+			const childDepth = context.depth + 1;
+			const options: NestedSpawnOptions = {
+				homeDir: context.homeDir,
+				description: params.description,
+				model,
+				modelSelection: selection,
+				maxTurns: invocation.maxTurns,
+				isolated: invocation.isolated,
+				inheritContext: invocation.inheritContext,
+				thinkingLevel: invocation.thinking,
+				isolation: invocation.isolation,
+				invocation: {
+					thinking: invocation.thinking,
+					maxTurns: invocation.maxTurns,
+					isolated: invocation.isolated,
+					inheritContext: invocation.inheritContext,
+					isolation: invocation.isolation,
+				},
+				// Nested children are hidden from every reporting surface, so their spend
+				// would otherwise be unattributable. Fold it into every ancestor's record:
+				// the top-level one appears in lifecycle events, completion notifications,
+				// and `/agents`, and those all read `lifetimeUsage`. The whole chain is
+				// walked, not just the immediate parent — a spawn callback only fires for
+				// that child's OWN turns, so stopping at one level would hide a
+				// great-grandchild from the only record anyone can see. (The live
+				// widget/fleet counters read their own per-agent activity tracker, which
+				// still sees only the top-level agent's own turns.)
+				onAssistantUsage: (usage) => {
+					for (let id: string | undefined = context.parentAgentId; id !== undefined; ) {
+						const ancestor = context.manager.getRecord(id);
+						if (!ancestor) break;
+						addUsage(ancestor.lifetimeUsage, usage);
+						id = ancestor.parentAgentId;
+					}
+				},
+				depth: childDepth,
+				parentAgentId: context.parentAgentId,
+				maxSubagentDepth: context.maxSubagentDepth,
+				configCwd: context.configCwd,
+				configProjectTrusted: context.projectTrusted,
+				rootSessionId,
+			};
 
-      // Transcript wiring, same gate as the top-level path: the child's
-      // `output_transcript` frontmatter wins, else the project default. Without
-      // it a nested run leaves no artifact but the string it returned — the
-      // parent's own transcript records the call and the answer, never the tool
-      // calls in between, which is exactly what a misbehaving child needs to
-      // explain itself. Filed under the ROOT session and this branch's config
-      // root, so a nested transcript lands in the same `tasks/` directory as its
-      // ancestors' rather than in a directory of its own.
-      const transcriptSessionId =
-        rootSessionId !== undefined && (config?.outputTranscript ?? getOutputTranscriptDefault())
-          ? rootSessionId
-          : undefined;
-      let childId: string | undefined;
-      const attachTranscript = (id: string): void => {
-        childId = id;
-        if (transcriptSessionId === undefined) return;
-        const rec = context.manager.getRecord(id);
-        if (!rec) return;
-        rec.outputFile = createOutputFilePath(context.configCwd, id, transcriptSessionId);
-        writeInitialEntry(rec.outputFile, id, params.prompt, ctx.cwd);
-      };
-      options.onSessionCreated = (session) => {
-        const rec = childId === undefined ? undefined : context.manager.getRecord(childId);
-        if (rec?.outputFile && childId !== undefined) {
-          rec.outputCleanup = streamToOutputFile(session, rec.outputFile, childId, ctx.cwd);
-        }
-      };
+			// Transcript wiring, same gate as the top-level path: the child's
+			// `output_transcript` frontmatter wins, else the project default. Without
+			// it a nested run leaves no artifact but the string it returned — the
+			// parent's own transcript records the call and the answer, never the tool
+			// calls in between, which is exactly what a misbehaving child needs to
+			// explain itself. Filed under the ROOT session and this branch's config
+			// root, so a nested transcript lands in the same `tasks/` directory as its
+			// ancestors' rather than in a directory of its own.
+			const transcriptSessionId =
+				rootSessionId !== undefined && (config?.outputTranscript ?? getOutputTranscriptDefault())
+					? rootSessionId
+					: undefined;
+			let childId: string | undefined;
+			const attachTranscript = (id: string): void => {
+				childId = id;
+				if (transcriptSessionId === undefined) return;
+				const rec = context.manager.getRecord(id);
+				if (!rec) return;
+				rec.outputFile = createOutputFilePath(context.configCwd, id, transcriptSessionId);
+				rec.outputFile = writeInitialEntry(rec.outputFile, id, params.prompt, ctx.cwd);
+			};
+			options.onSessionCreated = (session) => {
+				const rec = childId === undefined ? undefined : context.manager.getRecord(childId);
+				if (rec?.outputFile && childId !== undefined) {
+					rec.outputCleanup = streamToOutputFile(session, rec.outputFile, childId, ctx.cwd);
+				}
+			};
 
-      // `ctx` is forwarded to the manager unmodified, never captured at tool-build
-      // time: each AgentSession builds its own ExtensionRunner from that session's
-      // cwd/sessionManager/modelRegistry, so this is the CHILD's context. Capturing
-      // one earlier would silently give a grandchild the wrong worktree base, the
-      // wrong conversation under inherit_context, and the wrong inherited model.
-      //
-      // spawn() throws on strict worktree-isolation failure and cwd validation —
-      // report it as a tool error, like the top-level Agent tool does, instead of
-      // letting it escape into the child's turn.
-      try {
-        const { record } = await context.manager.spawnAndWait(
-          context.pi,
-          ctx,
-          resolvedType,
-          params.prompt,
-          { ...options, signal, onPrepare: attachTranscript },
-        );
-        return textResult(formatRecord(record, "inline"), record.status === "error");
-      } catch (err) {
-        return textResult(errorMessage(err), true);
-      }
-    },
-  });
+			// `ctx` is forwarded to the manager unmodified, never captured at tool-build
+			// time: each AgentSession builds its own ExtensionRunner from that session's
+			// cwd/sessionManager/modelRegistry, so this is the CHILD's context. Capturing
+			// one earlier would silently give a grandchild the wrong worktree base, the
+			// wrong conversation under inherit_context, and the wrong inherited model.
+			//
+			// spawn() throws on strict worktree-isolation failure and cwd validation —
+			// report it as a tool error, like the top-level Agent tool does, instead of
+			// letting it escape into the child's turn.
+			try {
+				const { record } = await context.manager.spawnAndWait(context.pi, ctx, resolvedType, params.prompt, {
+					...options,
+					signal,
+					onPrepare: attachTranscript,
+				});
+				return textResult(formatRecord(record, "inline"), record.status === "error");
+			} catch (err) {
+				return textResult(errorMessage(err), true);
+			}
+		},
+	});
 
-  const resultTool = defineTool({
-    name: NESTED_TOOL_NAMES[1],
-    label: "Get Nested Agent Result",
-    description: "Check or wait for a background nested agent owned by this parent.",
-    parameters: Type.Object({
-      agent_id: Type.String(),
-      wait: Type.Optional(Type.Boolean()),
-    }),
-    execute: async (_toolCallId, params, signal) => {
-      const record = context.manager.getRecord(params.agent_id);
-      if (!ownsRecord(record, context.parentAgentId)) {
-        return textResult(`Nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
-      }
-      // Wait for completion if requested. Cancellation (e.g. the parent's tool
-      // call is aborted) stops only this wait; the nested child keeps running and
-      // stays unconsumed. Queued records have no promise until the manager starts
-      // them, so poll — abortably — until they leave the queue, then await.
-      if (params.wait && (record.status === "queued" || record.status === "running")) {
-        while (record.status === "queued") {
-          await abortable(new Promise<void>(resolve => setTimeout(resolve, 250)), signal);
-        }
-        if (record.promise) await abortable(record.promise, signal);
-      }
-      return textResult(formatRecord(record, "fetched"), record.status === "error");
-    },
-  });
+	const resultTool = defineTool({
+		name: NESTED_TOOL_NAMES[1],
+		label: "Get Nested Agent Result",
+		description: "Check or wait for a background nested agent owned by this parent.",
+		parameters: Type.Object({
+			agent_id: Type.String(),
+			wait: Type.Optional(Type.Boolean()),
+		}),
+		execute: async (_toolCallId, params, signal) => {
+			const record = context.manager.getRecord(params.agent_id);
+			if (!ownsRecord(record, context.parentAgentId)) {
+				return textResult(`Nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
+			}
+			// Wait for completion if requested. Cancellation (e.g. the parent's tool
+			// call is aborted) stops only this wait; the nested child keeps running and
+			// stays unconsumed. Queued records have no promise until the manager starts
+			// them, so poll — abortably — until they leave the queue, then await.
+			if (params.wait && (record.status === "queued" || record.status === "running")) {
+				while (record.status === "queued") {
+					await abortable(new Promise<void>((resolve) => setTimeout(resolve, 250)), signal);
+				}
+				if (record.promise) await abortable(record.promise, signal);
+			}
+			return textResult(formatRecord(record, "fetched"), record.status === "error");
+		},
+	});
 
-  const steerTool = defineTool({
-    name: NESTED_TOOL_NAMES[2],
-    label: "Steer Nested Agent",
-    description: "Send guidance to a running nested agent owned by this parent.",
-    parameters: Type.Object({
-      agent_id: Type.String(),
-      message: Type.String(),
-    }),
-    execute: async (_toolCallId, params) => {
-      const record = context.manager.getRecord(params.agent_id);
-      if (!ownsRecord(record, context.parentAgentId) || record.status !== "running") {
-        return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
-      }
-      // Session not ready yet — queue the steer. The manager flushes pending
-      // steers when the session is created (same contract as the top-level tool).
-      if (!record.session) {
-        if (!record.pendingSteers) record.pendingSteers = [];
-        record.pendingSteers.push(params.message);
-        return textResult(`Steering message queued for nested agent ${params.agent_id}.`);
-      }
-      try {
-        await record.session.steer(params.message);
-      } catch (err) {
-        return textResult(`Failed to steer nested agent: ${err instanceof Error ? err.message : String(err)}`, true);
-      }
-      return textResult(`Steering message sent to nested agent ${params.agent_id}.`);
-    },
-  });
+	const steerTool = defineTool({
+		name: NESTED_TOOL_NAMES[2],
+		label: "Steer Nested Agent",
+		description: "Send guidance to a running nested agent owned by this parent.",
+		parameters: Type.Object({
+			agent_id: Type.String(),
+			message: Type.String(),
+		}),
+		execute: async (_toolCallId, params) => {
+			const record = context.manager.getRecord(params.agent_id);
+			if (!ownsRecord(record, context.parentAgentId) || record.status !== "running") {
+				return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
+			}
+			// Session not ready yet — queue the steer. The manager flushes pending
+			// steers when the session is created (same contract as the top-level tool).
+			if (!record.session) {
+				if (!record.pendingSteers) record.pendingSteers = [];
+				record.pendingSteers.push(params.message);
+				return textResult(`Steering message queued for nested agent ${params.agent_id}.`);
+			}
+			try {
+				await record.session.steer(params.message);
+			} catch (err) {
+				return textResult(`Failed to steer nested agent: ${err instanceof Error ? err.message : String(err)}`, true);
+			}
+			return textResult(`Steering message sent to nested agent ${params.agent_id}.`);
+		},
+	});
 
-  const stopTool = defineTool({
-    name: NESTED_TOOL_NAMES[3],
-    label: "Stop Nested Agent",
-    description: "Stop a running or queued nested agent owned by this parent. It ends with status `stopped` before its next tool call.",
-    parameters: Type.Object({
-      agent_id: Type.String(),
-    }),
-    execute: async (_toolCallId, params) => {
-      const record = context.manager.getRecord(params.agent_id);
-      if (!ownsRecord(record, context.parentAgentId) || (record.status !== "running" && record.status !== "queued")) {
-        return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
-      }
-      context.manager.abort(record.id, "parent");
-      return textResult(`Nested agent ${params.agent_id} stopped.`);
-    },
-  });
+	const stopTool = defineTool({
+		name: NESTED_TOOL_NAMES[3],
+		label: "Stop Nested Agent",
+		description:
+			"Stop a running or queued nested agent owned by this parent. It ends with status `stopped` before its next tool call.",
+		parameters: Type.Object({
+			agent_id: Type.String(),
+		}),
+		execute: async (_toolCallId, params) => {
+			const record = context.manager.getRecord(params.agent_id);
+			if (!ownsRecord(record, context.parentAgentId) || (record.status !== "running" && record.status !== "queued")) {
+				return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
+			}
+			context.manager.abort(record.id, "parent");
+			return textResult(`Nested agent ${params.agent_id} stopped.`);
+		},
+	});
 
-  return [agentTool, resultTool, steerTool, stopTool];
+	return [agentTool, resultTool, steerTool, stopTool];
 }

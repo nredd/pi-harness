@@ -1,4 +1,5 @@
 node_modules/
+/.native-lint/
 .venv/
 __pycache__/
 *.egg-info/
@@ -10,7 +11,25 @@ __pycache__/
 .coverage.*
 .DS_Store
 packages/**/coverage/
-integration/**/coverage/
+tests/integration/**/coverage/
+tests/**/coverage/
 scripts/coverage/
-benchmarks/comparison/coverage/
+release/coverage/
+tests/benchmarks/comparison/coverage/
 /coverage/summary.json
+packages/*/dist/
+packages/plan-mode/.pi-plan-mode-*
+packages/*/*.tgz
+
+# computer-use local native/build/signing outputs (formerly package-local ignores).
+packages/computer-use/.pi/
+packages/computer-use/index-*.js
+packages/computer-use/main.js
+packages/computer-use/*.tsbuildinfo
+packages/computer-use/tmp/
+packages/computer-use/results/
+packages/computer-use/signing/
+packages/computer-use/benchmarks/results/*local*
+packages/computer-use/scripts/cubench-results.json
+packages/computer-use/native/*/bridge-rs/target/
+packages/computer-use/prebuilt/

@@ -1,8 +1,9 @@
 # @nredd/pi-preset
 
-Published to npm as `@nredd/pi-preset` (public); `0.1.0` was the initial manual publication
-(see `releases/2026-10-18-npm-publication.json`). Version `0.2.0` prepares footer-only adoption;
-it must be published before configuring that pin. Nothing here changes a live Pi installation.
+Published to npm as `@nredd/pi-preset` (public). Install the footer with explicit resource filters;
+the rest of the preset is opt-in content, not an automatic machine-configuration installer.
+Releases use the monorepo [publication workflow](../../docs/releases.md); the initial `0.1.0`
+manual-publication receipt is `releases/2026-10-18-npm-publication.json`.
 
 The full managed preset is still not a supported release: no installer, no profile resolver, no activation path exists yet.
 
@@ -11,11 +12,11 @@ imposed on `@nredd/pi-dev-tools`, `@nredd/pi-session-kit`, or `@nredd/pi-subscri
 
 Tested hosts: the package tests run on core `v1.3.0-nredd.10` (upstream `1.3.0` plus the fork's patch queue,
 the release tarballs pinned in `devDependencies`); `make check-package-contracts` installs the packed
-preset into exact stock Pi `1.3.0`. Peers are `*` per Pi's package rules.
+preset into exact stock Pi `1.3.0` and loads its footer and skills through that host's resource loader. Peers are `*` per Pi's package rules.
 
 ## Install only the footer
 
-After `0.2.0` is published, add this object to `settings.json`'s `packages` array:
+For published `0.4.0`, add this object to `settings.json`'s `packages` array:
 
 ```json
 {
@@ -28,7 +29,10 @@ After `0.2.0` is published, add this object to `settings.json`'s `packages` arra
 ```
 
 Pi's package-source filters narrow its declared resources. The native discovery test exercises
-this exact filter against the real resource loader, without invoking a Pi binary.
+the workspace's `src/index.ts` filter against the real resource loader, without invoking a Pi binary.
+The example above remains the published `0.4.0` filter. Workspace builds now declare
+`./src/index.ts`; change the promoted filter to `src/index.ts` only when promoting a new
+preset version containing that entry. Do not apply the new filter to published `0.4.0`.
 
 **If pi-subagents is installed**, also set `"packageAgents": false` in `subagents.json` when
 agents remain locally managed. Its package-agent discovery is separate from Pi's four resource
@@ -46,6 +50,9 @@ local themes, skills, agents and their configuration. Restart sessions after act
 - TUI only, installed on `session_start`; print, JSON and RPC modes never mount it or poll.
 - Cwd/home abbreviation, branch, session name; usage totals for assistant/tool-result messages,
   standalone usage, compaction and branch summaries; sorted, whitespace-sanitized statuses.
+- Unpriced usage keeps its tokens but contributes no invented spend: mixed totals show the priced
+  subtotal plus `N unpriced`; wholly unpriced totals show `unknown`, including on subscriptions.
+  Free requests with billable tokens count as priced; zero-usage failures count as neither.
 - Word labels when they fit with the selected model, compact labels otherwise. Every row is
   width-bounded, including provider, model and thinking-level labels. Context warnings are
   strictly above 70%/90%; `(auto)` is always displayed, not the live compaction toggle.
@@ -100,7 +107,21 @@ OAuth state, context usage, branch/session entries and footer data from Pi; home
 uses `HOME`, then `USERPROFILE`, then the OS home; SDK callers can instead inject `homeDir` through
 `createExpandedFooter`. It does not read `settings/personal-defaults.json`,
 router configuration files, `cacheWarming`, or the persisted compaction setting.
-See [the behavior comparison](../../docs/footer-port.md) for source references and migration boundaries.
+
+## Development layout
+
+Runtime TypeScript lives in `src/`. Tests live in `tests/`, with helper code in
+`tests/fixtures/`. Headless helpers use `@nredd/pi-test-lib/harness`; the neutral
+`tests/fixtures/usage.ts` keeps the router bus independent of the interactive host.
+The same three `footer-headless.test.ts` cases (RPC, print and JSON bindings) run on
+stock Pi `1.5.2` under Node and Bun. This is not a stock full-suite or typecheck claim:
+`tests/fixtures/footer.ts` still imports `createInteractiveHarness`, `InteractiveHarness`
+and `InteractiveHarnessOptions` from the fork's `/testing/interactive`, and
+`tests/scenarios/footer-model.test.ts` still imports its `InteractiveHarness` type.
+Those hosts depend on private `InteractiveMode` and TUI render flushing; private model-route
+and interactive behavior are unchanged. Run `npm run check` for lint, types, Node and Bun tests plus the
+packed-file contract. `CHANGELOG.md` tracks unreleased changes; earlier history remains
+in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
 
 ## Contents
 
@@ -110,7 +131,7 @@ See [the behavior comparison](../../docs/footer-port.md) for source references a
 - `skills/`: `code-review`, `ship-issue`, `get-it-merged`, `coding-like-redd`. Discovered by Pi
   through `pi.skills`. `coding-like-redd` is explicitly opinionated (Python/Rust conventions of the
   author) and is public, opt-in content
-- `extensions/expanded-footer.ts` with sibling `lib/footer-cache.ts` and `lib/footer-quota.ts`.
+- `src/index.ts` with sibling `src/footer-cache.ts` and `src/footer-quota.ts`.
   The quota row stays hidden unless a `router:rpc:usage` responder (the subscription router) answers
 - `themes/`: `belafonte-day`, `tokyonight-storm`. **Separately licensed**, see below
 - `settings/personal-defaults.json`: reference data only. Pi does not read it from a package. A
@@ -175,13 +196,13 @@ falls back to another tier.
 dispatch. The same tier rules apply: a parked tier waits, never substitutes. The binding itself is
 profile config, not preset content.
 
-`test/resources.test.ts` parses `agents/` and `skills/` (frontmatter, fenced YAML/JSON, `key: value`
+`tests/resources.test.ts` parses `agents/` and `skills/` (frontmatter, fenced YAML/JSON, `key: value`
 and call arguments, flow lists and maps, `--model` flags and pi's `/model` command, tables with a
 `model` column) and fails on any non-tier value under a model-like key (`model`, `models`,
 `subagentModel`, `model_id`, `agentModels`, ...), comments in data fences included. Only pi's
 `--model`/`--models` flags may add a thinking suffix (`--models @review:high`); pi-subagents never
 parses one, so `model: "@review:high"` fails. A best-effort prose scan also fails on
-provider-qualified refs, model ids and family names. The guard lives in `test/model-guard.ts`;
+provider-qualified refs, model ids and family names. The guard lives in `tests/lib/src/model-guard.ts` (`@nredd/pi-test-lib/model-guard`);
 pi-subagents' default-agent test shares it.
 
 `code-review` captures the original PR merge-base
@@ -214,7 +235,7 @@ acceptance are **pending** too. Public managed workflows must not be activated b
 
 ## Precedence and collisions
 
-Local wins. Verified against real Pi 1.3.0 (`test/discovery.test.ts`) and the pinned
+Local wins. Verified against real Pi 1.3.0 (`tests/discovery.test.ts`) and the pinned
 pi-subagents source (below):
 
 - Skills: Pi keeps the first discovered skill of a name and reports the packaged one as a
@@ -232,18 +253,18 @@ is exactly the known managed link, and it happens only during explicit activatio
 
 ## Evidence and what is pending
 
-Executed in this workspace (see the gate below): footer helper assertions (preserved, except the quota expectations superseded by the reset-time/OpenAI-window change), real interactive
-footer scenarios (quota, cache, widths, lifecycle), headless mode bindings, static resource/schema/privacy/
-dependency tests, `npm pack` allowlist/license tests, and real Pi 1.3.0 resource discovery in a temporary
-`HOME`/agent dir with no live model calls or auth. Every test runs under Vitest and Bun.
+The [development gate](#development) covers footer helpers, real interactive footer scenarios
+(quota, cache, widths, lifecycle), headless bindings, resource/schema/privacy/dependency checks,
+packed-file allowlist/licenses and real Pi 1.3.0 resource discovery in a temporary home/agent directory.
+Node and Bun run the tests without live model calls or operator auth. Quota assertions use the
+current reset-time/OpenAI-window contract above, not the retired helper's display strings.
 
-Packed-tarball evidence (`make check-package-contracts`, see
-[package contracts](../../docs/package-contracts.md)): the packed preset is audited and installed alone.
+Packed-tarball evidence (`make check-package-contracts`): the packed preset is audited and installed alone.
 The native preset package gate separately loads its installed skill/extension resources through Pi
 from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
 the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
 ignored) is exercised against real children from these sources by
-`integration/inprocess/{reviewer,specialists}.test.ts`.
+`tests/inprocess/{reviewer,specialists}.test.ts`.
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
 Bun compiled-artifact behavior, any other fork commit or Pi version, `pi install npm:@nredd/pi-preset` through a live Pi, and npm provenance attestation.
@@ -257,17 +278,13 @@ npm ci --ignore-scripts
 npm run check -w @nredd/pi-preset   # biome, strict tsc, full Vitest on Node and Bun 1.4.4
 ```
 
-Istanbul measurement commands, per-file before/after counts, default-timer/failure/replay
-contracts and mutation evidence are recorded [here](../../docs/preset-istanbul-coverage.md).
-The provider used for that receipt is ephemeral; it does not change coverage policy or config.
-
-- `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
+- `tests/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock, timeZone, homeDir })` optionally injects one clock, an IANA zone pinning reset labels, and a home for cwd presentation (all default to process values) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
-- `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
-- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam and routed physical model/thinking labels. `lib/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
-- All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
+- `tests/*.test.ts` and `tests/fixtures/` are checked by strict TypeScript, including the migrated footer helper assertions. Everything under `src/` and `tests/` is Biome-formatted.
+- The footer provides the optional factory/clock seam and routed physical model/thinking labels. `src/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `src/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `tests/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Retire duplicate local footer files through the configuration manager during explicit activation, not by loading both implementations.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.
 They run in the test process, so a path Pi computed at import time would not be redirected; Pi 1.3.0
-computes none of the ones used (see the comment in `test/discovery.test.ts`).
+computes none of the ones used (see the comment in `tests/discovery.test.ts`).

@@ -19,9 +19,9 @@
 
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AgentBeforeSettleEvent, BoundaryResult, ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
-import type { Profile } from "./config.js";
-import { refKey, sameModel } from "./model-ref.js";
-import { ChainExhaustedError, hasPartialOutput, isQuotaError, type RouteEnv, type Router } from "./router.js";
+import type { Profile } from "./config.ts";
+import { refKey, sameModel } from "./model-ref.ts";
+import { ChainExhaustedError, hasPartialOutput, isQuotaError, type RouteEnv, type Router } from "./router.ts";
 
 /** What happened at one settle boundary. */
 export type RecoveryOutcome =
@@ -63,6 +63,7 @@ export class SettleRecovery {
 		profile: Profile,
 		env: RouteEnv,
 		signal: AbortSignal | undefined,
+		current: () => boolean = () => !signal?.aborted,
 	): Promise<RecoveryOutcome> {
 		const failed = trailingError(event.context.contextEntries);
 		if (!failed || !isQuotaError(failed.message) || hasPartialOutput(failed.message)) return { kind: "none" };
@@ -73,6 +74,7 @@ export class SettleRecovery {
 		if (this.recovered.has(key)) return { kind: "none" };
 		const model: Model<Api> | undefined = env.resolve(entry);
 		if (!model || !(await this.router.confirm(model, env, signal, failed.message.timestamp))) return { kind: "none" };
+		if (!current()) return { kind: "none" };
 		this.recovered.add(key);
 		const next = this.router.pick(profile, env);
 		if (!next.ok) return { kind: "exhausted", error: new ChainExhaustedError(profile.id, next.blocked, next.resetAt) };

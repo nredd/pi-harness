@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Opt-in report-only native coverage. No thresholds and no normal-check invocation.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -60,15 +62,33 @@ export function runCoverage(args, spawn = spawnSync) {
 	const version = spawn("cargo", ["llvm-cov", "--version"], { encoding: "utf8" });
 	if (version.error || version.status !== 0)
 		throw new Error(
-			"Missing cargo-llvm-cov; install pinned cargo-llvm-cov and llvm-tools-preview using docs/rust-coverage.md",
+			"Missing cargo-llvm-cov; install pinned cargo-llvm-cov and llvm-tools-preview per the package README",
 		);
 	if (version.stdout.trim() !== `cargo-llvm-cov ${TOOL_VERSION}`)
-		throw new Error(`Expected cargo-llvm-cov ${TOOL_VERSION}; see docs/rust-coverage.md`);
+		throw new Error(`Expected cargo-llvm-cov ${TOOL_VERSION}; see the package README`);
 	const directory = output ?? mkdtempSync(path.join(os.tmpdir(), `cu-rust-coverage-${crate}-`));
 	// Never clean a caller's output or reuse instrumented profiles from an earlier run.
 	mkdirSync(directory, { recursive: true });
 	const run = mkdtempSync(path.join(directory, `${crate}-`));
-	const manifest = path.join(root, "native", crate, "bridge-rs", "Cargo.toml");
+	const crateRoot = path.join(root, "native", crate, "bridge-rs");
+	const manifest = path.join(crateRoot, "Cargo.toml");
+	// Bind the raw profile to every shipped source and locked build input, not only mapped files.
+	const sourceHashes = Object.fromEntries(
+		[
+			"Cargo.toml",
+			"Cargo.lock",
+			...["src", "tests"].flatMap((directory) =>
+				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
+			),
+		]
+			.sort()
+			.map((name) => [
+				name,
+				createHash("sha256")
+					.update(readFileSync(path.join(crateRoot, name)))
+					.digest("hex"),
+			]),
+	);
 	const env = {
 		...process.env,
 		CARGO_TARGET_DIR: path.join(run, "target"),
@@ -92,7 +112,7 @@ export function runCoverage(args, spawn = spawnSync) {
 		writeFileSync(path.join(run, "run.log"), `${result.stdout ?? ""}\n${result.stderr ?? ""}`, { flag: "a" });
 		if (result.error || result.status !== 0)
 			throw new Error(
-				`cargo llvm-cov failed (${result.error?.message ?? result.status}); inspect ${run}/run.log; install matching llvm-tools-preview per docs/rust-coverage.md`,
+				`cargo llvm-cov failed (${result.error?.message ?? result.status}); inspect ${run}/run.log; install matching llvm-tools-preview per the package README`,
 			);
 		return result.stdout;
 	};
@@ -140,6 +160,10 @@ export function runCoverage(args, spawn = spawnSync) {
 				{
 					crate,
 					platform: process.platform,
+					arch: process.arch,
+					sourceHashes,
+					// LLVM regions are independent units, never invented branches or statements.
+					unmeasured: ["branches", "statements"],
 					tool: version.stdout.trim(),
 					elapsedSeconds: (Date.now() - started) / 1000,
 					commands,

@@ -145,12 +145,12 @@ def test_repository_owned_source_inventory_is_complete() -> None:
     "file",
     [
         "scripts/coverage_accounting.py",
-        "integration/harness/paths.py",
-        "integration/probes/anthropic-block-types.mjs",
-        "integration/probes/latency.ts",
-        "integration/probes/render.ts",
-        "integration/probes/session-kit-child-scope.ts",
-        "integration/probes/stack-resources.ts",
+        "tests/integration/harness/paths.py",
+        "tests/integration/probes/anthropic-block-types.mjs",
+        "tests/integration/probes/latency.ts",
+        "tests/integration/probes/render.ts",
+        "tests/integration/probes/session-kit-child-scope.ts",
+        "tests/integration/probes/stack-resources.ts",
     ],
 )
 def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
@@ -195,7 +195,7 @@ def test_providers_are_measured_in_the_goal_at_zero() -> None:
     providers = cfg.packages["providers"]
     sources = {
         path.name
-        for path in (ROOT / "integration/providers").iterdir()
+        for path in (ROOT / "tests/integration/providers").iterdir()
         if path.suffix in {".ts", ".mjs"}
         and not path.name.endswith(".test.ts")
         and path.name != "vitest.config.ts"
@@ -210,7 +210,7 @@ def test_providers_are_measured_in_the_goal_at_zero() -> None:
         "linux": (0, 0),
     }
     helpers = {helper.path for helper in cfg.verification_helpers}
-    assert not any(path.startswith("integration/providers/") for path in helpers)
+    assert not any(path.startswith("tests/integration/providers/") for path in helpers)
 
 
 def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
@@ -229,21 +229,23 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         path.relative_to(ROOT).as_posix()
         for pattern in [
             "packages/*/vitest*.config.ts",
-            "packages/todo/.vitest.config.ts",
-            "integration/*/vitest.config.ts",
+            "tests/integration/*/vitest.config.ts",
+            "tests/inprocess/vitest.config.ts",
             "scripts/vitest.config.ts",
+            "tests/lib/vitest.config.ts",
         ]
         for path in ROOT.glob(pattern)
     }
     assert inventory(ROOT, audit) == {
-        "scripts/check-biome-paths.mjs",
+        "scripts/check-commit-messages.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
+        "scripts/vitest-package.ts",
         *configs,
     }
-    assert len(configs) == 17, configs
+    assert len(configs) == 18, configs
     assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]
@@ -253,9 +255,43 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "linux": (0, 0),
     }
     helpers = {helper.path for helper in cfg.verification_helpers}
-    assert {"scripts/check-biome-paths.test.mjs", "scripts/router_contract.test.mjs"} == {
+    assert {"scripts/router_contract.test.mjs"} == {
         path for path in helpers if path.startswith("scripts/") and "/" not in path.removeprefix("scripts/")
     }
+
+
+@pytest.mark.parametrize(
+    ("package", "report"),
+    [("probes", "coverage/bun/lcov.info"), ("import-audit", "scripts/coverage/bun/lcov.info")],
+)
+def test_helper_bun_signals_are_independent_full_source_at_zero(package: str, report: str) -> None:
+    """Pin both helper signals without a compatibility subset or unsupported cells.
+
+    Parameters:
+        package (str): Source-complete helper producer.
+        report (str): Report path relative to its policy root.
+    Returns:
+        None: Every counter is enforced at zero on both OSes, independently from primary.
+    Raises:
+        AssertionError: A helper loses source, a reporter, an OS floor or explicit enforcement.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    entry = cfg.packages[package]
+    bun = entry.signals["bun"]
+    assert entry.status == "measured"
+    assert entry.goal == "100-percent"
+    assert not entry.exclusions
+    assert bun.report == report
+    assert bun.report != entry.signals["primary"].report
+    assert bun.enforcement == "enforced"
+    assert bun.files is None
+    assert not bun.skip_os
+    assert not bun.skip_hosts
+    assert not bun.gate
+    assert bun.reporters == ["text", "lcov", "json-summary"]
+    assert set(bun.max_uncovered) == {"darwin", "linux"}
+    for counts in bun.max_uncovered.values():
+        assert counts.lines == counts.functions == counts.branches == counts.statements == 0
 
 
 def published_path(relative: Path, patterns: list[str]) -> bool:
@@ -323,9 +359,9 @@ def test_async_helper_is_independently_measured_at_zero() -> None:
     assert package.status == "measured"
     assert package.goal == "report-only"
     assert package.root == "packages/computer-use"
-    assert package.owned == ["scripts/check-async.mjs"]
+    assert package.owned == ["tests/fixtures/check-async.mjs"]
     assert not package.exclusions
-    assert "scripts/check-async.mjs" not in inventory(ROOT, cfg.packages["computer-use-vitest"])
+    assert "tests/fixtures/check-async.mjs" not in inventory(ROOT, cfg.packages["computer-use-vitest"])
     assert not any(helper.path.endswith("/check-async.mjs") for helper in cfg.verification_helpers)
     signal = package.signals["primary"]
     assert signal.report == "coverage/async/lcov.info"
@@ -364,7 +400,7 @@ def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, 
 
 
 def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
-    """Keep both complete runtime scripts measured by a mandatory zero-floor producer.
+    """Keep the complete runtime script measured by a mandatory zero-floor producer.
 
     Parameters:
         None.
@@ -378,7 +414,7 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     assert package.status == "measured"
     assert package.goal == "100-percent"
     assert package.root == "packages/subagents"
-    assert package.owned == ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"]
+    assert package.owned == ["scripts/build-runtime.mjs"]
     assert not package.exclusions
     assert not any(
         helper.path.startswith("packages/subagents/scripts/") for helper in cfg.verification_helpers
@@ -394,8 +430,8 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     for counts in signal.max_uncovered.values():
         assert counts.lines == counts.functions == counts.branches == counts.statements == 0
     manifest = json.loads((ROOT / package.root / "package.json").read_text())
-    assert "npm run test:runtime-scripts" in manifest["scripts"]["check"]
-    assert manifest["scripts"]["test:runtime-scripts"] == (
+    assert "npm run test:runtime-build" in manifest["scripts"]["check"]
+    assert manifest["scripts"]["test:runtime-build"] == (
         "node ../../scripts/run-vitest.ts node --config vitest.runtime-build.config.ts --coverage"
     )
 
@@ -457,7 +493,7 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     "path",
     [
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
-        "packages/computer-use/scripts/check-linux-live.mjs",
+        "packages/computer-use/tests/fixtures/linux-live.mjs",
     ],
 )
 def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> None:
@@ -472,40 +508,16 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
-    assert helpers.get(path, "").strip(), path
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "check-commit-messages",
-        "check-docs-platform",
-        "check-docs",
-        "check-package-assets",
-        "check-sync-ledger",
-        "check-sync-reverts",
-        "check-upstream-sync",
-    ],
-)
-def test_retained_computer_use_gates_are_measured(name: str) -> None:
-    """Keep executable repository gates in both inventories, not helper exemptions.
-
-    Parameters:
-        name (str): Retained gate module measured under computer-use Vitest.
-    Returns:
-        None: Both inventories contain the gate and no helper exemption remains.
-    Raises:
-        AssertionError: A gate silently leaves the measured producer.
-    """
-    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
-    source = f"scripts/{name}.mjs"
-    for package in ["computer-use", "computer-use-vitest"]:
-        assert source in inventory(ROOT, cfg.packages[package])
-    assert not any(helper.path == f"packages/computer-use/{source}" for helper in cfg.verification_helpers)
+    assert path not in helpers
+    if path.endswith("pi-cubench-agent.mjs"):
+        assert not (ROOT / path).exists()
+    else:
+        assert is_test_path(Path(path))
+        assert (ROOT / path).is_file()
 
 
 def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> None:
-    """Keep `integration/conftest.py` in test scope (#386) instead of a `test-helper` exclusion.
+    """Keep `tests/integration/conftest.py` in test scope (#386) instead of a `test-helper` exclusion.
 
     Parameters:
         None.
@@ -517,8 +529,8 @@ def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> N
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     assert not cfg.packages["python-harness"].exclusions
     assert not cfg.packages["python-scripts"].exclusions
-    assert is_test_path(Path("integration/conftest.py"))
-    assert not is_test_path(Path("integration/harness/conftest_like.py"))
+    assert is_test_path(Path("tests/integration/conftest.py"))
+    assert not is_test_path(Path("tests/integration/harness/conftest_like.py"))
 
 
 def test_ported_computer_suites_are_conventional_tests() -> None:
@@ -542,7 +554,6 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
         "async.test.mjs",
         "bounded-output.test.mjs",
         "cleanup.test.mjs",
-        "commit-messages.test.mjs",
         "desktop-tools.test.mjs",
         "find-params.test.mjs",
         "invariants.test.mjs",
@@ -563,7 +574,6 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
         "rust-coverage.test.mjs",
         "session-lifecycle.test.mjs",
         "swift-sdk.test.mjs",
-        "sync-ledger.test.mjs",
         "tool-schemas.test.mjs",
         "unpaired-act.test.mjs",
         "windows-build-scripts.test.mjs",
@@ -604,7 +614,8 @@ def test_unaudited_languages_are_owned_pending_or_tracked_unmeasured() -> None:
         }:
             assert file in covered or is_test_path(Path(file)), file
     assert "packages/computer-use/native/macos/agent_cursor_tests.swift" not in covered
-    assert "packages/computer-use/scripts/make-signing-cert.sh" in covered
+    assert not (ROOT / "packages/computer-use/scripts/make-signing-cert.sh").exists()
+    assert "packages/computer-use/scripts/make-signing-cert.mjs" in covered
     assert "scripts/merge-pr.sh" in covered
     assert cfg.packages["shell-scripts"].status == "pending"
     assert "#695" in cfg.packages["shell-scripts"].note
@@ -626,16 +637,9 @@ INERT_BY_DECISION = {
     ".github/workflows/runner-smoke.yml",
     ".github/workflows/wsl-watchdog.yml",
     "Makefile",
-    "benchmarks/comparison/Makefile",
-    "integration/Makefile",
-    "packages/computer-use/.github/FUNDING.yml",
-    "packages/computer-use/.github/dependabot.yml",
-    "packages/computer-use/.github/workflows/ci.yml",
-    "packages/computer-use/.github/workflows/docs.yml",
-    "packages/computer-use/.github/workflows/npm-audit.yml",
-    "packages/computer-use/.github/workflows/publish-npm.yml",
-    "packages/subagents/.github/FUNDING.yml",
-    "packages/subagents/.github/workflows/ci.yml",
+    "tests/benchmarks/comparison/Makefile",
+    "tests/integration/Makefile",
+    "packages/computer-use/Makefile",
 }
 
 

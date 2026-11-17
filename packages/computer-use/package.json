@@ -29,7 +29,6 @@
     "node": ">=20.6.0"
   },
   "files": [
-    "extensions",
     "src",
     "scripts/build-native.mjs",
     "scripts/setup-helper.mjs",
@@ -49,61 +48,27 @@
     "native/linux/bridge-rs/src/wayland.rs",
     "native/linux/bridge-rs/src/x11.rs",
     "prebuilt/macos",
-    "assets/reference/img.jpg",
     "README.md",
-    "UPSTREAM.md",
-    "LICENSE",
-    "docs/macos-root-targeting.md",
-    "docs/content/docs",
-    "docs/README.md"
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
-      "./extensions/computer-use.ts"
-    ],
-    "image": "./assets/reference/img.jpg"
+      "./src/index.ts"
+    ]
   },
   "scripts": {
     "postinstall": "node scripts/setup-helper.mjs --postinstall",
-    "docs:generate": "tsx scripts/docs-generators/generate-tool-reference.mjs && node scripts/docs-generators/generate-source-references.mjs",
-    "docs:check": "tsx scripts/docs-generators/generate-tool-reference.mjs --check && node scripts/docs-generators/generate-source-references.mjs --check && node scripts/check-docs.mjs && node scripts/check-docs-platform.mjs",
-    "docs:dev": "npm --prefix docs run dev",
-    "docs:build": "npm --prefix docs run build",
-    "docs:site:check": "npm --prefix docs run typecheck && npm --prefix docs run build",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.signing.json",
-    "test:schema": "node ../../scripts/run-vitest.ts node test/tool-schemas.test.mjs --coverage.enabled=false",
-    "test:find-params": "node ../../scripts/run-vitest.ts node test/find-params.test.mjs --coverage.enabled=false",
-    "test:invariants": "node ../../scripts/run-vitest.ts node test/invariants.test.mjs --coverage.enabled=false",
-    "test:lifecycle": "node ../../scripts/run-vitest.ts node test/session-lifecycle.test.mjs --coverage.enabled=false",
-    "test:runtime": "node ../../scripts/run-vitest.ts node test/runtime-concurrency.test.mjs --coverage.enabled=false",
-    "test:output": "node ../../scripts/run-vitest.ts node test/bounded-output.test.mjs --coverage.enabled=false",
-    "test:commits": "node ../../scripts/run-vitest.ts node test/commit-messages.test.mjs --coverage.enabled=false && node scripts/check-commit-messages.mjs",
-    "test:platform": "node ../../scripts/run-vitest.ts node test/platform-windows.test.mjs --coverage.enabled=false",
-    "test:windows-scripts": "PI_CU_WINDOWS_SCRIPTS=1 node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs --coverage.enabled=false",
-    "test:package-assets": "node scripts/check-package-assets.mjs",
-    "test:signing": "node ../../scripts/run-vitest.ts node test/local-signing.test.mjs --coverage.enabled=false",
-    "test:macos-path": "node ../../scripts/run-vitest.ts node test/macos-helper-path.test.mjs --coverage.enabled=false",
-    "test:macos-target": "node ../../scripts/run-vitest.ts node test/macos-observe-target.test.mjs --coverage.enabled=false",
-    "test:macos-native": "node ../../scripts/run-vitest.ts node test/macos-native-pure.test.mjs --coverage.enabled=false",
-    "test:act-outcomes": "node ../../scripts/run-vitest.ts node test/act-outcomes.test.mjs --coverage.enabled=false",
-    "test:desktop": "node ../../scripts/run-vitest.ts node test/desktop-tools.test.mjs --coverage.enabled=false",
-    "test:unpaired": "node ../../scripts/run-vitest.ts node test/unpaired-act.test.mjs --coverage.enabled=false",
-    "test:macos-live": "node ../../scripts/run-vitest.ts node test/macos-helper-live.test.mjs --coverage.enabled=false",
-    "test:sync-reverts": "node ../../scripts/run-vitest.ts node test/sync-ledger.test.mjs --coverage.enabled=false && node scripts/check-sync-reverts.mjs",
+    "typecheck": "tsc -p tsconfig.json",
     "coverage:rust": "node scripts/rust-coverage.mjs",
     "test:async": "node ../../scripts/run-vitest.ts node --config vitest.async.config.ts --coverage",
     "coverage:swift": "node scripts/swift-coverage.mjs",
-    "test:rust-coverage": "node ../../scripts/run-vitest.ts node test/rust-coverage.test.mjs --coverage.enabled=false",
-    "test:upstream-sync": "node scripts/check-upstream-sync.mjs",
-    "check": "npm run typecheck && npm run docs:check && npm test && npm run test:async && node scripts/check-package-assets.mjs && node scripts/check-commit-messages.mjs && node scripts/check-sync-reverts.mjs && node scripts/check-upstream-sync.mjs --fetch-if-enabled",
+    "check": "uv run --locked --project ../../tests/integration python ../../scripts/package_contracts.py --packed-files-only --package computer-use && npm run typecheck && npm test && npm run test:async",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "build:native": "node scripts/build-native.mjs",
     "build:windows": "node scripts/build-native.mjs --platform windows",
     "build:linux": "node scripts/build-native.mjs --platform linux",
-    "test:linux": "node ../../scripts/run-vitest.ts node test/platform-linux.test.mjs --coverage.enabled=false",
-    "test:linux-scripts": "node ../../scripts/run-vitest.ts node test/async.test.mjs test/cleanup.test.mjs test/linux-build-scripts.test.mjs --coverage.enabled=false",
-    "test:linux-native": "node ../../scripts/run-vitest.ts node test/linux-native.test.mjs --coverage.enabled=false",
-    "test:linux-live": "PI_CU_LIVE=1 node scripts/check-linux-live.mjs"
+    "test:linux-live": "PI_CU_LIVE=1 node tests/fixtures/linux-live.mjs",
+    "build": "make bridge"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -111,8 +76,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "tsx": "^4.23.1",
-    "typescript": "^7.0.2"
+    "@nredd/pi-test-lib": "0.0.0",
+    "tsx": "^4.23.1"
   }
 }

@@ -11,33 +11,33 @@
 
 /** Await a promise until it settles or the caller cancels, without aborting the underlying work. */
 export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(signal.reason);
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(signal.reason);
 
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    // The listener is removed on every settle path, so abort can only fire while pending.
-    const onAbort = () => {
-      settled = true;
-      cleanup();
-      reject(signal.reason);
-    };
+	return new Promise<T>((resolve, reject) => {
+		let settled = false;
+		const cleanup = () => signal.removeEventListener("abort", onAbort);
+		// The listener is removed on every settle path, so abort can only fire while pending.
+		const onAbort = () => {
+			settled = true;
+			cleanup();
+			reject(signal.reason);
+		};
 
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      },
-    );
-  });
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(value) => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				resolve(value);
+			},
+			(error: unknown) => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				reject(error);
+			},
+		);
+	});
 }

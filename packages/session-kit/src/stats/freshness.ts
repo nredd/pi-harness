@@ -1,6 +1,7 @@
 /** Offline provenance display. Export time is not last activity or proof of fleet completeness. */
 import { sanitize } from "../diff/view.ts";
-import type { Coverage } from "./snapshot.ts";
+import { HARNESSES } from "./load.ts";
+import type { Coverage, HarnessStatus } from "./snapshot.ts";
 
 /** Invalid/absent clocks never become fresh; future clocks are explicitly untrustworthy. */
 export function timestampLabel(ms: number | undefined, now: number): string {
@@ -17,6 +18,19 @@ export function timestampLabel(ms: number | undefined, now: number): string {
 					? `${Math.floor(minutes / 60)}h`
 					: `${Math.floor(minutes / 1440)}d`;
 	return `${timestamp} (${age} ago)`;
+}
+
+/** One harness on one machine: found or not installed, last event, last clean read, diagnostics. */
+function harnessLine(name: string, status: HarnessStatus, now: number): string {
+	const parts: string[] = [];
+	if (status.found !== undefined) parts.push(status.found ? "found" : "not installed");
+	if (status.lastGoodAt !== undefined)
+		parts.push(
+			`${status.stale ? "STALE, not read cleanly since" : "last read cleanly"} ${timestampLabel(status.lastGoodAt, now)}`,
+		);
+	if (status.lastEventMs !== undefined) parts.push(`last event ${timestampLabel(status.lastEventMs, now)}`);
+	for (const problem of status.problems) parts.push(sanitize(problem.replace(/^[a-z]+: /, "")));
+	return `  ${name}: ${parts.join(" · ") || "no data"}`;
 }
 
 /** Shared print/TUI lines. UUIDs disambiguate default or duplicate labels without exposing hostnames. */
@@ -40,6 +54,10 @@ export function freshnessLines(coverage: Coverage, now = Date.now()): string[] {
 						? "Incomplete import; no last-good snapshot"
 						: "Incomplete import; retained last-good snapshot",
 				);
+		}
+		for (const h of HARNESSES) {
+			const status = source.harnesses?.[h];
+			if (status) lines.push(harnessLine(h, status, now));
 		}
 	}
 	return lines;

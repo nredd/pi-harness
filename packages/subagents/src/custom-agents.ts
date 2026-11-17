@@ -5,17 +5,17 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
-import { errorMessage } from "./error-message.js";
-import { resolveAgentDir } from "./home-paths.js";
+import { BUILTIN_TOOL_NAMES } from "./agent-types.ts";
+import { errorMessage } from "./error-message.ts";
+import { resolveAgentDir } from "./home-paths.ts";
 import {
-  isPackageResourceExcluded,
-  isProjectTrusted,
-  MAX_PACKAGE_RESOURCE_BYTES,
-  packageAgentDirs,
-  packageAgentFiles,
-} from "./package-resources.js";
-import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./types.js";
+	isPackageResourceExcluded,
+	isProjectTrusted,
+	MAX_PACKAGE_RESOURCE_BYTES,
+	packageAgentDirs,
+	packageAgentFiles,
+} from "./package-resources.ts";
+import type { AgentConfig, IsolationMode, MemoryScope, ThinkingLevel } from "./types.ts";
 
 /**
  * The one thing a declared `name:` may not contain, matching Claude Code
@@ -44,21 +44,21 @@ type Excluder = (path: string) => boolean;
  * for a caller that has to pin a scan it already performed.
  */
 export interface LoadCustomAgentsOptions {
-  /** Explicit package directories, bypassing discovery. */
-  packageDirs?: string[];
-  /** Explicit package files, bypassing discovery. */
-  packageFiles?: string[];
-  /** Explicit `!` exclusion predicate, bypassing discovery. */
-  packageExcluded?: Excluder;
-  /**
-   * Whether pi trusts the project at `cwd`. Gates the project roots and, for
-   * discovered packages, the project's `.pi/settings.json`. Omitted falls back to
-   * the session state in package-resources.ts, which is untrusted until pi's
-   * answer is recorded.
-   */
-  projectTrusted?: boolean;
-  /** Home directory for the default global agent directory. Defaults at call time. */
-  homeDir?: string;
+	/** Explicit package directories, bypassing discovery. */
+	packageDirs?: string[];
+	/** Explicit package files, bypassing discovery. */
+	packageFiles?: string[];
+	/** Explicit `!` exclusion predicate, bypassing discovery. */
+	packageExcluded?: Excluder;
+	/**
+	 * Whether pi trusts the project at `cwd`. Gates the project roots and, for
+	 * discovered packages, the project's `.pi/settings.json`. Omitted falls back to
+	 * the session state in package-resources.ts, which is untrusted until pi's
+	 * answer is recorded.
+	 */
+	projectTrusted?: boolean;
+	/** Home directory for the default global agent directory. Defaults at call time. */
+	homeDir?: string;
 }
 
 /**
@@ -94,58 +94,59 @@ export interface LoadCustomAgentsOptions {
  * filename clash, and `warnSkippedOverride` reports the substitution.
  */
 export function loadCustomAgents(
-  cwd: string,
-  strict = false,
-  opts: LoadCustomAgentsOptions = {},
+	cwd: string,
+	strict = false,
+	opts: LoadCustomAgentsOptions = {},
 ): Map<string, AgentConfig> {
-  const globalDir = join(resolveAgentDir(opts.homeDir), "agents");
-  const workspaceProjectDir = join(cwd, ".agents", "agents");
-  const projectDir = join(cwd, ".pi", "agents");
+	const globalDir = join(resolveAgentDir(opts.homeDir), "agents");
+	const workspaceProjectDir = join(cwd, ".agents", "agents");
+	const projectDir = join(cwd, ".pi", "agents");
 
-  const projectTrusted = opts.projectTrusted ?? isProjectTrusted();
-  const discovery = { projectTrusted, homeDir: opts.homeDir };
-  const pkgDirs = opts.packageDirs ?? packageAgentDirs(cwd, discovery);
-  const pkgFiles = opts.packageFiles ?? packageAgentFiles(cwd, discovery);
-  // `!./agents/wip.md` alongside `./agents` excludes one file out of a directory
-  // that is only enumerated here, so the check has to run per file.
-  const excluded: Excluder = opts.packageExcluded ?? (path => isPackageResourceExcluded(path, cwd, "agents", discovery));
+	const projectTrusted = opts.projectTrusted ?? isProjectTrusted();
+	const discovery = { projectTrusted, homeDir: opts.homeDir };
+	const pkgDirs = opts.packageDirs ?? packageAgentDirs(cwd, discovery);
+	const pkgFiles = opts.packageFiles ?? packageAgentFiles(cwd, discovery);
+	// `!./agents/wip.md` alongside `./agents` excludes one file out of a directory
+	// that is only enumerated here, so the check has to run per file.
+	const excluded: Excluder =
+		opts.packageExcluded ?? ((path) => isPackageResourceExcluded(path, cwd, "agents", discovery));
 
-  const agents = new Map<string, AgentConfig>();
-  for (const dir of pkgDirs) loadFromDir(dir, agents, "package", strict, excluded); // lowest priority
-  for (const file of pkgFiles) loadOneFile(file, agents, "package", strict);
-  loadFromDir(globalDir, agents, "global", strict);
-  if (projectTrusted) {
-    loadFromDir(workspaceProjectDir, agents, "project", strict); // shared workspace
-    loadFromDir(projectDir, agents, "project", strict);          // highest priority (overwrites)
-  }
+	const agents = new Map<string, AgentConfig>();
+	for (const dir of pkgDirs) loadFromDir(dir, agents, "package", strict, excluded); // lowest priority
+	for (const file of pkgFiles) loadOneFile(file, agents, "package", strict);
+	loadFromDir(globalDir, agents, "global", strict);
+	if (projectTrusted) {
+		loadFromDir(workspaceProjectDir, agents, "project", strict); // shared workspace
+		loadFromDir(projectDir, agents, "project", strict); // highest priority (overwrites)
+	}
 
-  warnedLastLoad = warnedThisLoad;
-  warnedThisLoad = new Set();
-  return agents;
+	warnedLastLoad = warnedThisLoad;
+	warnedThisLoad = new Set();
+	return agents;
 }
 
 /** Load agent configs from a directory into the map, skipping any `excluded` path. */
 function loadFromDir(
-  dir: string,
-  agents: Map<string, AgentConfig>,
-  source: AgentSource,
-  strict: boolean,
-  excluded?: Excluder,
+	dir: string,
+	agents: Map<string, AgentConfig>,
+	source: AgentSource,
+	strict: boolean,
+	excluded?: Excluder,
 ): void {
-  if (!existsSync(dir)) return;
+	if (!existsSync(dir)) return;
 
-  let files: string[];
-  try {
-    files = readdirSync(dir).filter(f => f.endsWith(".md"));
-  } catch {
-    return;
-  }
+	let files: string[];
+	try {
+		files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+	} catch {
+		return;
+	}
 
-  for (const file of files) {
-    const path = join(dir, file);
-    if (excluded?.(path)) continue;
-    loadOneFile(path, agents, source, strict);
-  }
+	for (const file of files) {
+		const path = join(dir, file);
+		if (excluded?.(path)) continue;
+		loadOneFile(path, agents, source, strict);
+	}
 }
 
 /**
@@ -156,87 +157,89 @@ function loadFromDir(
  * to both paths.
  */
 function loadOneFile(path: string, agents: Map<string, AgentConfig>, source: AgentSource, strict: boolean): void {
-  const filenameType = basename(path, ".md");
+	const filenameType = basename(path, ".md");
 
-  // Package files are third-party content read on every `Agent` call, so a
-  // pathological one is skipped rather than pulled into the session. Claude
-  // Code applies the same 1 MB ceiling to plugin-provided agents. Local files
-  // are the user's own and stay unbounded, as they always have been.
-  if (source === "package" && !withinSizeLimit(path)) {
-    warnIfNew(`Skipping package agent ${path}: not a regular file, or larger than ${MAX_PACKAGE_RESOURCE_BYTES} bytes.`);
-    return;
-  }
+	// Package files are third-party content read on every `Agent` call, so a
+	// pathological one is skipped rather than pulled into the session. Claude
+	// Code applies the same 1 MB ceiling to plugin-provided agents. Local files
+	// are the user's own and stay unbounded, as they always have been.
+	if (source === "package" && !withinSizeLimit(path)) {
+		warnIfNew(
+			`Skipping package agent ${path}: not a regular file, or larger than ${MAX_PACKAGE_RESOURCE_BYTES} bytes.`,
+		);
+		return;
+	}
 
-  // `strict` is deliberately not passed for a package file. Failing activation
-  // over a broken agent file is right for a checked-in `.pi/agents/` — the point
-  // is that a repo's own file cannot silently fall through to a same-named one
-  // elsewhere. A file inside a third-party package is not the user's to fix, and
-  // one bad `.md` in any installed package would otherwise stop pi from
-  // starting at all. Warn and skip, as for a non-strict local file.
-  const parsed = readAgentFile(path, strict && source !== "package");
-  if (!parsed) {
-    warnSkippedOverride(filenameType, agents);
-    return;
-  }
-  const { frontmatter: fm, body } = parsed;
+	// `strict` is deliberately not passed for a package file. Failing activation
+	// over a broken agent file is right for a checked-in `.pi/agents/` — the point
+	// is that a repo's own file cannot silently fall through to a same-named one
+	// elsewhere. A file inside a third-party package is not the user's to fix, and
+	// one bad `.md` in any installed package would otherwise stop pi from
+	// starting at all. Warn and skip, as for a non-strict local file.
+	const parsed = readAgentFile(path, strict && source !== "package");
+	if (!parsed) {
+		warnSkippedOverride(filenameType, agents);
+		return;
+	}
+	const { frontmatter: fm, body } = parsed;
 
-  // Claude Code's rule: `name:` IS the agent type, and the filename need not
-  // match. Absent, the filename stands in — Claude Code requires the field,
-  // but most files here predate it and must keep loading.
-  const declared = str(fm.name)?.trim();
-  if (declared?.includes(RESERVED_IN_TYPE)) {
-    // Refusing beats silently substituting: the file would otherwise load
-    // under its filename, so `Agent({subagent_type})` would succeed against
-    // an agent whose declared identity nothing honoured.
-    warnIfNew(
-      `Agent file ${path} declares name "${declared}", which contains "${RESERVED_IN_TYPE}" — reserved for `
-      + "plugin-scoped identifiers. Rename it, or move the label to `display_name:`. Skipping.",
-    );
-    // No `warnSkippedOverride`: this file would have registered under its
-    // *declared* name, which nothing else can hold (a colon keeps it out of
-    // the registry), so it shadowed nothing. Passing the filename instead
-    // would report a substitution of an unrelated agent that never happened.
-    return;
-  }
-  // `||`, not `??`: a quoted empty or all-whitespace `name:` would otherwise
-  // register the agent under the empty type — unspawnable, and it takes the
-  // filename-derived one down with it.
-  const name = declared || filenameType;
+	// Claude Code's rule: `name:` IS the agent type, and the filename need not
+	// match. Absent, the filename stands in — Claude Code requires the field,
+	// but most files here predate it and must keep loading.
+	const declared = str(fm.name)?.trim();
+	if (declared?.includes(RESERVED_IN_TYPE)) {
+		// Refusing beats silently substituting: the file would otherwise load
+		// under its filename, so `Agent({subagent_type})` would succeed against
+		// an agent whose declared identity nothing honoured.
+		warnIfNew(
+			`Agent file ${path} declares name "${declared}", which contains "${RESERVED_IN_TYPE}" — reserved for ` +
+				"plugin-scoped identifiers. Rename it, or move the label to `display_name:`. Skipping.",
+		);
+		// No `warnSkippedOverride`: this file would have registered under its
+		// *declared* name, which nothing else can hold (a colon keeps it out of
+		// the registry), so it shadowed nothing. Passing the filename instead
+		// would report a substitution of an unrelated agent that never happened.
+		return;
+	}
+	// `||`, not `??`: a quoted empty or all-whitespace `name:` would otherwise
+	// register the agent under the empty type — unspawnable, and it takes the
+	// filename-derived one down with it.
+	const name = declared || filenameType;
 
-  const { builtinToolNames, extSelectors } = parseToolsField(fm.tools);
+	const { builtinToolNames, extSelectors } = parseToolsField(fm.tools);
 
-  agents.set(name, {
-    name,
-    // Only `display_name` now: `name` is the type, and `getConfig` already
-    // falls back to the type when no label is set — so a Claude Code file
-    // with `name: code-reviewer` still badges as "code-reviewer".
-    displayName: str(fm.display_name),
-    color: str(fm.color),
-    description: str(fm.description) ?? name,
-    builtinToolNames,
-    extSelectors,
-    disallowedTools: csvListOptional(fm.disallowed_tools),
-    extensions: inheritField(fm.extensions ?? fm.inherit_extensions),
-    excludeExtensions: csvListOptional(fm.exclude_extensions),
-    skills: inheritField(fm.skills ?? fm.inherit_skills),
-    model: str(fm.model),
-    thinking: str(fm.thinking) as ThinkingLevel | undefined,
-    maxTurns: nonNegativeInt(fm.max_turns),
-    persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
-    outputTranscript: fm.output_transcript != null ? fm.output_transcript !== false : undefined,
-    sessionDir: str(fm.session_dir),
-    allowedSubagents: parseAllowedSubagents(fm.allowed_subagents),
-    systemPrompt: body.trim(),
-    promptMode: fm.prompt_mode === "append" ? "append" : "replace",
-    inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,
-    runInBackground: fm.run_in_background != null ? fm.run_in_background === true : undefined,
-    isolated: fm.isolated != null ? fm.isolated === true : undefined,
-    memory: parseMemory(fm.memory),
-    isolation: parseIsolation(fm.isolation),
-    enabled: fm.enabled !== false,  // default true; explicitly false disables
-    source,
-    sourcePath: path,
-  });
+	agents.set(name, {
+		name,
+		// Only `display_name` now: `name` is the type, and `getConfig` already
+		// falls back to the type when no label is set — so a Claude Code file
+		// with `name: code-reviewer` still badges as "code-reviewer".
+		displayName: str(fm.display_name),
+		color: str(fm.color),
+		description: str(fm.description) ?? name,
+		builtinToolNames,
+		extSelectors,
+		disallowedTools: csvListOptional(fm.disallowed_tools),
+		extensions: inheritField(fm.extensions ?? fm.inherit_extensions),
+		excludeExtensions: csvListOptional(fm.exclude_extensions),
+		skills: inheritField(fm.skills ?? fm.inherit_skills),
+		model: str(fm.model),
+		thinking: str(fm.thinking) as ThinkingLevel | undefined,
+		maxTurns: nonNegativeInt(fm.max_turns),
+		persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
+		outputTranscript: fm.output_transcript != null ? fm.output_transcript !== false : undefined,
+		sessionDir: str(fm.session_dir),
+		allowedSubagents: parseAllowedSubagents(fm.allowed_subagents),
+		systemPrompt: body.trim(),
+		promptMode: fm.prompt_mode === "append" ? "append" : "replace",
+		inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,
+		runInBackground: fm.run_in_background != null ? fm.run_in_background === true : undefined,
+		isolated: fm.isolated != null ? fm.isolated === true : undefined,
+		memory: parseMemory(fm.memory),
+		isolation: parseIsolation(fm.isolation),
+		enabled: fm.enabled !== false, // default true; explicitly false disables
+		source,
+		sourcePath: path,
+	});
 }
 
 /**
@@ -248,12 +251,12 @@ function loadOneFile(path: string, agents: Map<string, AgentConfig>, source: Age
  * because the alternative is reading something we could not describe.
  */
 function withinSizeLimit(path: string): boolean {
-  try {
-    const stat = statSync(path);
-    return stat.isFile() && stat.size <= MAX_PACKAGE_RESOURCE_BYTES;
-  } catch {
-    return false;
-  }
+	try {
+		const stat = statSync(path);
+		return stat.isFile() && stat.size <= MAX_PACKAGE_RESOURCE_BYTES;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -283,19 +286,24 @@ function withinSizeLimit(path: string): boolean {
  * content — normalising it at the boundary keeps one behaviour across the whole
  * supported peer range instead of forking on what happens to be installed.
  */
-export function parseAgentFrontmatter<T extends Record<string, unknown>>(content: string): { frontmatter: T; body: string } {
-  return parseFrontmatter<T>(content.startsWith("\uFEFF") ? content.slice(1) : content);
+export function parseAgentFrontmatter<T extends Record<string, unknown>>(
+	content: string,
+): { frontmatter: T; body: string } {
+	return parseFrontmatter<T>(content.startsWith("\uFEFF") ? content.slice(1) : content);
 }
 
-function readAgentFile(path: string, strict: boolean): { frontmatter: Record<string, unknown>; body: string } | undefined {
-  try {
-    return parseAgentFrontmatter<Record<string, unknown>>(readFileSync(path, "utf-8"));
-  } catch (err) {
-    const reason = errorMessage(err);
-    if (strict) throw new Error(`${path}: ${reason}`);
-    warnIfNew(`Skipping agent file ${path}: ${reason}`);
-    return undefined;
-  }
+function readAgentFile(
+	path: string,
+	strict: boolean,
+): { frontmatter: Record<string, unknown>; body: string } | undefined {
+	try {
+		return parseAgentFrontmatter<Record<string, unknown>>(readFileSync(path, "utf-8"));
+	} catch (err) {
+		const reason = errorMessage(err);
+		if (strict) throw new Error(`${path}: ${reason}`);
+		warnIfNew(`Skipping agent file ${path}: ${reason}`);
+		return undefined;
+	}
 }
 
 /**
@@ -304,11 +312,11 @@ function readAgentFile(path: string, strict: boolean): { frontmatter: Record<str
  * downstream can flag that: unlike an unknown type, the `Agent` call succeeds.
  */
 function warnSkippedOverride(name: string, agents: Map<string, AgentConfig>): void {
-  const surviving = agents.get(name);
-  // Nothing shadowed, or what it shadowed is disabled: dispatch refuses the type
-  // either way (see resolveEnabledTypeIn), so there is no substitution to report.
-  if (!surviving?.sourcePath || surviving.enabled === false) return;
-  warnIfNew(`Agent "${name}" now loads from ${surviving.sourcePath} instead`);
+	const surviving = agents.get(name);
+	// Nothing shadowed, or what it shadowed is disabled: dispatch refuses the type
+	// either way (see resolveEnabledTypeIn), so there is no substitution to report.
+	if (!surviving?.sourcePath || surviving.enabled === false) return;
+	warnIfNew(`Agent "${name}" now loads from ${surviving.sourcePath} instead`);
 }
 
 let warnedLastLoad = new Set<string>();
@@ -321,9 +329,9 @@ let warnedThisLoad = new Set<string>();
  * load ever, so a file that is fixed and then broken again still reports.
  */
 function warnIfNew(message: string): void {
-  warnedThisLoad.add(message);
-  if (warnedLastLoad.has(message)) return;
-  console.warn(`[pi-subagents] ${message}`);
+	warnedThisLoad.add(message);
+	if (warnedLastLoad.has(message)) return;
+	console.warn(`[pi-subagents] ${message}`);
 }
 
 // ---- Field parsers ----
@@ -331,23 +339,26 @@ function warnIfNew(message: string): void {
 
 /** Extract a string or undefined. */
 function str(val: unknown): string | undefined {
-  return typeof val === "string" ? val : undefined;
+	return typeof val === "string" ? val : undefined;
 }
 
 /** Extract a non-negative integer or undefined. 0 means unlimited for max_turns. */
 function nonNegativeInt(val: unknown): number | undefined {
-  return typeof val === "number" && val >= 0 ? val : undefined;
+	return typeof val === "number" && val >= 0 ? val : undefined;
 }
 
 /**
  * Parse a raw CSV field value into items, or undefined if absent/empty/"none".
  */
 function parseCsvField(val: unknown): string[] | undefined {
-  if (val === undefined || val === null) return undefined;
-  const s = String(val).trim();
-  if (!s || s === "none") return undefined;
-  const items = s.split(",").map(t => t.trim()).filter(Boolean);
-  return items.length > 0 ? items : undefined;
+	if (val === undefined || val === null) return undefined;
+	const s = String(val).trim();
+	if (!s || s === "none") return undefined;
+	const items = s
+		.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
+	return items.length > 0 ? items : undefined;
 }
 
 /**
@@ -360,10 +371,10 @@ function parseCsvField(val: unknown): string[] | undefined {
  * literally named "true", so the tools appear and every spawn is refused.
  */
 function parseAllowedSubagents(val: unknown): "all" | string[] | undefined {
-  if (typeof val === "boolean") return val ? "all" : undefined;
-  const items = parseCsvField(val);
-  if (!items) return undefined;
-  return items.some(i => i === "*" || i.toLowerCase() === "all") ? "all" : items;
+	if (typeof val === "boolean") return val ? "all" : undefined;
+	const items = parseCsvField(val);
+	if (!items) return undefined;
+	return items.some((i) => i === "*" || i.toLowerCase() === "all") ? "all" : items;
 }
 
 /**
@@ -371,8 +382,8 @@ function parseAllowedSubagents(val: unknown): "all" | string[] | undefined {
  * omitted → defaults; "none"/empty → []; csv → listed items.
  */
 function csvList(val: unknown, defaults: string[]): string[] {
-  if (val === undefined || val === null) return defaults;
-  return parseCsvField(val) ?? [];
+	if (val === undefined || val === null) return defaults;
+	return parseCsvField(val) ?? [];
 }
 
 /**
@@ -383,15 +394,15 @@ function csvList(val: unknown, defaults: string[]): string[] {
  * `tools:` present with only `ext:` entries → zero built-ins (use `*`).
  */
 function parseToolsField(val: unknown): { builtinToolNames: string[]; extSelectors: string[] | undefined } {
-  const entries = csvList(val, BUILTIN_TOOL_NAMES);
-  const isWildcard = (e: string) => e === "*" || e.toLowerCase() === "all";
-  const hasWildcard = entries.some(isWildcard);
-  const plain = entries.filter(e => !isWildcard(e) && !e.startsWith("ext:"));
-  const extEntries = entries.filter(e => e.startsWith("ext:"));
-  return {
-    builtinToolNames: hasWildcard ? [...new Set([...BUILTIN_TOOL_NAMES, ...plain])] : plain,
-    extSelectors: extEntries.length > 0 ? extEntries : undefined,
-  };
+	const entries = csvList(val, BUILTIN_TOOL_NAMES);
+	const isWildcard = (e: string) => e === "*" || e.toLowerCase() === "all";
+	const hasWildcard = entries.some(isWildcard);
+	const plain = entries.filter((e) => !isWildcard(e) && !e.startsWith("ext:"));
+	const extEntries = entries.filter((e) => e.startsWith("ext:"));
+	return {
+		builtinToolNames: hasWildcard ? [...new Set([...BUILTIN_TOOL_NAMES, ...plain])] : plain,
+		extSelectors: extEntries.length > 0 ? extEntries : undefined,
+	};
 }
 
 /**
@@ -399,7 +410,7 @@ function parseToolsField(val: unknown): { builtinToolNames: string[]; extSelecto
  * omitted → undefined; "none"/empty → undefined; csv → listed items.
  */
 function csvListOptional(val: unknown): string[] | undefined {
-  return parseCsvField(val);
+	return parseCsvField(val);
 }
 
 /**
@@ -407,8 +418,8 @@ function csvListOptional(val: unknown): string[] | undefined {
  * omitted → undefined; "user"/"project"/"local" → MemoryScope.
  */
 function parseMemory(val: unknown): MemoryScope | undefined {
-  if (val === "user" || val === "project" || val === "local") return val;
-  return undefined;
+	if (val === "user" || val === "project" || val === "local") return val;
+	return undefined;
 }
 
 /**
@@ -424,9 +435,9 @@ function parseMemory(val: unknown): MemoryScope | undefined {
  * else stays `undefined`, as before.
  */
 function parseIsolation(val: unknown): IsolationMode | undefined {
-  if (val === "worktree") return "worktree";
-  if (val === "off" || val === "none" || val === "no" || val === false) return "off";
-  return undefined;
+	if (val === "worktree") return "worktree";
+	if (val === "off" || val === "none" || val === "no" || val === false) return "off";
+	return undefined;
 }
 
 /**
@@ -434,8 +445,8 @@ function parseIsolation(val: unknown): IsolationMode | undefined {
  * omitted/true → true (inherit all); false/"none"/empty → false; csv → listed names.
  */
 function inheritField(val: unknown): true | string[] | false {
-  if (val === undefined || val === null || val === true) return true;
-  if (val === false || val === "none") return false;
-  const items = csvList(val, []);
-  return items.length > 0 ? items : false;
+	if (val === undefined || val === null || val === true) return true;
+	if (val === false || val === "none") return false;
+	const items = csvList(val, []);
+	return items.length > 0 ? items : false;
 }

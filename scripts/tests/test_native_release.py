@@ -116,6 +116,7 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
         assert timeout == 1200
         for arch, cpu in pc.MACHO_CPU_TYPES.items():
             payload = cwd / "prebuilt/macos" / arch / "bridge"
+            payload.parent.mkdir(parents=True, exist_ok=True)
             payload.write_bytes(pc.MACHO_MAGIC_64 + cpu.to_bytes(4, "little") + bytes(24))
             payload.chmod(0o755)
         compiled.append(cwd)
@@ -134,6 +135,57 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(rd, "DESCRIPTORS", ())
     with pytest.raises(nr.ReleaseError, match="Missing computer-use descriptor"):
         nr.native_check(ROOT, tmp_path / "missing")
+
+
+def test_native_build_starts_from_a_clean_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compile when no prebuilt exists, as in CI and release checkouts, and drop stale local builds.
+
+    Parameters:
+        tmp_path (Path): Disposable repository and work parents.
+        monkeypatch (pytest.MonkeyPatch): Substitute the compiler and host platform.
+
+    Returns:
+        None: The staged copy holds only fresh compiler output; a missing output still fails.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-computer-use")
+    assert descriptor is not None
+    monkeypatch.setattr(sys, "platform", descriptor.native_build_platform)
+    repo = tmp_path / "repo"
+    workspace = repo / descriptor.workspace
+    workspace.mkdir(parents=True)
+    (workspace / "package.json").write_text("{}")
+    assert nr.native_matches(workspace, descriptor, required=False) == ()
+    with pytest.raises(nr.ReleaseError, match="Missing native artifact"):
+        nr.native_matches(workspace, descriptor)
+    seen: list[bool] = []
+
+    def compile_fixture(cwd: Path, *cmd: str, timeout: int) -> str:
+        """Record whether a stale payload survived into the build, then write fresh output.
+
+        Parameters:
+            cwd (Path): Disposable staged workspace.
+            *cmd (str): Descriptor build invocation.
+            timeout (int): Required build deadline.
+
+        Returns:
+            str: Synthetic compiler diagnostics.
+        """
+        seen.append(any((cwd / relative).exists() for relative in descriptor.native_artifacts))
+        for arch, cpu in pc.MACHO_CPU_TYPES.items():
+            payload = cwd / "prebuilt/macos" / arch / "bridge"
+            payload.parent.mkdir(parents=True, exist_ok=True)
+            payload.write_bytes(pc.MACHO_MAGIC_64 + cpu.to_bytes(4, "little") + bytes(24))
+        return "compiled"
+
+    monkeypatch.setattr(nr, "command", compile_fixture)
+    monkeypatch.setattr(nr, "validate_native_sources", lambda *_: None)
+    staged = nr.build_native_workspace(repo, descriptor, tmp_path / "clean")
+    assert len(nr.native_matches(staged, descriptor)) == len(descriptor.native_artifacts)
+    stale = workspace / descriptor.native_artifacts[0]
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale")
+    nr.build_native_workspace(repo, descriptor, tmp_path / "stale")
+    assert seen == [False, False]
 
 
 def test_packed_compiler_bytes(tmp_path: Path) -> None:

@@ -1,0 +1,214 @@
+import { describe, expect, it } from "vitest";
+import { applyPlanApproval } from "../../src/plan/reconcile.ts";
+import type { TaskState } from "../../src/state/state.ts";
+import type { Op } from "../../src/state/state-reducer.ts";
+import { applyTaskMutation } from "../../src/state/state-reducer.ts";
+import { buildToolResult, formatContent } from "../../src/tool/response-envelope.ts";
+import type { Task } from "../../src/tool/types.ts";
+
+const stateWith = (...tasks: Task[]): TaskState => ({ tasks, nextId: Math.max(0, ...tasks.map((t) => t.id)) + 1 });
+
+const t = (over: Partial<Task> & { id: number; subject: string }): Task => ({ status: "pending", ...over });
+
+describe("formatContent", () => {
+	it("indents and sanitizes verbatim plan detail only while the item is open", () => {
+		const approved = applyPlanApproval(
+			stateWith(),
+			"p",
+			"# Release\n## Migration\nMove traffic.\nKeep \u001b[31mrollback\u001b[0m ready.\n",
+		).state;
+		expect(approved.tasks[0].planText).toBe("Move traffic.\nKeep \u001b[31mrollback\u001b[0m ready.");
+		expect(formatContent({ kind: "list", includeDeleted: false }, approved)).toBe(
+			"Plan: Release -- 1/1 plan items open\n[pending] #1 Migration [plan: Migration]\n    Move traffic.\n    Keep rollback ready.",
+		);
+		const completed = applyTaskMutation(approved, "update", {
+			id: 1,
+			status: "completed",
+			evidence: "canary passed",
+		}).state;
+		expect(formatContent({ kind: "list", includeDeleted: false }, completed)).toBe(
+			"Plan: Release -- 0/1 plan items open\n[completed] #1 Migration [plan: Migration]\n    evidence: canary passed",
+		);
+	});
+
+	it("create — 'Created #id: subject (pending)'", () => {
+		const state = stateWith(t({ id: 1, subject: "alpha" }));
+		expect(formatContent({ kind: "create", taskId: 1 }, state)).toBe("Created #1: alpha (pending)");
+	});
+
+	it("update — emits transition tuple when statuses differ", () => {
+		const state = stateWith(t({ id: 1, subject: "x", status: "in_progress" }));
+		const op: Op = { kind: "update", id: 1, fromStatus: "pending", toStatus: "in_progress", changed: true };
+		expect(formatContent(op, state)).toBe("Updated #1 (pending → in_progress)");
+	});
+
+	it("update — omits transition when from === to but fields changed (e.g. blockedBy-only update)", () => {
+		const state = stateWith(t({ id: 1, subject: "x" }));
+		const op: Op = { kind: "update", id: 1, fromStatus: "pending", toStatus: "pending", changed: true };
+		expect(formatContent(op, state)).toBe("Updated #1");
+	});
+
+	it("update — reports 'No change' when changed is false (no-effect update)", () => {
+		const state = stateWith(t({ id: 1, subject: "x" }));
+		const op: Op = { kind: "update", id: 1, fromStatus: "pending", toStatus: "pending", changed: false };
+		expect(formatContent(op, state)).toBe("No change: #1 already matches the requested values (status: pending)");
+	});
+
+	it("delete — 'Deleted #id: subject'", () => {
+		const state = stateWith(t({ id: 1, subject: "ship", status: "deleted" }));
+		expect(formatContent({ kind: "delete", id: 1, subject: "ship" }, state)).toBe("Deleted #1: ship");
+	});
+
+	it("clear — emits prior count", () => {
+		expect(formatContent({ kind: "clear", count: 4, kept: 0 }, stateWith())).toBe("Cleared 4 tasks");
+	});
+
+	it("list — 'No tasks' when filtered view is empty", () => {
+		const state = stateWith(t({ id: 1, subject: "x", status: "deleted" }));
+		expect(formatContent({ kind: "list", includeDeleted: false }, state)).toBe("No tasks");
+	});
+
+	it("list — joins per-task '[status] #id subject' lines", () => {
+		const state = stateWith(
+			t({ id: 1, subject: "a" }),
+			t({ id: 2, subject: "b", status: "in_progress", activeForm: "Building" }),
+		);
+		expect(formatContent({ kind: "list", includeDeleted: false }, state)).toBe(
+			"[pending] #1 a\n[in_progress] #2 b (Building)",
+		);
+	});
+
+	it("get — multi-line task block with description/blockedBy/owner", () => {
+		const state = stateWith(
+			t({ id: 1, subject: "root" }),
+			t({ id: 2, subject: "leaf", description: "details", blockedBy: [1], owner: "Sergii" }),
+		);
+		const op: Op = { kind: "get", task: state.tasks[1]! };
+		expect(formatContent(op, state)).toBe(
+			"#2 [pending] leaf\n  description: details\n  blockedBy: #1\n  owner: Sergii",
+		);
+	});
+
+	it("get — emits 'blocks: #id,…' reverse-edge line when other tasks block on it", () => {
+		// task 1 has blockedBy=[2] AND [3] → deriveBlocks(2) = [1], deriveBlocks(3) = [1].
+		// Selecting task 2 should then expose `blocks: #1`.
+		const state = stateWith(
+			t({ id: 1, subject: "ship", blockedBy: [2, 3] }),
+			t({ id: 2, subject: "test" }),
+			t({ id: 3, subject: "lint" }),
+		);
+		const op: Op = { kind: "get", task: state.tasks[1]! };
+		expect(formatContent(op, state)).toBe("#2 [pending] test\n  blocks: #1");
+	});
+
+	it("get — emits activeForm line for in_progress task", () => {
+		const state = stateWith(t({ id: 1, subject: "build", status: "in_progress", activeForm: "Building" }));
+		const op: Op = { kind: "get", task: state.tasks[0]! };
+		expect(formatContent(op, state)).toBe("#1 [in_progress] build\n  activeForm: Building");
+	});
+
+	it("list — statusFilter narrows to a single status", () => {
+		const state = stateWith(
+			t({ id: 1, subject: "a", status: "pending" }),
+			t({ id: 2, subject: "b", status: "in_progress", activeForm: "Working" }),
+			t({ id: 3, subject: "c", status: "completed" }),
+		);
+		expect(formatContent({ kind: "list", includeDeleted: false, statusFilter: "in_progress" }, state)).toBe(
+			"[in_progress] #2 b (Working)",
+		);
+	});
+
+	it("list — includeDeleted=true surfaces tombstoned rows", () => {
+		const state = stateWith(t({ id: 1, subject: "x", status: "deleted" }));
+		expect(formatContent({ kind: "list", includeDeleted: true }, state)).toBe("[deleted] #1 x");
+	});
+
+	it("list — '⛓ #id,…' suffix appears when task has blockedBy", () => {
+		const state = stateWith(t({ id: 1, subject: "leaf" }), t({ id: 2, subject: "task", blockedBy: [1] }));
+		expect(formatContent({ kind: "list", includeDeleted: false }, state)).toBe(
+			"[pending] #1 leaf\n[pending] #2 task ⛓ #1",
+		);
+	});
+
+	it("create — defensive fallback when op.taskId is unknown to state", () => {
+		// Defensive branch — exercises the early-return when find() returns undefined.
+		expect(formatContent({ kind: "create", taskId: 999 }, stateWith())).toBe("Created #999");
+	});
+
+	it("error — 'Error: <message>'", () => {
+		expect(formatContent({ kind: "error", message: "subject required for create" }, stateWith())).toBe(
+			"Error: subject required for create",
+		);
+	});
+});
+
+describe("buildToolResult", () => {
+	it("envelope.details mirrors the canonical TaskDetails shape on success", () => {
+		const state = stateWith(t({ id: 1, subject: "alpha" }));
+		const env = buildToolResult("create", { subject: "alpha" }, state, { kind: "create", taskId: 1 });
+		expect(env).toEqual({
+			content: [{ type: "text", text: "Created #1: alpha (pending)" }],
+			details: { action: "create", params: { subject: "alpha" }, tasks: state.tasks, nextId: state.nextId },
+		});
+	});
+
+	it("envelope.details carries error message on op.kind === 'error'", () => {
+		const env = buildToolResult("create", { subject: "" }, stateWith(), {
+			kind: "error",
+			message: "subject required for create",
+		});
+		expect(env.details.error).toBe("subject required for create");
+		expect(env.content[0].text).toBe("Error: subject required for create");
+	});
+});
+
+describe("formatContent — control characters in model-controlled fields", () => {
+	it("get — strips escape sequences from subject, description, and owner", () => {
+		const state = stateWith(
+			t({ id: 1, subject: "safe\u001b[2J\u001b[Hsubject", description: "line1\nline2", owner: "who\u009b31mami" }),
+		);
+		const op: Op = { kind: "get", task: state.tasks[0]! };
+		expect(formatContent(op, state)).toBe("#1 [pending] safesubject\n  description: line1 line2\n  owner: whoami");
+	});
+
+	it("create/list — strips escape sequences from the echoed subject and activeForm", () => {
+		const state = stateWith(
+			t({ id: 1, subject: "evil\u001b[31m", status: "in_progress", activeForm: "clear\u001b[2Jing" }),
+		);
+		expect(formatContent({ kind: "create", taskId: 1 }, state)).toBe("Created #1: evil (pending)");
+		expect(formatContent({ kind: "list", includeDeleted: false }, state)).toBe("[in_progress] #1 evil (clearing)");
+	});
+});
+
+describe("formatContent — plan item details on get", () => {
+	it("lists the plan group, verbatim text and deferral reason", () => {
+		const state = stateWith(
+			t({
+				id: 1,
+				subject: "Migrate",
+				status: "deferred",
+				source: "plan",
+				planGroup: "Rollout",
+				planText: "Move traffic.",
+				reason: "blocked on infra",
+			}),
+		);
+		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).toBe(
+			["#1 [deferred] Migrate", "  plan item: Rollout", "    Move traffic.", "  deferred: blocked on infra"].join("\n"),
+		);
+	});
+
+	it("says only 'plan item' for an ungrouped plan item without text", () => {
+		const state = stateWith(t({ id: 1, subject: "Solo", source: "plan" }));
+		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).toContain("\n  plan item");
+		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).not.toContain("plan item:");
+	});
+});
+
+describe("formatContent — clear", () => {
+	it("reports kept plan items", () => {
+		expect(formatContent({ kind: "clear", count: 2, kept: 3 }, stateWith())).toBe(
+			"Cleared 2 tasks; kept 3 plan items (complete them with evidence or defer them with a reason)",
+		);
+	});
+});

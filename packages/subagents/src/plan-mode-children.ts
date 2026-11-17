@@ -13,7 +13,7 @@
  * than imported because either package installs without the other.
  */
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
-import type { AgentRecord } from "./types.js";
+import type { AgentRecord } from "./types.ts";
 
 export const PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
 /** pi-plan-mode asks here whether a compatible gate is installed; answering is the handshake. */
@@ -27,24 +27,26 @@ const planModeSeen = new WeakSet<object>();
  * Answer pi-plan-mode's gate query, so Plan admits `Agent` and friends, and remember that Plan
  * mode is installed on this bus: from then on a state query nobody answers fails closed.
  */
-export function answerPlanGateQueries(events: { on(channel: string, handler: (data: unknown) => void): unknown }): void {
-  events.on(PLAN_MODE_GATE_QUERY, (data) => {
-    planModeSeen.add(events);
-    const reply = (data as { reply?: unknown } | undefined)?.reply;
-    if (typeof reply === "function") reply({ version: PLAN_MODE_STATE_VERSION, gate: "@nredd/pi-subagents" });
-  });
+export function answerPlanGateQueries(events: {
+	on(channel: string, handler: (data: unknown) => void): unknown;
+}): void {
+	events.on(PLAN_MODE_GATE_QUERY, (data) => {
+		planModeSeen.add(events);
+		const reply = (data as { reply?: unknown } | undefined)?.reply;
+		if (typeof reply === "function") reply({ version: PLAN_MODE_STATE_VERSION, gate: "@nredd/pi-subagents" });
+	});
 }
 
 /** Thrown when pi-plan-mode is installed but did not answer whether it is planning. */
 export const PLAN_MODE_SILENT_ERROR =
-  "Plan mode is installed but did not answer whether it is planning, so this subagent was not started. Reload Pi, or update @nredd/pi-plan-mode and @nredd/pi-subagents together.";
+	"Plan mode is installed but did not answer whether it is planning, so this subagent was not started. Reload Pi, or update @nredd/pi-plan-mode and @nredd/pi-subagents together.";
 
 /** One tool call inside a child session. */
 interface PlanModeChildToolCall {
-  toolName: string;
-  input: unknown;
-  cwd: string;
-  tool: ToolInfo | undefined;
+	toolName: string;
+	input: unknown;
+	cwd: string;
+	tool: ToolInfo | undefined;
 }
 
 /** Why Plan mode refuses a child's tool call, or `undefined` when it may run. */
@@ -56,7 +58,7 @@ export type PlanToolPolicy = (call: PlanModeChildToolCall) => string | undefined
  * once, on the child's session.
  */
 export interface PlanGate {
-  policy?: PlanToolPolicy;
+	policy?: PlanToolPolicy;
 }
 
 /** Tools a child keeps without asking: safe built-ins only. */
@@ -68,9 +70,9 @@ const FAIL_CLOSED_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "find", 
  * unrestricted.
  */
 const failClosedPolicy: PlanToolPolicy = ({ toolName }) =>
-  FAIL_CLOSED_TOOLS.has(toolName)
-    ? undefined
-    : `Plan mode is active and sent no tool policy this subagent understands, so '${toolName}' is blocked.`;
+	FAIL_CLOSED_TOOLS.has(toolName)
+		? undefined
+		: `Plan mode is active and sent no tool policy this subagent understands, so '${toolName}' is blocked.`;
 
 /**
  * Ask the parent's pi-plan-mode whether a child started now must plan. Returns
@@ -81,39 +83,39 @@ const failClosedPolicy: PlanToolPolicy = ({ toolName }) =>
  * (`silent: "refuse"`, which throws) and a resumed one runs fail-closed.
  */
 export function queryPlanPolicy(
-  events: { emit(channel: string, data: unknown): void } | undefined,
-  silent: "refuse" | "restrict" = "refuse",
+	events: { emit(channel: string, data: unknown): void } | undefined,
+	silent: "refuse" | "restrict" = "refuse",
 ): PlanToolPolicy | undefined {
-  // Hosts without an event bus (bare programmatic callers) cannot run pi-plan-mode either.
-  if (!events) return undefined;
-  const policies: PlanToolPolicy[] = [];
-  let answered = false;
-  events.emit(PLAN_MODE_STATE_QUERY, {
-    version: PLAN_MODE_STATE_VERSION,
-    reply: (state: unknown) => {
-      const answer = state as { version?: unknown; active?: unknown; evaluate?: unknown } | undefined;
-      // Only a well-formed answer says whether Plan is on; anything else restricts, never frees.
-      if (answer?.version !== PLAN_MODE_STATE_VERSION || typeof answer.active !== "boolean") {
-        policies.push(failClosedPolicy);
-        return;
-      }
-      answered = true;
-      if (!answer.active) return;
-      policies.push(typeof answer.evaluate === "function" ? (answer.evaluate as PlanToolPolicy) : failClosedPolicy);
-    },
-  });
-  if (!answered && policies.length === 0 && planModeSeen.has(events)) {
-    if (silent === "refuse") throw new Error(PLAN_MODE_SILENT_ERROR);
-    return failClosedPolicy;
-  }
-  if (policies.length === 0) return undefined;
-  return (call) => {
-    for (const policy of policies) {
-      const reason = policy(call);
-      if (reason !== undefined) return reason;
-    }
-    return undefined;
-  };
+	// Hosts without an event bus (bare programmatic callers) cannot run pi-plan-mode either.
+	if (!events) return undefined;
+	const policies: PlanToolPolicy[] = [];
+	let answered = false;
+	events.emit(PLAN_MODE_STATE_QUERY, {
+		version: PLAN_MODE_STATE_VERSION,
+		reply: (state: unknown) => {
+			const answer = state as { version?: unknown; active?: unknown; evaluate?: unknown } | undefined;
+			// Only a well-formed answer says whether Plan is on; anything else restricts, never frees.
+			if (answer?.version !== PLAN_MODE_STATE_VERSION || typeof answer.active !== "boolean") {
+				policies.push(failClosedPolicy);
+				return;
+			}
+			answered = true;
+			if (!answer.active) return;
+			policies.push(typeof answer.evaluate === "function" ? (answer.evaluate as PlanToolPolicy) : failClosedPolicy);
+		},
+	});
+	if (!answered && policies.length === 0 && planModeSeen.has(events)) {
+		if (silent === "refuse") throw new Error(PLAN_MODE_SILENT_ERROR);
+		return failClosedPolicy;
+	}
+	if (policies.length === 0) return undefined;
+	return (call) => {
+		for (const policy of policies) {
+			const reason = policy(call);
+			if (reason !== undefined) return reason;
+		}
+		return undefined;
+	};
 }
 
 /**
@@ -122,7 +124,7 @@ export function queryPlanPolicy(
  * unrestricted (a schedule, a quota-parked dispatch, steering an unrestricted child).
  */
 export function planningNow(events: { emit(channel: string, data: unknown): void } | undefined): boolean {
-  return queryPlanPolicy(events, "restrict") !== undefined;
+	return queryPlanPolicy(events, "restrict") !== undefined;
 }
 
 /**
@@ -131,27 +133,27 @@ export function planningNow(events: { emit(channel: string, data: unknown): void
  * predicate for `steer_subagent` and `subagents:rpc:steer`.
  */
 export function planSteerBlocked(
-  record: Pick<AgentRecord, "status" | "planGate">,
-  events: { emit(channel: string, data: unknown): void } | undefined,
+	record: Pick<AgentRecord, "status" | "planGate">,
+	events: { emit(channel: string, data: unknown): void } | undefined,
 ): boolean {
-  return (record.status === "running" || record.status === "queued") && !record.planGate?.policy && planningNow(events);
+	return (record.status === "running" || record.status === "queued") && !record.planGate?.policy && planningNow(events);
 }
 
 /** Plan's model must not steer a child that runs without Plan's restrictions. */
 export function planSteerRefusal(id: string): string {
-  return (
-    `Cannot steer agent "${id}" while Plan mode is active: it started before Plan and runs without Plan's restrictions, so a steer could make it edit. ` +
-    "Wait for it to finish and steer it then (that resumes it read-only), stop it with stop_subagent, or leave Plan mode (/plan exit) first."
-  );
+	return (
+		`Cannot steer agent "${id}" while Plan mode is active: it started before Plan and runs without Plan's restrictions, so a steer could make it edit. ` +
+		"Wait for it to finish and steer it then (that resumes it read-only), stop it with stop_subagent, or leave Plan mode (/plan exit) first."
+	);
 }
 
 /** A scheduled agent fires as a fresh spawn, after Plan, with nothing restricting it. */
 export const PLAN_SCHEDULE_REFUSAL =
-  "Cannot schedule an agent while Plan mode is active: it would start later, after Plan, without Plan's restrictions. Start it now, or leave Plan mode first.";
+	"Cannot schedule an agent while Plan mode is active: it would start later, after Plan, without Plan's restrictions. Start it now, or leave Plan mode first.";
 
 /** A quota-parked dispatch is a scheduled job too. */
 export const PLAN_PARK_REFUSAL =
-  "The agent was not started or parked: Plan mode is active, and a parked agent would start after Plan without Plan's restrictions. Retry after the reset, or leave Plan mode first.";
+	"The agent was not started or parked: Plan mode is active, and a parked agent would start after Plan without Plan's restrictions. Retry after the reset, or leave Plan mode first.";
 
 /**
  * The refusal for one child tool call, or `undefined`. Tools this extension
@@ -159,14 +161,14 @@ export const PLAN_PARK_REFUSAL =
  * the workflow refusal) are exempt: Plan's policy has no entry for them.
  */
 export function planGateReason(
-  gate: PlanGate | undefined,
-  call: { toolName: string; input: unknown; cwd: string },
-  tools: () => ToolInfo[],
-  exempt: ReadonlySet<string>,
+	gate: PlanGate | undefined,
+	call: { toolName: string; input: unknown; cwd: string },
+	tools: () => ToolInfo[],
+	exempt: ReadonlySet<string>,
 ): string | undefined {
-  const policy = gate?.policy;
-  if (!policy || exempt.has(call.toolName)) return undefined;
-  return policy({ ...call, tool: tools().find((tool) => tool.name === call.toolName) });
+	const policy = gate?.policy;
+	if (!policy || exempt.has(call.toolName)) return undefined;
+	return policy({ ...call, tool: tools().find((tool) => tool.name === call.toolName) });
 }
 
 /** Told to a child started while planning, so a refused write is not a surprise. */

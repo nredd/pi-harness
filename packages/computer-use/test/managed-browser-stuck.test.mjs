@@ -10,11 +10,14 @@ const spawned = vi.hoisted(() => ({ children: /** @type {import('node:child_proc
 
 vi.mock("node:child_process", async (importOriginal) => {
 	const original = await importOriginal();
-	return { ...original, spawn: vi.fn((...args) => {
-		const child = original.spawn(...args);
-		spawned.children.push(child);
-		return child;
-	}) };
+	return {
+		...original,
+		spawn: vi.fn((...args) => {
+			const child = original.spawn(...args);
+			spawned.children.push(child);
+			return child;
+		}),
+	};
 });
 
 const { shutdownComputerUseSession, testing } = await import("../src/bridge.ts");
@@ -74,7 +77,11 @@ describe.skipIf(process.platform === "win32")("managed browser that outlives SIG
 		const kill = vi.spyOn(child, "kill");
 		const { profile } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));
 		await shutdownComputerUseSession();
-		assert.deepEqual(kill.mock.calls.map(([signal]) => signal), ["SIGTERM"], "SIGTERM is sent but nothing waits on a browser that is already gone");
+		assert.deepEqual(
+			kill.mock.calls.map(([signal]) => signal),
+			["SIGTERM"],
+			"SIGTERM is sent but nothing waits on a browser that is already gone",
+		);
 		assert.equal(fs.existsSync(profile), false);
 	});
 });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Guard asynchronous recovery with requester-owned selection generations, durable model-change identities and cancellation; prove same-child routed failover, retained mutation results, finite budgets and sibling isolation. Abort handling requires the active-run signal from core `v1.3.0-nredd.12` (#971)
+
 - Add `/router resets codex` with a version-checked first-party app-server bound to Pi's current OAuth identity, actual FREE grant listing, explicit human confirmation, durable idempotency/reload reconciliation, authoritative quota refresh and exact-scope block reconciliation; exclude paid/automatic redemption and preserve manual resume (#776)
 
 - Add cached `/router resets [refresh]` schedules with local/UTC/DST timing, family scope, stale retention and bounded cancellable refresh; record the supported Codex app-server contract, initially keep grant operations unavailable in Pi with an official handoff, and label `/router reset` local-only (#776)

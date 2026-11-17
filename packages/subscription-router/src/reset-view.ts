@@ -1,7 +1,7 @@
 /** Native, width-bounded cached schedule screen; completion only requests a read or closes. */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { CancellableLoader, Key, matchesKey, ScrollView, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import type { UsageService, UsageSnapshot } from "./usage.js";
+import type { UsageService, UsageSnapshot } from "./usage.ts";
 
 /** Escape detaches this refresh caller; the usage service retains ownership of shared reads. */
 export async function refreshSchedules(

@@ -24,16 +24,20 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-CLEANUP = ROOT / "scripts" / "wsl2_cleanup.sh"
+SCRIPTS = ROOT / "scripts"
 
 
 def workflow_text() -> str:
-    """Return the native WSL2 workflow text.
+    """Return executable WSL2 workflow text without full-line policy comments.
 
     Returns:
-        str: UTF-8 workflow contents.
+        str: UTF-8 workflow contents, excluding full-line comments.
     """
-    return WORKFLOW.read_text(encoding="utf-8")
+    return "\n".join(
+        line
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
 
 def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
@@ -57,7 +61,7 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
 def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     """Require explicit WSL2 proof and Linux-filesystem execution."""
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    setup = (ROOT / "scripts/wsl2_setup.py").read_text()
     assert "wsl-version: '2'" in action
     assert "wsl --list --verbose" in action
     assert "-replace ([char]0), ''" in (ROOT / "scripts/wsl2_bounded.ps1").read_text()
@@ -65,127 +69,15 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "core.autocrlf false" in action
     assert "Expected Windows source below /mnt" in setup
     assert "Harness worktree is not on a Linux filesystem" in setup
-    assert "findmnt --noheadings --output FSTYPE" in setup
-    assert "drvfs|''" in setup
-
-
-def run_cleanup(
-    tmp_path: Path,
-    status: int,
-    command_dir: Path | None = None,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    """Run the workflow's real cleanup trap against a disposable harness worktree.
-
-    Parameters:
-        tmp_path: Root for the disposable worktree and diagnostics directory.
-        status: Harness exit status to preserve through the cleanup trap.
-        command_dir: Optional directory of failing command fixtures prepended to `PATH`.
-
-    Returns:
-        tuple[CompletedProcess[str], Path, Path]: Shell outcome, worktree, and diagnostics paths.
-    """
-    worktree = tmp_path / "worktree"
-    artifacts = worktree / "integration" / "artifacts"
-    artifacts.mkdir(parents=True)
-    (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n", encoding="utf-8")
-    diagnostics = tmp_path / "wsl2-diagnostics"
-    diagnostics.mkdir()
-    script = "\n".join(
-        [
-            "set -euo pipefail",
-            f"source {shlex.quote(str(CLEANUP))}",
-            f"worktree={shlex.quote(str(worktree))}",
-            f"diagnostics_dir={shlex.quote(str(diagnostics))}",
-            "trap cleanup_wsl2_worktree EXIT",
-            f"exit {status}",
-        ]
-    )
-    env = dict(os.environ)
-    if command_dir is not None:
-        env["PATH"] = f"{command_dir}{os.pathsep}{env['PATH']}"
-    completed = subprocess.run(
-        ["/bin/bash", "-c", script], capture_output=True, check=False, env=env, text=True
-    )
-    return completed, worktree, diagnostics
-
-
-def write_failing_command(directory: Path, name: str) -> None:
-    """Create a `PATH` fixture that causes one cleanup command to fail.
-
-    Parameters:
-        directory: Fixture command directory.
-        name: Command name intercepted by the fixture.
-
-    Returns:
-        None: The executable fixture is created.
-    """
-    command = directory / name
-    command.write_text("#!/bin/sh\nexit 92\n", encoding="utf-8")
-    command.chmod(0o755)
-
-
-def test_wsl2_cleanup_preserves_failure_artifacts_before_deleting_worktree(tmp_path: Path) -> None:
-    """Copy bounded artifacts before removing a failed harness worktree."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47)
-    assert completed.returncode == 47
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").read_text(encoding="utf-8") == "<testsuite/>\n"
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_preserves_success_status_and_artifacts(tmp_path: Path) -> None:
-    """Keep normal cleanup successful after retaining the bounded diagnostics."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 0)
-    assert completed.returncode == 0
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 0.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_copying_artifacts_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when diagnostic preservation fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "cp")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not preserve WSL failure artifacts" in completed.stderr
-    assert not worktree.exists()
-    assert not (diagnostics / "artifacts" / "wsl2-personal.xml").exists()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_worktree_removal_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when disposable-worktree removal fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "rm")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not remove disposable WSL worktree" in completed.stderr
-    assert worktree.is_dir()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-    shutil.rmtree(worktree)
+    assert '["findmnt", "--noheadings", "--output", "FSTYPE"' in setup
+    assert 'filesystem in ("drvfs", "")' in setup
 
 
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     """Keep the executable cleanup and bounded upload attached to the native job."""
     workflow = workflow_text()
-    capture = (ROOT / "scripts/wsl2_capture.sh").read_text()
     assert "wsl2-diagnostics" in workflow
-    assert 'source "$worktree/scripts/wsl2_cleanup.sh"' in capture
-    assert "trap finish_capture EXIT" in capture
-    assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
-    assert "cleanup_wsl2_worktree" in capture
+    assert not (SCRIPTS / "wsl2_cleanup.sh").exists()
     assert workflow.count("cleanup: cleanup") == 2
     # Both cleanup captures see timeouts and cancels, which leave no guest first-failure record.
     assert workflow.count("cleanup: cleanup\n          job-status: ${{ job.status }}\n") == 2
@@ -223,9 +115,9 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
         "packages/example/coverage/primary/coverage-summary.json",
         "packages/example/coverage/bun/lcov.info",
         "packages/example/coverage/bun/coverage-summary.json",
-        "integration/inprocess/coverage/primary/lcov.info",
-        "integration/probes/coverage/primary/lcov.info",
-        "integration/providers/coverage/primary/lcov.info",
+        "tests/inprocess/coverage/primary/lcov.info",
+        "tests/integration/probes/coverage/primary/lcov.info",
+        "tests/integration/providers/coverage/primary/lcov.info",
         "scripts/coverage/primary/lcov.info",
         "coverage/summary.json",
     ]
@@ -356,41 +248,46 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     """Require actual Pi startup, RPC, extension, and stack process coverage."""
     workflow = workflow_text()
     assert "git submodule update --init forks/pi" in workflow
-    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
-    assert 'test "$(bun --version)" = "$bun_version"' in setup
-    assert "bun-v$bun_version" in setup
-    assert "uv_version=0.13.1" in setup
-    assert '"uv $uv_version"*' in setup
-    assert "uv run --locked python -m harness.release" in workflow
-    assert "--gitlink ../forks/pi" in workflow
+    setup = (ROOT / "scripts/wsl2_setup.py").read_text()
+    assert 'raise ValueError("Bun version mismatch")' in setup
+    assert 'f"bun-v{bun_version}"' in setup
+    assert 'UV_VERSION = "0.13.1"' in setup
+    assert 'startswith(f"uv {UV_VERSION}")' in setup
+    assert "uv run --locked python -m pi_release.release" in workflow
+    assert "--gitlink ../../forks/pi" in workflow
     assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in workflow
-    assert '--stack "stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile' in workflow
-    assert "--stack stacks/personal.json --runtime bun-standalone" in workflow
-    assert "--stack stacks/local.json --runtime bun-standalone" in workflow
+    assert '--stack "../../release/stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile' in workflow
+    assert "--stack ../../release/stacks/personal.json --runtime bun-standalone" in workflow
+    assert "--stack ../../release/stacks/local.json --runtime bun-standalone" in workflow
 
 
-INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
+INSTALL_GH = SCRIPTS / "install_gh_linux.sh"
+INSTALL_GH_PY = INSTALL_GH.with_suffix(".py")
 
 
 def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
     """Install attestation-capable `gh`, forward the token via WSLENV, and gate `npm ci` on verification."""
     workflow = workflow_text()
-    setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
+    setup = (ROOT / "scripts/wsl2_setup.py").read_text()
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN/u" in wrapper
-    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
+    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.py").read_text(encoding="utf-8")
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    assert "additional-packages" not in action
+    assert all(
+        "additional-packages" not in step.get("with", {}) for step in yaml.safe_load(action)["runs"]["steps"]
+    )
     assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
-    assert "unset GH_TOKEN" in setup
-    assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup
+    assert 'env.pop("GH_TOKEN", None)' in setup
+    assert '["bash", "scripts/install_gh_linux.sh", str(tool_dir / "gh")]' in setup
     makefile = (ROOT / "Makefile").read_text()
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
     assert "env -u GH_TOKEN uv sync --locked" in makefile
-    assert "cd integration && uv sync --locked --python" in workflow
-    verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
-    npm_ci = workflow.index("npm ci --ignore-scripts")
+    assert "cd tests/integration && uv sync --locked --python" in workflow
+    # Inspect the stack's guest commands, not an unrelated native Windows npm installation.
+    commands = "\n".join(step.get("run", "") for step in yaml.safe_load(workflow)["jobs"]["stack"]["steps"])
+    verify = commands.index("python3 -m pi_release.release --verify-root-overrides --root .")
+    npm_ci = commands.index("npm ci --ignore-scripts")
     assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow
 
@@ -488,12 +385,16 @@ def test_install_gh_downloads_the_asset_of_its_architecture(tmp_path: Path, mach
     assert completed.returncode == 1
     assert f"for gh_{GH_VERSION}_{asset}.tar.gz; refusing to install" in completed.stderr
     assert (tmp_path / "sha256sum-ran").is_file()
-    pins = re.findall(r"^GH_SHA256_(AMD64|ARM64)=([0-9a-f]{64})$", INSTALL_GH.read_text(), re.MULTILINE)
+    pins = re.findall(
+        r'^GH_SHA256_(AMD64|ARM64) = "([0-9a-f]{64})"$', INSTALL_GH_PY.read_text(), re.MULTILINE
+    )
     assert sorted(name for name, _ in pins) == ["AMD64", "ARM64"]
     assert len({digest for _, digest in pins}) == 2
 
 
-GH_VERSION = cast("re.Match[str]", re.search(r"^GH_VERSION=(\S+)$", INSTALL_GH.read_text(), re.MULTILINE))[1]
+GH_VERSION = cast(
+    "re.Match[str]", re.search(r'^GH_VERSION = "(\S+)"$', INSTALL_GH_PY.read_text(), re.MULTILINE)
+)[1]
 
 
 def test_install_gh_requires_one_directory_argument() -> None:
@@ -699,19 +600,16 @@ def test_guest_setup_names_a_failed_command_without_calling_it_a_timeout(tmp_pat
 
 def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     """Every network, archive and installer command goes through `bounded`/`fetch`; no pipe into a shell."""
-    setup = SETUP.read_text(encoding="utf-8")
-    assert not re.search(r"\|\s*(ba)?sh\b", setup)
-    body = setup.split("source_checkout=$WSL_HOST_WORKSPACE", 1)[1]
-    unbounded = [
-        stripped
-        for stripped in (line.strip() for line in body.splitlines())
-        if re.match(r"(curl|tar|npm|cp|bun|uv) ", stripped) or re.match(r"(ba)?sh ", stripped)
-    ]
-    assert not unbounded, unbounded
+    bootstrap = SETUP.read_text(encoding="utf-8")
+    assert 'exec python3 "$(dirname "${BASH_SOURCE[0]}")/wsl2_setup.py" "$@"' in bootstrap
+    setup = SETUP.with_suffix(".py").read_text(encoding="utf-8")
+    assert '["timeout", "--kill-after=10", str(seconds), *cmd]' in setup
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
-        assert f'bounded "{label}" ' in setup
-    assert 'bounded "install owned tools" 90 ' in setup
-    assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
+        assert f'label="{label}"' in setup
+    assert 'label="install owned tools"' in setup
+    assert "seconds=90" in setup
+    owned_tools = (ROOT / "scripts/install_wsl_owned_tools.py").read_text(encoding="utf-8")
+    assert 'CURL_BOUNDS = ["--connect-timeout", "15", "--max-time", "45"]' in owned_tools
 
 
 APT = ROOT / "scripts" / "wsl2_apt.sh"
@@ -1176,6 +1074,8 @@ def native_guest(tmp_path: Path, versions: dict[str, str]) -> tuple[dict[str, st
     (workspace / ".git").mkdir(parents=True)
     (workspace / "scripts").mkdir()
     shutil.copy(INSTALL_GH, workspace / "scripts" / "install_gh_linux.sh")
+    shutil.copy(INSTALL_GH_PY, workspace / "scripts" / "install_gh_linux.py")
+    shutil.copy(INSTALL_GH_PY.with_name("wsl2_exec.py"), workspace / "scripts" / "wsl2_exec.py")
     (workspace / ".node-version").write_text("22.0.0\n", encoding="utf-8")
     (workspace / ".bun-version").write_text("1.4.4\n", encoding="utf-8")
     (workspace / "package.json").write_text("{}", encoding="utf-8")
@@ -1265,6 +1165,11 @@ def test_in_guest_setup_needs_a_runner_checkout_and_an_unprivileged_user(tmp_pat
     assert result.returncode != 0
 
 
+DISABLED_WSL_POLICY = (
+    "[automount]\nenabled=false\nmountFsTab=false\n[interop]\nenabled=false\nappendWindowsPath=false\n"
+)
+
+
 def run_smoke(
     tmp_path: Path,
     blocked: bool,
@@ -1273,6 +1178,9 @@ def run_smoke(
     userns: bool = False,
     ns_limit: str = "0",
     control: bool = True,
+    policy: str | None = DISABLED_WSL_POLICY,
+    policy_stat: str = "0 644",
+    binfmt: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real smoke script against stub network tools.
 
@@ -1283,6 +1191,10 @@ def run_smoke(
         userns (bool): Whether `unshare -Urn` succeeds, i.e. unprivileged user namespaces are enabled.
         ns_limit (str): Value of `user.max_user_namespaces`.
         control (bool): Whether the public positive-control connection (port 443) opens.
+        policy (str | None): Fixture configuration, or None for a missing file.
+        policy_stat (str): Stub owner and octal permissions reported by stat.
+        binfmt (dict[str, str] | None): Contents of `binfmt_misc` interop registrations by file name;
+            None models a retained, disabled `WSLInterop`.
 
     Returns:
         subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
@@ -1291,9 +1203,9 @@ def run_smoke(
     commands.mkdir()
     refuse = (
         (
-            'case "$*" in *"/443"*) '
+            'case "$*" in *"--tcp api.github.com 443"*) '
             + ("" if control else "exit 124 ")
-            + ';; *"/dev/tcp/"*) exit 124 ;; esac\n'
+            + ';; *"--tcp "*) exit 124 ;; esac\n'
         )
         if blocked
         else ""
@@ -1307,12 +1219,22 @@ def run_smoke(
         "ip": "#!/bin/sh\necho 'default via 172.20.0.1 dev eth0'\n",
         "nft": "#!/bin/sh\nexit 1\n",
         "findmnt": "#!/bin/sh\nexit 1\n",
+        "stat": f'#!/bin/sh\n[ -f "$3" ] || exit 1\nprintf "%s\\n" {shlex.quote(policy_stat)}\n',
         "timeout": f"#!/bin/sh\nshift\n{refuse}exit 0\n",
     }
     for name, body in stubs.items():
         (commands / name).write_text(body, encoding="utf-8")
         (commands / name).chmod(0o755)
     root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    if policy is not None:
+        (root / "etc/wsl.conf").write_text(policy, encoding="utf-8")
+    # WSL can retain these paths even when an actual Windows executable is rejected.
+    (root / "proc/sys/fs/binfmt_misc").mkdir(parents=True)
+    for name, contents in (binfmt if binfmt is not None else {"WSLInterop": "disabled\n"}).items():
+        (root / "proc/sys/fs/binfmt_misc" / name).write_text(contents, encoding="utf-8")
+    (root / "run/WSL").mkdir(parents=True)
+    (root / "run/WSL/17_interop").touch()
     (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
     (root / "proc/sys/net/ipv6/conf/all/disable_ipv6").write_text("1\n")
     (root / "proc/sys/user").mkdir(parents=True)
@@ -1344,6 +1266,69 @@ def test_smoke_passes_when_every_private_target_is_blocked(tmp_path: Path) -> No
     ):
         assert f"blocked: {target}" in result.stdout, target
     assert "loopback:8080 closed" in result.stdout
+    assert "interop and automount are explicitly disabled" in result.stdout
+    assert "note: WSLInterop registration present" in result.stdout
+    assert "note: WSL broker paths present" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        None,
+        "not an ini file",
+        "[interop]\nenabled=false\n",
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=true"),
+        DISABLED_WSL_POLICY.replace("appendWindowsPath=false", "appendWindowsPath=true"),
+        DISABLED_WSL_POLICY + "[interop]\nenabled=true\n",
+        "[DEFAULT]\nenabled=false\nappendWindowsPath=false\nmountFsTab=false\n[interop]\n[automount]\n",
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=off"),
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=no"),
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=0"),
+    ],
+)
+def test_smoke_rejects_missing_ambiguous_or_enabled_policy(tmp_path: Path, policy: str | None) -> None:
+    """Residual plumbing is harmless only alongside an explicitly disabled, valid policy."""
+    result = run_smoke(tmp_path, blocked=True, policy=policy)
+    assert result.returncode == 1
+    assert "::error::wsl.conf does not explicitly disable interop and automount" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["WSLInterop", "WSLInterop-late"])
+@pytest.mark.parametrize(
+    "contents",
+    ["enabled\ninterpreter /init\n", "enabled\n", "", "garbage\n", "disabled \n", "\ndisabled\n"],
+)
+def test_smoke_fails_on_a_live_or_unreadable_interop_registration(
+    tmp_path: Path, name: str, contents: str
+) -> None:
+    """A registration is only residue when its first line is exactly `disabled`."""
+    result = run_smoke(tmp_path, blocked=True, binfmt={name: contents})
+    assert result.returncode == 1
+    assert f"::error::{name} interop registration is not disabled" in result.stdout
+
+
+@pytest.mark.parametrize("names", [["WSLInterop"], ["WSLInterop-late"], ["WSLInterop", "WSLInterop-late"]])
+def test_smoke_notes_only_disabled_interop_registrations(tmp_path: Path, names: list[str]) -> None:
+    """Disabled registrations stay diagnostics; trailing lines after `disabled` are ignored."""
+    result = run_smoke(tmp_path, blocked=True, binfmt=dict.fromkeys(names, "disabled\ninterpreter /init\n"))
+    assert result.returncode == 0, result.stdout
+    assert "::error::" not in result.stdout
+    assert "note: WSLInterop registration present" in result.stdout
+
+
+def test_smoke_passes_without_any_interop_registration(tmp_path: Path) -> None:
+    """Absent registrations need no note and no failure."""
+    result = run_smoke(tmp_path, blocked=True, binfmt={})
+    assert result.returncode == 0, result.stdout
+    assert "WSLInterop registration" not in result.stdout
+
+
+@pytest.mark.parametrize("policy_stat", ["1001 644", "0 664", "0 646", "0 invalid"])
+def test_smoke_rejects_unprotected_policy(tmp_path: Path, policy_stat: str) -> None:
+    """The runner must not supply a writable configuration to make the policy check pass."""
+    result = run_smoke(tmp_path, blocked=True, policy_stat=policy_stat)
+    assert result.returncode == 1
+    assert "::error::wsl.conf is missing or not protected" in result.stdout
 
 
 def test_smoke_fails_when_unprivileged_user_namespaces_are_enabled(tmp_path: Path) -> None:
@@ -1377,7 +1362,9 @@ def test_smoke_fails_on_a_reachable_private_target(tmp_path: Path) -> None:
 
 def test_smoke_hardcodes_no_host_or_dev_address() -> None:
     """Host and dev addresses come from the environment; the script names only generic ranges."""
-    addresses = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", SMOKE.read_text(encoding="utf-8")))
+    addresses = set(
+        re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", SMOKE.with_suffix(".py").read_text(encoding="utf-8"))
+    )
     assert addresses == {
         "192.168.1.1",
         "10.0.0.1",

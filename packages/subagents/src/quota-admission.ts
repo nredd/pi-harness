@@ -12,8 +12,8 @@
  */
 
 import { nanoid } from "nanoid";
-import { type Clock, realClock } from "./clock.js";
-import type { TierAdmission } from "./model-tiers.js";
+import { type Clock, realClock } from "./clock.ts";
+import type { TierAdmission } from "./model-tiers.ts";
 
 export const ADMIT_CHANNEL = "router:rpc:admit";
 
@@ -25,89 +25,98 @@ const ADMIT_TIMEOUT_MS = 100;
 
 /** Minimal `pi.events` surface. */
 export interface AdmissionEvents {
-  emit(channel: string, data: unknown): void;
-  on(channel: string, handler: (data: unknown) => void): () => void;
+	emit(channel: string, data: unknown): void;
+	on(channel: string, handler: (data: unknown) => void): () => void;
 }
 
 /** A dispatch the router refused, with the earliest known reset (epoch ms). */
 export interface QuotaBlock {
-  model: string;
-  resetAt?: number;
-  /**
-   * False when the router's exhaustion policy says fail now instead of parking.
-   * Absent (an older router) means the dispatch may park until `resetAt`.
-   */
-  wait?: boolean;
+	model: string;
+	resetAt?: number;
+	/**
+	 * False when the router's exhaustion policy says fail now instead of parking.
+	 * Absent (an older router) means the dispatch may park until `resetAt`.
+	 */
+	wait?: boolean;
 }
 
 /** Whether a refused background dispatch may be parked until the block's reset. */
 export function mayPark(block: QuotaBlock): block is QuotaBlock & { resetAt: number } {
-  return block.resetAt !== undefined && block.wait !== false;
+	return block.resetAt !== undefined && block.wait !== false;
 }
 
 /** `provider/id` for a model, the key the router expects. */
 export function modelRef(model: { provider: string; id: string }): string {
-  return `${model.provider}/${model.id}`;
+	return `${model.provider}/${model.id}`;
 }
 
 /** Resolve to the block when the router refuses `model`, else undefined. */
 export async function checkAdmission(
-  events: AdmissionEvents,
-  model: string,
-  timeoutMs = ADMIT_TIMEOUT_MS,
-  clock: Clock = realClock,
-  signal?: AbortSignal,
+	events: AdmissionEvents,
+	model: string,
+	timeoutMs = ADMIT_TIMEOUT_MS,
+	clock: Clock = realClock,
+	signal?: AbortSignal,
 ): Promise<QuotaBlock | undefined> {
-  return (await admissionOutcome(events, model, timeoutMs, clock, signal)).block;
+	return (await admissionOutcome(events, model, timeoutMs, clock, signal)).block;
 }
 
 /** Retain the physical admission label and whether the router supplied a signal. */
 export function admissionOutcome(
-  events: AdmissionEvents,
-  model: string,
-  timeoutMs = ADMIT_TIMEOUT_MS,
-  clock: Clock = realClock,
-  signal?: AbortSignal,
+	events: AdmissionEvents,
+	model: string,
+	timeoutMs = ADMIT_TIMEOUT_MS,
+	clock: Clock = realClock,
+	signal?: AbortSignal,
 ): Promise<TierAdmission> {
-  if (signal?.aborted) return Promise.reject(new DOMException("Admission cancelled", "AbortError"));
-  const requestId = nanoid();
-  return new Promise((resolve, reject) => {
-    // Every step is idempotent and a promise settles once, so no `done` latch is needed.
-    const cleanup = () => {
-      timer.cancel();
-      unsubscribe();
-      signal?.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      cleanup();
-      reject(new DOMException("Admission cancelled", "AbortError"));
-    };
-    const finish = (outcome: TierAdmission) => {
-      cleanup();
-      resolve(outcome);
-    };
-    const unsubscribe = events.on(`${ADMIT_CHANNEL}:reply:${requestId}`, raw => {
-      const reply = raw as { success?: unknown; data?: { ok?: unknown; resolvedModel?: unknown; resetAt?: unknown; wait?: unknown } } | undefined;
-      if (reply?.success !== true || typeof reply.data?.ok !== "boolean") return finish({ quotaSignal: false });
-      if (reply.data.ok) return finish({ quotaSignal: true, resolvedModel: typeof reply.data.resolvedModel === "string" ? reply.data.resolvedModel : undefined });
-      const resetAt = reply.data.resetAt;
-      const wait = reply.data.wait;
-      finish({ quotaSignal: true, block: {
-        model,
-        resetAt: typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : undefined,
-        ...(typeof wait === "boolean" ? { wait } : {}),
-      } });
-    });
-    const timer = clock.setTimeout(() => finish({ quotaSignal: false }), timeoutMs);
-    signal?.addEventListener("abort", abort, { once: true });
-    events.emit(ADMIT_CHANNEL, { requestId, model });
-  });
+	if (signal?.aborted) return Promise.reject(new DOMException("Admission cancelled", "AbortError"));
+	const requestId = nanoid();
+	return new Promise((resolve, reject) => {
+		// Every step is idempotent and a promise settles once, so no `done` latch is needed.
+		const cleanup = () => {
+			timer.cancel();
+			unsubscribe();
+			signal?.removeEventListener("abort", abort);
+		};
+		const abort = () => {
+			cleanup();
+			reject(new DOMException("Admission cancelled", "AbortError"));
+		};
+		const finish = (outcome: TierAdmission) => {
+			cleanup();
+			resolve(outcome);
+		};
+		const unsubscribe = events.on(`${ADMIT_CHANNEL}:reply:${requestId}`, (raw) => {
+			const reply = raw as
+				| { success?: unknown; data?: { ok?: unknown; resolvedModel?: unknown; resetAt?: unknown; wait?: unknown } }
+				| undefined;
+			if (reply?.success !== true || typeof reply.data?.ok !== "boolean") return finish({ quotaSignal: false });
+			if (reply.data.ok)
+				return finish({
+					quotaSignal: true,
+					resolvedModel: typeof reply.data.resolvedModel === "string" ? reply.data.resolvedModel : undefined,
+				});
+			const resetAt = reply.data.resetAt;
+			const wait = reply.data.wait;
+			finish({
+				quotaSignal: true,
+				block: {
+					model,
+					resetAt: typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : undefined,
+					...(typeof wait === "boolean" ? { wait } : {}),
+				},
+			});
+		});
+		const timer = clock.setTimeout(() => finish({ quotaSignal: false }), timeoutMs);
+		signal?.addEventListener("abort", abort, { once: true });
+		events.emit(ADMIT_CHANNEL, { requestId, model });
+	});
 }
 
 /** One-line reason for a refused dispatch. */
 export function describeBlock(block: QuotaBlock): string {
-  const when = block.resetAt === undefined ? "an unknown time" : new Date(block.resetAt).toISOString();
-  return `Subscription quota for ${block.model} is exhausted; it resets at ${when}.`;
+	const when = block.resetAt === undefined ? "an unknown time" : new Date(block.resetAt).toISOString();
+	return `Subscription quota for ${block.model} is exhausted; it resets at ${when}.`;
 }
 
 /** Delay past a reported reset before a parked dispatch starts, so usage has refilled. */

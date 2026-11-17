@@ -34,7 +34,8 @@ export const wireNode = (ref, role, title, extra = {}) => ({
  * @returns {object} Wire node.
  * @throws {never} Fixed construction cannot fail.
  */
-export const wireButton = (ref, title, extra = {}) => wireNode(ref, "AXButton", title, { actions: ["AXPress"], ...extra });
+export const wireButton = (ref, title, extra = {}) =>
+	wireNode(ref, "AXButton", title, { actions: ["AXPress"], ...extra });
 
 /**
  * Build a desktop root listing entry.
@@ -65,7 +66,22 @@ export const desktopRoot = (fields = {}) => {
 	};
 };
 
-const BACKEND_KEYS = ["ensureReady", "listApps", "listRoots", "getFrontmost", "observe", "act", "actBatch", "readText", "waitFor", "isBrowserApp", "isChromeFamilyApp", "setActivity", "shutdown", "emptyRootsHint"];
+const BACKEND_KEYS = [
+	"ensureReady",
+	"listApps",
+	"listRoots",
+	"getFrontmost",
+	"observe",
+	"act",
+	"actBatch",
+	"readText",
+	"waitFor",
+	"isBrowserApp",
+	"isChromeFamilyApp",
+	"setActivity",
+	"shutdown",
+	"emptyRootsHint",
+];
 
 /**
  * Build a complete wire look, independent of the fake's own tree.
@@ -76,7 +92,17 @@ const BACKEND_KEYS = ["ensureReady", "listApps", "listRoots", "getFrontmost", "o
 export const lookPayload = ({ lookId = "look1", children, image = true, window = {} } = {}) => ({
 	lookId,
 	capturedAt: 1,
-	window: { windowId: 11, rootRef: "ax:w11", kind: "window", framePoints: { x: 0, y: 0, w: 300, h: 200 }, scaleFactor: 1, isModal: false, role: "AXWindow", subrole: "", ...window },
+	window: {
+		windowId: 11,
+		rootRef: "ax:w11",
+		kind: "window",
+		framePoints: { x: 0, y: 0, w: 300, h: 200 },
+		scaleFactor: 1,
+		isModal: false,
+		role: "AXWindow",
+		subrole: "",
+		...window,
+	},
 	...(image ? { image: { jpegBase64: "AAAA", mimeType: "image/jpeg", width: 300, height: 200 } } : {}),
 	outline: wireNode("w", "AXWindow", "Main", {
 		label: "",
@@ -136,7 +162,11 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		/** Replaceable `readText` backend: receives the request and returns a native text page. */
 		readTextResult: async () => ({ text: "", offset: 0, limit: 0, totalChars: 0, hasMore: false }),
 		actBatchCalls: [],
-		actBatchResult: { outcome: "worked", performed: { delivery: "pid", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked" }] },
+		actBatchResult: {
+			outcome: "worked",
+			performed: { delivery: "pid", transaction: true, actionCount: 1 },
+			steps: [{ outcome: "worked" }],
+		},
 		lookSeq: 0,
 		/** Replaceable listing: receives the query, returns roots, or undefined for the default. */
 		listRootsHook: undefined,
@@ -157,9 +187,25 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		return {
 			lookId: `look${++fake.lookSeq}`,
 			capturedAt: 1,
-			window: { windowId: root.windowId ?? 0, rootRef: root.rootRef, kind: "window", framePoints: root.framePoints, scaleFactor: 1, isModal: false, role: "AXWindow", subrole: "AXStandardWindow", metadata: {} },
+			window: {
+				windowId: root.windowId ?? 0,
+				rootRef: root.rootRef,
+				kind: "window",
+				framePoints: root.framePoints,
+				scaleFactor: 1,
+				isModal: false,
+				role: "AXWindow",
+				subrole: "AXStandardWindow",
+				metadata: {},
+			},
 			// A scoped look returns the requested subtree as its root, like the native helper.
-			outline: (request?.scopeRef && findWire(fake.tree, request.scopeRef)) || wireNode("w", "AXWindow", fake.windowTitle, { subrole: "AXStandardWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, children: fake.tree }),
+			outline:
+				(request?.scopeRef && findWire(fake.tree, request.scopeRef)) ||
+				wireNode("w", "AXWindow", fake.windowTitle, {
+					subrole: "AXStandardWindow",
+					rect: { x: 0, y: 0, w: 300, h: 200 },
+					children: fake.tree,
+				}),
 			readText: fake.readText,
 			image: fake.image,
 			timings: { captureMs: 0, describeMs: 0, readTextMs: 0 },
@@ -168,10 +214,23 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	Object.assign(currentPlatformBackend, {
 		ensureReady: async () => {
 			fake.readyCalls++;
-			return { permissionStatus: { accessibility: true, screenRecording: true }, lastPermissionCheckAt: Date.now(), helperDiagnostics: fake.diagnostics };
+			return {
+				permissionStatus: { accessibility: true, screenRecording: true },
+				lastPermissionCheckAt: Date.now(),
+				helperDiagnostics: fake.diagnostics,
+			};
 		},
-		listApps: async () => fake.apps ?? [...new Map(fake.roots.map((r) => [r.pid, { appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.pid === fake.frontmostPid }])).values()],
-		listRoots: async (query) => fake.listRootsHook?.(query) ?? (query?.pid ? fake.roots.filter((r) => r.pid === query.pid) : fake.roots),
+		listApps: async () =>
+			fake.apps ?? [
+				...new Map(
+					fake.roots.map((r) => [
+						r.pid,
+						{ appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.pid === fake.frontmostPid },
+					]),
+				).values(),
+			],
+		listRoots: async (query) =>
+			fake.listRootsHook?.(query) ?? (query?.pid ? fake.roots.filter((r) => r.pid === query.pid) : fake.roots),
 		getFrontmost: async () => {
 			if (fake.frontmost) return fake.frontmost;
 			const root = fake.roots.find((candidate) => candidate.pid === fake.frontmostPid) ?? fake.roots[0];
@@ -209,7 +268,11 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
 	fake.ctx = ctx;
 	fake.call = (executor, params, signal) => executor("t", params, signal, undefined, ctx);
-	fake.text = (result) => result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+	fake.text = (result) =>
+		result.content
+			.filter((c) => c.type === "text")
+			.map((c) => c.text)
+			.join("\n");
 	/** Observe the frontmost root and return `{ result, stateId, text }`. */
 	fake.observe = async (params = {}) => {
 		const result = await fake.call(bridge.executeObserve, { mode: "semantic", ...params });

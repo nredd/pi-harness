@@ -22,7 +22,15 @@ vi.mock("node:fs", async (importOriginal) => {
 	return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
 });
 
-const ENV_KEYS = ["BROWSER_USE", "HEADLESS", "CURSOR_OVERLAY", "DESKTOP_CONTROL", "ACTIVITY_GLOW", "MANAGED_BROWSER", "BLOCKED_APPS"].map((name) => `PI_COMPUTER_USE_${name}`);
+const ENV_KEYS = [
+	"BROWSER_USE",
+	"HEADLESS",
+	"CURSOR_OVERLAY",
+	"DESKTOP_CONTROL",
+	"ACTIVITY_GLOW",
+	"MANAGED_BROWSER",
+	"BLOCKED_APPS",
+].map((name) => `PI_COMPUTER_USE_${name}`);
 let saved;
 let savedAgentDir;
 let root;
@@ -58,8 +66,22 @@ afterEach(() => {
 describe("defaults", () => {
 	test("no files and no env give the documented defaults", () => {
 		const loaded = loadComputerUseConfig(cwd());
-		assert.deepEqual(loaded.config, { browser_use: true, headless: false, cursor_overlay: true, desktop_control: true, activity_glow: false, managed_browser: "chrome", blocked_apps: [...DEFAULT_BLOCKED_APPS] });
-		assert.deepEqual(loaded.sources.map(({ path: p, exists }) => [p, exists]), [[userFile(), false], [projectFile(), false]]);
+		assert.deepEqual(loaded.config, {
+			browser_use: true,
+			headless: false,
+			cursor_overlay: true,
+			desktop_control: true,
+			activity_glow: false,
+			managed_browser: "chrome",
+			blocked_apps: [...DEFAULT_BLOCKED_APPS],
+		});
+		assert.deepEqual(
+			loaded.sources.map(({ path: p, exists }) => [p, exists]),
+			[
+				[userFile(), false],
+				[projectFile(), false],
+			],
+		);
 		assert.deepEqual(loaded.env, {});
 		assert.deepEqual(loaded.blockedAppsErrors, []);
 		assert.equal(getLoadedComputerUseConfig(), loaded);
@@ -92,22 +114,53 @@ describe("boolean spellings", () => {
 
 	test("unrecognised values leave the default alone", () => {
 		for (const value of IGNORED) {
-			writeJson(projectFile(), { browser_use: value, headless: value, cursor_overlay: value, desktop_control: value, activity_glow: value });
+			writeJson(projectFile(), {
+				browser_use: value,
+				headless: value,
+				cursor_overlay: value,
+				desktop_control: value,
+				activity_glow: value,
+			});
 			const { config } = loadComputerUseConfig(cwd());
-			assert.deepEqual([config.browser_use, config.headless, config.cursor_overlay, config.desktop_control, config.activity_glow], [true, false, true, true, false], JSON.stringify(value));
+			assert.deepEqual(
+				[config.browser_use, config.headless, config.cursor_overlay, config.desktop_control, config.activity_glow],
+				[true, false, true, true, false],
+				JSON.stringify(value),
+			);
 		}
 	});
 
 	test("env spellings override files and are reported", () => {
-		writeJson(projectFile(), { browser_use: true, headless: false, activity_glow: false, cursor_overlay: true, desktop_control: true });
+		writeJson(projectFile(), {
+			browser_use: true,
+			headless: false,
+			activity_glow: false,
+			cursor_overlay: true,
+			desktop_control: true,
+		});
 		process.env.PI_COMPUTER_USE_BROWSER_USE = "off";
 		process.env.PI_COMPUTER_USE_HEADLESS = "yes";
 		process.env.PI_COMPUTER_USE_CURSOR_OVERLAY = "0";
 		process.env.PI_COMPUTER_USE_DESKTOP_CONTROL = "false";
 		process.env.PI_COMPUTER_USE_ACTIVITY_GLOW = "ENABLED";
 		const loaded = loadComputerUseConfig(cwd());
-		assert.deepEqual(loaded.env, { browser_use: false, headless: true, cursor_overlay: false, desktop_control: false, activity_glow: true });
-		assert.deepEqual([loaded.config.browser_use, loaded.config.headless, loaded.config.cursor_overlay, loaded.config.desktop_control, loaded.config.activity_glow], [false, true, false, false, true]);
+		assert.deepEqual(loaded.env, {
+			browser_use: false,
+			headless: true,
+			cursor_overlay: false,
+			desktop_control: false,
+			activity_glow: true,
+		});
+		assert.deepEqual(
+			[
+				loaded.config.browser_use,
+				loaded.config.headless,
+				loaded.config.cursor_overlay,
+				loaded.config.desktop_control,
+				loaded.config.activity_glow,
+			],
+			[false, true, false, false, true],
+		);
 		assert.equal(isHeadlessMode(), true);
 		assert.equal(isBrowserUseEnabled(), false);
 		process.env.PI_COMPUTER_USE_HEADLESS = "perhaps";
@@ -154,7 +207,12 @@ describe("unreadable and oddly shaped files", () => {
 		assert.deepEqual([source.exists, source.error], [true, "disk on fire"]);
 	});
 
-	test.each([["null", "null"], ["a number", "5"], ["a string", '"headless"'], ["an array root", "[true]"]])("%s root is ignored", (_name, body) => {
+	test.each([
+		["null", "null"],
+		["a number", "5"],
+		["a string", '"headless"'],
+		["an array root", "[true]"],
+	])("%s root is ignored", (_name, body) => {
 		writeJson(projectFile(), body);
 		const loaded = loadComputerUseConfig(cwd());
 		assert.equal(loaded.sources[1].error, undefined);
@@ -198,7 +256,11 @@ describe("blocked_apps", () => {
 
 		writeJson(projectFile(), { blocked_apps: [] });
 		process.env.PI_COMPUTER_USE_BLOCKED_APPS = " , ";
-		assert.deepEqual(loadComputerUseConfig(cwd()).config.blocked_apps, ["com.example.a"], "a blank env and an empty project list change nothing");
+		assert.deepEqual(
+			loadComputerUseConfig(cwd()).config.blocked_apps,
+			["com.example.a"],
+			"a blank env and an empty project list change nothing",
+		);
 	});
 
 	test.each([
@@ -207,7 +269,10 @@ describe("blocked_apps", () => {
 		["one bad entry", ["com.example.a", 5], /blocked_apps has 1 invalid entry \(each must be a non-blank string\)/],
 		["several bad entries", [" ", {}, "ok"], /blocked_apps has 2 invalid entries/],
 	])("%s is reported and the current list stays", (_name, value, message) => {
-		for (const [file, scope] of [[userFile(), "user"], [projectFile(), "project"]]) {
+		for (const [file, scope] of [
+			[userFile(), "user"],
+			[projectFile(), "project"],
+		]) {
 			writeJson(userFile(), {});
 			writeJson(projectFile(), {});
 			writeJson(file, { blocked_apps: value });
@@ -217,7 +282,11 @@ describe("blocked_apps", () => {
 			assert.match(loaded.blockedAppsErrors[0], message);
 			assert.match(loaded.blockedAppsErrors[0], /; keeping the current list$/);
 			assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS], scope);
-			assert.equal("blockedAppsError" in loaded.sources[scope === "user" ? 0 : 1], false, "the per-file error key is not leaked into sources");
+			assert.equal(
+				"blockedAppsError" in loaded.sources[scope === "user" ? 0 : 1],
+				false,
+				"the per-file error key is not leaked into sources",
+			);
 		}
 	});
 });

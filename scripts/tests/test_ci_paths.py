@@ -97,9 +97,9 @@ def classify_change(repo: Path, files: dict[str, str]) -> ci_paths.ChangeClassif
 @pytest.mark.parametrize(
     "path",
     [
-        "docs/ci.md",
+        "docs/guide.md",
         "CONTRIBUTING.md",
-        "PLAN.md",
+        "NOTES.md",
         "packages/dev-tools/README.md",
         "packages/session-kit/CHANGELOG.md",
     ],
@@ -114,6 +114,8 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
     Returns:
         None: Assertions verify classification.
     """
+    if path.startswith("packages/"):
+        classify_change(repo, {path: "seed\n"})  # editing a package doc, not adding one
     result = classify_change(repo, {path: "documentation\n"})
     assert result.docs_only
     assert result.paths == (path,)
@@ -123,14 +125,21 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
     "path",
     [
         "README.md",
+        "packages/computer-use/README.md",
+        "packages/plan-mode/README.md",
         "packages/preset/README.md",
+        "packages/session-kit/README.md",
+        "packages/todo/README.md",
         ".github/workflows/ci.yml",
+        "AGENTS.md",
+        "docs/coverage.md",
+        "docs/install.md",
         "package-lock.json",
         "forks/pi",
-        "integration/README.md",
+        "tests/integration/README.md",
         "scripts/ci_paths.py",
         "releases/example.json",
-        "packages/session-kit/docs/stats-snapshots.md",
+        "packages/session-kit/docs/notes.md",
     ],
 )
 def test_classify_rejects_code_and_tested_documentation(repo: Path, path: str) -> None:
@@ -157,9 +166,9 @@ def test_classify_rejects_mixed_changes(repo: Path) -> None:
     Returns:
         None: Assertions verify classification.
     """
-    result = classify_change(repo, {"docs/ci.md": "docs\n", "packages/dev-tools/src/index.ts": "code\n"})
+    result = classify_change(repo, {"docs/guide.md": "docs\n", "packages/dev-tools/src/index.ts": "code\n"})
     assert not result.docs_only
-    assert result.paths == ("docs/ci.md", "packages/dev-tools/src/index.ts")
+    assert result.paths == ("docs/guide.md", "packages/dev-tools/src/index.ts")
 
 
 def test_classify_rejects_empty_diff(repo: Path) -> None:
@@ -288,14 +297,16 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
     """
     output = tmp_path / "output"
     result = ci_paths.ChangeClassification(
-        paths=("docs/ci.md", "PLAN.md"), docs_only=True, inputs={"wsl_inputs": False, "stack_inputs": False}
+        paths=("docs/guide.md", "NOTES.md"),
+        docs_only=True,
+        inputs={"wsl_inputs": False, "stack_inputs": False},
     )
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
     contents = output.read_text(encoding="utf-8")
     assert "docs_only=true\n" in contents
     assert "wsl_inputs=false\n" in contents
     assert "stack_inputs=false\n" in contents
-    assert "docs/ci.md\nPLAN.md\n" in contents
+    assert "docs/guide.md\nNOTES.md\n" in contents
 
 
 @pytest.mark.parametrize(
@@ -331,8 +342,13 @@ def test_write_github_output_keeps_input_flags_independent(
         ".github/actions/setup-ci-wsl/action.yml",
         "scripts/wsl2_setup.sh",
         "scripts/wsl2_shell.ps1",
+        "scripts/wsl2_capture.py",
+        "scripts/wsl2_exec.py",
+        "scripts/wsl2_run.py",
         "scripts/ci_paths.py",
+        "scripts/install_gh_linux.py",
         "scripts/install_gh_linux.sh",
+        "scripts/install_wsl_owned_tools.py",
         "scripts/install_wsl_owned_tools.sh",
         "Makefile",
         "package.json",
@@ -344,12 +360,13 @@ def test_write_github_output_keeps_input_flags_independent(
         ".gitmodules",
         "coverage/policy.json",
         "package-lock.json",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
-        "integration/probes/stack-resources.ts",
-        "integration/providers/faux.ts",
-        "scripts/check-biome-paths.mjs",
-        "scripts/check-biome-paths.test.mjs",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
+        "tests/integration/probes/stack-resources.ts",
+        "tests/integration/providers/faux.ts",
+        "scripts/check-commit-messages.mjs",
+        "scripts/tests/commit-messages.test.mjs",
+        "scripts/tests/commit-policy.test.mjs",
         "scripts/coverage-configs.test.ts",
         "scripts/import_audit.test.ts",
         "scripts/import_audit.ts",
@@ -357,7 +374,9 @@ def test_write_github_output_keeps_input_flags_independent(
         "scripts/router_contract.test.mjs",
         "scripts/run-vitest.test.ts",
         "scripts/run-vitest.ts",
+        "scripts/vitest-package.ts",
         "scripts/vitest.config.ts",
+        "tests/lib/src/isolated-home.ts",
     ],
 )
 def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> None:
@@ -376,10 +395,10 @@ def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> 
 @pytest.mark.parametrize(
     "path",
     [
-        "docs/ci.md",
-        "PLAN.md",
+        "docs/guide.md",
+        "NOTES.md",
         "packages/dev-tools/src/index.ts",
-        "integration/harness/stack.py",
+        "release/pi_release/stack.py",
         "scripts/merge_pr_checks.py",
         "scripts/tests/test_wsl2_workflow.py",
         "scripts/tests/ci_helper.py",
@@ -402,15 +421,15 @@ def test_wsl_inputs_reject_paths_outside_the_guest_path(repo: Path, path: str) -
 @pytest.mark.parametrize(
     "path",
     [
-        "integration/stacks/personal.json",
-        "integration/harness/stack.py",
-        "integration/scenarios/test_stack.py",
-        "integration/providers/auth_guard.mjs",
-        "integration/golden/personal-tools.txt",
-        "integration/probes/stack-resources.ts",
-        "integration/conftest.py",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
+        "release/stacks/personal.json",
+        "release/pi_release/stack.py",
+        "tests/integration/scenarios/test_stack.py",
+        "tests/integration/providers/auth_guard.mjs",
+        "tests/integration/golden/personal-tools.txt",
+        "tests/integration/probes/stack-resources.ts",
+        "tests/integration/conftest.py",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
         "Makefile",
         ".github/workflows/ci.yml",
         "forks/pi/README.md",
@@ -440,14 +459,14 @@ def test_stack_inputs_accept_paths_the_personal_stack_reads(repo: Path, path: st
 @pytest.mark.parametrize(
     "path",
     [
-        "docs/ci.md",
+        "docs/guide.md",
         "packages/session-kit/src/index.ts",
         "packages/preset/package.json",
-        "integration/README.md",
-        "integration/tests/test_stack.py",
-        "integration/inprocess/support.ts",
+        "tests/integration/README.md",
+        "tests/integration/tests/test_stack.py",
+        "tests/inprocess/support.ts",
         "scripts/merge_pr_checks.py",
-        "integration/stacksy/x.json",
+        "tests/integration/stacksy/x.json",
     ],
 )
 def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: str) -> None:
@@ -466,11 +485,11 @@ def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: st
 @pytest.mark.parametrize(
     "path",
     [
-        "benchmarks/comparison/src/pi_harness_benchmark/usage.py",
-        "benchmarks/comparison/tests/test_usage.py",
-        "benchmarks/comparison/pyproject.toml",
-        "benchmarks/comparison/uv.lock",
-        "benchmarks/comparison/results/runs/a/result.json",
+        "tests/benchmarks/comparison/src/pi_harness_benchmark/usage.py",
+        "tests/benchmarks/comparison/tests/test_usage.py",
+        "tests/benchmarks/comparison/pyproject.toml",
+        "tests/benchmarks/comparison/uv.lock",
+        "tests/benchmarks/comparison/results/runs/a/result.json",
         "Makefile",
         ".python-version",
         ".node-version",
@@ -497,15 +516,15 @@ def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str
     [
         "packages/router/src/index.ts",
         "scripts/ci_guest_x.py",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
         "package.json",
         ".bun-version",
         ".github/workflows/release.yml",
         ".github/actions/setup-ci-wsl/action.yml",
-        "benchmarks/other/pyproject.toml",
-        "benchmarks/comparison-notes.md",
-        "docs/ci.md",
+        "tests/benchmarks/other/pyproject.toml",
+        "tests/benchmarks/comparison-notes.md",
+        "docs/guide.md",
         "coverage/policy.json",
     ],
 )
@@ -531,7 +550,9 @@ def test_benchmark_inputs_follow_any_changed_path(repo: Path) -> None:
     Returns:
         None: Assertions verify classification.
     """
-    result = classify_change(repo, {"packages/router/a.ts": "x\n", "benchmarks/comparison/uv.lock": "lock\n"})
+    result = classify_change(
+        repo, {"packages/router/a.ts": "x\n", "tests/benchmarks/comparison/uv.lock": "lock\n"}
+    )
     assert result.inputs["benchmark_inputs"]
     assert not result.inputs["wsl_inputs"]
 
@@ -545,7 +566,7 @@ def test_mixed_change_reports_each_input_family(repo: Path) -> None:
     Returns:
         None: Assertions verify classification.
     """
-    result = classify_change(repo, {"docs/ci.md": "docs\n", "scripts/ci_paths.py": "code\n"})
+    result = classify_change(repo, {"docs/guide.md": "docs\n", "scripts/ci_paths.py": "code\n"})
     assert (result.docs_only, result.inputs["wsl_inputs"], result.inputs["stack_inputs"]) == (
         False,
         True,
@@ -644,6 +665,101 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/x/AGENTS.md",
+        "packages/x/NOTICE.md",
+        "packages/x/docs/a.md",
+        "packages/x/.hidden",
+        "packages/x/src/shot.png",
+        "packages/x/package.json",
+        "packages/x/test/a.test.mjs",
+        "tests/inprocess/biome.json",
+        "scripts/package_layout.json",
+    ],
+)
+def test_layout_relevant_changes_run_check_scripts_on_every_native_cell(repo: Path, path: str) -> None:
+    """Never skip the layout gate (`scripts/package_layout.py`, in `check-scripts`) for a change it reads.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Changed path that can add or remove a layout violation.
+
+    Returns:
+        None: Assertions verify the classification and the planned gates.
+    """
+    assert not classify_change(repo, {path: "x\n"}).docs_only
+    plan = plan_change(repo, {path: "y\n"}, PULL_REQUEST)
+    for cell in ("owned (ubuntu-24.04)", "owned (macos-14)"):
+        assert plan[cell].run
+        assert "check-scripts" in plan[cell].gates
+
+
+@pytest.mark.parametrize("name", ["README.md", "CHANGELOG.md"])
+def test_adding_or_deleting_a_package_doc_is_not_docs_only(repo: Path, name: str) -> None:
+    """Run the layout gate when a package gains or loses a doc; editing the same doc stays docs-only.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        name (str): Package doc.
+
+    Returns:
+        None: Assertions verify each diff.
+    """
+    path = f"packages/x/{name}"
+    added = classify_change(repo, {path: "one\n"})
+    assert added.paths == (path,)
+    assert not added.docs_only
+    assert classify_change(repo, {path: "two\n"}).docs_only
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / path).unlink()
+    git(repo, "add", "--all")
+    commit(repo, "delete the doc")
+    result = ci_paths.classify(repo, base, "HEAD")
+    assert result.paths == (path,)
+    assert not result.docs_only
+
+
+def test_classify_fails_closed_when_the_trees_cannot_be_listed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Treat a diff as code when the package-doc presence check cannot run.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Makes the presence check fail.
+
+    Returns:
+        None: Assertions verify the classification.
+    """
+
+    def fail(*_args: object) -> bool:
+        """Fail like a broken Git.
+
+        Parameters:
+            *_args (object): Ignored.
+
+        Returns:
+            bool: Never.
+
+        Raises:
+            ClassificationError: Always.
+        """
+        raise ci_paths.ClassificationError("boom")
+
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "packages" / "x").mkdir(parents=True)
+    (repo / "packages/x/README.md").write_text("x\n", encoding="utf-8")
+    git(repo, "add", "--all")
+    commit(repo, "add doc")
+    monkeypatch.setattr(ci_paths, "changes_package_doc_presence", fail)
+    result = ci_paths.classify(repo, base, "HEAD")
+    assert not result.docs_only
+    assert result.paths == ()
+    assert all(result.inputs.values())
+
+
 def test_wsl_inputs_wake_wsl_with_only_the_lcov_producers(repo: Path) -> None:
     """Run WSL on a PR that changes its inputs, without the duplicate Python unit suites.
 
@@ -672,7 +788,7 @@ def test_stack_inputs_wake_the_personal_scenarios(repo: Path) -> None:
     Returns:
         None: Assertions verify the plan.
     """
-    plan = plan_change(repo, {"integration/harness/stack.py": "x\n"}, PULL_REQUEST)
+    plan = plan_change(repo, {"release/pi_release/stack.py": "x\n"}, PULL_REQUEST)
     assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
     assert not plan["owned (wsl2)"].run
 
@@ -688,7 +804,7 @@ def test_docs_only_change_bypasses_native_cells_and_wsl_runs_on_main(repo: Path,
     Returns:
         None: Assertions verify the plan.
     """
-    plan = plan_change(repo, {"docs/ci.md": "x\n"}, event)
+    plan = plan_change(repo, {"docs/guide.md": "x\n"}, event)
     for name in (
         "owned (ubuntu-24.04)",
         "owned (macos-14)",
@@ -719,7 +835,7 @@ def test_permanent_stack_bypass_cells_report_why_on_every_change(
     Returns:
         None: Assertions verify the plan.
     """
-    for files in ({"docs/ci.md": "x\n"}, {".github/workflows/ci.yml": "x\n"}):
+    for files in ({"docs/guide.md": "x\n"}, {".github/workflows/ci.yml": "x\n"}):
         plan = plan_change(repo, files, event)[f"stack ({stack_cell[0]}, {stack_cell[1]})"]
         assert plan == ci_paths.CellPlan(False, False, (), ci_paths.STACK_NOT_RUN[stack_cell])
 
@@ -821,8 +937,10 @@ def test_input_registry_drives_classification_and_outputs(
     Returns:
         None: Assertions verify classification and output.
     """
-    monkeypatch.setitem(ci_paths.INPUT_CLASSES, "bench_inputs", lambda path: path.startswith("benchmarks/"))
-    changed = classify_change(repo, {"benchmarks/comparison/x.py": "x\n"})
+    monkeypatch.setitem(
+        ci_paths.INPUT_CLASSES, "bench_inputs", lambda path: path.startswith("tests/benchmarks/")
+    )
+    changed = classify_change(repo, {"tests/benchmarks/comparison/x.py": "x\n"})
     other = classify_change(repo, {"packages/dev-tools/src/index.ts": "x\n"})
     assert changed.inputs["bench_inputs"]
     assert not other.inputs["bench_inputs"]
@@ -841,7 +959,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     Returns:
         None: Assertions verify workflow output.
     """
-    result = classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    result = classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     output = tmp_path / "out"
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
     plan = read_plan(output)
@@ -883,10 +1001,19 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
             },
             {
                 "os": "macos-14",
+                "shard": "scripts",
+                "runner": "xcode-27",
+                "guest": "macos",
+                "gates": "check-scripts",
+                "workspaces": "",
+                "skipped_gates": "",
+            },
+            {
+                "os": "macos-14",
                 "shard": "python",
                 "runner": "xcode-27",
                 "guest": "macos",
-                "gates": "check-scripts check-integration check-benchmark",
+                "gates": "check-integration check-benchmark",
                 "workspaces": "",
                 "skipped_gates": "check-benchmark",
             },
@@ -939,7 +1066,7 @@ def test_cli_plans_a_pull_request_and_a_push(repo: Path, tmp_path: Path) -> None
     Returns:
         None: Assertions verify workflow output.
     """
-    classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     pr, push = tmp_path / "pr", tmp_path / "push"
     assert run_cli(repo, pr, "--event", PULL_REQUEST, "--pr-title", "Fix the thing", "--pr-number", "7") == 0
     assert run_cli(repo, push, "--event", PUSH) == 0
@@ -960,7 +1087,7 @@ def test_cli_blocks_every_cell_for_a_long_title(repo: Path, tmp_path: Path) -> N
     Returns:
         None: Assertions verify workflow output.
     """
-    classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     output = tmp_path / "out"
     assert run_cli(repo, output, "--event", PULL_REQUEST, "--pr-title", "A" * 70, "--pr-number", "305") == 0
     plan = read_plan(output)
@@ -985,7 +1112,7 @@ def test_cli_blocks_every_cell_when_a_pull_request_has_no_title(repo: Path, tmp_
     assert all(cell["blocked"] and "--pr-title" in cell["reason"] for cell in plan.values())
 
 
-LINT = ci_paths.REPO_ROOT / "packages/computer-use/scripts/check-commit-messages.mjs"
+LINT = ci_paths.REPO_ROOT / "scripts/check-commit-messages.mjs"
 SUBJECT_CASES = [
     ("Fix the thing", True),
     ("rtl: Preserve the root target", True),
@@ -1171,28 +1298,28 @@ def test_cli_requires_a_revision_range_unless_full(capsys: pytest.CaptureFixture
 
 
 def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Path) -> None:
-    """Drive the real command line over a `benchmarks/comparison/uv.lock` diff and read the output file.
+    """Drive the real command line over a `tests/benchmarks/comparison/uv.lock` diff and read the output file.
 
     Parameters:
         repo (Path): Disposable repository.
         tmp_path (Path): Pytest temporary directory.
     """
     base = git(repo, "rev-parse", "HEAD")
-    classify_change(repo, {"benchmarks/comparison/uv.lock": "lock\n"})
+    classify_change(repo, {"tests/benchmarks/comparison/uv.lock": "lock\n"})
     output = tmp_path / "github-output"
     argv = ["--repo", str(repo), "--base", base, "--head", "HEAD", "--github-output", str(output)]
     assert ci_paths.main([*argv, "--event", PUSH]) == 0
     lines = output.read_text(encoding="utf-8").splitlines()
     assert "benchmark_inputs=true" in lines
     assert "docs_only=false" in lines
-    assert "benchmarks/comparison/uv.lock" in lines
+    assert "tests/benchmarks/comparison/uv.lock" in lines
     assert "wsl_inputs=false" in lines
 
 
 WORKSPACES = ci_paths.npm_workspaces(ci_paths.REPO_ROOT)
 SHARD_NAMES = {
     "ubuntu-24.04": ("subagents", "computer-use", "ts", "python"),
-    "macos-14": ("subagents", "computer-use", "ts", "python"),
+    "macos-14": ("subagents", "computer-use", "ts", "scripts", "python"),
     "wsl2": ("subagents-computer-use", "ts"),
 }
 
@@ -1228,8 +1355,27 @@ def test_owned_shards_run_every_workspace_exactly_once_in_npm_order(repo: Path, 
     assert all(entry["workspaces"] == "" for entry in entries if "check-ts" not in entry["gates"].split())
 
 
+def test_macos_scripts_have_an_independent_budget_without_dropping_gates(repo: Path) -> None:
+    """Separate the 19-minute scripts gate from both full integration coverage runs.
+
+    Parameters:
+        repo (Path): Disposable repository.
+    """
+    cell = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PUSH)["owned (macos-14)"]
+    scripts = next(shard for shard in cell.shards if "check-scripts" in shard.gates)
+    integration = next(shard for shard in cell.shards if "check-integration" in shard.gates)
+    assert scripts.name != integration.name
+    assert scripts.gates == ("check-scripts",)
+    assert integration.gates == ("check-integration", "check-benchmark")
+    assert [gate for shard in cell.shards for gate in shard.gates if gate != "check-ts"] == [
+        "check-scripts",
+        "check-integration",
+        "check-benchmark",
+    ]
+
+
 def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> None:
-    """Pin the shard split: four Ubuntu shards, four macOS shards, two WSL shards.
+    """Pin the shard split: four Ubuntu shards, five macOS shards, two WSL shards.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -1252,7 +1398,8 @@ def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> No
         for workspace in WORKSPACES
         if workspace not in {"packages/subagents", "packages/computer-use"}
     ]
-    assert mac["python"]["gates"] == "check-scripts check-integration check-benchmark"
+    assert mac["scripts"]["gates"] == "check-scripts"
+    assert mac["python"]["gates"] == "check-integration check-benchmark"
     wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
     assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
     assert wsl["ts"]["gates"] == "check-ts check-probes check-providers check-import-audit"
@@ -1312,7 +1459,7 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     Parameters:
         repo (Path): Disposable repository.
     """
-    docs = plan_change(repo, {"docs/ci.md": "x\n"}, PULL_REQUEST)
+    docs = plan_change(repo, {"docs/guide.md": "x\n"}, PULL_REQUEST)
     assert docs["owned (ubuntu-24.04)"].shards == ()
     assert docs["owned (wsl2)"].shards == ()
     code = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
@@ -1343,12 +1490,12 @@ def test_npm_workspaces_follow_the_manifest_patterns_in_order(tmp_path: Path) ->
         tmp_path (Path): Fixture repository root.
     """
     (tmp_path / "package.json").write_text(
-        json.dumps({"workspaces": ["packages/*", "integration/inprocess"]}), encoding="utf-8"
+        json.dumps({"workspaces": ["packages/*", "tests/inprocess"]}), encoding="utf-8"
     )
-    for relative in ("packages/zeta", "packages/alpha", "integration/inprocess"):
+    for relative in ("packages/zeta", "packages/alpha", "tests/inprocess"):
         write_workspace(tmp_path, relative)
     (tmp_path / "packages/no-manifest").mkdir()
-    assert ci_paths.npm_workspaces(tmp_path) == ("packages/alpha", "packages/zeta", "integration/inprocess")
+    assert ci_paths.npm_workspaces(tmp_path) == ("packages/alpha", "packages/zeta", "tests/inprocess")
 
 
 @pytest.mark.parametrize(
@@ -1423,9 +1570,9 @@ def test_main_fails_when_the_shard_plan_cannot_be_built(
 @pytest.mark.parametrize(
     ("files", "event", "skips"),
     [
-        ({"integration/harness/stack.py": "x\n"}, PULL_REQUEST, True),
-        ({"benchmarks/comparison/tests/test_cli.py": "x\n"}, PULL_REQUEST, False),
-        ({"integration/harness/stack.py": "x\n"}, PUSH, False),
+        ({"release/pi_release/stack.py": "x\n"}, PULL_REQUEST, True),
+        ({"tests/benchmarks/comparison/tests/test_cli.py": "x\n"}, PULL_REQUEST, False),
+        ({"release/pi_release/stack.py": "x\n"}, PUSH, False),
     ],
 )
 def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs(
@@ -1448,6 +1595,7 @@ def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs
         "subagents": (),
         "computer-use": (),
         "ts": (),
+        "scripts": (),
         "python": expected,
     }
     # A cell never skips a gate it does not plan: Ubuntu and WSL have no benchmark producer at all.

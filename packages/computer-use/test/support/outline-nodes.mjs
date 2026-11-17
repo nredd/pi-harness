@@ -2,7 +2,30 @@
 
 /** A minimal `OutlineNode`; children get their `parent` link. */
 export const outlineNode = (ref, over = {}) => {
-	const out = { ref, role: "AXGroup", subrole: "", identifier: "", title: "", description: "", value: "", actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, focused: false, offscreen: false, pictureOnly: false, truncated: false, text: [], children: [], ...over };
+	const out = {
+		ref,
+		role: "AXGroup",
+		subrole: "",
+		identifier: "",
+		title: "",
+		description: "",
+		value: "",
+		actions: [],
+		canPress: false,
+		canFocus: false,
+		canSetValue: false,
+		canScroll: false,
+		canIncrement: false,
+		canDecrement: false,
+		isTextInput: false,
+		focused: false,
+		offscreen: false,
+		pictureOnly: false,
+		truncated: false,
+		text: [],
+		children: [],
+		...over,
+	};
 	for (const child of out.children) child.parent = out;
 	return out;
 };

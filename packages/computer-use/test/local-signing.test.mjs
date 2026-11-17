@@ -1,13 +1,8 @@
-
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-	ensureIdentityOnce,
-	parseCodeSigningIdentities,
-	withDirectoryLock,
-} from "../scripts/setup-helper.mjs";
+import { ensureIdentityOnce, parseCodeSigningIdentities, withDirectoryLock } from "../scripts/setup-helper.mjs";
 import { test } from "vitest";
 
 test("stable identity, non-destructive install and concurrent creation", async () => {
@@ -28,18 +23,21 @@ Policy: Code Signing
 		"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
 	]);
 
-	const setupCopy = await fs.readFile(
-		new URL("../scripts/setup-helper.mjs", import.meta.url),
-		"utf8",
-	);
+	const setupCopy = await fs.readFile(new URL("../scripts/setup-helper.mjs", import.meta.url), "utf8");
 	assert.doesNotMatch(setupCopy, /tccutil[\s\S]{0,80}reset|resetTcc/i);
 	// Both replacement paths must stop old code before overwriting it. No real helper is launched here.
-	assert.match(setupCopy, /await stopRunningHelper\(\);\s+await fs\.rm\(helperAppPath/, "sealed bundle replacement must stop the helper");
-	assert.match(setupCopy, /await stopRunningHelper\(\);\s+await fs\.copyFile\(sourcePath, helperAppExecutablePath\)/, "local bundle replacement must stop the helper");
-
-	const tempDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "pi-computer-use-signing-test-"),
+	assert.match(
+		setupCopy,
+		/await stopRunningHelper\(\);\s+await fs\.rm\(helperAppPath/,
+		"sealed bundle replacement must stop the helper",
 	);
+	assert.match(
+		setupCopy,
+		/await stopRunningHelper\(\);\s+await fs\.copyFile\(sourcePath, helperAppExecutablePath\)/,
+		"local bundle replacement must stop the helper",
+	);
+
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-signing-test-"));
 	const lockPath = path.join(tempDir, "identity.lock");
 	let identity;
 	let createCount = 0;
@@ -70,17 +68,11 @@ Policy: Code Signing
 			),
 		);
 
-		assert.equal(
-			createCount,
-			1,
-			"concurrent callers must create only one identity",
-		);
+		assert.equal(createCount, 1, "concurrent callers must create only one identity");
 		assert.deepEqual(new Set(results), new Set([identity]));
 	} finally {
 		await fs.rm(tempDir, { force: true, recursive: true });
 	}
 
-	console.log(
-		"[check-local-signing] stable identity, non-destructive install, and concurrent creation passed",
-	);
+	console.log("[check-local-signing] stable identity, non-destructive install, and concurrent creation passed");
 });

@@ -17,11 +17,35 @@ export async function browserSnapshot(id, children, options = {}) {
 	const outline = parseLookResponse({
 		lookId: id,
 		capturedAt: 1,
-		window: { windowId: 0, framePoints: { x: 0, y: 0, w: 1, h: 1 }, scaleFactor: 1, isModal: false, role: "document", subrole: "" },
+		window: {
+			windowId: 0,
+			framePoints: { x: 0, y: 0, w: 1, h: 1 },
+			scaleFactor: 1,
+			isModal: false,
+			role: "document",
+			subrole: "",
+		},
 		outline: wireNode("doc", options.role ?? "AXWebArea", "Page", { children }),
 		timings: {},
 	}).parsedOutline;
-	return { contextId: options.contextId ?? "browser:page1", snapshotId: id, targetId: "page1", title: "Page", url: "https://example.test/", capturedAt: 1, text: "", targets: children.map((child) => ({ ref: child.ref, source: "browser_ax", role: child.role, name: child.title, actions: [] })), outline: serializeOutline(outline), diagnostics: { cdp: "connected", targetCount: children.length } };
+	return {
+		contextId: options.contextId ?? "browser:page1",
+		snapshotId: id,
+		targetId: "page1",
+		title: "Page",
+		url: "https://example.test/",
+		capturedAt: 1,
+		text: "",
+		targets: children.map((child) => ({
+			ref: child.ref,
+			source: "browser_ax",
+			role: child.role,
+			name: child.title,
+			actions: [],
+		})),
+		outline: serializeOutline(outline),
+		diagnostics: { cdp: "connected", targetCount: children.length },
+	};
 }
 
 /**
@@ -33,8 +57,11 @@ export async function browserSnapshot(id, children, options = {}) {
  */
 export async function observeBrowser(fake, children) {
 	const cdp = await import("../../src/cdp.ts");
-	if (!vi.isMockFunction(cdp.cdpSnapshotForContext) || !vi.isMockFunction(cdp.listCdpPageContexts)) throw new Error("observeBrowser needs the caller to vi.mock(\"../src/cdp.ts\") with vi.fn() page functions.");
-	cdp.listCdpPageContexts.mockResolvedValue([{ contextId: "browser:page1", targetId: "page1", title: "Page", url: "https://example.test/" }]);
+	if (!vi.isMockFunction(cdp.cdpSnapshotForContext) || !vi.isMockFunction(cdp.listCdpPageContexts))
+		throw new Error('observeBrowser needs the caller to vi.mock("../src/cdp.ts") with vi.fn() page functions.');
+	cdp.listCdpPageContexts.mockResolvedValue([
+		{ contextId: "browser:page1", targetId: "page1", title: "Page", url: "https://example.test/" },
+	]);
 	cdp.cdpSnapshotForContext.mockResolvedValue(await browserSnapshot("base", children));
 	const found = await fake.call(fake.bridge.executeFind, { app: "Browser" });
 	const root = found.details.windows.find((window) => window.kind === "browser_page").windowRef;

@@ -59,64 +59,64 @@ const BUDGET_VERSION = 2;
 export const MAX_PENDING_SUBAGENTS = 128;
 
 export const DEFAULT_BUDGET_POLICY: Readonly<BudgetPolicy> = {
-  maxActive: 0,
-  nestedReserve: 2,
-  maxDepth: 2,
+	maxActive: 0,
+	nestedReserve: 2,
+	maxDepth: 2,
 };
 
 export interface BudgetPolicy {
-  /** Process-wide ceiling on running subagents. `0` = off (counted, never enforced). */
-  maxActive: number;
-  /** Slots held back per nesting level below a run, so children can always start. */
-  nestedReserve: number;
-  /**
-   * The deepest level the reserve covers: the GLOBAL `maxSubagentDepth`, so a
-   * project file cannot reshape a process-wide policy. A deeper run is refused.
-   */
-  maxDepth: number;
+	/** Process-wide ceiling on running subagents. `0` = off (counted, never enforced). */
+	maxActive: number;
+	/** Slots held back per nesting level below a run, so children can always start. */
+	nestedReserve: number;
+	/**
+	 * The deepest level the reserve covers: the GLOBAL `maxSubagentDepth`, so a
+	 * project file cannot reshape a process-wide policy. A deeper run is refused.
+	 */
+	maxDepth: number;
 }
 
 /** One admitted run. Released exactly once; later releases are no-ops. */
 export interface BudgetLease {
-  readonly depth: number;
-  released: boolean;
+	readonly depth: number;
+	released: boolean;
 }
 
 /** A start waiting for admission. */
 export interface BudgetWaiter {
-  /** Nesting depth of the run: top-level = 1. */
-  depth: number;
-  /** Local conditions the owner also needs (its own pool limits). */
-  ready: () => boolean;
-  /** Takes ownership of the lease. Must not throw; a throw is swallowed and the lease released. */
-  grant: (lease: BudgetLease) => void;
+	/** Nesting depth of the run: top-level = 1. */
+	depth: number;
+	/** Local conditions the owner also needs (its own pool limits). */
+	ready: () => boolean;
+	/** Takes ownership of the lease. Must not throw; a throw is swallowed and the lease released. */
+	grant: (lease: BudgetLease) => void;
 }
 
 interface BudgetState {
-  version: number;
-  policy: BudgetPolicy;
-  /** A tightening change, applied once no lease is active (`setBudgetPolicy`). */
-  pendingPolicy: BudgetPolicy | undefined;
-  active: Set<BudgetLease>;
-  waiters: BudgetWaiter[];
-  pumping: boolean;
-  repump: boolean;
+	version: number;
+	policy: BudgetPolicy;
+	/** A tightening change, applied once no lease is active (`setBudgetPolicy`). */
+	pendingPolicy: BudgetPolicy | undefined;
+	active: Set<BudgetLease>;
+	waiters: BudgetWaiter[];
+	pumping: boolean;
+	repump: boolean;
 }
 
 export const BUDGET_QUEUE_FULL_ERROR =
-  `Subagent queue is full (${MAX_PENDING_SUBAGENTS} waiting for the process-wide maxActiveSubagents limit). `
-  + "Wait for running agents to finish, or do the work directly.";
+	`Subagent queue is full (${MAX_PENDING_SUBAGENTS} waiting for the process-wide maxActiveSubagents limit). ` +
+	"Wait for running agents to finish, or do the work directly.";
 
 function freshState(): BudgetState {
-  return {
-    version: BUDGET_VERSION,
-    policy: { ...DEFAULT_BUDGET_POLICY },
-    pendingPolicy: undefined,
-    active: new Set(),
-    waiters: [],
-    pumping: false,
-    repump: false,
-  };
+	return {
+		version: BUDGET_VERSION,
+		policy: { ...DEFAULT_BUDGET_POLICY },
+		pendingPolicy: undefined,
+		active: new Set(),
+		waiters: [],
+		pumping: false,
+		repump: false,
+	};
 }
 
 /**
@@ -125,18 +125,18 @@ function freshState(): BudgetState {
  * Never fork the state: two private counts could each admit the whole cap.
  */
 function state(): BudgetState {
-  const g = globalThis as Record<symbol, unknown>;
-  const existing = g[BUDGET_KEY] as BudgetState | undefined;
-  if (existing === undefined) {
-    const created = freshState();
-    g[BUDGET_KEY] = created;
-    return created;
-  }
-  if (existing.version === BUDGET_VERSION) return existing;
-  throw new Error(
-    `[pi-subagents] Incompatible process budget v${String(existing.version)} already loaded (this build uses v${String(BUDGET_VERSION)}). `
-    + "Restart pi before starting more subagents; no private budget will be created.",
-  );
+	const g = globalThis as Record<symbol, unknown>;
+	const existing = g[BUDGET_KEY] as BudgetState | undefined;
+	if (existing === undefined) {
+		const created = freshState();
+		g[BUDGET_KEY] = created;
+		return created;
+	}
+	if (existing.version === BUDGET_VERSION) return existing;
+	throw new Error(
+		`[pi-subagents] Incompatible process budget v${String(existing.version)} already loaded (this build uses v${String(BUDGET_VERSION)}). ` +
+			"Restart pi before starting more subagents; no private budget will be created.",
+	);
 }
 
 /** The deepest level `policy` reserves for; nesting off still means one level. */
@@ -147,8 +147,8 @@ const topLevel = (policy: BudgetPolicy): number => Math.max(1, policy.maxDepth);
  * shallower has to wait. No floor: `isCoherent` keeps it at least one.
  */
 export function admissionLimit(policy: BudgetPolicy, level: number): number {
-  if (policy.maxActive <= 0) return Number.POSITIVE_INFINITY;
-  return policy.maxActive - policy.nestedReserve * (topLevel(policy) - level);
+	if (policy.maxActive <= 0) return Number.POSITIVE_INFINITY;
+	return policy.maxActive - policy.nestedReserve * (topLevel(policy) - level);
 }
 
 /**
@@ -157,22 +157,22 @@ export function admissionLimit(policy: BudgetPolicy, level: number): number {
  * top-level run after reserving for every level below it.
  */
 export function isCoherent(policy: BudgetPolicy): boolean {
-  if (policy.maxActive <= 0 || topLevel(policy) === 1) return true;
-  return policy.nestedReserve >= 1 && admissionLimit(policy, 1) >= 1;
+	if (policy.maxActive <= 0 || topLevel(policy) === 1) return true;
+	return policy.nestedReserve >= 1 && admissionLimit(policy, 1) >= 1;
 }
 
 /** Every level's limit is at least what it was, so no held lease can block a child that fit before. */
 function relaxes(from: BudgetPolicy, to: BudgetPolicy): boolean {
-  if (to.maxActive <= 0) return true;
-  if (from.maxActive <= 0 || topLevel(from) !== topLevel(to)) return false;
-  for (let level = 1; level <= topLevel(to); level++) {
-    if (admissionLimit(to, level) < admissionLimit(from, level)) return false;
-  }
-  return true;
+	if (to.maxActive <= 0) return true;
+	if (from.maxActive <= 0 || topLevel(from) !== topLevel(to)) return false;
+	for (let level = 1; level <= topLevel(to); level++) {
+		if (admissionLimit(to, level) < admissionLimit(from, level)) return false;
+	}
+	return true;
 }
 
 export function getBudgetPolicy(): BudgetPolicy {
-  return { ...state().policy };
+	return { ...state().policy };
 }
 
 /**
@@ -184,38 +184,38 @@ export function getBudgetPolicy(): BudgetPolicy {
  * limits applies at once.
  */
 export function setBudgetPolicy(next: BudgetPolicy): void {
-  const policy: BudgetPolicy = {
-    maxActive: Math.max(0, Math.floor(next.maxActive)),
-    nestedReserve: Math.max(0, Math.floor(next.nestedReserve)),
-    maxDepth: Math.max(0, Math.floor(next.maxDepth)),
-  };
-  if (!isCoherent(policy)) {
-    console.warn(
-      `[pi-subagents] Ignoring maxActiveSubagents ${String(policy.maxActive)} with nestedSubagentReserve ${String(policy.nestedReserve)} `
-      + `at maxSubagentDepth ${String(policy.maxDepth)}: it could deadlock. Nesting needs a reserve of at least 1 and `
-      + "maxActiveSubagents >= nestedSubagentReserve * (maxSubagentDepth - 1) + 1.",
-    );
-    return;
-  }
-  const s = state();
-  if (s.active.size === 0 || relaxes(s.policy, policy)) {
-    s.policy = policy;
-    s.pendingPolicy = undefined;
-    pumpBudget();
-  } else {
-    s.pendingPolicy = policy;
-    console.warn(
-      `[pi-subagents] Process budget change deferred until all running subagents settle: `
-      + `maxActiveSubagents=${String(policy.maxActive)}, nestedSubagentReserve=${String(policy.nestedReserve)}, `
-      + `maxSubagentDepth=${String(policy.maxDepth)}. The previous policy remains in force; continuous work can delay this indefinitely.`,
-    );
-  }
+	const policy: BudgetPolicy = {
+		maxActive: Math.max(0, Math.floor(next.maxActive)),
+		nestedReserve: Math.max(0, Math.floor(next.nestedReserve)),
+		maxDepth: Math.max(0, Math.floor(next.maxDepth)),
+	};
+	if (!isCoherent(policy)) {
+		console.warn(
+			`[pi-subagents] Ignoring maxActiveSubagents ${String(policy.maxActive)} with nestedSubagentReserve ${String(policy.nestedReserve)} ` +
+				`at maxSubagentDepth ${String(policy.maxDepth)}: it could deadlock. Nesting needs a reserve of at least 1 and ` +
+				"maxActiveSubagents >= nestedSubagentReserve * (maxSubagentDepth - 1) + 1.",
+		);
+		return;
+	}
+	const s = state();
+	if (s.active.size === 0 || relaxes(s.policy, policy)) {
+		s.policy = policy;
+		s.pendingPolicy = undefined;
+		pumpBudget();
+	} else {
+		s.pendingPolicy = policy;
+		console.warn(
+			`[pi-subagents] Process budget change deferred until all running subagents settle: ` +
+				`maxActiveSubagents=${String(policy.maxActive)}, nestedSubagentReserve=${String(policy.nestedReserve)}, ` +
+				`maxSubagentDepth=${String(policy.maxDepth)}. The previous policy remains in force; continuous work can delay this indefinitely.`,
+		);
+	}
 }
 
 /** The policy waiting for the process to go idle, if any. For diagnostics and tests. */
 export function getPendingBudgetPolicy(): BudgetPolicy | undefined {
-  const pending = state().pendingPolicy;
-  return pending === undefined ? undefined : { ...pending };
+	const pending = state().pendingPolicy;
+	return pending === undefined ? undefined : { ...pending };
 }
 
 /**
@@ -224,45 +224,45 @@ export function getPendingBudgetPolicy(): BudgetPolicy | undefined {
  * fixed for the run's life, since `maxDepth` changes only while idle.
  */
 export function assertWithinBudgetDepth(depth: number): void {
-  const { policy } = state();
-  if (policy.maxActive > 0 && depth > topLevel(policy)) {
-    throw new Error(
-      `Nested subagent at depth ${String(depth)} exceeds the process budget's depth ${String(topLevel(policy))} `
-      + "(global maxSubagentDepth). Complete the task directly.",
-    );
-  }
+	const { policy } = state();
+	if (policy.maxActive > 0 && depth > topLevel(policy)) {
+		throw new Error(
+			`Nested subagent at depth ${String(depth)} exceeds the process budget's depth ${String(topLevel(policy))} ` +
+				"(global maxSubagentDepth). Complete the task directly.",
+		);
+	}
 }
 
 /** Running leases and waiting starts, for diagnostics and tests. */
 export function budgetUsage(): { active: number; pending: number; maxActive: number } {
-  const s = state();
-  return { active: s.active.size, pending: s.waiters.length, maxActive: s.policy.maxActive };
+	const s = state();
+	return { active: s.active.size, pending: s.waiters.length, maxActive: s.policy.maxActive };
 }
 
 function admits(s: BudgetState, depth: number): boolean {
-  const { policy } = s;
-  if (policy.maxActive <= 0) return true;
-  const top = topLevel(policy);
-  const level = Math.max(1, depth);
-  if (level > top) return false;
-  // Leases deeper than `top` cannot exist while it is on; clamp so they still count in the total.
-  const atDepth = new Array<number>(top + 1).fill(0);
-  for (const lease of s.active) {
-    const index = Math.min(top, Math.max(1, lease.depth));
-    atDepth[index] = atDepth[index]! + 1;
-  }
-  let atOrAbove = 0;
-  for (let j = 1; j <= top; j++) {
-    atOrAbove += atDepth[j]!;
-    if (j >= level && atOrAbove >= admissionLimit(policy, j)) return false;
-  }
-  return true;
+	const { policy } = s;
+	if (policy.maxActive <= 0) return true;
+	const top = topLevel(policy);
+	const level = Math.max(1, depth);
+	if (level > top) return false;
+	// Leases deeper than `top` cannot exist while it is on; clamp so they still count in the total.
+	const atDepth = new Array<number>(top + 1).fill(0);
+	for (const lease of s.active) {
+		const index = Math.min(top, Math.max(1, lease.depth));
+		atDepth[index] = atDepth[index]! + 1;
+	}
+	let atOrAbove = 0;
+	for (let j = 1; j <= top; j++) {
+		atOrAbove += atDepth[j]!;
+		if (j >= level && atOrAbove >= admissionLimit(policy, j)) return false;
+	}
+	return true;
 }
 
 function newLease(s: BudgetState, depth: number): BudgetLease {
-  const lease: BudgetLease = { depth, released: false };
-  s.active.add(lease);
-  return lease;
+	const lease: BudgetLease = { depth, released: false };
+	s.active.add(lease);
+	return lease;
 }
 
 /**
@@ -271,25 +271,25 @@ function newLease(s: BudgetState, depth: number): BudgetLease {
  * between release and drain; re-entrant grant callbacks can do the same.
  */
 export function tryAcquireBudget(depth: number): BudgetLease | undefined {
-  const s = state();
-  if (!admits(s, depth) || s.waiters.some(waiter => admits(s, waiter.depth) && waiter.ready())) return undefined;
-  return newLease(s, depth);
+	const s = state();
+	if (!admits(s, depth) || s.waiters.some((waiter) => admits(s, waiter.depth) && waiter.ready())) return undefined;
+	return newLease(s, depth);
 }
 
 /** Whether another waiter fits. Always true while the budget is off. */
 export function budgetHasPendingRoom(): boolean {
-  const s = state();
-  return s.policy.maxActive <= 0 || s.waiters.length < MAX_PENDING_SUBAGENTS;
+	const s = state();
+	return s.policy.maxActive <= 0 || s.waiters.length < MAX_PENDING_SUBAGENTS;
 }
 
 /** Join the queue. Returns a cancel function; cancelling a granted waiter is a no-op. */
 export function enqueueBudget(waiter: BudgetWaiter): () => void {
-  state().waiters.push(waiter);
-  return () => {
-    const s = state();
-    const i = s.waiters.indexOf(waiter);
-    if (i !== -1) s.waiters.splice(i, 1);
-  };
+	state().waiters.push(waiter);
+	return () => {
+		const s = state();
+		const i = s.waiters.indexOf(waiter);
+		if (i !== -1) s.waiters.splice(i, 1);
+	};
 }
 
 /**
@@ -297,14 +297,14 @@ export function enqueueBudget(waiter: BudgetWaiter): () => void {
  * ordering. The last release applies a held policy change.
  */
 export function releaseBudget(lease: BudgetLease | undefined): void {
-  if (lease === undefined || lease.released) return;
-  lease.released = true;
-  const s = state();
-  s.active.delete(lease);
-  if (s.active.size === 0 && s.pendingPolicy !== undefined) {
-    s.policy = s.pendingPolicy;
-    s.pendingPolicy = undefined;
-  }
+	if (lease === undefined || lease.released) return;
+	lease.released = true;
+	const s = state();
+	s.active.delete(lease);
+	if (s.active.size === 0 && s.pendingPolicy !== undefined) {
+		s.policy = s.pendingPolicy;
+		s.pendingPolicy = undefined;
+	}
 }
 
 /**
@@ -313,34 +313,34 @@ export function releaseBudget(lease: BudgetLease | undefined): void {
  * Re-entrant calls from inside a grant are folded into the running loop.
  */
 export function pumpBudget(): void {
-  const s = state();
-  if (s.pumping) {
-    s.repump = true;
-    return;
-  }
-  s.pumping = true;
-  try {
-    do {
-      s.repump = false;
-      for (;;) {
-        const i = s.waiters.findIndex(w => admits(s, w.depth) && w.ready());
-        if (i === -1) break;
-        const waiter = s.waiters.splice(i, 1)[0]!;
-        const lease = newLease(s, waiter.depth);
-        try {
-          waiter.grant(lease);
-        } catch {
-          releaseBudget(lease);
-        }
-      }
-    } while (s.repump);
-  } finally {
-    s.pumping = false;
-  }
+	const s = state();
+	if (s.pumping) {
+		s.repump = true;
+		return;
+	}
+	s.pumping = true;
+	try {
+		do {
+			s.repump = false;
+			for (;;) {
+				const i = s.waiters.findIndex((w) => admits(s, w.depth) && w.ready());
+				if (i === -1) break;
+				const waiter = s.waiters.splice(i, 1)[0]!;
+				const lease = newLease(s, waiter.depth);
+				try {
+					waiter.grant(lease);
+				} catch {
+					releaseBudget(lease);
+				}
+			}
+		} while (s.repump);
+	} finally {
+		s.pumping = false;
+	}
 }
 
 /** Test-only: forget all leases and waiters and restore the default policy. */
 export function resetBudgetForTests(): void {
-  const g = globalThis as Record<symbol, unknown>;
-  g[BUDGET_KEY] = freshState();
+	const g = globalThis as Record<symbol, unknown>;
+	g[BUDGET_KEY] = freshState();
 }

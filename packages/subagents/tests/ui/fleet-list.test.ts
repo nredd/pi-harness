@@ -1,0 +1,2165 @@
+import { Editor, type OverlayOptions, type TuiMode, visibleWidth } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentManager } from "../../src/agent-manager.ts";
+import { registerAgents } from "../../src/agent-types.ts";
+import type { Clock } from "../../src/clock.ts";
+import type { AgentConfig, AgentRecord, ViewerMarkdownMode } from "../../src/types.ts";
+import { type AgentActivity, getDisplayName } from "../../src/ui/agent-widget.ts";
+import type { ViewerBackgroundAction } from "../../src/ui/conversation-viewer.ts";
+import {
+	FleetList,
+	type FleetUICtx,
+	type FleetWorkflow,
+	formatFleetElapsed,
+	formatFleetTokens,
+} from "../../src/ui/fleet-list.ts";
+import { FLEET_STATE_ENTRY, type FleetJournalEntry } from "../../src/ui/fleet-state.ts";
+
+// ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
+const DOWN = "\x1b[B";
+const UP = "\x1b[A";
+const LEFT = "\x1b[D";
+const RIGHT = "\x1b[C";
+const ESC = "\x1b";
+const ENTER = "\r";
+// Kitty-protocol key-RELEASE for ↓ (event type 3) — listeners receive these too.
+const DOWN_RELEASE = "\x1b[1;1:3B";
+
+const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => `*${s}*` };
+type WidgetFactory = Exclude<Parameters<FleetUICtx["setWidget"]>[1], undefined>;
+
+/** An agent that renders as a badge — no default agent configures a color. */
+const BADGED_TYPE = "colored-reviewer";
+const PURPLE_BACKGROUND = "\u001b[48;2;130;125;189m";
+const BADGED_CONFIG: AgentConfig = {
+	name: BADGED_TYPE,
+	displayName: "Code Reviewer",
+	color: "purple",
+	description: "Reviews code",
+	extensions: false,
+	skills: false,
+	systemPrompt: "Review code.",
+	promptMode: "replace",
+};
+
+/**
+ * Visible text of a rendered row: ANSI stripped, along with this theme's fake
+ * `<color>` / `*bold*` markers — all three stand in for zero-width escapes.
+ */
+function plain(row: string): string {
+	return row.replace(/\u001b\[[0-9;]*m/g, "").replace(/<\/?[a-zA-Z]+>|\*/g, "");
+}
+
+/** A no-op session so a record is "openable" by default (the list hides session-less agents). */
+const FAKE_SESSION = { subscribe: () => () => {}, messages: [] };
+
+function makeRecord(over: Partial<AgentRecord> = {}): AgentRecord {
+	return {
+		id: "a1",
+		type: "general-purpose",
+		description: "Sleep then report 1",
+		status: "running",
+		toolUses: 0,
+		startedAt: Date.now(),
+		session: FAKE_SESSION as any,
+		lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0 },
+		compactionCount: 0,
+		...over,
+	} as AgentRecord;
+}
+
+/** Fake manager exposing only what FleetList touches. */
+function fakeManager(agents: AgentRecord[]): AgentManager {
+	return {
+		listAgents: () => agents,
+		abort: () => true,
+		steer: vi.fn(() => true),
+	} as unknown as AgentManager;
+}
+
+interface Harness {
+	fleet: FleetList;
+	ui: FleetUICtx;
+	manager: AgentManager;
+	/** Replace the workflow runs the list sees, and re-render. */
+	setWorkflows: (list: FleetWorkflow[]) => void;
+	/** Ids the list asked the extension to open, in order. */
+	openedWorkflows: () => string[];
+	/** Settle the workflow dialog the list last opened; flushes the close microtask. */
+	closeWorkflowDialog: () => Promise<void>;
+	/** Notices the fleet pushed through `ui.notify`, as `level: message`. */
+	notices: () => string[];
+	/** The overlay component (a real ConversationViewer) once one is opened. */
+	overlayComponent: () => { handleInput(data: string): void } | undefined;
+	/** Overlay options resolved after the custom factory runs. */
+	overlayOptions: () => OverlayOptions | undefined;
+	/** Feed a key to the registered input handler; returns the consume result. */
+	press: (data: string) => { consume?: boolean } | undefined;
+	/** Render the currently-registered below-editor widget at the given width. */
+	render: (width?: number) => string[];
+	setEditorText: (t: string) => void;
+	/** Whether an overlay has been opened. */
+	overlayOpened: () => boolean;
+	/** Whether the most recently opened overlay's `done` was invoked (closed). */
+	overlayClosed: () => boolean;
+	/** Simulate the viewer closing itself (Esc → done); flushes the close microtask. */
+	closeOverlay: () => Promise<void>;
+	/** The fake `tui` handed to the widget factory; tests set `focusedComponent` on it. */
+	widgetTui: { requestRender(): void; focusedComponent?: unknown };
+}
+
+function makeWorkflow(over: Partial<FleetWorkflow> = {}): FleetWorkflow {
+	return {
+		id: "wf_abc123",
+		name: "audit-src",
+		status: "running",
+		doneCount: 1,
+		totalCount: 3,
+		startedAt: Date.now() - 32_000,
+		tokens: 26_400,
+		...over,
+	};
+}
+
+function harness(
+	agents: AgentRecord[],
+	opts: {
+		collapsed?: boolean;
+		tuiMode?: TuiMode;
+		viewerMarkdown?: () => ViewerMarkdownMode;
+		onViewerMarkdown?: (mode: ViewerMarkdownMode) => void;
+		backgroundAction?: (record: AgentRecord, notify: (message: string) => void) => ViewerBackgroundAction;
+		clock?: Clock;
+	} = {},
+): Harness {
+	const notices: string[] = [];
+	let inputHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+	let widgetFactory: ((tui: any, theme: any) => { render(w: number): string[] }) | undefined;
+	let editorText = "";
+	let opened = false;
+	let closed = false;
+	let overlayDone: ((r: undefined) => void) | undefined;
+	let overlayComponent: { handleInput(data: string): void } | undefined;
+	let overlayOptions: OverlayOptions | undefined;
+	const fakeTui = {
+		mode: opts.tuiMode ?? "regular",
+		handleMouse: () => undefined,
+		requestRender: () => {},
+		terminal: { columns: 120, rows: 40 },
+	};
+
+	const ui: FleetUICtx = {
+		setWidget: (_key, content) => {
+			widgetFactory = content as any;
+		},
+		onTerminalInput: (h) => {
+			inputHandler = h;
+			return () => {
+				inputHandler = undefined;
+			};
+		},
+		getEditorText: () => editorText,
+		notify: (message, level) => {
+			notices.push(`${level}: ${message}`);
+		},
+		custom: ((factory: any, options?: { overlayOptions?: OverlayOptions | (() => OverlayOptions) }) => {
+			opened = true;
+			return new Promise<undefined>((resolve) => {
+				const done = (r: undefined) => {
+					closed = true;
+					overlayDone = undefined;
+					resolve(r);
+				};
+				overlayDone = done;
+				// Construct the overlay component so the controller wires viewerClose,
+				// and keep it so tests can drive the real ConversationViewer's input.
+				overlayComponent = factory(fakeTui, theme, undefined, done);
+				overlayOptions =
+					typeof options?.overlayOptions === "function" ? options.overlayOptions() : options?.overlayOptions;
+			});
+		}) as FleetUICtx["custom"],
+	};
+
+	const manager = fakeManager(agents);
+	const fleet = new FleetList(
+		manager,
+		new Map(),
+		undefined,
+		opts.viewerMarkdown,
+		opts.onViewerMarkdown,
+		undefined,
+		opts.backgroundAction,
+		undefined,
+		undefined,
+		opts.clock,
+	);
+	const journal: FleetJournalEntry[] = [];
+	fleet.restoreSession(
+		() => journal,
+		(data) => journal.push({ type: "custom", customType: FLEET_STATE_ENTRY, data }),
+	);
+	fleet.setUICtx(ui);
+	if (!opts.collapsed) fleet.toggleCollapse(); // existing row tests exercise the expanded rendering
+	let workflows: FleetWorkflow[] = [];
+	const openedWorkflows: string[] = [];
+	let closeWorkflowDialog: (() => void) | undefined;
+	fleet.setWorkflowSource(
+		() => workflows,
+		(id) => {
+			openedWorkflows.push(id);
+			// The real opener hands back the dialog's promise, so the list can put the
+			// cursor back when it closes. Held open here until a test resolves it.
+			return new Promise<void>((resolve) => {
+				closeWorkflowDialog = () => resolve();
+			});
+		},
+	);
+	fleet.update();
+
+	return {
+		fleet,
+		setWorkflows: (list: FleetWorkflow[]) => {
+			workflows = list;
+			fleet.update();
+		},
+		openedWorkflows: () => openedWorkflows,
+		closeWorkflowDialog: async () => {
+			closeWorkflowDialog?.();
+			await Promise.resolve();
+		},
+		ui,
+		manager,
+		notices: () => notices,
+		overlayComponent: () => overlayComponent,
+		overlayOptions: () => overlayOptions,
+		press: (data) => inputHandler?.(data),
+		render: (width = 120) => (widgetFactory ? widgetFactory(fakeTui, theme).render(width) : []),
+		setEditorText: (t) => {
+			editorText = t;
+		},
+		overlayOpened: () => opened,
+		overlayClosed: () => closed,
+		closeOverlay: async () => {
+			overlayDone?.(undefined);
+			await Promise.resolve();
+		},
+		widgetTui: fakeTui,
+	};
+}
+
+describe("formatFleetElapsed", () => {
+	it("renders integer seconds (no decimal, no suffix)", () => {
+		expect(formatFleetElapsed(0)).toBe("0s");
+		expect(formatFleetElapsed(11_000)).toBe("11s");
+		expect(formatFleetElapsed(11_400)).toBe("11s");
+		expect(formatFleetElapsed(11_600)).toBe("12s");
+	});
+	it("floors negatives to 0s", () => {
+		expect(formatFleetElapsed(-500)).toBe("0s");
+	});
+});
+
+describe("formatFleetTokens", () => {
+	it("prefixes a down-arrow and uses plural 'tokens'", () => {
+		expect(formatFleetTokens(13_100)).toBe("↓ 13.1k tokens");
+		expect(formatFleetTokens(950)).toBe("↓ 950 tokens");
+		expect(formatFleetTokens(1_200_000)).toBe("↓ 1.2M tokens");
+	});
+
+	it("picks the unit after rounding, so the k/M boundary never reads 1000.0k", () => {
+		expect(formatFleetTokens(999_949)).toBe("↓ 999.9k tokens");
+		expect(formatFleetTokens(999_950)).toBe("↓ 1.0M tokens");
+		expect(formatFleetTokens(999_999)).toBe("↓ 1.0M tokens");
+		expect(formatFleetTokens(999)).toBe("↓ 999 tokens");
+		expect(formatFleetTokens(1_000)).toBe("↓ 1.0k tokens");
+	});
+});
+
+describe("FleetList detached agents", () => {
+	function detachedHarness(own: AgentRecord[], orphans: () => any[]) {
+		let factory: ((tui: any, theme: any) => { render(w: number): string[] }) | undefined;
+		const ui = {
+			setWidget: (_k: string, content: any) => {
+				factory = content;
+			},
+			onTerminalInput: () => () => {},
+			getEditorText: () => "",
+			notify: () => {},
+			custom: (() => new Promise(() => {})) as FleetUICtx["custom"],
+		} as FleetUICtx;
+		const fleet = new FleetList(
+			fakeManager(own),
+			new Map(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			orphans,
+		);
+		fleet.setUICtx(ui);
+		fleet.update();
+		fleet.toggleCollapse();
+		const render = () =>
+			factory
+				? factory({ requestRender: () => {} }, theme)
+						.render(120)
+						.join("\n")
+				: "";
+		return { fleet, render };
+	}
+
+	it("lists an orphaned running agent that the manager does not know", () => {
+		const orphan = makeRecord({ id: "orph", description: "survivor" });
+		const h = detachedHarness([], () => [{ record: orphan, abort: () => true, steer: () => true }]);
+		expect(h.render()).toContain("survivor");
+		h.fleet.dispose();
+	});
+
+	it("does not duplicate a record present in both the manager and the registry", () => {
+		const rec = makeRecord({ id: "same", description: "once-only" });
+		const h = detachedHarness([rec], () => [{ record: rec, abort: () => true, steer: () => true }]);
+		expect(h.render().split("once-only")).toHaveLength(2);
+		h.fleet.dispose();
+	});
+
+	it("drops the row when the registry empties", () => {
+		const orphan = makeRecord({ id: "orph", description: "survivor" });
+		let list = [{ record: orphan, abort: () => true, steer: () => true }];
+		const h = detachedHarness([], () => list);
+		list = [];
+		h.fleet.update();
+		expect(h.render()).toBe("");
+		h.fleet.dispose();
+	});
+});
+
+describe("FleetList navigation", () => {
+	it.each([1, 5, 6, 8])("keeps expanded content contiguous with %i children (#552)", (count) => {
+		const h = harness(
+			Array.from({ length: count }, (_, i) => makeRecord({ id: `child-${i}`, description: `child ${i}` })),
+		);
+		try {
+			for (const width of [80, 120, 200]) {
+				const lines = h.render(width).map(plain);
+				const main = lines.findIndex((line) => line.includes(" main"));
+				expect(main).toBeGreaterThanOrEqual(0);
+				expect(lines[main + 1]).toContain("running");
+				if (width >= 120) expect(lines[main + 1]).toContain("child 0");
+			}
+			h.press(DOWN); // activate main
+			for (let selection = 0; selection <= count; selection++) {
+				const lines = h.render().map(plain);
+				const main = lines.findIndex((line) => line.includes(" main"));
+				const lastContent = lines.findLastIndex((line) => line.trim() !== "");
+				expect(lines.slice(main, lastContent + 1).every((line) => line.trim() !== "")).toBe(true);
+				expect(lines).toHaveLength(4 + Math.min(count, 5));
+				expect(
+					lines.some((line) => line.includes("●") && line.includes(selection ? `child ${selection - 1}` : " main")),
+				).toBe(true);
+				h.press(DOWN);
+			}
+			h.press(ESC);
+			h.press("\x1b[97;6u");
+			expect(h.render()).toHaveLength(1);
+		} finally {
+			h.fleet.dispose();
+		}
+	});
+
+	it("keeps a workflow immediately after main in an overflowing mixed fleet (#552)", () => {
+		const h = harness(Array.from({ length: 6 }, (_, i) => makeRecord({ id: `child-${i}` })));
+		try {
+			h.setWorkflows([makeWorkflow({ name: "first workflow" })]);
+			const lines = h.render().map(plain);
+			const main = lines.findIndex((line) => line.includes(" main"));
+			expect(lines[main + 1]).toContain("first workflow");
+		} finally {
+			h.fleet.dispose();
+		}
+	});
+
+	it("does not register a widget when there are no agents", () => {
+		const h = harness([]);
+		expect(h.render()).toEqual([]);
+	});
+
+	it("hides nested child records from the coordinator fleet", () => {
+		const h = harness([
+			makeRecord({ id: "top", description: "top-level" }),
+			makeRecord({ id: "nested", description: "nested-child", parentAgentId: "top" }),
+		]);
+		const output = h.render().join("\n");
+		expect(output).toContain("top-level");
+		expect(output).not.toContain("nested-child");
+	});
+
+	it("activates on ↓ at an empty prompt, consuming the key", () => {
+		const h = harness([makeRecord()]);
+		const res = h.press(DOWN);
+		expect(res).toEqual({ consume: true });
+		// main selected, list active → nav hint shown
+		expect(h.render().some((l) => l.includes("enter view"))).toBe(true);
+	});
+
+	it("also activates on ← (matches the '← for agents' hint)", () => {
+		const h = harness([makeRecord()]);
+		expect(h.press(LEFT)).toEqual({ consume: true });
+	});
+
+	it("does NOT activate when the prompt is non-empty (typing is preserved)", () => {
+		const h = harness([makeRecord()]);
+		h.setEditorText("hello");
+		expect(h.press(DOWN)).toBeUndefined();
+	});
+
+	it("ignores key-release events so one tap moves exactly one row", () => {
+		const h = harness([makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })]);
+		h.press(DOWN); // activate → selection on main (idx 0)
+		h.press(DOWN_RELEASE); // release half of the SAME tap — must be a no-op
+		expect(h.render().find((l) => l.includes("main"))).toContain("●");
+		h.press(DOWN); // a real second tap → first agent
+		h.press(DOWN_RELEASE);
+		expect(h.render().find((l) => l.includes("one"))).toContain("●");
+		expect(h.render().find((l) => l.includes("two"))).toContain("○");
+	});
+
+	it("renders the whole selected row in the theme's primary text color (#230)", () => {
+		const h = harness([makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })]);
+		h.press(DOWN); // activate → main
+		h.press(DOWN); // → a1
+		const selected = h.render().find((l) => l.includes("one"))!;
+		// Selection marker keeps accent color; row content uses primary text color.
+		expect(selected).toContain("<accent>●</accent>");
+		expect(selected).toContain("<text>one</text>");
+		expect(selected).toMatch(/<text>.*· \d+s · ↓ [\d.]+k? tokens<\/text>/);
+		// Agent display name rendered with the text token too (this type has no badge).
+		expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
+		// Inactive rows keep the muted/dim treatment.
+		const unselected = h.render().find((l) => l.includes("two"))!;
+		expect(unselected).toContain("<dim>○</dim>");
+		expect(unselected).toMatch(/<dim>.*· \d+s · ↓ [\d.]+k? tokens<\/dim>/);
+		expect(unselected).not.toContain("<text>");
+	});
+
+	it("keeps a color badge on the selected row, bolded, without shifting it (#230)", () => {
+		registerAgents(new Map([[BADGED_TYPE, BADGED_CONFIG]]));
+		try {
+			const h = harness([
+				makeRecord({ id: "a1", type: BADGED_TYPE, description: "one" }),
+				makeRecord({ id: "a2", type: BADGED_TYPE, description: "two" }),
+			]);
+			h.press(DOWN); // activate → main
+			const before = h.render().find((l) => l.includes("one"))!;
+			expect(before).toContain(`${PURPLE_BACKGROUND}`);
+			expect(before).toContain(` ${BADGED_CONFIG.displayName} `);
+
+			h.press(DOWN); // → a1
+			const selected = h.render().find((l) => l.includes("one"))!;
+			// Selection bolds the badge rather than repainting it (Claude Code's FleetView) …
+			expect(selected).toContain(PURPLE_BACKGROUND);
+			expect(selected).toContain(`* ${BADGED_CONFIG.displayName} *`);
+			expect(selected).not.toContain(`<text>${BADGED_CONFIG.displayName}`);
+			// … so the description stays in the same column as when unselected.
+			expect(plain(selected).indexOf("one")).toBe(plain(before).indexOf("one"));
+		} finally {
+			registerAgents(new Map());
+		}
+	});
+
+	it("moves selection down/up and clamps at the ends", () => {
+		const agents = [makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })];
+		const h = harness(agents);
+		h.press(DOWN); // activate → index 0 (main)
+		h.press(DOWN); // → 1 (a1)
+		expect(h.render().find((l) => l.includes("one"))).toContain("●");
+		h.press(DOWN); // → 2 (a2)
+		h.press(DOWN); // clamp at 2
+		expect(h.render().find((l) => l.includes("two"))).toContain("●");
+		expect(h.render().find((l) => l.includes("one"))).toContain("○");
+	});
+
+	it("↑ above 'main' deactivates (returns to the prompt)", () => {
+		const h = harness([makeRecord()]);
+		h.press(DOWN); // activate, index 0
+		expect(h.press(UP)).toEqual({ consume: true });
+		// back to inactive hint
+		expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
+	});
+
+	it("Esc deactivates", () => {
+		const h = harness([makeRecord()]);
+		h.press(DOWN);
+		expect(h.press(ESC)).toEqual({ consume: true });
+		expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
+	});
+
+	it("passes non-nav keys through and cancels navigation", () => {
+		const h = harness([makeRecord()]);
+		h.press(DOWN);
+		expect(h.press(RIGHT)).toBeUndefined();
+		expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
+	});
+
+	it("ignores all input while disabled and hides the widget", () => {
+		const h = harness([makeRecord()]);
+		h.fleet.setEnabled(false);
+		expect(h.press(DOWN)).toBeUndefined();
+		expect(h.render()).toEqual([]);
+	});
+
+	it("shows an agent whose session arrives after spawn without another update() call", () => {
+		vi.useFakeTimers();
+		try {
+			const record = makeRecord({ id: "late", session: undefined });
+			const h = harness([record]);
+			h.fleet.update(); // spawn time: running but no session yet, so no rows
+			expect(h.render().join("\n")).toContain("1 running"); // summary includes pending starts
+			(record as { session?: unknown }).session = FAKE_SESSION;
+			vi.advanceTimersByTime(250); // the tick must still be armed to pick it up
+			expect(h.render().join("\n")).toContain("Sleep then report 1");
+			h.fleet.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops ticking once no agent is starting or listed", () => {
+		vi.useFakeTimers();
+		try {
+			const listAgents = vi.fn((): AgentRecord[] => []);
+			const manager = { listAgents, abort: () => true } as unknown as AgentManager;
+			const fleet = new FleetList(manager, new Map());
+			fleet.setUICtx({
+				setWidget: () => {},
+				onTerminalInput: () => () => {},
+				getEditorText: () => "",
+				notify: () => {},
+				custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+			});
+			fleet.update();
+			const before = listAgents.mock.calls.length;
+			vi.advanceTimersByTime(1000);
+			expect(listAgents.mock.calls.length).toBe(before);
+			fleet.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-arms the refresh timer when the list is re-shown (toggle off→on)", () => {
+		vi.useFakeTimers();
+		try {
+			const agents = [makeRecord({ id: "a1" })];
+			const listAgents = vi.fn(() => agents);
+			const manager = { listAgents, abort: () => true } as unknown as AgentManager;
+			const fleet = new FleetList(manager, new Map());
+			fleet.setUICtx({
+				setWidget: () => {},
+				onTerminalInput: () => () => {},
+				getEditorText: () => "",
+				notify: () => {},
+				custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+			});
+			fleet.update(); // shows list, arms the timer
+			fleet.setEnabled(false); // hides, clears the timer
+			fleet.setEnabled(true); // re-shows — must re-arm the timer
+			const before = listAgents.mock.calls.length;
+			vi.advanceTimersByTime(250); // a tick should fire and re-read the roster
+			expect(listAgents.mock.calls.length).toBeGreaterThan(before);
+			fleet.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("FleetList vs other focused components (#123)", () => {
+	// pi dispatches terminal input to extension listeners BEFORE the focused
+	// component (pi-tui TUI.handleInput), and ctx.ui.select/confirm/input swap
+	// the prompt editor out of the editor container while getEditorText() still
+	// reads the detached (empty) editor. So while another component owns the
+	// keyboard — another extension's selector (rpiv-ask-user-question), pi's own
+	// menus, our /agents settings — the list must not consume its keys.
+
+	/** A minimal real Editor — what pi focuses at the prompt (CustomEditor extends it). */
+	function realEditor(): Editor {
+		const fakeTui = { requestRender: () => {} };
+		const theme = { borderColor: (s: string) => s, selectList: {} };
+		return new Editor(fakeTui as any, theme as any);
+	}
+
+	/** Hand the fleet list its `tui` (happens on first widget render in pi) with the given focus. */
+	function focusInHarness(h: Harness, focused: unknown): void {
+		h.widgetTui.focusedComponent = focused;
+		h.render();
+	}
+
+	it("does not steal ↓ from a focused selector (activation)", () => {
+		const h = harness([makeRecord()]);
+		focusInHarness(h, { kind: "selector" }); // e.g. ExtensionSelectorComponent
+		expect(h.press(DOWN)).toBeUndefined(); // must flow through to the selector
+	});
+
+	it("does not steal navigation keys from a selector opened while the list was active", () => {
+		const h = harness([makeRecord()]);
+		focusInHarness(h, realEditor());
+		expect(h.press(DOWN)).toEqual({ consume: true }); // activate at the prompt
+		focusInHarness(h, { kind: "selector" }); // a dialog takes focus
+		expect(h.press(DOWN)).toBeUndefined();
+		expect(h.press(ENTER)).toBeUndefined();
+		expect(h.press(ESC)).toBeUndefined();
+		// and the list dropped back to its inactive hint
+		expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
+	});
+
+	it("still activates when the prompt editor has focus", () => {
+		const h = harness([makeRecord()]);
+		focusInHarness(h, realEditor());
+		expect(h.press(DOWN)).toEqual({ consume: true });
+	});
+
+	it("activates under another extension's editor that is not an Editor subclass (#374)", () => {
+		// ui.setEditorComponent accepts any EditorComponent; pi-voice-stt's
+		// VoiceEditorWrapper implements the interface without extending Editor.
+		const h = harness([makeRecord()]);
+		focusInHarness(h, {
+			render: () => [],
+			invalidate: () => {},
+			handleInput: () => {},
+			getText: () => "",
+			setText: () => {},
+		});
+		expect(h.press(DOWN)).toEqual({ consume: true });
+	});
+
+	it("does not steal ↓ from a selector that handles input but holds no text (#374)", () => {
+		const h = harness([makeRecord()]);
+		focusInHarness(h, { render: () => [], invalidate: () => {}, handleInput: () => {} });
+		expect(h.press(DOWN)).toBeUndefined();
+	});
+
+	it("assumes the editor when focus is unknowable (no tui yet / nothing focused)", () => {
+		const h = harness([makeRecord()]);
+		// No render yet → the list has never seen a tui: activation must still work.
+		expect(h.press(DOWN)).toEqual({ consume: true });
+	});
+});
+
+describe("FleetList rendering", () => {
+	it("renders main + agent rows with markers, type, description and right-aligned stats", () => {
+		const h = harness([makeRecord({ description: "Sleep then report 1" })]);
+		const lines = h.render(120);
+		// hint + blank + main + one agent + blank
+		expect(lines[0]).toContain("← for agents");
+		expect(lines.find((l) => l.includes("main"))).toContain("●"); // main selected by default
+		const agentLine = lines.find((l) => l.includes("Sleep then report 1"))!;
+		expect(agentLine).toContain("○");
+		expect(agentLine).toContain(getDisplayName("general-purpose"));
+		expect(agentLine).toContain("↓ 13.1k tokens");
+		expect(agentLine).toMatch(/\d+s · ↓/); // "<seconds>s · ↓ ..." (timing-agnostic)
+	});
+
+	it("orders agents earliest-launched first (top)", () => {
+		const agents = [
+			makeRecord({ id: "new", description: "newest", startedAt: 2000 }),
+			makeRecord({ id: "old", description: "oldest", startedAt: 1000 }),
+		];
+		const lines = harness(agents).render();
+		const oldIdx = lines.findIndex((l) => l.includes("oldest"));
+		const newIdx = lines.findIndex((l) => l.includes("newest"));
+		expect(oldIdx).toBeGreaterThanOrEqual(0);
+		expect(oldIdx).toBeLessThan(newIdx); // earliest sits above the later one
+	});
+
+	it("hides agents that have no session yet (pending)", () => {
+		const agents = [
+			makeRecord({ id: "live", description: "running one" }),
+			makeRecord({ id: "pending", description: "queued one", status: "queued", session: undefined }),
+		];
+		const lines = harness(agents).render();
+		expect(lines.some((l) => l.includes("running one"))).toBe(true);
+		expect(lines.some((l) => l.includes("queued one"))).toBe(false);
+	});
+
+	it("reserves row-block height for every roster size and selection", () => {
+		for (let count = 1; count <= 12; count++) {
+			const agents = Array.from({ length: count }, (_, i) => makeRecord({ id: `a${i}`, description: `report ${i}` }));
+			const h = harness(agents);
+			const expectedHeight = 4 + Math.min(count, 5); // hint, blank, main, spacer + row block
+			for (let selection = 0; selection <= count; selection++) {
+				expect(h.render(120), `${count} rows, selection ${selection}`).toHaveLength(expectedHeight);
+				h.press(DOWN);
+			}
+		}
+	});
+
+	it("keeps its height while an active roster crosses the cap", () => {
+		const agents = Array.from({ length: 5 }, (_, i) => makeRecord({ id: `a${i}`, description: `report ${i}` }));
+		const h = harness(agents);
+		h.press(DOWN); // activate main
+		for (let i = 0; i < 5; i++) h.press(DOWN); // select the last row
+		const heights = [h.render(120).length];
+
+		agents.push(makeRecord({ id: "a5", description: "report 5" }));
+		h.fleet.update();
+		heights.push(h.render(120).length);
+		expect(h.render(120).some((line) => line.includes("●") && line.includes("report 4"))).toBe(true);
+
+		agents.pop();
+		h.fleet.update();
+		heights.push(h.render(120).length);
+		expect(new Set(heights)).toEqual(new Set([9]));
+	});
+
+	it("changes height one line per row below the cap", () => {
+		const agents = [makeRecord({ id: "a0", description: "report 0" })];
+		const h = harness(agents);
+		const heights = [h.render(120).length];
+		for (let i = 1; i < 5; i++) {
+			agents.push(makeRecord({ id: `a${i}`, description: `report ${i}` }));
+			h.fleet.update();
+			heights.push(h.render(120).length);
+		}
+		expect(heights.slice(1).map((height, i) => height - heights[i]!)).toEqual([1, 1, 1, 1]);
+
+		while (agents.length > 1) {
+			agents.pop();
+			h.fleet.update();
+			heights.push(h.render(120).length);
+		}
+		expect(heights.slice(5).map((height, i) => heights[i + 4]! - height)).toEqual([1, 1, 1, 1]);
+	});
+
+	it("ends with a blank spacer so the last row clears pi's footer (#351)", () => {
+		const one = harness([makeRecord({ description: "only agent" })]).render(120);
+		expect(one.at(-1)).toBe("");
+		expect(one.at(-2)).toContain("only agent");
+
+		const many = harness(
+			Array.from({ length: 8 }, (_, i) => makeRecord({ id: `a${i}`, description: `report ${i}` })),
+		).render(120);
+		expect(many.at(-1)).toBe("");
+		expect(plain(many.at(-2)!)).toBe("  ↓ 4 more: 4 running"); // left-aligned, no blank padding row (#857)
+		expect(plain(many.at(-3)!)).toContain("report"); // the free upper slot holds a fourth agent row
+	});
+
+	it("never emits a line wider than the terminal (guards wrap-induced flicker)", () => {
+		const agents = Array.from({ length: 8 }, (_, i) =>
+			makeRecord({ id: `a${i}`, description: `a very long agent description number ${i} that keeps going` }),
+		);
+		const h = harness(agents);
+		for (const w of [4, 8, 12, 20, 40, 80, 200]) {
+			for (const line of h.render(w)) {
+				expect(visibleWidth(plain(line))).toBeLessThanOrEqual(w); // fake theme tags stand in for zero-width escapes
+			}
+		}
+	});
+
+	it("windows the visible agents so the selection stays on screen", () => {
+		const agents = Array.from({ length: 8 }, (_, i) => makeRecord({ id: `a${i}`, description: `report ${i}` }));
+		const h = harness(agents);
+		h.press(DOWN); // activate (main)
+		// step down to the last agent (8 agents → roster index 8)
+		for (let i = 0; i < 8; i++) h.press(DOWN);
+		const lines = h.render(120);
+		expect(lines.find((l) => l.includes("report 7"))).toContain("●");
+		expect(lines.some((l) => l.includes("↑"))).toBe(true); // hidden-above indicator
+	});
+});
+
+describe("FleetList overlay lifecycle", () => {
+	it("acknowledges an old failed record only after its viewer closes successfully", async () => {
+		const failed = makeRecord({ status: "error", completedAt: Date.now() - 60_000, error: "BROKEN" });
+		const h = harness([failed], { collapsed: true });
+		expect(h.render().join("\n")).toContain("[1 failed]");
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+		expect(h.overlayOpened()).toBe(true);
+		expect(failed.resultConsumed).not.toBe(true);
+		await h.closeOverlay();
+		expect(failed.resultConsumed).toBe(true);
+		h.press(ESC);
+		expect(h.render()).toEqual([]);
+		h.fleet.dispose();
+	});
+
+	it("does not acknowledge a failed record when opening its viewer rejects", async () => {
+		const failed = makeRecord({ status: "error", completedAt: Date.now() - 60_000 });
+		const h = harness([failed], { collapsed: true });
+		h.ui.custom = () => Promise.reject(new Error("viewer unavailable"));
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+		await Promise.resolve();
+		expect(failed.resultConsumed).not.toBe(true);
+		h.press(ESC);
+		expect(h.render().join("\n")).toContain("[1 failed]");
+		h.fleet.dispose();
+	});
+
+	it("retains an old failed workflow until its inspector is actually viewed", async () => {
+		const h = harness([], { collapsed: true });
+		h.setWorkflows([makeWorkflow({ status: "failed", completedAt: Date.now() - 60_000 })]);
+		expect(h.render().join("\n")).toContain("[1 failed]");
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+		await h.closeWorkflowDialog();
+		h.press(ESC);
+		expect(h.render()).toEqual([]);
+		h.fleet.dispose();
+	});
+	it.each<{ mode: TuiMode; expected: OverlayOptions }>([
+		{ mode: "regular", expected: { anchor: "center", width: "90%", maxHeight: "70%" } },
+		{ mode: "fullscreen", expected: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } },
+	])("opens the agent viewer with options for the active $mode TUI", async ({ mode, expected }) => {
+		const h = harness([makeRecord()], { tuiMode: mode });
+		try {
+			h.press(DOWN); // activate (main)
+			h.press(DOWN); // select the agent
+			h.press(ENTER);
+
+			expect(h.overlayOptions()).toEqual(expected);
+		} finally {
+			await h.closeOverlay();
+			h.fleet.dispose();
+		}
+	});
+
+	it("Enter on 'main' just deactivates (no overlay)", () => {
+		const h = harness([makeRecord()]);
+		h.press(DOWN); // active, index 0 (main)
+		h.press(ENTER);
+		expect(h.overlayOpened()).toBe(false); // never opened an overlay
+		expect(h.render().some((l) => l.includes("← for agents"))).toBe(true);
+	});
+
+	it("keeps the cursor on the viewed agent after closing, even if the list reordered", async () => {
+		const fakeSession = { subscribe: () => () => {}, messages: [] };
+		const agents = [
+			makeRecord({ id: "a1", description: "one", session: fakeSession as any }),
+			makeRecord({ id: "a2", description: "two", session: fakeSession as any }),
+			makeRecord({ id: "a3", description: "three", session: fakeSession as any }),
+		];
+		const h = harness(agents);
+		h.press(DOWN); // activate (main, idx 0)
+		h.press(DOWN); // a1 (idx 1)
+		h.press(DOWN); // a2 (idx 2)
+		h.press(ENTER); // open a2
+		// a1 finishes and drops out while viewing → a2 shifts from idx 2 to idx 1.
+		agents.splice(0, 1);
+		await h.closeOverlay();
+		// Selection follows a2 ("two") to its new position, not whatever is at idx 2 now.
+		expect(h.render().find((l) => l.includes("two"))).toContain("●");
+		expect(h.render().find((l) => l.includes("three"))).toContain("○");
+	});
+
+	it("wires the viewer's b to the extension's action for that row, notifying through the session UI", () => {
+		const agents = [makeRecord({ id: "live", description: "the one" })];
+		const backgroundAction = vi.fn((record: AgentRecord, notify: (message: string) => void) => ({
+			available: () => true,
+			send: () => notify(`sent ${record.id}`),
+		}));
+		const h = harness(agents, { backgroundAction });
+		h.press(DOWN); // activate (main)
+		h.press(DOWN); // → the agent
+		h.press(ENTER); // open the conversation viewer
+
+		expect(backgroundAction).toHaveBeenCalledWith(agents[0], expect.any(Function));
+		h.overlayComponent()!.handleInput("b");
+		expect(h.notices()).toEqual(["info: sent live"]);
+	});
+
+	it("offers no b when the extension supplies no action", () => {
+		const agents = [makeRecord({ id: "live", description: "the one" })];
+		const h = harness(agents);
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+
+		expect(() => h.overlayComponent()!.handleInput("b")).not.toThrow();
+		expect(h.notices()).toEqual([]);
+	});
+
+	it("wires the viewer's steer composer to manager.steer with the agent id", () => {
+		const agents = [makeRecord({ id: "live", description: "the one" })];
+		const h = harness(agents);
+		h.press(DOWN); // activate (main)
+		h.press(DOWN); // → the agent
+		h.press(ENTER); // open the conversation viewer
+
+		const viewer = h.overlayComponent();
+		expect(viewer).toBeDefined();
+		viewer!.handleInput("\r"); // Enter → open composer
+		for (const ch of "go left") viewer!.handleInput(ch);
+		viewer!.handleInput("\r"); // Enter → send
+
+		expect(h.manager.steer).toHaveBeenCalledWith("live", "go left");
+	});
+
+	it("hands the viewer the user's markdown setting, and persists a mode chosen with m", () => {
+		const persisted: ViewerMarkdownMode[] = [];
+		const h = harness([makeRecord({ id: "live", description: "the one" })], {
+			viewerMarkdown: () => "all",
+			onViewerMarkdown: (mode) => persisted.push(mode),
+		});
+		h.press(DOWN); // activate (main)
+		h.press(DOWN); // → the agent
+		h.press(ENTER); // open the conversation viewer
+
+		h.overlayComponent()!.handleInput("m");
+
+		// "all" → "off" proves the cycle started from the *setting*; the viewer's own
+		// fallback would have started at "assistant" and landed on "all". A recorded
+		// value at all proves the persist hook is wired, as it is from /agents.
+		expect(persisted).toEqual(["off"]);
+	});
+
+	it("does NOT auto-close when the viewed agent finishes (final output stays readable)", () => {
+		const agents = [makeRecord({ id: "live", description: "the one" })];
+		const h = harness(agents);
+		h.press(DOWN); // active (main)
+		h.press(DOWN); // → the agent
+		h.press(ENTER); // opens overlay
+		expect(h.overlayOpened()).toBe(true);
+		// The agent finishes, well past the linger window...
+		agents[0] = makeRecord({
+			id: "live",
+			description: "the one",
+			status: "completed",
+			completedAt: Date.now() - 60_000,
+		});
+		h.fleet.onAgentFinished("live");
+		expect(h.overlayClosed()).toBe(false); // viewer stays open
+		expect(h.render().some((l) => l.includes("the one"))).toBe(true); // and stays listed while viewed
+	});
+
+	it("lingers a finished agent in the list, then drops it after the window", () => {
+		const recent = makeRecord({ id: "r", description: "recent done", status: "completed", completedAt: Date.now() });
+		expect(
+			harness([recent])
+				.render()
+				.some((l) => l.includes("recent done")),
+		).toBe(true);
+		const old = makeRecord({ id: "o", description: "old done", status: "completed", completedAt: Date.now() - 60_000 });
+		expect(
+			harness([old])
+				.render()
+				.some((l) => l.includes("old done")),
+		).toBe(false);
+	});
+});
+
+describe("FleetList selection and stop edges", () => {
+	it("clamps the selection onto the last row when the selected agent leaves", () => {
+		const agents = [
+			makeRecord({ id: "a1", description: "first" }),
+			makeRecord({ id: "a2", description: "second", startedAt: Date.now() + 1 }),
+		];
+		const h = harness(agents);
+		h.press(DOWN); // main
+		h.press(DOWN); // a1
+		h.press(DOWN); // a2
+		agents.splice(1, 1);
+		h.fleet.update();
+		h.press(ENTER);
+		expect(h.overlayOpened()).toBe(true);
+		expect(h.render().find((l) => l.includes("first"))).toContain("<accent>●</accent>");
+	});
+
+	it("keeps a valid selection when the viewed agent is gone by the time its viewer closes", async () => {
+		const agents = [
+			makeRecord({ id: "a1", description: "first" }),
+			makeRecord({ id: "a2", description: "second", startedAt: Date.now() + 1 }),
+		];
+		const h = harness(agents);
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+		agents.splice(1, 1); // evicted while its overlay was up
+		await h.closeOverlay();
+		expect(h.render().find((l) => l.includes("first"))).toContain("<accent>●</accent>");
+	});
+
+	it("confirms a viewer stop only when the manager actually stopped the agent", () => {
+		for (const stopped of [true, false]) {
+			const agents = [makeRecord({ description: "target" })];
+			const h = harness(agents);
+			(h.manager as unknown as { abort: () => boolean }).abort = () => stopped;
+			h.press(DOWN);
+			h.press(DOWN);
+			h.press(ENTER);
+			h.overlayComponent()!.handleInput("x");
+			h.overlayComponent()!.handleInput("x");
+			expect(h.notices().some((n) => n === 'info: Stopped "target".')).toBe(stopped);
+		}
+	});
+
+	it("keeps a failed run that never settled visible after it leaves the source", () => {
+		const h = harness([]);
+		h.setWorkflows([makeWorkflow({ status: "failed", completedAt: undefined })]);
+		h.setWorkflows([]);
+		expect(h.render().some((l) => plain(l).includes("audit-src"))).toBe(true);
+	});
+});
+
+describe("FleetList re-registration after core disposes it", () => {
+	function setup() {
+		const registered: { render(w: number): string[]; invalidate(): void; dispose?(): void }[] = [];
+		const ui: FleetUICtx = {
+			setWidget: (_key, content) => {
+				if (content) registered.push(content({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme));
+			},
+			onTerminalInput: () => () => {},
+			getEditorText: () => "",
+			notify: () => {},
+			custom: (() => new Promise(() => {})) as FleetUICtx["custom"],
+		};
+		const fleet = new FleetList(fakeManager([makeRecord()]), new Map());
+		fleet.setUICtx(ui);
+		fleet.update();
+		return { fleet, registered };
+	}
+
+	it("registers a fresh widget on the next update after dispose()", () => {
+		const { fleet, registered } = setup();
+		expect(registered).toHaveLength(1);
+		fleet.update();
+		expect(registered).toHaveLength(1);
+
+		registered[0]!.dispose?.();
+		fleet.update();
+
+		expect(registered).toHaveLength(2);
+		fleet.dispose();
+	});
+
+	it("ignores the disposal of a component that was already replaced", () => {
+		const { fleet, registered } = setup();
+		registered[0]!.invalidate();
+		fleet.update();
+		expect(registered).toHaveLength(2);
+
+		registered[0]!.dispose?.();
+		fleet.update();
+
+		expect(registered).toHaveLength(2);
+		fleet.dispose();
+	});
+});
+
+describe("FleetList cost display", () => {
+	const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
+
+	function row(showCost: boolean, cost: number, activity?: Map<string, AgentActivity>): string {
+		const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
+		const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
+		let factory: WidgetFactory | undefined;
+		const ui: FleetUICtx = {
+			setWidget: (_k, c) => {
+				factory = c;
+			},
+			onTerminalInput: () => () => {},
+			getEditorText: () => "",
+			notify: () => {},
+			custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+		};
+		fleet.setUICtx(ui);
+		fleet.update();
+		fleet.toggleCollapse();
+		return factory!({ requestRender: () => {}, terminal: { columns: 120, rows: 40 } }, theme)
+			.render(120)
+			.join("\n");
+	}
+
+	it("appends the cost after the token count when enabled", () => {
+		const out = row(true, 0.0042);
+		expect(out).toContain("13.1k tokens");
+		expect(out).toContain("~$0.0042");
+	});
+
+	it("shows no cost when disabled, and none for an unpriced model", () => {
+		expect(row(false, 0.0042)).not.toContain("$");
+		expect(row(true, 0)).not.toContain("$");
+	});
+
+	it("reads the record, so the figures do not change when the agent finishes", () => {
+		// Spend used to come from the live activity tracker while an agent ran and
+		// from its record once the tracker was deleted. The two disagree: only the
+		// record carries a nested child's spend (nested-tools folds it into every
+		// ancestor), so the number jumped upward at completion.
+		// The stale shape on purpose: an activity entry carrying figures of its own
+		// is what the old fallback preferred, so a row that still renders the
+		// record's numbers proves the tracker is no longer consulted for spend.
+		const tracked = new Map<string, AgentActivity>([
+			[
+				"a1",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					lifetimeUsage: { input: 1, output: 1, cacheWrite: 0, cost: 0.9 },
+				} as unknown as AgentActivity,
+			],
+		]);
+
+		expect(row(true, 0.0042, tracked)).toBe(row(true, 0.0042));
+	});
+});
+
+describe("FleetList model and activity", () => {
+	const withModel = (over: Partial<AgentRecord> = {}) =>
+		makeRecord({
+			invocation: { modelName: "opus 4.6", modelId: "anthropic/claude-opus-4-6", thinking: "high" },
+			...over,
+		});
+
+	function row(record: AgentRecord, showModel: boolean, activity?: Map<string, AgentActivity>): string {
+		const fleet = new FleetList(
+			fakeManager([record]),
+			activity ?? new Map(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => showModel,
+		);
+		let factory: WidgetFactory | undefined;
+		const ui: FleetUICtx = {
+			setWidget: (_k, c) => {
+				factory = c;
+			},
+			onTerminalInput: () => () => {},
+			getEditorText: () => "",
+			notify: () => {},
+			custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+		};
+		fleet.setUICtx(ui);
+		fleet.update();
+		fleet.toggleCollapse();
+		return factory!({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, theme)
+			.render(160)
+			.join("\n");
+	}
+
+	it("names the model and thinking level under showModel", () => {
+		const out = row(withModel(), true);
+		expect(out).toContain("opus 4.6");
+		expect(out).toContain("think:high");
+	});
+
+	it("renders the row exactly as before when showModel is off", () => {
+		const out = row(withModel(), false);
+		expect(out).not.toContain("opus 4.6");
+		expect(out).not.toContain("think:high");
+	});
+
+	it("flags a model fallback first on the row, even with showModel off", () => {
+		const fallback = { input: "ghost", used: "anthropic/x" };
+		expect(row(withModel({ modelFallback: fallback }), true)).toContain("[fallback]");
+		expect(row(withModel({ modelFallback: fallback }), false)).toContain("[fallback]");
+		expect(row(withModel(), false)).not.toContain("fallback");
+	});
+
+	it("aligns populated tail columns with Unicode and truncation", () => {
+		// Markup-free theme: escape-less tags would otherwise count as visible cells when `left` truncates.
+		const markupFree = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
+		const now = Date.now();
+		const agents = [
+			withModel({
+				id: "a1",
+				description: "調査 🦊 with a deliberately long description",
+				completedAt: now,
+				startedAt: now - 1_018_000,
+				invocation: { modelName: "銀河 4.6", modelId: "acme/galaxy", thinking: "low" },
+				lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+			}),
+			withModel({
+				id: "a2",
+				description: "emoji model and a different long description 🧠",
+				startedAt: now - 59_000,
+				invocation: {
+					modelName: "🧠 opus",
+					modelId: "acme/opus",
+					thinking: "ultrathink" as NonNullable<AgentRecord["invocation"]>["thinking"],
+				},
+				lifetimeUsage: { input: 987_654, output: 0, cacheWrite: 0, cost: 12.34 },
+			}),
+		];
+		const activity = new Map<string, AgentActivity>([
+			[
+				"a2",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					modelCall: { startedAt: now - 4_000, lastEventAt: now - 100, kind: "thinking", writtenChars: 0 },
+				},
+			],
+		]);
+		const fleet = new FleetList(
+			fakeManager(agents),
+			activity,
+			() => true,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => true,
+		);
+		let factory: WidgetFactory | undefined;
+		const ui: FleetUICtx = {
+			setWidget: (_key, content) => {
+				factory = content;
+			},
+			onTerminalInput: () => () => {},
+			getEditorText: () => "",
+			notify: () => {},
+			custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+		};
+		fleet.setUICtx(ui);
+		fleet.update();
+
+		fleet.toggleCollapse();
+		const cellStart = (line: string, text: string) => {
+			expect(line).toContain(text);
+			return visibleWidth(line.split(text, 1)[0]!);
+		};
+		const cellEnd = (line: string, text: string) => cellStart(line, text) + visibleWidth(text);
+		for (const width of [60, 80]) {
+			const lines =
+				factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
+					.render(width)
+					.map(plain) ?? [];
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+
+		// Widths where the descriptions truncate but still show their prefix.
+		for (const width of [110, 120, 130]) {
+			const wide =
+				factory?.({ requestRender: () => {}, terminal: { columns: width, rows: 40 } }, markupFree)
+					.render(width)
+					.map(plain) ?? [];
+			for (const line of wide) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			const [cjk, emoji] = ["調査", "emoji"].map((description) => {
+				const found = wide.find((line) => line.includes(description));
+				expect(found).toBeDefined();
+				return found!;
+			});
+			// The descriptions must really truncate at these widths.
+			expect(cjk).toContain("...");
+			expect(emoji).toContain("...");
+			expect(cjk).not.toContain("deliberately long description");
+			expect(emoji).not.toContain("different long description");
+			expect(cellEnd(cjk!, "think:low")).toBe(cellEnd(emoji!, "think:ultrathink"));
+			expect(cellStart(cjk!, "tokens")).toBe(cellStart(emoji!, "tokens"));
+			expect(cellStart(cjk!, "~$0.0042") + visibleWidth("~$0.0042")).toBe(
+				cellStart(emoji!, "~$12.34") + visibleWidth("~$12.34"),
+			);
+			expect(visibleWidth(cjk!.trimEnd())).toBe(width);
+			expect(visibleWidth(emoji!.trimEnd())).toBe(width);
+		}
+
+		const lines =
+			factory?.({ requestRender: () => {}, terminal: { columns: 160, rows: 40 } }, markupFree)
+				.render(160)
+				.map(plain) ?? [];
+		const [a, b] = ["調査", "emoji"].map((description) => lines.find((line) => line.includes(description))!);
+		expect(cellStart(a!, "~$0.0042") + visibleWidth("~$0.0042")).toBe(
+			cellStart(b!, "~$12.34") + visibleWidth("~$12.34"),
+		);
+		expect(cellStart(a!, "↓ 13.1k tokens") + visibleWidth("↓ 13.1k tokens")).toBe(
+			cellStart(b!, "↓ 987.7k tokens") + visibleWidth("↓ 987.7k tokens"),
+		);
+		expect(cellEnd(a!, "銀河 4.6")).toBe(cellEnd(b!, "🧠 opus"));
+		expect(cellEnd(a!, "think:low")).toBe(cellEnd(b!, "think:ultrathink"));
+	});
+
+	it("copes with a record that has no invocation yet", () => {
+		expect(() => row(makeRecord(), true)).not.toThrow();
+	});
+
+	it("shows what the in-flight model call is doing on a running row", () => {
+		const now = Date.now();
+		const thinking = new Map<string, AgentActivity>([
+			[
+				"a1",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					modelCall: { startedAt: now - 161_000, lastEventAt: now - 1_000, kind: "thinking", writtenChars: 0 },
+				},
+			],
+		]);
+		expect(row(withModel(), false, thinking)).toMatch(/thinking · 2m4\ds/);
+
+		const writing = new Map<string, AgentActivity>([
+			[
+				"a1",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					modelCall: { startedAt: now - 5_000, lastEventAt: now - 100, kind: "writing", writtenChars: 12_800 },
+				},
+			],
+		]);
+		expect(row(withModel(), false, writing)).toContain("writing · 3.2k tok");
+
+		const stalled = new Map<string, AgentActivity>([
+			[
+				"a1",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					modelCall: { startedAt: now - 200_000, lastEventAt: now - 161_000, kind: "thinking", writtenChars: 0 },
+				},
+			],
+		]);
+		expect(row(withModel(), false, stalled)).toMatch(/stalled\? · 2m4\ds/);
+	});
+
+	it("shows no call for a finished row", () => {
+		const now = Date.now();
+		const activity = new Map<string, AgentActivity>([
+			[
+				"a1",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					modelCall: { startedAt: now - 5_000, lastEventAt: now - 100, kind: "writing", writtenChars: 12_800 },
+				},
+			],
+		]);
+		const out = row(withModel({ status: "completed", completedAt: now - 100 }), false, activity);
+		expect(out).not.toContain("writing");
+	});
+});
+
+describe("FleetList layout at real terminal sizes (#144)", () => {
+	const plainTheme = { fg: (_c: string, text: string) => text, bold: (text: string) => text };
+	const NOW = 1_000_000;
+
+	/** One agent per state, plus aliased and activity-less rows; start order = array order. */
+	function mixed(): AgentRecord[] {
+		const usage = (input: number) => ({ input, output: 0, cacheWrite: 0 });
+		const base = { startedAt: NOW - 60_000, lifetimeUsage: usage(13_100) };
+		return [
+			makeRecord({
+				...base,
+				id: "p",
+				type: "Plan",
+				description: "Plan the migration",
+				invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+			}),
+			makeRecord({
+				...base,
+				id: "c1",
+				alias: "pr-1412",
+				description: "Spec review of the harness change",
+				startedAt: NOW - 50_000,
+				lifetimeUsage: usage(250_000),
+			}),
+			makeRecord({
+				...base,
+				id: "c2",
+				alias: "pr-1413",
+				description: "Spec review of the harness change",
+				startedAt: NOW - 40_000,
+			}),
+			makeRecord({ ...base, id: "q", status: "queued", description: "Waiting for a slot", startedAt: NOW - 30_000 }),
+			makeRecord({
+				...base,
+				id: "d",
+				status: "completed",
+				completedAt: NOW - 1_000,
+				description: "Finished fix",
+				startedAt: NOW - 20_000,
+			}),
+			makeRecord({
+				...base,
+				id: "f",
+				status: "error",
+				completedAt: NOW - 1_000,
+				description: "Broken build",
+				startedAt: NOW - 15_000,
+			}),
+			makeRecord({
+				...base,
+				id: "s",
+				status: "stopped",
+				completedAt: NOW - 1_000,
+				description: "Stopped by user",
+				startedAt: NOW - 10_000,
+			}),
+		];
+	}
+
+	/** A visible mixed-state fixture matching the owner-visible FleetView surface. */
+	function snapshotRows(): AgentRecord[] {
+		const costById: Record<string, number> = { p: 1.57, c1: 0.8078, c2: 0.0012, q: 0.0042, d: 0.05 };
+		return mixed()
+			.filter((row) => row.id in costById)
+			.map((row) => ({
+				...row,
+				invocation: {
+					modelName: row.id === "c2" ? "gpt-6-luna" : "gpt-5.6-terra",
+					modelId: "openai/test",
+					thinking: "medium",
+				},
+				lifetimeUsage: { ...row.lifetimeUsage, cost: costById[row.id] },
+			}));
+	}
+
+	/** Real ANSI colour, so width maths and truncation run over escapes (the plain theme hides them). */
+	const styledTheme = {
+		fg: (color: string, text: string) =>
+			`\u001b[${color === "accent" ? 36 : color === "error" ? 31 : color === "success" ? 32 : 90}m${text}\u001b[39m`,
+		bold: (text: string) => `\u001b[1m${text}\u001b[22m`,
+	};
+
+	function renderAt(
+		agents: AgentRecord[],
+		columns: number,
+		rows: number,
+		selected = 0,
+		showModel = true,
+		extra: { styled?: boolean; showCost?: boolean; activity?: Map<string, AgentActivity> } = {},
+	): string[] {
+		const activity =
+			extra.activity ??
+			new Map<string, AgentActivity>([
+				[
+					"c1",
+					{
+						activeTools: new Map(),
+						toolUses: 0,
+						responseText: "",
+						turnCount: 1,
+						modelCall: { startedAt: NOW - 4_000, lastEventAt: NOW - 100, kind: "thinking", writtenChars: 0 },
+					},
+				],
+			]);
+		const clock = {
+			now: () => NOW,
+			setInterval: () => ({ cancel() {}, unref() {} }),
+			setTimeout: () => ({ cancel() {}, unref() {} }),
+		};
+		const fleet = new FleetList(
+			fakeManager(agents),
+			activity,
+			() => extra.showCost ?? false,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => showModel,
+			() => [],
+			clock as never,
+		);
+		let factory: WidgetFactory | undefined;
+		let input: ((data: string) => unknown) | undefined;
+		const ui: FleetUICtx = {
+			setWidget: (_k, c) => {
+				factory = c;
+			},
+			onTerminalInput: (h) => {
+				input = h;
+				return () => {};
+			},
+			getEditorText: () => "",
+			notify: () => {},
+			custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+		};
+		fleet.setUICtx(ui);
+		fleet.update();
+		for (let i = 0; i <= selected; i++) input?.(DOWN);
+		const lines = factory!(
+			{ requestRender: () => {}, terminal: { columns, rows } },
+			extra.styled ? styledTheme : plainTheme,
+		).render(columns);
+		return extra.styled ? lines : lines.map(plain);
+	}
+
+	it.each([80, 120, 200])("snapshots mixed states and activity cells at %i columns", (columns) => {
+		expect(renderAt(snapshotRows(), columns, 40, 0, true, { showCost: true })).toMatchSnapshot();
+	});
+
+	it.each([
+		[80, 24],
+		[120, 40],
+	])("keeps leading fallback flags, aliases and aligned state/stats at %ix%i", (columns, rows) => {
+		const agents = mixed().slice(1, 3);
+		agents[0]!.modelFallback = { input: "ghost", used: "anthropic/x" };
+		for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
+		for (const showModel of [false, true]) {
+			const lines = renderAt(agents, columns, rows, 1, showModel, { styled: true }).map(plain);
+			const flagged = lines.find((l) => l.includes("[fallback]"))!;
+			expect(flagged).toContain("pr-1412:");
+			expect(flagged.indexOf("[fallback]")).toBeLessThan(flagged.indexOf("pr-1412:"));
+			const agentRows = lines.filter((l) => l.includes("▶ running"));
+			expect(agentRows).toHaveLength(2);
+			expect(new Set(agentRows.map((l) => visibleWidth(l.split("▶ running")[0]!))).size).toBe(1);
+			expect(new Set(agentRows.map((l) => visibleWidth(l.split("tokens")[0]!))).size).toBe(1);
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+		}
+	});
+
+	it("reserves a hidden row's fallback flag before fitting columns", () => {
+		const agents = mixed();
+		for (const agent of agents) agent.invocation = { modelName: "opus 4.6", modelId: "a/o", thinking: "high" };
+		agents[5]!.modelFallback = { input: "ghost", used: "anthropic/x" };
+		const top = renderAt(agents, 75, 24);
+		const bottom = renderAt(agents, 75, 24, 7);
+		expect(top.join("\n")).not.toContain("[fallback]");
+		expect(top.join("\n")).not.toContain("opus 4.6");
+		expect(bottom.join("\n")).toContain("[fallback]");
+		const stateAt = (lines: string[]) => lines.find((l) => l.includes("tokens"))!.indexOf(" · ");
+		expect(stateAt(top)).toBe(stateAt(bottom));
+	});
+
+	it.each([false, true].flatMap((fallback) => [false, true].map((showModel) => ({ fallback, showModel }))))(
+		"preserves paid stats at 40 columns (fallback=$fallback, showModel=$showModel)",
+		({ fallback, showModel }) => {
+			const record = makeRecord({
+				startedAt: NOW - 60_000,
+				alias: "audit",
+				description: "Review a deliberately long description",
+				modelFallback: fallback ? { input: "ghost", used: "anthropic/x" } : undefined,
+				invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+				lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+			});
+			const lines = renderAt([record], 40, 24, 1, showModel, { styled: true, showCost: true }).map(plain);
+			const line = lines[3];
+			if (fallback) expect(line).toMatch(/^\s*(?:[●○]\s*)?(?:\[fb\]|!)(?:\s|$)/);
+			else expect(line).not.toMatch(/\[fallback\]|\[fb\]|!/);
+			expect(line).toContain("60s");
+			expect(line).toContain("↓ 13.1k tokens");
+			expect(line).toContain("~$0.0042");
+			for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(40);
+		},
+	);
+
+	it.each([false, true].flatMap((fallback) => Array.from({ length: 91 }, (_, i) => ({ fallback, columns: i + 30 }))))(
+		"preserves physically fitting spend at $columns columns (fallback=$fallback)",
+		({ fallback, columns }) => {
+			for (const [input, cost, tokenText, costText] of [
+				[13_100, 0.0042, "↓ 13.1k tokens", "~$0.0042"],
+				[987_654, 12.34, "↓ 987.7k tokens", "~$12.34"],
+			] as const) {
+				const record = makeRecord({
+					startedAt: NOW - 60_000,
+					alias: "audit",
+					description: "A long description to truncate before spend",
+					modelFallback: fallback ? { input: "ghost", used: "anthropic/x" } : undefined,
+					invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+					lifetimeUsage: { input, output: 0, cacheWrite: 0, cost },
+				});
+				const lines = renderAt([record], columns, 24, 1, true, { styled: true, showCost: true }).map(plain);
+				const line = lines[3];
+				if (fallback) expect(line).toMatch(/^\s*(?:[●○]\s*)?(?:\[fallback\]|\[fb\]|!)(?:\s|$)/);
+				else expect(line).not.toMatch(/\[fallback\]|\[fb\]|!/);
+				// Independent lower bound from literal expected stats, with a marker only if needed.
+				const marker = fallback ? "! " : "";
+				if (visibleWidth(`${marker}${tokenText} ${costText}`) <= columns) {
+					expect(line).toContain(tokenText);
+					expect(line).toContain(costText);
+				}
+				if (visibleWidth(`${marker}60s ${tokenText} ${costText}`) <= columns) expect(line).toContain("60s");
+				for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(columns);
+			}
+		},
+	);
+
+	it("gives every state a glyph and a word, at 120x40", () => {
+		const lines = renderAt(mixed().slice(0, 1).concat(mixed().slice(3, 7)), 120, 40);
+		const text = lines.join("\n");
+		expect(text).toContain("▶ running");
+		expect(text).toContain("◦ queued");
+		expect(text).toContain("✓ done");
+		expect(text).toContain("✗ failed");
+		expect(text).toContain("■ stopped");
+	});
+
+	it("aligns every column across rows with and without activity, at 120x40", () => {
+		const lines = renderAt(mixed().slice(0, 3), 120, 40);
+		const rows = lines.filter((l) => /▶ running/.test(l));
+		expect(rows).toHaveLength(3);
+		// The activity-less Plan row pads the activity slot, so elapsed and tokens still line up.
+		expect(new Set(rows.map((l) => visibleWidth(l.split("tokens", 1)[0]!))).size).toBe(1);
+		expect(new Set(rows.map((l) => l.search(/\d\ds · +↓/))).size).toBe(1);
+		expect(new Set(rows.map((l) => visibleWidth(l.trimEnd()))).size).toBe(1);
+		expect(rows[0]).toContain("think:high");
+		expect(rows[1]).toContain("thinking · 4s");
+	});
+
+	it("keeps the name handle ahead of a truncated description, at 80x24", () => {
+		const lines = renderAt(mixed().slice(0, 3), 80, 24);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+		const critics = lines.filter((l) => /pr-141\d/.test(l));
+		expect(critics.map((l) => l.match(/pr-141\d/)?.[0])).toEqual(["pr-1412", "pr-1413"]);
+	});
+
+	it("drops optional columns, never the tokens, at 80x24", () => {
+		const lines = renderAt(mixed().slice(0, 3), 80, 24);
+		const agentRows = lines.filter((l) => /▶ running/.test(l));
+		for (const line of agentRows) {
+			expect(line).toMatch(/↓ [\d.]+k? tokens\s*$/);
+			expect(line).not.toContain("think:");
+			expect(line).not.toContain("thinking ·");
+		}
+	});
+
+	it("sizes columns from hidden rows too, so scrolling never shifts them", () => {
+		// Seven agents: three show at a time. The widest cells (long model, 999.9k tokens) sit in a row
+		// that is hidden at the top of the list and visible only once scrolled to the end.
+		const agents = mixed();
+		agents[5] = makeRecord({
+			id: "wide",
+			startedAt: NOW - 15_000,
+			description: "Widest cells",
+			invocation: {
+				modelName: "a-very-long-model-name 9.9",
+				modelId: "x/y",
+				thinking: "ultrathink" as NonNullable<AgentRecord["invocation"]>["thinking"],
+			},
+			lifetimeUsage: { input: 999_900, output: 0, cacheWrite: 0 },
+		});
+		const stateAt = (lines: string[]) => lines.find((l) => l.includes("▶ running"))!.indexOf("▶ running");
+		const top = renderAt(agents, 160, 40, 0);
+		const bottom = renderAt(agents, 160, 40, 7);
+		expect(top.join("\n")).not.toContain("a-very-long-model-name");
+		expect(bottom.join("\n")).toContain("a-very-long-model-name");
+		// With window-only sizing the top view's tail is narrower, so its state column starts further right.
+		expect(stateAt(top)).toBe(stateAt(bottom));
+	});
+
+	it("drops activity, then thinking, then model as the terminal narrows, never elapsed, tokens or cost", () => {
+		const record = makeRecord({
+			id: "r",
+			startedAt: NOW - 41_000,
+			description: "Review the change",
+			invocation: { modelName: "opus 4.6", modelId: "a/o", thinking: "high" },
+			lifetimeUsage: { input: 8_200, output: 0, cacheWrite: 0, cost: 0.0042 },
+		});
+		const activity = new Map<string, AgentActivity>([
+			[
+				"r",
+				{
+					activeTools: new Map(),
+					toolUses: 0,
+					responseText: "",
+					turnCount: 1,
+					modelCall: { startedAt: NOW - 4_000, lastEventAt: NOW - 100, kind: "thinking", writtenChars: 0 },
+				},
+			],
+		]);
+		const cells = { activity: "thinking · 4s", thinking: "think:high", model: "opus 4.6" };
+		const survivors = (columns: number) => {
+			const line = renderAt(
+				[record, makeRecord({ id: "x", description: "other", startedAt: NOW - 5_000 })],
+				columns,
+				24,
+				0,
+				true,
+				{ showCost: true, activity },
+			).find((l) => l.includes("Review") || l.includes("▶ running"))!;
+			expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+			// The tail the terminal must always keep.
+			expect(line).toContain("41s");
+			expect(line).toContain("↓ 8.2k tokens");
+			expect(line).toContain("~$0.0042");
+			expect(line).toContain("▶ running");
+			return Object.fromEntries(Object.entries(cells).map(([k, v]) => [k, line.includes(v)]));
+		};
+		// Widest each optional column still shows, scanning down from a roomy terminal; once gone it never returns.
+		const lastWith = { activity: 0, thinking: 0, model: 0 };
+		const gone = new Set<string>();
+		for (let columns = 160; columns >= 50; columns--) {
+			const seen = survivors(columns);
+			for (const k of Object.keys(lastWith) as (keyof typeof lastWith)[]) {
+				if (seen[k]) {
+					expect(gone.has(k)).toBe(false);
+					lastWith[k] = columns;
+				} else gone.add(k);
+			}
+		}
+		expect(lastWith.activity).toBeGreaterThan(lastWith.thinking);
+		expect(lastWith.thinking).toBeGreaterThan(lastWith.model);
+		expect(lastWith.model).toBeGreaterThan(0);
+		// Pin the boundaries: at the width the cell survives, one column narrower drops it.
+		expect(survivors(lastWith.activity).activity).toBe(true);
+		expect(survivors(lastWith.activity - 1).activity).toBe(false);
+		expect(survivors(lastWith.thinking).thinking).toBe(true);
+		expect(survivors(lastWith.thinking - 1).thinking).toBe(false);
+		expect(survivors(lastWith.model).model).toBe(true);
+		expect(survivors(lastWith.model - 1).model).toBe(false);
+		// Order between boundaries: activity goes first, then thinking, model last.
+		expect(survivors(lastWith.thinking)).toEqual({ activity: false, thinking: true, model: true });
+		expect(survivors(lastWith.model)).toEqual({ activity: false, thinking: false, model: true });
+	});
+
+	it.each([
+		[80, 24],
+		[120, 40],
+	])("keeps CJK and emoji rows aligned and in bounds under ANSI styling at %ix%i", (columns, rows) => {
+		const agents = [
+			makeRecord({
+				id: "a1",
+				description: "調査 🦊 with a deliberately long description for the narrow terminal",
+				startedAt: NOW - 118_000,
+				invocation: { modelName: "銀河 4.6", modelId: "acme/galaxy", thinking: "low" },
+				lifetimeUsage: { input: 13_100, output: 0, cacheWrite: 0, cost: 0.0042 },
+			}),
+			makeRecord({
+				id: "a2",
+				alias: "🧠-audit",
+				description: "emoji model and a different long description",
+				startedAt: NOW - 59_000,
+				invocation: {
+					modelName: "🧠 opus",
+					modelId: "acme/opus",
+					thinking: "ultrathink" as NonNullable<AgentRecord["invocation"]>["thinking"],
+				},
+				lifetimeUsage: { input: 987_654, output: 0, cacheWrite: 0, cost: 12.34 },
+			}),
+		];
+		const raw = renderAt(agents, columns, rows, 1, true, { styled: true, showCost: true });
+		expect(raw.some((l) => l.includes("\u001b["))).toBe(true);
+		for (const line of raw) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+			// No colour is left open at the end of a row, so truncation cannot bleed into the next line.
+			const escapes = line.match(/\u001b\[[0-9;]*m/g) ?? [];
+			if (escapes.length > 0) expect(escapes.at(-1)).toMatch(/\[(?:39|22|0)m$/);
+		}
+		// A nested state colour must hand back to the row's colour: tokens stay dim, not default.
+		for (const line of raw.filter((l) => l.includes("▶ running"))) {
+			const before = line.slice(0, line.indexOf("tokens"));
+			const lastFg = before.match(/\u001b\[(?:3[0-9]|90)m/g)?.at(-1);
+			expect(lastFg).toBeDefined();
+			expect(lastFg).not.toBe("\u001b[39m");
+		}
+		const [cjk, emoji] = ["調査", "🧠-audit"].map(
+			(d) => raw.map((line) => line.replace(/\u001b\[[0-9;]*m/g, "")).find((l) => l.includes(d))!,
+		);
+		expect(cjk).toBeDefined();
+		expect(emoji).toBeDefined();
+		// Both rows end on the same cell and start the state column on the same cell, whatever the glyph widths.
+		expect(visibleWidth(cjk!.trimEnd())).toBe(visibleWidth(emoji!.trimEnd()));
+		expect(visibleWidth(cjk!.split("▶ running")[0]!)).toBe(visibleWidth(emoji!.split("▶ running")[0]!));
+		// The description truncates with an ellipsis; the cost cell never does.
+		expect(cjk).toContain("~$0.0042");
+		expect(emoji).toContain("~$12.34");
+		if (columns === 80) expect(cjk).toContain("...");
+	});
+
+	it.each([
+		[80, 24],
+		[120, 40],
+	])("summarizes hidden agents by state at %ix%i", (columns, rows) => {
+		// 7 agents at the top edge: 4 rows shown, 3 hidden below.
+		const lines = renderAt(mixed(), columns, rows);
+		const more = lines.find((l) => /↓ \d+ more/.test(l));
+		expect(more).toBe("  ↓ 3 more: 1 failed, 1 stopped, 1 done");
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+	});
+
+	it("summarizes rows scrolled above the window too", () => {
+		const lines = renderAt(mixed(), 120, 40, 7);
+		const above = lines.find((l) => /↑ \d+ more/.test(l));
+		expect(above).toMatch(/^ {2}↑ \d+ more: .*running/);
+	});
+});
+
+/* ------------------------------------------------------------------------- *
+ * Workflow runs
+ * ------------------------------------------------------------------------- */
+
+describe("FleetList workflow rows", () => {
+	it("renders identically with no workflow source and an empty one", () => {
+		// The contract: a session without workflows behaves exactly as it did
+		// before they existed. Asserted as an equality rather than an absence, so
+		// a future change to the roster cannot quietly alter the agents-only path.
+		const clock = new FakeClock();
+		const now = vi.spyOn(Date, "now").mockReturnValue(clock.now());
+		const startedAt = clock.now();
+		const withNone = harness([makeRecord({ id: "a1", description: "one", startedAt })], { clock });
+		const withEmpty = harness([makeRecord({ id: "a1", description: "one", startedAt })], { clock });
+		try {
+			const before = withNone.render().join("\n");
+			expect(before).not.toContain("workflow");
+
+			// A wall-clock advance must not change either injected-clock fixture.
+			now.mockReturnValue(clock.now() + 1_000);
+			withEmpty.setWorkflows([]);
+			expect(withEmpty.render().join("\n")).toBe(before);
+		} finally {
+			withNone.fleet.dispose();
+			withEmpty.fleet.dispose();
+			now.mockRestore();
+		}
+	});
+
+	it("navigates agents exactly as before when no run is present", () => {
+		const h = harness([makeRecord({ id: "a1", description: "one" }), makeRecord({ id: "a2", description: "two" })]);
+		h.setWorkflows([]);
+
+		expect(h.press(DOWN)?.consume).toBe(true);
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+
+		// The second agent, not a run and not `main`.
+		expect(h.overlayOpened()).toBe(true);
+		expect(h.openedWorkflows()).toEqual([]);
+	});
+
+	it("clears the widget when the last run and the last agent both go", () => {
+		const h = harness([]);
+		h.setWorkflows([makeWorkflow()]);
+		expect(h.render().length).toBeGreaterThan(0);
+
+		h.setWorkflows([]);
+		expect(h.render()).toEqual([]);
+	});
+
+	it("lists a run above the agents, with its counts and stats", () => {
+		const h = harness([makeRecord({ id: "a1", description: "one" })]);
+		h.setWorkflows([makeWorkflow()]);
+
+		const rows = h
+			.render()
+			.map(plain)
+			.filter((row) => row.trim() !== "");
+		const run = rows.find((row) => row.includes("audit-src"))!;
+		const agent = rows.findIndex((row) => row.includes("one"));
+		expect(run).toContain("workflow");
+		expect(run).toContain("1/3 agents");
+		expect(run).toContain("26.4k tokens");
+		// A run owns most of the agents under it, so the container comes first.
+		expect(rows.findIndex((row) => row.includes("audit-src"))).toBeLessThan(agent);
+	});
+
+	it("agrees with itself about a single-agent run", () => {
+		const h = harness([]);
+		h.setWorkflows([makeWorkflow({ doneCount: 1, totalCount: 1 })]);
+		expect(h.render().map(plain).join("\n")).toContain("1/1 agent ");
+	});
+
+	it("hides the run's own agents — the run is the row that represents them", () => {
+		// A 40-agent fan-out would otherwise push every other agent off the list,
+		// and each child is already reachable inside the workflow dialog.
+		const h = harness([
+			makeRecord({ id: "a1", description: "mine" }),
+			makeRecord({ id: "w1", description: "the workflow's", workflowId: "wf_abc123" }),
+		]);
+		h.setWorkflows([makeWorkflow()]);
+
+		const rendered = h.render().map(plain).join("\n");
+		expect(rendered).toContain("mine");
+		expect(rendered).toContain("audit-src");
+		expect(rendered).not.toContain("the workflow's");
+	});
+
+	it("moves into the list when the only row is a run", () => {
+		// The regression this guards: activation counted agents, so a session
+		// running nothing but a workflow rendered the row and then refused to
+		// move into it.
+		const h = harness([]);
+		h.setWorkflows([makeWorkflow({ id: "wf_only" })]);
+
+		// The first ↓ moves focus into the list and lands on `main`, as it always
+		// has; the second reaches the only other row.
+		expect(h.press(DOWN)?.consume, "↓ at an empty prompt has somewhere to go").toBe(true);
+		h.press(DOWN);
+		h.press(ENTER);
+
+		expect(h.openedWorkflows()).toEqual(["wf_only"]);
+	});
+
+	it("still does nothing at an empty prompt with no rows at all", () => {
+		const h = harness([]);
+		expect(h.press(DOWN)?.consume).toBeFalsy();
+	});
+
+	it("opens the selected run rather than a conversation viewer", () => {
+		const h = harness([makeRecord({ id: "a1", description: "one" })]);
+		h.setWorkflows([makeWorkflow({ id: "wf_pick" })]);
+
+		h.press(LEFT);
+		h.press(DOWN);
+		h.press(ENTER);
+
+		expect(h.openedWorkflows()).toEqual(["wf_pick"]);
+		// The workflow dialog owns its own overlay; the list must not open one.
+		expect(h.overlayOpened()).toBe(false);
+	});
+
+	const NOW = Date.now();
+
+	/** Open the second of two runs, leaving the inspector up. */
+	function openSecondRun() {
+		const h = harness([makeRecord({ id: "a1", description: "one" })]);
+		h.setWorkflows([
+			makeWorkflow({ id: "wf_a", name: "audit-src", startedAt: NOW - 30_000 }),
+			makeWorkflow({ id: "wf_b", name: "review-changes", startedAt: NOW - 20_000 }),
+		]);
+		h.render();
+		h.press(LEFT);
+		h.press(DOWN);
+		h.press(DOWN);
+		expect(h.openedWorkflows()).toEqual([]);
+		h.press(ENTER);
+		expect(h.openedWorkflows()).toEqual(["wf_b"]);
+		return h;
+	}
+
+	it("keeps its hands off the keyboard while the inspector is up", () => {
+		// The list only stays out of an overlay's keys when it knows one is open.
+		// Focus alone is not enough: `editorHasFocus` reads unknowable focus as
+		// the editor's, which is exactly the state a fresh overlay leaves behind,
+		// and the list would then eat the arrow keys the dialog is waiting for.
+		const h = openSecondRun();
+
+		expect(h.press(DOWN)?.consume, "the dialog's keys are not the list's").toBeFalsy();
+		expect(h.press(ENTER)?.consume).toBeFalsy();
+		// And nothing moved behind it — one ENTER opened one run.
+		expect(h.openedWorkflows()).toEqual(["wf_b"]);
+	});
+
+	it("comes back to the same run when the inspector closes", async () => {
+		// Runs settle and start while the dialog is open, so the row the reader
+		// came from is not reliably where it was. The agent path re-finds its row
+		// by id for the same reason; a run has to be findable the same way.
+		const h = openSecondRun();
+
+		h.setWorkflows([
+			makeWorkflow({ id: "wf_a", name: "audit-src", startedAt: NOW - 30_000 }),
+			makeWorkflow({ id: "wf_new", name: "started-meanwhile", startedAt: NOW - 25_000 }),
+			makeWorkflow({ id: "wf_b", name: "review-changes", startedAt: NOW - 20_000 }),
+		]);
+		await h.closeWorkflowDialog();
+
+		expect(h.render().find((l) => l.includes("review-changes"))).toContain("●");
+		expect(h.render().find((l) => l.includes("started-meanwhile"))).not.toContain("●");
+	});
+
+	it("still opens an agent's viewer when the selection is past the runs", () => {
+		const h = harness([makeRecord({ id: "a1", description: "one" })]);
+		h.setWorkflows([makeWorkflow()]);
+
+		h.press(LEFT);
+		h.press(DOWN);
+		h.press(DOWN);
+		h.press(ENTER);
+
+		expect(h.openedWorkflows()).toEqual([]);
+		expect(h.overlayOpened()).toBe(true);
+	});
+
+	it("drops a settled run once it stops lingering, and keeps a live one", () => {
+		const h = harness([]);
+		h.setWorkflows([
+			makeWorkflow({ id: "wf_old", name: "old", status: "completed", completedAt: Date.now() - 60 * 60_000 }),
+			makeWorkflow({ id: "wf_now", name: "now" }),
+		]);
+
+		const rendered = h.render().map(plain).join("\n");
+		expect(rendered).toContain("now");
+		expect(rendered).not.toContain("old");
+	});
+
+	it("freezes a finished run's clock the way an agent's is frozen", () => {
+		const h = harness([]);
+		// Inside FINISHED_LINGER_MS, or the row would be gone before it could be read.
+		const completedAt = Date.now() - 1_000;
+		h.setWorkflows([makeWorkflow({ status: "completed", startedAt: completedAt - 12_000, completedAt })]);
+
+		expect(h.render().map(plain).join("\n")).toContain("12s");
+	});
+});
+
+/* ------------------------------------------------------------------------- *
+ * Overflow indicators (#857): RAW lines, never trimmed. Earlier regressions
+ * (#154, #559) passed because they `.trim()`ed a 95%-whitespace line.
+ * ------------------------------------------------------------------------- */
+
+describe("FleetList overflow window (#857)", () => {
+	const INDICATOR = /^ {2}[↑↓] \d+ more: /;
+	const GLYPH = /^ {2}[↑↓●○] /;
+
+	function roster(count: number): AgentRecord[] {
+		return Array.from({ length: count }, (_, i) =>
+			makeRecord({
+				id: `a${i}`,
+				description: `child ${String(i).padStart(2, "0")}`,
+				startedAt: Date.now() - (count - i) * 1000,
+			}),
+		);
+	}
+
+	/** Raw lines for `count` children with agent row `selRow` (0-based) selected. */
+	function renderSel(count: number, selRow: number, width: number, agents = roster(count)): string[] {
+		const h = harness(agents);
+		for (let i = 0; i <= selRow + 1; i++) h.press(DOWN); // first press activates, then selRow + 1 steps onto the row
+		return h.render(width).map(plain);
+	}
+
+	/** Lines strictly between `main` and the trailing footer spacer. */
+	function block(lines: string[]): string[] {
+		const main = lines.findIndex((l) => /^ {2}[●○] main$/.test(l));
+		expect(main).toBeGreaterThanOrEqual(0);
+		expect(lines.at(-1)).toBe("");
+		return lines.slice(main + 1, -1);
+	}
+
+	// A true middle shows both indicators, so it needs selRow >= 4 and one row below it (overflowing rosters only).
+	const positions = (count: number) =>
+		[
+			["top", 0],
+			["middle", count > 5 ? Math.max(4, Math.floor(count / 2)) : 2],
+			["bottom", count - 1],
+		] as const;
+	const cases = [5, 6, 7, 12].flatMap((count) => positions(count).map(([name, sel]) => [count, name, sel] as const));
+
+	it.each(cases)("%i children, selection at %s (row %i): raw layout", (count, _name, sel) => {
+		for (const width of [20, 40, 80, 120, 200, 300]) {
+			const lines = renderSel(count, sel, width);
+			const rows = block(lines);
+			const overflow = count > 5;
+			expect(rows).toHaveLength(5);
+			// Only the footer spacer is empty; nothing else is blank or whitespace-only.
+			expect(lines.filter((l) => l === "")).toHaveLength(2); // hint/main spacer + footer spacer
+			for (const row of rows) {
+				if (width >= 80) expect(row).toMatch(GLYPH); // narrower rows drop their bullet to keep stats whole
+				expect(row.trim()).not.toBe("");
+				expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+			}
+			const indicators = rows.filter((r) => /^ {2}[↑↓] /.test(r));
+			for (const ind of indicators) {
+				expect(ind).toBe(ind.trimEnd());
+				if (width >= 40) expect(ind).toMatch(INDICATOR);
+				else expect(ind).toMatch(/^ {2}[↑↓] \d+/); // arrow and count survive truncation
+			}
+			const agentRows = rows.filter((r) => !/^ {2}[↑↓] /.test(r));
+			const up = rows[0]?.startsWith("  ↑ ");
+			const down = rows.at(-1)?.startsWith("  ↓ ");
+			if (!overflow) {
+				expect(indicators).toHaveLength(0);
+				expect(agentRows).toHaveLength(5);
+				continue;
+			}
+			expect(agentRows).toHaveLength(up && down ? 3 : 4);
+			expect(up).toBe(sel >= 4);
+			expect(down).toBe(sel < count - 1);
+			// Hidden counts plus visible rows are the whole roster.
+			const hidden = indicators.reduce((n, ind) => n + Number(ind.match(/(\d+)/)![1]), 0);
+			expect(hidden + agentRows.length).toBe(count);
+			// Selected row is always visible.
+			if (width >= 80) expect(agentRows.some((r) => r.startsWith("  ● "))).toBe(true);
+		}
+	});
+
+	it("keeps the block height constant and moves a visible row at most one line per step", () => {
+		for (const count of [6, 7, 12]) {
+			const h = harness(roster(count));
+			h.press(DOWN);
+			let prev: string[] | undefined;
+			for (let sel = 0; sel <= count; sel++) {
+				// main, then every row incl. the bottom edge
+				const lines = h.render(120).map(plain);
+				expect(block(lines)).toHaveLength(5);
+				expect(lines).toHaveLength(9);
+				expect(lines.some((r) => r.startsWith("  ● "))).toBe(true); // selection visible at every step
+				if (prev) {
+					for (const [i, line] of lines.entries()) {
+						const m = line.match(/child \d\d/);
+						if (!m) continue;
+						const before = prev.findIndex((l) => l.includes(m[0]));
+						if (before >= 0) expect(Math.abs(before - i)).toBeLessThanOrEqual(1);
+					}
+				}
+				prev = lines;
+				h.press(DOWN);
+			}
+		}
+	});
+
+	it("leaves no leading whitespace beyond two columns at any width", () => {
+		for (const width of [80, 120, 200, 300]) {
+			const rows = block(renderSel(12, 6, width));
+			expect(rows[0]).toMatch(INDICATOR);
+			expect(rows.at(-1)).toMatch(INDICATOR);
+			expect(rows[0]!.length).toBeLessThan(40);
+		}
+	});
+
+	it("truncates the indicator on narrow terminals without wrapping", () => {
+		for (const width of [20, 40]) {
+			for (const row of block(renderSel(12, 6, width)).filter((r) => /^ {2}[↑↓]/.test(r))) {
+				expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+				expect(row).toMatch(/^ {2}[↑↓] \d+ more/);
+			}
+		}
+	});
+
+	it("keeps the truncation ellipsis inside the dim span with no stray reset", () => {
+		const h = harness(roster(12));
+		for (let i = 0; i <= 7; i++) h.press(DOWN);
+		const raw = h.render(20).filter((l) => /^ {2}<dim>[↑↓] /.test(l));
+		expect(raw.length).toBeGreaterThan(0);
+		for (const line of raw) {
+			expect(line).toMatch(/\.\.\.<\/dim>$/);
+			expect(line).not.toContain("\u001b[0m");
+		}
+	});
+
+	it("counts mixed hidden states above and below in BUCKET_ORDER, failed included", () => {
+		const states = [
+			"running",
+			"error",
+			"queued",
+			"completed",
+			"stopped",
+			"running",
+			"running",
+			"error",
+			"queued",
+			"completed",
+		] as const;
+		const agents = states.map((status, i) =>
+			makeRecord({
+				id: `m${i}`,
+				status,
+				description: `child ${String(i).padStart(2, "0")}`,
+				startedAt: Date.now() - (20 - i) * 1000,
+				...(status === "completed" || status === "error" || status === "stopped" ? { completedAt: Date.now() } : {}),
+			}),
+		);
+		const rows = block(renderSel(10, 5, 200, agents));
+		expect(rows[0]).toBe("  ↑ 3 more: 1 running, 1 queued, 1 failed");
+		expect(rows.at(-1)).toBe("  ↓ 4 more: 1 running, 1 queued, 1 failed, 1 done");
+	});
+
+	it("matches the issue example: 12 children, middle selection", () => {
+		const rows = block(renderSel(12, 9, 200));
+		expect(rows[0]).toBe("  ↑ 7 more: 7 running");
+		expect(rows[4]).toBe("  ↓ 2 more: 2 running");
+		expect(block(renderSel(12, 11, 200))[0]).toBe("  ↑ 8 more: 8 running");
+	});
+});

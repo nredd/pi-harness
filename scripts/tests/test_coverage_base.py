@@ -377,7 +377,7 @@ def test_hosted_accounting_passes_an_explicit_base() -> None:
         line.strip()
         for workflow in sorted((ROOT / ".github/workflows").glob("*.yml"))
         for line in workflow.read_text().splitlines()
-        if "make check-coverage" in line
+        if not line.lstrip().startswith("#") and "make check-coverage" in line
     ]
     assert calls
     assert all('BASE="$BASE"' in call for call in calls), calls

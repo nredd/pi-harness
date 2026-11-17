@@ -5,7 +5,9 @@
  */
 import assert from "node:assert/strict";
 import { globSync, readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInstrumenter } from "@vitest/istanbul-lib-instrument";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
 interface Coverage {
@@ -67,7 +69,7 @@ const PRODUCERS: Producer[] = [
 		config: "packages/plan-mode/vitest.runtime-build.config.ts",
 		policy: "runtime-build-tooling",
 		provider: "istanbul",
-		reportsDirectory: "coverage/runtime-build-tooling",
+		reportsDirectory: "packages/plan-mode/coverage/runtime-build-tooling",
 		load: () => import("../packages/plan-mode/vitest.runtime-build.config.ts"),
 	},
 	{
@@ -120,32 +122,39 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../packages/subscription-router/vitest.config.ts"),
 	},
 	{
-		config: "packages/todo/.vitest.config.ts",
+		config: "packages/todo/vitest.config.ts",
 		policy: "todo",
 		provider: "istanbul",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../packages/todo/.vitest.config.ts"),
+		load: () => import("../packages/todo/vitest.config.ts"),
 	},
 	{
-		config: "integration/inprocess/vitest.config.ts",
+		config: "tests/inprocess/vitest.config.ts",
 		policy: "inprocess",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/inprocess/vitest.config.ts"),
+		load: () => import("../tests/inprocess/vitest.config.ts"),
 	},
 	{
-		config: "integration/probes/vitest.config.ts",
+		config: "tests/lib/vitest.config.ts",
+		policy: "test-lib",
+		provider: "v8",
+		reportsDirectory: "coverage/primary",
+		load: () => import("../tests/lib/vitest.config.ts"),
+	},
+	{
+		config: "tests/integration/probes/vitest.config.ts",
 		policy: "probes",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/probes/vitest.config.ts"),
+		load: () => import("../tests/integration/probes/vitest.config.ts"),
 	},
 	{
-		config: "integration/providers/vitest.config.ts",
+		config: "tests/integration/providers/vitest.config.ts",
 		policy: "providers",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/providers/vitest.config.ts"),
+		load: () => import("../tests/integration/providers/vitest.config.ts"),
 	},
 	{
 		config: "scripts/vitest.config.ts",
@@ -158,17 +167,7 @@ const PRODUCERS: Producer[] = [
 
 /** Files at 0/0/0/0 on every OS; adding or dropping a pin must change this list too (#645). */
 const ZERO_UNCOVERED_FILES = [
-	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
-	"scripts/check-commit-messages.mjs",
-	"scripts/check-docs-platform.mjs",
-	"scripts/check-docs.mjs",
-	"scripts/check-package-assets.mjs",
-	"scripts/check-sync-ledger.mjs",
-	"scripts/check-sync-reverts.mjs",
-	"scripts/check-upstream-sync.mjs",
-	"scripts/docs-generators/generate-source-references.mjs",
-	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
@@ -179,6 +178,7 @@ const ZERO_UNCOVERED_FILES = [
 	"src/contract.ts",
 	"src/desktop.ts",
 	"src/find-params.ts",
+	"src/index.ts",
 	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
@@ -203,6 +203,195 @@ const ZERO_UNCOVERED_FILES = [
 	"src/view.ts",
 ];
 
+/**
+ * The resolved non-coverage options of every producer, pinned before the shared factory (#863). Paths are
+ * repo-relative. One change is deliberate: the factory puts the home guard FIRST in `setupFiles` (plan-mode,
+ * subagents, todo had it last), so those entries list it first.
+ */
+const RESOLVED: Record<string, unknown> = {
+	"tests/inprocess/vitest.config.ts": {
+		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"tests/integration/probes/vitest.config.ts": {
+		test: {
+			include: [
+				"anthropic-block-types.test.ts",
+				"latency.test.ts",
+				"process-lifecycle.test.ts",
+				"render.test.ts",
+				"session-kit-child-scope.test.ts",
+				"stack-resources.test.ts",
+				"transcript-types.test.ts",
+			],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"tests/integration/providers/vitest.config.ts": {
+		test: {
+			include: [
+				"bun_runtime.test.ts",
+				"extension_inventory.test.ts",
+				"faux.test.ts",
+				"preloads.test.ts",
+				"usage_fixture.test.ts",
+			],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"packages/computer-use/vitest.async.config.ts": {
+		test: {
+			include: ["test/async.test.mjs", "test/async-observer.test.mjs", "test/async-safety.test.mjs"],
+			pool: "forks",
+			maxWorkers: 1,
+			fileParallelism: false,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"packages/computer-use/vitest.config.ts": {
+		test: {
+			dir: "test",
+			pool: "forks",
+			maxWorkers: 1,
+			fileParallelism: false,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"packages/dev-tools/vitest.config.ts": {
+		test: { pool: "forks", maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"], testTimeout: 20000 },
+	},
+	"packages/plan-mode/vitest.config.ts": {
+		test: {
+			maxWorkers: 2,
+			environment: "node",
+			env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" },
+			hookTimeout: 30000,
+			include: ["tests/**/*.test.ts"],
+			globalSetup: ["packages/plan-mode/tests/fixtures/vitest.global-setup.ts"],
+			pool: "forks",
+			runner: "packages/plan-mode/tests/fixtures/vitest.runner.ts",
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/plan-mode/tests/fixtures/vitest.setup.ts"],
+			teardownTimeout: 10000,
+			testTimeout: 5000,
+		},
+	},
+	"packages/plan-mode/vitest.runtime-build.config.ts": {
+		test: {
+			environment: "node",
+			env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" },
+			hookTimeout: 30000,
+			include: ["packages/plan-mode/tests/build-runtime.test.ts"],
+			globalSetup: ["packages/plan-mode/tests/fixtures/vitest.global-setup.ts"],
+			pool: "forks",
+			runner: "packages/plan-mode/tests/fixtures/vitest.runner.ts",
+			setupFiles: ["packages/plan-mode/tests/fixtures/vitest.setup.ts"],
+			teardownTimeout: 10000,
+			testTimeout: 5000,
+		},
+		root: ".",
+	},
+	"packages/preset/vitest.config.ts": {
+		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"packages/resource-sampler/vitest.config.ts": {
+		test: { maxWorkers: 1, fileParallelism: false, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"packages/session-kit/vitest.config.ts": {
+		test: {
+			server: { deps: { inline: ["@nredd/pi-resource-sampler"] } },
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+		},
+	},
+	"packages/subagents/vitest.config.ts": {
+		test: {
+			maxWorkers: 2,
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/tests/fixtures/tmp-root-setup.ts"],
+			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
+		},
+		resolve: { dedupe: ["@earendil-works/pi-ai"] },
+	},
+	"packages/subagents/vitest.runtime-build.config.ts": {
+		test: { maxWorkers: 1, fileParallelism: false, include: ["tests/runtime-scripts.test.ts"], testTimeout: 15000 },
+	},
+	"packages/subagents/vitest.workflow-examples.config.ts": {
+		test: {
+			env: { PI_WORKFLOW_EXAMPLE_COVERAGE: "1" },
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/tests/fixtures/tmp-root-setup.ts"],
+			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
+			include: ["tests/workflow/workflow-examples.test.ts"],
+		},
+		resolve: { dedupe: ["@earendil-works/pi-ai"] },
+	},
+	"packages/subscription-router/vitest.config.ts": {
+		test: { maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"packages/todo/vitest.config.ts": {
+		test: {
+			include: ["tests/**/*.test.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/todo/tests/fixtures/setup.ts"],
+			pool: "forks",
+			maxWorkers: 2,
+			hookTimeout: 30000,
+			testTimeout: 15000,
+			unstubGlobals: true,
+			clearMocks: true,
+			restoreMocks: true,
+		},
+		resolve: { alias: { "@juicesharp/rpiv-test-utils": "packages/todo/tests/fixtures/upstream/index.ts" } },
+	},
+	"scripts/vitest.config.ts": {
+		test: {
+			include: [
+				"scripts/tests/commit-messages.test.mjs",
+				"scripts/tests/commit-policy.test.mjs",
+				"scripts/coverage-configs.test.ts",
+				"scripts/import_audit.test.ts",
+				"scripts/merge-pr.test.ts",
+				"scripts/router_contract.test.mjs",
+				"scripts/run-vitest.test.ts",
+			],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+		root: ".",
+	},
+	"tests/lib/vitest.config.ts": { test: { pool: "forks", maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"] } },
+};
+
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+const PATH_OPTIONS = new Set(["setupFiles", "globalSetup", "runner"]);
+
+/** The config minus its coverage block, as JSON with regexes spelled out and every path made repo-relative. */
+function resolvedShape(producer: Producer, config: { root?: string; test?: Record<string, unknown> }): unknown {
+	const base = config.root ?? resolve(REPO, dirname(producer.config));
+	const repoRelative = (path: string) => relative(REPO, resolve(base, path));
+	const { coverage: _coverage, ...test } = config.test ?? {};
+	const paths = (value: unknown) =>
+		Array.isArray(value) ? value.map((path: string) => repoRelative(path)) : repoRelative(value as string);
+	const shape = {
+		...config,
+		...(config.root === undefined ? {} : { root: relative(REPO, config.root) || "." }),
+		test: Object.fromEntries(
+			Object.entries(test).map(([key, value]) => [key, PATH_OPTIONS.has(key) ? paths(value) : value]),
+		),
+	};
+	return JSON.parse(
+		JSON.stringify(shape, (_key, value) => (value instanceof RegExp ? `RE:${value}` : value)).replaceAll(`${REPO}`, ""),
+	);
+}
+
 const POLICY_URL = new URL("../coverage/policy.json", import.meta.url);
 
 /** Policy entries the faked `readFileSync` serves; null serves the real file. */
@@ -225,6 +414,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	served.packages = null;
+	vi.unstubAllEnvs();
 });
 
 async function coverageOf({ load }: Producer): Promise<Coverage> {
@@ -249,6 +439,13 @@ test("the producer table is exactly the Vitest configurations the policy invento
 });
 
 for (const producer of PRODUCERS) {
+	test(`${producer.config} has an executable initializer in the real Istanbul statement map`, () => {
+		const instrumenter = createInstrumenter({ esModules: true, parserPlugins: ["typescript"] });
+		const path = resolve(REPO, producer.config);
+		instrumenter.instrumentSync(readFileSync(path, "utf8"), path);
+		assert.ok(Object.keys(instrumenter.lastFileCoverage()?.statementMap ?? {}).length > 0);
+	});
+
 	test(`${producer.config} reports text, LCOV and a statement summary from ${producer.provider} even on failure`, async () => {
 		const policy = realPolicy()[producer.policy];
 		assert.ok(policy, `${producer.policy} is in the policy`);
@@ -291,20 +488,71 @@ for (const producer of PRODUCERS) {
 	});
 }
 
-test("subagents runtime verification pins both complete scripts at zero L/F/B/S", async () => {
+for (const producer of PRODUCERS) {
+	test(`${producer.config} resolves the pinned non-coverage options (home guard first in setupFiles on purpose)`, async () => {
+		const config = (await producer.load()).default as { root?: string; test?: Record<string, unknown> };
+		assert.deepEqual(resolvedShape(producer, config), RESOLVED[producer.config]);
+	});
+}
+
+/**
+ * Vitest 5 lets `VITEST_MAX_WORKERS` override `maxWorkers` AND `fileParallelism: false` after the config
+ * resolves, so a shell that exports it (the shared heavy-slot wrapper sets 2) ran "serial" packages
+ * concurrently (#934). Only the config file can drop it, before Vitest reads it.
+ */
+const SERIAL_PRODUCERS = PRODUCERS.filter(
+	({ config }) => (RESOLVED[config] as { test: { maxWorkers?: number } }).test.maxWorkers === 1,
+);
+
+test("the serial producers are exactly the four pinned with maxWorkers 1", () => {
+	assert.deepEqual(
+		SERIAL_PRODUCERS.map(({ config }) => config),
+		[
+			"packages/computer-use/vitest.async.config.ts",
+			"packages/computer-use/vitest.config.ts",
+			"packages/resource-sampler/vitest.config.ts",
+			"packages/subagents/vitest.runtime-build.config.ts",
+		],
+	);
+});
+
+for (const producer of PRODUCERS) {
+	const serial = SERIAL_PRODUCERS.includes(producer);
+	test(`${producer.config} ${serial ? "runs files serially and ignores an exported VITEST_MAX_WORKERS" : "keeps its worker cap and an exported VITEST_MAX_WORKERS"}`, async () => {
+		vi.stubEnv("VITEST_MAX_WORKERS", "2");
+		const { test: options } = (await producer.load()).default as { test?: Record<string, unknown> };
+		assert.equal(options?.fileParallelism, serial ? false : undefined);
+		assert.equal(process.env.VITEST_MAX_WORKERS, serial ? undefined : "2");
+	});
+}
+
+test("subagents runtime verification pins the complete script at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "subagents-runtime-tooling");
 	assert.ok(producer);
 	assert.deepEqual((await coverageOf(producer)).thresholds, {
 		"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
-		"scripts/check-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
 	});
 });
+
+for (const signal of ["probes", "import-audit"]) {
+	test(`${signal} pins each owned file at zero L/F/B/S on either runtime`, async () => {
+		const producer = PRODUCERS.find(({ policy }) => policy === signal);
+		assert.ok(producer);
+		assert.deepEqual((await coverageOf(producer)).thresholds, {
+			perFile: true,
+			lines: 100,
+			functions: 100,
+			branches: 100,
+			statements: 100,
+		});
+	});
+}
 
 test("computer-use async verification pins the whole helper at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");
 	assert.ok(producer);
 	assert.deepEqual((await coverageOf(producer)).thresholds, {
-		"scripts/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+		"tests/fixtures/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
 	});
 });
 

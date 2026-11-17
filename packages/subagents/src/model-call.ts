@@ -10,19 +10,19 @@
 
 /** One streaming event from an assistant message, as the runner reports it. */
 export type ModelCallEvent =
-  | { type: "start" }
-  | { type: "delta"; kind: "thinking" | "writing"; chars: number }
-  /** A stream event that carries no text (block boundaries): proof of life only. */
-  | { type: "beat" }
-  | { type: "end" };
+	| { type: "start" }
+	| { type: "delta"; kind: "thinking" | "writing"; chars: number }
+	/** A stream event that carries no text (block boundaries): proof of life only. */
+	| { type: "beat" }
+	| { type: "end" };
 
 export interface ModelCallState {
-  startedAt: number;
-  /** The last stream event of any kind, which is what `stalled?` is measured from. */
-  lastEventAt: number;
-  kind: "thinking" | "writing";
-  /** Characters streamed as text or tool-call arguments this call. */
-  writtenChars: number;
+	startedAt: number;
+	/** The last stream event of any kind, which is what `stalled?` is measured from. */
+	lastEventAt: number;
+	kind: "thinking" | "writing";
+	/** Characters streamed as text or tool-call arguments this call. */
+	writtenChars: number;
 }
 
 /** Silence this long mid-call reads as stalled. */
@@ -33,37 +33,37 @@ const CHARS_PER_TOKEN = 4;
 
 /** Fold one event into `current`; `undefined` means no call is in flight. */
 export function applyModelCallEvent(
-  current: ModelCallState | undefined,
-  event: ModelCallEvent,
-  now: number,
+	current: ModelCallState | undefined,
+	event: ModelCallEvent,
+	now: number,
 ): ModelCallState | undefined {
-  switch (event.type) {
-    case "start":
-      return { startedAt: now, lastEventAt: now, kind: "thinking", writtenChars: 0 };
-    case "end":
-      return undefined;
-    case "beat":
-      return current ? { ...current, lastEventAt: now } : current;
-    case "delta": {
-      const base = current ?? { startedAt: now, lastEventAt: now, kind: "thinking" as const, writtenChars: 0 };
-      return {
-        ...base,
-        lastEventAt: now,
-        // Once it has started writing, a late thinking block does not flip it back.
-        kind: event.kind === "writing" ? "writing" : base.kind,
-        writtenChars: base.writtenChars + (event.kind === "writing" ? event.chars : 0),
-      };
-    }
-  }
+	switch (event.type) {
+		case "start":
+			return { startedAt: now, lastEventAt: now, kind: "thinking", writtenChars: 0 };
+		case "end":
+			return undefined;
+		case "beat":
+			return current ? { ...current, lastEventAt: now } : current;
+		case "delta": {
+			const base = current ?? { startedAt: now, lastEventAt: now, kind: "thinking" as const, writtenChars: 0 };
+			return {
+				...base,
+				lastEventAt: now,
+				// Once it has started writing, a late thinking block does not flip it back.
+				kind: event.kind === "writing" ? "writing" : base.kind,
+				writtenChars: base.writtenChars + (event.kind === "writing" ? event.chars : 0),
+			};
+		}
+	}
 }
 
 /** `41s`, `2m41s`, `1h05m`. */
 export function formatClock(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  if (total < 60) return `${total}s`;
-  const minutes = Math.floor(total / 60);
-  if (minutes < 60) return `${minutes}m${String(total % 60).padStart(2, "0")}s`;
-  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+	const total = Math.max(0, Math.floor(ms / 1000));
+	if (total < 60) return `${total}s`;
+	const minutes = Math.floor(total / 60);
+	if (minutes < 60) return `${minutes}m${String(total % 60).padStart(2, "0")}s`;
+	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 /**
@@ -71,13 +71,13 @@ export function formatClock(ms: number): string {
  * when no call is in flight.
  */
 export function describeModelCall(state: ModelCallState | undefined, now: number): string | undefined {
-  if (!state) return undefined;
-  const silent = now - state.lastEventAt;
-  if (silent >= STALL_MS) return `stalled? · ${formatClock(silent)}`;
-  if (state.kind === "writing") {
-    // `950`, `3.2k`.
-    const tokens = Math.round(state.writtenChars / CHARS_PER_TOKEN);
-    return `writing · ${tokens < 1_000 ? `${tokens}` : `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`} tok`;
-  }
-  return `thinking · ${formatClock(now - state.startedAt)}`;
+	if (!state) return undefined;
+	const silent = now - state.lastEventAt;
+	if (silent >= STALL_MS) return `stalled? · ${formatClock(silent)}`;
+	if (state.kind === "writing") {
+		// `950`, `3.2k`.
+		const tokens = Math.round(state.writtenChars / CHARS_PER_TOKEN);
+		return `writing · ${tokens < 1_000 ? `${tokens}` : `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k`} tok`;
+	}
+	return `thinking · ${formatClock(now - state.startedAt)}`;
 }

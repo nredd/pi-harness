@@ -82,7 +82,10 @@ export class CdpTab {
 		const ws = new WebSocket(wsUrl);
 		try {
 			await new Promise<void>((resolve, reject) => {
-				const timer = setTimeout(() => reject(new Error(`Timed out connecting to CDP target at ${wsUrl}`)), COMMAND_TIMEOUT_MS);
+				const timer = setTimeout(
+					() => reject(new Error(`Timed out connecting to CDP target at ${wsUrl}`)),
+					COMMAND_TIMEOUT_MS,
+				);
 				ws.onopen = () => {
 					clearTimeout(timer);
 					resolve();
@@ -119,7 +122,12 @@ export class CdpTab {
 
 	/** Evaluates a JS expression in the page and returns its primitive value. */
 	async evaluate(expression: string): Promise<unknown> {
-		const result = await this.send("Runtime.evaluate", { expression, returnByValue: true, timeout: COMMAND_TIMEOUT_MS, awaitPromise: true });
+		const result = await this.send("Runtime.evaluate", {
+			expression,
+			returnByValue: true,
+			timeout: COMMAND_TIMEOUT_MS,
+			awaitPromise: true,
+		});
 		return result?.result?.value;
 	}
 
@@ -142,19 +150,32 @@ export class CdpTab {
 	}
 
 	async clickBackendNode(backendNodeId: number): Promise<void> {
-		await this.withBackendNode(backendNodeId, "function(){ this.scrollIntoView({block:'center', inline:'center'}); this.click(); }");
+		await this.withBackendNode(
+			backendNodeId,
+			"function(){ this.scrollIntoView({block:'center', inline:'center'}); this.click(); }",
+		);
 	}
 
 	async typeIntoBackendNode(backendNodeId: number, text: string, replace: boolean): Promise<void> {
-		await this.withBackendNode(backendNodeId, "function(text, replace){ this.scrollIntoView({block:'center', inline:'center'}); this.focus(); if (replace) { if ('value' in this) this.value = ''; else this.textContent = ''; } if ('value' in this) this.value += text; else this.textContent = (this.textContent || '') + text; this.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:text})); this.dispatchEvent(new Event('change', {bubbles:true})); }", [text, replace]);
+		await this.withBackendNode(
+			backendNodeId,
+			"function(text, replace){ this.scrollIntoView({block:'center', inline:'center'}); this.focus(); if (replace) { if ('value' in this) this.value = ''; else this.textContent = ''; } if ('value' in this) this.value += text; else this.textContent = (this.textContent || '') + text; this.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:text})); this.dispatchEvent(new Event('change', {bubbles:true})); }",
+			[text, replace],
+		);
 	}
 
 	async scrollBy(deltaX: number, deltaY: number, backendNodeId?: number): Promise<void> {
 		if (backendNodeId) {
-			await this.withBackendNode(backendNodeId, "function(dx, dy){ this.scrollIntoView({block:'center', inline:'center'}); this.scrollBy(dx, dy); }", [deltaX, deltaY]);
+			await this.withBackendNode(
+				backendNodeId,
+				"function(dx, dy){ this.scrollIntoView({block:'center', inline:'center'}); this.scrollBy(dx, dy); }",
+				[deltaX, deltaY],
+			);
 			return;
 		}
-		await this.send("Runtime.evaluate", { expression: `window.scrollBy(${JSON.stringify(deltaX)}, ${JSON.stringify(deltaY)})` });
+		await this.send("Runtime.evaluate", {
+			expression: `window.scrollBy(${JSON.stringify(deltaX)}, ${JSON.stringify(deltaY)})`,
+		});
 	}
 
 	async typeIntoFocused(text: string): Promise<void> {
@@ -162,27 +183,65 @@ export class CdpTab {
 	}
 
 	async keypress(keys: string[]): Promise<void> {
-		const modifierBits: Record<string, number> = { alt: 1, option: 1, control: 2, ctrl: 2, meta: 4, command: 4, cmd: 4, shift: 8 };
+		const modifierBits: Record<string, number> = {
+			alt: 1,
+			option: 1,
+			control: 2,
+			ctrl: 2,
+			meta: 4,
+			command: 4,
+			cmd: 4,
+			shift: 8,
+		};
 		const modifiers = keys.reduce((bits, key) => bits | (modifierBits[key.toLowerCase()] ?? 0), 0);
 		for (const key of keys.filter((candidate) => modifierBits[candidate.toLowerCase()] === undefined)) {
-			await this.send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key, text: key.length === 1 && modifiers === 0 ? key : undefined, modifiers });
+			await this.send("Input.dispatchKeyEvent", {
+				type: "keyDown",
+				key,
+				code: key,
+				text: key.length === 1 && modifiers === 0 ? key : undefined,
+				modifiers,
+			});
 			await this.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, modifiers });
 		}
 	}
 
-	async mouseAt(x: number, y: number, type: "mouseMoved" | "mousePressed" | "mouseReleased", button: "left" | "right" | "middle" = "left", clickCount = 1): Promise<void> {
-		await this.send("Input.dispatchMouseEvent", { type, x, y, button: type === "mouseMoved" ? "none" : button, clickCount });
+	async mouseAt(
+		x: number,
+		y: number,
+		type: "mouseMoved" | "mousePressed" | "mouseReleased",
+		button: "left" | "right" | "middle" = "left",
+		clickCount = 1,
+	): Promise<void> {
+		await this.send("Input.dispatchMouseEvent", {
+			type,
+			x,
+			y,
+			button: type === "mouseMoved" ? "none" : button,
+			clickCount,
+		});
 	}
 
 	async dragPath(path: Array<{ x: number; y: number }>): Promise<void> {
 		if (path.length < 2) throw new Error("CDP drag requires at least two points.");
 		await this.mouseAt(path[0].x, path[0].y, "mousePressed");
-		for (const point of path.slice(1)) await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, button: "left", buttons: 1 });
+		for (const point of path.slice(1))
+			await this.send("Input.dispatchMouseEvent", {
+				type: "mouseMoved",
+				x: point.x,
+				y: point.y,
+				button: "left",
+				buttons: 1,
+			});
 		const end = path[path.length - 1];
 		await this.mouseAt(end.x, end.y, "mouseReleased");
 	}
 
-	private async withBackendNode(backendNodeId: number, functionDeclaration: string, args: unknown[] = []): Promise<void> {
+	private async withBackendNode(
+		backendNodeId: number,
+		functionDeclaration: string,
+		args: unknown[] = [],
+	): Promise<void> {
 		const resolved = await this.send("DOM.resolveNode", { backendNodeId });
 		const objectId = resolved?.object?.objectId;
 		if (typeof objectId !== "string") throw new Error(`CDP could not resolve backend node ${backendNodeId}.`);
@@ -375,50 +434,98 @@ export async function listCdpPageContexts(): Promise<CdpPageContext[]> {
 }
 
 export async function cdpClickForContext(contextId: string, backendNodeId: number): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => {
-		await tab.clickBackendNode(backendNodeId);
-		return true;
-	})) === true;
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.clickBackendNode(backendNodeId);
+			return true;
+		})) === true
+	);
 }
 
-export async function cdpTypeForContext(contextId: string, backendNodeId: number, text: string, replace: boolean): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => {
-		await tab.typeIntoBackendNode(backendNodeId, text, replace);
-		return true;
-	})) === true;
+export async function cdpTypeForContext(
+	contextId: string,
+	backendNodeId: number,
+	text: string,
+	replace: boolean,
+): Promise<boolean> {
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.typeIntoBackendNode(backendNodeId, text, replace);
+			return true;
+		})) === true
+	);
 }
 
-export async function cdpScrollForContext(contextId: string, deltaX: number, deltaY: number, backendNodeId?: number): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => {
-		await tab.scrollBy(deltaX, deltaY, backendNodeId);
-		return true;
-	})) === true;
+export async function cdpScrollForContext(
+	contextId: string,
+	deltaX: number,
+	deltaY: number,
+	backendNodeId?: number,
+): Promise<boolean> {
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.scrollBy(deltaX, deltaY, backendNodeId);
+			return true;
+		})) === true
+	);
 }
 
 export async function cdpTypeFocusedForContext(contextId: string, text: string): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => { await tab.typeIntoFocused(text); return true; })) === true;
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.typeIntoFocused(text);
+			return true;
+		})) === true
+	);
 }
 
 export async function cdpKeypressForContext(contextId: string, keys: string[]): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => { await tab.keypress(keys); return true; })) === true;
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.keypress(keys);
+			return true;
+		})) === true
+	);
 }
 
-export async function cdpMouseForContext(contextId: string, x: number, y: number, type: "mouseMoved" | "mousePressed" | "mouseReleased", button: "left" | "right" | "middle" = "left", clickCount = 1): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => { await tab.mouseAt(x, y, type, button, clickCount); return true; })) === true;
+export async function cdpMouseForContext(
+	contextId: string,
+	x: number,
+	y: number,
+	type: "mouseMoved" | "mousePressed" | "mouseReleased",
+	button: "left" | "right" | "middle" = "left",
+	clickCount = 1,
+): Promise<boolean> {
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.mouseAt(x, y, type, button, clickCount);
+			return true;
+		})) === true
+	);
 }
 
 export async function cdpDragForContext(contextId: string, path: Array<{ x: number; y: number }>): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => { await tab.dragPath(path); return true; })) === true;
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.dragPath(path);
+			return true;
+		})) === true
+	);
 }
 
 export async function cdpNavigateContext(contextId: string, url: string): Promise<boolean> {
-	return (await withCdpContextTab(contextId, async (tab) => {
-		await tab.navigate(url);
-		return true;
-	})) === true;
+	return (
+		(await withCdpContextTab(contextId, async (tab) => {
+			await tab.navigate(url);
+			return true;
+		})) === true
+	);
 }
 
-export async function cdpEvaluateForContext(contextId: string, expression: string): Promise<CdpEvaluationResult | undefined> {
+export async function cdpEvaluateForContext(
+	contextId: string,
+	expression: string,
+): Promise<CdpEvaluationResult | undefined> {
 	const page = await cdpPageForContext(contextId);
 	if (!page?.webSocketDebuggerUrl) return undefined;
 	const tab = await CdpTab.connect(page.webSocketDebuggerUrl, page.id, page.title);
@@ -481,8 +588,11 @@ async function cdpPages(): Promise<CdpPageTarget[]> {
 	const port = process.env.PI_COMPUTER_USE_CDP_PORT;
 	const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2_000) });
 	const targets = (await response.json()) as CdpPageTarget[];
-	return targets.filter((target) =>
-		target.type === "page" && target.webSocketDebuggerUrl && isLocalDebuggerWebSocket(target.webSocketDebuggerUrl, port),
+	return targets.filter(
+		(target) =>
+			target.type === "page" &&
+			target.webSocketDebuggerUrl &&
+			isLocalDebuggerWebSocket(target.webSocketDebuggerUrl, port),
 	);
 }
 
@@ -495,7 +605,10 @@ function axString(raw: any): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
-function cdpSnapshotOutline(snapshotId: string, nodes: unknown[]): { targets: CdpSnapshotTarget[]; outline: SerializedOutline } {
+function cdpSnapshotOutline(
+	snapshotId: string,
+	nodes: unknown[],
+): { targets: CdpSnapshotTarget[]; outline: SerializedOutline } {
 	const records = new Map<string, any>();
 	for (const raw of nodes as any[]) {
 		const nodeId = String(raw?.nodeId ?? "");
@@ -512,7 +625,15 @@ function cdpSnapshotOutline(snapshotId: string, nodes: unknown[]): { targets: Cd
 		const backendNodeId = Number.isFinite(raw?.backendDOMNodeId) ? Math.trunc(raw.backendDOMNodeId) : undefined;
 		const wireRef = `cdp:${nodeId}`;
 		if (actions.length > 0 && name && (!actions.includes("click") || backendNodeId)) {
-			targets.push({ ref: wireRef, source: "browser_ax", role, name, value: axString(raw?.value) || undefined, actions, backendNodeId });
+			targets.push({
+				ref: wireRef,
+				source: "browser_ax",
+				role,
+				name,
+				value: axString(raw?.value) || undefined,
+				actions,
+				backendNodeId,
+			});
 		}
 		const childIds: string[] = Array.isArray(raw?.childIds) ? raw.childIds.map(String) : [];
 		return {
@@ -532,34 +653,48 @@ function cdpSnapshotOutline(snapshotId: string, nodes: unknown[]): { targets: Cd
 			canDecrement: false,
 			isTextInput: actions.includes("set_text"),
 			rect: { x: 0, y: 0, w: 0, h: 0 },
-			children: childIds.map((id: string) => records.get(id)).filter(Boolean).map((child: any) => build(child, seen)).filter(Boolean),
+			children: childIds
+				.map((id: string) => records.get(id))
+				.filter(Boolean)
+				.map((child: any) => build(child, seen))
+				.filter(Boolean),
 		};
 	};
 	const roots = (nodes as any[]).filter((raw) => !raw?.parentId || !records.has(String(raw.parentId)));
 	const children = roots.map((root) => build(root, new Set())).filter(Boolean);
-	const rawOutline = children.length === 1 ? children[0] : {
-		ref: `cdp:root:${snapshotId}`,
-		role: "document",
-		subrole: "",
-		identifier: "",
-		title: "Browser page",
-		description: "",
-		value: "",
-		actions: [],
-		canPress: false,
-		canFocus: false,
-		canSetValue: false,
-		canScroll: false,
-		canIncrement: false,
-		canDecrement: false,
-		isTextInput: false,
-		rect: { x: 0, y: 0, w: 0, h: 0 },
-		children,
-	};
+	const rawOutline =
+		children.length === 1
+			? children[0]
+			: {
+					ref: `cdp:root:${snapshotId}`,
+					role: "document",
+					subrole: "",
+					identifier: "",
+					title: "Browser page",
+					description: "",
+					value: "",
+					actions: [],
+					canPress: false,
+					canFocus: false,
+					canSetValue: false,
+					canScroll: false,
+					canIncrement: false,
+					canDecrement: false,
+					isTextInput: false,
+					rect: { x: 0, y: 0, w: 0, h: 0 },
+					children,
+				};
 	const parsed = parseLookResponse({
 		lookId: snapshotId,
 		capturedAt: Date.now() / 1000,
-		window: { windowId: 0, framePoints: { x: 0, y: 0, w: 1, h: 1 }, scaleFactor: 1, isModal: false, role: "document", subrole: "" },
+		window: {
+			windowId: 0,
+			framePoints: { x: 0, y: 0, w: 1, h: 1 },
+			scaleFactor: 1,
+			isModal: false,
+			role: "document",
+			subrole: "",
+		},
 		outline: rawOutline,
 		timings: {},
 	}).parsedOutline!;
@@ -581,7 +716,11 @@ function isLocalDebuggerWebSocket(wsUrl: string, expectedPort: string | undefine
 	try {
 		const parsed = new URL(wsUrl);
 		const localHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
-		return (parsed.protocol === "ws:" || parsed.protocol === "wss:") && localHosts.has(parsed.hostname) && parsed.port === expectedPort;
+		return (
+			(parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
+			localHosts.has(parsed.hostname) &&
+			parsed.port === expectedPort
+		);
 	} catch {
 		return false;
 	}
@@ -597,7 +736,11 @@ function isLocalDebuggerWebSocket(wsUrl: string, expectedPort: string | undefine
  *      active tab is "visible", background tabs are "hidden").
  * /json/list ordering is never trusted; it is an undocumented MRU detail.
  */
-async function pickTab(pages: CdpPageTarget[], windowTitle: string, frame?: WindowFrame): Promise<CdpPageTarget | undefined> {
+async function pickTab(
+	pages: CdpPageTarget[],
+	windowTitle: string,
+	frame?: WindowFrame,
+): Promise<CdpPageTarget | undefined> {
 	const matches = pages.filter((target) => titlesMatch(target.title, windowTitle));
 	if (matches.length === 0) return pages.length === 1 ? pages[0] : undefined;
 	if (matches.length === 1) return matches[0];

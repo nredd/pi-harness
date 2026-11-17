@@ -107,7 +107,8 @@ async function signBinary(ctx, outputPath) {
 	}
 
 	const identity = getArg(ctx, "--sign-identity") ?? ctx.env.PI_COMPUTER_USE_CODESIGN_IDENTITY ?? "-";
-	const identifier = getArg(ctx, "--sign-identifier") ?? ctx.env.PI_COMPUTER_USE_CODESIGN_IDENTIFIER ?? defaultCodeSignIdentifier;
+	const identifier =
+		getArg(ctx, "--sign-identifier") ?? ctx.env.PI_COMPUTER_USE_CODESIGN_IDENTIFIER ?? defaultCodeSignIdentifier;
 	const args = ["--force", "-i", identifier];
 	if (hasArg(ctx, "--hardened-runtime")) {
 		args.push("--options", "runtime");
@@ -165,7 +166,9 @@ async function buildWindowsHelper(ctx, prebuiltOutput) {
 	const windowsCrateDir = path.join(ctx.rootDir, "native", "windows", "bridge-rs");
 	const target = getArg(ctx, "--target");
 	if (ctx.platform !== "win32" && !target?.includes("windows")) {
-		throw new Error("Refusing to label a host binary as Windows. Build on Windows or pass an explicit Windows --target triple.");
+		throw new Error(
+			"Refusing to label a host binary as Windows. Build on Windows or pass an explicit Windows --target triple.",
+		);
 	}
 	const prebuiltDir = prebuiltOutput
 		? path.resolve(ctx.cwd, prebuiltOutput, "..")
@@ -173,12 +176,7 @@ async function buildWindowsHelper(ctx, prebuiltOutput) {
 	const manifestPath = path.join(windowsCrateDir, "Cargo.toml");
 
 	ctx.log("Building Windows helper with cargo...");
-	const cargoArgs = [
-		"build",
-		"--release",
-		"--manifest-path",
-		manifestPath,
-	];
+	const cargoArgs = ["build", "--release", "--manifest-path", manifestPath];
 	if (target) cargoArgs.push("--target", target);
 	await ctx.run("cargo", cargoArgs);
 
@@ -213,7 +211,8 @@ function defaultLinuxOutputPath(ctx, arch) {
 async function buildLinuxForArch(ctx, arch, outputPath) {
 	const linuxCrateDir = path.join(ctx.rootDir, "native", "linux", "bridge-rs");
 	const explicitTarget = getArg(ctx, "--target");
-	if (explicitTarget && !explicitTarget.includes("linux")) throw new Error(`Linux builds require a Linux --target triple, got ${explicitTarget}.`);
+	if (explicitTarget && !explicitTarget.includes("linux"))
+		throw new Error(`Linux builds require a Linux --target triple, got ${explicitTarget}.`);
 	const target = explicitTarget ?? (ctx.platform === "linux" && ctx.arch === arch ? undefined : linuxTargets[arch]);
 	ctx.log(`Building Linux helper for ${arch} with cargo...`);
 	const cargoArgs = ["build", "--release", "--manifest-path", path.join(linuxCrateDir, "Cargo.toml")];
@@ -221,7 +220,8 @@ async function buildLinuxForArch(ctx, arch, outputPath) {
 	await ctx.run("cargo", cargoArgs);
 	const cargoOutput = linuxBinaryPath(linuxCrateDir, target);
 	const header = await fs.readFile(cargoOutput).then((data) => data.subarray(0, 20));
-	if (header.length < 20 || !header.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) throw new Error(`Cargo output is not a Linux ELF executable: ${cargoOutput}`);
+	if (header.length < 20 || !header.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])))
+		throw new Error(`Cargo output is not a Linux ELF executable: ${cargoOutput}`);
 	const machine = header.readUInt16LE(18);
 	const expectedMachine = arch === "x64" ? 0x3e : 0xb7;
 	if (machine !== expectedMachine) throw new Error(`Cargo output architecture does not match ${arch}: ${cargoOutput}`);
@@ -236,8 +236,10 @@ async function buildLinuxHelper(ctx) {
 	if (arch === "universal") throw new Error("Linux does not support --arch universal. Use x64, arm64, or all.");
 	const outputArg = getArg(ctx, "--output");
 	if (arch === "all") {
-		if (outputArg) throw new Error("--output is not supported with --arch all. Use a single architecture for one output.");
-		for (const nextArch of ["x64", "arm64"]) await buildLinuxForArch(ctx, nextArch, defaultLinuxOutputPath(ctx, nextArch));
+		if (outputArg)
+			throw new Error("--output is not supported with --arch all. Use a single architecture for one output.");
+		for (const nextArch of ["x64", "arm64"])
+			await buildLinuxForArch(ctx, nextArch, defaultLinuxOutputPath(ctx, nextArch));
 		return;
 	}
 	await buildLinuxForArch(ctx, arch, outputArg ? path.resolve(ctx.cwd, outputArg) : defaultLinuxOutputPath(ctx, arch));

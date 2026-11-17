@@ -1,34 +1,30 @@
-import { readFileSync } from "node:fs";
-import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-// `runtime-build-tooling`: plan-mode's `scripts/*.mjs` runtime builders that `test:dist` measures, not `src/`.
-const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
-  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
-).packages["runtime-build-tooling"];
-
-export default defineConfig({
-  test: {
-    coverage: {
-      provider: "istanbul",
-      reporter: ["text", "lcov", "json-summary"],
-      reportsDirectory: "coverage/runtime-build-tooling",
-      reportOnFailure: true,
-      include: owned,
-      exclude: exclusions.map(({ path }) => path),
-    },
-    environment: "node",
-    env: {
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "commit.gpgsign",
-      GIT_CONFIG_VALUE_0: "false",
-    },
-    hookTimeout: 30_000,
-    include: ["test/build-runtime.test.ts"],
-    globalSetup: ["./test/harness/vitest.global-setup.ts"],
-    pool: "forks",
-    runner: "./test/harness/vitest.runner.ts",
-    setupFiles: ["./test/harness/vitest.setup.ts"],
-    teardownTimeout: 10_000,
-    testTimeout: 5_000,
-  },
+// `runtime-build-tooling`: plan-mode's `scripts/build-runtime.mjs` plus the shared root `scripts/runtime-builder.mjs`
+// that `test:runtime-build` measures, not `src/`. The root is the repository so both files sit inside it (as `import-audit`).
+// No home guard: this producer never read one.
+const config = definePackageConfig("runtime-build-tooling", {
+	provider: "istanbul",
+	reportsDirectory: "packages/plan-mode/coverage/runtime-build-tooling",
+	homeGuard: false,
+	root: fileURLToPath(new URL("../..", import.meta.url)),
+	test: {
+		environment: "node",
+		env: {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "commit.gpgsign",
+			GIT_CONFIG_VALUE_0: "false",
+		},
+		hookTimeout: 30_000,
+		include: ["packages/plan-mode/tests/build-runtime.test.ts"],
+		globalSetup: ["./packages/plan-mode/tests/fixtures/vitest.global-setup.ts"],
+		pool: "forks",
+		runner: "./packages/plan-mode/tests/fixtures/vitest.runner.ts",
+		setupFiles: ["./packages/plan-mode/tests/fixtures/vitest.setup.ts"],
+		teardownTimeout: 10_000,
+		testTimeout: 5_000,
+	},
 });
+
+export default config;

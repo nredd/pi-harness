@@ -11,6 +11,6 @@ export const STALE_CTX_RE = /extension ctx is stale after session replacement or
 
 /** Whether `error` (an `Error` or a message string) is the stale-ctx failure. */
 export function isStaleCtxError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return STALE_CTX_RE.test(message);
+	const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+	return STALE_CTX_RE.test(message);
 }

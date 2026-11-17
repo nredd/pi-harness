@@ -55,38 +55,38 @@
 
 import type { Model } from "@earendil-works/pi-ai";
 import {
-  createAgentSession,
-  type ExtensionContext,
-  type ExtensionToolContext,
-  SessionManager,
-  type ToolDefinition,
+	createAgentSession,
+	type ExtensionContext,
+	type ExtensionToolContext,
+	SessionManager,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
-import { errorMessage } from "./error-message.js";
-import { resolveAgentDir } from "./home-paths.js";
-import { agentMentionReminder } from "./mention.js";
-import { createHomeResourceLoader } from "./resource-loader.js";
-import type { SubagentType } from "./types.js";
+import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.ts";
+import { errorMessage } from "./error-message.ts";
+import { resolveAgentDir } from "./home-paths.ts";
+import { agentMentionReminder } from "./mention.ts";
+import { createHomeResourceLoader } from "./resource-loader.ts";
+import type { SubagentType } from "./types.ts";
 
 export interface MentionCloneOptions {
-  /** Home directory for the clone's user resources and settings. */
-  homeDir?: string;
-  /** The MAIN session's context — what the spawn is attributed to, and the
-   * source of both the conversation and the live system prompt. */
-  ctx: ExtensionContext;
-  /** Agent type the handle resolved to. */
-  type: SubagentType;
-  /** What the user typed after the handle. */
-  message: string;
-  /** The registered `Agent` tool, reused so the spawn is an ordinary one. */
-  agentTool: ToolDefinition;
+	/** Home directory for the clone's user resources and settings. */
+	homeDir?: string;
+	/** The MAIN session's context — what the spawn is attributed to, and the
+	 * source of both the conversation and the live system prompt. */
+	ctx: ExtensionContext;
+	/** Agent type the handle resolved to. */
+	type: SubagentType;
+	/** What the user typed after the handle. */
+	message: string;
+	/** The registered `Agent` tool, reused so the spawn is an ordinary one. */
+	agentTool: ToolDefinition;
 }
 
 export interface MentionCloneResult {
-  /** True once the clone actually called `Agent`. */
-  spawned: boolean;
-  /** Why not, when it didn't. Absent on success. */
-  error?: string;
+	/** True once the clone actually called `Agent`. */
+	spawned: boolean;
+	/** Why not, when it didn't. Absent on success. */
+	error?: string;
 }
 
 /**
@@ -95,106 +95,107 @@ export interface MentionCloneResult {
  * back to starting the agent directly.
  */
 export async function runMentionClone(opts: MentionCloneOptions): Promise<MentionCloneResult> {
-  const { ctx, type, message, agentTool } = opts;
+	const { ctx, type, message, agentTool } = opts;
 
-  let spawned = false;
-  const cloneAgentTool: ToolDefinition = {
-    ...agentTool,
-    execute: (_cloneToolCallId, params, signal, onUpdate, _cloneCtx) => {
-      // One spawn per mention. The clone has a single tool and every reason to
-      // stop after using it, but a model that decides to "also" launch a second
-      // agent would do it where nobody can see and nobody asked.
-      if (spawned) {
-        return Promise.resolve({
-          content: [{ type: "text" as const, text: "Already started an agent for this mention. Stop here." }],
-          details: undefined,
-          isError: true,
-        });
-      }
-      spawned = true;
-      // undefined tool-call id + the main ctx: see the header. Background is
-      // forced rather than left to the clone: `run_in_background` defaults to
-      // false, and a foreground agent answers through its TOOL RESULT — which
-      // here is delivered into a session that is disposed moments later, so the
-      // agent would run, appear in the widget and the fleet, and reach nobody.
-      return agentTool.execute(
-        undefined as never,
-        { ...(params as Record<string, unknown>), run_in_background: true } as typeof params,
-        signal,
-        onUpdate,
-        // A tool context adds `tools` and `executeTool`, for nested tool calls;
-        // the Agent handler reads neither, only the main session's own fields.
-        ctx as ExtensionToolContext,
-      );
-    },
-  };
+	let spawned = false;
+	const cloneAgentTool: ToolDefinition = {
+		...agentTool,
+		execute: (_cloneToolCallId, params, signal, onUpdate, _cloneCtx) => {
+			// One spawn per mention. The clone has a single tool and every reason to
+			// stop after using it, but a model that decides to "also" launch a second
+			// agent would do it where nobody can see and nobody asked.
+			if (spawned) {
+				return Promise.resolve({
+					content: [{ type: "text" as const, text: "Already started an agent for this mention. Stop here." }],
+					details: undefined,
+					isError: true,
+				});
+			}
+			spawned = true;
+			// undefined tool-call id + the main ctx: see the header. Background is
+			// forced rather than left to the clone: `run_in_background` defaults to
+			// false, and a foreground agent answers through its TOOL RESULT — which
+			// here is delivered into a session that is disposed moments later, so the
+			// agent would run, appear in the widget and the fleet, and reach nobody.
+			return agentTool.execute(
+				undefined as never,
+				{ ...(params as Record<string, unknown>), run_in_background: true } as typeof params,
+				signal,
+				onUpdate,
+				// A tool context adds `tools` and `executeTool`, for nested tool calls;
+				// the Agent handler reads neither, only the main session's own fields.
+				ctx as ExtensionToolContext,
+			);
+		},
+	};
 
-  let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
-  try {
-    // Pi 0.80.8 moved createAgentSession from modelRegistry to modelRuntime;
-    // agent-runner.ts carries the same shim for the same reason — pass both so
-    // the clone keeps the parent's providers across the supported range.
-    const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
-    // Absent when the session has no level of its own; the clone then takes the
-    // settings level, which is what a session that never ran `/think` is on.
-    const thinkingLevel = ctx.thinkingLevel;
-    // The live system prompt, not the one the clone would build from cwd and
-    // agentDir — extensions contribute to it per turn. Everything the loader
-    // would add on top (AGENTS.md, skills, APPEND_SYSTEM.md) is already in the
-    // rendered prompt, so it is suppressed, as agent-runner does.
-    const systemPrompt = ctx.getSystemPrompt();
-    const agentDir = resolveAgentDir(opts.homeDir);
-    const loader = createHomeResourceLoader({
-      cwd: ctx.cwd,
-      agentDir,
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-      systemPromptOverride: (base: string | undefined) => systemPrompt || base,
-      appendSystemPromptOverride: () => [],
-    }, opts.homeDir);
-    await bindChildResourceLoader(loader).reload();
-    const created = await runInChildSessionContext(() =>
-      createAgentSession({
-        cwd: ctx.cwd,
-        agentDir,
-        // The parent's root-to-leaf path, which the clone projects itself:
-        // compaction applied, branch summaries substituted. Not `getEntries()`,
-        // whose last entry is not the leaf after `/tree` navigation. In memory,
-        // so nothing about the copy is persisted and the real session stays
-        // untouched.
-        sessionManager: SessionManager.inMemory(ctx.cwd, undefined, ctx.sessionManager.getBranch()),
-        resourceLoader: loader,
-        model: ctx.model as Model<never> | undefined,
-        ...(thinkingLevel && { thinkingLevel }),
-        modelRegistry: ctx.modelRegistry,
-        ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
-        // An allowlist naming exactly the clone's own tool. NOT `noTools:
-        // "all"`, whose doc comment ("start with no tools enabled") reads like
-        // it spares custom tools and does not: it resolves to an EMPTY
-        // allowlist, and `isAllowedTool` then drops every tool from the
-        // registry — the custom one included. The clone would be prompted with
-        // nothing to call, answer in prose, and every mention would fall
-        // through to the direct start with a warning. Same idiom as
-        // agent-runner's `tools: sessionTools` beside its nested `customTools`.
-        tools: [cloneAgentTool.name],
-        customTools: [cloneAgentTool],
-      } as Parameters<typeof createAgentSession>[0]),
-    );
-    session = created.session;
+	let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+	try {
+		// Pi 0.80.8 moved createAgentSession from modelRegistry to modelRuntime;
+		// agent-runner.ts carries the same shim for the same reason — pass both so
+		// the clone keeps the parent's providers across the supported range.
+		const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
+		// Absent when the session has no level of its own; the clone then takes the
+		// settings level, which is what a session that never ran `/think` is on.
+		const thinkingLevel = ctx.thinkingLevel;
+		// The live system prompt, not the one the clone would build from cwd and
+		// agentDir — extensions contribute to it per turn. Everything the loader
+		// would add on top (AGENTS.md, skills, APPEND_SYSTEM.md) is already in the
+		// rendered prompt, so it is suppressed, as agent-runner does.
+		const systemPrompt = ctx.getSystemPrompt();
+		const agentDir = resolveAgentDir(opts.homeDir);
+		const loader = createHomeResourceLoader(
+			{
+				cwd: ctx.cwd,
+				agentDir,
+				noExtensions: true,
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+				noContextFiles: true,
+				systemPromptOverride: (base: string | undefined) => systemPrompt || base,
+				appendSystemPromptOverride: () => [],
+			},
+			opts.homeDir,
+		);
+		await bindChildResourceLoader(loader).reload();
+		const created = await runInChildSessionContext(() =>
+			createAgentSession({
+				cwd: ctx.cwd,
+				agentDir,
+				// The parent's root-to-leaf path, which the clone projects itself:
+				// compaction applied, branch summaries substituted. Not `getEntries()`,
+				// whose last entry is not the leaf after `/tree` navigation. In memory,
+				// so nothing about the copy is persisted and the real session stays
+				// untouched.
+				sessionManager: SessionManager.inMemory(ctx.cwd, undefined, ctx.sessionManager.getBranch()),
+				resourceLoader: loader,
+				model: ctx.model as Model<never> | undefined,
+				...(thinkingLevel && { thinkingLevel }),
+				modelRegistry: ctx.modelRegistry,
+				...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
+				// An allowlist naming exactly the clone's own tool. NOT `noTools:
+				// "all"`, whose doc comment ("start with no tools enabled") reads like
+				// it spares custom tools and does not: it resolves to an EMPTY
+				// allowlist, and `isAllowedTool` then drops every tool from the
+				// registry — the custom one included. The clone would be prompted with
+				// nothing to call, answer in prose, and every mention would fall
+				// through to the direct start with a warning. Same idiom as
+				// agent-runner's `tools: sessionTools` beside its nested `customTools`.
+				tools: [cloneAgentTool.name],
+				customTools: [cloneAgentTool],
+			} as Parameters<typeof createAgentSession>[0]),
+		);
+		session = created.session;
 
-    // User text first, reminder after — the order Claude Code's attachment
-    // renderer produces, where the reminder trails the message it is about.
-    await session.prompt(`${message}\n\n${agentMentionReminder(type)}`);
-  } catch (err) {
-    return { spawned, error: errorMessage(err) };
-  } finally {
-    session?.dispose?.();
-  }
+		// User text first, reminder after — the order Claude Code's attachment
+		// renderer produces, where the reminder trails the message it is about.
+		await session.prompt(`${message}\n\n${agentMentionReminder(type)}`);
+	} catch (err) {
+		return { spawned, error: errorMessage(err) };
+	} finally {
+		session?.dispose?.();
+	}
 
-  return spawned
-    ? { spawned: true }
-    : { spawned: false, error: "the conversation clone did not start it" };
+	return spawned ? { spawned: true } : { spawned: false, error: "the conversation clone did not start it" };
 }

@@ -1242,20 +1242,22 @@ def test_audit_files_flags_leaks_and_gaps() -> None:
     assert "unexpected file 'src/x.test.snap'" in problems
 
 
-def test_session_kit_readme_links_only_packed_files() -> None:
-    """Every in-package README link is allowlisted for packing and required, so no tarball has dead links."""
+def test_session_kit_readme_is_required_and_links_only_packed_files() -> None:
+    """The README carries the folded reference, so it is required; any in-package link must be packed."""
     contract = next(c for c in pc.CONTRACTS if c.name == "@nredd/pi-session-kit")
     root = pc.REPO_ROOT / "packages" / contract.directory
     targets = re.findall(r"\]\(([^)\s]+)\)", (root / "README.md").read_text())
     links = {t.split("#")[0].removeprefix("./") for t in targets if not re.match(r"[a-z]+:|#", t)}
-    assert "docs/mon-dashboard.md" in links
     allowlist = json.loads((root / "package.json").read_text())["files"]
-    for link in sorted(links):
-        assert (root / link).is_file(), link
-        assert link in contract.required, link
-        assert any(link == entry or link.startswith(f"{entry}/") for entry in allowlist), link
-    packed = [name for name in contract.required if name != "docs/mon-dashboard.md"]
-    assert pc.audit_files(contract, packed) == ["missing required file 'docs/mon-dashboard.md'"]
+    assert all((root / link).is_file() for link in links), links
+    assert links <= set(contract.required), links
+    packable = {link for link in links if any(link == e or link.startswith(f"{e}/") for e in allowlist)}
+    assert links == packable
+    packed = [name for name in contract.packed_files if name != "README.md"]
+    assert pc.audit_files(contract, packed) == [
+        "missing required file 'README.md'",
+        "packed file 'README.md' required by the '@nredd/pi-session-kit' contract is missing",
+    ]
 
 
 def test_audit_license(tmp_path: Path) -> None:
@@ -1512,9 +1514,102 @@ def test_pack_without_allowlist_is_rejected(tmp_path: Path, sandbox: pc.Sandbox)
     artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
     problems = pc.audit_tarball(artifact, ROOT_LICENSE)
     assert "missing required file 'LICENSE'" in problems
-    assert any("unexpected file 'test/" in p for p in problems)
-    assert "unexpected file 'biome.json'" in problems
+    assert any("unexpected file 'tests/" in p for p in problems)
     assert "unexpected file 'tsconfig.json'" in problems
+
+
+def _build_fixture(tmp_path: Path, build: str) -> Path:
+    """Copy `dev-tools` and give it a `build` script, as a package with gitignored `dist/` has.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        build (str): Shell command for the `build` script.
+
+    Returns:
+        Path: The copied package directory.
+    """
+    source = tmp_path / "dev-tools"
+    shutil.copytree(
+        pc.REPO_ROOT / "packages" / "dev-tools", source, ignore=shutil.ignore_patterns("node_modules")
+    )
+    manifest = json.loads((source / "package.json").read_text())
+    manifest["files"] = [*manifest["files"], "dist"]
+    manifest["scripts"] = {**manifest.get("scripts", {}), "build": build}
+    (source / "package.json").write_text(json.dumps(manifest))
+    (tmp_path / "out").mkdir()
+    return source
+
+
+def test_pack_rejects_omitted_source_before_build(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """Reject an existing contracted source before invoking an expensive or failing build.
+
+    Parameters:
+        tmp_path (Path): Disposable package parent.
+        sandbox (pc.Sandbox): Scrubbed npm environment.
+
+    Returns:
+        None: The canonical payload diagnostic wins over the build failure.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(97)"')
+    manifest = json.loads((source / "package.json").read_text())
+    manifest["files"].append("!src/index.ts")
+    (source / "package.json").write_text(json.dumps(manifest))
+    with pytest.raises(pc.ContractError, match=r"missing required file 'src/index\.ts'") as failure:
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "Packed files" in str(failure.value)
+    assert not list((tmp_path / "out").iterdir())
+
+
+def test_pack_builds_before_packing(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """`--ignore-scripts` skips `prepack`, so `pack` itself must build the gitignored `dist/`.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(
+        tmp_path,
+        "node -e \"require('fs').mkdirSync('dist');require('fs').writeFileSync('dist/index.ts','x')\"",
+    )
+    assert not (source / "dist").exists()
+    artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "dist/index.ts" in artifact.files
+
+
+def test_pack_rebuilds_after_imported_source_is_deleted(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """Deleting an imported source must fail the next pack, not ship its old bundle.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(
+        tmp_path,
+        "node -e \"const value=require('./src/imported.cjs');require('fs').mkdirSync('dist');"
+        "require('fs').writeFileSync('dist/index.ts',value)\"",
+    )
+    imported = source / "src" / "imported.cjs"
+    imported.write_text("module.exports = 'export const value = 1;';\n")
+    pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    (source / "dist" / "obsolete.js").write_text("stale")
+    artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "dist/obsolete.js" not in artifact.files
+    imported.unlink()
+    with pytest.raises(pc.ContractError):
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+
+
+def test_pack_fails_when_the_build_fails(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """A failed build must stop the pack rather than ship a package without its entry.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(3)"')
+    with pytest.raises(pc.ContractError):
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert not list((tmp_path / "out").iterdir())
 
 
 def test_install_alone_has_no_host_copy(tmp_path: Path, sandbox: pc.Sandbox) -> None:
@@ -1947,7 +2042,7 @@ SHARD_HASH = "a" * 64
 
 
 def good_stats_manifest() -> dict[str, object]:
-    """A manifest matching `docs/stats-snapshots.md`.
+    """A manifest matching the README's snapshot schema.
 
     Returns:
         dict[str, object]: Parsed manifest.
@@ -1976,6 +2071,7 @@ def test_stats_manifest_accepts_documented_shape() -> None:
         {"shards": {"a": 1}},
         {"shards": [MONTH]},
         {"shards": None},
+        {"version": 3},
         {"version": 2},
         {"version": True},
         {"version": "1"},
@@ -2037,6 +2133,240 @@ def test_stats_manifest_rejects_duplicate_months() -> None:
         pc.parse_stats_json(pc.StatsManifest, raw, "manifest")
 
 
+def good_v2_manifest(**over: object) -> dict[str, object]:
+    """A version 2 manifest: the v1 shape plus per-harness freshness.
+
+    Parameters:
+        over (object): Fields overriding the v2 manifest.
+
+    Returns:
+        dict[str, object]: Parsed manifest.
+    """
+    exported = 1_790_000_000_000
+    return (
+        good_stats_manifest() | {"version": 2, "lastGoodAt": {"pi": exported, "codex": exported - 5}} | over
+    )
+
+
+def test_stats_manifest_accepts_v2_freshness() -> None:
+    """A v2 manifest with `lastGoodAt` validates, and an empty mapping is fine."""
+    parsed = pc.parse_stats_json(pc.StatsManifest, json.dumps(good_v2_manifest()), "manifest")
+    assert parsed.version == 2
+    assert parsed.lastGoodAt is not None
+    assert set(parsed.lastGoodAt) == {"pi", "codex"}
+    assert pc.parse_stats_json(pc.StatsManifest, json.dumps(good_v2_manifest(lastGoodAt={})), "manifest")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"lastGoodAt": None},
+        {"lastGoodAt": {"vim": 1_790_000_000_000}},
+        {"lastGoodAt": {"pi": 0}},
+        {"lastGoodAt": {"pi": 1_790_000_000_001}},
+        {"lastGoodAt": {"pi": "x"}},
+        {"lastGoodAt": []},
+        {"version": 3},
+    ],
+)
+def test_stats_manifest_rejects_malformed_v2(mutation: dict[str, object]) -> None:
+    """`lastGoodAt` must be a known-harness map of times no later than the export.
+
+    Parameters:
+        mutation (dict[str, object]): Fields overriding the good v2 manifest.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed stats manifest"):
+        pc.parse_stats_json(pc.StatsManifest, json.dumps(good_v2_manifest(**mutation)), "manifest")
+
+
+def test_stats_manifest_v1_has_no_freshness() -> None:
+    """A v1 manifest must not carry the v2 `lastGoodAt` field, and v2 must."""
+    with pytest.raises(pc.ContractError, match="Malformed stats manifest"):
+        pc.parse_stats_json(
+            pc.StatsManifest, json.dumps(good_stats_manifest() | {"lastGoodAt": {}}), "manifest"
+        )
+    without = {k: v for k, v in good_v2_manifest().items() if k != "lastGoodAt"}
+    with pytest.raises(pc.ContractError, match="Malformed stats manifest"):
+        pc.parse_stats_json(pc.StatsManifest, json.dumps(without), "manifest")
+
+
+EVENT_ID = "b" * 64
+SESSION_ID = "c" * 64
+ACCOUNT = "d" * 64
+
+
+def good_event(**over: object) -> dict[str, object]:
+    """A v1 usage event.
+
+    Parameters:
+        over (object): Fields overriding the event.
+
+    Returns:
+        dict[str, object]: Parsed event.
+    """
+    return {
+        "id": EVENT_ID,
+        "entryId": None,
+        "sessionId": SESSION_ID,
+        "ms": 1_790_000_000_000,
+        "provider": "p",
+        "model": "m",
+        "input": 1,
+        "output": 2,
+        "cacheRead": 3,
+        "cacheWrite": 4,
+        "cost": 0.5,
+    } | over
+
+
+def good_quota(**over: object) -> dict[str, object]:
+    """A v2 quota reading.
+
+    Parameters:
+        over (object): Fields overriding the reading.
+
+    Returns:
+        dict[str, object]: Parsed reading.
+    """
+    return {
+        "harness": "codex",
+        "provider": "openai-codex",
+        "limitId": "codex",
+        "window": "7d",
+        "usedPercent": 12.5,
+        "resetAt": 1_790_000_000_000,
+        "durationMs": 604_800_000,
+        "observedAt": 1_789_000_000_000,
+        "planType": None,
+        "account": ACCOUNT,
+    } | over
+
+
+def good_shard(version: int = 1, **over: object) -> dict[str, object]:
+    """A month shard of the given schema version.
+
+    Parameters:
+        version (int): Snapshot version, 1 or 2.
+        over (object): Fields overriding the shard.
+
+    Returns:
+        dict[str, object]: Parsed shard.
+    """
+    session = {"id": SESSION_ID, "startMs": 1_790_000_000_000, "endMs": 1_790_000_000_001, "child": False}
+    shard: dict[str, object] = {
+        "version": version,
+        "machineId": MACHINE_ID,
+        "month": MONTH,
+        "events": [good_event() if version == 1 else good_event(harness="claude", cost=None)],
+        "sessions": [session],
+    }
+    if version == 2:
+        shard["quota"] = [good_quota(), good_quota(account="", planType="pro", window="5h")]
+    return shard | over
+
+
+def test_stats_shard_accepts_v1_and_v2() -> None:
+    """Legacy v1 shards and v2 shards (harness, null cost, quota) both validate."""
+    v1 = pc.parse_stats_json(pc.StatsShard, json.dumps(good_shard(1)), "month shard")
+    assert (v1.version, v1.quota, v1.events[0].harness) == (1, None, None)
+    v2 = pc.parse_stats_json(pc.StatsShard, json.dumps(good_shard(2)), "month shard")
+    assert v2.version == 2
+    assert v2.events[0].cost is None
+    assert v2.events[0].harness == "claude"
+    assert v2.quota is not None
+    assert len(v2.quota) == 2
+    empty = good_shard(2, quota=[], events=[good_event(harness="pi")])
+    assert pc.parse_stats_json(pc.StatsShard, json.dumps(empty), "month shard").quota == []
+
+
+@pytest.mark.parametrize(
+    "shard",
+    [
+        good_shard(3),
+        good_shard(1, quota=[]),
+        good_shard(1, events=[good_event(harness="pi")]),
+        good_shard(1, events=[good_event(cost=None)]),
+        good_shard(2, quota=None),
+        good_shard(2, events=[good_event()]),
+        good_shard(2, events=[good_event(harness="vim")]),
+        good_shard(2, events=[good_event(harness="pi", cost=-1)]),
+        good_shard(2, events=[good_event(harness="pi", cost="free")]),
+        good_shard(2, quota=[good_quota(harness="vim")]),
+        good_shard(2, quota=[good_quota(account="not-a-hash")]),
+        good_shard(2, quota=[good_quota(usedPercent=-1)]),
+        good_shard(2, quota=[good_quota(resetAt=0)]),
+        good_shard(2, quota=[good_quota(planType="")]),
+        good_shard(2, quota=[good_quota(email="x@y")]),
+        good_shard(2, quota=[{k: v for k, v in good_quota().items() if k != "account"}]),
+    ],
+)
+def test_stats_shard_rejects_malformed(shard: dict[str, object]) -> None:
+    """v2 fields are required exactly in v2 shards, and each is strictly typed.
+
+    Parameters:
+        shard (dict[str, object]): Malformed shard.
+    """
+    with pytest.raises(pc.ContractError, match="Malformed stats month shard"):
+        pc.parse_stats_json(pc.StatsShard, json.dumps(shard), "month shard")
+
+
+def test_stats_export_result_accepts_harness_status_and_warnings() -> None:
+    """The v2 export response reports per-harness status and post-publication warnings."""
+    raw = {
+        "machineId": MACHINE_ID,
+        "snapshotDir": "/a",
+        "harnesses": {
+            "claude": {"found": True, "problems": []},
+            "codex": {"found": False, "problems": ["x"], "failed": "kept", "consecutiveFailures": 2},
+            "opencode": {"found": True, "problems": [], "failed": "lost", "consecutiveFailures": 1},
+        },
+        "warnings": ["export state not recorded"],
+    }
+    parsed = pc.parse_stats_json(pc.StatsExportResult, json.dumps(raw), "export")
+    assert parsed.harnesses is not None
+    assert parsed.harnesses["codex"].failed == "kept"
+    assert parsed.warnings == ["export state not recorded"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"harnesses": {"pi": {"found": True, "problems": []}}},
+        {"harnesses": {"codex": {"found": True}}},
+        {"harnesses": {"codex": {"found": True, "problems": [], "failed": "gone"}}},
+        {"harnesses": {"codex": {"found": True, "problems": [], "consecutiveFailures": 0}}},
+        {"harnesses": {"codex": {"found": True, "problems": [], "extra": 1}}},
+        {"warnings": [""]},
+        {"warnings": "x"},
+    ],
+)
+def test_stats_export_result_rejects_malformed_v2(extra: dict[str, object]) -> None:
+    """Harness status and warnings keep their documented shape.
+
+    Parameters:
+        extra: Fields added to a good export response.
+    """
+    raw = {"machineId": MACHINE_ID, "snapshotDir": "/a"} | extra
+    with pytest.raises(pc.ContractError, match="Malformed stats export"):
+        pc.parse_stats_json(pc.StatsExportResult, json.dumps(raw), "export")
+
+
+def test_stats_import_result_lists_stale_harnesses() -> None:
+    """`stale` entries name a machine, a known harness and the last clean read."""
+    stale = [{"machineId": MACHINE_ID, "harness": "codex", "lastGoodAt": 1_789_000_000_000}]
+    parsed = pc.parse_stats_json(pc.StatsImportResult, json.dumps(GOOD_IMPORT | {"stale": stale}), "import")
+    assert [(s.harness, s.lastGoodAt) for s in parsed.stale] == [("codex", 1_789_000_000_000)]
+    for bad in (
+        [{**stale[0], "harness": "vim"}],
+        [{**stale[0], "machineId": "x"}],
+        [{**stale[0], "lastGoodAt": 0}],
+        [{**stale[0], "extra": 1}],
+        "none",
+    ):
+        with pytest.raises(pc.ContractError, match="Malformed stats import"):
+            pc.parse_stats_json(pc.StatsImportResult, json.dumps(GOOD_IMPORT | {"stale": bad}), "import")
+
+
 @pytest.mark.parametrize("raw", ["", "not json", "[]", "null", '"x"', "1"])
 def test_stats_json_rejects_non_objects(raw: str) -> None:
     """Non-object and unparseable stdout is a `ContractError`.
@@ -2068,7 +2398,13 @@ def test_stats_export_result_rejects_malformed(raw: dict[str, object]) -> None:
         pc.parse_stats_json(pc.StatsExportResult, json.dumps(raw), "export")
 
 
-GOOD_IMPORT = {"imported": 1, "retained": 0, "problems": [], "importedAt": 1_790_000_000_000}
+GOOD_IMPORT: dict[str, object] = {
+    "imported": 1,
+    "retained": 0,
+    "problems": [],
+    "importedAt": 1_790_000_000_000,
+    "stale": [],
+}
 
 
 def test_stats_import_result_accepts_documented_shape() -> None:
@@ -2329,13 +2665,13 @@ def preset_manifest() -> dict[str, object]:
         "dependencies": {},
         "license": "MIT AND Apache-2.0 AND CC-BY-SA-4.0",
         "peerDependencies": {"@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*"},
-        "pi": {"extensions": ["./extensions/expanded-footer.ts"]},
+        "pi": {"extensions": ["./src/index.ts"]},
     }
 
 
 def test_preset_contract_accounts_for_separately_licensed_assets() -> None:
     """The preset must declare the full license expression; plugins stay MIT-only."""
-    files = ["extensions/expanded-footer.ts"]
+    files = ["src/index.ts"]
     assert pc.audit_manifest(pc.PRESET_CONTRACT, preset_manifest(), files) == []
     mit_only = pc.audit_manifest(pc.PRESET_CONTRACT, preset_manifest() | {"license": "MIT"}, files)
     assert any("MIT AND Apache-2.0 AND CC-BY-SA-4.0" in problem for problem in mit_only), mit_only
@@ -2474,8 +2810,8 @@ def test_preset_audit_requires_notice_and_license_texts(files: list[str]) -> Non
 
 def test_preset_audit_rejects_unlisted_files() -> None:
     """Tests, fixtures and config do not ship in the preset tarball."""
-    problems = pc.audit_files(pc.PRESET_CONTRACT, [*pc.PRESET_CONTRACT.required, "test/x.ts", "biome.json"])
-    assert "unexpected file 'test/x.ts'" in problems
+    problems = pc.audit_files(pc.PRESET_CONTRACT, [*pc.PRESET_CONTRACT.required, "tests/x.ts", "biome.json"])
+    assert "unexpected file 'tests/x.ts'" in problems
     assert "unexpected file 'biome.json'" in problems
 
 
@@ -2800,7 +3136,7 @@ def helper_tarball(
     Parameters:
         path (Path): Destination.
         overrides (dict[str, tuple[bytes, int]] | None): `arch -> (content, mode)` replacements.
-        drop (str | None): Arch whose helper is omitted.
+        drop (str | None): Arch whose helper is omitted, or `all` for a source-only pack.
         omit_source (str | None): Swift source left out of the tarball.
         setup_script (str | None): Replacement `setup-helper.mjs` text.
         build_script (str | None): Replacement `build-native.mjs` text.
@@ -2816,7 +3152,7 @@ def helper_tarball(
     }
     with tarfile.open(path, "w:gz") as tar:
         for arch, (data, mode) in entries.items():
-            if arch == drop:
+            if drop in (arch, "all"):
                 continue
             info = tarfile.TarInfo(f"package/prebuilt/macos/{arch}/bridge")
             info.size, info.mode = len(data), mode
@@ -3097,10 +3433,48 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
     assert "no release descriptor for '@nredd/nope'" in done.stderr
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_computer_use_source_only_payload_is_explicitly_platform_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    """Only non-macOS source packs may omit both bridges; partial payloads always fail.
+
+    Parameters:
+        tmp_path (Path): Disposable packed-package directory.
+        monkeypatch (pytest.MonkeyPatch): Simulate the host and isolate the Pi/provider boundary.
+        platform (str): Host platform whose native-payload contract is exercised.
+
+    Returns:
+        None: Complete payloads are enforced or explicitly reported as source-only.
+
+    Raises:
+        AssertionError: A partial payload is accepted or platform-specific evidence is incorrect.
+        pc.ContractError: The source-only non-macOS fixture unexpectedly violates its contract.
+    """
+    monkeypatch.setattr(pc, "host_platform", lambda: platform)
+    packed = [
+        name for name in pc.COMPUTER_USE_CONTRACT.packed_files if not name.startswith("prebuilt/macos/")
+    ]
+    problems = pc.audit_files(pc.COMPUTER_USE_CONTRACT, packed)
+    assert bool(problems) == (platform == "darwin")
+    assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "prebuilt/macos/arm64/bridge"])
+    tarball = helper_tarball(tmp_path / "source-only.tgz", drop="all")
+    if platform == "darwin":
+        with pytest.raises(pc.ContractError, match="prebuilt/macos/arm64/bridge"):
+            run_computer_use_scenario(
+                tmp_path, monkeypatch, platform=platform, tools=CU_ALL_TOOLS, tarball=tarball
+            )
+    else:
+        evidence = run_computer_use_scenario(
+            tmp_path, monkeypatch, platform=platform, tools=CU_NON_DARWIN_TOOLS, tarball=tarball
+        )
+        assert evidence["helpers"] == dict.fromkeys(CU_CPU, "NOT RUN: source-only non-macOS pack")
+
+
 def test_audit_files_computer_use_exact_payload() -> None:
     """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 93
+    assert len(packed) == 54
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])

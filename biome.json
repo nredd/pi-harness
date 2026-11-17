@@ -1,0 +1,87 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": ["**", "!**/dist", "!**/node_modules", "!**/coverage", "!forks", "!package-lock.json"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "tab",
+    "lineWidth": 120
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noUselessTypeConstraint": "error"
+      },
+      "performance": {
+        "noReExportAll": "error"
+      },
+      "style": {
+        "useAsConstAssertion": "error",
+        "useConsistentArrayType": "error",
+        "useConst": "error",
+        "useShorthandFunctionType": "error",
+        "useSingleVarDeclarator": "error"
+      },
+      "suspicious": {
+        "noExtraNonNullAssertion": "error"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "packages/subagents/src/**/*.ts",
+        "packages/subagents/tests/**/*.ts",
+        "packages/todo/src/**/*.ts",
+        "packages/todo/tests/**/*.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": { "noNonNullAssertion": "off" },
+          "suspicious": {
+            "noExplicitAny": "off",
+            "noControlCharactersInRegex": "off",
+            "noEmptyInterface": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/subscription-router/tests/fixtures/legacy-oracle/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false },
+      "assist": { "enabled": false }
+    },
+    {
+      "includes": ["**/package.json", "**/tsconfig*.json", "biome.json", "!**/fixtures/**"],
+      "json": {
+        "formatter": {
+          "indentStyle": "space",
+          "indentWidth": 2
+        }
+      }
+    }
+  ]
+}

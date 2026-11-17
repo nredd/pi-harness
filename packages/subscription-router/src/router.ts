@@ -10,9 +10,9 @@
 
 import type { Api, AssistantMessage, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
-import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.js";
-import type { ExhaustionTracker } from "./exhaustion.js";
-import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.js";
+import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.ts";
+import type { ExhaustionTracker } from "./exhaustion.ts";
+import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.ts";
 import {
 	compilePolicy,
 	evaluatePolicy,
@@ -21,9 +21,9 @@ import {
 	type PolicyEvaluation,
 	type PolicyMember,
 	type SafetyFilter,
-} from "./policy.js";
-import { formatScore, type QuotaScore } from "./selection.js";
-import type { UsageDecision, UsageSnapshot } from "./usage.js";
+} from "./policy.ts";
+import { formatScore, type QuotaScore } from "./selection.ts";
+import type { UsageDecision, UsageSnapshot } from "./usage.ts";
 
 /**
  * Failure text worth a confirming usage read: rate limits and 429s (which
@@ -48,6 +48,8 @@ export function hasPartialOutput(message: Pick<AssistantMessage, "content">): bo
 
 /** What the router needs from the host. `ExtensionContext` provides it in production. */
 export interface RouteEnv {
+	/** Reject a stale requester after shared asynchronous confirmation, before any route decision. */
+	assertCurrent?(): void;
 	/** The physical model for a chain entry, or undefined when unknown or without credentials. */
 	resolve(entry: ChainEntry): Model<Api> | undefined;
 	/**
@@ -343,6 +345,7 @@ export class Router {
 		onDecision = this.onDecision,
 	): Promise<ModelRoute> {
 		request.signal?.throwIfAborted();
+		env.assertCurrent?.();
 		const { reason, previous, failed } = request;
 		if (reason === "retry" && failed) {
 			const entry = profile.chain.find((item) => sameModel(item, failed.model));
@@ -351,6 +354,7 @@ export class Router {
 					isQuotaError(failed.message) &&
 					(await this.confirm(failed.model, env, request.signal, failed.message.timestamp));
 				request.signal?.throwIfAborted();
+				env.assertCurrent?.();
 				if (!confirmed) {
 					if (profile.policy) {
 						const picked = this.pick(profile, env, undefined, { reason, retryUnconfirmed: refKey(entry) });

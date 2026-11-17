@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { testing } from "../src/bridge.ts";
 
 const { managedBrowserNeedsHeadless, managedBrowserArgs } = testing;
-const BASE = ["--remote-debugging-port=9222", "--user-data-dir=/tmp/profile", "--no-first-run", "--no-default-browser-check"];
+const BASE = [
+	"--remote-debugging-port=9222",
+	"--user-data-dir=/tmp/profile",
+	"--no-first-run",
+	"--no-default-browser-check",
+];
 const OPTS = { remoteDebuggingPort: 9222, userDataDir: "/tmp/profile", url: "https://example.com" };
 
 describe("managed browser headless detection (upstream #104)", () => {

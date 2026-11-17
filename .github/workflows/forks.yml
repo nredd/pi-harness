@@ -1,4 +1,4 @@
-# Each Gitlinked fork's own gate at exactly its Gitlink, when a Gitlink (or this workflow) changes. See docs/ci.md.
+# Each Gitlinked fork's own gate at exactly its Gitlink, when a Gitlink (or this workflow) changes. Policy is documented inline below.
 name: Forks
 
 on:
@@ -8,10 +8,10 @@ on:
       - .gitmodules
       - .github/workflows/forks.yml
       - Makefile
-      - integration/core-source/**
-      - integration/inprocess/support.ts
+      - tests/integration/core-source/**
+      - tests/inprocess/support.ts
       - packages/subagents/**
-      - packages/dev-tools/biome.json
+      - biome.json
       - package.json
       - package-lock.json
       - .npmrc
@@ -23,10 +23,10 @@ on:
       - .gitmodules
       - .github/workflows/forks.yml
       - Makefile
-      - integration/core-source/**
-      - integration/inprocess/support.ts
+      - tests/integration/core-source/**
+      - tests/inprocess/support.ts
       - packages/subagents/**
-      - packages/dev-tools/biome.json
+      - biome.json
       - package.json
       - package-lock.json
       - .npmrc
@@ -44,6 +44,15 @@ permissions:
   contents: read
 
 jobs:
+  # Policy: Core Gitlink gate and full-dispatch policy
+  # `.github/workflows/forks.yml`, when the remaining `forks/pi` Gitlink, `.gitmodules` or the workflow changes, plus manual dispatch:
+  #
+  # | Job | Runs |
+  # | --- | --- |
+  # | `core (forks/pi)` | `npm ci`, the release's model data restored from npm `@earendil-works/pi-ai@<version>` (never the live fetch), `npm run build:offline`, the steps of the fork's `check` with Biome check-only (the step fails if the fork's `check` list changes), the env daemon, `./test.sh` |
+  #
+  # `ci.yml` full dispatches call it as `release-core` with no inputs, inheriting CI's context. Dispatches group per SHA and never cancel, so a second dispatch on `main` cannot kill an earlier frozen candidate's core gate; PR and push runs still cancel per ref (`test_dispatched_core_gates_never_cancel_each_other`, `test_forks_callee_contract`).
+
   core:
     name: core (forks/pi)
     runs-on: ubuntu-24.04
@@ -92,13 +101,15 @@ jobs:
         run: |
           # The fork's `check` runs Biome with --write; CI runs the same steps with Biome check-only.
           # Fail loudly if the fork changes its check list instead of silently drifting from it.
-          expected='node scripts/biome-check.mjs --write && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
+          expected='node scripts/worktree.mjs check && node scripts/biome-check.mjs --write && npm run check:binary-release && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
           actual=$(node -p 'require("./package.json").scripts.check')
           if [ "$actual" != "$expected" ]; then
             echo "::error::forks/pi changed its check script; update this step: $actual"
             exit 1
           fi
+          node scripts/worktree.mjs check
           node scripts/biome-check.mjs
+          npm run check:binary-release
           npm run check:pinned-deps
           npm run check:runtime-deps
           npm run check:ts-imports

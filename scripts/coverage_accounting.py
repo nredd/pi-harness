@@ -625,8 +625,21 @@ def is_test_path(path: Path) -> bool:
     Raises:
         None.
     """
+    # The relocated async process helper retains its independent measured signal (#870).
+    # Accept both package-relative and repository-relative paths used by inventory/report readers.
+    if path.as_posix().removeprefix("packages/computer-use/") == "tests/fixtures/check-async.mjs":
+        return False
     # Rust modules inside src belong to the instrumented source denominator, even when named
     # tests/fixtures. Only conventional test/fixture directories OUTSIDE src are excluded.
+    # Top-level test projects contain owned, measured support code. Strip only the umbrella
+    # directory; their own tests/fixtures and conventional test filenames remain tests.
+    if path.parts[:2] in {
+        ("tests", "lib"),
+        ("tests", "inprocess"),
+        ("tests", "integration"),
+        ("tests", "benchmarks"),
+    }:
+        path = Path(*path.parts[1:])
     if path.suffix == ".rs" and "src" in path.parts:
         path = Path(*path.parts[: path.parts.index("src")])
     return (
@@ -857,7 +870,12 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
         key = (entry.package, entry.signal, entry.path)
         if key in declarations or key not in losses:
             raise ValueError(f"Duplicate or stale `reclassification`: '{key}'")
-        if entry.replacement is not None and entry.replacement not in after.get(key[:2], set()):
+        # A move may cross packages (e.g. shared helpers into `tests/lib`), so any current scope of the
+        # same signal can hold the replacement.
+        replacement = entry.replacement
+        if replacement is not None and not any(
+            replacement in files for (_, signal), files in after.items() if signal == key[1]
+        ):
             raise ValueError(f"Replacement is outside current inventory: '{entry.replacement}'")
         declarations[key] = entry
     missing = losses - declarations.keys()

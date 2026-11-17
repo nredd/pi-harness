@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 
 vi.mock("../src/cdp.ts", async (importOriginal) => {
 	const original = await importOriginal();
-	return { ...original, listCdpPageContexts: vi.fn(original.listCdpPageContexts), cdpSnapshotForContext: vi.fn(original.cdpSnapshotForContext) };
+	return {
+		...original,
+		listCdpPageContexts: vi.fn(original.listCdpPageContexts),
+		cdpSnapshotForContext: vi.fn(original.cdpSnapshotForContext),
+	};
 });
 
 const { listCdpPageContexts, cdpSnapshotForContext } = await import("../src/cdp.ts");
@@ -33,11 +37,17 @@ describe.skipIf(process.platform === "win32")("launch_browser observation after 
 
 	test("a browser that lists no page is an error", async () => {
 		vi.mocked(listCdpPageContexts).mockResolvedValueOnce([]);
-		await assert.rejects(testing.performLaunchBrowser({}), /^Error: Managed browser launched without a CDP page context\.$/);
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			/^Error: Managed browser launched without a CDP page context\.$/,
+		);
 	});
 
 	test("a page that cannot be snapshotted is an error", async () => {
 		vi.mocked(cdpSnapshotForContext).mockResolvedValueOnce(undefined);
-		await assert.rejects(testing.performLaunchBrowser({}), /^Error: Managed browser page could not be observed after launch\.$/);
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			/^Error: Managed browser page could not be observed after launch\.$/,
+		);
 	});
 });

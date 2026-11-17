@@ -16,10 +16,27 @@
  *
  * `cost` is a plain sum for the same reason: it is what pi charged for that one
  * message (`usage.cost.total`, priced from the model's rates), not a cumulative
- * figure. Both are optional because a model with no pricing data reports no
- * cost, and because every accumulator predates them; absent reads as 0.
+ * figure. Optional fields preserve compatibility with older accumulators.
+ * `unpriced` and its request counts qualify that sum as a priced subtotal;
+ * they must survive every accumulation and report, never be interpreted as free.
  */
-export type LifetimeUsage = { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number };
+export type LifetimeUsage = {
+	input: number;
+	output: number;
+	cacheWrite: number;
+	cacheRead?: number;
+	cost?: number;
+	/** Cost is a priced subtotal when any calls were unpriced. */
+	unpriced?: true;
+	unpricedCalls?: number;
+	pricedCalls?: number;
+};
+
+/** Match core's request counts, including free usage but excluding empty failures. */
+function pricedCalls(u: LifetimeUsage): number {
+	if (u.unpriced) return u.pricedCalls ?? ((u.cost ?? 0) > 0 ? 1 : 0);
+	return u.input + u.output + u.cacheWrite + (u.cacheRead ?? 0) > 0 || (u.cost ?? 0) > 0 ? 1 : 0;
+}
 
 /**
  * Sum of lifetime *token* components for DISPLAY, or 0 if undefined.
@@ -28,21 +45,28 @@ export type LifetimeUsage = { input: number; output: number; cacheWrite: number;
  * events.
  */
 export function getLifetimeTotal(u?: LifetimeUsage): number {
-  return u ? u.input + u.output + u.cacheWrite : 0;
+	return u ? u.input + u.output + u.cacheWrite : 0;
 }
 
-/** Accumulated cost in USD, or 0 when unpriced/undefined. */
+/** Accumulated priced subtotal in USD, or 0 when absent. See `unpricedCalls` for unknown spend. */
 export function getLifetimeCost(u?: LifetimeUsage): number {
-  return u?.cost ?? 0;
+	return u?.cost ?? 0;
 }
 
 /** Add a usage delta into a target accumulator (mutates target). */
 export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
-  into.input += delta.input;
-  into.output += delta.output;
-  into.cacheWrite += delta.cacheWrite;
-  if (delta.cacheRead) into.cacheRead = (into.cacheRead ?? 0) + delta.cacheRead;
-  if (delta.cost) into.cost = (into.cost ?? 0) + delta.cost;
+	const priced = (into.pricedCalls ?? pricedCalls(into)) + (delta.pricedCalls ?? pricedCalls(delta));
+	const unpriced = (into.unpricedCalls ?? (into.unpriced ? 1 : 0)) + (delta.unpricedCalls ?? (delta.unpriced ? 1 : 0));
+	if (unpriced > 0) {
+		into.pricedCalls = priced;
+		into.unpriced = true;
+		into.unpricedCalls = unpriced;
+	}
+	into.input += delta.input;
+	into.output += delta.output;
+	into.cacheWrite += delta.cacheWrite;
+	if (delta.cacheRead) into.cacheRead = (into.cacheRead ?? 0) + delta.cacheRead;
+	if (delta.cost) into.cost = (into.cost ?? 0) + delta.cost;
 }
 
 /**
@@ -60,12 +84,21 @@ export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
  * events — carry this, and gain whatever pi adds to `Usage` for free.
  */
 export type ReportedUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+		unpriced?: true;
+		unpricedCalls?: number;
+		pricedCalls?: number;
+	};
 };
 
 /**
@@ -79,16 +112,25 @@ export type ReportedUsage = {
  * reads nothing else from it, and the per-kind split is not tracked.
  */
 export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
-  const { input, output, cacheWrite, cacheRead = 0, cost = 0 } = u;
-  if (input === 0 && output === 0 && cacheWrite === 0 && cacheRead === 0 && cost === 0) return undefined;
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens: input + output + cacheRead + cacheWrite,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-  };
+	const { input, output, cacheWrite, cacheRead = 0, cost = 0 } = u;
+	if (input === 0 && output === 0 && cacheWrite === 0 && cacheRead === 0 && cost === 0 && !u.unpriced) return undefined;
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		totalTokens: input + output + cacheRead + cacheWrite,
+		cost: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: cost,
+			...(u.unpriced
+				? { unpriced: true, unpricedCalls: u.unpricedCalls ?? 1, pricedCalls: u.pricedCalls ?? pricedCalls(u) }
+				: {}),
+		},
+	};
 }
 
 /**
@@ -106,32 +148,32 @@ export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
  * results are returned or how many agents were running.
  */
 export class PendingUsagePool {
-  private pending: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
-  private dirty = false;
+	private pending: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
+	private dirty = false;
 
-  add(delta: LifetimeUsage): void {
-    addUsage(this.pending, delta);
-    this.dirty = true;
-  }
+	add(delta: LifetimeUsage): void {
+		addUsage(this.pending, delta);
+		this.dirty = true;
+	}
 
-  /**
-   * Take everything accumulated so far as a pi `Usage`, resetting the pool.
-   * Returns undefined when nothing is pending, so callers can leave the tool
-   * result untouched rather than attaching a zero.
-   */
-  drain(): ReportedUsage | undefined {
-    if (!this.dirty) return undefined;
-    const drained = toReportedUsage(this.pending);
-    this.pending = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
-    this.dirty = false;
-    return drained;
-  }
+	/**
+	 * Take everything accumulated so far as a pi `Usage`, resetting the pool.
+	 * Returns undefined when nothing is pending, so callers can leave the tool
+	 * result untouched rather than attaching a zero.
+	 */
+	drain(): ReportedUsage | undefined {
+		if (!this.dirty) return undefined;
+		const drained = toReportedUsage(this.pending);
+		this.pending = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
+		this.dirty = false;
+		return drained;
+	}
 }
 
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
-  tokens: { input: number; output: number; cacheWrite: number };
-  contextUsage?: { percent: number | null };
+	tokens: { input: number; output: number; cacheWrite: number };
+	contextUsage?: { percent: number | null };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
@@ -149,11 +191,13 @@ export type SessionLike = { getSessionStats(): SessionStatsLike };
  * (issue #38).
  */
 export function getSessionTokens(session: SessionLike | undefined): number {
-  if (!session) return 0;
-  try {
-    const t = session.getSessionStats().tokens;
-    return t.input + t.output + t.cacheWrite;
-  } catch { return 0; }
+	if (!session) return 0;
+	try {
+		const t = session.getSessionStats().tokens;
+		return t.input + t.output + t.cacheWrite;
+	} catch {
+		return 0;
+	}
 }
 
 /**
@@ -161,7 +205,10 @@ export function getSessionTokens(session: SessionLike | undefined): number {
  * (no model contextWindow, or post-compaction before the next response).
  */
 export function getSessionContextPercent(session: SessionLike | undefined): number | null {
-  if (!session) return null;
-  try { return session.getSessionStats().contextUsage?.percent ?? null; }
-  catch { return null; }
+	if (!session) return null;
+	try {
+		return session.getSessionStats().contextUsage?.percent ?? null;
+	} catch {
+		return null;
+	}
 }

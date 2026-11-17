@@ -1,26 +1,20 @@
-import { readFileSync } from "node:fs";
-import { defineConfig } from "vitest/config";
+import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
-  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
-).packages["subagents-runtime-tooling"];
-
-export default defineConfig({
-  test: {
-    maxWorkers: 1,
-    include: ["test/runtime-scripts.test.ts"],
-    testTimeout: 15_000,
-    coverage: {
-      provider: "istanbul",
-      reporter: ["text", "lcov", "json-summary"],
-      reportsDirectory: "coverage/runtime-build-tooling",
-      reportOnFailure: true,
-      include: owned,
-      exclude: exclusions.map(({ path }) => path),
-      thresholds: {
-        "scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
-        "scripts/check-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
-      },
-    },
-  },
+// No home guard: this producer never read one.
+const config = definePackageConfig("subagents-runtime-tooling", {
+	provider: "istanbul",
+	reportsDirectory: "coverage/runtime-build-tooling",
+	homeGuard: false,
+	test: {
+		maxWorkers: 1,
+		include: ["tests/runtime-scripts.test.ts"],
+		testTimeout: 15_000,
+		coverage: {
+			thresholds: {
+				"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+			},
+		},
+	},
 });
+
+export default config;

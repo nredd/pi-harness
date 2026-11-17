@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "vitest";
-import { runCheckCommand, writeSignalReadinessObserver } from "../scripts/check-async.mjs";
+import { runCheckCommand, writeSignalReadinessObserver } from "../tests/fixtures/check-async.mjs";
 
 // This runs the generated module in real Node. It does not claim Istanbul coverage of its text.
 test("readiness preload propagates real marker-write failure rather than reporting ready", async () => {

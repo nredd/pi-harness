@@ -21,15 +21,12 @@ ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
 LAUNCHER_PACKAGE_ARGS = {
-    "resource-sampler": " --maxWorkers=1",
-    "todo": " --config .vitest.config.ts",
     "session-kit": (
-        " --exclude test/scenarios/home-injection.test.ts && "
-        f"{LAUNCHER} test/scenarios/home-injection.test.ts --coverage.enabled=false"
+        " --exclude tests/scenarios/home-injection.test.ts && "
+        f"{LAUNCHER} tests/scenarios/home-injection.test.ts --coverage.enabled=false"
     ),
 }
 BUN_COVERAGE_ARGS = [
-    "--coverage",
     "--coverage.provider=istanbul",
     "--coverage.reporter=text",
     "--coverage.reporter=lcov",
@@ -129,7 +126,7 @@ def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> N
     """
     argv = launch_bun(tmp_path, "--maxWorkers=1")
     assert argv[0] == "--bun"
-    assert argv[2:] == ["run", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
+    assert argv[2:] == ["run", "--coverage", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
     canary = launch_bun(tmp_path, "test/resource-loader-home.test.ts", "--coverage.enabled=false")
     assert canary[2:] == ["run", "test/resource-loader-home.test.ts", "--coverage.enabled=false"]
 
@@ -147,8 +144,8 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     """
     makefile = (ROOT / "Makefile").read_text()
     recipe = makefile[makefile.index("define PY_GATE") : makefile.index("endef")]
-    assert "-n auto --dist loadfile" in recipe
-    sources = dict(re.findall(r"\$\(call PY_GATE,(\w+),[^,]*,[^,]*,([^)]+)\)", makefile))
+    assert "-n 2 --dist loadfile" in recipe
+    sources = dict(re.findall(r"\$\(call PY_GATE,([\w/]+),[^,]*,[^,]*,([^)]+)\)", makefile))
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
     python = {name: pkg for name, pkg in policy["packages"].items() if name.startswith("python-")}
     for name, package in python.items():
@@ -160,7 +157,7 @@ def test_python_signals_match_the_shared_python_gate() -> None:
         assert {Path(pattern).parent.as_posix() for pattern in package["owned"]} == {source}, name
         assert primary["skip_hosts"] == ["wsl2"], name
         assert primary["producer"] == "coverage.py", name
-    assert set(sources) == {"scripts", "integration"}
+    assert set(sources) == {"scripts", "tests/integration", "release"}
 
 
 def test_benchmark_signal_matches_its_check_benchmark_producer() -> None:
@@ -210,7 +207,7 @@ def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
         AssertionError: A manifest bypasses the launcher, restates coverage flags, drops a reporter
             or a retired native subset returns.
     """
-    manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "integration/inprocess/package.json"]
+    manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "tests/inprocess/package.json"]
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
         if not command:
@@ -229,8 +226,9 @@ def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
     Raises:
         AssertionError: A repeated native gate starts linting generated reports.
     """
-    for directory in [ROOT / "packages/plan-mode", ROOT / "integration/inprocess"]:
-        assert "coverage/" in (directory / ".gitignore").read_text().splitlines()
+    root_patterns = (ROOT / ".gitignore").read_text().splitlines()
+    assert "packages/**/coverage/" in root_patterns
+    assert "tests/integration/**/coverage/" in root_patterns
 
 
 def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
@@ -245,15 +243,18 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
     """
     makefile = (ROOT / "Makefile").read_text()
     for target, directory, launcher in [
-        ("check-probes", "integration/probes", "../../scripts/run-vitest.ts"),
+        ("check-probes", "tests/integration/probes", "../../../scripts/run-vitest.ts"),
         ("check-import-audit", "scripts", "run-vitest.ts"),
     ]:
         recipe = makefile.split(f"{target}:", 1)[1].split("\n\n", 1)[0]
         assert recipe.count(f"cd {directory} && env -i ") == 2
         assert f"node {launcher} node --coverage\n" in recipe
-        assert recipe.endswith(f"node {launcher} bun --coverage.enabled=false")
-    assert "cd integration/providers && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
-    assert "cd integration/providers && node ../../scripts/run-vitest.ts bun\n" in makefile
+        suffix = " --coverage.reportsDirectory=scripts/coverage/bun" if target == "check-import-audit" else ""
+        assert recipe.endswith(f"node {launcher} bun{suffix}")
+    assert (
+        "cd tests/integration/providers && node ../../../scripts/run-vitest.ts node --coverage\n" in makefile
+    )
+    assert "cd tests/integration/providers && node ../../../scripts/run-vitest.ts bun\n" in makefile
     manifest = json.loads((ROOT / "packages/subagents/package.json").read_text())
     assert manifest["scripts"]["test:workflow-examples"] == (
         "node ../../scripts/run-vitest.ts node --config vitest.workflow-examples.config.ts --coverage && "
@@ -262,12 +263,13 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
     )
     assert "node --test" not in makefile
     assert "/.bin/c8 " not in makefile
+    assert "tests/lib/src/home-setup.ts" in (ROOT / "scripts/vitest-package.ts").read_text()
     for config in [
-        ROOT / "integration/probes/vitest.config.ts",
-        ROOT / "integration/providers/vitest.config.ts",
+        ROOT / "tests/integration/probes/vitest.config.ts",
+        ROOT / "tests/integration/providers/vitest.config.ts",
         ROOT / "scripts/vitest.config.ts",
     ]:
-        assert "verification/home-setup.ts" in config.read_text(), config
+        assert "definePackageConfig(" in config.read_text(), config
 
 
 def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -396,7 +398,7 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     assert {"ripgrep", "fd-find"}.issubset(packages)
     assert "rg --version" in owned
     assert "fdfind --version" in owned
-    reviewer = (ROOT / "integration/inprocess/reviewer.test.ts").read_text()
+    reviewer = (ROOT / "tests/inprocess/reviewer.test.ts").read_text()
     assert 'vi.stubEnv("PI_OFFLINE", "1")' in reviewer
     assert "vi.unstubAllEnvs()" in reviewer
 
@@ -435,3 +437,32 @@ def test_pinned_bun_enforces_threshold_with_either_reporter(tmp_path: Path) -> N
     assert bypass.returncode != 0, bypass.stderr.decode()
     assert enforced.returncode != 0, enforced.stderr.decode()
     assert b"50.00" in enforced.stderr
+
+
+def test_test_scripts_go_through_the_launcher_and_read_policy_only_in_the_factory() -> None:
+    """Hold #863: one Vitest factory, `test` and `test:bun` through the launcher, no one-file aliases.
+
+    Parameters:
+        None.
+    Returns:
+        None: Every package config is one `definePackageConfig` call and no config reads the policy itself.
+    Raises:
+        AssertionError: A config rebuilds the coverage block, a package passes `--config` for its
+            primary suite, or a `test*` script is neither `test`, `test:bun` nor a policy signal producer.
+    """
+    for config in [*ROOT.glob("packages/*/vitest*.config.ts"), *ROOT.glob("packages/*/.vitest*.config.ts")]:
+        text = config.read_text()
+        assert "definePackageConfig(" in text, config
+        assert "readFileSync" not in text, config
+    node = f"{LAUNCHER.replace(' bun', ' node')} --coverage"
+    for manifest in ROOT.glob("packages/*/package.json"):
+        scripts = json.loads(manifest.read_text())["scripts"]
+        if manifest.parent.name != "session-kit":
+            assert scripts["test"] == node, manifest
+        for name, command in scripts.items():
+            if name.startswith("test:") and name != "test:bun":
+                # One name per extra producer: its config, a non-Vitest check or the live run.
+                assert "--config vitest." in command or "vitest" not in command or name == "test:e2e", (
+                    manifest,
+                    name,
+                )

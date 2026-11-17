@@ -80,7 +80,10 @@ export function loadStoredOutline(stateId: string): SerializedOutline | undefine
 	const entry = listEntries(dir).find((candidate) => candidate.key === key);
 	if (!entry) return undefined;
 	try {
-		const parsed = JSON.parse(readFileSync(path.join(dir, entry.name), "utf8")) as { stateId?: unknown; outline?: SerializedOutline };
+		const parsed = JSON.parse(readFileSync(path.join(dir, entry.name), "utf8")) as {
+			stateId?: unknown;
+			outline?: SerializedOutline;
+		};
 		const outline = parsed.outline;
 		if (parsed.stateId !== stateId || !outline?.root || typeof outline.lookId !== "string") return undefined;
 		return outline;

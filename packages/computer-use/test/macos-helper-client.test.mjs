@@ -23,7 +23,7 @@ import {
 } from "./support/fake-helper.mjs";
 
 // Cases that wait out the client's own fixed timers (30 x 100 ms probe loop, 400 ms restart pause, 2 s glow
-// timeout). Longest alone: ~5.9 s; budget is ~7x that, see docs/test-worker-budgets.md.
+// timeout). Longest alone: ~5.9 s; budget is ~7x that (#312).
 const SLOW_MS = 45_000;
 
 const cleanups = [];
@@ -69,7 +69,10 @@ async function load({ external, fake, spawn }) {
 	if (!external) {
 		vi.doMock("node:net", async (original) => {
 			const actual = await original();
-			const patched = { ...actual, createConnection: (_target, ...rest) => actual.createConnection(fake.socketPath, ...rest) };
+			const patched = {
+				...actual,
+				createConnection: (_target, ...rest) => actual.createConnection(fake.socketPath, ...rest),
+			};
 			return { ...patched, default: patched };
 		});
 	}
@@ -169,17 +172,26 @@ describe("daemon commands over the socket", () => {
 
 	test("a partial reply cut off by a disconnect is a disconnect, and the next command still works", async () => {
 		const fake = await fakeOn();
-		fake.script("half", effect(() => setTimeout(() => fake.disconnectAll(), 20), raw('{"id":"req_2","ok":tr')));
+		fake.script(
+			"half",
+			effect(() => setTimeout(() => fake.disconnectAll(), 20), raw('{"id":"req_2","ok":tr')),
+		);
 		const { MacosHelperClient } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
-		await assert.rejects(client.command("half", {}, { timeoutMs: 30_000 }), (error) => error.code === "helper_disconnected");
+		await assert.rejects(
+			client.command("half", {}, { timeoutMs: 30_000 }),
+			(error) => error.code === "helper_disconnected",
+		);
 		assert.equal(client.daemonAvailable, false);
 		assert.equal((await client.command("diagnostics")).protocolVersion, 7);
 	});
 
 	test("a reply that is followed at once by a disconnect resolves, not helper_disconnected (#725)", async () => {
 		const fake = await fakeOn();
-		fake.script("last", effect(() => setTimeout(() => fake.disconnectAll(), 0), ok({ done: true })));
+		fake.script(
+			"last",
+			effect(() => setTimeout(() => fake.disconnectAll(), 0), ok({ done: true })),
+		);
 		const { MacosHelperClient } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
 		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
@@ -193,8 +205,14 @@ describe("daemon commands over the socket", () => {
 		const client = new MacosHelperClient();
 		const controller = new AbortController();
 		const removed = vi.spyOn(controller.signal, "removeEventListener");
-		await assert.rejects(client.command("crash", {}, { signal: controller.signal, timeoutMs: 30_000 }), (error) => error.code === "helper_disconnected");
-		assert.ok(removed.mock.calls.some(([type]) => type === "abort"), "the abort listener is removed on disconnect");
+		await assert.rejects(
+			client.command("crash", {}, { signal: controller.signal, timeoutMs: 30_000 }),
+			(error) => error.code === "helper_disconnected",
+		);
+		assert.ok(
+			removed.mock.calls.some(([type]) => type === "abort"),
+			"the abort listener is removed on disconnect",
+		);
 		controller.abort();
 	});
 
@@ -247,52 +265,67 @@ describe("daemon availability", () => {
 		assert.equal(await late.ensureDaemon(), true);
 	});
 
-	test("ensureDaemon gives up after 30 probes, command() reports the unavailable daemon, abort interrupts the wait", async () => {
-		const fake = await fakeOn();
-		await fake.stop();
-		const { MacosHelperClient, HelperTransportError, HELPER_APP_PATH } = await load({ external: true, fake });
-		const client = new MacosHelperClient();
-		await assert.rejects(client.command("look"), (error) => {
-			assert.ok(error instanceof HelperTransportError);
-			assert.equal(error.message, `pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`);
-			return true;
-		});
-		const controller = new AbortController();
-		const waiting = client.ensureDaemon(controller.signal);
-		setTimeout(() => controller.abort(), 150);
-		await assert.rejects(waiting, /aborted/);
-		await assert.rejects(client.ensureDaemon(AbortSignal.abort()), /aborted/);
-	}, SLOW_MS);
+	test(
+		"ensureDaemon gives up after 30 probes, command() reports the unavailable daemon, abort interrupts the wait",
+		async () => {
+			const fake = await fakeOn();
+			await fake.stop();
+			const { MacosHelperClient, HelperTransportError, HELPER_APP_PATH } = await load({ external: true, fake });
+			const client = new MacosHelperClient();
+			await assert.rejects(client.command("look"), (error) => {
+				assert.ok(error instanceof HelperTransportError);
+				assert.equal(error.message, `pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`);
+				return true;
+			});
+			const controller = new AbortController();
+			const waiting = client.ensureDaemon(controller.signal);
+			setTimeout(() => controller.abort(), 150);
+			await assert.rejects(waiting, /aborted/);
+			await assert.rejects(client.ensureDaemon(AbortSignal.abort()), /aborted/);
+		},
+		SLOW_MS,
+	);
 
-	test("restart shuts the daemon down, waits and reconnects; failure to come back throws", async () => {
-		const fake = await fakeOn();
-		const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: true, fake });
-		const client = new MacosHelperClient();
-		fake.relaunchAfterExit();
-		await client.restart();
-		assert.deepEqual(
-			fake.requests.map((request) => request.cmd),
-			["diagnostics", "shutdown", "diagnostics"],
-		);
-		assert.equal(fake.requests[1].raw.id.startsWith("req_"), true);
+	test(
+		"restart shuts the daemon down, waits and reconnects; failure to come back throws",
+		async () => {
+			const fake = await fakeOn();
+			const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: true, fake });
+			const client = new MacosHelperClient();
+			fake.relaunchAfterExit();
+			await client.restart();
+			assert.deepEqual(
+				fake.requests.map((request) => request.cmd),
+				["diagnostics", "shutdown", "diagnostics"],
+			);
+			assert.equal(fake.requests[1].raw.id.startsWith("req_"), true);
 
-		// The default shutdown exits the fake; with no relaunch it stays down.
-		fake.relaunchAfterExit(false);
-		await assert.rejects(client.restart(), (error) => {
-			assert.equal(error.message, `pi-computer-use helper did not come back after restart. Helper app: ${HELPER_APP_PATH}`);
-			return true;
-		});
-	}, SLOW_MS);
+			// The default shutdown exits the fake; with no relaunch it stays down.
+			fake.relaunchAfterExit(false);
+			await assert.rejects(client.restart(), (error) => {
+				assert.equal(
+					error.message,
+					`pi-computer-use helper did not come back after restart. Helper app: ${HELPER_APP_PATH}`,
+				);
+				return true;
+			});
+		},
+		SLOW_MS,
+	);
 
-	test("restart ignores a failing shutdown and reconnects to the surviving daemon", async () => {
-		const fake = await fakeOn({ handlers: { shutdown: fail("cannot stop", "internal_error") } });
-		const { MacosHelperClient } = await load({ external: true, fake });
-		await new MacosHelperClient().restart();
-		assert.deepEqual(
-			fake.requests.map((request) => request.cmd),
-			["diagnostics", "shutdown", "diagnostics"],
-		);
-	}, SLOW_MS);
+	test(
+		"restart ignores a failing shutdown and reconnects to the surviving daemon",
+		async () => {
+			const fake = await fakeOn({ handlers: { shutdown: fail("cannot stop", "internal_error") } });
+			const { MacosHelperClient } = await load({ external: true, fake });
+			await new MacosHelperClient().restart();
+			assert.deepEqual(
+				fake.requests.map((request) => request.cmd),
+				["diagnostics", "shutdown", "diagnostics"],
+			);
+		},
+		SLOW_MS,
+	);
 
 	test("an external socket is never installed or launched", async () => {
 		const fake = await fakeOn();
@@ -376,7 +409,10 @@ describe("ensureProtocol", () => {
 	test("accepts a current daemon without restarting", async () => {
 		const { client, fake, spawn } = await protocolRig({ diagnostics: { pid: 77 } });
 		assert.equal((await client.ensureProtocol()).protocolVersion, 7);
-		assert.equal(fake.requests.some((request) => request.cmd === "shutdown"), false);
+		assert.equal(
+			fake.requests.some((request) => request.cmd === "shutdown"),
+			false,
+		);
 		assert.deepEqual(spawn.calls[0].args, ["-o", "etime=", "-p", "77"]);
 	});
 
@@ -393,50 +429,75 @@ describe("ensureProtocol", () => {
 		await assert.doesNotReject(client.ensureProtocol());
 	});
 
-	test("restarts a stale-protocol daemon and accepts the relaunched one", async () => {
-		const { client, fake } = await protocolRig({ diagnostics: { protocolVersion: 6 }, afterRestart: { protocolVersion: 7 } });
-		assert.equal((await client.ensureProtocol()).protocolVersion, 7);
-		assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-	}, SLOW_MS);
+	test(
+		"restarts a stale-protocol daemon and accepts the relaunched one",
+		async () => {
+			const { client, fake } = await protocolRig({
+				diagnostics: { protocolVersion: 6 },
+				afterRestart: { protocolVersion: 7 },
+			});
+			assert.equal((await client.ensureProtocol()).protocolVersion, 7);
+			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
+		},
+		SLOW_MS,
+	);
 
-	test("restarts a daemon launched from another executable (unresolvable paths compare resolved)", async () => {
-		const { client, fake } = await protocolRig({
-			install: false,
-			diagnostics: { executablePath: path.join(tmp, "elsewhere", "bridge") },
-			afterRestart: { executablePath: executable },
-		});
-		await client.ensureProtocol();
-		assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-	}, SLOW_MS);
+	test(
+		"restarts a daemon launched from another executable (unresolvable paths compare resolved)",
+		async () => {
+			const { client, fake } = await protocolRig({
+				install: false,
+				diagnostics: { executablePath: path.join(tmp, "elsewhere", "bridge") },
+				afterRestart: { executablePath: executable },
+			});
+			await client.ensureProtocol();
+			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
+		},
+		SLOW_MS,
+	);
 
-	test("restarts when the daemon process predates the installed binary", async () => {
-		const { client, fake } = await protocolRig({ etime: "00:01" });
-		// 100 s before the binary's ctime: started + 1 s < ctime.
-		const now = Date.now();
-		vi.spyOn(Date, "now").mockReturnValue(now - 100_000);
-		await client.ensureProtocol();
-		assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-	}, SLOW_MS);
+	test(
+		"restarts when the daemon process predates the installed binary",
+		async () => {
+			const { client, fake } = await protocolRig({ etime: "00:01" });
+			// 100 s before the binary's ctime: started + 1 s < ctime.
+			const now = Date.now();
+			vi.spyOn(Date, "now").mockReturnValue(now - 100_000);
+			await client.ensureProtocol();
+			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
+		},
+		SLOW_MS,
+	);
 
-	test("throws and drops the daemon when the relaunched helper still mismatches", async () => {
-		const { client, HELPER_APP_EXECUTABLE_PATH, HELPER_APP_PATH } = await protocolRig({ diagnostics: { protocolVersion: 5, executablePath: undefined } });
-		await assert.rejects(client.ensureProtocol(), (error) => {
-			assert.equal(
-				error.message,
-				`pi-computer-use helper mismatch after relaunch: expected protocol 7 and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol 5 and executable unknown. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
-			);
-			return true;
-		});
-		assert.equal(client.daemonAvailable, false);
-	}, SLOW_MS);
+	test(
+		"throws and drops the daemon when the relaunched helper still mismatches",
+		async () => {
+			const { client, HELPER_APP_EXECUTABLE_PATH, HELPER_APP_PATH } = await protocolRig({
+				diagnostics: { protocolVersion: 5, executablePath: undefined },
+			});
+			await assert.rejects(client.ensureProtocol(), (error) => {
+				assert.equal(
+					error.message,
+					`pi-computer-use helper mismatch after relaunch: expected protocol 7 and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol 5 and executable unknown. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
+				);
+				return true;
+			});
+			assert.equal(client.daemonAvailable, false);
+		},
+		SLOW_MS,
+	);
 
-	test("throws when the relaunched helper reports the wrong executable", async () => {
-		const { client } = await protocolRig({
-			diagnostics: { protocolVersion: 5 },
-			afterRestart: { protocolVersion: 7, executablePath: path.join(tmp, "other") },
-		});
-		await assert.rejects(client.ensureProtocol(), /got protocol 7 and executable .*other/);
-	}, SLOW_MS);
+	test(
+		"throws when the relaunched helper reports the wrong executable",
+		async () => {
+			const { client } = await protocolRig({
+				diagnostics: { protocolVersion: 5 },
+				afterRestart: { protocolVersion: 7, executablePath: path.join(tmp, "other") },
+			});
+			await assert.rejects(client.ensureProtocol(), /got protocol 7 and executable .*other/);
+		},
+		SLOW_MS,
+	);
 
 	test.each([
 		["no pid", { pid: 0 }, undefined],
@@ -445,7 +506,10 @@ describe("ensureProtocol", () => {
 	])("does not call a daemon stale for %s", async (_name, diagnostics, etime) => {
 		const { client, fake } = await protocolRig({ diagnostics, etime: etime ?? "00:00" });
 		await client.ensureProtocol();
-		assert.equal(fake.requests.some((request) => request.cmd === "shutdown"), false);
+		assert.equal(
+			fake.requests.some((request) => request.cmd === "shutdown"),
+			false,
+		);
 	});
 
 	test.each([
@@ -454,15 +518,22 @@ describe("ensureProtocol", () => {
 	])("does not call a daemon stale when %s", async (_name, options) => {
 		const { client, fake } = await protocolRig(options);
 		await client.ensureProtocol();
-		assert.equal(fake.requests.some((request) => request.cmd === "shutdown"), false);
+		assert.equal(
+			fake.requests.some((request) => request.cmd === "shutdown"),
+			false,
+		);
 	});
 
-	test("reads day-prefixed elapsed times: a daemon running for days predates the binary", async () => {
-		const { client, fake, spawn } = await protocolRig({ etime: "2-00:00:01" });
-		await client.ensureProtocol();
-		assert.equal(spawn.calls.length >= 1, true);
-		assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-	}, SLOW_MS);
+	test(
+		"reads day-prefixed elapsed times: a daemon running for days predates the binary",
+		async () => {
+			const { client, fake, spawn } = await protocolRig({ etime: "2-00:00:01" });
+			await client.ensureProtocol();
+			assert.equal(spawn.calls.length >= 1, true);
+			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
+		},
+		SLOW_MS,
+	);
 
 	test("helperPredatesBinary allows a 1 s grace and rejects non-finite times", async () => {
 		const { helperPredatesBinary } = await load({ external: true, fake: await fakeOn() });
@@ -507,9 +578,15 @@ describe("install, launch and runProcess", () => {
 		const spawn = createFakeSpawn({ [path.basename(process.execPath)]: () => route });
 		const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: false, fake, spawn });
 		const client = new MacosHelperClient();
-		await assert.rejects(client.ensureInstalled(), new Error(`Failed to install pi-computer-use helper app at ${HELPER_APP_PATH}.`));
+		await assert.rejects(
+			client.ensureInstalled(),
+			new Error(`Failed to install pi-computer-use helper app at ${HELPER_APP_PATH}.`),
+		);
 		route = { exitCode: 2, stderr: "swiftc missing\n", stdout: "partial\n" };
-		await assert.rejects(client.ensureInstalled(), /Command failed \(2\): .*setup-helper\.mjs --runtime\nswiftc missing\npartial$/);
+		await assert.rejects(
+			client.ensureInstalled(),
+			/Command failed \(2\): .*setup-helper\.mjs --runtime\nswiftc missing\npartial$/,
+		);
 	});
 
 	test("launchDaemon opens the app bundle on the daemon socket and ensureDaemon then connects", async () => {
@@ -528,14 +605,18 @@ describe("install, launch and runProcess", () => {
 		assert.deepEqual(open.args, ["-n", "-g", HELPER_APP_PATH, "--args", "serve", "--socket", HELPER_SOCKET_PATH]);
 	});
 
-	test("a failing launch is tolerated and the unavailable daemon is reported", async () => {
-		const fake = await fakeOn();
-		await fake.stop();
-		const spawn = createFakeSpawn({ open: { spawnError: new Error("open: not found") } });
-		const { MacosHelperClient } = await load({ external: false, fake, spawn });
-		assert.equal(await new MacosHelperClient().ensureDaemon(), false);
-		assert.equal(spawn.calls.filter((call) => call.command === "open").length, 1);
-	}, SLOW_MS);
+	test(
+		"a failing launch is tolerated and the unavailable daemon is reported",
+		async () => {
+			const fake = await fakeOn();
+			await fake.stop();
+			const spawn = createFakeSpawn({ open: { spawnError: new Error("open: not found") } });
+			const { MacosHelperClient } = await load({ external: false, fake, spawn });
+			assert.equal(await new MacosHelperClient().ensureDaemon(), false);
+			assert.equal(spawn.calls.filter((call) => call.command === "open").length, 1);
+		},
+		SLOW_MS,
+	);
 
 	describe("runProcess", () => {
 		async function runner(routes) {
@@ -552,7 +633,10 @@ describe("install, launch and runProcess", () => {
 
 		test("rejects with trimmed output on a non-zero exit, and without output when silent", async () => {
 			const noisy = await runner({ exitCode: 3, stderr: " bad \n", stdout: " out \n" });
-			await assert.rejects(noisy.runProcess("tool", ["a", "b"], 1_000), new Error("Command failed (3): tool a b\nbad\nout"));
+			await assert.rejects(
+				noisy.runProcess("tool", ["a", "b"], 1_000),
+				new Error("Command failed (3): tool a b\nbad\nout"),
+			);
 			const quiet = await runner({ exitCode: 1 });
 			await assert.rejects(quiet.runProcess("tool", [], 1_000), new Error("Command failed (1): tool"));
 		});
@@ -593,10 +677,20 @@ describe("activity glow connection", () => {
 
 	test("serialises setActive calls over one persistent connection", async () => {
 		const { fake, macosActivityGlow } = await glowRig({ handlers: { setActivityGlow: ok({}) } });
-		await Promise.all([macosActivityGlow.setActive(true), macosActivityGlow.setActive(false), macosActivityGlow.setActive(true)]);
+		await Promise.all([
+			macosActivityGlow.setActive(true),
+			macosActivityGlow.setActive(false),
+			macosActivityGlow.setActive(true),
+		]);
 		const glow = fake.requests.filter((request) => request.cmd === "setActivityGlow");
-		assert.deepEqual(glow.map((request) => request.args.active), [true, false, true]);
-		assert.deepEqual(glow.map((request) => request.id), ["activity_1", "activity_2", "activity_3"]);
+		assert.deepEqual(
+			glow.map((request) => request.args.active),
+			[true, false, true],
+		);
+		assert.deepEqual(
+			glow.map((request) => request.id),
+			["activity_1", "activity_2", "activity_3"],
+		);
 		// one probe connection from ensureDaemon, one persistent glow connection
 		assert.equal(fake.connections, 2);
 	});
@@ -608,7 +702,13 @@ describe("activity glow connection", () => {
 
 	test("an error reply or a mismatched id rejects with HelperCommandError", async () => {
 		const { macosActivityGlow, HelperCommandError } = await glowRig({
-			handlers: { setActivityGlow: [fail("no overlay", "overlay_unavailable"), raw('{"id":"other","ok":true}\n'), { kind: "reply", body: { ok: false } }] },
+			handlers: {
+				setActivityGlow: [
+					fail("no overlay", "overlay_unavailable"),
+					raw('{"id":"other","ok":true}\n'),
+					{ kind: "reply", body: { ok: false } },
+				],
+			},
 		});
 		await assert.rejects(macosActivityGlow.setActive(true), (error) => {
 			assert.ok(error instanceof HelperCommandError);
@@ -617,7 +717,10 @@ describe("activity glow connection", () => {
 			return true;
 		});
 		await assert.rejects(macosActivityGlow.setActive(true), new HelperCommandError("Activity glow command failed."));
-		await assert.rejects(macosActivityGlow.setActive(true), (error) => error.message === "Activity glow command failed." && error.code === undefined);
+		await assert.rejects(
+			macosActivityGlow.setActive(true),
+			(error) => error.message === "Activity glow command failed." && error.code === undefined,
+		);
 	});
 
 	test("a malformed reply rejects with the parse error", async () => {
@@ -625,16 +728,30 @@ describe("activity glow connection", () => {
 		await assert.rejects(macosActivityGlow.setActive(true), SyntaxError);
 	});
 
-	test("times out on a silent helper and reconnects afterwards", async () => {
-		const { fake, macosActivityGlow, HelperTransportError } = await glowRig({ handlers: { setActivityGlow: [silent(), ok({})] } });
-		await assert.rejects(macosActivityGlow.setActive(true), new HelperTransportError("Activity glow command timed out."));
-		await macosActivityGlow.setActive(true);
-		assert.equal(fake.connections, 3, "the timed-out socket was destroyed and replaced");
-	}, SLOW_MS);
+	test(
+		"times out on a silent helper and reconnects afterwards",
+		async () => {
+			const { fake, macosActivityGlow, HelperTransportError } = await glowRig({
+				handlers: { setActivityGlow: [silent(), ok({})] },
+			});
+			await assert.rejects(
+				macosActivityGlow.setActive(true),
+				new HelperTransportError("Activity glow command timed out."),
+			);
+			await macosActivityGlow.setActive(true);
+			assert.equal(fake.connections, 3, "the timed-out socket was destroyed and replaced");
+		},
+		SLOW_MS,
+	);
 
 	test("a disconnect mid-request rejects, then the next call reconnects", async () => {
-		const { fake, macosActivityGlow, HelperTransportError } = await glowRig({ handlers: { setActivityGlow: [drop(), ok({})] } });
-		await assert.rejects(macosActivityGlow.setActive(true), new HelperTransportError("Activity glow connection closed."));
+		const { fake, macosActivityGlow, HelperTransportError } = await glowRig({
+			handlers: { setActivityGlow: [drop(), ok({})] },
+		});
+		await assert.rejects(
+			macosActivityGlow.setActive(true),
+			new HelperTransportError("Activity glow connection closed."),
+		);
 		await macosActivityGlow.setActive(true);
 		assert.equal(fake.connections, 3);
 	});
@@ -645,7 +762,10 @@ describe("activity glow connection", () => {
 		await fake.stop();
 		await assert.rejects(macosActivityGlow.setActive(true), HelperTransportError);
 		vi.spyOn(macosHelper, "ensureDaemon").mockResolvedValue(false);
-		await assert.rejects(macosActivityGlow.setActive(true), new HelperTransportError(`pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`));
+		await assert.rejects(
+			macosActivityGlow.setActive(true),
+			new HelperTransportError(`pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`),
+		);
 	});
 
 	test("a socket error after connect destroys the socket, and concurrent connects share one attempt", async () => {
@@ -701,7 +821,10 @@ describe("helper app path resolution", () => {
 		const system = "/x/pi-computer-use.app";
 		const base = { env: {}, homeDir: "/home/u", systemHelperAppPath: system, fileExists: () => true };
 		assert.equal(resolveMacosHelperAppPath({ ...base, directoryIsWritable: (dir) => dir === "/x" }), system);
-		assert.equal(resolveMacosHelperAppPath({ ...base, directoryIsWritable: () => false }), path.join("/home/u", "Applications", "pi-computer-use.app"));
+		assert.equal(
+			resolveMacosHelperAppPath({ ...base, directoryIsWritable: () => false }),
+			path.join("/home/u", "Applications", "pi-computer-use.app"),
+		);
 	});
 
 	test("an omitted existence probe checks the real filesystem", () => {
@@ -710,7 +833,10 @@ describe("helper app path resolution", () => {
 		const present = path.join(tmp, "present", "pi-computer-use.app");
 		mkdirSync(present, { recursive: true });
 		const base = { env: {}, homeDir: home, directoryIsWritable: () => true };
-		assert.equal(resolveMacosHelperAppPath({ ...base, systemHelperAppPath: missing }), path.join(home, "Applications", "pi-computer-use.app"));
+		assert.equal(
+			resolveMacosHelperAppPath({ ...base, systemHelperAppPath: missing }),
+			path.join(home, "Applications", "pi-computer-use.app"),
+		);
 		assert.equal(resolveMacosHelperAppPath({ ...base, systemHelperAppPath: present }), present);
 	});
 
@@ -726,7 +852,11 @@ describe("helper app path resolution", () => {
 		assert.equal(resolveMacosHelperAppPath(), path.resolve("rel/custom.app"));
 		vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", "  ");
 		assert.equal(
-			resolveMacosHelperAppPath({ homeDir: "/home/u", systemHelperAppPath: "/x/pi-computer-use.app", fileExists: () => false }),
+			resolveMacosHelperAppPath({
+				homeDir: "/home/u",
+				systemHelperAppPath: "/x/pi-computer-use.app",
+				fileExists: () => false,
+			}),
 			path.join("/home/u", "Applications", "pi-computer-use.app"),
 		);
 	});
@@ -736,7 +866,10 @@ describe("helper app path resolution", () => {
 		const writableDir = path.join(tmp, "Applications");
 		mkdirSync(writableDir);
 		const system = path.join(writableDir, "pi-computer-use.app");
-		assert.equal(resolveMacosHelperAppPath({ env: {}, homeDir, systemHelperAppPath: system, fileExists: () => true }), system);
+		assert.equal(
+			resolveMacosHelperAppPath({ env: {}, homeDir, systemHelperAppPath: system, fileExists: () => true }),
+			system,
+		);
 		const missingParent = path.join(tmp, "nope", "pi-computer-use.app");
 		assert.equal(
 			resolveMacosHelperAppPath({ env: {}, homeDir, systemHelperAppPath: missingParent, fileExists: () => true }),

@@ -1,8 +1,12 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
-    "strict": true, "noUncheckedIndexedAccess": true, "skipLibCheck": true,
-    "types": ["node"]
+    // nredd/pi-harness#878: the one package that emits with `tsc`. `.ts` specifiers plus `rewriteRelativeImportExtensions`
+    // rewrite `dist/*.js` but leave `.ts` specifiers in `dist/*.d.ts`, which a consumer's compiler cannot resolve. So it keeps
+    // `.js` specifiers on Node ESM resolution, and constructor parameter properties rule out `erasableSyntaxOnly`.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "erasableSyntaxOnly": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src", "tests", "*.ts"]
 }

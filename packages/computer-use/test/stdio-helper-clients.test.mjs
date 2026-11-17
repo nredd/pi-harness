@@ -129,9 +129,14 @@ describe("Windows helper client", () => {
 	test("exports the default helper path and a shared client", async () => {
 		vi.resetModules();
 		vi.stubEnv("PI_COMPUTER_USE_WINDOWS_HELPER_PATH", "");
-		const { WINDOWS_HELPER_PATH, WINDOWS_HELPER_PROTOCOL_VERSION, windowsHelper, WindowsHelperClient } = await import("../src/platform/windows/helper.ts");
+		const { WINDOWS_HELPER_PATH, WINDOWS_HELPER_PROTOCOL_VERSION, windowsHelper, WindowsHelperClient } = await import(
+			"../src/platform/windows/helper.ts"
+		);
 		assert.equal(WINDOWS_HELPER_PROTOCOL_VERSION, 4);
-		assert.equal(WINDOWS_HELPER_PATH, path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe"));
+		assert.equal(
+			WINDOWS_HELPER_PATH,
+			path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe"),
+		);
 		assert.ok(windowsHelper instanceof WindowsHelperClient);
 		windowsHelper.dispose();
 	});
@@ -154,8 +159,16 @@ describe("Windows helper client", () => {
 		assert.equal(setup.options.env.BUN_BE_BUN, "1");
 		assert.deepEqual(setup.options.stdio, ["ignore", "pipe", "pipe"]);
 		assert.equal(helperSpawns(spawn).length, 1);
-		assert.deepEqual(engine.requests.map((request) => request.cmd), ["look", "look"]);
-		assert.deepEqual(engine.requests[0].raw, { protocolVersion: 4, id: engine.requests[0].id, cmd: "look", args: { app: "x" } });
+		assert.deepEqual(
+			engine.requests.map((request) => request.cmd),
+			["look", "look"],
+		);
+		assert.deepEqual(engine.requests[0].raw, {
+			protocolVersion: 4,
+			id: engine.requests[0].id,
+			cmd: "look",
+			args: { app: "x" },
+		});
 	});
 
 	test("re-runs setup when an installed helper was never validated, and when it disappears", async () => {
@@ -173,13 +186,22 @@ describe("Windows helper client", () => {
 
 	test("setup that leaves no executable fails with the install path", async () => {
 		const { client } = await windows({ helper: {} });
-		await assert.rejects(client.command("look"), new RegExp(`Failed to install Windows helper at ${helperPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`));
+		await assert.rejects(
+			client.command("look"),
+			new RegExp(`Failed to install Windows helper at ${helperPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`),
+		);
 	});
 
 	test("setup failure reports exit code and stderr then stdout", async () => {
-		const { client } = await windows({ setup: { exitCode: 3, stdout: "out line\n", stderr: "err line\n" }, helper: {} });
+		const { client } = await windows({
+			setup: { exitCode: 3, stdout: "out line\n", stderr: "err line\n" },
+			helper: {},
+		});
 		await assert.rejects(client.ensureInstalled(), (error) => {
-			assert.match(error.message, /^Command failed \(3\): .*setup-helper\.mjs --platform windows --runtime\nerr line\nout line$/);
+			assert.match(
+				error.message,
+				/^Command failed \(3\): .*setup-helper\.mjs --platform windows --runtime\nerr line\nout line$/,
+			);
 			return true;
 		});
 	});
@@ -205,7 +227,10 @@ describe("Windows helper client", () => {
 	});
 
 	test("an already aborted signal does not respawn an exited helper (#735)", async () => {
-		const { client, spawn, children } = await windows({ setup: () => (install(), { exitCode: 0 }), helper: { engine: envelope("Windows", { look: ok(1) }) } });
+		const { client, spawn, children } = await windows({
+			setup: () => (install(), { exitCode: 0 }),
+			helper: { engine: envelope("Windows", { look: ok(1) }) },
+		});
 		assert.equal(await client.command("look"), 1);
 		children[0].exit(0);
 		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
@@ -244,7 +269,10 @@ describe("Windows helper client", () => {
 		const { client, setups } = await windows({ setup: { hang: true }, helper: {} });
 		const pending = client.ensureInstalled();
 		await vi.waitFor(() => assert.equal(setups.length, 1));
-		const outcome = assert.rejects(pending, /Command timed out after 60000ms: .*setup-helper\.mjs --platform windows --runtime/);
+		const outcome = assert.rejects(
+			pending,
+			/Command timed out after 60000ms: .*setup-helper\.mjs --platform windows --runtime/,
+		);
 		await vi.advanceTimersByTimeAsync(59_000);
 		assert.deepEqual(setups[0].signals, []);
 		await vi.advanceTimersByTimeAsync(1_000);
@@ -256,7 +284,10 @@ describe("Windows helper client", () => {
 		install();
 		const engine = envelope("Windows", {
 			look: split(ok({ roots: [1, 2, 3] }), 4, 1),
-			noise: (request) => ({ kind: "raw", text: `\n   \n{not json\n${JSON.stringify({ protocolVersion: 4, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result: "after noise" })}\n` }),
+			noise: (request) => ({
+				kind: "raw",
+				text: `\n   \n{not json\n${JSON.stringify({ protocolVersion: 4, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result: "after noise" })}\n`,
+			}),
 		});
 		const { client } = await windows({ helper: { engine } });
 		assert.deepEqual(await client.command("look"), { roots: [1, 2, 3] });
@@ -279,10 +310,19 @@ describe("Windows helper client", () => {
 			bare: body({ ok: false }),
 		});
 		const { client } = await windows({ helper: { engine } });
-		await assert.rejects(client.command("denied"), (error) => error.message === "not allowed" && error.code === "permission_denied");
+		await assert.rejects(
+			client.command("denied"),
+			(error) => error.message === "not allowed" && error.code === "permission_denied",
+		);
 		await assert.rejects(client.command("nocode"), (error) => error.message === "plain" && error.code === undefined);
-		await assert.rejects(client.command("bare"), (error) => error.message === "Windows helper command failed." && error.code === undefined);
-		await assert.rejects(client.command("missing"), (error) => error.code === "unsupported_command" && error.message === "Unknown command 'missing'");
+		await assert.rejects(
+			client.command("bare"),
+			(error) => error.message === "Windows helper command failed." && error.code === undefined,
+		);
+		await assert.rejects(
+			client.command("missing"),
+			(error) => error.code === "unsupported_command" && error.message === "Unknown command 'missing'",
+		);
 	});
 
 	test("a reply from another protocol version is rejected with the versions named", async () => {
@@ -292,7 +332,10 @@ describe("Windows helper client", () => {
 			unversioned: (request) => raw(`${JSON.stringify({ id: request.id, ok: true, result: {} })}\n`),
 		});
 		const { client } = await windows({ helper: { engine } });
-		await assert.rejects(client.command("old"), /Windows helper protocol mismatch: expected 4, got 3\. Restart Pi to use the installed helper\./);
+		await assert.rejects(
+			client.command("old"),
+			/Windows helper protocol mismatch: expected 4, got 3\. Restart Pi to use the installed helper\./,
+		);
 		await assert.rejects(client.command("unversioned"), /expected 4, got unknown\./);
 	});
 
@@ -301,7 +344,9 @@ describe("Windows helper client", () => {
 		const engine = envelope("Windows", { hang: silent() });
 		const { client, children } = await windows({ helper: { engine } });
 		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
-		children[0].stdout.write(`${JSON.stringify({ protocolVersion: 4, id: engine.requests[0].id, ok: true, result: {} })}\n`);
+		children[0].stdout.write(
+			`${JSON.stringify({ protocolVersion: 4, id: engine.requests[0].id, ok: true, result: {} })}\n`,
+		);
 		engine.script("hang", ok("again"));
 		assert.equal(await client.command("hang"), "again");
 	});
@@ -334,7 +379,10 @@ describe("Windows helper client", () => {
 		const pending = client.command("crash", {}, { timeoutMs: 600_000 });
 		await vi.waitFor(() => assert.equal(engine.requests.length, 1));
 		children[0].exit(1);
-		await assert.rejects(pending, (error) => error.code === "helper_disconnected" && /exited before replying/.test(error.message));
+		await assert.rejects(
+			pending,
+			(error) => error.code === "helper_disconnected" && /exited before replying/.test(error.message),
+		);
 	});
 
 	test("a dead child's close does not fail a command pending on its successor", async () => {
@@ -344,8 +392,13 @@ describe("Windows helper client", () => {
 		await client.command("look");
 		children[0].kill();
 		let settled;
-		const pending = client.command("hang", {}, { timeoutMs: 600_000 }).then(() => "resolved", (error) => error);
-		void pending.then((value) => { settled = value; });
+		const pending = client.command("hang", {}, { timeoutMs: 600_000 }).then(
+			() => "resolved",
+			(error) => error,
+		);
+		void pending.then((value) => {
+			settled = value;
+		});
 		await vi.waitFor(() => assert.equal(children.length, 2));
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[0].emit("close", 1, null);
@@ -369,7 +422,9 @@ describe("Windows helper client", () => {
 
 	test("a spawn error clears the child so the next command respawns", async () => {
 		install();
-		const { client, children, spawn } = await windows({ helper: (list) => realisticChild(list, { engine: envelope("Windows", { look: ok(1) }) }) });
+		const { client, children, spawn } = await windows({
+			helper: (list) => realisticChild(list, { engine: envelope("Windows", { look: ok(1) }) }),
+		});
 		await client.command("look");
 		children[0].fail(new Error("boom"));
 		assert.equal(await client.command("look"), 1);
@@ -435,7 +490,10 @@ describe("Linux helper client", () => {
 		vi.stubEnv("PI_COMPUTER_USE_LINUX_HELPER_PATH", "");
 		const module = await import("../src/platform/linux/helper.ts");
 		assert.equal(module.LINUX_HELPER_PROTOCOL_VERSION, 4);
-		assert.equal(module.LINUX_HELPER_PATH, path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge"));
+		assert.equal(
+			module.LINUX_HELPER_PATH,
+			path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge"),
+		);
 		const before = module.linuxHelper;
 		assert.ok(before instanceof module.LinuxHelperClient);
 		module.resetLinuxHelper();
@@ -452,8 +510,16 @@ describe("Linux helper client", () => {
 		assert.deepEqual(await client.command("look"), { roots: [] });
 		assert.equal(setupSpawns(spawn).length, 0);
 		assert.equal(helperSpawns(spawn).length, 1, "the validated probe child stays as the live process");
-		assert.deepEqual(engine.requests.map((request) => request.cmd), ["diagnostics", "look", "look"]);
-		assert.deepEqual(engine.requests[1].raw, { protocolVersion: 4, id: engine.requests[1].id, cmd: "look", args: { app: "x" } });
+		assert.deepEqual(
+			engine.requests.map((request) => request.cmd),
+			["diagnostics", "look", "look"],
+		);
+		assert.deepEqual(engine.requests[1].raw, {
+			protocolVersion: 4,
+			id: engine.requests[1].id,
+			cmd: "look",
+			args: { app: "x" },
+		});
 		assert.deepEqual(helperSpawns(spawn)[0].options.stdio, ["pipe", "pipe", "pipe"]);
 	});
 
@@ -473,7 +539,11 @@ describe("Linux helper client", () => {
 		install();
 		const engine = linuxEngine({ a: slow(20, ok("A")), b: ok("B") });
 		const { client, spawn } = await linux({ helper: { engine } });
-		assert.deepEqual(await Promise.all([client.command("a"), client.command("b"), client.ensureInstalled()]), ["A", "B", undefined]);
+		assert.deepEqual(await Promise.all([client.command("a"), client.command("b"), client.ensureInstalled()]), [
+			"A",
+			"B",
+			undefined,
+		]);
 		assert.equal(helperSpawns(spawn).length, 1);
 		assert.equal(engine.requests.filter((request) => request.cmd === "diagnostics").length, 1);
 	});
@@ -494,7 +564,10 @@ describe("Linux helper client", () => {
 		const engine = linuxEngine({ diagnostics: withProtocol(3) });
 		const { client, spawn } = await linux({ setup: { exitCode: 2, stderr: "no prebuilt\n" }, helper: { engine } });
 		await assert.rejects(client.ensureInstalled(), (error) => {
-			assert.match(error.message, /^Command failed \(2\): .*--platform linux --runtime\nno prebuilt\nInstalled Linux helper .* was rejected: Linux helper protocol mismatch: expected 4, got 3\.$/s);
+			assert.match(
+				error.message,
+				/^Command failed \(2\): .*--platform linux --runtime\nno prebuilt\nInstalled Linux helper .* was rejected: Linux helper protocol mismatch: expected 4, got 3\.$/s,
+			);
 			assert.doesNotMatch(error.message, /Restart Pi/);
 			return true;
 		});
@@ -523,7 +596,11 @@ describe("Linux helper client", () => {
 		const { client, children } = await linux({ setup: installing, helper: { engine } });
 		await assert.rejects(client.ensureInstalled(), (error) => {
 			assert.ok(error.message.startsWith(`Linux helper installed at ${helperPath} failed validation: `));
-			assert.ok(error.message.endsWith("Linux helper architecture mismatch: expected 1, got 9. Rebuild and restart the helper. Re-run setup or delete it."));
+			assert.ok(
+				error.message.endsWith(
+					"Linux helper architecture mismatch: expected 1, got 9. Rebuild and restart the helper. Re-run setup or delete it.",
+				),
+			);
 			return true;
 		});
 		assert.deepEqual(children[0].signals, ["SIGTERM"]);
@@ -533,7 +610,9 @@ describe("Linux helper client", () => {
 		install();
 		const engine = linuxEngine({ diagnostics: ok(null) });
 		const { client } = await linux({ setup: { exitCode: 1 }, helper: { engine } });
-		await assert.rejects(client.ensureInstalled(), (error) => error.message.includes("was rejected: protocol mismatch: expected 4, got unknown."));
+		await assert.rejects(client.ensureInstalled(), (error) =>
+			error.message.includes("was rejected: protocol mismatch: expected 4, got unknown."),
+		);
 	});
 
 	test("setup that leaves no executable fails with the install path", async () => {
@@ -544,7 +623,10 @@ describe("Linux helper client", () => {
 	test("setup that times out adds the manual setup hint and escalates to SIGKILL after the grace", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		const { client, setups } = await linux({ setup: { hang: true }, helper: {} });
-		const outcome = assert.rejects(client.ensureInstalled(), /Command timed out after 60000ms: .*\nRun `PI_COMPUTER_USE_ALLOW_BUILD=1 node .*setup-helper\.mjs --platform linux` once outside Pi/s);
+		const outcome = assert.rejects(
+			client.ensureInstalled(),
+			/Command timed out after 60000ms: .*\nRun `PI_COMPUTER_USE_ALLOW_BUILD=1 node .*setup-helper\.mjs --platform linux` once outside Pi/s,
+		);
 		await vi.waitFor(() => assert.equal(setups.length, 1), { interval: 1 });
 		await vi.advanceTimersByTimeAsync(60_000);
 		await outcome;
@@ -567,7 +649,9 @@ describe("Linux helper client", () => {
 
 	test("setup failures: exit code with output, without output, spawn error, and a late close reported once", async () => {
 		const failing = await linux({ setup: { exitCode: 4, stdout: "built nothing\n" }, helper: {} });
-		await assert.rejects(failing.client.ensureInstalled(), (error) => /^Command failed \(4\): .*\nbuilt nothing$/s.test(error.message));
+		await assert.rejects(failing.client.ensureInstalled(), (error) =>
+			/^Command failed \(4\): .*\nbuilt nothing$/s.test(error.message),
+		);
 		const noOutput = await linux({ setup: { exitCode: 5 }, helper: {} });
 		await assert.rejects(noOutput.client.ensureInstalled(), (error) => /--runtime$/.test(error.message));
 		const broken = await linux({ setup: { spawnError: new Error("spawn ENOENT") }, helper: {} });
@@ -581,9 +665,12 @@ describe("Linux helper client", () => {
 	});
 
 	test("a non-Error setup failure is stringified", async () => {
-		const { client } = await linux({ setup: () => {
-			throw "string failure";
-		}, helper: {} });
+		const { client } = await linux({
+			setup: () => {
+				throw "string failure";
+			},
+			helper: {},
+		});
 		await assert.rejects(client.ensureInstalled(), /^Error: string failure$/);
 	});
 
@@ -640,7 +727,10 @@ describe("Linux helper client", () => {
 		install();
 		const engine = linuxEngine({
 			look: split(ok({ roots: [1, 2, 3] }), 4, 1),
-			noise: (request) => raw(`\n   \n{not json\n${JSON.stringify({ protocolVersion: 4, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result: "after noise" })}\n`),
+			noise: (request) =>
+				raw(
+					`\n   \n{not json\n${JSON.stringify({ protocolVersion: 4, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result: "after noise" })}\n`,
+				),
 		});
 		const { client } = await linux({ helper: { engine } });
 		assert.deepEqual(await client.command("look"), { roots: [1, 2, 3] });
@@ -651,16 +741,31 @@ describe("Linux helper client", () => {
 		install();
 		const engine = linuxEngine({ denied: fail("not allowed", "permission_denied"), bare: body({ ok: false }) });
 		const { client } = await linux({ helper: { engine } });
-		await assert.rejects(client.command("denied"), (error) => error.message === "not allowed" && error.code === "permission_denied");
-		await assert.rejects(client.command("bare"), (error) => error.message === "Linux helper command failed." && error.code === undefined);
-		await assert.rejects(client.command("missing"), (error) => error.code === "unsupported_command" && error.message === "Unknown command 'missing'");
+		await assert.rejects(
+			client.command("denied"),
+			(error) => error.message === "not allowed" && error.code === "permission_denied",
+		);
+		await assert.rejects(
+			client.command("bare"),
+			(error) => error.message === "Linux helper command failed." && error.code === undefined,
+		);
+		await assert.rejects(
+			client.command("missing"),
+			(error) => error.code === "unsupported_command" && error.message === "Unknown command 'missing'",
+		);
 	});
 
 	test("a reply from another protocol version names both versions and the restart hint", async () => {
 		install();
-		const engine = linuxEngine({ old: withProtocol(3), unversioned: (request) => raw(`${JSON.stringify({ id: request.id, ok: true, result: {} })}\n`) });
+		const engine = linuxEngine({
+			old: withProtocol(3),
+			unversioned: (request) => raw(`${JSON.stringify({ id: request.id, ok: true, result: {} })}\n`),
+		});
 		const { client } = await linux({ helper: { engine } });
-		await assert.rejects(client.command("old"), /Linux helper protocol mismatch: expected 4, got 3\. Restart Pi to use the installed helper\./);
+		await assert.rejects(
+			client.command("old"),
+			/Linux helper protocol mismatch: expected 4, got 3\. Restart Pi to use the installed helper\./,
+		);
 		await assert.rejects(client.command("unversioned"), /expected 4, got unknown\./);
 	});
 
@@ -669,7 +774,9 @@ describe("Linux helper client", () => {
 		const engine = linuxEngine({ hang: silent() });
 		const { client, children } = await linux({ helper: { engine } });
 		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
-		children[0].stdout.write(`${JSON.stringify({ protocolVersion: 4, id: engine.requests.at(-1).id, ok: true, result: {} })}\n`);
+		children[0].stdout.write(
+			`${JSON.stringify({ protocolVersion: 4, id: engine.requests.at(-1).id, ok: true, result: {} })}\n`,
+		);
 		engine.script("hang", ok("again"));
 		assert.equal(await client.command("hang"), "again");
 	});
@@ -694,7 +801,11 @@ describe("Linux helper client", () => {
 		const spawned = spawn.calls.length;
 		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
 		assert.equal(spawn.calls.length, spawned);
-		assert.equal(engine.requests.filter((request) => request.cmd === "look").length, 1, "only the first command reached the helper");
+		assert.equal(
+			engine.requests.filter((request) => request.cmd === "look").length,
+			1,
+			"only the first command reached the helper",
+		);
 	});
 
 	test("an already aborted signal on a cold client probes, sets up and spawns nothing (#735)", async () => {
@@ -714,7 +825,11 @@ describe("Linux helper client", () => {
 		const aborted = client.command("look", {}, { signal: controller.signal });
 		controller.abort();
 		await assert.rejects(aborted, /Operation aborted\./);
-		assert.equal(engine.requests.filter((request) => request.cmd === "look").length, 1, "only the first command reached the helper");
+		assert.equal(
+			engine.requests.filter((request) => request.cmd === "look").length,
+			1,
+			"only the first command reached the helper",
+		);
 	});
 
 	test("aborting a command rejects it", async () => {
@@ -730,7 +845,9 @@ describe("Linux helper client", () => {
 
 	test("an abort signal is detached once the command settles, on every path", async () => {
 		install();
-		const { client } = await linux({ helper: { engine: linuxEngine({ look: ok(1), nope: fail("no", "x"), hang: silent() }) } });
+		const { client } = await linux({
+			helper: { engine: linuxEngine({ look: ok(1), nope: fail("no", "x"), hang: silent() }) },
+		});
 		const listeners = (signal) => getEventListeners(signal, "abort").length;
 		const controller = new AbortController();
 		assert.equal(await client.command("look", {}, { signal: controller.signal }), 1);
@@ -746,7 +863,9 @@ describe("Linux helper client", () => {
 		const engine = linuxEngine({ look: ok(1) });
 		const hold = {};
 		let spawned = 0;
-		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }, spawned++ ? hold : undefined) });
+		const { client, children, spawn } = await linux({
+			helper: (list) => realisticChild(list, { engine }, spawned++ ? hold : undefined),
+		});
 		await client.command("look");
 		children[0].exit(0);
 		const controller = new AbortController();
@@ -762,7 +881,9 @@ describe("Linux helper client", () => {
 
 	test("a failed stdin write rejects the command with the write error", async () => {
 		install();
-		const { client, children } = await linux({ helper: (list) => realisticChild(list, { engine: linuxEngine({ look: ok(1) }) }) });
+		const { client, children } = await linux({
+			helper: (list) => realisticChild(list, { engine: linuxEngine({ look: ok(1) }) }),
+		});
 		await client.command("look");
 		children[0].stdin.destroy();
 		await assert.rejects(client.command("look"), (error) => error.code === "ERR_STREAM_DESTROYED");
@@ -784,7 +905,10 @@ describe("Linux helper client", () => {
 	test("a non-Error probe failure is stringified in the rejection", async () => {
 		install();
 		const engine = linuxEngine({ diagnostics: silent() });
-		const { client, children } = await linux({ setup: { exitCode: 1 }, helper: (list) => realisticChild(list, { engine }) });
+		const { client, children } = await linux({
+			setup: { exitCode: 1 },
+			helper: (list) => realisticChild(list, { engine }),
+		});
 		const pending = client.ensureInstalled();
 		await vi.waitFor(() => assert.equal(engine.requests.length, 1));
 		children[0].stdin.emit("error", "pipe closed");
@@ -893,7 +1017,9 @@ describe("Linux helper client", () => {
 		const engine = linuxEngine({ look: ok(1) });
 		const hold = {};
 		let spawned = 0;
-		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }, spawned++ ? hold : undefined) });
+		const { client, children, spawn } = await linux({
+			helper: (list) => realisticChild(list, { engine }, spawned++ ? hold : undefined),
+		});
 		await client.command("look");
 		children[0].exit(0);
 		const both = Promise.all([client.command("look"), client.command("look")]);

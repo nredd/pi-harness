@@ -1,27 +1,13 @@
-import { readFileSync } from "node:fs";
-import { defineConfig } from "vitest/config";
+import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
 // `computer-use-vitest`: the JS/TS runtime slice these suites measure; `computer-use` also inventories native and docs source.
-const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
-	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
-).packages["computer-use-vitest"];
 
 /**
  * Files already at 0 uncovered lines, functions, branches and statements on every OS (#645 T0). The policy schema has
  * no per-file pins, so Vitest enforces them: any regression fails `npm test` even inside the aggregate cap.
  */
 const ZERO_UNCOVERED_FILES = [
-	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
-	"scripts/check-commit-messages.mjs",
-	"scripts/check-sync-ledger.mjs",
-	"scripts/check-sync-reverts.mjs",
-	"scripts/check-upstream-sync.mjs",
-	"scripts/check-docs-platform.mjs",
-	"scripts/check-docs.mjs",
-	"scripts/check-package-assets.mjs",
-	"scripts/docs-generators/generate-source-references.mjs",
-	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
@@ -32,6 +18,7 @@ const ZERO_UNCOVERED_FILES = [
 	"src/contract.ts",
 	"src/desktop.ts",
 	"src/find-params.ts",
+	"src/index.ts",
 	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
@@ -56,7 +43,9 @@ const ZERO_UNCOVERED_FILES = [
 	"src/view.ts",
 ];
 
-export default defineConfig({
+// `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
+const config = definePackageConfig("computer-use-vitest", {
+	provider: "istanbul",
 	test: {
 		dir: "test",
 		// The suites came from `node --test` and chained `node`/`tsx` scripts, which ran one at a time.
@@ -69,18 +58,12 @@ export default defineConfig({
 		// `swiftc` invariants (INV-8, INV-17) and the `macos-native-pure` Swift compile carry their
 		// own derived budgets.
 		testTimeout: 20_000,
-		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
-		// `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
 		coverage: {
-			provider: "istanbul",
-			reporter: ["text", "lcov", "json-summary"],
-			reportsDirectory: "coverage/primary",
-			reportOnFailure: true,
-			include: owned,
-			exclude: exclusions.map(({ path }) => path),
 			thresholds: Object.fromEntries(
 				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100, statements: 100 }]),
 			),
 		},
 	},
 });
+
+export default config;

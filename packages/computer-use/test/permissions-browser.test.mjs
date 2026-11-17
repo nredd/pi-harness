@@ -4,7 +4,13 @@ import { beforeEach, describe, test, vi } from "vitest";
 import { REQUIRED_PLATFORM_INVARIANTS } from "../src/platform/architecture.ts";
 
 const fakes = vi.hoisted(() => ({
-	macos: { command: vi.fn(), ensureInstalled: vi.fn(), ensureDaemon: vi.fn(), ensureProtocol: vi.fn(), restart: vi.fn() },
+	macos: {
+		command: vi.fn(),
+		ensureInstalled: vi.fn(),
+		ensureDaemon: vi.fn(),
+		ensureProtocol: vi.fn(),
+		restart: vi.fn(),
+	},
 	runProcess: vi.fn(),
 }));
 
@@ -16,7 +22,9 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 
 const { ensurePermissions } = await import("../src/permissions.ts");
 const { ensureMacosReady } = await import("../src/platform/macos/permissions.ts");
-const { isBrowserApp, isChromeFamilyApp, openBrowserLocationWithAppleScript } = await import("../src/platform/macos/browser.ts");
+const { isBrowserApp, isChromeFamilyApp, openBrowserLocationWithAppleScript } = await import(
+	"../src/platform/macos/browser.ts"
+);
 
 const kinds = [
 	{ kind: "accessibility", openOption: "Open A" },
@@ -78,7 +86,12 @@ describe("ensurePermissions", () => {
 
 	test("registers once, offers only missing panes, opens one and rechecks to ready", async () => {
 		const signal = new AbortController().signal;
-		const bridge = makeBridge([status(false, true), status(false, true), status(true, true)], { permissionHint: "HINT", registerPermissions: vi.fn(async () => { throw new Error("register failed"); }) });
+		const bridge = makeBridge([status(false, true), status(false, true), status(true, true)], {
+			permissionHint: "HINT",
+			registerPermissions: vi.fn(async () => {
+				throw new Error("register failed");
+			}),
+		});
 		const ctx = makeCtx(["Open A", "Recheck (restarts helper)", "Recheck (restarts helper)"]);
 		assert.deepEqual(await ensurePermissions(ctx, bridge, "/h", signal), status(true, true));
 		assert.equal(bridge.registerPermissions.mock.calls.length, 1);
@@ -88,7 +101,10 @@ describe("ensurePermissions", () => {
 		assert.match(ctx.prompts[0].prompt, /\/h HINT$/);
 		assert.deepEqual(bridge.openPermissionPane.mock.calls, [["accessibility", signal]]);
 		assert.equal(bridge.restartHelper.mock.calls.length, 2);
-		assert.deepEqual(ctx.notices, [["missing accessibility", "warning"], ["ready!", "info"]]);
+		assert.deepEqual(ctx.notices, [
+			["missing accessibility", "warning"],
+			["ready!", "info"],
+		]);
 	});
 
 	test("offers both panes when both are missing and opens the selected one", async () => {
@@ -101,7 +117,10 @@ describe("ensurePermissions", () => {
 	});
 
 	test("a dismissed prompt is incomplete and an aborted signal stops the loop", async () => {
-		await assert.rejects(ensurePermissions(makeCtx([undefined]), makeBridge([status(true, false)]), "/h"), /incomplete \/h/);
+		await assert.rejects(
+			ensurePermissions(makeCtx([undefined]), makeBridge([status(true, false)]), "/h"),
+			/incomplete \/h/,
+		);
 		const controller = new AbortController();
 		const bridge = makeBridge([status(false, false)], { registerPermissions: vi.fn(async () => controller.abort()) });
 		const ctx = makeCtx([]);
@@ -113,7 +132,12 @@ describe("ensurePermissions", () => {
 describe("ensureMacosReady", () => {
 	const readyState = { lastPermissionCheckAt: 0 };
 	const goodDiagnostics = { architectureVersion: 1, invariants: [...REQUIRED_PLATFORM_INVARIANTS], pid: 1 };
-	const reply = (over = {}) => ({ accessibility: true, screenRecordingCapturable: true, screenRecordingPreflight: true, ...over });
+	const reply = (over = {}) => ({
+		accessibility: true,
+		screenRecordingCapturable: true,
+		screenRecordingPreflight: true,
+		...over,
+	});
 
 	beforeEach(() => {
 		for (const fake of Object.values(fakes.macos)) fake.mockReset();
@@ -127,22 +151,46 @@ describe("ensureMacosReady", () => {
 	test("fails when the daemon does not start or the architecture is wrong", async () => {
 		const signal = new AbortController().signal;
 		fakes.macos.ensureDaemon.mockResolvedValueOnce(false);
-		await assert.rejects(ensureMacosReady(makeCtx([]), readyState, signal), /daemon did not start\. Helper app: \/fake\/pi-computer-use\.app/);
+		await assert.rejects(
+			ensureMacosReady(makeCtx([]), readyState, signal),
+			/daemon did not start\. Helper app: \/fake\/pi-computer-use\.app/,
+		);
 		assert.deepEqual(fakes.macos.ensureInstalled.mock.calls, [[signal]]);
 		fakes.macos.ensureProtocol.mockResolvedValueOnce({ ...goodDiagnostics, architectureVersion: 7 });
 		await assert.rejects(ensureMacosReady(makeCtx([]), readyState), /macOS helper architecture mismatch/);
 	});
 
 	test("checks granted permissions and parses the attribution source", async () => {
-		fakes.macos.command.mockResolvedValueOnce(reply({ screenRecordingPreflight: false, source: {
-			attribution: "helper-app", pid: 12.5, parentPid: 0, executablePath: "/x/bridge", parentPath: "/p", parentBundleId: "b.id", macOS: "15.1",
-		} }));
+		fakes.macos.command.mockResolvedValueOnce(
+			reply({
+				screenRecordingPreflight: false,
+				source: {
+					attribution: "helper-app",
+					pid: 12.5,
+					parentPid: 0,
+					executablePath: "/x/bridge",
+					parentPath: "/p",
+					parentBundleId: "b.id",
+					macOS: "15.1",
+				},
+			}),
+		);
 		const signal = new AbortController().signal;
 		const before = Date.now();
 		const next = await ensureMacosReady(makeCtx([], false), readyState, signal);
 		assert.deepEqual(next.permissionStatus, {
-			accessibility: true, screenRecording: true, screenRecordingPreflight: false,
-			source: { attribution: "helper-app", pid: 12, parentPid: undefined, executablePath: "/x/bridge", parentPath: "/p", parentBundleId: "b.id", os: "15.1" },
+			accessibility: true,
+			screenRecording: true,
+			screenRecordingPreflight: false,
+			source: {
+				attribution: "helper-app",
+				pid: 12,
+				parentPid: undefined,
+				executablePath: "/x/bridge",
+				parentPath: "/p",
+				parentBundleId: "b.id",
+				os: "15.1",
+			},
 		});
 		assert.deepEqual(next.helperDiagnostics, goodDiagnostics);
 		assert.ok(next.lastPermissionCheckAt >= before);
@@ -156,44 +204,98 @@ describe("ensureMacosReady", () => {
 		assert.deepEqual(cached, { ...fresh, helperDiagnostics: goodDiagnostics });
 		await ensureMacosReady(makeCtx([], false), { ...fresh, lastPermissionCheckAt: Date.now() - 5_000 });
 		assert.equal(checks().length, 1);
-		await ensureMacosReady(makeCtx([], false), { permissionStatus: status(true, false), lastPermissionCheckAt: Date.now() });
-		await ensureMacosReady(makeCtx([], false), { permissionStatus: status(false, true), lastPermissionCheckAt: Date.now() });
+		await ensureMacosReady(makeCtx([], false), {
+			permissionStatus: status(true, false),
+			lastPermissionCheckAt: Date.now(),
+		});
+		await ensureMacosReady(makeCtx([], false), {
+			permissionStatus: status(false, true),
+			lastPermissionCheckAt: Date.now(),
+		});
 		await ensureMacosReady(makeCtx([], false), { lastPermissionCheckAt: Date.now() });
 		assert.equal(checks().length, 4);
 	});
 
 	test("a missing grant without a UI explains the setup", async () => {
 		fakes.macos.command.mockResolvedValue(reply({ accessibility: false, source: "not an object" }));
-		await assert.rejects(ensureMacosReady(makeCtx([], false), readyState), (error) => /requires an interactive session/.test(error.message) && /Helper path: \/fake\/pi-computer-use\.app/.test(error.message) && /Accessibility and Screen Recording/.test(error.message));
+		await assert.rejects(
+			ensureMacosReady(makeCtx([], false), readyState),
+			(error) =>
+				/requires an interactive session/.test(error.message) &&
+				/Helper path: \/fake\/pi-computer-use\.app/.test(error.message) &&
+				/Accessibility and Screen Recording/.test(error.message),
+		);
 	});
 
 	test("a missing grant prompts, registers, opens panes, restarts and finishes after recheck", async () => {
 		const signal = new AbortController().signal;
 		let granted = false;
-		const ctx = makeCtx(["Open Accessibility Settings (missing)", "Open Screen Recording Settings (missing)", "Recheck (restarts helper)", "Recheck (restarts helper)"]);
+		const ctx = makeCtx([
+			"Open Accessibility Settings (missing)",
+			"Open Screen Recording Settings (missing)",
+			"Recheck (restarts helper)",
+			"Recheck (restarts helper)",
+		]);
 		fakes.macos.command.mockImplementation(async (command) => {
-			if (command === "checkPermissions") return reply({ accessibility: granted, screenRecordingCapturable: granted, screenRecordingPreflight: true });
+			if (command === "checkPermissions")
+				return reply({ accessibility: granted, screenRecordingCapturable: granted, screenRecordingPreflight: true });
 			return {};
 		});
-		fakes.macos.restart.mockImplementationOnce(async () => undefined).mockImplementationOnce(async () => { granted = true; });
+		fakes.macos.restart
+			.mockImplementationOnce(async () => undefined)
+			.mockImplementationOnce(async () => {
+				granted = true;
+			});
 		const next = await ensureMacosReady(ctx, readyState, signal);
 		assert.equal(next.permissionStatus.accessibility, true);
 		const commands = fakes.macos.command.mock.calls.map(([command]) => command);
-		assert.deepEqual(commands.filter((command) => command !== "checkPermissions"), ["registerPermissions", "openPermissionPane", "openPermissionPane"]);
-		assert.deepEqual(fakes.macos.command.mock.calls.find(([command]) => command === "registerPermissions"), ["registerPermissions", {}, { signal, timeoutMs: 15_000 }]);
-		assert.deepEqual(fakes.macos.command.mock.calls.filter(([command]) => command === "openPermissionPane").map(([, args, options]) => [args, options]), [[{ kind: "accessibility" }, { signal }], [{ kind: "screenRecording" }, { signal }]], "openPermissionPane forwards the signal");
+		assert.deepEqual(
+			commands.filter((command) => command !== "checkPermissions"),
+			["registerPermissions", "openPermissionPane", "openPermissionPane"],
+		);
+		assert.deepEqual(
+			fakes.macos.command.mock.calls.find(([command]) => command === "registerPermissions"),
+			["registerPermissions", {}, { signal, timeoutMs: 15_000 }],
+		);
+		assert.deepEqual(
+			fakes.macos.command.mock.calls
+				.filter(([command]) => command === "openPermissionPane")
+				.map(([, args, options]) => [args, options]),
+			[
+				[{ kind: "accessibility" }, { signal }],
+				[{ kind: "screenRecording" }, { signal }],
+			],
+			"openPermissionPane forwards the signal",
+		);
 		assert.deepEqual(fakes.macos.restart.mock.calls, [[signal], [signal]]);
-		assert.deepEqual(ctx.notices, [["Still missing after restart: accessibility and screenRecording. If these permissions were enabled before this install/update, macOS invalidated the old grants because pi-computer-use.app was re-signed. Re-enable both toggles for the newly signed helper. If a toggle is already on, switch it off and on again. Then choose Recheck again.", "warning"], ["pi-computer-use is ready.", "info"]]);
-		assert.match(ctx.prompts[0].prompt, /^pi-computer-use needs macOS permissions for its helper app\.\nAccessibility: missing; Screen Recording: missing; \(Screen Recording reads granted/);
+		assert.deepEqual(ctx.notices, [
+			[
+				"Still missing after restart: accessibility and screenRecording. If these permissions were enabled before this install/update, macOS invalidated the old grants because pi-computer-use.app was re-signed. Re-enable both toggles for the newly signed helper. If a toggle is already on, switch it off and on again. Then choose Recheck again.",
+				"warning",
+			],
+			["pi-computer-use is ready.", "info"],
+		]);
+		assert.match(
+			ctx.prompts[0].prompt,
+			/^pi-computer-use needs macOS permissions for its helper app\.\nAccessibility: missing; Screen Recording: missing; \(Screen Recording reads granted/,
+		);
 	});
 
 	test("the prompt reports a failed capture probe and the caller-attribution warning", async () => {
-		fakes.macos.command.mockResolvedValue(reply({ screenRecordingCapturable: false, source: { attribution: "caller", executablePath: "/x/bridge" } }));
+		fakes.macos.command.mockResolvedValue(
+			reply({ screenRecordingCapturable: false, source: { attribution: "caller", executablePath: "/x/bridge" } }),
+		);
 		const ctx = makeCtx(["Cancel"]);
 		await assert.rejects(ensureMacosReady(ctx, readyState), /setup is incomplete\. Grant Accessibility/);
 		const { prompt } = ctx.prompts[0];
-		assert.match(prompt, /Accessibility: granted; Screen Recording: missing; \(Screen Recording reads granted in the TCC database but a live capture probe failed/);
-		assert.match(prompt, /Helper: pi-computer-use\.app \(\/fake\/pi-computer-use\.app\)\nWarning: the helper is not running as the installed pi-computer-use\.app \(executable: \/x\/bridge\)/);
+		assert.match(
+			prompt,
+			/Accessibility: granted; Screen Recording: missing; \(Screen Recording reads granted in the TCC database but a live capture probe failed/,
+		);
+		assert.match(
+			prompt,
+			/Helper: pi-computer-use\.app \(\/fake\/pi-computer-use\.app\)\nWarning: the helper is not running as the installed pi-computer-use\.app \(executable: \/x\/bridge\)/,
+		);
 		assert.match(prompt, /Important: If these permissions were enabled before/);
 		assert.match(prompt, /enable its toggle, then choose Recheck\.$/);
 		fakes.macos.command.mockResolvedValue(reply({ accessibility: false, source: { attribution: "caller" } }));
@@ -203,7 +305,14 @@ describe("ensureMacosReady", () => {
 	});
 
 	test("no hint for the canonical helper and no capture-probe line when preflight also fails", async () => {
-		fakes.macos.command.mockResolvedValue(reply({ accessibility: false, screenRecordingCapturable: false, screenRecordingPreflight: false, source: { attribution: "helper-app" } }));
+		fakes.macos.command.mockResolvedValue(
+			reply({
+				accessibility: false,
+				screenRecordingCapturable: false,
+				screenRecordingPreflight: false,
+				source: { attribution: "helper-app" },
+			}),
+		);
 		const ctx = makeCtx(["Cancel"]);
 		await assert.rejects(ensureMacosReady(ctx, readyState), /incomplete/);
 		assert.doesNotMatch(ctx.prompts[0].prompt, /Warning: the helper is not running|live capture probe/);
@@ -230,29 +339,58 @@ describe("browser bridge", () => {
 	test("drives Safari and Chrome-family targets through osascript with escaped values", async () => {
 		const signal = new AbortController().signal;
 		fakes.runProcess.mockResolvedValue("");
-		assert.equal(await openBrowserLocationWithAppleScript({ appName: "Safari", bundleId: "com.apple.Safari" }, 'https://x.test/?q="1"\\', signal), true);
-		assert.deepEqual(fakes.runProcess.mock.calls[0], ["osascript", ["-e", 'tell application id "com.apple.Safari" to set URL of front document to "https://x.test/?q=\\"1\\"\\\\"'], 10_000, signal]);
+		assert.equal(
+			await openBrowserLocationWithAppleScript(
+				{ appName: "Safari", bundleId: "com.apple.Safari" },
+				'https://x.test/?q="1"\\',
+				signal,
+			),
+			true,
+		);
+		assert.deepEqual(fakes.runProcess.mock.calls[0], [
+			"osascript",
+			["-e", 'tell application id "com.apple.Safari" to set URL of front document to "https://x.test/?q=\\"1\\"\\\\"'],
+			10_000,
+			signal,
+		]);
 		assert.equal(await openBrowserLocationWithAppleScript({ appName: " safari " }, "u"), true);
-		assert.equal(fakes.runProcess.mock.calls[1][1][1], 'tell application " safari " to set URL of front document to "u"');
+		assert.equal(
+			fakes.runProcess.mock.calls[1][1][1],
+			'tell application " safari " to set URL of front document to "u"',
+		);
 		assert.equal(await openBrowserLocationWithAppleScript({ appName: "Arc" }, "https://a.test"), true);
-		assert.equal(fakes.runProcess.mock.calls[2][1][1], 'tell application "Arc" to set URL of active tab of front window to "https://a.test"');
+		assert.equal(
+			fakes.runProcess.mock.calls[2][1][1],
+			'tell application "Arc" to set URL of active tab of front window to "https://a.test"',
+		);
 		assert.equal(await openBrowserLocationWithAppleScript({ appName: "x", bundleId: "com.brave.Browser" }, "u"), true);
-		assert.match(fakes.runProcess.mock.calls[3][1][1], /^tell application id "com\.brave\.Browser" to set URL of active tab/);
+		assert.match(
+			fakes.runProcess.mock.calls[3][1][1],
+			/^tell application id "com\.brave\.Browser" to set URL of active tab/,
+		);
 	});
 
 	test("returns false without running osascript for other apps", async () => {
-		assert.equal(await openBrowserLocationWithAppleScript({ appName: "Firefox", bundleId: "org.mozilla.firefox" }, "u"), false);
+		assert.equal(
+			await openBrowserLocationWithAppleScript({ appName: "Firefox", bundleId: "org.mozilla.firefox" }, "u"),
+			false,
+		);
 		assert.equal(fakes.runProcess.mock.calls.length, 0);
 	});
 
 	test("appends the Apple Events hint once for JavaScript-disabled errors and passes others through", async () => {
 		const target = { appName: "Google Chrome" };
-		const disabled = Object.assign(new Error("Executing JavaScript through AppleScript is turned off."), { name: "CustomError" });
+		const disabled = Object.assign(new Error("Executing JavaScript through AppleScript is turned off."), {
+			name: "CustomError",
+		});
 		fakes.runProcess.mockRejectedValueOnce(disabled);
 		const enhanced = await openBrowserLocationWithAppleScript(target, "u").catch((error) => error);
 		assert.notEqual(enhanced, disabled);
 		assert.equal(enhanced.name, "CustomError");
-		assert.match(enhanced.message, /^Executing JavaScript through AppleScript is turned off\.\n\nBrowser JavaScript Apple Events are disabled for the target browser\. Ask the user to enable "Allow JavaScript from Apple Events"/);
+		assert.match(
+			enhanced.message,
+			/^Executing JavaScript through AppleScript is turned off\.\n\nBrowser JavaScript Apple Events are disabled for the target browser\. Ask the user to enable "Allow JavaScript from Apple Events"/,
+		);
 		fakes.runProcess.mockRejectedValueOnce(enhanced);
 		assert.equal(await openBrowserLocationWithAppleScript(target, "u").catch((error) => error), enhanced);
 		const other = new Error("boom");

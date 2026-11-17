@@ -6,6 +6,62 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Retire upstream-sync metadata validation (#895, #860); all runtime behavior suites remain, including the ordinary EPERM regression. No runtime source or uncovered budget is removed." },
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Retire the sync mutation runner (#895, #860); each applicable case already invokes an ordinary behavior regression which remains. The EPERM group-quiescence guard remains in async-safety.test.mjs; no runtime source or uncovered budget is removed." },
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Retire automated upstream comparison (#895, #860), upstream pulls are manual. The layout gate now denies retired sync signatures even under renamed commands and files; no runtime source or uncovered budget is removed." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Retire sync metadata validation (#895, #860), retaining the ordinary runtime regression suites and every zero-uncovered budget." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Retire sync mutation orchestration (#895, #860); its runtime tests already live under test/ and remain, including the EPERM regression. Every zero-uncovered budget remains." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Retire automated upstream comparison (#895, #860); the measured python-scripts layout gate denies renamed sync signatures and retains zero-uncovered budgets." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/config.ts", "replacement": "packages/todo/src/config.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/index.ts", "replacement": "packages/todo/src/index.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/plan-hooks.ts", "replacement": "packages/todo/src/plan/hooks.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/todo-overlay.ts", "replacement": "packages/todo/src/todo-overlay.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/todo.ts", "replacement": "packages/todo/src/todo.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/agents.ts", "replacement": "packages/todo/src/agents.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/monitors.ts", "replacement": "packages/todo/src/monitors.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/plan.ts", "replacement": "packages/todo/src/plan/reconcile.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/i18n-bridge.ts", "replacement": "packages/todo/src/state/i18n-bridge.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/invariants.ts", "replacement": "packages/todo/src/state/invariants.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/lineage.ts", "replacement": "packages/todo/src/state/lineage.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/replay.ts", "replacement": "packages/todo/src/state/replay.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/selectors.ts", "replacement": "packages/todo/src/state/selectors.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/state-reducer.ts", "replacement": "packages/todo/src/state/state-reducer.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/state.ts", "replacement": "packages/todo/src/state/state.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/store.ts", "replacement": "packages/todo/src/state/store.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/state/task-graph.ts", "replacement": "packages/todo/src/state/task-graph.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/tool/response-envelope.ts", "replacement": "packages/todo/src/tool/response-envelope.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/tool/sanitize.ts", "replacement": "packages/todo/src/tool/sanitize.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/tool/types.ts", "replacement": "packages/todo/src/tool/types.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "bun", "path": "packages/todo/view/format.ts", "replacement": "packages/todo/src/view/format.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/config.ts", "replacement": "packages/todo/src/config.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/index.ts", "replacement": "packages/todo/src/index.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/plan-hooks.ts", "replacement": "packages/todo/src/plan/hooks.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/todo-overlay.ts", "replacement": "packages/todo/src/todo-overlay.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/todo.ts", "replacement": "packages/todo/src/todo.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/agents.ts", "replacement": "packages/todo/src/agents.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/monitors.ts", "replacement": "packages/todo/src/monitors.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/plan.ts", "replacement": "packages/todo/src/plan/reconcile.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/i18n-bridge.ts", "replacement": "packages/todo/src/state/i18n-bridge.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/invariants.ts", "replacement": "packages/todo/src/state/invariants.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/lineage.ts", "replacement": "packages/todo/src/state/lineage.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/replay.ts", "replacement": "packages/todo/src/state/replay.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/selectors.ts", "replacement": "packages/todo/src/state/selectors.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/state-reducer.ts", "replacement": "packages/todo/src/state/state-reducer.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/state.ts", "replacement": "packages/todo/src/state/state.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/store.ts", "replacement": "packages/todo/src/state/store.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/state/task-graph.ts", "replacement": "packages/todo/src/state/task-graph.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/tool/response-envelope.ts", "replacement": "packages/todo/src/tool/response-envelope.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/tool/sanitize.ts", "replacement": "packages/todo/src/tool/sanitize.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/tool/types.ts", "replacement": "packages/todo/src/tool/types.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "todo", "signal": "owned", "path": "packages/todo/view/format.ts", "replacement": "packages/todo/src/view/format.ts", "reason": "Layout move, no source change (#874)." },
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-package-assets.mjs", "replacement": "scripts/package_contracts.py", "reason": "Consolidate exact tarball checks in PackageContract (#868); Python implementation and negative controls remain measured under python-scripts at zero uncovered budgets." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-package-assets.mjs", "replacement": "scripts/package_contracts.py", "reason": "Move duplicate asset checks to the authoritative PackageContract (#868), measured by python-scripts with zero uncovered budgets." },
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-commit-messages.mjs", "replacement": "scripts/check-commit-messages.mjs", "reason": "Move repository-wide commit policy to root scripts (#869), measured by import-audit with the same real-history and refusal tests and zero uncovered floors." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-commit-messages.mjs", "replacement": "scripts/check-commit-messages.mjs", "reason": "Move repository-wide commit policy to root scripts (#869), measured by import-audit with the same real-history and refusal tests and zero uncovered floors." },
+    { "package": "import-audit", "signal": "owned", "path": "scripts/check-biome-paths.mjs", "reason": "Deleted for nredd/pi-harness#862: the preflight only existed to hand `biome check` an explicit path list so a missing path could not pass silently. The five migrated packages lint under the shared root `biome.json` (the three deferred packages keep nested configs marked `root: false`), and the integration/probes, integration/providers and scripts gates lint a directory or glob instead of hand-written file lists, so a renamed or deleted file cannot silently drop out and there is no path list to validate. Its test and verification helper entry go with it; no other owned file lost coverage and import-audit stays at 0/0/0/0." },
+    { "package": "import-audit", "signal": "owned", "path": "packages/todo/.vitest.config.ts", "replacement": "packages/todo/vitest.config.ts", "reason": "Relative to cba32fea: the config loses its dot prefix (#863, #860) so every package config is `vitest.config.ts` and no script passes `--config`. Same options, now built by `scripts/vitest-package.ts`, which is owned and measured at 0/0/0/0 in this signal." },
+    { "package": "runtime-build-tooling", "signal": "owned", "path": "packages/plan-mode/scripts/runtime-builder.mjs", "replacement": "scripts/runtime-builder.mjs", "reason": "Relative to 1b1ae909: the shared esbuild runtime builder moves to the root `scripts/` (#866) because subagents imported it across package boundaries. Same producer, same 0/0 floor: `test:dist` now roots Vitest at the repository so the moved file stays measured by the plan-mode `build-runtime.test.ts` that already exercised it." },
+    { "package": "subagents-runtime-tooling", "signal": "owned", "path": "packages/subagents/scripts/check-runtime.mjs", "reason": "Relative to 1b1ae909: deleted (#866). It compared a committed `dist/` with a fresh build, and `dist/` is no longer committed, so there is nothing to compare. Its guarantee survives as the `runtime-scripts.test.ts` case that two builds of one tree are byte-identical; `build-runtime.mjs` stays pinned at 100%." },
     { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to 57a0c580: preserve every runtime and type export through explicit static named re-exports. Real TypeScript and emitted-ESM Istanbul maps contain zero statements/functions/branches; real Node/Bun namespace parity and type tests preserve the export-star contract. Existing strict facade validation rejects executable additions; all three target modules remain owned and measured." },
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
@@ -31,15 +87,140 @@
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/probes/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/providers/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "scripts/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
-    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
+    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." },
+    { "package": "inprocess", "signal": "owned", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
+    { "package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_cleanup.sh", "reason": "Relative to origin/main 06ceb029: deleted. Its cleanup is folded into `scripts/wsl2_capture.py` (`cleanup`), measured under python-scripts (#695 slice 3); the `shell-scripts` inventory cannot name a `.py` replacement. `wsl2_capture.sh` stays as an exec bootstrap and remains owned." },
+    { "package": "preset", "signal": "owned", "path": "packages/preset/extensions/expanded-footer.ts", "replacement": "packages/preset/src/index.ts", "reason": "Move the preset entry into src (#876); unchanged behavior and zero uncovered budgets." },
+    { "package": "preset", "signal": "bun", "path": "packages/preset/extensions/expanded-footer.ts", "replacement": "packages/preset/src/index.ts", "reason": "Preserve the Bun signal for the moved preset entry (#876)." },
+    { "package": "preset", "signal": "owned", "path": "packages/preset/lib/footer-cache.ts", "replacement": "packages/preset/src/footer-cache.ts", "reason": "Move the footer cache helper into src (#876); unchanged behavior and zero uncovered budgets." },
+    { "package": "preset", "signal": "bun", "path": "packages/preset/lib/footer-cache.ts", "replacement": "packages/preset/src/footer-cache.ts", "reason": "Preserve the Bun signal for the moved cache helper (#876)." },
+    { "package": "preset", "signal": "owned", "path": "packages/preset/lib/footer-quota.ts", "replacement": "packages/preset/src/footer-quota.ts", "reason": "Move the footer quota helper into src (#876); unchanged behavior and zero uncovered budgets." },
+    { "package": "preset", "signal": "bun", "path": "packages/preset/lib/footer-quota.ts", "replacement": "packages/preset/src/footer-quota.ts", "reason": "Preserve the Bun signal for the moved quota helper (#876)." },
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/next.config.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/postcss.config.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/source.config.ts", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/app/(docs)/[[...slug]]/page.tsx", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/app/(docs)/layout.tsx", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/app/api/search/route.ts", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/app/layout.tsx", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/components/brand.tsx", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/lib/source.ts", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/docs/src/mdx-components.tsx", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/extensions/computer-use.ts", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870).", "replacement": "packages/computer-use/src/index.ts"},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-docs-platform.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-docs.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/docs-generators/generate-source-references.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/docs-generators/generate-tool-reference.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/make-signing-cert.sh", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/extensions/computer-use.ts", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870).", "replacement": "packages/computer-use/src/index.ts"},
+    {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-docs-platform.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-docs.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/docs-generators/generate-source-references.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/docs-generators/generate-tool-reference.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
+    {"package": "computer-use-async", "signal": "owned", "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870).", "replacement": "packages/computer-use/tests/fixtures/check-async.mjs"},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/__init__.py", "replacement": "tests/integration/harness/__init__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/anthropic_mock.py", "replacement": "tests/integration/harness/anthropic_mock.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/bench.py", "replacement": "tests/integration/harness/bench.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/credentials.py", "replacement": "release/pi_release/credentials.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/files.py", "replacement": "release/pi_release/files.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/fleet_load.py", "replacement": "tests/integration/harness/fleet_load.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/git_fixture.py", "replacement": "tests/integration/harness/git_fixture.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/golden.py", "replacement": "tests/integration/harness/golden.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/headless.py", "replacement": "tests/integration/harness/headless.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/install.py", "replacement": "release/pi_release/install.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/install_paths.py", "replacement": "release/pi_release/install_paths.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/interactive.py", "replacement": "tests/integration/harness/interactive.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/isolation.py", "replacement": "tests/integration/harness/isolation.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/latency.py", "replacement": "tests/integration/harness/latency.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/live.py", "replacement": "tests/integration/harness/live.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/paths.py", "replacement": "tests/integration/harness/paths.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/power.py", "replacement": "tests/integration/harness/power.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/probe.py", "replacement": "tests/integration/harness/probe.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/process_group.py", "replacement": "release/pi_release/process_group.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/promotion.py", "replacement": "release/pi_release/promotion.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/promotion_verify.py", "replacement": "release/pi_release/promotion_verify.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/publish_gate.py", "replacement": "release/pi_release/publish_gate.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/quota.py", "replacement": "tests/integration/harness/quota.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/release.py", "replacement": "release/pi_release/release.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/release_gate.py", "replacement": "release/pi_release/release_gate.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/rpc.py", "replacement": "tests/integration/harness/rpc.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/runtime_hooks.py", "replacement": "tests/integration/harness/runtime_hooks.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/runtime_lock.py", "replacement": "release/pi_release/runtime_lock.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/sandbox.py", "replacement": "tests/integration/harness/sandbox.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/session_kit.py", "replacement": "tests/integration/harness/session_kit.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/sessions.py", "replacement": "tests/integration/harness/sessions.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/stack.py", "replacement": "release/pi_release/stack.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/stack_fixture.py", "replacement": "tests/integration/harness/stack_fixture.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/standalone_diagnostics.py", "replacement": "tests/integration/harness/standalone_diagnostics.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/startup.py", "replacement": "tests/integration/harness/startup.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/stats.py", "replacement": "tests/integration/harness/stats.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/tmux.py", "replacement": "tests/integration/harness/tmux.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/transcript.py", "replacement": "tests/integration/harness/transcript.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/__init__.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/__init__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/__main__.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/__main__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/artifacts.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/artifacts.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/cli.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/cli.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/finalize.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/finalize.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/fixtures.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/fixtures.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/matrix.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/matrix.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/models.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/models.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/prepare.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/prepare.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/process.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/process.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/report.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/report.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/usage.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/usage.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/auth_guard.mjs", "replacement": "tests/integration/providers/auth_guard.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/auth_runtime_fixture.mjs", "replacement": "tests/integration/providers/auth_runtime_fixture.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/auth_transport.mjs", "replacement": "tests/integration/providers/auth_transport.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/bun_runtime.mjs", "replacement": "tests/integration/providers/bun_runtime.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/extension_inventory.ts", "replacement": "tests/integration/providers/extension_inventory.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/faux.ts", "replacement": "tests/integration/providers/faux.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/redirect_anthropic.mjs", "replacement": "tests/integration/providers/redirect_anthropic.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/usage_fixture.ts", "replacement": "tests/integration/providers/usage_fixture.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/auth_guard.mjs", "replacement": "tests/integration/providers/auth_guard.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/auth_runtime_fixture.mjs", "replacement": "tests/integration/providers/auth_runtime_fixture.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/auth_transport.mjs", "replacement": "tests/integration/providers/auth_transport.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/bun_runtime.mjs", "replacement": "tests/integration/providers/bun_runtime.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/extension_inventory.ts", "replacement": "tests/integration/providers/extension_inventory.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/faux.ts", "replacement": "tests/integration/providers/faux.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/redirect_anthropic.mjs", "replacement": "tests/integration/providers/redirect_anthropic.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/usage_fixture.ts", "replacement": "tests/integration/providers/usage_fixture.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "import-audit", "signal": "owned", "path": "integration/inprocess/vitest.config.ts", "replacement": "tests/inprocess/vitest.config.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "import-audit", "signal": "owned", "path": "integration/probes/vitest.config.ts", "replacement": "tests/integration/probes/vitest.config.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "import-audit", "signal": "owned", "path": "integration/providers/vitest.config.ts", "replacement": "tests/integration/providers/vitest.config.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/anthropic-block-types.mjs", "replacement": "tests/integration/probes/anthropic-block-types.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/latency.ts", "replacement": "tests/integration/probes/latency.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/render.ts", "replacement": "tests/integration/probes/render.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/session-kit-child-scope.ts", "replacement": "tests/integration/probes/session-kit-child-scope.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/stack-resources.ts", "replacement": "tests/integration/probes/stack-resources.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/transcript-types.ts", "replacement": "tests/integration/probes/transcript-types.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/agents-support.ts", "replacement": "tests/inprocess/agents-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/goal-support.ts", "replacement": "tests/inprocess/goal-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/native-timers.ts", "replacement": "tests/inprocess/native-timers.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/support.ts", "replacement": "tests/inprocess/support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/todo-support.ts", "replacement": "tests/inprocess/todo-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/verification/core-artifacts.ts", "replacement": "tests/inprocess/verification/core-artifacts.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/agents-support.ts", "replacement": "tests/inprocess/agents-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/goal-support.ts", "replacement": "tests/inprocess/goal-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/native-timers.ts", "replacement": "tests/inprocess/native-timers.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/support.ts", "replacement": "tests/inprocess/support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/todo-support.ts", "replacement": "tests/inprocess/todo-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/core-artifacts.ts", "replacement": "tests/inprocess/verification/core-artifacts.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/anthropic-block-types.mjs","replacement":"tests/integration/probes/anthropic-block-types.mjs","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/latency.ts","replacement":"tests/integration/probes/latency.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/render.ts","replacement":"tests/integration/probes/render.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/session-kit-child-scope.ts","replacement":"tests/integration/probes/session-kit-child-scope.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/stack-resources.ts","replacement":"tests/integration/probes/stack-resources.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/transcript-types.ts","replacement":"tests/integration/probes/transcript-types.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/inprocess/vitest.config.ts","replacement":"tests/inprocess/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/probes/vitest.config.ts","replacement":"tests/integration/probes/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/providers/vitest.config.ts","replacement":"tests/integration/providers/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."}
   ],
   "enforcement_changes": [],
   "verification_helpers": [
-    { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
-    { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
-    { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
-    { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." }
+    { "path": "tests/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
+    { "path": "tests/lib/src/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." }
   ],
   "packages": {
     "dev-tools": {
@@ -66,7 +247,6 @@
       "root": "packages/plan-mode",
       "owned": ["src/**/*.ts"],
       "exclusions": [
-        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files." },
         { "path": "src/index.ts", "kind": "non-executable-facade", "reason": "Only a static ESM re-export of plan-mode's default binding. Istanbul source/emitted-ESM maps contain zero statements/functions; all implementation remains owned in src/plan-mode.ts. Strict source-shape validation rejects executable additions." },
         { "path": "src/interactive-ui.ts", "kind": "non-executable-facade", "reason": "Only static ESM re-exports of UI menu bindings; Istanbul source/emitted-ESM maps contain zero statements/functions. Target implementations remain owned. Strict source-shape validation rejects executable additions." }
       ],
@@ -88,7 +268,7 @@
     },
     "preset": {
       "root": "packages/preset",
-      "owned": ["extensions/**/*.ts", "lib/**/*.ts"],
+      "owned": ["src/**/*.ts"],
       "exclusions": [],
       "status": "measured",
       "note": "",
@@ -133,11 +313,10 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [
         { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
-        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." },
-        { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
+        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." }
       ],
       "status": "measured",
-      "note": "Retain the existing zero primary floors. Follow-up #824 covers omitted stats arguments and classifies the validated named library facade without excluding its executable targets. Bun follows the full owned inventory; local zero reports do not authorize promotion without this follow-up's own hosted macOS/Linux zero receipts.",
+      "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS, Ubuntu and WSL/Linux Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829); WSL is Linux, not native Windows. The strict named facade leaves its executable targets owned.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -147,8 +326,7 @@
         "bun": {
           "report": "coverage/bun/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
-          "enforcement": "report-only",
-          "reason": "Full source-complete Vitest-on-Bun suite with real Istanbul L/F/B/S. Omitted public arguments are covered, the unreachable private help default is removed, and the validated named library facade preserves the full runtime/type export contract. Keep report-only; this follow-up's own hosted macOS/Linux zero receipts are required before promotion: https://github.com/nredd/pi-harness/issues/824 (parent https://github.com/nredd/pi-harness/issues/320).",
+          "enforcement": "enforced",
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
@@ -156,9 +334,7 @@
     "subagents": {
       "root": "packages/subagents",
       "owned": ["src/**/*.ts"],
-      "exclusions": [
-        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; Pi's Jiti loads this generated entry (#577)." }
-      ],
+      "exclusions": [],
       "status": "measured",
       "note": "",
       "signals": {
@@ -198,7 +374,7 @@
     },
     "todo": {
       "root": "packages/todo",
-      "owned": ["config.ts", "index.ts", "plan-hooks.ts", "todo-overlay.ts", "todo.ts", "state/**/*.ts", "tool/**/*.ts", "view/**/*.ts"],
+      "owned": ["src/**/*.ts"],
       "exclusions": [],
       "status": "measured",
       "note": "Branch cap 0 on primary and bun: measured on darwin locally (#414); linux and WSL2 to be confirmed by hosted CI",
@@ -219,8 +395,8 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
-      "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs"],
+      "exclusions": [{"path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript."}],
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
@@ -251,7 +427,7 @@
     },
     "computer-use-async": {
       "root": "packages/computer-use",
-      "owned": ["scripts/check-async.mjs"],
+      "owned": ["tests/fixtures/check-async.mjs"],
       "exclusions": [],
       "status": "measured",
       "goal": "report-only",
@@ -289,12 +465,12 @@
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
-      "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "scripts/build-native.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs"],
+      "exclusions": [{"path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript."}],
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements; see docs/computer-use-coverage.md.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -310,18 +486,18 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner has not chosen how to measure shell and PowerShell (port to Python vs kcov/Pester): https://github.com/nredd/pi-harness/issues/695. Inventory stays visible, with no coverage claim.",
-      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. No producer or shellcheck for the remaining install_*.sh, wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
+      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh, wsl2_run.sh and wsl2_capture.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py`, `scripts/wsl2_run.py` and `scripts/wsl2_capture.py` (shared plumbing in `scripts/wsl2_exec.py`; the former `wsl2_cleanup.sh` is folded into the capture) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
       "signals": {}
     },
     "runtime-build-tooling": {
-      "root": "packages/plan-mode",
-      "owned": ["scripts/*.mjs"],
+      "root": ".",
+      "owned": ["packages/plan-mode/scripts/build-runtime.mjs", "scripts/runtime-builder.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI enforces it at 0/0 on macOS and Linux.",
+      "note": "`test:runtime-build` (Vitest root is the repository) emits a complete primary report for plan-mode's thin `build-runtime.mjs` and the shared root `scripts/runtime-builder.mjs` (moved from `packages/plan-mode/scripts/`, #866); required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
-          "report": "coverage/runtime-build-tooling/lcov.info",
+          "report": "packages/plan-mode/coverage/runtime-build-tooling/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
@@ -329,10 +505,10 @@
     },
     "subagents-runtime-tooling": {
       "root": "packages/subagents",
-      "owned": ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"],
+      "owned": ["scripts/build-runtime.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "The actual production scripts run against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
+      "note": "The actual production script runs against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
@@ -378,7 +554,7 @@
       }
     },
     "python-harness": {
-      "root": "integration",
+      "root": "tests/integration",
       "owned": ["harness/*.py"],
       "exclusions": [],
       "status": "measured",
@@ -394,7 +570,7 @@
       }
     },
     "python-benchmarks": {
-      "root": "benchmarks/comparison",
+      "root": "tests/benchmarks/comparison",
       "owned": ["src/pi_harness_benchmark/*.py"],
       "exclusions": [],
       "status": "measured",
@@ -411,7 +587,7 @@
       }
     },
     "providers": {
-      "root": "integration/providers",
+      "root": "tests/integration/providers",
       "owned": ["auth_guard.mjs", "auth_runtime_fixture.mjs", "auth_transport.mjs", "bun_runtime.mjs", "extension_inventory.ts", "faux.ts", "redirect_anthropic.mjs", "usage_fixture.ts"],
       "exclusions": [],
       "status": "measured",
@@ -433,49 +609,62 @@
     "import-audit": {
       "root": ".",
       "owned": [
-        "scripts/check-biome-paths.mjs",
+        "scripts/check-commit-messages.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
         "scripts/vitest.config.ts",
+        "scripts/vitest-package.ts",
         "packages/*/vitest*.config.ts",
-        "packages/todo/.vitest.config.ts",
-        "integration/inprocess/vitest.config.ts",
-        "integration/probes/vitest.config.ts",
-        "integration/providers/vitest.config.ts"
+        "tests/inprocess/vitest.config.ts",
+        "tests/integration/probes/vitest.config.ts",
+        "tests/integration/providers/vitest.config.ts",
+        "tests/lib/vitest.config.ts"
       ],
       "exclusions": [],
       "status": "measured",
-      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root verification scripts measured in process on Node and Bun by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. Named config initializers retain real executable statement maps on both engines. The Vitest root is the repository root so both reports cover configurations outside `scripts/`, with the complete owned inventory at zero L/F/B/S. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "scripts/coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "scripts/coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
     "probes": {
-      "root": "integration/probes",
+      "root": "tests/integration/probes",
       "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Every executable probe runs in process under `check-probes`: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Joins the 100-percent goal at 0/0.",
+      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
     "inprocess": {
-      "root": "integration/inprocess",
-      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/home-guard.ts"],
+      "root": "tests/inprocess",
+      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "In-process stack fixtures, measured with every fixture module the suites run. `verification/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage.",
+      "note": "In-process stack fixtures, measured with every fixture module the suites run. Shared fixtures that moved to `tests/lib` are measured there.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -487,6 +676,60 @@
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "test-lib": {
+      "root": "tests/lib",
+      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/isolated-home.ts", "src/model-guard.ts", "src/pi.ts", "src/resources.ts", "src/run-tree.ts", "src/sandbox.ts", "src/terminal.ts"],
+      "exclusions": [],
+      "status": "measured",
+      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, the recording ExtensionAPI and context doubles (#865), terminal constants, git and temp/agent/config-home sandboxes, home guard, the isolated-home environment shared with the Vitest launcher, a process-group runner that kills a hung child tree, the tier-only model guard (moved from `preset`, #867), and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
+      "signals": {
+        "primary": {
+          "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "enforcement": "enforced",
+          "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "python-release": {
+      "root": "release",
+      "owned": [
+        "pi_release/*.py"
+      ],
+      "exclusions": [],
+      "status": "measured",
+      "note": "Product code, measured by all retained infrastructure tests in make check-integration, with zero line and branch uncovered floors.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "producer": "coverage.py",
+          "skip_hosts": [
+            "wsl2"
+          ],
+          "max_uncovered": {
+            "darwin": {
+              "lines": 0,
+              "functions": 0,
+              "branches": 0
+            },
+            "linux": {
+              "lines": 0,
+              "functions": 0,
+              "branches": 0
+            }
+          },
+          "reporters": [
+            "text",
+            "lcov"
+          ]
         }
       }
     }

@@ -30,8 +30,12 @@ interface DisplayInfo {
 function assertDesktopControlAllowed(): void {
 	if (process.platform !== "darwin") throw new Error("Desktop control is only implemented on macOS.");
 	const config = getComputerUseConfig();
-	if (config.headless) throw new Error("Desktop control is unavailable while headless is enabled (it moves the real cursor and keyboard).");
-	if (!config.desktop_control) throw new Error("Desktop control is disabled (desktop_control: false / PI_COMPUTER_USE_DESKTOP_CONTROL=0).");
+	if (config.headless)
+		throw new Error(
+			"Desktop control is unavailable while headless is enabled (it moves the real cursor and keyboard).",
+		);
+	if (!config.desktop_control)
+		throw new Error("Desktop control is disabled (desktop_control: false / PI_COMPUTER_USE_DESKTOP_CONTROL=0).");
 }
 
 let desktopQueue: Promise<unknown> = Promise.resolve();
@@ -111,22 +115,33 @@ export function validateDesktopInput(params: DesktopInputParams): void {
 		case "click":
 		case "scroll":
 			if (!finite(params.x) || !finite(params.y)) throw new Error(`${params.action} requires finite x and y.`);
-			if (params.action === "click" && params.clickCount !== undefined && (!Number.isInteger(params.clickCount) || params.clickCount < 1 || params.clickCount > 3)) {
+			if (
+				params.action === "click" &&
+				params.clickCount !== undefined &&
+				(!Number.isInteger(params.clickCount) || params.clickCount < 1 || params.clickCount > 3)
+			) {
 				throw new Error("clickCount must be an integer from 1 to 3.");
 			}
-			if (params.action === "scroll" && !(Math.trunc(params.scrollX ?? 0) || Math.trunc(params.scrollY ?? 0))) throw new Error("scroll requires a whole-number scrollX or scrollY of at least 1 in magnitude.");
+			if (params.action === "scroll" && !(Math.trunc(params.scrollX ?? 0) || Math.trunc(params.scrollY ?? 0)))
+				throw new Error("scroll requires a whole-number scrollX or scrollY of at least 1 in magnitude.");
 			return;
 		case "drag":
-			if (!Array.isArray(params.path) || params.path.length < 2 || params.path.some((p) => !finite(p?.x) || !finite(p?.y))) {
+			if (
+				!Array.isArray(params.path) ||
+				params.path.length < 2 ||
+				params.path.some((p) => !finite(p?.x) || !finite(p?.y))
+			) {
 				throw new Error("drag requires a path of at least two finite points.");
 			}
 			return;
 		case "typeText":
 		case "writeClipboard":
-			if (typeof params.text !== "string" || params.text.length === 0) throw new Error(`${params.action} requires non-empty text.`);
+			if (typeof params.text !== "string" || params.text.length === 0)
+				throw new Error(`${params.action} requires non-empty text.`);
 			return;
 		case "activateApp":
-			if (typeof params.app !== "string" || params.app.trim().length === 0) throw new Error("activateApp requires app (a name or bundle id).");
+			if (typeof params.app !== "string" || params.app.trim().length === 0)
+				throw new Error("activateApp requires app (a name or bundle id).");
 			return;
 		case "readClipboard":
 			return;
@@ -146,14 +161,32 @@ export async function executeDesktopScreenshot(
 	_ctx: ExtensionContext,
 ): Promise<AgentToolResult<unknown>> {
 	assertDesktopControlAllowed();
-	const result = await withDesktopLock(() => macosHelper.command<{ displays: DisplayInfo[]; display: number; frame: DisplayInfo["frame"]; image: { jpegBase64: string; width: number; height: number } }>(
-		"captureDisplay",
-		// The helper excludes blocked apps' windows from the capture.
-		{ display: params.display ?? 0, maxDimension: params.maxDimension ?? 1600, blockedBundleIds: effectiveBlockedBundleIds() },
-		{ signal, timeoutMs: 15_000 },
-	), signal);
+	const result = await withDesktopLock(
+		() =>
+			macosHelper.command<{
+				displays: DisplayInfo[];
+				display: number;
+				frame: DisplayInfo["frame"];
+				image: { jpegBase64: string; width: number; height: number };
+			}>(
+				"captureDisplay",
+				// The helper excludes blocked apps' windows from the capture.
+				{
+					display: params.display ?? 0,
+					maxDimension: params.maxDimension ?? 1600,
+					blockedBundleIds: effectiveBlockedBundleIds(),
+				},
+				{ signal, timeoutMs: 15_000 },
+			),
+		signal,
+	);
 	const f = result.frame;
-	const layout = result.displays.map((d) => `display ${d.index}${d.isMain ? " (main)" : ""}: origin ${Math.round(d.frame.x)},${Math.round(d.frame.y)} size ${Math.round(d.frame.w)}x${Math.round(d.frame.h)}`).join("\n");
+	const layout = result.displays
+		.map(
+			(d) =>
+				`display ${d.index}${d.isMain ? " (main)" : ""}: origin ${Math.round(d.frame.x)},${Math.round(d.frame.y)} size ${Math.round(d.frame.w)}x${Math.round(d.frame.h)}`,
+		)
+		.join("\n");
 	const scale = result.image.width / f.w;
 	return {
 		content: [
@@ -202,12 +235,30 @@ export async function executeDesktopInput(
 ): Promise<AgentToolResult<unknown>> {
 	assertDesktopControlAllowed();
 	validateDesktopInput(params);
-	const wire = params.action === "typeText" ? { ...params, action: "type" } : params.action === "keypress" ? { ...params, action: "key" } : params;
+	const wire =
+		params.action === "typeText"
+			? { ...params, action: "type" }
+			: params.action === "keypress"
+				? { ...params, action: "key" }
+				: params;
 	// The helper refuses (`app_blocked`) when keys go to, or the pointer lands on, a blocked app, and `activateApp` of one.
 	const blockedBundleIds = effectiveBlockedBundleIds();
-	const result = await withDesktopLock(() => macosHelper.command<DesktopInputResult>("desktopInput", { ...wire, blockedBundleIds }, { signal, timeoutMs: 30_000 }), signal);
+	const result = await withDesktopLock(
+		() =>
+			macosHelper.command<DesktopInputResult>(
+				"desktopInput",
+				{ ...wire, blockedBundleIds },
+				{ signal, timeoutMs: 30_000 },
+			),
+		signal,
+	);
 	return {
 		content: [{ type: "text", text: desktopInputText(result) }],
-		details: { tool: "desktop_input", action: result.performed, ...(result.pid !== undefined ? { pid: result.pid, appName: result.appName } : {}), ...(result.truncated !== undefined ? { truncated: result.truncated, length: result.length } : {}) },
+		details: {
+			tool: "desktop_input",
+			action: result.performed,
+			...(result.pid !== undefined ? { pid: result.pid, appName: result.appName } : {}),
+			...(result.truncated !== undefined ? { truncated: result.truncated, length: result.length } : {}),
+		},
 	};
 }

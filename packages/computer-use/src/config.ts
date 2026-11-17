@@ -90,18 +90,29 @@ type BundleIds = { ids: string[] } | { error: string };
 function parseBundleIdArray(value: unknown): BundleIds {
 	if (!Array.isArray(value)) return { error: "blocked_apps must be an array of bundle id strings" };
 	const bad = value.filter((item) => typeof item !== "string" || !item.trim());
-	if (bad.length) return { error: `blocked_apps has ${bad.length} invalid entr${bad.length === 1 ? "y" : "ies"} (each must be a non-blank string)` };
+	if (bad.length)
+		return {
+			error: `blocked_apps has ${bad.length} invalid entr${bad.length === 1 ? "y" : "ies"} (each must be a non-blank string)`,
+		};
 	return { ids: [...new Set((value as string[]).map((item) => item.trim()))] };
 }
 
 /** `PI_COMPUTER_USE_BLOCKED_APPS`: a comma list of ids to ADD to the blocklist; blank is unset. The env can never remove an id (a repo's `.envrc` can set it). */
 function parseBundleIdEnv(value: string | undefined): string[] {
-	return [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
+	return [
+		...new Set(
+			(value ?? "")
+				.split(",")
+				.map((item) => item.trim())
+				.filter(Boolean),
+		),
+	];
 }
 
 function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
 	if (!raw || typeof raw !== "object") return {};
-	const source = (raw as any).computer_use && typeof (raw as any).computer_use === "object" ? (raw as any).computer_use : raw;
+	const source =
+		(raw as any).computer_use && typeof (raw as any).computer_use === "object" ? (raw as any).computer_use : raw;
 	const out: Partial<ComputerUseConfig> = {};
 	const browserUse = parseBoolean((source as any).browser_use);
 	const headless = parseBoolean((source as any).headless);
@@ -121,15 +132,23 @@ function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
 /** The raw `blocked_apps` value of a parsed config file, or undefined when absent. */
 function rawBlockedApps(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return undefined;
-	const source = (raw as any).computer_use && typeof (raw as any).computer_use === "object" ? (raw as any).computer_use : raw;
+	const source =
+		(raw as any).computer_use && typeof (raw as any).computer_use === "object" ? (raw as any).computer_use : raw;
 	return (source as any).blocked_apps;
 }
 
-function readConfigFile(filePath: string, scope: "user" | "project"): ComputerUseConfigSource & { blockedAppsError?: string } {
+function readConfigFile(
+	filePath: string,
+	scope: "user" | "project",
+): ComputerUseConfigSource & { blockedAppsError?: string } {
 	if (!existsSync(filePath)) return { path: filePath, exists: false };
 	try {
 		const parsed = JSON.parse(readFileSync(filePath, "utf-8"));
-		const out: ComputerUseConfigSource & { blockedAppsError?: string } = { path: filePath, exists: true, values: normalizePartial(parsed) };
+		const out: ComputerUseConfigSource & { blockedAppsError?: string } = {
+			path: filePath,
+			exists: true,
+			values: normalizePartial(parsed),
+		};
 		const rawList = rawBlockedApps(parsed);
 		if (rawList !== undefined) {
 			const result = parseBundleIdArray(rawList);
@@ -175,7 +194,13 @@ export function loadComputerUseConfig(cwd: string): LoadedComputerUseConfig {
 	}
 	Object.assign(config, env);
 	// Project files and the environment, both repo-controllable, can only add ids.
-	config.blocked_apps = [...new Set([...config.blocked_apps, ...sources.flatMap((source) => source.blockedAppsAdd ?? []), ...parseBundleIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS)])];
+	config.blocked_apps = [
+		...new Set([
+			...config.blocked_apps,
+			...sources.flatMap((source) => source.blockedAppsAdd ?? []),
+			...parseBundleIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS),
+		]),
+	];
 	activeConfig = config;
 	activeLoadedConfig = { config, sources, env, blockedAppsErrors };
 	return activeLoadedConfig;

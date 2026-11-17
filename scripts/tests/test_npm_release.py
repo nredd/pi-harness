@@ -976,7 +976,7 @@ def test_artifact_destination_checked_before_install(
 def test_commands_run_outside_the_uv_run_venv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
 ) -> None:
-    """Child tools never see the venv `uv run --project integration` activated for this script.
+    """Child tools never see the venv `uv run --project tests/integration` activated for this script.
 
     Parameters:
         tmp_path (Path): Holds a fake activated venv with a tool found nowhere else.
@@ -1020,7 +1020,12 @@ def test_workflow_permissions_and_immutable_transfer() -> None:
     Returns:
         None: Permissions, immutable transfer and release dependencies match the design.
     """
-    workflow = (pc.REPO_ROOT / ".github/workflows/publish.yml").read_text()
+    # Count executable declarations, not the inline policy that explains their scope.
+    workflow = "\n".join(
+        line
+        for line in (pc.REPO_ROOT / ".github/workflows/publish.yml").read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    )
     assert "tags: ['@nredd/*@*']" in workflow
     assert "cancel-in-progress: false" in workflow
     assert workflow.count("id-token: write") == 2  # Isolated attestor and npm publisher.

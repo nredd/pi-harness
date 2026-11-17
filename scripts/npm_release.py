@@ -173,7 +173,7 @@ class Statement(BaseModel):
 def host_environment() -> dict[str, str]:
     """Return this process's environment without the integration venv that `uv run` activated.
 
-    `publish.yml` runs this script via `uv run --project integration`, which exports `VIRTUAL_ENV` and
+    `publish.yml` runs this script via `uv run --project tests/integration`, which exports `VIRTUAL_ENV` and
     puts its `bin` first on `PATH`. Child tools must see what CI's `owned` job sees: otherwise a
     package check that expects a tool to be missing from its own project (e.g. dev-tools' `uv run
     pytest` case) silently finds the harness's `pytest`.
@@ -294,18 +294,22 @@ def release_workspace(repo: Path, descriptor: rd.ReleaseDescriptor) -> Path:
     return workspace
 
 
-def native_matches(workspace: Path, descriptor: rd.ReleaseDescriptor) -> tuple[Path, ...]:
+def native_matches(
+    workspace: Path, descriptor: rd.ReleaseDescriptor, *, required: bool = True
+) -> tuple[Path, ...]:
     """Expand descriptor-native artifacts without allowing path traversal.
 
     Parameters:
         workspace (Path): Validated package source directory.
         descriptor (rd.ReleaseDescriptor): Package release data.
+        required (bool): Fail when a pattern has no files; `False` lists stale local builds
+            in a clean checkout, which has none since prebuilts are not committed.
 
     Returns:
-        tuple[Path, ...]: Required regular files in deterministic order.
+        tuple[Path, ...]: Matching regular files in deterministic order.
 
     Raises:
-        ReleaseError: If a native-artifact pattern is unsafe or has no files.
+        ReleaseError: If a native-artifact pattern is unsafe, or required and has no files.
     """
     root = workspace.resolve()
     candidates = tuple(
@@ -322,7 +326,7 @@ def native_matches(workspace: Path, descriptor: rd.ReleaseDescriptor) -> tuple[P
             for path in candidates
             if matches_native_artifact(pattern, PurePosixPath(path.relative_to(workspace).as_posix()))
         )
-        if not found:
+        if required and not found:
             raise ReleaseError(f"Missing native artifact: '{pattern}'")
         matches.extend(found)
     return tuple(matches)
@@ -537,7 +541,7 @@ def build_native_workspace(repo: Path, descriptor: rd.ReleaseDescriptor, work: P
     staged = work / "native-source"
     shutil.copytree(workspace, staged, ignore=shutil.ignore_patterns("node_modules", "target"))
     # No committed prebuilt may survive as a successful compiler's missing output.
-    for payload in native_matches(staged, descriptor):
+    for payload in native_matches(staged, descriptor, required=False):
         payload.unlink()
     for cmd in descriptor.native_build_commands:
         LOGGER.info(command(staged, cmd[0], *cmd[1:], timeout=1200))

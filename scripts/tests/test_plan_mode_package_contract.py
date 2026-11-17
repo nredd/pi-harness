@@ -59,7 +59,7 @@ def test_plan_mode_pack_matches_contract(tmp_path: Path) -> None:
     artifact = pc.pack(pc.PLAN_MODE_CONTRACT, tmp_path, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()))
     manifest = json.loads((pc.REPO_ROOT / "packages/plan-mode/package.json").read_text())
     assert pc.audit_files(pc.PLAN_MODE_CONTRACT, artifact.files) == []
-    assert manifest["files"] == ["src", "dist", "docs", "README.md", "LICENSE"]
+    assert manifest["files"] == ["src", "dist", "README.md", "LICENSE"]
 
 
 def test_plan_mode_own_license_rejects_root_license(tmp_path: Path) -> None:

@@ -125,15 +125,16 @@ test("compatibility launcher forwards quoted arguments and the Node exit code th
 	const host = await fixture();
 	const fakeNode = path.join(host.base, "node");
 	await fs.writeFile(fakeNode, '#!/bin/sh\nprintf "%s\\n" "$@"\nexit 23\n', { mode: 0o700 });
-	const launcher = fileURLToPath(new URL("../scripts/make-signing-cert.sh", import.meta.url));
-	const result = spawnSync("bash", [launcher, host.out, "extra argument"], {
+	const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+	const result = spawnSync("make", ["--no-print-directory", "-s", "signing-cert", `OUTPUT_DIR=${host.out}`], {
+		cwd: packageRoot,
 		encoding: "utf8",
 		env: { ...process.env, PATH: `${host.base}${path.delimiter}${process.env.PATH}` },
 	});
 	assert.ifError(result.error);
-	assert.equal(result.status, 23);
-	assert.equal(result.stdout, `${path.dirname(launcher)}/make-signing-cert.mjs\n${host.out}\nextra argument\n`);
-	assert.equal(result.stderr, "");
+	assert.equal(result.status, 2);
+	assert.equal(result.stdout, `scripts/make-signing-cert.mjs\n${host.out}\n`);
+	assert.match(result.stderr, /Error 23/);
 });
 
 for (const [label, failure, expected] of [

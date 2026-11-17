@@ -2,7 +2,17 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import { afterEach, describe, test, vi } from "vitest";
-import { createFakeChild, createFakeSpawn, createHelperEngine, drop, effect, fail, ok, silent, withProtocol } from "./support/fake-helper.mjs";
+import {
+	createFakeChild,
+	createFakeSpawn,
+	createHelperEngine,
+	drop,
+	effect,
+	fail,
+	ok,
+	silent,
+	withProtocol,
+} from "./support/fake-helper.mjs";
 
 const clients = [];
 
@@ -16,11 +26,13 @@ afterEach(() => {
 async function clientFor(handlers) {
 	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 4, handlers, platform: "Windows" });
 	const children = [];
-	const spawn = createFakeSpawn({ "*": () => {
-		const child = createFakeChild({ engine });
-		children.push(child);
-		return child;
-	} });
+	const spawn = createFakeSpawn({
+		"*": () => {
+			const child = createFakeChild({ engine });
+			children.push(child);
+			return child;
+		},
+	});
 	vi.resetModules();
 	vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	const { WindowsHelperClient } = await import("../src/platform/windows/helper.ts");
@@ -31,7 +43,18 @@ async function clientFor(handlers) {
 }
 
 describe("Windows helper post-write cancellation (#750)", () => {
-	for (const completion of ["success", "error", "protocol", "timeout", "close", "dispose", "write-callback", "write-throw", "non-error-throw", "serialize"]) {
+	for (const completion of [
+		"success",
+		"error",
+		"protocol",
+		"timeout",
+		"close",
+		"dispose",
+		"write-callback",
+		"write-throw",
+		"non-error-throw",
+		"serialize",
+	]) {
 		test(`${completion} removes the command abort listener and timer`, async () => {
 			const { client, children, engine } = await clientFor({ warm: ok(), request: silent() });
 			await client.command("warm");
@@ -41,10 +64,27 @@ describe("Windows helper post-write cancellation (#750)", () => {
 			if (completion === "success") engine.script("request", ok("done"));
 			if (completion === "error") engine.script("request", fail("denied", "permission_denied"));
 			if (completion === "protocol") engine.script("request", withProtocol(3));
-			if (completion === "write-callback") vi.spyOn(children[0].stdin, "write").mockImplementation((_line, callback) => { callback(expected); return false; });
-			if (completion === "write-throw" || completion === "non-error-throw") vi.spyOn(children[0].stdin, "write").mockImplementation(() => { throw completion === "write-throw" ? expected : "write failed"; });
-			const args = completion === "serialize" ? { toJSON() { throw expected; } } : {};
-			const outcome = client.command("request", args, { signal: controller.signal, timeoutMs: 30_000 }).then((value) => ({ value }), (error) => ({ error }));
+			if (completion === "write-callback")
+				vi.spyOn(children[0].stdin, "write").mockImplementation((_line, callback) => {
+					callback(expected);
+					return false;
+				});
+			if (completion === "write-throw" || completion === "non-error-throw")
+				vi.spyOn(children[0].stdin, "write").mockImplementation(() => {
+					throw completion === "write-throw" ? expected : "write failed";
+				});
+			const args =
+				completion === "serialize"
+					? {
+							toJSON() {
+								throw expected;
+							},
+						}
+					: {};
+			const outcome = client.command("request", args, { signal: controller.signal, timeoutMs: 30_000 }).then(
+				(value) => ({ value }),
+				(error) => ({ error }),
+			);
 			if (["timeout", "close", "dispose"].includes(completion)) {
 				await vi.waitFor(() => assert.equal(engine.requests.length, 2));
 				assert.equal(getEventListeners(controller.signal, "abort").length, 1);
@@ -83,7 +123,9 @@ describe("Windows helper post-write cancellation (#750)", () => {
 		assert.equal((await aborted).message, "Operation aborted.");
 		assert.equal(client.pending.size, 1);
 		assert.equal(getEventListeners(other.signal, "abort").length, 1);
-		children[0].stdout.write(`${JSON.stringify({ protocolVersion: 4, id: engine.requests[1].id, ok: true, result: "B" })}\n`);
+		children[0].stdout.write(
+			`${JSON.stringify({ protocolVersion: 4, id: engine.requests[1].id, ok: true, result: "B" })}\n`,
+		);
 		assert.equal(await pending, "B");
 		assert.equal(getEventListeners(other.signal, "abort").length, 0);
 	});
@@ -92,7 +134,9 @@ describe("Windows helper post-write cancellation (#750)", () => {
 		const { client, children, engine } = await clientFor({ hang: silent(), next: ok("next") });
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		const controller = new AbortController();
-		const outcome = client.command("hang", {}, { signal: controller.signal, timeoutMs: 30_000 }).catch((error) => error);
+		const outcome = client
+			.command("hang", {}, { signal: controller.signal, timeoutMs: 30_000 })
+			.catch((error) => error);
 		await vi.waitFor(() => assert.equal(engine.requests.length, 1));
 		assert.equal(vi.getTimerCount(), 1);
 		controller.abort();
@@ -101,7 +145,9 @@ describe("Windows helper post-write cancellation (#750)", () => {
 		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 		assert.equal((await outcome).message, "Operation aborted.");
 		const next = client.command("next", {}, { signal: new AbortController().signal });
-		children[0].stdout.write(`${JSON.stringify({ protocolVersion: 4, id: engine.requests[0].id, ok: true, result: "late" })}\n`);
+		children[0].stdout.write(
+			`${JSON.stringify({ protocolVersion: 4, id: engine.requests[0].id, ok: true, result: "late" })}\n`,
+		);
 		assert.equal(await next, "next");
 		assert.equal(client.pending.size, 0);
 		assert.equal(vi.getTimerCount(), 0);
@@ -135,10 +181,13 @@ describe("Windows helper client disconnects (#725)", () => {
 
 	test("a dead child's partial line is not glued onto its successor's first reply", async () => {
 		const { client, children, engine } = await clientFor({});
-		engine.script("first", effect(() => {
-			children.at(-1).stdout.write('{"id":"x"');
-			children.at(-1).emit("exit", 1, null);
-		}, silent()));
+		engine.script(
+			"first",
+			effect(() => {
+				children.at(-1).stdout.write('{"id":"x"');
+				children.at(-1).emit("exit", 1, null);
+			}, silent()),
+		);
 		engine.script("second", ok({ fine: true }));
 		const first = client.command("first", {}, { timeoutMs: 30_000 });
 		await vi.waitFor(() => assert.ok(children.length === 1 && client.child === undefined));
@@ -151,11 +200,17 @@ describe("Windows helper client disconnects (#725)", () => {
 
 	test("a complete reply still in stdout when the helper exits resolves the command", async () => {
 		const { client, children, engine } = await clientFor({});
-		engine.script("last", effect(() => {
-			const child = children.at(-1);
-			child.emit("exit", 0, null);
-			setTimeout(() => child.emit("close", 0, null), 20);
-		}, ok({ done: true })));
+		engine.script(
+			"last",
+			effect(
+				() => {
+					const child = children.at(-1);
+					child.emit("exit", 0, null);
+					setTimeout(() => child.emit("close", 0, null), 20);
+				},
+				ok({ done: true }),
+			),
+		);
 		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
 		assert.equal(client.child, undefined, "exit forgets the child so the next command respawns");
 	});

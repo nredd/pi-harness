@@ -23,7 +23,6 @@
     "packages/session-kit/src/mon/model.ts",
     "packages/session-kit/src/mon/poll.ts",
     "packages/session-kit/src/mon/source.ts",
-    "packages/session-kit/src/monitor/README.md",
     "packages/session-kit/src/monitor/coalescer.ts",
     "packages/session-kit/src/monitor/index.ts",
     "packages/session-kit/src/monitor/manager.ts",

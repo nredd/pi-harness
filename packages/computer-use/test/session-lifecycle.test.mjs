@@ -24,8 +24,7 @@ test("session shutdown closes CDP while leaving an external browser running", as
 			(resolve, reject) => {
 				const timer = setTimeout(
 					/** @returns {void} Rejects missing socket closure. @throws {never} No synchronous errors. */
-					() =>
-						reject(new Error("CDP socket remained open after session shutdown")),
+					() => reject(new Error("CDP socket remained open after session shutdown")),
 					CDP_CLOSE_TIMEOUT_MS,
 				);
 				websocket.once("close", () => {
@@ -37,19 +36,13 @@ test("session shutdown closes CDP while leaving an external browser running", as
 		await Promise.all([shutdownComputerUseSession(), websocketClosed]);
 
 		const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-		assert.equal(
-			response.status,
-			200,
-			"session shutdown stopped the external browser endpoint",
-		);
+		assert.equal(response.status, 200, "session shutdown stopped the external browser endpoint");
 		assert.equal(
 			process.env.PI_COMPUTER_USE_CDP_PORT,
 			String(port),
 			"session shutdown changed the external CDP configuration",
 		);
-		console.log(
-			"PASS session shutdown closes CDP while leaving an external browser running",
-		);
+		console.log("PASS session shutdown closes CDP while leaving an external browser running");
 	} finally {
 		delete process.env.PI_COMPUTER_USE_CDP_PORT;
 		await fake?.close();

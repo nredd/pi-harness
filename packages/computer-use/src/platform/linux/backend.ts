@@ -24,7 +24,11 @@ import { LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./
 import { wslNoWindowsHint } from "./wsl.ts";
 
 function normalizedProcessName(appName: string): string {
-	return appName.toLowerCase().split("/").pop()!.replace(/\.desktop$/i, "");
+	return appName
+		.toLowerCase()
+		.split("/")
+		.pop()!
+		.replace(/\.desktop$/i, "");
 }
 
 function classifyBrowser(appName: string): false | "chromium" | "firefox" {
@@ -61,33 +65,37 @@ function parseFramePoints(raw: unknown): FramePoints {
 }
 
 function parseRootKind(raw: unknown): PlatformRootKind {
-	return raw === "menu" || raw === "sheet" || raw === "dialog" || raw === "popover" || raw === "window" ? raw : "window";
+	return raw === "menu" || raw === "sheet" || raw === "dialog" || raw === "popover" || raw === "window"
+		? raw
+		: "window";
 }
 
 function parseRoots(result: unknown): PlatformRoot[] {
 	const roots = Array.isArray(result) ? result : (result as any)?.roots;
 	if (!Array.isArray(roots)) return [];
-	return roots.map((raw: any, index): PlatformRoot => ({
-		kind: parseRootKind(raw?.kind),
-		rootRef: toOptionalString(raw?.rootRef ?? raw?.windowRef ?? raw?.ref),
-		windowRef: toOptionalString(raw?.windowRef ?? raw?.rootRef ?? raw?.ref),
-		windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
-		pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
-		appName: toOptionalString(raw?.appName ?? raw?.processName),
-		bundleId: toOptionalString(raw?.bundleId ?? raw?.desktopId),
-		title: toOptionalString(raw?.title) ?? "",
-		role: toOptionalString(raw?.role),
-		subrole: toOptionalString(raw?.subrole),
-		zOrder: Math.trunc(toFiniteNumber(raw?.zOrder, index)),
-		framePoints: parseFramePoints(raw),
-		scaleFactor: Math.max(1, toFiniteNumber(raw?.scaleFactor, 1)),
-		isOnscreen: raw?.isOnscreen === undefined ? true : toBoolean(raw.isOnscreen),
-		isFocused: toBoolean(raw?.isFocused),
-		isMinimized: toBoolean(raw?.isMinimized),
-		isMain: toBoolean(raw?.isMain ?? raw?.isFocused),
-		isModal: toBoolean(raw?.isModal),
-		metadata: raw?.metadata,
-	}));
+	return roots.map(
+		(raw: any, index): PlatformRoot => ({
+			kind: parseRootKind(raw?.kind),
+			rootRef: toOptionalString(raw?.rootRef ?? raw?.windowRef ?? raw?.ref),
+			windowRef: toOptionalString(raw?.windowRef ?? raw?.rootRef ?? raw?.ref),
+			windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
+			pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
+			appName: toOptionalString(raw?.appName ?? raw?.processName),
+			bundleId: toOptionalString(raw?.bundleId ?? raw?.desktopId),
+			title: toOptionalString(raw?.title) ?? "",
+			role: toOptionalString(raw?.role),
+			subrole: toOptionalString(raw?.subrole),
+			zOrder: Math.trunc(toFiniteNumber(raw?.zOrder, index)),
+			framePoints: parseFramePoints(raw),
+			scaleFactor: Math.max(1, toFiniteNumber(raw?.scaleFactor, 1)),
+			isOnscreen: raw?.isOnscreen === undefined ? true : toBoolean(raw.isOnscreen),
+			isFocused: toBoolean(raw?.isFocused),
+			isMinimized: toBoolean(raw?.isMinimized),
+			isMain: toBoolean(raw?.isMain ?? raw?.isFocused),
+			isModal: toBoolean(raw?.isModal),
+			metadata: raw?.metadata,
+		}),
+	);
 }
 
 function appsFromRoots(roots: PlatformRoot[]): PlatformApp[] {
@@ -95,12 +103,14 @@ function appsFromRoots(roots: PlatformRoot[]): PlatformApp[] {
 	return roots.flatMap((root) => {
 		if (!root.pid || seen.has(root.pid)) return [];
 		seen.add(root.pid);
-		return [{
-			appName: root.appName ?? "Unknown",
-			bundleId: root.bundleId,
-			pid: root.pid,
-			isFrontmost: root.isFocused,
-		}];
+		return [
+			{
+				appName: root.appName ?? "Unknown",
+				bundleId: root.bundleId,
+				pid: root.pid,
+				isFrontmost: root.isFocused,
+			},
+		];
 	});
 }
 
@@ -109,15 +119,23 @@ function helperAction(request: PlatformActRequest): Record<string, unknown> {
 	return { ...request, target: request.target.focus, params: { ...request.params, preserveFocus: true } };
 }
 
-async function ensureReady(_ctx: unknown, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState> {
+async function ensureReady(
+	_ctx: unknown,
+	state: PlatformReadyState,
+	signal?: AbortSignal,
+): Promise<PlatformReadyState> {
 	await linuxHelper.ensureInstalled(signal);
 	const diagnostics = await linuxHelper.command<any>("diagnostics", {}, { signal, timeoutMs: 5_000 });
 	if (diagnostics?.protocolVersion !== LINUX_HELPER_PROTOCOL_VERSION) {
-		throw new Error(`Linux helper protocol mismatch: expected ${LINUX_HELPER_PROTOCOL_VERSION}, got ${diagnostics?.protocolVersion ?? "unknown"}. Restart Pi to use the installed helper.`);
+		throw new Error(
+			`Linux helper protocol mismatch: expected ${LINUX_HELPER_PROTOCOL_VERSION}, got ${diagnostics?.protocolVersion ?? "unknown"}. Restart Pi to use the installed helper.`,
+		);
 	}
 	assertPlatformArchitecture("Linux", diagnostics);
 	if (diagnostics?.accessibility === false) {
-		throw new Error("Linux accessibility is unavailable. Ensure AT-SPI is enabled and a D-Bus desktop accessibility bus is running.");
+		throw new Error(
+			"Linux accessibility is unavailable. Ensure AT-SPI is enabled and a D-Bus desktop accessibility bus is running.",
+		);
 	}
 	return { ...state, lastPermissionCheckAt: Date.now(), helperDiagnostics: diagnostics };
 }
@@ -132,7 +150,11 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 		return appsFromRoots(parseRoots(await linuxHelper.command("listRoots", {}, { signal })));
 	},
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
-		const roots = parseRoots(await linuxHelper.command("listRoots", Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, { signal }));
+		const roots = parseRoots(
+			await linuxHelper.command("listRoots", Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, {
+				signal,
+			}),
+		);
 		const title = query.title?.trim().toLowerCase();
 		return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
 	},
@@ -141,7 +163,12 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 		const roots = parseRoots(await linuxHelper.command("listRoots", {}, { signal }));
 		const focused = roots.find((root) => root.isFocused) ?? roots[0];
 		// The WSL hint is only for an empty guest: roots without a pid are a Linux-side problem.
-		if (!focused?.pid) throw new Error(["No frontmost window was available.", roots.length === 0 ? wslNoWindowsHint() : undefined].filter(Boolean).join(" "));
+		if (!focused?.pid)
+			throw new Error(
+				["No frontmost window was available.", roots.length === 0 ? wslNoWindowsHint() : undefined]
+					.filter(Boolean)
+					.join(" "),
+			);
 		return {
 			appName: focused.appName ?? "Unknown",
 			bundleId: focused.bundleId,
@@ -154,26 +181,47 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 	async focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult> {
 		return await linuxHelper.command("focusWindow", { ...target }, { signal });
 	},
-	async observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse> {
-		return parseLookResponse(await linuxHelper.command("look", {
-			...request.target,
-			baseLookId: request.baseLookId,
-			maxDimension: request.maxDimension,
-			readText: request.readText,
-			scopeRef: request.scopeRef,
-			includeImage: request.includeImage,
-		}, options));
+	async observe(
+		request: PlatformObserveRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<LookResponse> {
+		return parseLookResponse(
+			await linuxHelper.command(
+				"look",
+				{
+					...request.target,
+					baseLookId: request.baseLookId,
+					maxDimension: request.maxDimension,
+					readText: request.readText,
+					scopeRef: request.scopeRef,
+					includeImage: request.includeImage,
+				},
+				options,
+			),
+		);
 	},
-	async act(request: PlatformActRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult> {
+	async act(
+		request: PlatformActRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<HelperActResult> {
 		return await linuxHelper.command("act", helperAction(request), options);
 	},
-	async actBatch(requests: PlatformActRequest[], options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult> {
+	async actBatch(
+		requests: PlatformActRequest[],
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<HelperActResult> {
 		return await linuxHelper.command("actBatch", { actions: requests.map(helperAction) }, options);
 	},
-	async readText(args: PlatformReadTextRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformReadTextResponse> {
+	async readText(
+		args: PlatformReadTextRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<PlatformReadTextResponse> {
 		return await linuxHelper.command("atspiReadText", { ...args }, options);
 	},
-	async waitFor(args: PlatformWaitForRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformWaitForResponse> {
+	async waitFor(
+		args: PlatformWaitForRequest,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<PlatformWaitForResponse> {
 		return await linuxHelper.command("atspiWaitFor", { ...args }, options);
 	},
 	isBrowserApp(appName: string): boolean {
@@ -182,7 +230,11 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 	isChromeFamilyApp(appName: string): boolean {
 		return classifyBrowser(appName) === "chromium";
 	},
-	async openBrowserLocation(target: { appName: string; bundleId?: string }, url: string, signal?: AbortSignal): Promise<boolean> {
+	async openBrowserLocation(
+		target: { appName: string; bundleId?: string },
+		url: string,
+		signal?: AbortSignal,
+	): Promise<boolean> {
 		await linuxHelper.command("openBrowserLocation", { ...target, url }, { signal, timeoutMs: 10_000 });
 		return true;
 	},

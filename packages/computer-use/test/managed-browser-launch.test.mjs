@@ -10,7 +10,17 @@ import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { loadComputerUseConfig } from "../src/config.ts";
 
 const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
-const ENV = ["PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_HELIUM_EXECUTABLE", "PI_COMPUTER_USE_MANAGED_BROWSER", "PI_COMPUTER_USE_CDP_PORT", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "FAKE_BROWSER_NO_CDP", "FAKE_BROWSER_LOG"];
+const ENV = [
+	"PI_COMPUTER_USE_CHROME_EXECUTABLE",
+	"PI_COMPUTER_USE_HELIUM_EXECUTABLE",
+	"PI_COMPUTER_USE_MANAGED_BROWSER",
+	"PI_COMPUTER_USE_CDP_PORT",
+	"LOCALAPPDATA",
+	"PROGRAMFILES",
+	"PROGRAMFILES(X86)",
+	"FAKE_BROWSER_NO_CDP",
+	"FAKE_BROWSER_LOG",
+];
 
 /** Pretend to run on another platform until `vi.restoreAllMocks`. */
 const platform = (value) => vi.spyOn(process, "platform", "get").mockReturnValue(value);
@@ -40,8 +50,14 @@ describe("managed browser executable discovery", () => {
 
 	test("macOS looks in /Applications and ~/Applications", () => {
 		platform("darwin");
-		assert.deepEqual(candidates("chrome"), ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", path.join(os.homedir(), "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome")]);
-		assert.deepEqual(candidates("helium"), ["/Applications/Helium.app/Contents/MacOS/Helium", path.join(os.homedir(), "Applications", "Helium.app", "Contents", "MacOS", "Helium")]);
+		assert.deepEqual(candidates("chrome"), [
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			path.join(os.homedir(), "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+		]);
+		assert.deepEqual(candidates("helium"), [
+			"/Applications/Helium.app/Contents/MacOS/Helium",
+			path.join(os.homedir(), "Applications", "Helium.app", "Contents", "MacOS", "Helium"),
+		]);
 	});
 
 	test("Linux lists the system locations, then PATH entries without duplicates", () => {
@@ -78,7 +94,11 @@ describe("managed browser executable discovery", () => {
 			path.join("/pf86", "Google", "Chrome", "Application", "chrome.exe"),
 			path.join(bin, "chrome.exe"),
 		]);
-		assert.deepEqual(candidates("helium"), [path.join("/local", "Helium", "Application", "helium.exe"), path.join("/pf", "Helium", "Application", "helium.exe"), path.join(bin, "helium.exe")]);
+		assert.deepEqual(candidates("helium"), [
+			path.join("/local", "Helium", "Application", "helium.exe"),
+			path.join("/pf", "Helium", "Application", "helium.exe"),
+			path.join(bin, "helium.exe"),
+		]);
 	});
 
 	test("an unset PATH yields only the platform locations", () => {
@@ -117,25 +137,48 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 	test("a missing browser names the override variable to set", async () => {
 		platform("win32");
 		vi.stubEnv("PATH", "");
-		await assert.rejects(testing.performLaunchBrowser({}), (error) => error.message === "chrome executable was not found. Set PI_COMPUTER_USE_CHROME_EXECUTABLE to its absolute path.");
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			(error) =>
+				error.message ===
+				"chrome executable was not found. Set PI_COMPUTER_USE_CHROME_EXECUTABLE to its absolute path.",
+		);
 		useHelium();
-		await assert.rejects(testing.performLaunchBrowser({}), (error) => error.message === "helium executable was not found. Set PI_COMPUTER_USE_HELIUM_EXECUTABLE to its absolute path.");
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			(error) =>
+				error.message ===
+				"helium executable was not found. Set PI_COMPUTER_USE_HELIUM_EXECUTABLE to its absolute path.",
+		);
 		assert.deepEqual(fs.readdirSync(tmp), [], "no profile dir was created");
 	});
 
 	test("an override that is missing or not executable is reported with its path", async () => {
 		const missing = path.join(scratch, "no-such-chrome");
 		vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", missing);
-		await assert.rejects(testing.performLaunchBrowser({}), (error) => error.message === `chrome executable from PI_COMPUTER_USE_CHROME_EXECUTABLE was not found or is not executable: ${missing}.`);
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			(error) =>
+				error.message ===
+				`chrome executable from PI_COMPUTER_USE_CHROME_EXECUTABLE was not found or is not executable: ${missing}.`,
+		);
 		const plain = path.join(scratch, "plain");
 		fs.writeFileSync(plain, "#!/bin/sh\n", { mode: 0o644 });
 		useHelium();
 		vi.stubEnv("PI_COMPUTER_USE_HELIUM_EXECUTABLE", plain);
-		await assert.rejects(testing.performLaunchBrowser({}), (error) => error.message === `helium executable from PI_COMPUTER_USE_HELIUM_EXECUTABLE was not found or is not executable: ${plain}.`);
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			(error) =>
+				error.message ===
+				`helium executable from PI_COMPUTER_USE_HELIUM_EXECUTABLE was not found or is not executable: ${plain}.`,
+		);
 	});
 
 	test("a relative url is refused before anything starts", async () => {
-		await assert.rejects(testing.performLaunchBrowser({ url: "file:///etc/passwd" }), /launch_browser\.url must be an absolute HTTP\(S\) URL\./);
+		await assert.rejects(
+			testing.performLaunchBrowser({ url: "file:///etc/passwd" }),
+			/launch_browser\.url must be an absolute HTTP\(S\) URL\./,
+		);
 		assert.deepEqual(fs.readdirSync(tmp), []);
 	});
 
@@ -157,10 +200,15 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 		// Otherwise a loaded host can time out and kill it before launch.json ever exists.
 		let skew = 0;
 		const realNow = Date.now.bind(Date);
-		vi.spyOn(Date, "now").mockImplementation(() => realNow() + (fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0));
+		vi.spyOn(Date, "now").mockImplementation(
+			() => realNow() + (fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0),
+		);
 		Date.now();
 		assert.equal(skew, 0, "timeout fixture clock must not advance before child startup acknowledgement");
-		await assert.rejects(testing.performLaunchBrowser({}), /^Error: Managed browser did not expose CDP on port \d+ within 15000ms\.$/);
+		await assert.rejects(
+			testing.performLaunchBrowser({}),
+			/^Error: Managed browser did not expose CDP on port \d+ within 15000ms\.$/,
+		);
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, "", "the managed port is not left configured");
 		const { profile } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));
 		assert.equal(fs.existsSync(profile), false, "the profile dir of the failed launch is removed");
@@ -193,7 +241,9 @@ describe.skipIf(process.platform === "win32")("managed browser launch edge cases
 		let probes = 0;
 		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 			probes += 1;
-			return probes === 1 && String(input).endsWith("/json/version") ? new Response("starting", { status: 503 }) : await realFetch(input, init);
+			return probes === 1 && String(input).endsWith("/json/version")
+				? new Response("starting", { status: 503 })
+				: await realFetch(input, init);
 		});
 		const result = await testing.performLaunchBrowser({});
 		assert.ok(probes >= 2, `probed ${probes} times`);
@@ -211,7 +261,11 @@ describe.skipIf(process.platform === "win32")("managed browser launch edge cases
 		});
 		const fetchSpy = vi.spyOn(globalThis, "fetch");
 		await assert.rejects(testing.performLaunchBrowser({}, abort.signal), /^Error: Browser launch was aborted\.$/);
-		assert.equal(fetchSpy.mock.calls.filter(([input]) => String(input).endsWith("/json/version")).length, 0, "no probe was sent");
+		assert.equal(
+			fetchSpy.mock.calls.filter(([input]) => String(input).endsWith("/json/version")).length,
+			0,
+			"no probe was sent",
+		);
 		assert.deepEqual(fs.readdirSync(tmp), [], "the profile dir was removed once the browser stopped");
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, "");
 	});
@@ -226,7 +280,11 @@ describe.skipIf(process.platform === "win32")("managed browser launch edge cases
 		await testing.performLaunchBrowser({});
 		const { profile } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));
 		await shutdownComputerUseSession();
-		assert.equal(fs.existsSync(profile), false, "the later browser's profile is found past the stale entry and removed");
+		assert.equal(
+			fs.existsSync(profile),
+			false,
+			"the later browser's profile is found past the stale entry and removed",
+		);
 		testing.removeProfileDirsOnExit();
 		assert.equal(fs.existsSync(stuck), false);
 	});

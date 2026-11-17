@@ -32,6 +32,15 @@ export function money(n: number): string {
 	return n >= 1000 ? `$${trim((n / 1e3).toFixed(1))}k` : `$${n.toFixed(2)}`;
 }
 
+/**
+ * A cost cell for `calls` calls of which `unpriced` recorded no cost (`null`, Claude and Codex): the priced
+ * sum plus `+ N unpriced`, or just `unpriced` when none was priced. An unpriced call is never counted as $0.
+ */
+export function costLabel(cost: number, unpriced: number, calls: number): string {
+	if (calls > 0 && unpriced === calls) return "unpriced";
+	return unpriced > 0 ? `${money(cost)} + ${unpriced} unpriced` : money(cost);
+}
+
 /** `27s`, `14m`, `3h 5m`, `2d 4h` */
 export function duration(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));

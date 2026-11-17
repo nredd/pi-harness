@@ -12,12 +12,10 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, type Dirent } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
-import { createInterface } from "node:readline";
-import { setImmediate as tick } from "node:timers/promises";
 import { agentDir } from "../agent-dir.ts";
+import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, num, type ScanDiagnostic, timeOf } from "./jsonl.ts";
 import { nth } from "./nth.ts";
 export const CACHE_VERSION = 3;
 
@@ -30,7 +28,6 @@ const EXCLUDED_PROVIDERS = new Set(["faux", "faux-provider", "fake-provider", "r
 const CHILD_NAME = /#[0-9a-f]{8}$/;
 /** Entries open with `{"type":..,"id":..,"parentId":..,"timestamp":".."`: read it without a full parse. */
 const LEADING_TIMESTAMP = /^.{0,200}?"timestamp"\s*:\s*"([^"]+)"/;
-const YIELD_EVERY_LINES = 2000;
 
 /** One assistant call, compact so the cache stays small: `[ms, model index, in, out, cacheRead, cacheWrite, cost]`. */
 export type CallTuple = [number, number, number, number, number, number, number];
@@ -57,7 +54,12 @@ export interface FileStats {
 	badLines: number;
 }
 
+/** Which tool wrote the usage. Part of the event identity, so pi and Codex rows can never collide. */
+export const HARNESSES = ["pi", "claude", "codex", "opencode"] as const;
+export type Harness = (typeof HARNESSES)[number];
+
 export interface Call {
+	harness: Harness;
 	/** Opaque owning session ID (the oldest copy, after fork dedup). */
 	session: string;
 	/** Opaque preserved entry identity; absent on old transcripts. */
@@ -69,7 +71,8 @@ export interface Call {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	cost: number;
+	/** Recorded notional cost; `null` when the harness records none (Claude, Codex), which is not 0. */
+	cost: number | null;
 }
 
 export interface Session {
@@ -81,6 +84,8 @@ export interface Session {
 }
 
 export interface Loaded {
+	/** At most 20 local-only locations. Never included in usage snapshots. */
+	diagnostics?: ScanDiagnostic[];
 	calls: Call[];
 	/** Top-level sessions with at least one counted call. Subagent children are excluded. */
 	sessions: Session[];
@@ -105,27 +110,6 @@ export function cachePath(dir = agentDir()): string {
 	return join(dir, "pi-session-kit", "stats-cache.json");
 }
 
-function num(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function timeOf(value: unknown): number {
-	if (typeof value === "number")
-		return Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000 ? value : 0;
-	if (typeof value !== "string") return 0;
-	const ms = Date.parse(value);
-	return Number.isFinite(ms) ? ms : 0;
-}
-
-/** Cheap structural check for lines that are not parsed: one JSON object per line. */
-function looksLikeObject(line: string): boolean {
-	const text = line.trim();
-	return text.startsWith("{") && text.endsWith("}");
-}
-
-/** A line of only NULs: crash padding (file size extended, data never written) that carries no data. */
-const NUL_PADDING = /^\0+$/;
-
 /** Line-at-a-time parser for one session file. */
 export class SessionParser {
 	private readonly out: FileStats;
@@ -134,8 +118,11 @@ export class SessionParser {
 	private childName = false;
 	private markedChild = false;
 	private lines = 0;
+	private physicalLine = 0;
+	private readonly onBadLine: ((line: number) => void) | undefined;
 
-	constructor(size: number, mtimeMs: number) {
+	constructor(size: number, mtimeMs: number, onBadLine?: (line: number) => void) {
+		this.onBadLine = onBadLine;
 		this.out = {
 			size,
 			mtimeMs,
@@ -151,6 +138,7 @@ export class SessionParser {
 	}
 
 	accept(line: string): void {
+		this.physicalLine++;
 		if (!line || NUL_PADDING.test(line)) return;
 		// Cheap supersets, whitespace-agnostic: a false positive only costs a JSON.parse.
 		const isHeader = this.lines++ === 0;
@@ -159,7 +147,7 @@ export class SessionParser {
 		if (!isHeader && !isAssistant && !isInfo) {
 			// Every other entry only moves the session's end time: skip the JSON.parse, but still
 			// catch the usual damage (a truncated or spliced line) by its missing braces.
-			if (!looksLikeObject(line)) this.out.badLines++;
+			if (!looksLikeObject(line)) this.badLine();
 			else this.seen(timeOf(LEADING_TIMESTAMP.exec(line)?.[1]));
 			return;
 		}
@@ -167,11 +155,11 @@ export class SessionParser {
 		try {
 			entry = JSON.parse(line) as Record<string, unknown>;
 		} catch {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		const ts = timeOf(entry.timestamp);
@@ -207,6 +195,11 @@ export class SessionParser {
 		return this.out;
 	}
 
+	private badLine(): void {
+		this.out.badLines++;
+		this.onBadLine?.(this.physicalLine);
+	}
+
 	private seen(ts: number): void {
 		if (ts <= 0) return;
 		if (this.out.startMs === 0) this.out.startMs = ts;
@@ -224,7 +217,7 @@ export class SessionParser {
 				(v) => v !== undefined && (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0),
 			)
 		) {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		const input = num(usage.input);
@@ -236,7 +229,7 @@ export class SessionParser {
 		const cost =
 			typeof costValue === "number" ? num(costValue) : num((costValue as Record<string, unknown> | undefined)?.total);
 		if (cost < 0) {
-			this.out.badLines++;
+			this.badLine();
 			return;
 		}
 		const ms = timeOf(message.timestamp) || entryTs;
@@ -261,47 +254,17 @@ export function parseSession(text: string, size = text.length, mtimeMs = 0): Fil
 	return parser.finish();
 }
 
-/** Stream a file through `SessionParser`, yielding to the event loop every 2000 lines so the TUI keeps painting. */
-export async function parseFile(path: string, size: number, mtimeMs: number): Promise<FileStats> {
-	const parser = new SessionParser(size, mtimeMs);
-	const rl = createInterface({
-		input: createReadStream(path, { encoding: "utf8" }),
-		crlfDelay: Number.POSITIVE_INFINITY,
-	});
-	let n = 0;
-	for await (const line of rl) {
-		parser.accept(line);
-		if (++n % YIELD_EVERY_LINES === 0) await tick();
-	}
+/** Stream a file through `SessionParser`. */
+export async function parseFile(
+	path: string,
+	size: number,
+	mtimeMs: number,
+	onBadLine?: (line: number) => void,
+): Promise<FileStats> {
+	const parser = new SessionParser(size, mtimeMs, onBadLine);
+	await feedFile(path, parser);
 	return parser.finish();
 }
-
-/**
- * Every `*.jsonl` under `root`. A missing root is an empty history; any other directory that cannot
- * be listed (EACCES, ...) is counted in `errors` so partial totals are never presented as complete.
- */
-async function listJsonl(root: string): Promise<{ paths: string[]; errors: number }> {
-	const out: string[] = [];
-	let errors = 0;
-	const walk = async (dir: string): Promise<void> => {
-		let entries: Dirent[];
-		try {
-			entries = await readdir(dir, { withFileTypes: true });
-		} catch (error) {
-			if (!(dir === root && (error as NodeJS.ErrnoException).code === "ENOENT")) errors++;
-			return;
-		}
-		for (const entry of entries) {
-			const path = join(dir, entry.name);
-			if (entry.isDirectory()) await walk(path);
-			else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(path);
-		}
-	};
-	await walk(root);
-	return { paths: out.sort(), errors };
-}
-
-const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** Whether a cached record has exactly the shape `flatten` relies on. */
 export function isFileStats(value: unknown): value is FileStats {
@@ -381,9 +344,9 @@ async function writeCache(path: string, files: Record<string, FileStats>): Promi
 	await rename(tmp, path);
 }
 
-/** Old caches deduplicated this tuple, without cost or entry identity. */
+/** Old caches deduplicated this tuple, without cost or entry identity; `harness` keeps tools apart. */
 export function legacyKey(c: Call): string {
-	return JSON.stringify([c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
+	return JSON.stringify([c.harness, c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
 }
 
 /** Prefer identified records over their legacy copies, but retain distinct preserved IDs. */
@@ -417,11 +380,16 @@ export interface LoadOptions {
  * are kept, so pruning old sessions does not erase history; entries outside `root` stay cached but
  * are not reported.
  */
-export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
+export async function loadUsage(options: LoadOptions = {}): Promise<Loaded & { diagnostics: ScanDiagnostic[] }> {
 	const root = resolve(options.root ?? sessionsDir());
 	const cacheFile = options.cache ?? cachePath();
 	const { files, migrate } = await readCache(cacheFile);
-	const listed = await listJsonl(root);
+	const diagnostics: ScanDiagnostic[] = [];
+	const diagnose = (diagnostic: ScanDiagnostic): void => {
+		if (diagnostics.length < 20) diagnostics.push(diagnostic);
+	};
+	const parsed = new Set<string>();
+	const listed = await listJsonl(root, diagnose);
 	const paths = listed.paths;
 	let errors = listed.errors;
 	const stale: { path: string; size: number; mtimeMs: number }[] = [];
@@ -429,20 +397,23 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 		try {
 			const s = await stat(path);
 			const hit = files[path];
-			if (!hit || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
+			if (!hit || hit.badLines > 0 || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
 				stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
 		} catch {
 			errors++;
+			diagnose({ path, line: 0, reason: "read-file" });
 		}
 	}
 	let done = 0;
 	let dirty = migrate;
 	for (const { path, size, mtimeMs } of stale) {
 		try {
-			files[path] = await parseFile(path, size, mtimeMs);
+			files[path] = await parseFile(path, size, mtimeMs, (line) => diagnose({ path, line, reason: "invalid-record" }));
+			parsed.add(path);
 			dirty = true;
 		} catch {
 			errors++;
+			diagnose({ path, line: 0, reason: "read-file" });
 		}
 		options.onProgress?.(++done, stale.length);
 	}
@@ -452,6 +423,7 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 		} catch {
 			// The view can still render, but a producer must not claim durable history.
 			errors++;
+			diagnose({ path: cacheFile, line: 0, reason: "write-cache" });
 		}
 	}
 	// The cache is shared by every sessions dir this agent dir has used; only this root's files
@@ -460,7 +432,10 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 	const scoped = Object.fromEntries(
 		Object.entries(files).filter(([path]) => options.includeAllRoots || path.startsWith(prefix)),
 	);
-	return { ...flatten(scoped), errors };
+	for (const [path, file] of Object.entries(scoped)) {
+		if (file.badLines > 0 && !parsed.has(path)) diagnose({ path, line: 0, reason: "cached-invalid-record" });
+	}
+	return { ...flatten(scoped), errors, diagnostics };
 }
 
 /** Merge preserved session IDs, spanning all copies and propagating child attribution. */
@@ -499,6 +474,7 @@ export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"
 
 			const slash = raw.indexOf("/");
 			candidates.push({
+				harness: "pi",
 				session,
 				entryId: file.entryIds?.[i] ?? undefined,
 				ms,

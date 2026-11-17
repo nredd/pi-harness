@@ -1,5 +1,5 @@
 /** Cached schedule interpretation only. This module never redeems grants or changes admission. */
-import type { UsageSnapshot, UsageWindow } from "./usage.js";
+import type { UsageSnapshot, UsageWindow } from "./usage.ts";
 
 /** Official interactive handoff, not a shell command or a programmatic redemption API. */
 export const CODEX_RESET_HELP = "https://help.openai.com/en/articles/20001498-how-resets-work-in-codex";

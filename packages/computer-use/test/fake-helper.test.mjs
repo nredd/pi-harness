@@ -12,6 +12,7 @@ import {
 	createFakeChild,
 	createFakeSpawn,
 	createHelperEngine,
+	drop,
 	fail,
 	ok,
 	shortSocketPath,
@@ -37,6 +38,20 @@ afterEach(() => {
 	rmSync(tmp, { recursive: true, force: true });
 });
 
+function askSocket(socketPath, cmd) {
+	return new Promise((resolve, reject) => {
+		const socket = net.createConnection(socketPath);
+		socket.setEncoding("utf8");
+		socket.once("error", reject);
+		socket.once("close", () => reject(new Error("Helper socket closed before reply")));
+		socket.once("data", (data) => {
+			socket.destroy();
+			resolve(JSON.parse(data));
+		});
+		socket.write(`${JSON.stringify({ id: "1", cmd })}\n`);
+	});
+}
+
 async function windowsClient(engine) {
 	vi.resetModules();
 	vi.stubEnv("PI_COMPUTER_USE_WINDOWS_HELPER_PATH", exe);
@@ -60,8 +75,14 @@ describe("envelope profile over a fake child's stdio", () => {
 		assert.deepEqual(await client.command("look", { app: "x" }), { roots: [] });
 		assert.deepEqual(engine.requests[0].args, { app: "x" });
 		assert.equal(engine.requests[0].raw.protocolVersion, 4);
-		await assert.rejects(client.command("click"), (error) => error.code === "permission_denied" && error.message === "denied");
-		await assert.rejects(client.command("nope"), (error) => error.code === "unsupported_command" && error.message === "Unknown command 'nope'");
+		await assert.rejects(
+			client.command("click"),
+			(error) => error.code === "permission_denied" && error.message === "denied",
+		);
+		await assert.rejects(
+			client.command("nope"),
+			(error) => error.code === "unsupported_command" && error.message === "Unknown command 'nope'",
+		);
 		assert.equal((await client.command("diagnostics")).protocolVersion, 4);
 		client.dispose();
 	});
@@ -79,7 +100,11 @@ describe("envelope profile over a fake child's stdio", () => {
 	});
 
 	test("a child that exits mid-request ends the stream", async () => {
-		const engine = createHelperEngine({ profile: "envelope", protocolVersion: 4, handlers: { crash: { kind: "drop" } } });
+		const engine = createHelperEngine({
+			profile: "envelope",
+			protocolVersion: 4,
+			handlers: { crash: { kind: "drop" } },
+		});
 		const child = createFakeChild({ engine });
 		const closed = new Promise((resolve) => child.once("close", resolve));
 		child.stdin.write(`${JSON.stringify({ protocolVersion: 4, id: "1", cmd: "crash", args: {} })}\n`);
@@ -93,7 +118,11 @@ describe("wire fidelity", () => {
 	async function exchange(options, lines) {
 		const engine = createHelperEngine(options);
 		const replies = [];
-		const io = { write: (text) => replies.push(JSON.parse(text)), end: () => undefined, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) };
+		const io = {
+			write: (text) => replies.push(JSON.parse(text)),
+			end: () => undefined,
+			sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+		};
 		for (const line of lines) await engine.handleLine(line, io);
 		return { engine, replies };
 	}
@@ -101,7 +130,13 @@ describe("wire fidelity", () => {
 	const envelope = { profile: "envelope", protocolVersion: 4, platform: "Linux" };
 
 	test("flat profile: invalid JSON and non-objects get id `invalid` and invalid_request; blank lines are ignored", async () => {
-		const { replies } = await exchange({ profile: "flat" }, ["{nope", "null", "[1]", "   ", JSON.stringify({ id: "a", cmd: "zzz" })]);
+		const { replies } = await exchange({ profile: "flat" }, [
+			"{nope",
+			"null",
+			"[1]",
+			"   ",
+			JSON.stringify({ id: "a", cmd: "zzz" }),
+		]);
 		assert.deepEqual(replies[0], err("invalid", "invalid_request", "Input was not valid JSON"));
 		assert.deepEqual(replies[1], err("invalid", "invalid_request", "Request must be a JSON object"));
 		assert.deepEqual(replies[2], err("invalid", "invalid_request", "Request must be a JSON object"));
@@ -110,7 +145,10 @@ describe("wire fidelity", () => {
 	});
 
 	test("flat profile handles one connection's lines serially", async () => {
-		const engine = createHelperEngine({ profile: "flat", handlers: { slow: slow(80, ok({ n: 1 })), fast: ok({ n: 2 }) } });
+		const engine = createHelperEngine({
+			profile: "flat",
+			handlers: { slow: slow(80, ok({ n: 1 })), fast: ok({ n: 2 }) },
+		});
 		const order = [];
 		const input = new PassThrough();
 		serveForTest(engine, input, order);
@@ -147,7 +185,10 @@ describe("wire fidelity", () => {
 			["v", "invalid_request", 4],
 		]);
 		assert.match(replies[2].error.message, /missing field `args`/);
-		assert.equal(replies[5].error.message, "Unsupported Linux helper protocol 3; expected 4. Restart Pi to use the installed helper.");
+		assert.equal(
+			replies[5].error.message,
+			"Unsupported Linux helper protocol 3; expected 4. Restart Pi to use the installed helper.",
+		);
 		assert.equal(engine.requests.length, 0, "invalid requests are not recorded");
 	});
 
@@ -159,27 +200,40 @@ describe("wire fidelity", () => {
 		};
 		const started = Date.now();
 		const replies = [];
-		await engine.handleLine('{"id":"s","cmd":"shutdown"}', { write: (t) => replies.push(JSON.parse(t)), end() {}, sleep: () => undefined });
+		await engine.handleLine('{"id":"s","cmd":"shutdown"}', {
+			write: (t) => replies.push(JSON.parse(t)),
+			end() {},
+			sleep: () => undefined,
+		});
 		assert.deepEqual(replies, [{ id: "s", ok: true, result: { shuttingDown: true } }]);
 		assert.equal(exitedAt, undefined);
 		await vi.waitFor(() => assert.ok(exitedAt - started >= 190));
+	});
+
+	test("socket request rejects if the helper closes before replying", async () => {
+		const { socketPath, dispose } = shortSocketPath();
+		const fake = await startFakeHelper({ socketPath });
+		try {
+			fake.script("diagnostics", drop());
+			const result = await Promise.race([
+				askSocket(socketPath, "diagnostics").then(
+					() => "reply",
+					() => "closed",
+				),
+				new Promise((resolve) => setTimeout(() => resolve("hung"), 500)),
+			]);
+			assert.equal(result, "closed", "a closed socket must settle the waiting request");
+		} finally {
+			await fake.stop();
+			dispose();
+		}
 	});
 
 	test("a shut-down socket helper stops listening and can be relaunched explicitly", async () => {
 		const { socketPath, dispose } = shortSocketPath();
 		const fake = await startFakeHelper({ socketPath });
 		try {
-			const ask = (cmd) =>
-				new Promise((resolve, reject) => {
-					const socket = net.createConnection(socketPath);
-					socket.setEncoding("utf8");
-					socket.once("error", reject);
-					socket.once("data", (data) => {
-						socket.destroy();
-						resolve(JSON.parse(data));
-					});
-					socket.write(`${JSON.stringify({ id: "1", cmd })}\n`);
-				});
+			const ask = (cmd) => askSocket(socketPath, cmd);
 			assert.deepEqual((await ask("shutdown")).result, { shuttingDown: true });
 			await new Promise((resolve) => setTimeout(resolve, 400));
 			await assert.rejects(ask("diagnostics"), /ECONNREFUSED|ENOENT/);
@@ -187,7 +241,9 @@ describe("wire fidelity", () => {
 			assert.equal((await ask("diagnostics")).ok, true);
 			fake.relaunchAfterExit({ delayMs: 10, diagnostics: { protocolVersion: 8 } });
 			await ask("shutdown");
-			await vi.waitFor(async () => assert.equal((await ask("diagnostics")).result.protocolVersion, 8), { timeout: 2_000 });
+			await vi.waitFor(async () => assert.equal((await ask("diagnostics")).result.protocolVersion, 8), {
+				timeout: 2_000,
+			});
 		} finally {
 			await fake.stop();
 			dispose();
@@ -204,7 +260,12 @@ function serveForTest(engine, input, order) {
 		for (let n = buffer.indexOf("\n"); n >= 0; n = buffer.indexOf("\n")) {
 			const line = buffer.slice(0, n);
 			buffer = buffer.slice(n + 1);
-			const run = () => engine.handleLine(line, { write: (t) => order.push(JSON.parse(t).id), end() {}, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) });
+			const run = () =>
+				engine.handleLine(line, {
+					write: (t) => order.push(JSON.parse(t).id),
+					end() {},
+					sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+				});
 			if (engine.profile === "flat") tail = tail.then(run);
 			else void run();
 		}
@@ -214,7 +275,12 @@ function serveForTest(engine, input, order) {
 describe("socket server", () => {
 	test("disconnectAll drops live clients but keeps listening, and the envelope reply is framed per profile", async () => {
 		const { socketPath, dispose } = shortSocketPath();
-		const fake = await startFakeHelper({ socketPath, profile: "envelope", protocolVersion: 4, handlers: { look: ok({}) } });
+		const fake = await startFakeHelper({
+			socketPath,
+			profile: "envelope",
+			protocolVersion: 4,
+			handlers: { look: ok({}) },
+		});
 		try {
 			const lines = [];
 			const socket = net.createConnection(socketPath);

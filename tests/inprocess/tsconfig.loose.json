@@ -1,0 +1,13 @@
+{
+  // nredd/pi-harness#867: the tests that import `plan-mode` or `subagents` sources, which are typed under their own
+  // looser configs (no `noUncheckedIndexedAccess`). Every other file here stays under the strict `tsconfig.json`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noUncheckedIndexedAccess": false },
+  "exclude": [],
+  "include": [
+    "plan-mode-children.test.ts",
+    "plan-mode-subagents.test.ts",
+    "router-rebinding.test.ts",
+    "todo-subagent-lifecycle.test.ts"
+  ]
+}
