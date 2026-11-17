@@ -214,12 +214,19 @@ scoped selector.
 `architect` keeps the deepening survey and preloaded `codebase-design` vocabulary, adds cited
 web evidence and explicit opt-in follow-up grilling. It proposes decision-record edits in its
 reply, never writes them or starts implementation. Fetch tools may cache material; this is not
-a filesystem sandbox.
+a filesystem sandbox. Survey reports identify scope and flow, separate confirmed evidence
+from inference, classify dependencies and name unexamined sources and the cost of skipping
+a candidate. Follow-up proposals use `Decision record:` and `Proposed edits:` labels.
 
 `general-purpose` delegates only independent Standards and Spec reviews to read-only
 `code-reviewer` leaves. Passive waits remain with the continuing parent's monitor, linked to
 its tracked todo. The shipping skills preserve that ownership, including bounded parent-only
-foreground waits when native monitors are unavailable.
+foreground waits when native monitors are unavailable. Monitor availability comes from tool
+discovery, not error wording; a timeout is a resumable wait, not a terminal result. Parents run
+the deployment's safe merged-worktree sweep after each merge and before stopping. Without
+one, cleanup is limited to clean, fully pushed worktrees/branches of merged PRs, never forced.
+An explicit no-PR sweep mode is deployment-specific; without it, retain the worktree and
+report its owner rather than guessing a cleanup command.
 
 Local overrides shadow these packaged definitions; update their managed source separately. This change does not activate a preset or alter tool grants.
 

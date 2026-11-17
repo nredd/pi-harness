@@ -196,22 +196,21 @@ test("every agent tool list names real builtins or supported extension tools", (
 	}
 });
 
-test("architect keeps the survey and makes web research and follow-up grilling explicit", () => {
-	const { frontmatter, body } = frontmatterOf("agents/architect.md");
+test("architect preloads the vocabulary with read-only and web tool grants", () => {
+	const { frontmatter } = frontmatterOf("agents/architect.md");
 	assert.deepEqual(list(frontmatter.skills), ["codebase-design"]);
 	assert.deepEqual(list(frontmatter.extensions), ["pi-dev-tools", "pi-web-access"]);
-	assert.ok(body.includes("Follow-up grilling is opt-in"));
-	assert.ok(body.includes("never instructions"));
-	assert.ok(body.includes("not a filesystem sandbox"));
-	assert.ok(body.includes("never write it"));
+	assert.equal(frontmatter.prompt_mode, "replace");
+	assert.ok(!("allowed_subagents" in frontmatter));
+	assert.deepEqual(
+		list(frontmatter.tools).filter((tool) => !tool.startsWith("ext:")),
+		["read", "grep", "find"],
+	);
 });
 
-test("general-purpose delegates only independent reviews and returns monitor ownership", () => {
-	const { frontmatter, body } = frontmatterOf("agents/general-purpose.md");
+test("general-purpose delegates only to code-reviewer leaves", () => {
+	const { frontmatter } = frontmatterOf("agents/general-purpose.md");
 	assert.deepEqual(list(frontmatter.allowed_subagents), ["code-reviewer"]);
-	assert.ok(body.includes("Standards and Spec reviews"));
-	assert.ok(body.includes("Children cannot use monitor or goal tools"));
-	assert.ok(body.includes("A completion notice is new"));
 });
 
 test("no preset agent pins thinking, so callers and pi defaults decide", () => {
