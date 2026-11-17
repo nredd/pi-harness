@@ -1,5 +1,20 @@
 """Render existing accounting evidence without publishing or executing artifact code.
 
+Presentation only: reads trusted-plan JSON plus downloaded `coverage-<host>` artifacts (a ZIP, never
+extracted, or an already-unpacked `coverage/summary.json`) and prints deterministic Markdown and optional
+per-OS SVG badges. It runs no tests, accounting, network or Git calls and writes only explicit outputs.
+
+Plan JSON, supplied by the trusted caller and never derived from the artifact: a mapping of
+`ubuntu-24.04` | `macos-14` | `wsl2` to `{state, signals}`. `state` is `available`, `unavailable`,
+`pending` or `NOT RUN`. `signals` maps `package/signal` to `{enforcement: enforced|report-only, reason,
+semantics, state: planned|NOT RUN, source_root}`. `semantics` names the producer and counter meaning, so
+`vs measured main` is computed only when it matches. The caller must authenticate repository, SHAs, run,
+attempt and artifact freshness first. A host whose artifact is missing or malformed degrades to
+`unavailable` with a bounded reason; the healthy hosts still render.
+
+Implemented limits: Markdown is capped at 60,000 characters with uncovered-first file rows and omitted
+counts. No step-summary cap or changed-files ordering exists yet (slice 2/3 of #1001).
+
 References:
     - https://github.com/nredd/pi-harness/issues/1001
     - https://docs.python.org/3/library/zipfile.html
@@ -11,11 +26,13 @@ import argparse
 import html
 import json
 import logging
+import math
 import re
 import stat
 import sys
+import unicodedata
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -24,6 +41,9 @@ MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_MARKDOWN = 60_000
+MAX_COUNT = 10**12
+MAX_REASON = 200
+FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
 COUNTERS = ("lines", "functions", "branches", "statements")
 HOSTS = {"ubuntu-24.04": ("Ubuntu", "linux"), "macos-14": ("macOS", "darwin"), "wsl2": ("WSL", "linux")}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -46,7 +66,7 @@ def object_value(value: object) -> dict[str, object]:
 
 
 def text_value(value: object) -> str:
-    """Require bounded, non-control text.
+    """Require bounded text without control, format, separator, private or surrogate characters.
 
     Parameters:
         value (object): Untrusted JSON value.
@@ -55,8 +75,12 @@ def text_value(value: object) -> str:
     Raises:
         ValueError: Text is malformed or too large.
     """
-    if not isinstance(value, str) or len(value) > 8192 or any(ord(c) < 32 for c in value):
-        raise ValueError("Expected bounded text without control characters")
+    if (
+        not isinstance(value, str)
+        or len(value) > 8192
+        or any(unicodedata.category(c) in FORBIDDEN_CATEGORIES for c in value)
+    ):
+        raise ValueError("Expected bounded text without control or format characters")
     return value
 
 
@@ -78,6 +102,35 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def reject_constant(token: str) -> object:
+    """Refuse the non-finite tokens Python's JSON decoder accepts by default.
+
+    Parameters:
+        token (str): `NaN`, `Infinity` or `-Infinity`.
+    Returns:
+        object: Never returns.
+    Raises:
+        ValueError: Always.
+    """
+    raise ValueError(f"Non-finite JSON number: '{token}'")
+
+
+def parse_float(token: str) -> float:
+    """Parse a JSON float, refusing overflow to infinity.
+
+    Parameters:
+        token (str): Decimal float token.
+    Returns:
+        float: Finite value.
+    Raises:
+        ValueError: The value is not finite.
+    """
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"Non-finite JSON number: '{token}'")
+    return value
+
+
 def decode_json(data: bytes) -> dict[str, object]:
     """Decode bounded JSON with no duplicate keys.
 
@@ -91,8 +144,15 @@ def decode_json(data: bytes) -> dict[str, object]:
     if len(data) > MAX_JSON_BYTES:
         raise ValueError("JSON byte limit exceeded")
     try:
-        return object_value(json.loads(data, object_pairs_hook=unique_object))
-    except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+        return object_value(
+            json.loads(
+                data,
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+                parse_float=parse_float,
+            )
+        )
+    except (ValueError, RecursionError) as error:
         raise ValueError(f"Cannot decode JSON: '{error}'") from error
 
 
@@ -108,7 +168,7 @@ def read_summary(path: Path) -> dict[str, object]:
         OSError: The input cannot be read.
     """
     if path.is_symlink() or not path.is_file():
-        raise ValueError(f"Not a regular input file: '{path}'")
+        raise ValueError(f"Not a regular input file: '{path.name}'")
     if path.stat().st_size > MAX_ARCHIVE_BYTES:
         raise ValueError("Input byte limit exceeded")
     if path.suffix != ".zip":
@@ -138,7 +198,8 @@ def read_summary(path: Path) -> dict[str, object]:
             member = archive.getinfo("coverage/summary.json")
             if member.file_size > MAX_JSON_BYTES or member.is_dir():
                 raise ValueError("Invalid summary member")
-            return decode_json(archive.read(member))
+            with archive.open(member) as stream:
+                return decode_json(stream.read(MAX_JSON_BYTES + 1))
     except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError) as error:
         raise ValueError(f"Cannot read artifact ZIP: '{error}'") from error
 
@@ -166,7 +227,11 @@ class Counters:
             total, uncovered = obj.get(name), obj.get(f"uncovered_{name}")
             if total is None and uncovered is None:
                 continue
-            if type(total) is not int or type(uncovered) is not int or not 0 <= uncovered <= total:
+            if (
+                type(total) is not int
+                or type(uncovered) is not int
+                or not 0 <= uncovered <= total <= MAX_COUNT
+            ):
                 raise ValueError(f"Invalid measured counter: '{name}'")
             values.append((name, total, uncovered))
         if not values:
@@ -284,6 +349,7 @@ class Summary:
                         if (
                             metric not in COUNTERS
                             or type(count) is not int
+                            or abs(count) > MAX_COUNT
                             or (key == "reference" and count < 0)
                         ):
                             raise ValueError("Invalid policy reference counters")
@@ -316,15 +382,17 @@ class Summary:
 
 
 def validate_totals(packages: dict[str, Counters], files: list[File]) -> None:
-    """Reject aggregate values that disagree with the measured per-file rows.
+    """Reject per-file rows that exceed their signal's measured totals.
+
+    Rows may be a subset (trimmed fixtures, truncated producers), never more than the total.
 
     Parameters:
         packages (dict[str, Counters]): Measured signal totals.
         files (list[File]): Validated unique source rows.
     Returns:
-        None: Totals agree for every measured counter.
+        None: File rows fit within every measured counter.
     Raises:
-        ValueError: Artifact counters disagree.
+        ValueError: File rows exceed the signal totals.
     """
     for label, counters in packages.items():
         for metric, total, uncovered in counters.values:
@@ -335,8 +403,8 @@ def validate_totals(packages: dict[str, Counters], files: list[File]) -> None:
                 for name, t, u in file.counters.values
                 if name == metric
             ]
-            if sum(t for t, _ in measured) != total or sum(u for _, u in measured) != uncovered:
-                raise ValueError("Measured package and file counters disagree")
+            if sum(t for t, _ in measured) > total or sum(u for _, u in measured) > uncovered:
+                raise ValueError("Measured file rows exceed the package counters")
 
 
 @dataclass(frozen=True)
@@ -347,6 +415,7 @@ class Evidence:
     state: str
     plan: tuple[Signal, ...]
     summary: Summary | None
+    reason: str = ""
 
     @classmethod
     def parse(cls, host: str, value: object, summary: Summary | None) -> Evidence:
@@ -376,7 +445,7 @@ class Evidence:
             raise ValueError("Available evidence lacks a compatible planned summary")
         for signal in plan:
             meta = summary.signals.get(signal.name)
-            if meta is not None and (signal.state != "planned" or meta["enforcement"] != signal.enforcement):
+            if meta is not None and meta["enforcement"] != signal.enforcement:
                 raise ValueError("Measured signal conflicts with trusted plan")
         return cls(host, state, plan, summary)
 
@@ -497,6 +566,7 @@ def source_link(file: File, plan: tuple[Signal, ...], provenance: Provenance) ->
     display = escape(file.path)
     if (
         not file.path
+        or not file.path.isprintable()
         or PurePosixPath(file.path).is_absolute()
         or "\\" in file.path
         or any(p in {"", ".", ".."} for p in file.path.split("/"))
@@ -508,6 +578,153 @@ def source_link(file: File, plan: tuple[Signal, ...], provenance: Provenance) ->
     path = "/".join(part for part in (signal.source_root, file.path) if part)
     url = f"https://github.com/{provenance.repository}/blob/{provenance.tested_sha}/{quote(path, safe='/')}"
     return f"[{display}]({url})"
+
+
+def signal_row(cell: Evidence, signal: Signal, main: Evidence | None) -> str:
+    """Render one planned signal, flagging a measurement the plan says was NOT RUN.
+
+    Parameters:
+        cell (Evidence): Host evidence.
+        signal (Signal): Trusted planned signal.
+        main (Evidence | None): Optional measured-main evidence for the same host.
+    Returns:
+        str: One escaped table row.
+
+    Raises:
+        None.
+    """
+    summary = cell.summary
+    counts = summary.packages.get(signal.name) if summary is not None else None
+    note = ""
+    if signal.state != "planned":
+        counters = " | ".join([signal.state] * 4)
+        if counts is not None:
+            note = "; INCONSISTENT: measurement present for a NOT RUN signal"
+    elif counts is not None:
+        counters = counts.cells()
+    else:
+        counters = " | ".join(["unavailable" if summary is not None else cell.state] * 4)
+    meta = summary.signals.get(signal.name, {}) if summary is not None and signal.state == "planned" else {}
+    enforcement = signal.enforcement if signal.enforcement == "enforced" else "REPORT-ONLY (outside headline)"
+    return (
+        f"{escape(signal.name)} | {counters} | {enforcement}: {escape(signal.reason)}{note} | "
+        f"{policy_delta(meta.get('delta'))} | {measured_delta(cell, main, signal)}"
+    )
+
+
+def host_rows(cell: Evidence, main: Evidence | None) -> list[str]:
+    """Build one host's table, removed-signal, error and not-measured rows.
+
+    Parameters:
+        cell (Evidence): Host evidence.
+        main (Evidence | None): Optional measured-main evidence for the same host.
+    Returns:
+        list[str]: Ordered rows, header first.
+
+    Raises:
+        None.
+    """
+    rows = [
+        f"\n{HOSTS[cell.host][0]}:\n\nSignal | L | F | B | S | Enforcement / reason | "
+        "vs policy reference | vs measured main\n"
+        "--- | --- | --- | --- | --- | --- | --- | ---"
+    ]
+    rows.extend(
+        signal_row(cell, signal, main)
+        for signal in sorted(cell.plan, key=lambda s: (s.enforcement != "enforced", s.name))
+    )
+    if main is not None:
+        removed = sorted({s.name for s in main.plan} - {s.name for s in cell.plan})
+        rows.extend(f"{escape(name)} | removed vs measured main" for name in removed)
+    summary = cell.summary
+    if summary is None:
+        if cell.reason:
+            rows.append(f"\nUnavailable: {escape(cell.reason)}")
+        return rows
+    rows.extend(f"Error: {escape(error)}" for error in summary.errors)
+    rows.extend(
+        f"Not measured: {escape(name)}: {escape(reason)}"
+        for name, reason in sorted(summary.not_measured.items())
+    )
+    return rows
+
+
+def host_file_rows(cell: Evidence, provenance: Provenance) -> list[str]:
+    """Build one host's per-file rows, most uncovered first.
+
+    Parameters:
+        cell (Evidence): Host evidence.
+        provenance (Provenance): Authenticated run identity for source links.
+    Returns:
+        list[str]: Ordered rows for planned signals only.
+
+    Raises:
+        None.
+    """
+    if cell.summary is None:
+        return []
+    planned = {s.name for s in cell.plan if s.state == "planned"}
+    files = sorted(
+        (file for file in cell.summary.files if file.signal in planned),
+        key=lambda f: (-sum(u for _, _, u in f.counters.values), f.signal, f.path),
+    )
+    return [
+        f"{HOSTS[cell.host][0]} | {escape(file.signal)} | {source_link(file, cell.plan, provenance)} | "
+        f"{file.counters.cells()}"
+        for file in files
+    ]
+
+
+def admit_rows(rows: list[str], budget: int) -> tuple[list[str], int]:
+    """Admit whole rows in order until the character budget is spent.
+
+    Parameters:
+        rows (list[str]): Candidate rows.
+        budget (int): Remaining characters.
+    Returns:
+        tuple[list[str], int]: Admitted rows and the budget left.
+
+    Raises:
+        None.
+    """
+    kept: list[str] = []
+    for row in rows:
+        if len(row) + 1 > budget:
+            break
+        kept.append(row)
+        budget -= len(row) + 1
+    return kept, budget
+
+
+def assemble(blocks: list[str], signal_rows: list[str], file_rows: list[str], footer: str) -> str:
+    """Join the report sections; the details element is always closed.
+
+    Parameters:
+        blocks (list[str]): Provenance, headlines and legend.
+        signal_rows (list[str]): Admitted signal/status rows.
+        file_rows (list[str]): Admitted per-file rows.
+        footer (str): Omitted-row counts.
+    Returns:
+        str: Complete Markdown.
+
+    Raises:
+        None.
+    """
+    details = (
+        "<details><summary>Per-file measurements (uncovered first)</summary>\n\n"
+        "OS | Signal | File | L | F | B | S\n--- | --- | --- | --- | --- | --- | ---"
+    )
+    return (
+        "\n\n".join(blocks)
+        + "\n"
+        + "\n".join(signal_rows)
+        + "\n\n"
+        + details
+        + "\n"
+        + "\n".join(file_rows)
+        + "\n\n</details>"
+        + footer
+    )
 
 
 def render_markdown(
@@ -530,105 +747,31 @@ def render_markdown(
     """
     if not 1000 <= limit <= MAX_MARKDOWN or len({e.host for e in evidence}) != len(evidence):
         raise ValueError("Invalid Markdown limit or duplicate OS")
+    ordered = sorted(evidence, key=lambda e: e.host)
     blocks = [
         provenance.markdown(),
-        "\n".join(headline(e) for e in sorted(evidence, key=lambda e: e.host)),
+        "\n".join(headline(e) for e in ordered),
         "L/F/B/S = lines/functions/branches/statements. Cells: covered/total (uncovered). "
         "Unsupported: not measured; zero denominator: N/A. Signals are never averaged. "
         "Badges and cached reports are not merge evidence.",
     ]
-    rows: list[str] = []
-    file_rows: list[str] = []
-    for cell in sorted(evidence, key=lambda e: e.host):
-        summary = cell.summary
-        rows.append(
-            f"\n{HOSTS[cell.host][0]}:\n\nSignal | L | F | B | S | Enforcement / reason | "
-            "vs policy reference | vs measured main\n"
-            "--- | --- | --- | --- | --- | --- | --- | ---"
-        )
-        main = next((e for e in baseline if e.host == cell.host), None)
-        for signal in sorted(cell.plan, key=lambda s: (s.enforcement != "enforced", s.name)):
-            counts = summary.packages.get(signal.name) if summary is not None else None
-            state = (
-                signal.state
-                if signal.state != "planned"
-                else ("unavailable" if summary is not None else cell.state)
-            )
-            counters = (
-                counts.cells()
-                if counts is not None and signal.state == "planned"
-                else " | ".join([state] * 4)
-            )
-            meta = (
-                summary.signals.get(signal.name, {})
-                if summary is not None and signal.state == "planned"
-                else {}
-            )
-            enforcement = (
-                signal.enforcement if signal.enforcement == "enforced" else "REPORT-ONLY (outside headline)"
-            )
-            rows.append(
-                f"{escape(signal.name)} | {counters} | {enforcement}: {escape(signal.reason)} | "
-                f"{policy_delta(meta.get('delta'))} | {measured_delta(cell, main, signal)}"
-            )
-        if main is not None:
-            removed = sorted({s.name for s in main.plan} - {s.name for s in cell.plan})
-            rows.extend(f"{escape(name)} | removed vs measured main" for name in removed)
-        if summary is None:
-            continue
-        rows.extend(f"Error: {escape(error)}" for error in summary.errors)
-        rows.extend(
-            f"Not measured: {escape(name)}: {escape(reason)}"
-            for name, reason in sorted(summary.not_measured.items())
-        )
-        planned_names = {s.name for s in cell.plan if s.state == "planned"}
-        for file in sorted(
-            (file for file in summary.files if file.signal in planned_names),
-            key=lambda f: (-sum(u for _, _, u in f.counters.values), f.signal, f.path),
-        ):
-            file_rows.append(
-                f"{HOSTS[cell.host][0]} | {escape(file.signal)} | "
-                f"{source_link(file, cell.plan, provenance)} | "
-                f"{file.counters.cells()}"
-            )
-    details_start = (
-        "<details><summary>Per-file measurements (uncovered first)</summary>\n\n"
-        "OS | Signal | File | L | F | B | S\n--- | --- | --- | --- | --- | --- | ---"
-    )
-    details_end = "\n\n</details>"
-    # Reserve the complete footer before admitting rows, so truncation never cuts HTML or a headline.
-    footer = f"\nOmitted rows: {len(rows)} signal/status, {len(file_rows)} files."
-    essential = "\n\n".join(blocks) + "\n\n" + details_start + details_end
-    if len(essential) + len(footer) > limit:
+    rows = [
+        row
+        for cell in ordered
+        for row in host_rows(cell, next((e for e in baseline if e.host == cell.host), None))
+    ]
+    files = [row for cell in ordered for row in host_file_rows(cell, provenance)]
+    # The reserved footer is built from the full counts, so the final one is never longer.
+    reserved = f"\nOmitted rows: {len(rows)} signal/status, {len(files)} files."
+    budget = limit - len(assemble(blocks, [], [], reserved))
+    if budget < 0:
         raise ValueError("Essential report state exceeds Markdown limit")
-    kept: list[str] = []
-    used = len(essential) + len(footer) + 32
-    for group in (rows, file_rows):
-        admitted = 0
-        for row in group:
-            if used + len(row) + 1 > limit:
-                break
-            kept.append(row)
-            used += len(row) + 1
-            admitted += 1
-        if group is rows:
-            signal_count = admitted
-            signal_rows = kept[:]
-            kept = []
-        else:
-            file_count = admitted
-    footer = f"\nOmitted rows: {len(rows) - signal_count} signal/status, {len(file_rows) - file_count} files."
-    return (
-        "\n\n".join(blocks)
-        + "\n"
-        + "\n".join(signal_rows)
-        + "\n\n"
-        + details_start
-        + "\n"
-        + "\n".join(kept)
-        + details_end
-        + footer
+    kept_rows, budget = admit_rows(rows, budget)
+    kept_files, _ = admit_rows(files, budget)
+    footer = (
+        f"\nOmitted rows: {len(rows) - len(kept_rows)} signal/status, {len(files) - len(kept_files)} files."
     )
+    return assemble(blocks, kept_rows, kept_files, footer)
 
 
 @dataclass(frozen=True)
@@ -702,17 +845,37 @@ def render_badge(evidence: Evidence) -> str:
     )
 
 
+def read_host_summary(directory: Path, host: str) -> Summary | None:
+    """Read and validate one host's artifact, if it was downloaded.
+
+    Parameters:
+        directory (Path): Artifact parent.
+        host (str): Trusted host label.
+    Returns:
+        Summary | None: Validated summary, or None when no artifact exists.
+    Raises:
+        ValueError: The artifact is malformed or unsafe.
+        OSError: The artifact cannot be read.
+    """
+    path = directory / f"coverage-{host}.zip"
+    if not path.exists():
+        path = directory / f"coverage-{host}" / "coverage" / "summary.json"
+    return Summary.parse(read_summary(path)) if path.exists() else None
+
+
 def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
     """Read a trusted explicit manifest and its locally downloaded summaries.
+
+    A bad or missing artifact degrades only its own host to `unavailable` with a bounded reason.
 
     Parameters:
         directory (Path): Artifact parent containing coverage-HOST/coverage/summary.json or coverage-HOST.zip.
         plan_path (Path): Trusted JSON mapping hosts to state and complete signal plans.
     Returns:
-        tuple[Evidence, ...]: Validated evidence; absent files become unavailable.
+        tuple[Evidence, ...]: Validated evidence, never carrying numbers for a degraded host.
     Raises:
-        ValueError: A present artifact or manifest is malformed.
-        OSError: An input cannot be read.
+        ValueError: The manifest itself is malformed.
+        OSError: The manifest cannot be read.
     """
     manifest = read_summary(plan_path)
     cells = []
@@ -720,16 +883,20 @@ def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
         obj = object_value(value)
         if host not in HOSTS:
             raise ValueError("Invalid evidence host")
-        summary = None
+        reason = "artifact missing or expired"
         if obj.get("state") == "available":
-            path = directory / f"coverage-{host}.zip"
-            if not path.exists():
-                path = directory / f"coverage-{host}" / "coverage" / "summary.json"
-            if path.exists():
-                summary = Summary.parse(read_summary(path))
-            else:
-                obj = obj | {"state": "unavailable"}
-        cells.append(Evidence.parse(host, obj, summary))
+            try:
+                summary = read_host_summary(directory, host)
+                if summary is not None:
+                    cells.append(Evidence.parse(host, obj, summary))
+                    continue
+            except (OSError, ValueError) as error:
+                LOGGER.warning(f"Host '{host}' artifact unusable: '{error}'")
+                reason = str(error)[:MAX_REASON]
+            obj = obj | {"state": "unavailable"}
+            cells.append(replace(Evidence.parse(host, obj, None), reason=reason))
+        else:
+            cells.append(Evidence.parse(host, obj, None))
     return tuple(cells)
 
 

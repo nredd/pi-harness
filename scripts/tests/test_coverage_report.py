@@ -20,7 +20,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
 
-FIXTURES = Path(__file__).resolve().parents[2] / "tests/integration/tests/fixtures/coverage-report"
 PROVENANCE = report.Provenance("example/repository", "a" * 40, "b" * 40, 123, 2)
 
 
@@ -310,15 +309,15 @@ def test_deterministic_ordering_and_bounded_whole_rows() -> None:
     assert "1000 files." not in truncated
     assert len(report.render_markdown((current,), PROVENANCE)) <= 60_000
     for limit in (1, 60_001):
-        with pytest.raises(ValueError, match="limit"):
+        with pytest.raises(ValueError, match=r"^Invalid Markdown limit or duplicate OS$"):
             report.render_markdown((current,), PROVENANCE, limit=limit)
     enormous = replace(current, plan=tuple(replace(current.plan[0], name=str(i)) for i in range(100)))
     result = report.render_markdown((enormous,), PROVENANCE, limit=1100)
     assert len(result) <= 1100
     assert "signal/status" in result
-    with pytest.raises(ValueError, match="duplicate OS"):
+    with pytest.raises(ValueError, match=r"^Invalid Markdown limit or duplicate OS$"):
         report.render_markdown((current, current), PROVENANCE)
-    with pytest.raises(ValueError, match="Essential"):
+    with pytest.raises(ValueError, match=r"^Essential report state exceeds Markdown limit$"):
         report.render_markdown(
             (current, replace(current, host="wsl2"), replace(current, host="macos-14")),
             replace(PROVENANCE, repository="x" * 300 + "/repo"),
@@ -331,7 +330,7 @@ def test_object_types(value: object) -> None:
     """Reject non-object JSON values at every parsing entrypoint.
 
     Parameters:
-        value (object): Boundary input.
+        value (object): Non-object value.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -339,16 +338,16 @@ def test_object_types(value: object) -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    with pytest.raises(ValueError, match="object"):
+    with pytest.raises(ValueError, match=r"^Expected a JSON object$"):
         report.object_value(value)
 
 
 @pytest.mark.parametrize("value", [None, 3, "line\nfeed", "x" * 8193])
 def test_text_types(value: object) -> None:
-    """Reject malformed labels before escaping/rendering.
+    """Reject malformed labels before escaping or rendering.
 
     Parameters:
-        value (object): Boundary input.
+        value (object): Malformed text.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -356,16 +355,32 @@ def test_text_types(value: object) -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    with pytest.raises(ValueError, match="text"):
+    with pytest.raises(ValueError, match=r"^Expected bounded text without control or format characters$"):
         report.text_value(value)
 
 
-@pytest.mark.parametrize("data", [b"{", b"\xff", b"[]", b'{"x":1,"x":2}', b" " * (report.MAX_JSON_BYTES + 1)])
-def test_json_refusals(data: bytes) -> None:
-    """Reject malformed, duplicate-key and oversized JSON.
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (b"{", r"^Cannot decode JSON: 'Expecting property name"),
+        (b"\xff", r"^Cannot decode JSON: "),
+        (b"[]", r"^Cannot decode JSON: 'Expected a JSON object'$"),
+        (b'{"x":1,"x":2}', r"^Cannot decode JSON: 'Duplicate JSON key: .x.'$"),
+        (b" " * (report.MAX_JSON_BYTES + 1), r"^JSON byte limit exceeded$"),
+        (b'{"x":NaN}', r"Non-finite JSON number: .NaN."),
+        (b'{"x":Infinity}', r"Non-finite JSON number: .Infinity."),
+        (b'{"x":-Infinity}', r"Non-finite JSON number: .-Infinity."),
+        (b'{"x":1e999}', r"Non-finite JSON number: .1e999."),
+        (b'{"x":' + b"9" * 5000 + b"}", r"Exceeds the limit"),
+        (b"[" * 200_000, r"^Cannot decode JSON: .(Stack overflow|maximum recursion depth)"),
+    ],
+)
+def test_json_refusals(data: bytes, message: str) -> None:
+    """Reject malformed, duplicate-key, non-finite, huge-integer, deep and oversized JSON.
 
     Parameters:
-        data (bytes): Boundary input.
+        data (bytes): Hostile document.
+        message (str): Specific expected refusal.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -373,29 +388,29 @@ def test_json_refusals(data: bytes) -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    with pytest.raises(
-        ValueError, match=r"Invalid|Expected|No measured|JSON|Duplicate|decode|differ|Available"
-    ):
+    with pytest.raises(ValueError, match=message):
         report.decode_json(data)
 
 
 @pytest.mark.parametrize(
-    "counts",
+    ("counts", "message"),
     [
-        {},
-        {"lines": True, "uncovered_lines": 0},
-        {"lines": 1.0, "uncovered_lines": 0},
-        {"lines": -1, "uncovered_lines": 0},
-        {"lines": 1, "uncovered_lines": 2},
-        {"lines": 1},
-        {"uncovered_lines": 1},
+        ({}, r"^No measured counters$"),
+        ({"lines": True, "uncovered_lines": 0}, r"^Invalid measured counter: 'lines'$"),
+        ({"lines": 1.0, "uncovered_lines": 0}, r"^Invalid measured counter: 'lines'$"),
+        ({"lines": -1, "uncovered_lines": 0}, r"^Invalid measured counter: 'lines'$"),
+        ({"lines": 1, "uncovered_lines": 2}, r"^Invalid measured counter: 'lines'$"),
+        ({"lines": 1}, r"^Invalid measured counter: 'lines'$"),
+        ({"uncovered_lines": 1}, r"^Invalid measured counter: 'lines'$"),
+        ({"lines": 10**13, "uncovered_lines": 0}, r"^Invalid measured counter: 'lines'$"),
     ],
 )
-def test_invalid_counters(counts: object) -> None:
-    """Reject invented or impossible measured counts.
+def test_invalid_counters(counts: object, message: str) -> None:
+    """Reject invented, impossible or absurdly large measured counts.
 
     Parameters:
-        counts (object): Boundary input.
+        counts (object): Hostile counters.
+        message (str): Specific expected refusal.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -403,32 +418,67 @@ def test_invalid_counters(counts: object) -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    with pytest.raises(
-        ValueError, match=r"Invalid|Expected|No measured|JSON|Duplicate|decode|differ|Available"
-    ):
+    with pytest.raises(ValueError, match=message):
         report.Counters.parse(counts)
 
 
+def oversized_file() -> dict[str, object]:
+    """Build a file row whose total exceeds its signal total.
+
+    Parameters:
+        None.
+
+    Returns:
+        dict[str, object]: Hostile row.
+
+    Raises:
+        None.
+    """
+    return document()["files"][0] | {"lines": 11}
+
+
 @pytest.mark.parametrize(
-    "patch",
+    ("patch", "message"),
     [
-        {"os": "windows"},
-        {"measurement_only": 0},
-        {"files": {}},
-        {"errors": "error"},
-        {"signals": {}},
-        {"packages": {"pkg/primary": {"lines": 11, "uncovered_lines": 2}}},
-        {"signals": {"pkg/primary": {"enforcement": "optional", "reason": ""}}},
-        {"signals": {"pkg/primary": {"enforcement": "enforced", "reason": "", "reference": {"lines": -1}}}},
-        {"signals": {"pkg/primary": {"enforcement": "enforced", "reason": "", "delta": {"lines": True}}}},
-        {"signals": {"pkg/primary": {"enforcement": "enforced", "reason": "", "delta": {"unknown": 1}}}},
+        ({"os": "windows"}, r"^Invalid summary platform or measurement mode$"),
+        ({"measurement_only": 0}, r"^Invalid summary platform or measurement mode$"),
+        ({"files": {}}, r"^Expected file and error arrays$"),
+        ({"errors": "error"}, r"^Expected file and error arrays$"),
+        ({"signals": {}}, r"^Measured packages and signal metadata differ$"),
+        ({"files": [oversized_file()]}, r"^Measured file rows exceed the package counters$"),
+        ({"signals": {"pkg/primary": {"enforcement": "optional", "reason": ""}}}, r"^Invalid enforcement$"),
+        (
+            {
+                "signals": {
+                    "pkg/primary": {"enforcement": "enforced", "reason": "", "reference": {"lines": -1}}
+                }
+            },
+            r"^Invalid policy reference counters$",
+        ),
+        (
+            {"signals": {"pkg/primary": {"enforcement": "enforced", "reason": "", "delta": {"lines": True}}}},
+            r"^Invalid policy reference counters$",
+        ),
+        (
+            {"signals": {"pkg/primary": {"enforcement": "enforced", "reason": "", "delta": {"unknown": 1}}}},
+            r"^Invalid policy reference counters$",
+        ),
+        (
+            {
+                "signals": {
+                    "pkg/primary": {"enforcement": "enforced", "reason": "", "delta": {"lines": 10**13}}
+                }
+            },
+            r"^Invalid policy reference counters$",
+        ),
     ],
 )
-def test_summary_shape_validation(patch: dict[str, object]) -> None:
+def test_summary_shape_validation(patch: dict[str, object], message: str) -> None:
     """Validate summary metadata rather than trusting accounting JSON shapes.
 
     Parameters:
-        patch (dict[str, object]): Boundary input.
+        patch (dict[str, object]): Hostile replacement fields.
+        message (str): Specific expected refusal.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -436,9 +486,7 @@ def test_summary_shape_validation(patch: dict[str, object]) -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    with pytest.raises(
-        ValueError, match=r"Invalid|Expected|No measured|JSON|Duplicate|decode|differ|Available|disagree"
-    ):
+    with pytest.raises(ValueError, match=message):
         report.Summary.parse(document() | patch)
 
 
@@ -458,7 +506,7 @@ def test_duplicate_and_foreign_file_membership() -> None:
         obj = document()
         row = obj["files"][0]
         obj["files"] = [row, row | patch]
-        with pytest.raises(ValueError, match="membership"):
+        with pytest.raises(ValueError, match=r"^Invalid or duplicate file membership$"):
             report.Summary.parse(obj)
 
 
@@ -467,7 +515,7 @@ def test_invalid_plan(patch: dict[str, object]) -> None:
     """Require explicit valid trusted planning information.
 
     Parameters:
-        patch (dict[str, object]): Boundary input.
+        patch (dict[str, object]): Hostile plan fields.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -476,9 +524,7 @@ def test_invalid_plan(patch: dict[str, object]) -> None:
         AssertionError: The boundary contract regresses.
     """
     declaration = plan()["signals"]["pkg/primary"]
-    with pytest.raises(
-        ValueError, match=r"Invalid|Expected|No measured|JSON|Duplicate|decode|differ|Available"
-    ):
+    with pytest.raises(ValueError, match=r"^Invalid signal plan$"):
         report.Signal.parse("pkg/primary", declaration | patch)
 
 
@@ -494,22 +540,24 @@ def test_invalid_evidence_and_provenance() -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    for host, value, summary in (
-        ("windows", plan(), None),
-        ("ubuntu-24.04", plan("expired"), None),
-        ("ubuntu-24.04", plan(), None),
-        ("macos-14", plan(), cell().summary),
-        ("ubuntu-24.04", plan() | {"signals": {}}, cell().summary),
+    for host, value, summary, message in (
+        ("windows", plan(), None, r"^Invalid evidence host or state$"),
+        ("ubuntu-24.04", plan("expired"), None, r"^Invalid evidence host or state$"),
+        ("ubuntu-24.04", plan(), None, r"^Available evidence lacks a compatible planned summary$"),
+        ("macos-14", plan(), cell().summary, r"^Available evidence lacks a compatible planned summary$"),
+        (
+            "ubuntu-24.04",
+            plan() | {"signals": {}},
+            cell().summary,
+            r"^Available evidence lacks a compatible planned summary$",
+        ),
     ):
-        with pytest.raises(
-            ValueError, match=r"Invalid|Expected|No measured|JSON|Duplicate|decode|differ|Available"
-        ):
+        with pytest.raises(ValueError, match=message):
             report.Evidence.parse(host, value, summary)
-    for patch in ({"state": "NOT RUN"}, {"enforcement": "report-only"}):
-        declaration = plan()
-        declaration["signals"]["pkg/primary"] |= patch
-        with pytest.raises(ValueError, match="conflicts"):
-            report.Evidence.parse("ubuntu-24.04", declaration, cell().summary)
+    declaration = plan()
+    declaration["signals"]["pkg/primary"]["enforcement"] = "report-only"
+    with pytest.raises(ValueError, match=r"^Measured signal conflicts with trusted plan$"):
+        report.Evidence.parse("ubuntu-24.04", declaration, cell().summary)
     for patch in (
         {"repository": "bad"},
         {"head_sha": "bad"},
@@ -519,10 +567,30 @@ def test_invalid_evidence_and_provenance() -> None:
         {"attempt": -1},
         {"attempt": True},
     ):
-        with pytest.raises(
-            ValueError, match=r"Invalid|Expected|No measured|JSON|Duplicate|decode|differ|Available"
-        ):
+        with pytest.raises(ValueError, match=r"^Invalid run provenance$"):
             replace(PROVENANCE, **patch)
+
+
+def test_not_run_signal_with_measurement_is_flagged() -> None:
+    """Render a NOT RUN plan entry that has a measurement explicitly instead of raising.
+
+    Parameters:
+        None.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    declaration = plan()
+    declaration["signals"]["pkg/primary"]["state"] = "NOT RUN"
+    current = report.Evidence.parse("ubuntu-24.04", declaration, report.Summary.parse(document()))
+    markdown = report.render_markdown((current,), PROVENANCE)
+    assert "NOT RUN | NOT RUN | NOT RUN | NOT RUN" in markdown
+    assert "INCONSISTENT: measurement present for a NOT RUN signal" in markdown
+    assert "0/1 zero uncovered (measured counters only); incomplete" in markdown
+    assert "8/10" not in markdown
 
 
 @pytest.mark.parametrize(
@@ -544,7 +612,7 @@ def test_archive_path_refusals(tmp_path: Path, name: str) -> None:
     path = tmp_path / "artifact.zip"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(name or "/", "data")
-    with pytest.raises(ValueError, match="Unsafe"):
+    with pytest.raises(ValueError, match=r"^Unsafe archive member: "):
         report.read_summary(path)
 
 
@@ -567,38 +635,38 @@ def test_archive_duplicates_symlinks_missing_and_limits(
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("same", "x")
         archive.writestr("same/", "")
-    with pytest.raises(ValueError, match="Unsafe"):
+    with pytest.raises(ValueError, match=r"^Unsafe archive member: "):
         report.read_summary(path)
     entry = zipfile.ZipInfo("link")
     entry.external_attr = (stat.S_IFLNK | 0o777) << 16
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(entry, "target")
-    with pytest.raises(ValueError, match="Unsafe"):
+    with pytest.raises(ValueError, match=r"^Unsafe archive member: "):
         report.read_summary(path)
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("other", "x")
-    with pytest.raises(ValueError, match="Cannot read"):
+    with pytest.raises(ValueError, match=r"^Cannot read artifact ZIP: "):
         report.read_summary(path)
     monkeypatch.setattr(report, "MAX_MEMBERS", 0)
-    with pytest.raises(ValueError, match="expansion"):
+    with pytest.raises(ValueError, match=r"^Archive expansion limit exceeded$"):
         report.read_summary(path)
     monkeypatch.setattr(report, "MAX_MEMBERS", 4096)
     monkeypatch.setattr(report, "MAX_JSON_BYTES", 2)
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("coverage/summary.json", "{} ")
-    with pytest.raises(ValueError, match="Invalid summary"):
+    with pytest.raises(ValueError, match=r"^Invalid summary member$"):
         report.read_summary(path)
     path.write_text("not a zip")
-    with pytest.raises(ValueError, match="Cannot read"):
+    with pytest.raises(ValueError, match=r"^Cannot read artifact ZIP: "):
         report.read_summary(path)
     monkeypatch.setattr(report, "MAX_ARCHIVE_BYTES", 1)
-    with pytest.raises(ValueError, match="Input byte"):
+    with pytest.raises(ValueError, match=r"^Input byte limit exceeded$"):
         report.read_summary(path)
     path.unlink()
-    with pytest.raises(ValueError, match="regular"):
+    with pytest.raises(ValueError, match=r"^Not a regular input file: "):
         report.read_summary(path)
     path.symlink_to(tmp_path / "missing")
-    with pytest.raises(ValueError, match="regular"):
+    with pytest.raises(ValueError, match=r"^Not a regular input file: "):
         report.read_summary(path)
 
 

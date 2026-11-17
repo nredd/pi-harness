@@ -79,7 +79,7 @@ def test_invalid_source_roots(root: str) -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    with pytest.raises(ValueError, match="source root"):
+    with pytest.raises(ValueError, match=r"^Invalid source root$"):
         report.Signal.parse(
             "pkg/primary",
             {
@@ -106,7 +106,7 @@ def test_invalid_manifest_host(tmp_path: Path) -> None:
     """
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({"../../escape": {}}))
-    with pytest.raises(ValueError, match="host"):
+    with pytest.raises(ValueError, match=r"^Invalid evidence host$"):
         report.load_evidence(tmp_path, path)
 
 
@@ -127,7 +127,7 @@ def test_zip_expanded_byte_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("coverage/summary.json", " " * 10_000)
     monkeypatch.setattr(report, "MAX_ARCHIVE_BYTES", 1000)
-    with pytest.raises(ValueError, match="expansion"):
+    with pytest.raises(ValueError, match=r"^Archive expansion limit exceeded$"):
         report.read_summary(path)
 
 
