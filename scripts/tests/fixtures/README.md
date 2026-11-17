@@ -25,4 +25,4 @@ Sources:
 
 Projection keeps only evidence used by the gate plus capture timestamps. Actor, commit-message, repository metadata and unused step timing fields are omitted. Step names/status/conclusions are retained; zero-step cancelled jobs are unchanged. Tests split these real records over synthetic pages, reverse run ordering and mutate one property at a time for negative cases. The two CI runs were created in the same second; run numbers `435` and `436`, not timestamps, establish order. The legacy flattened predicate rejects exactly three unexpanded cancelled template names despite nine successful required contexts.
 
-Replay offline: `uv run --locked --project integration pytest scripts/tests/test_merge_pr_checks.py -c scripts/pyproject.toml`.
+Replay offline: `uv run --locked --project tests/integration pytest scripts/tests/test_merge_pr_checks.py -c scripts/pyproject.toml`.

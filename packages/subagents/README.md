@@ -986,7 +986,7 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, max foreg
 
 **Report usage to session** (`reportUsage`, default `false`): whether subagent spend is added to *this* session's own totals. Subagents run in their own pi sessions, so by default pi's footer, statusline and `/cost` count only what the main model spent — a session that delegated most of its work reads as nearly free. Turn it on and each `Agent` / `get_subagent_result` / `steer_subagent` result carries the spend accumulated since the last one, which pi folds into `getSessionStats()`; `/cost` attributes it to the **Tools/summaries** bucket. Toggle via `/agents → Settings → Report usage to session`; applied live.
 
-Three things worth knowing about the numbers. Every token component is reported, `cacheRead` included — the cached prefix genuinely is re-read and re-billed on every call, and pi counts it the same way for the session's own messages, so withholding it would make a subagent's rows count differently from every other row in one total. (The extension's *own* token displays still leave it out, which is a different question: there it inflates a reading of how much work was done.) Cost is pi's own per-message figure, priced from the model's listed rates; a model pi has no rates for contributes zero rather than an estimate. And the context-window percentage is untouched: pi derives it from assistant messages alone, so a delegating session's context doesn't appear to fill up faster. Agents that finish in the background have no tool result of their own to ride on, so their spend is carried by the next one you make — the footer catches up on the following call, not the moment they finish.
+Three things worth knowing about the numbers. Every token component is reported, `cacheRead` included — the cached prefix genuinely is re-read and re-billed on every call, and pi counts it the same way for the session's own messages, so withholding it would make a subagent's rows count differently from every other row in one total. (The extension's *own* token displays still leave it out, which is a different question: there it inflates a reading of how much work was done.) Cost is pi's own per-message figure, priced from the model's listed rates; `cost.unpriced` marks unknown spend, not free usage. Reports and lifecycle events retain `unpricedCalls` and `pricedCalls` alongside the priced subtotal, including across nesting and resumes; a free request with billable tokens is priced, while an empty failed request counts as neither. Older records without the marker remain priced. No second estimator is used. And the context-window percentage is untouched: pi derives it from assistant messages alone, so a delegating session's context doesn't appear to fill up faster. Agents that finish in the background have no tool result of their own to ride on, so their spend is carried by the next one you make — the footer catches up on the following call, not the moment they finish.
 
 **Show cost** (`showCost`, default `false`): whether the subagent surfaces print an estimated cost beside their token counts — the widget (running *and* finished lines), [FleetView](#fleetview), the conversation viewer, foreground results, `get_subagent_result`, and completion notifications:
 
@@ -2276,6 +2276,29 @@ Formatting and linting use the root `biome.json`. Four scoped rules retain the f
 
 `prepublishOnly` is removed because publishing is owned by the monorepo release workflow, not a package-local shortcut: `scripts/release_descriptors.py` runs this workspace's `check`, and `scripts/npm_release.py` packs once and exercises those bytes through stock Pi before `.github/workflows/publish.yml` publishes the verified tarball. `prepack` still builds local tarballs. Use the release workflow, not direct `npm publish`, for publication.
 
+### Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of prepending to `CHANGELOG.md`. The issue is a
+positive ASCII decimal without leading zeroes; categories are `added`, `changed`, `fixed`,
+`refactored`, `removed`, `deprecated` and `security`. Each file is exactly one UTF-8 `- ` bullet
+on one line ending in LF, with no surrounding whitespace or control characters. Include its
+matching `[#932](https://github.com/nredd/pi-harness/issues/932)`-shaped issue link; other existing
+references and attribution stay in the bullet. One file per issue/category; update that file
+when the same issue has more to say. Nested paths, extra files, symlinks and duplicate bullets
+are refused. Issue numbers are checked syntactically, not against GitHub's live API.
+
+From the repository root, `make check-changelog-fragments` validates without writing and runs
+under `make check-scripts` / `make check`. `make fold-changelog` explicitly inserts fragments
+into `[Unreleased]`, then removes only consumed files. It does not choose a version, create a
+release heading, publish, tag or run automatically during publication. Review and commit the
+fold separately before a release. See the root [release contract](../../docs/releases.md#changelog-fragments).
+
+The initial migration moves 49 exact historical bullets. Eighteen bullets remain in
+`[Unreleased]`: the repeated issue/category groups `330.fixed` (five), `436.fixed` (two),
+`548.fixed` (two), `264.fixed` (two), six unattributed bullets and the PR-only `#196` bullet.
+The nonbullet `#900` breaking warning also remains verbatim. No historical issue IDs were
+invented, and released sections are untouched. Other packages are not migrated yet.
+
 ### Contributing
 
 Use the root [development guide](../../README.md) and [repository rules](../../AGENTS.md).
@@ -2305,7 +2328,7 @@ The full workspace check builds the runtime and runs Biome, strict TypeScript an
 suite on Node and Bun. `test:e2e` defaults to scripted faux providers;
 `PI_E2E_LIVE=1 npm run test:e2e` uses the operator's login (optional `PI_PROVIDER` /
 `PI_MODEL`), not an isolated gate. Benchmarks are opt-in and separate from ordinary performance
-tests, which assert operation counts. The benchmark entry points and sampling behavior remain unchanged.
+tests, which assert operation counts. The benchmark entry points and sampling behavior remain unchanged. `ScenarioSession` uses `@nredd/pi-test-lib/harness`; only an explicit `terminal: true` loads `tests/fixtures/scenario-terminal.ts` and the fork's interactive host. The fixed stock Pi `1.5.2` headless scope is `tests/{scenario-session-headless,session-scenarios,steer-resume-scenarios,stop-subagent-scenarios}.test.ts` (29 cases on Node and Bun), including a native subprocess that observes the import boundary, persists a real physical child session and removes its temporary roots. Injected eager testing imports and a terminal request are negative controls. This is not full upstream compatibility: requester-bound routing and stale-context recovery (`tests/stale-ctx-*.test.ts`), terminal/workflow rendering, credential-command retries, detached-session reload, fatal startup and injected-home discovery remain fork contracts, with their existing assertions retained in the full fork suite. Stock tests do not manufacture `ctx.session`, resource-loader `homeDir` or `ExtensionStartupError`.
 
 Read affected modules completely and check installed SDK types before changing APIs. Keep changes
 small, avoid unnecessary `any` and abstractions, and follow root Biome/type rules. Use

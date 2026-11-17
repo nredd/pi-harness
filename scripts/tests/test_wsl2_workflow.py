@@ -115,9 +115,9 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
         "packages/example/coverage/primary/coverage-summary.json",
         "packages/example/coverage/bun/lcov.info",
         "packages/example/coverage/bun/coverage-summary.json",
-        "integration/inprocess/coverage/primary/lcov.info",
-        "integration/probes/coverage/primary/lcov.info",
-        "integration/providers/coverage/primary/lcov.info",
+        "tests/inprocess/coverage/primary/lcov.info",
+        "tests/integration/probes/coverage/primary/lcov.info",
+        "tests/integration/providers/coverage/primary/lcov.info",
         "scripts/coverage/primary/lcov.info",
         "coverage/summary.json",
     ]
@@ -253,12 +253,12 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     assert 'f"bun-v{bun_version}"' in setup
     assert 'UV_VERSION = "0.13.1"' in setup
     assert 'startswith(f"uv {UV_VERSION}")' in setup
-    assert "uv run --locked python -m harness.release" in workflow
-    assert "--gitlink ../forks/pi" in workflow
+    assert "uv run --locked python -m pi_release.release" in workflow
+    assert "--gitlink ../../forks/pi" in workflow
     assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in workflow
-    assert '--stack "stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile' in workflow
-    assert "--stack stacks/personal.json --runtime bun-standalone" in workflow
-    assert "--stack stacks/local.json --runtime bun-standalone" in workflow
+    assert '--stack "../../release/stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile' in workflow
+    assert "--stack ../../release/stacks/personal.json --runtime bun-standalone" in workflow
+    assert "--stack ../../release/stacks/local.json --runtime bun-standalone" in workflow
 
 
 INSTALL_GH = SCRIPTS / "install_gh_linux.sh"
@@ -283,10 +283,10 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     makefile = (ROOT / "Makefile").read_text()
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
     assert "env -u GH_TOKEN uv sync --locked" in makefile
-    assert "cd integration && uv sync --locked --python" in workflow
+    assert "cd tests/integration && uv sync --locked --python" in workflow
     # Inspect the stack's guest commands, not an unrelated native Windows npm installation.
     commands = "\n".join(step.get("run", "") for step in yaml.safe_load(workflow)["jobs"]["stack"]["steps"])
-    verify = commands.index("python3 -m harness.release --verify-root-overrides --root .")
+    verify = commands.index("python3 -m pi_release.release --verify-root-overrides --root .")
     npm_ci = commands.index("npm ci --ignore-scripts")
     assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow

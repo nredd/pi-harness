@@ -2,6 +2,9 @@
 
 `@nredd/pi-computer-use` lets Pi agents observe and control desktop apps and CDP browser pages.
 This workspace is a fork of `injaneity/pi-computer-use`; see [Upstream](#upstream).
+Managed browser shutdown shares concurrent cleanup of its temporary profile; failed removal stays
+tracked for synchronous exit cleanup. This serializes removal attempts, not a proven fix for a
+historical browser-profile leak.
 
 ## Install
 
@@ -81,6 +84,11 @@ export PATH="$(dirname "$(rustup which --toolchain 1.97.1 cargo)"):$PATH"
 `npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
 compiler worker. It covers analytic geometry, clock/lifecycle checks and the clamp mutation control.
 This does not run the live overlay suite or prove physical pointer behavior.
+`native/macos/headless_tests.swift` directly asserts complete `appBlockedMessage` literals for a
+named bundle, nil (`unknown bundle id`), an empty bundle and a quoted Unicode application name.
+These pure string checks do not discover applications or exercise live refusal callers, UI,
+capture, input or permissions. All five production Swift sources stay unchanged. LLVM regions
+are not branch outcomes or statements; the full-source producer retains unexecuted live code.
 
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
 `native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
@@ -230,7 +238,7 @@ Non-pointer actions on the same tool:
 
 ### Tests
 
-`npm test -- test/macos-observe-target.test.mjs --coverage.enabled=false`, `test/macos-native-pure.test.mjs` (compiles the `PURE` region of `bridge.swift`),
+`npm test -- test/macos-observe-target.test.mjs --coverage.enabled=false`, `test/macos-native-pure.test.mjs` (links all five production Swift files into the headless assertion binary),
 `test/act-outcomes.test.mjs`, `test/desktop-tools.test.mjs`, `test/unpaired-act.test.mjs` (stubbed backend: unpaired successor, delta refs, lock
 scope). `PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false` drives the real helper against an `NSAlert` fixture
 (`windowElement`, `look`, `act`, `axWaitFor`, `desktopInput` parsing, `activateApp`, clipboard round trip with
@@ -1016,7 +1024,7 @@ Readiness and wrapper completion have bounded waits with explicit failures, rath
 
 The cold source build, cargo tests and alternate-target check each get 15 minutes because they compile dependencies in cold scratch caches and may share a loaded CI runner. Packing needs only two minutes: `npm pack --ignore-scripts` archives local files without compiler or network work. The complete live D-Bus session gets a five-minute overall budget covering desktop startup, assertions and inner teardown, then capped group TERM/KILL cleanup. Stream closure is not group quiescence: the shared cleanup helper independently probes the owned group until `ESRCH`, with separate five-second stream-close and group-probe caps after TERM and KILL. Once a leader has already exited, its former numeric PGID no longer proves ownership: cleanup is probe-only, never TERM/KILL, even if a probe sees a potentially recycled group. This applies to successful live sessions, completed failed commands and completed integration fixtures; regressions assert that success sends only signal `0` and that inherited pipes/handles are released when probe-only cleanup times out. Polling every 20ms avoids busy-spinning while promptly observing exit within the caps. One-second recurring fixture intervals only keep the leader and descendant alive until explicit cleanup; they are neither readiness delays nor finite lifetime backstops. Helper test cases use named, JSDoc-documented callbacks so formatting cannot attach their return/error contracts to the preceding test-name argument. The redirected-descendant failure fallback also refuses group signals after its leader exits. Native and build-script fixture cleanup retains only its direct setup/wrapper child: while it is live, that wrapper reaps its owned group; after either a failed or completed wrapper exits, cleanup releases handles without signalling its historical PID or PGID. Regressions assert both completed and failed fixtures send no later signal. Its redirected-descendant regression starts a TERM-responsive leader and a TERM-ignoring descendant with redirected stdio; leader closure must not skip group KILL. Readiness failures at *any* leader, compiler, descendant or wrapper marker retain captured output, as do native setup completion timeouts.
 
-The synchronization audit covers `scripts/*.mjs`, `test/*.test.mjs` and `integration/probes/`:
+The synchronization audit covers `scripts/*.mjs`, `test/*.test.mjs` and `tests/integration/probes/`:
 - Keep the named `DISPOSE_NO_RESTART_WINDOW_MS` and `FOREGROUND_BLOCKED_WINDOW_MS` negative-observation windows: they watch start/setup counters and completion/delivery markers after observable probe/fallback readiness, not elapsed time as a proxy for readiness.
 - Use cooperative microtask yields for mock concurrent workloads and await their completion; do not inject fixed signing/installation latency. Register the CDP close listener before triggering shutdown, then await shutdown and close together so a close-deadline rejection is handled even while shutdown is pending. Live Linux checks poll accessible roots instead of sleeping before discovery or Terminal launch.
 - Trigger integration lifecycle TERM escalation from the fixture's post-handler `ready` line, not a startup timer. Normal-exit leaders retain an IPC channel until their descendant acknowledges an installed lifetime timer; only then do they disconnect, unreference the child and exit. Remaining timers bound observable file/process/socket polls, fixture lifetime, requests or teardown. The slow diagnostics reply is deliberate fault injection, not a readiness guarantee.

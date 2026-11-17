@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInstrumenter } from "@vitest/istanbul-lib-instrument";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
 interface Coverage {
@@ -128,11 +129,11 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../packages/todo/vitest.config.ts"),
 	},
 	{
-		config: "integration/inprocess/vitest.config.ts",
+		config: "tests/inprocess/vitest.config.ts",
 		policy: "inprocess",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/inprocess/vitest.config.ts"),
+		load: () => import("../tests/inprocess/vitest.config.ts"),
 	},
 	{
 		config: "tests/lib/vitest.config.ts",
@@ -142,18 +143,18 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../tests/lib/vitest.config.ts"),
 	},
 	{
-		config: "integration/probes/vitest.config.ts",
+		config: "tests/integration/probes/vitest.config.ts",
 		policy: "probes",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/probes/vitest.config.ts"),
+		load: () => import("../tests/integration/probes/vitest.config.ts"),
 	},
 	{
-		config: "integration/providers/vitest.config.ts",
+		config: "tests/integration/providers/vitest.config.ts",
 		policy: "providers",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/providers/vitest.config.ts"),
+		load: () => import("../tests/integration/providers/vitest.config.ts"),
 	},
 	{
 		config: "scripts/vitest.config.ts",
@@ -208,10 +209,10 @@ const ZERO_UNCOVERED_FILES = [
  * subagents, todo had it last), so those entries list it first.
  */
 const RESOLVED: Record<string, unknown> = {
-	"integration/inprocess/vitest.config.ts": {
+	"tests/inprocess/vitest.config.ts": {
 		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
 	},
-	"integration/probes/vitest.config.ts": {
+	"tests/integration/probes/vitest.config.ts": {
 		test: {
 			include: [
 				"anthropic-block-types.test.ts",
@@ -228,7 +229,7 @@ const RESOLVED: Record<string, unknown> = {
 			setupFiles: ["tests/lib/src/home-setup.ts"],
 		},
 	},
-	"integration/providers/vitest.config.ts": {
+	"tests/integration/providers/vitest.config.ts": {
 		test: {
 			include: [
 				"bun_runtime.test.ts",
@@ -438,6 +439,13 @@ test("the producer table is exactly the Vitest configurations the policy invento
 });
 
 for (const producer of PRODUCERS) {
+	test(`${producer.config} has an executable initializer in the real Istanbul statement map`, () => {
+		const instrumenter = createInstrumenter({ esModules: true, parserPlugins: ["typescript"] });
+		const path = resolve(REPO, producer.config);
+		instrumenter.instrumentSync(readFileSync(path, "utf8"), path);
+		assert.ok(Object.keys(instrumenter.lastFileCoverage()?.statementMap ?? {}).length > 0);
+	});
+
 	test(`${producer.config} reports text, LCOV and a statement summary from ${producer.provider} even on failure`, async () => {
 		const policy = realPolicy()[producer.policy];
 		assert.ok(policy, `${producer.policy} is in the policy`);
@@ -525,6 +533,20 @@ test("subagents runtime verification pins the complete script at zero L/F/B/S", 
 		"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
 	});
 });
+
+for (const signal of ["probes", "import-audit"]) {
+	test(`${signal} pins each owned file at zero L/F/B/S on either runtime`, async () => {
+		const producer = PRODUCERS.find(({ policy }) => policy === signal);
+		assert.ok(producer);
+		assert.deepEqual((await coverageOf(producer)).thresholds, {
+			perFile: true,
+			lines: 100,
+			functions: 100,
+			branches: 100,
+			statements: 100,
+		});
+	});
+}
 
 test("computer-use async verification pins the whole helper at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");

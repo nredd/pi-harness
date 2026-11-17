@@ -70,7 +70,8 @@ def tree(tmp_path: Path) -> Tree:
     """
     worktree = tmp_path / "home" / "pi-harness-ci"
     (worktree / ".ci-temp").mkdir(parents=True)
-    (worktree / "integration").mkdir()
+    (worktree / "tests/integration").mkdir(parents=True)
+    (worktree / "release").mkdir()
     host = tmp_path / "host"
     host_temp = host / "temp"
     (host_temp / "wsl2-diagnostics").mkdir(parents=True)
@@ -143,19 +144,19 @@ def hosted(tree: Tree) -> set[str]:
 
 def test_mirrors_only_declared_reports_and_clears_stale_ones(tree: Tree) -> None:
     """Declared artifacts and coverage cross; stale host files, hidden names and unrelated files do not."""
-    write(tree.worktree / "integration/artifacts/node.xml", "node")
-    write(tree.worktree / "integration/artifacts-personal/p.xml", "personal")
+    write(tree.worktree / "tests/integration/artifacts/node.xml", "node")
+    write(tree.worktree / "tests/integration/artifacts-personal/p.xml", "personal")
     write(tree.worktree / REPORT, "lcov")
     write(tree.worktree / "coverage/summary.json", "summary")
     write(tree.worktree / "coverage/unexpected.txt")
     write(tree.worktree / "packages/example/coverage/.hidden/lcov.info")
     (tree.worktree / "scripts/coverage/primary/lcov.info").mkdir(parents=True)  # a directory is no report
-    write(tree.host / "integration/artifacts-node/stale.xml")
+    write(tree.host / "tests/integration/artifacts-node/stale.xml")
     write(tree.host / "packages/old/coverage/primary/lcov.info")
     assert capture.main(environ=tree.env, argv=[]) == 0
     assert hosted(tree) == {
-        "integration/artifacts/node.xml",
-        "integration/artifacts-personal/p.xml",
+        "tests/integration/artifacts/node.xml",
+        "tests/integration/artifacts-personal/p.xml",
         REPORT,
         "coverage/summary.json",
     }
@@ -167,12 +168,12 @@ def test_mirrors_only_declared_reports_and_clears_stale_ones(tree: Tree) -> None
 
 def test_artifact_snapshots_never_mix_after_a_guest_rename(tree: Tree) -> None:
     """A directory absent from the guest is removed from the host, symlinks included."""
-    write(tree.worktree / "integration/artifacts/standalone.xml", "standalone")
-    write(tree.host / "integration/artifacts/node.xml", "stale")
-    (tree.host / "integration/artifacts-node").symlink_to(tree.host_temp, target_is_directory=True)
+    write(tree.worktree / "tests/integration/artifacts/standalone.xml", "standalone")
+    write(tree.host / "tests/integration/artifacts/node.xml", "stale")
+    (tree.host / "tests/integration/artifacts-node").symlink_to(tree.host_temp, target_is_directory=True)
     assert capture.main(environ=tree.env, argv=[]) == 0
-    assert hosted(tree) == {"integration/artifacts/standalone.xml"}
-    assert not (tree.host / "integration/artifacts-node").exists()
+    assert hosted(tree) == {"tests/integration/artifacts/standalone.xml"}
+    assert not (tree.host / "tests/integration/artifacts-node").exists()
 
 
 def test_a_stale_host_report_that_cannot_be_removed_fails_the_capture(
@@ -196,7 +197,7 @@ def test_an_unremovable_artifact_target_fails_with_status_1(
     tree: Tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A tree the guest cannot delete is reported by name, not as a traceback."""
-    write(tree.host / "integration/artifacts/node.xml")
+    write(tree.host / "tests/integration/artifacts/node.xml")
 
     monkeypatch.setattr(capture.shutil, "rmtree", refuse_removal)
     assert capture.main(environ=tree.env, argv=[]) == 1
@@ -333,7 +334,7 @@ def test_running_the_file_exits_with_the_status_of_main(tree: Tree, monkeypatch:
 def test_cleanup_exits_with_the_first_failure_record(tree: Tree, recorded: str, expected: int) -> None:
     """The guest's first failure wins, an unparseable one is 1, and the status is taken modulo 256."""
     write(tree.worktree / ".ci-temp/first-failure", recorded)
-    write(tree.worktree / "integration/artifacts/wsl2-personal.xml", "<testsuite/>\n")
+    write(tree.worktree / "tests/integration/artifacts/wsl2-personal.xml", "<testsuite/>\n")
     assert capture.main(environ=tree.env, argv=["cleanup"]) == expected
     assert not tree.worktree.exists()
     # Artifacts are preserved whatever the status, success included.
@@ -362,7 +363,7 @@ def test_an_unreadable_first_failure_record_counts_as_status_1(
 
 def test_an_export_failure_without_a_first_failure_record_is_the_exit_status(tree: Tree) -> None:
     """`cleanup` mode keeps the export's own failing status and still removes the checkout."""
-    write(tree.worktree / "integration/artifacts/x.xml")
+    write(tree.worktree / "tests/integration/artifacts/x.xml")
     stub(tree, "cp", "exit 92")
     assert capture.main(environ=tree.env, argv=["cleanup"]) == 92
     assert not tree.worktree.exists()
@@ -388,7 +389,7 @@ def test_sigterm_during_the_export_exits_143_and_cleanup_still_runs(
 
 def test_a_real_sigterm_runs_the_cleanup(tree: Tree, tmp_path: Path) -> None:
     """Deliver SIGTERM to the bootstrap's Python while its first command hangs."""
-    write(tree.worktree / "integration/artifacts/x.xml")
+    write(tree.worktree / "tests/integration/artifacts/x.xml")
     started = tmp_path / "started"
     # Only the export hangs; the cleanup's own `cp` must return.
     stub(tree, "cp", f"test -e {started} && exit 0\ntouch {started}\nexec sleep 60")
@@ -404,7 +405,7 @@ def test_a_real_sigterm_runs_the_cleanup(tree: Tree, tmp_path: Path) -> None:
 
 def test_cleanup_preserves_failure_artifacts_before_deleting_the_worktree(tree: Tree) -> None:
     """Copy bounded artifacts, record the status, then remove the harness checkout."""
-    write(tree.worktree / "integration/artifacts/wsl2-personal.xml", "<testsuite/>\n")
+    write(tree.worktree / "tests/integration/artifacts/wsl2-personal.xml", "<testsuite/>\n")
     write(tree.worktree / ".ci-temp/first-failure", "47\n")
     assert capture.main(environ=tree.env, argv=["cleanup"]) == 47
     diagnostics = tree.host_temp / "wsl2-diagnostics"
@@ -417,7 +418,7 @@ def test_cleanup_keeps_the_harness_status_when_every_housekeeping_step_fails(
     tree: Tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Copying, recording and removing are best effort: each warns and none replaces the status."""
-    write(tree.worktree / "integration/artifacts/x.xml")
+    write(tree.worktree / "tests/integration/artifacts/x.xml")
     stub(tree, "cp", "exit 92")
     blocked = tree.host_temp / "blocked"
     blocked.write_text("a file, not a directory")
@@ -540,20 +541,20 @@ def test_a_report_the_scanner_refuses_is_withheld(tree: Tree) -> None:
 
 
 def test_the_scanner_runs_the_shared_credential_policy_from_the_integration_directory(tree: Tree) -> None:
-    """`python3 -m harness.credentials <report>` runs in `integration/`, bounded by `timeout 60`."""
+    """`python3 -m pi_release.credentials <report>` runs in `tests/integration/`, bounded by `timeout 60`."""
     log = tree.worktree.parent / "scan.log"
     stub(tree, "timeout", f'echo "$PWD $*" > {log}')
     capture._guest_state(context(tree), 1)
     assert log.read_text() == (
-        f"{tree.worktree.resolve() / 'integration'} 60 python3 -m harness.credentials "
+        f"{tree.worktree.resolve() / 'release'} 60 python3 -m pi_release.credentials "
         f"{tree.worktree / '.ci-temp/guest-state.txt'}\n"
     )
 
 
 def test_a_missing_scanner_command_is_withheld_not_a_traceback(tree: Tree) -> None:
-    """With no `timeout`, no `python3` and no `integration/` the report is withheld quietly."""
+    """With no `timeout`, no `python3` and no `tests/integration/` the report is withheld quietly."""
     (tree.commands / "timeout").unlink()
-    (tree.worktree / "integration").rmdir()
+    (tree.worktree / "release").rmdir()
     ctx = context(tree)
     ctx.env["PATH"] = str(tree.commands)
     capture._guest_state(ctx, 1)
@@ -622,7 +623,7 @@ def test_a_dangling_host_link_at_a_report_path_is_cleared(tree: Tree) -> None:
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 def test_a_tree_is_removed_as_far_as_possible_before_the_failure_is_reported(tree: Tree) -> None:
     """Like `rm -rf`, one unremovable entry does not stop the rest of the tree going."""
-    victim = tree.worktree / "integration/artifacts"
+    victim = tree.worktree / "tests/integration/artifacts"
     write(victim / "keep/inner.txt")
     write(victim / "gone.txt")
     locked = victim / "keep"
@@ -661,7 +662,7 @@ def test_one_failing_cleanup_step_leaves_the_others_running(
     tree: Tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing: str
 ) -> None:
     """Preserving artifacts, recording the status and removing the checkout are independent."""
-    write(tree.worktree / "integration/artifacts/x.xml", "<testsuite/>\n")
+    write(tree.worktree / "tests/integration/artifacts/x.xml", "<testsuite/>\n")
     diagnostics = tree.host_temp / "wsl2-diagnostics"
     warning = {
         "copy": "preserve WSL failure artifacts",

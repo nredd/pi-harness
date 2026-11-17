@@ -69,20 +69,24 @@ const WINDOWS_CRATE_DIR = path.join(ROOT, "native", "windows", "bridge-rs");
 const RELEASE_DIR = path.join(WINDOWS_CRATE_DIR, "target", "release");
 const EXE_CANDIDATE = path.join(RELEASE_DIR, "windows-bridge.exe");
 
-/** Spawn a script, capturing stdout/stderr and the exit code. */
+/** Keep the real smoke command, environment and 120 s deadline unchanged. */
 function runScript(relPath, args, timeoutMs = SCRIPT_TIMEOUT_MS) {
-	const scriptPath = path.join(SCRIPTS_DIR, relPath);
+	return runCommand(process.execPath, [path.join(SCRIPTS_DIR, relPath), ...args], timeoutMs, {
+		...process.env,
+		PI_COMPUTER_USE_HELPER_APP_PATH: TEST_HELPER_APP,
+		PI_COMPUTER_USE_WINDOWS_HELPER_PATH: TEST_WINDOWS_HELPER,
+		// Signing can open SecurityAgent on headless macOS; these tests only validate routing.
+		PI_COMPUTER_USE_NO_SIGN: "1",
+	});
+}
+
+/** Test-only seam: retain full streams for assertions, but bound each diagnostic tail to 8192 characters. */
+function runCommand(command, args, timeoutMs, env = process.env) {
+	const started = Date.now();
 	return new Promise((resolve) => {
-		const child = spawn(process.execPath, [scriptPath, ...args], {
+		const child = spawn(command, args, {
 			stdio: ["ignore", "pipe", "pipe"],
-			env: {
-				...process.env,
-				PI_COMPUTER_USE_HELPER_APP_PATH: TEST_HELPER_APP,
-				PI_COMPUTER_USE_WINDOWS_HELPER_PATH: TEST_WINDOWS_HELPER,
-				// These smoke tests validate routing and isolated install paths, not
-				// Keychain integration. Signing can open SecurityAgent on headless macOS.
-				PI_COMPUTER_USE_NO_SIGN: "1",
-			},
+			env,
 		});
 		let stdout = "";
 		let stderr = "";
@@ -91,12 +95,23 @@ function runScript(relPath, args, timeoutMs = SCRIPT_TIMEOUT_MS) {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timeout);
-			resolve(result);
+			const tail = (value) =>
+				value.length > 8192 ? `[truncated to last 8192 characters]\n${value.slice(-8192)}` : value;
+			resolve({
+				...result,
+				diagnostics: [
+					`command: ${JSON.stringify([command, ...args])}`,
+					`outcome: ${result.outcome}; code: ${result.code}; signal: ${result.signal ?? "none"}`,
+					`elapsed: ${Date.now() - started}ms; timeout: ${timeoutMs}ms; SIGTERM sent: ${result.killSent ?? "not requested"}`,
+					`stdout (tail):\n${tail(result.stdout)}`,
+					`stderr (tail):\n${tail(result.stderr)}`,
+				].join("\n"),
+			});
 		};
 		const timeout = setTimeout(() => {
-			stderr += `Timed out after ${timeoutMs}ms: ${relPath} ${args.join(" ")}\n`;
-			child.kill("SIGTERM");
-			finish({ code: -1, stdout, stderr });
+			stderr += `Timed out after ${timeoutMs}ms: ${JSON.stringify([command, ...args])}\n`;
+			const killSent = child.kill("SIGTERM");
+			finish({ code: -1, stdout, stderr, outcome: "timeout", signal: null, killSent });
 		}, timeoutMs);
 		timeout.unref();
 		child.stdout.on("data", (d) => {
@@ -105,10 +120,75 @@ function runScript(relPath, args, timeoutMs = SCRIPT_TIMEOUT_MS) {
 		child.stderr.on("data", (d) => {
 			stderr += d.toString();
 		});
-		child.on("close", (code) => finish({ code, stdout, stderr }));
-		child.on("error", (err) => finish({ code: -1, stdout, stderr: `${stderr}${err.message}` }));
+		child.on("close", (code, signal) => finish({ code, stdout, stderr, outcome: "exit", signal }));
+		child.on("error", (err) =>
+			finish({ code: -1, stdout, stderr: `${stderr}${err.message}`, outcome: "spawn-error", signal: null }),
+		);
 	});
 }
+
+/** Preserve strict exit assertions while exposing the evidence otherwise hidden by code -1. */
+function assertScriptCode(result, expected, message) {
+	assert.equal(result.code, expected, `${message}\n${result.diagnostics}`);
+}
+
+// Portable real-child regressions run without opting into native builds. These are diagnostic
+// checks only: they cannot establish whether a Windows compiler was slow or waiting for a lock.
+describe("script failure diagnostics", () => {
+	test("nonzero exit retains command and bounded compiler/lock output tails", async () => {
+		const source =
+			'process.stdout.write("x".repeat(9000) + "compiler progress"); process.stderr.write("y".repeat(9000) + "Blocking waiting for file lock"); process.exitCode = 7;';
+		const result = await runCommand(process.execPath, ["-e", source], 5000);
+		assert.equal(result.code, 7);
+		assert.throws(
+			() => assertScriptCode(result, 0, "build must succeed"),
+			(error) => {
+				assert.ok(error instanceof assert.AssertionError);
+				assert.match(error.message, /build must succeed/);
+				assert.match(error.message, /outcome: exit; code: 7; signal: none/);
+				assert.match(error.message, /compiler progress/);
+				assert.match(error.message, /Blocking waiting for file lock/);
+				assert.match(error.message, /truncated to last 8192 characters/);
+				assert.ok(error.message.includes(JSON.stringify([process.execPath, "-e", source])));
+				assert.ok(error.message.length < 18_000);
+				return true;
+			},
+		);
+		assert.equal(result.stdout.length, 9017);
+		assert.equal(result.stderr.length, 9030);
+	});
+
+	test("deadline is distinct from spawn failure and retains progress", async () => {
+		const result = await runCommand(
+			process.execPath,
+			["-e", 'console.log("compile started"); console.error("lock wait"); setInterval(() => {}, 1000);'],
+			2000,
+		);
+		assert.equal(result.code, -1);
+		assert.equal(result.killSent, true);
+		assert.throws(() => assertScriptCode(result, 0, "build must succeed"), /outcome: timeout/);
+		assert.match(result.diagnostics, /timeout: 2000ms/);
+		assert.match(result.diagnostics, /compile started/);
+		assert.match(result.diagnostics, /lock wait/);
+		assert.match(result.diagnostics, /Timed out after 2000ms/);
+	});
+
+	test("missing executable reports spawn provenance and error", async () => {
+		const missing = path.join(os.tmpdir(), `missing-script-command-${process.pid}`, "node");
+		const result = await runCommand(missing, [], 5000);
+		assert.equal(result.code, -1);
+		assert.throws(() => assertScriptCode(result, 0, "build must succeed"), /outcome: spawn-error/);
+		assert.match(result.diagnostics, /ENOENT/);
+		assert.ok(result.diagnostics.includes(JSON.stringify([missing])));
+	});
+
+	test("successful exit still uses the strict expected-code assertion", async () => {
+		const result = await runCommand(process.execPath, ["-e", 'console.log("built");'], 5000);
+		assertScriptCode(result, 0, "build succeeds");
+		assert.match(result.stdout, /built/);
+		assert.throws(() => assertScriptCode(result, 1, "wrong expected code"), /outcome: exit; code: 0/);
+	});
+});
 
 /** Remove a path recursively, ignoring errors. */
 function rmSilent(p) {
@@ -169,10 +249,10 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 				try {
 					const result = await runScript("build-native.mjs", ["--platform", "windows", "--output", tmpBuildOut]);
 					if (isWin32()) {
-						assert.equal(result.code, 0, "build-native.mjs --platform windows --output <tmp> exits 0 on Windows");
+						assertScriptCode(result, 0, "build-native.mjs --platform windows --output <tmp> exits 0 on Windows");
 						assert.match(result.stdout, /Building Windows helper/, "prints build start message");
 					} else {
-						assert.equal(result.code, 1, "host build is rejected instead of being renamed to .exe");
+						assertScriptCode(result, 1, "host build is rejected instead of being renamed to .exe");
 						assert.match(
 							result.stderr,
 							/Refusing to label a host binary as Windows/,
@@ -192,13 +272,13 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 			async () => {
 				const result = await runScript("build-native.mjs", ["--output", path.join(TEST_ROOT, "native-default")]);
 				if (isWin32()) {
-					assert.equal(result.code, 0, "no-args exits 0 on Windows");
+					assertScriptCode(result, 0, "no-args exits 0 on Windows");
 					assert.match(result.stdout, /Building Windows helper/, "builds Windows helper on win32");
 				} else if (isDarwin()) {
-					assert.equal(result.code, 0, "no-args exits 0 on macOS");
+					assertScriptCode(result, 0, "no-args exits 0 on macOS");
 					assert.match(result.stdout, /Building .*native helper|Built .*helper/, "builds macOS helper on darwin");
 				} else {
-					assert.equal(result.code, 0, "no-args exits 0 on Linux");
+					assertScriptCode(result, 0, "no-args exits 0 on Linux");
 					assert.match(result.stdout, /Skipping native build/, "prints platform-skip message");
 				}
 			},
@@ -215,10 +295,10 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 					path.join(TEST_ROOT, "native-darwin"),
 				]);
 				if (isDarwin()) {
-					assert.equal(result.code, 0, "--platform darwin exits 0 on macOS");
+					assertScriptCode(result, 0, "--platform darwin exits 0 on macOS");
 					assert.match(result.stdout, /Building .*native helper|Built .*helper/, "builds macOS helper on darwin");
 				} else {
-					assert.equal(result.code, 1, "--platform darwin exits 1 without macOS toolchain");
+					assertScriptCode(result, 1, "--platform darwin exits 1 without macOS toolchain");
 					assert.match(result.stderr, /xcrun|ENOENT|Command failed/, "errors about missing xcrun/swift toolchain");
 				}
 			},
@@ -237,7 +317,7 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 					assert.equal(isOk, true, "--platform windows handles prebuilt (install or EPERM gracefully)");
 				} else {
 					// When no prebuilt exists and --allow-build is not given, must error with instructions.
-					assert.equal(result.code, 1, "--platform windows exits 1 when prebuilt absent");
+					assertScriptCode(result, 1, "--platform windows exits 1 when prebuilt absent");
 					assert.match(
 						result.stderr,
 						/No Windows prebuilt helper found/,
@@ -262,7 +342,7 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 							"no-args handles win32 prebuilt setup",
 						);
 					} else {
-						assert.equal(result.code, 1, "no-args refuses an absent Windows prebuilt without build opt-in");
+						assertScriptCode(result, 1, "no-args refuses an absent Windows prebuilt without build opt-in");
 						assert.match(result.stderr, /No Windows prebuilt helper found/);
 					}
 				} else if (isDarwin()) {
@@ -278,7 +358,7 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 						"prints macOS install/current/sandbox status",
 					);
 				} else {
-					assert.equal(result.code, 1, "no-args exits 1 on non-Windows/non-macOS");
+					assertScriptCode(result, 1, "no-args exits 1 on non-Windows/non-macOS");
 					assert.match(result.stderr, /only supported on macOS/, "prints macOS-only error");
 				}
 			},
@@ -292,12 +372,12 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 				if (isWin32()) {
 					// On Windows, postinstall should exit 0 gracefully. The helper may be
 					// installed, up-to-date, or the install skipped with a clear message.
-					assert.equal(result.code, 0, "--postinstall exits 0 on Windows");
+					assertScriptCode(result, 0, "--postinstall exits 0 on Windows");
 					const combined = result.stderr + result.stdout;
 					const hasAcceptableMsg = /skipped|installed|up to date/i.test(combined);
 					assert.equal(hasAcceptableMsg, true, "prints skip, install, or up-to-date message");
 				} else if (isDarwin()) {
-					assert.equal(result.code, 0, "--postinstall exits 0 on macOS");
+					assertScriptCode(result, 0, "--postinstall exits 0 on macOS");
 					const combined = result.stderr + result.stdout;
 					assert.equal(
 						/installed|current|unavailable|skipped|EPERM/i.test(combined),
@@ -305,7 +385,7 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 						"prints macOS install/current/sandbox status",
 					);
 				} else {
-					assert.equal(result.code, 0, "--postinstall exits 0 on non-Windows/non-macOS");
+					assertScriptCode(result, 0, "--postinstall exits 0 on non-Windows/non-macOS");
 					assert.match(result.stderr, /skipping helper setup/, "prints skip warning");
 				}
 			},
@@ -316,7 +396,7 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 			"setup-helper.mjs --platform windows --postinstall",
 			async () => {
 				const result = await runScript("setup-helper.mjs", ["--platform", "windows", "--postinstall"]);
-				assert.equal(result.code, 0, "--platform windows --postinstall exits 0 (postinstall catch-all)");
+				assertScriptCode(result, 0, "--platform windows --postinstall exits 0 (postinstall catch-all)");
 				const combined = result.stderr + result.stdout;
 				const hasMsg = /skipped|installed|up to date/i.test(combined);
 				assert.equal(hasMsg, true, "prints appropriate status message (skip, install, or up-to-date)");

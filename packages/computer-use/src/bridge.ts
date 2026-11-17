@@ -2972,6 +2972,7 @@ const debugLog = debuglog("pi-computer-use");
  * The `exit` hook empties it on a hard exit that skips session shutdown.
  */
 const liveProfileDirs = new Map<string, ChildProcess>();
+const profileCleanup = new Map<string, Promise<void>>();
 let profileExitHookInstalled = false;
 
 /**
@@ -2992,6 +2993,19 @@ function trackProfileDir(profileDir: string, browser: ChildProcess): void {
  * @param profileDir Profile dir to delete.
  */
 async function removeProfileDir(profileDir: string): Promise<void> {
+	const previous = profileCleanup.get(profileDir);
+	if (previous) return await previous;
+	const current = removeProfileDirOnce(profileDir);
+	profileCleanup.set(profileDir, current);
+	try {
+		await current;
+	} finally {
+		profileCleanup.delete(profileDir);
+	}
+}
+
+/** Remove one temporary profile; concurrent close and shutdown callers share this attempt. */
+async function removeProfileDirOnce(profileDir: string): Promise<void> {
 	try {
 		await rm(profileDir, { recursive: true, force: true, maxRetries: 3 });
 		liveProfileDirs.delete(profileDir);

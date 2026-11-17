@@ -8,8 +8,9 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerMon } from "../../src/mon/index.ts";
 import { snapshot } from "../fixtures/mon/fixtures.ts";
-import { configFor, TerminalFixture } from "../fixtures/session.ts";
+import { configFor } from "../fixtures/session.ts";
 import { assistant, history } from "../fixtures/stats.ts";
+import { TerminalFixture } from "../fixtures/terminal.ts";
 
 let fixture: TerminalFixture | undefined;
 afterEach(async () => {

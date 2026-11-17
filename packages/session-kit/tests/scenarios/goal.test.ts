@@ -1,6 +1,6 @@
 import { getCurrentTools } from "@earendil-works/pi-ai/compat";
-import { type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
+import { type FauxResponseFactory, fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { turnTokens } from "../../src/goal/index.ts";
 import { complete, configFor, EVIDENCE, goalStates, nudges, ScenarioFixture, spoken } from "../fixtures/session.ts";

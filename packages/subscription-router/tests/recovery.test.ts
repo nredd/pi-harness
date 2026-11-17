@@ -172,6 +172,37 @@ describe("SettleRecovery", () => {
 		}
 	});
 
+	it("rechecks a retained signal cancelled between confirmation and recovery commitment", async () => {
+		const { recovery, env, tracker } = harness({ anthropic: blocked });
+		const controller = new AbortController();
+		const refresh = env.refresh;
+		env.refresh = async (...args) => {
+			const decision = await refresh(...args);
+			// Confirm marks the shared evidence in the intervening microtask; the owner then cancels.
+			queueMicrotask(() => queueMicrotask(() => controller.abort()));
+			return decision;
+		};
+		expect(await recovery.handle(settle(quotaError(SONNET)), PROFILE, env, controller.signal)).toEqual({
+			kind: "none",
+		});
+		expect(tracker.active()).toHaveLength(1);
+	});
+
+	it("honors a live retained signal when committing recovery", async () => {
+		const { recovery, env } = harness({ anthropic: blocked });
+		expect((await recovery.handle(settle(quotaError(SONNET)), PROFILE, env, new AbortController().signal)).kind).toBe(
+			"continue",
+		);
+	});
+
+	it("keeps confirmed evidence but spends no recovery budget for a stale requester", async () => {
+		const { recovery, env, tracker } = harness({ anthropic: blocked });
+		const event = settle(quotaError(SONNET));
+		expect(await recovery.handle(event, PROFILE, env, undefined, () => false)).toEqual({ kind: "none" });
+		expect(tracker.active()).toHaveLength(1);
+		expect((await recovery.handle(event, PROFILE, env, undefined)).kind).toBe("continue");
+	});
+
 	it("recovers each chain model at most once per user prompt", async () => {
 		const { recovery, env } = harness({ anthropic: blocked });
 		expect((await recovery.handle(settle(quotaError(SONNET)), PROFILE, env, undefined)).kind).toBe("continue");

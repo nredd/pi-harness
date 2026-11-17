@@ -118,12 +118,108 @@
     {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-docs.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
     {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/docs-generators/generate-source-references.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
     {"package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/docs-generators/generate-tool-reference.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870)."},
-    {"package": "computer-use-async", "signal": "owned", "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870).", "replacement": "packages/computer-use/tests/fixtures/check-async.mjs"}
+    {"package": "computer-use-async", "signal": "owned", "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Retire inherited website/tooling or relocate owned source without changing coverage floors (#870).", "replacement": "packages/computer-use/tests/fixtures/check-async.mjs"},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/__init__.py", "replacement": "tests/integration/harness/__init__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/anthropic_mock.py", "replacement": "tests/integration/harness/anthropic_mock.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/bench.py", "replacement": "tests/integration/harness/bench.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/credentials.py", "replacement": "release/pi_release/credentials.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/files.py", "replacement": "release/pi_release/files.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/fleet_load.py", "replacement": "tests/integration/harness/fleet_load.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/git_fixture.py", "replacement": "tests/integration/harness/git_fixture.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/golden.py", "replacement": "tests/integration/harness/golden.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/headless.py", "replacement": "tests/integration/harness/headless.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/install.py", "replacement": "release/pi_release/install.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/install_paths.py", "replacement": "release/pi_release/install_paths.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/interactive.py", "replacement": "tests/integration/harness/interactive.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/isolation.py", "replacement": "tests/integration/harness/isolation.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/latency.py", "replacement": "tests/integration/harness/latency.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/live.py", "replacement": "tests/integration/harness/live.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/paths.py", "replacement": "tests/integration/harness/paths.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/power.py", "replacement": "tests/integration/harness/power.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/probe.py", "replacement": "tests/integration/harness/probe.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/process_group.py", "replacement": "release/pi_release/process_group.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/promotion.py", "replacement": "release/pi_release/promotion.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/promotion_verify.py", "replacement": "release/pi_release/promotion_verify.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/publish_gate.py", "replacement": "release/pi_release/publish_gate.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/quota.py", "replacement": "tests/integration/harness/quota.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/release.py", "replacement": "release/pi_release/release.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/release_gate.py", "replacement": "release/pi_release/release_gate.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/rpc.py", "replacement": "tests/integration/harness/rpc.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/runtime_hooks.py", "replacement": "tests/integration/harness/runtime_hooks.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/runtime_lock.py", "replacement": "release/pi_release/runtime_lock.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/sandbox.py", "replacement": "tests/integration/harness/sandbox.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/session_kit.py", "replacement": "tests/integration/harness/session_kit.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/sessions.py", "replacement": "tests/integration/harness/sessions.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/stack.py", "replacement": "release/pi_release/stack.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/stack_fixture.py", "replacement": "tests/integration/harness/stack_fixture.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/standalone_diagnostics.py", "replacement": "tests/integration/harness/standalone_diagnostics.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/startup.py", "replacement": "tests/integration/harness/startup.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/stats.py", "replacement": "tests/integration/harness/stats.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/tmux.py", "replacement": "tests/integration/harness/tmux.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-harness", "signal": "owned", "path": "integration/harness/transcript.py", "replacement": "tests/integration/harness/transcript.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/__init__.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/__init__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/__main__.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/__main__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/artifacts.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/artifacts.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/cli.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/cli.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/finalize.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/finalize.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/fixtures.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/fixtures.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/matrix.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/matrix.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/models.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/models.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/prepare.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/prepare.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/process.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/process.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/report.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/report.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/usage.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/usage.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/auth_guard.mjs", "replacement": "tests/integration/providers/auth_guard.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/auth_runtime_fixture.mjs", "replacement": "tests/integration/providers/auth_runtime_fixture.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/auth_transport.mjs", "replacement": "tests/integration/providers/auth_transport.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/bun_runtime.mjs", "replacement": "tests/integration/providers/bun_runtime.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/extension_inventory.ts", "replacement": "tests/integration/providers/extension_inventory.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/faux.ts", "replacement": "tests/integration/providers/faux.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/redirect_anthropic.mjs", "replacement": "tests/integration/providers/redirect_anthropic.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "owned", "path": "integration/providers/usage_fixture.ts", "replacement": "tests/integration/providers/usage_fixture.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/auth_guard.mjs", "replacement": "tests/integration/providers/auth_guard.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/auth_runtime_fixture.mjs", "replacement": "tests/integration/providers/auth_runtime_fixture.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/auth_transport.mjs", "replacement": "tests/integration/providers/auth_transport.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/bun_runtime.mjs", "replacement": "tests/integration/providers/bun_runtime.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/extension_inventory.ts", "replacement": "tests/integration/providers/extension_inventory.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/faux.ts", "replacement": "tests/integration/providers/faux.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/redirect_anthropic.mjs", "replacement": "tests/integration/providers/redirect_anthropic.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "providers", "signal": "bun", "path": "integration/providers/usage_fixture.ts", "replacement": "tests/integration/providers/usage_fixture.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "import-audit", "signal": "owned", "path": "integration/inprocess/vitest.config.ts", "replacement": "tests/inprocess/vitest.config.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "import-audit", "signal": "owned", "path": "integration/probes/vitest.config.ts", "replacement": "tests/integration/probes/vitest.config.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "import-audit", "signal": "owned", "path": "integration/providers/vitest.config.ts", "replacement": "tests/integration/providers/vitest.config.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/anthropic-block-types.mjs", "replacement": "tests/integration/probes/anthropic-block-types.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/latency.ts", "replacement": "tests/integration/probes/latency.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/render.ts", "replacement": "tests/integration/probes/render.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/session-kit-child-scope.ts", "replacement": "tests/integration/probes/session-kit-child-scope.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/stack-resources.ts", "replacement": "tests/integration/probes/stack-resources.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "probes", "signal": "owned", "path": "integration/probes/transcript-types.ts", "replacement": "tests/integration/probes/transcript-types.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/agents-support.ts", "replacement": "tests/inprocess/agents-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/goal-support.ts", "replacement": "tests/inprocess/goal-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/native-timers.ts", "replacement": "tests/inprocess/native-timers.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/support.ts", "replacement": "tests/inprocess/support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/todo-support.ts", "replacement": "tests/inprocess/todo-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "owned", "path": "integration/inprocess/verification/core-artifacts.ts", "replacement": "tests/inprocess/verification/core-artifacts.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/agents-support.ts", "replacement": "tests/inprocess/agents-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/goal-support.ts", "replacement": "tests/inprocess/goal-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/native-timers.ts", "replacement": "tests/inprocess/native-timers.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/support.ts", "replacement": "tests/inprocess/support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/todo-support.ts", "replacement": "tests/inprocess/todo-support.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/core-artifacts.ts", "replacement": "tests/inprocess/verification/core-artifacts.ts", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/anthropic-block-types.mjs","replacement":"tests/integration/probes/anthropic-block-types.mjs","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/latency.ts","replacement":"tests/integration/probes/latency.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/render.ts","replacement":"tests/integration/probes/render.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/session-kit-child-scope.ts","replacement":"tests/integration/probes/session-kit-child-scope.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/stack-resources.ts","replacement":"tests/integration/probes/stack-resources.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"probes","signal":"bun","path":"integration/probes/transcript-types.ts","replacement":"tests/integration/probes/transcript-types.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/inprocess/vitest.config.ts","replacement":"tests/inprocess/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/probes/vitest.config.ts","replacement":"tests/integration/probes/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."},
+    {"package":"import-audit","signal":"bun","path":"integration/providers/vitest.config.ts","replacement":"tests/integration/providers/vitest.config.ts","reason":"Preserve the admitted independent Bun producer across the tests relocation with unchanged zero floors (#884, #972)."}
   ],
   "enforcement_changes": [],
   "verification_helpers": [
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
-    { "path": "integration/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
+    { "path": "tests/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
     { "path": "tests/lib/src/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." }
   ],
   "packages": {
@@ -458,7 +554,7 @@
       }
     },
     "python-harness": {
-      "root": "integration",
+      "root": "tests/integration",
       "owned": ["harness/*.py"],
       "exclusions": [],
       "status": "measured",
@@ -474,7 +570,7 @@
       }
     },
     "python-benchmarks": {
-      "root": "benchmarks/comparison",
+      "root": "tests/benchmarks/comparison",
       "owned": ["src/pi_harness_benchmark/*.py"],
       "exclusions": [],
       "status": "measured",
@@ -491,7 +587,7 @@
       }
     },
     "providers": {
-      "root": "integration/providers",
+      "root": "tests/integration/providers",
       "owned": ["auth_guard.mjs", "auth_runtime_fixture.mjs", "auth_transport.mjs", "bun_runtime.mjs", "extension_inventory.ts", "faux.ts", "redirect_anthropic.mjs", "usage_fixture.ts"],
       "exclusions": [],
       "status": "measured",
@@ -521,38 +617,50 @@
         "scripts/vitest.config.ts",
         "scripts/vitest-package.ts",
         "packages/*/vitest*.config.ts",
-        "integration/inprocess/vitest.config.ts",
-        "integration/probes/vitest.config.ts",
-        "integration/providers/vitest.config.ts",
+        "tests/inprocess/vitest.config.ts",
+        "tests/integration/probes/vitest.config.ts",
+        "tests/integration/providers/vitest.config.ts",
         "tests/lib/vitest.config.ts"
       ],
       "exclusions": [],
       "status": "measured",
-      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root verification scripts measured in process on Node and Bun by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. Named config initializers retain real executable statement maps on both engines. The Vitest root is the repository root so both reports cover configurations outside `scripts/`, with the complete owned inventory at zero L/F/B/S. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "scripts/coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "scripts/coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
     "probes": {
-      "root": "integration/probes",
+      "root": "tests/integration/probes",
       "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Every executable probe runs in process under `check-probes`: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Joins the 100-percent goal at 0/0.",
+      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
     "inprocess": {
-      "root": "integration/inprocess",
+      "root": "tests/inprocess",
       "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts"],
       "exclusions": [],
       "status": "measured",
@@ -588,6 +696,40 @@
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "python-release": {
+      "root": "release",
+      "owned": [
+        "pi_release/*.py"
+      ],
+      "exclusions": [],
+      "status": "measured",
+      "note": "Product code, measured by all retained infrastructure tests in make check-integration, with zero line and branch uncovered floors.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "producer": "coverage.py",
+          "skip_hosts": [
+            "wsl2"
+          ],
+          "max_uncovered": {
+            "darwin": {
+              "lines": 0,
+              "functions": 0,
+              "branches": 0
+            },
+            "linux": {
+              "lines": 0,
+              "functions": 0,
+              "branches": 0
+            }
+          },
+          "reporters": [
+            "text",
+            "lcov"
+          ]
         }
       }
     }

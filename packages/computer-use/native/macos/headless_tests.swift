@@ -37,6 +37,10 @@ check(!allowsFirstWindowFallback(windowId: nil, windowRef: "ax:dlg"), "stale ref
 check(!allowsFirstWindowFallback(windowId: 7, windowRef: nil), "id request must not fall back")
 
 // App blocklist and session lock
+check(appBlockedMessage("Example", "com.example.app") == "app_blocked: 'Example' (com.example.app) is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)", "blocked message includes application and bundle")
+check(appBlockedMessage("Example", nil) == "app_blocked: 'Example' (unknown bundle id) is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)", "blocked message names unknown bundle")
+check(appBlockedMessage("Example", "") == "app_blocked: 'Example' () is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)", "blocked message preserves empty bundle")
+check(appBlockedMessage("Éditeur '雪'", "com.example.app") == "app_blocked: 'Éditeur '雪'' (com.example.app) is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)", "blocked message preserves quoted Unicode name")
 check(isBlockedBundleId("com.apple.Terminal", blocked: ["com.apple.terminal"]), "bundle ids match case-insensitively")
 check(!isBlockedBundleId("com.apple.TextEdit", blocked: ["com.apple.Terminal"]), "unlisted app is allowed")
 check(!isBlockedBundleId(nil, blocked: ["com.apple.Terminal"]) && !isBlockedBundleId("", blocked: [""]), "no bundle id never matches")

@@ -45,10 +45,10 @@ ARTIFACT_DIRECTORIES = ("artifacts", "artifacts-node", "artifacts-personal")
 COVERAGE_LEAVES = ("lcov.info", "coverage-summary.json")
 COVERAGE_ROOTS = (
     "packages/*",
-    "integration/inprocess",
+    "tests/inprocess",
     "tests/lib",
-    "integration/probes",
-    "integration/providers",
+    "tests/integration/probes",
+    "tests/integration/providers",
     "scripts",
 )
 # The exact report paths `ci.yml` uploads; nothing else under the guest checkout crosses the boundary.
@@ -268,9 +268,9 @@ def _mirror_artifacts(ctx: Capture) -> None:
         CaptureError: When a stale tree cannot be removed or `cp` fails.
     """
     for name in ARTIFACT_DIRECTORIES:
-        target = ctx.host_workspace / "integration" / name
+        target = ctx.host_workspace / "tests/integration" / name
         _remove(target)
-        source = ctx.worktree / "integration" / name
+        source = ctx.worktree / "tests/integration" / name
         if source.is_dir():
             target.mkdir(parents=True, exist_ok=True)
             _copy(ctx, ["-RP", f"{source}/.", f"{target}/"])
@@ -468,8 +468,8 @@ def _guest_state(ctx: Capture, status: int) -> None:
     with contextlib.suppress(OSError):
         report.write_text(_guest_report(ctx, status), encoding="utf-8", errors="surrogateescape")
     scanned = ctx.command(
-        ["timeout", "60", "python3", "-m", "harness.credentials", str(report)],
-        cwd=ctx.worktree / "integration",
+        ["timeout", "60", "python3", "-m", "pi_release.credentials", str(report)],
+        cwd=ctx.worktree / "release",
     )[0]
     target = ctx.diagnostics / "guest-state.txt"
     if scanned == 0:
@@ -491,7 +491,7 @@ def _cleanup(ctx: Capture, status: int) -> None:
         ctx (Capture): Locations and runner.
         status (int): The harness status recorded for the capture.
     """
-    artifacts = ctx.worktree / "integration/artifacts"
+    artifacts = ctx.worktree / "tests/integration/artifacts"
     if artifacts.is_dir():
         preserved = ctx.diagnostics / "artifacts"
         with contextlib.suppress(OSError):

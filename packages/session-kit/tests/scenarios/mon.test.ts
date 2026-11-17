@@ -14,7 +14,8 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, expect, it } from "vitest";
 import { registerMon } from "../../src/mon/index.ts";
 import { createSamplerSource } from "../../src/mon/source.ts";
-import { configFor, TerminalFixture } from "../fixtures/session.ts";
+import { configFor } from "../fixtures/session.ts";
+import { TerminalFixture } from "../fixtures/terminal.ts";
 
 const SIZES = [
 	[40, 12],

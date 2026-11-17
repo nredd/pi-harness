@@ -1,6 +1,6 @@
 /**
  * In-process tests for the Vitest launcher's `main`. Only `spawnSync` is faked, so every case runs the
- * real home creation and cleanup; `integration/inprocess/verification/launcher.test.ts` and
+ * real home creation and cleanup; `tests/inprocess/verification/launcher.test.ts` and
  * `scripts/tests/test_coverage_producers.py` keep the real-subprocess coverage of the CLI dispatch.
  */
 import assert from "node:assert/strict";
@@ -190,13 +190,15 @@ test("an unknown or missing engine is rejected before any home is created", () =
 test("offline Make gates run both engines without replacing primary coverage", () => {
 	const makefile = readFileSync(new URL("../Makefile", import.meta.url), "utf8");
 	for (const [target, launcher] of [
-		["check-probes", "../../scripts/run-vitest.ts"],
+		["check-probes", "../../../scripts/run-vitest.ts"],
 		["check-import-audit", "run-vitest.ts"],
 	]) {
 		const recipe = makefile.split(`${target}:`)[1]?.split("\n\n")[0];
 		assert.ok(recipe);
 		assert.ok(recipe.includes(`node ${launcher} node --coverage`));
-		assert.ok(recipe.includes(`node ${launcher} bun --coverage.enabled=false`));
+		const directory = target === "check-import-audit" ? " --coverage.reportsDirectory=scripts/coverage/bun" : "";
+		assert.ok(recipe.endsWith(`node ${launcher} bun${directory}`));
+		assert.doesNotMatch(recipe, /coverage\.enabled=false/);
 		assert.equal(recipe.match(/env -i PATH="\$\$PATH" HOME="\$\$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1/g)?.length, 2);
 		assert.equal(recipe.match(/trap 'rm -rf "\$\$sandbox"' EXIT/g)?.length, 2);
 		assert.doesNotMatch(recipe, /PI_CU_LIVE|PI_COMPUTER_USE_LIVE|\*\.test/);

@@ -7,7 +7,8 @@ import { expect } from "vitest";
 import type { QuotaObservation } from "../../src/stats/harness/common.ts";
 import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import { eventId, type Manifest, type SnapshotEvent } from "../../src/stats/snapshot.ts";
-import { configFor, type TerminalFixture } from "./session.ts";
+import { configFor } from "./session.ts";
+import type { TerminalFixture } from "./terminal.ts";
 
 export const MODELS = [
 	["anthropic", "claude-opus-5-5", 9],

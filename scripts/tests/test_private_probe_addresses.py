@@ -64,7 +64,7 @@ ALLOWED = frozenset(
 # Exact synthetic values (normalized IPv4 text, or a home path name) that a fixture file may carry. Every
 # entry must still appear in its file, so a stale entry fails instead of lingering as a blind spot.
 FIXTURE_VALUES: dict[str, frozenset[str]] = {
-    "integration/tests/test_startup.py": frozenset({"x"}),
+    "tests/integration/tests/test_startup.py": frozenset({"x"}),
     "packages/computer-use/test/macos-helper-client.test.mjs": frozenset({"u"}),
     "packages/dev-tools/tests/fixtures/cargo/check.jsonl": frozenset({"user"}),
     "packages/dev-tools/tests/fixtures/cargo/clippy-good.jsonl": frozenset({"user"}),
@@ -238,7 +238,7 @@ def test_scope_covers_whole_tree_but_not_forks_locks_or_generated() -> None:
     ):
         assert expected in paths
     assert any(p.startswith("packages/") for p in paths)
-    assert any(p.startswith("integration/") for p in paths)
+    assert any(p.startswith("tests/integration/") for p in paths)
     assert not any(p.startswith("forks/") or LOCKFILE.search(p) or GENERATED.search(p) for p in paths)
 
 

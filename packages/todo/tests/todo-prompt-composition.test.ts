@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { createHarness } from "@earendil-works/pi-coding-agent/testing";
+import { createHarness, fauxAssistantMessage, fauxToolCall, getToolResult } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
@@ -44,6 +44,7 @@ describe("todo SDK-composed prompt", () => {
 			additionalExtensionPaths: [PACKAGE_DIR],
 		});
 		await resourceLoader.reload();
+		expect(resourceLoader.getExtensions().errors).toEqual([]);
 		const harness = await createHarness({ cwd, resourceLoader });
 		try {
 			await harness.session.bindExtensions({ mode: "print" });
@@ -56,6 +57,20 @@ describe("todo SDK-composed prompt", () => {
 			expect(prompt).toContain("without delaying individual completions");
 			expect(prompt).toContain("A batch is atomic: if any op is invalid nothing changes");
 			expect(prompt).not.toMatch(OLD_GUIDANCE);
+
+			// Exercise the loaded tool through the real provider/runner, including its refusal path.
+			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("todo", { action: "list" })),
+				fauxAssistantMessage("done"),
+			]);
+			await harness.session.prompt("List todos");
+			expect(getToolResult(harness, "todo").content).toEqual([{ type: "text", text: "No tasks" }]);
+			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("todo", { action: "get", id: 999 })),
+				fauxAssistantMessage("done"),
+			]);
+			await harness.session.prompt("Read a missing todo");
+			expect(getToolResult(harness, "todo").content).toEqual([{ type: "text", text: "Error: #999 not found" }]);
 		} finally {
 			harness.cleanup();
 		}

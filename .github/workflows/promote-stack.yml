@@ -57,13 +57,13 @@ jobs:
         with:
           version: "0.13.1"
       - name: Install harness
-        run: uv sync --locked --directory integration
+        run: uv sync --locked --directory tests/integration
       - name: Require frozen combined candidate full verification
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: >-
-          uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.release_gate
+          uv run --locked --directory "$GITHUB_WORKSPACE/tests/integration" python -m pi_release.release_gate
           --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
       - id: target
         name: Verify the selected commit and build the candidate snapshot
@@ -71,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OPERATION: ${{ inputs.operation }}
           REQUESTED_SHA: ${{ inputs.source_sha }}
-        run: uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.promotion_verify
+        run: uv run --locked --directory "$GITHUB_WORKSPACE/tests/integration" python -m pi_release.promotion_verify
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: inputs.operation != 'verify-only'
         with:
@@ -105,7 +105,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --dependency-graph promotion/dependency-graph.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
+        run: PYTHONPATH="$GITHUB_WORKSPACE/release" python3 -m pi_release.publish_gate prepare-release --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" --rebuilt promotion/stack-snapshot.json --dependency-graph promotion/dependency-graph.json --existing-dir existing --github-output "$GITHUB_OUTPUT"
       - name: Verify the existing snapshot attestation
         if: steps.release.outputs.state == 'resume'
         env:
@@ -132,4 +132,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
+        run: PYTHONPATH="$GITHUB_WORKSPACE/release" python3 -m pi_release.publish_gate tag-target --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"
