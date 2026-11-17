@@ -48,13 +48,13 @@ local themes, skills, agents and their configuration. Restart sessions after act
 
 ## Select the shared agents and skills
 
-For a release containing the workspace entry, select its exact published version unfiltered in
+After `0.5.0` is published, select `npm:@nredd/pi-preset@0.5.0` unfiltered in
 `settings.json`'s `packages` (or a stack's `sources`) to load the footer, skills and themes.
-To keep themes disabled, use this shape with `VERSION` replaced by that published version:
+To keep themes disabled, use this selection only after publication:
 
 ```json
 {
-  "source": "npm:@nredd/pi-preset@VERSION",
+  "source": "npm:@nredd/pi-preset@0.5.0",
   "extensions": ["src/index.ts"],
   "skills": ["skills/**"],
   "prompts": [],
@@ -226,8 +226,9 @@ Local overrides shadow these packaged definitions; update their managed source s
 ## Models and roles
 
 Agents carry no `model:`. Skills name tiers only, never model ids or `router/*` profiles:
-`code-review` spawns `code-reviewer` with no `model`, so the user's `agentModels` routes it, and `ship-issue` adds a second `critic` on `@frontier` only for design-level issues (new
-module or public interface, concurrency, persistence or wire format, auth). `agentModels` binds agent
+`code-review` spawns `code-reviewer` with no `model`, so the user's `agentModels` routes it.
+`ship-issue` adds a second `critic` on `@frontier` only for design-level issues (new module or
+public interface, concurrency, persistence or wire format, auth). `agentModels` binds agent
 types to tiers; `modelTiers` binds tiers to a router profile or exact members. Both are deployment
 config, not preset content, so deployments ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
 falls back to another tier.
