@@ -8,9 +8,9 @@ published all four tarballs. Every downloaded asset passed `SHA256SUMS` and prov
 for that exact workflow, tag ref and source digest, denying self-hosted runners. Root overrides,
 all native test-host dependencies, the Gitlink, digest guard, personal stack and both runtime
 lock targets move together; no owned npm package version changes.
-The previous selection's [artifact receipt](../releases/2026-11-12-core-nredd.11.json) remains
-historical. Current pins bind the published assets through the root lockfile, digest guard and
-personal stack. Source selection is not stack promotion approval.
+The generated [artifact receipt](../releases/2026-11-17-core-nredd.12.json) records the clean
+selection commit, all four published asset digests and release verification evidence. The previous
+receipt remains historical. Source selection is not stack promotion approval.
 This npm tarball publication does not establish standalone binary #72 or live-install acceptance.
 
 Before publishing, require [full frozen-candidate verification](../README.md#frozen-release-verification).
