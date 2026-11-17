@@ -8,8 +8,8 @@ on:
       - .gitmodules
       - .github/workflows/forks.yml
       - Makefile
-      - integration/core-source/**
-      - integration/inprocess/support.ts
+      - tests/integration/core-source/**
+      - tests/inprocess/support.ts
       - packages/subagents/**
       - biome.json
       - package.json
@@ -23,8 +23,8 @@ on:
       - .gitmodules
       - .github/workflows/forks.yml
       - Makefile
-      - integration/core-source/**
-      - integration/inprocess/support.ts
+      - tests/integration/core-source/**
+      - tests/inprocess/support.ts
       - packages/subagents/**
       - biome.json
       - package.json

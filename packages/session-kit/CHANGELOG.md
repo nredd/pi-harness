@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Split session and harness JSONL on `\n` only (a trailing `\r` is dropped): `node:readline` also broke lines at U+2028 and U+2029, which `JSON.stringify` leaves raw inside strings, so one valid record became two bad lines and `pi-stats-export` failed with `Incomplete local scan` ([#991](https://github.com/nredd/pi-harness/issues/991)). Cached pi and Claude/Codex records that counted bad lines are re-read on the next scan, so no cache bump; a record for a file that is deleted or outside the scanned root cannot be re-read and keeps its old count
+
 - Neutralize the complete Unicode `Bidi_Control` set in local scan paths, including ALM, LRM and RLM; preserve C1 replacement and JSON C0 escaping (#960).
 
 - Report bounded local-only file/physical-line diagnostics for incomplete pi exports, including filesystem and cached-history failures; keep prior publication unchanged (#960, Refs nredd/dotfiles#1).

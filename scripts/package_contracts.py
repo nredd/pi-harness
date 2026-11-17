@@ -81,8 +81,8 @@ from faux_provider import (
 # imported from the source tree. Module-level, so every importer (`npm_release.py` in `publish.yml`,
 # the stock gate, tests) gets it with no `PYTHONPATH` at each call site. Appended, so nothing in
 # `scripts/` is shadowed.
-sys.path.append(str(Path(__file__).resolve().parents[1] / "integration"))
-from harness import process_group
+sys.path.append(str(Path(__file__).resolve().parents[1] / "release"))
+from pi_release import process_group
 
 LOGGER = logging.getLogger(__name__)
 
@@ -221,7 +221,7 @@ async function exitedWithin(child, ms) {
     } finally { timer.abort(); }
 }
 /**
- * Terminate/reap with SIGTERM then SIGKILL, like integration/inprocess/support.ts.
+ * Terminate/reap with SIGTERM then SIGKILL, like tests/inprocess/support.ts.
  * @param {import('node:child_process').ChildProcess} child Owned child handle.
  * @returns {Promise<void>} Cleanup completion; rejects if the child survives SIGKILL.
  */
@@ -1833,7 +1833,7 @@ def run_own_group(
 
     The group is signalled only while the leader is unreaped (`returncode` unset, read without a
     `poll` that could reap it): until then its pid, the group id, cannot be reused, like
-    `integration/harness/headless.py`. The kill follows `harness.process_group.kill_owned_group`:
+    `tests/integration/harness/headless.py`. The kill follows `pi_release.process_group.kill_owned_group`:
     `ESRCH`, or the `EPERM` macOS answers for a group holding only the exited, unreaped leader, is
     gone when `/bin/ps` shows no live member, and the original exception surfaces. If `communicate`
     already reaped the leader (its SIGINT grace wait can), the id may be reused, so nothing is

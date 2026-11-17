@@ -38,7 +38,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
-    "check": "uv run --locked --project ../../integration python ../../scripts/package_contracts.py --packed-files-only --package preset && npm run lint && npm run typecheck && npm run test && npm run test:bun"
+    "check": "uv run --locked --project ../../tests/integration python ../../scripts/package_contracts.py --packed-files-only --package preset && npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.12/earendil-works-pi-coding-agent-1.3.0.tgz",

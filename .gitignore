@@ -10,10 +10,11 @@ __pycache__/
 .coverage.*
 .DS_Store
 packages/**/coverage/
-integration/**/coverage/
+tests/integration/**/coverage/
 tests/**/coverage/
 scripts/coverage/
-benchmarks/comparison/coverage/
+release/coverage/
+tests/benchmarks/comparison/coverage/
 /coverage/summary.json
 packages/*/dist/
 packages/plan-mode/.pi-plan-mode-*
