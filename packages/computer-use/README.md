@@ -2,6 +2,9 @@
 
 `@nredd/pi-computer-use` lets Pi agents observe and control desktop apps and CDP browser pages.
 This workspace is a fork of `injaneity/pi-computer-use`; see [Upstream](#upstream).
+Managed browser shutdown shares concurrent cleanup of its temporary profile; failed removal stays
+tracked for synchronous exit cleanup. This serializes removal attempts, not a proven fix for a
+historical browser-profile leak.
 
 ## Install
 
