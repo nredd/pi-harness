@@ -2,9 +2,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { toolCalls } from "@nredd/pi-test-lib/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { answer, ScenarioSession, spawn } from "../../packages/subagents/tests/fixtures/scenario-session.ts";
 import { ExhaustionTracker } from "../../packages/subscription-router/src/exhaustion.ts";
