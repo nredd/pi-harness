@@ -25,8 +25,6 @@ PRESET_FILTERS = {"extensions/expanded-footer.ts": "src/index.ts"}
 
 
 class PackedPackage(BaseModel):
-    """Portable paths relative to the bundle root."""
-
     model_config = ConfigDict(extra="forbid")
     tarball: str = Field(description="Tarball path relative to bundle root")
     extensions: list[str] = Field(description="Validated pi.extensions paths relative to package root")
@@ -36,8 +34,6 @@ class PackedPackage(BaseModel):
 
 
 class Bundle(BaseModel):
-    """Versioned consumer contract; no activation state or machine paths."""
-
     model_config = ConfigDict(extra="forbid")
     schema_version: int = Field(default=1, description="Manifest format version")
     source_sha: str = Field(description="Harness checkout HEAD")

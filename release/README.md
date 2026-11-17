@@ -34,7 +34,9 @@ all owned packages, including the computer-use `make bridge` target (both macOS 
 explicit no-op elsewhere). Core must be clean and match the `forks/pi` Gitlink. Like `Fork release`,
 it installs core dependencies with scripts disabled, restores model data from the matching
 published `pi-ai` version, runs `build:offline`, and packs coding-agent, tui, agent and ai.
-It does not run the release gate, attest, publish, tag, pin or activate anything. Package scripts
+The release-only daemon build and isolated core test suite are deliberately not run: the daemon
+is not shipped in these four tarballs. It does not run the release gate, attest, publish, tag,
+pin or activate anything. Package scripts
 execute trusted checkout code. This is development output, never release evidence.
 
 `manifest.json` is written only after every build, tarball audit and core runtime installation

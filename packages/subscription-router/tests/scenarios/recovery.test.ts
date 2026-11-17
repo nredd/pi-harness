@@ -165,9 +165,8 @@ describe("router recovery through a real session", () => {
 		scenario.providers[1].setResponses([fauxAssistantMessage("must not run")]);
 		await prompt(scenario);
 		expect(scenario.providers.map((provider) => provider.state.callCount)).toEqual([1, 0, 0]);
-		// Core's settle boundary has no streaming signal. A completed confirmation
-		// remains valid, but the host must suppress the requested continuation.
-		expect(scenario.tracker.active()).toMatchObject([{ provider: "spike-a" }]);
+		// Core #112 keeps ctx.signal active through settlement: canceled recovery drafts cannot commit.
+		expect(scenario.tracker.active()).toEqual([]);
 	});
 
 	it("unconfirmed transient failures exhaust the core retry budget on the same model", async () => {
