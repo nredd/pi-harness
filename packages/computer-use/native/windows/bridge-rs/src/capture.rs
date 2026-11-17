@@ -165,9 +165,12 @@ fn screenshot_impl(
     );
     let baseline = if requires_transition && !is_minimized {
         // A failed pre-transition render is not evidence of a changed frame.
-        unsafe { gdi_capture_to_base64(hwnd, baseline_rect.2, baseline_rect.3, max_dimension) }
-            .ok()
-            .map(|frame| fingerprint(&frame.0))
+        Some(fingerprint(
+            &unsafe {
+                gdi_capture_to_base64(hwnd, baseline_rect.2, baseline_rect.3, max_dimension)
+            }?
+            .0,
+        ))
     } else {
         None
     };
@@ -175,136 +178,140 @@ fn screenshot_impl(
         crate::freshness::Freshness::new(baseline_rect, baseline, requires_transition);
     crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
     crate::window::request_foreground(native.raw())?;
-    if is_minimized {
-        warnings.push("window_restored".to_owned());
-    }
+    // Explicit capture may have restored/focused: later failure cannot claim zero mutation.
+    crate::guard::observe_after_delivery(|| {
+        if is_minimized {
+            warnings.push("window_restored".to_owned());
+        }
 
-    // 3. Get the window rect so we know capture dimensions.
-    let (x, y, width, height) = unsafe {
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
+        // 3. Get the window rect so we know capture dimensions.
+        let (x, y, width, height) = unsafe {
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_err() {
+                return Err(ProtocolError::new(
+                    "Failed to get window bounds",
+                    ErrorCode::CaptureFailed,
+                ));
+            }
+            let w = (rect.right - rect.left).max(0);
+            let h = (rect.bottom - rect.top).max(0);
+            (rect.left, rect.top, w, h)
+        };
+
+        if width == 0 || height == 0 {
             return Err(ProtocolError::new(
-                "Failed to get window bounds",
+                "Window has no capturable extent",
                 ErrorCode::CaptureFailed,
             ));
         }
-        let w = (rect.right - rect.left).max(0);
-        let h = (rect.bottom - rect.top).max(0);
-        (rect.left, rect.top, w, h)
-    };
 
-    if width == 0 || height == 0 {
-        return Err(ProtocolError::new(
-            "Window has no capturable extent",
-            ErrorCode::CaptureFailed,
-        ));
-    }
+        // 4. GDI capture (unsafe FFI block).
+        // SAFETY: All GDI objects are created and destroyed within this
+        // function.  Object lifetimes follow the Acquire → Use → Release
+        // pattern with proper cleanup on every error path.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let (png_base64, output_width, output_height) = loop {
+            crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
+            let mut current_rect = RECT::default();
+            // SAFETY: borrowed HWND was just validated; RECT is writable and initialized.
+            unsafe { GetWindowRect(hwnd, &mut current_rect) }.map_err(|_| {
+                ProtocolError::new("Capture window vanished", ErrorCode::CaptureFailed)
+            })?;
+            if (
+                current_rect.left,
+                current_rect.top,
+                current_rect.right - current_rect.left,
+                current_rect.bottom - current_rect.top,
+            ) != (x, y, width, height)
+            {
+                return Err(ProtocolError::new(
+                    "Window moved during capture; observe again",
+                    ErrorCode::CaptureFailed,
+                ));
+            }
+            // SAFETY: current live extent is positive and capture owns all GDI resources.
+            let frame = unsafe { gdi_capture_to_base64(hwnd, width, height, max_dimension) }?;
+            crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
+            let mut rendered_rect = RECT::default();
+            // SAFETY: revalidated borrowed HWND, with a live initialized output RECT.
+            unsafe { GetWindowRect(hwnd, &mut rendered_rect) }.map_err(|_| {
+                ProtocolError::new(
+                    "Capture window vanished after rendering",
+                    ErrorCode::CaptureFailed,
+                )
+            })?;
+            if (
+                rendered_rect.left,
+                rendered_rect.top,
+                rendered_rect.right,
+                rendered_rect.bottom,
+            ) != (
+                current_rect.left,
+                current_rect.top,
+                current_rect.right,
+                current_rect.bottom,
+            ) {
+                return Err(ProtocolError::new(
+                    "Window moved while rendering; observe again",
+                    ErrorCode::CaptureFailed,
+                ));
+            }
+            if freshness.observe(crate::freshness::Frame {
+                rect: (x, y, width, height),
+                fingerprint: fingerprint(&frame.0),
+            }) {
+                break frame;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ProtocolError::new(
+                    "Capture freshness could not be established",
+                    ErrorCode::CaptureFailed,
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        };
 
-    // 4. GDI capture (unsafe FFI block).
-    // SAFETY: All GDI objects are created and destroyed within this
-    // function.  Object lifetimes follow the Acquire → Use → Release
-    // pattern with proper cleanup on every error path.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
-    let (png_base64, output_width, output_height) = loop {
-        crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
-        let mut current_rect = RECT::default();
-        // SAFETY: borrowed HWND was just validated; RECT is writable and initialized.
-        unsafe { GetWindowRect(hwnd, &mut current_rect) }
-            .map_err(|_| ProtocolError::new("Capture window vanished", ErrorCode::CaptureFailed))?;
-        if (
-            current_rect.left,
-            current_rect.top,
-            current_rect.right - current_rect.left,
-            current_rect.bottom - current_rect.top,
-        ) != (x, y, width, height)
-        {
+        let state_id = StateId::fresh("s");
+        // SAFETY: HWND remains borrowed; API returns zero if it ceased to be valid.
+        let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) };
+        if dpi == 0 {
             return Err(ProtocolError::new(
-                "Window moved during capture; observe again",
+                "Capture window DPI is unavailable",
                 ErrorCode::CaptureFailed,
             ));
         }
-        // SAFETY: current live extent is positive and capture owns all GDI resources.
-        let frame = unsafe { gdi_capture_to_base64(hwnd, width, height, max_dimension) }?;
-        crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
-        let mut rendered_rect = RECT::default();
-        // SAFETY: revalidated borrowed HWND, with a live initialized output RECT.
-        unsafe { GetWindowRect(hwnd, &mut rendered_rect) }.map_err(|_| {
-            ProtocolError::new(
-                "Capture window vanished after rendering",
-                ErrorCode::CaptureFailed,
-            )
-        })?;
-        if (
-            rendered_rect.left,
-            rendered_rect.top,
-            rendered_rect.right,
-            rendered_rect.bottom,
-        ) != (
-            current_rect.left,
-            current_rect.top,
-            current_rect.right,
-            current_rect.bottom,
-        ) {
-            return Err(ProtocolError::new(
-                "Window moved while rendering; observe again",
-                ErrorCode::CaptureFailed,
-            ));
-        }
-        if freshness.observe(crate::freshness::Frame {
-            rect: (x, y, width, height),
-            fingerprint: fingerprint(&frame.0),
-        }) {
-            break frame;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(ProtocolError::new(
-                "Capture freshness could not be established",
-                ErrorCode::CaptureFailed,
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    };
 
-    let state_id = StateId::fresh("s");
-    // SAFETY: HWND remains borrowed; API returns zero if it ceased to be valid.
-    let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) };
-    if dpi == 0 {
-        return Err(ProtocolError::new(
-            "Capture window DPI is unavailable",
-            ErrorCode::CaptureFailed,
-        ));
-    }
+        // Build the base response.
+        let mut result = json!({
+            "target": target_ref.to_string(),
+            "capture": {
+                "stateId": state_id,
+                "x": x,
+                "y": y,
+                "width": output_width,
+                "height": output_height,
+                "sourceWidth": width,
+                "sourceHeight": height,
+                "scaleFactor": f64::from(dpi) / 96.0,
+                "imageFormat": "png",
+                "imageBase64": png_base64,
+            },
+            "warnings": warnings,
+        });
 
-    // Build the base response.
-    let mut result = json!({
-        "target": target_ref.to_string(),
-        "capture": {
-            "stateId": state_id,
-            "x": x,
-            "y": y,
-            "width": output_width,
-            "height": output_height,
-            "sourceWidth": width,
-            "sourceHeight": height,
-            "scaleFactor": f64::from(dpi) / 96.0,
-            "imageFormat": "png",
-            "imageBase64": png_base64,
-        },
-        "warnings": warnings,
-    });
-
-    // 5. Optionally extract UIA accessibility elements.
-    if include_elements {
-        let elements = crate::uia::live_elements(hwnd.0 as isize)
-            .map_err(|message| ProtocolError::new(message, ErrorCode::CapabilityDeferred))?;
-        if !elements.is_empty() {
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("axTargets".to_owned(), Value::Array(elements));
+        // 5. Optionally extract UIA accessibility elements.
+        if include_elements {
+            let elements = crate::uia::live_elements(hwnd.0 as isize)
+                .map_err(|message| ProtocolError::new(message, ErrorCode::CapabilityDeferred))?;
+            if !elements.is_empty() {
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("axTargets".to_owned(), Value::Array(elements));
+                }
             }
         }
-    }
 
-    Ok(result)
+        Ok(result)
+    })
 }
 
 #[cfg(windows)]

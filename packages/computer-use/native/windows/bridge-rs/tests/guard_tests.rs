@@ -53,6 +53,103 @@ fn partial_text_readback_cannot_be_acknowledged_as_refusal() {
     assert!(windows_bridge::guard::verify_written_text("complete text", "complete text").is_ok());
 }
 
+#[test]
+fn every_drag_vertex_is_admitted_before_any_input_or_foreground_mutation() {
+    let mutations = Cell::new(0);
+    for bad in [(-1001.0, 50.0), (-950.0, 701.0)] {
+        let result = windows_bridge::guard::deliver_path(
+            WINDOW,
+            None,
+            &[(-950.0, 50.0), bad],
+            |_, _| Ok(true),
+            || {
+                mutations.set(mutations.get() + 1);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+    }
+    let result = windows_bridge::guard::deliver_path(
+        WINDOW,
+        None,
+        &[(-950.0, 50.0), (-900.0, 60.0)],
+        |x, _| {
+            if x == -900.0 {
+                Err(unavailable())
+            } else {
+                Ok(true)
+            }
+        },
+        || {
+            mutations.set(mutations.get() + 1);
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        mutations.get(),
+        0,
+        "includes restore, foreground, cursor and button changes"
+    );
+}
+
+#[test]
+fn focus_mutation_and_verification_failures_preserve_uncertainty() {
+    let sets = Cell::new(0);
+    let failure = windows_bridge::guard::deliver_focus(
+        || {
+            sets.set(sets.get() + 1);
+            Err(unavailable())
+        },
+        || panic!("read after failed SetFocus"),
+    );
+    assert!(failure.unwrap_err().outcome_uncertain());
+    for read in [Err(unavailable()), Ok(false)] {
+        let failure = windows_bridge::guard::deliver_focus(
+            || {
+                sets.set(sets.get() + 1);
+                Ok(())
+            },
+            || read,
+        );
+        assert!(failure.unwrap_err().outcome_uncertain());
+    }
+    assert_eq!(sets.get(), 3);
+}
+
+#[test]
+fn failed_hit_identity_never_uses_a_later_ancestor_as_evidence() {
+    for failed_at in [0, 1] {
+        let visited = Cell::new(0);
+        let result = windows_bridge::guard::hit_ancestry(
+            &[2],
+            0,
+            |node| {
+                visited.set(visited.get() + 1);
+                if *node == failed_at {
+                    Err(unavailable())
+                } else {
+                    Ok(vec![*node])
+                }
+            },
+            |node| Ok(Some(node + 1)),
+        );
+        assert!(result.is_err());
+        assert_eq!(visited.get(), failed_at + 1);
+    }
+    assert!(
+        !windows_bridge::guard::hit_ancestry(&[2], 0, |node| Ok(vec![*node]), |_| Ok(None))
+            .unwrap()
+    );
+    assert!(windows_bridge::guard::hit_ancestry(
+        &[2],
+        0,
+        |node| Ok(vec![*node]),
+        |node| Ok(Some(node + 1))
+    )
+    .unwrap());
+}
+
 const WINDOW: Bounds = Bounds {
     x: -1000.0,
     y: 20.0,

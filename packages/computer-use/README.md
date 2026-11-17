@@ -45,6 +45,14 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   Read-only value patterns refuse before writing. Ref keyboard fallback verifies live keyboard focus;
   text fallback additionally requires an edit
   control. It does not click again after that verification or type into the previously focused field.
+- Every input executable is rebuilt from public request fields. Caller `resolved*` fields are
+  discarded, including nested params. Every actual rounded drag vertex (start, waypoints, end) is
+  checked before the first mutation for live containment and hit-tested ownership. Coordinate paths
+  use observed image pixels, reject stale window geometry and never clamp out-of-range vertices.
+  Ref drag paths use `params.path` fractions in `[0,1]` of the current live control, starting at its
+  current center, and remain entirely within that control and its owning window. Paths contain at
+  most 1024 requested vertices. Scroll/click/move paths use the same read-only ownership boundary.
+  Hit/ancestor RuntimeId or parent-provider errors propagate; only a genuine null tree end is absence.
 - Discovery registers a temporary UIA event listener on the selected subtree and walks raw-view
   children, at most 200 nodes/64 levels with a 1.5-second traversal budget and 500-ms UIA provider
   connection/transaction limits. The listener is removed on scope exit. UIA can exceed a traversal
@@ -54,7 +62,11 @@ install a helper, change accessibility settings or grant privileges. #673 remain
 - Startup requires per-monitor-v2 DPI awareness. Geometry stays in physical pixels, including negative
   origins. Restore uses `SW_RESTORE`, never a taskbar toggle. Explicit focus/capture may try one paired
   Alt hint and `BringWindowToTop` under the physical-input lease. Ref action preflight never sends
-  that hint: stale or failed hit-testing cannot send even a focus keystroke.
+  that hint. `act` never restores or foregrounds a window: use explicit `focusWindow`, then a fresh
+  observation when needed. Stale identity/geometry or occlusion refusal changes neither input nor
+  foreground/minimized state. UIA control focus happens only after full read-only admission;
+  mutating-call or focus read-back failure terminates without acknowledgement, as does any failed
+  revalidation after successful focus.
   Window images use selected-window `PrintWindow` rendering, not an occluder's screen pixels. Capture
   requires two matching completed renders, plus changed frame or rectangle evidence after activation
   or restoration, within 1.5 seconds. Missing freshness, moving windows, blank/failed renders and captures

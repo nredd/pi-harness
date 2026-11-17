@@ -42,6 +42,128 @@ pub struct Bounds {
     pub height: f64,
 }
 
+impl Bounds {
+    /// Whether all edges are finite and the rectangle has positive extent.
+    pub fn valid(self) -> bool {
+        [
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+            self.x + self.width,
+            self.y + self.height,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+            && self.width > 0.0
+            && self.height > 0.0
+    }
+
+    /// Containment of an actual integer pixel; right/bottom edges are exclusive.
+    pub fn contains(self, x: f64, y: f64) -> bool {
+        self.valid()
+            && x.is_finite()
+            && y.is_finite()
+            && x >= self.x
+            && y >= self.y
+            && x < self.x + self.width
+            && y < self.y + self.height
+    }
+}
+
+/// Validate the whole path before the first mutation, never skipping a vertex.
+pub fn validate_path(
+    window: Bounds,
+    target: Option<Bounds>,
+    points: &[(f64, f64)],
+    mut hit: impl FnMut(f64, f64) -> Result<bool, ProtocolError>,
+) -> Result<(), ProtocolError> {
+    if points.is_empty() {
+        return Err(ProtocolError::new(
+            "No resolved input points",
+            ErrorCode::CoordinateBlocked,
+        ));
+    }
+    for &(x, y) in points {
+        if x != x.round()
+            || y != y.round()
+            || !window.contains(x, y)
+            || target.is_some_and(|bounds| !bounds.contains(x, y))
+        {
+            return Err(ProtocolError::new(
+                "Input vertex is outside its current target",
+                ErrorCode::CoordinateBlocked,
+            ));
+        }
+        if !hit(x, y)? {
+            return Err(ProtocolError::new(
+                "Input vertex is occluded",
+                ErrorCode::OccludedTarget,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Admit every vertex before invoking any mutation, including focus/restore.
+pub fn deliver_path<T>(
+    window: Bounds,
+    target: Option<Bounds>,
+    points: &[(f64, f64)],
+    hit: impl FnMut(f64, f64) -> Result<bool, ProtocolError>,
+    mutate: impl FnOnce() -> Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
+    validate_path(window, target, points, hit)?;
+    mutate()
+}
+
+/// Focus is a mutation even when the API or its verification fails.
+pub fn deliver_focus(
+    set: impl FnOnce() -> Result<(), ProtocolError>,
+    verify: impl FnOnce() -> Result<bool, ProtocolError>,
+) -> Result<(), ProtocolError> {
+    observe_after_delivery(set)?;
+    if !observe_after_delivery(verify)? {
+        return Err(ProtocolError::uncertain(
+            "Focus delivery could not be verified",
+            ErrorCode::InternalError,
+        ));
+    }
+    Ok(())
+}
+
+/// Walk actual hit identities; query failure never becomes ancestor evidence.
+pub fn hit_ancestry<T>(
+    target: &[i32],
+    mut hit: T,
+    mut identity: impl FnMut(&T) -> Result<Vec<i32>, ProtocolError>,
+    mut parent: impl FnMut(&T) -> Result<Option<T>, ProtocolError>,
+) -> Result<bool, ProtocolError> {
+    if target.is_empty() {
+        return Err(ProtocolError::new(
+            "Missing target RuntimeId",
+            ErrorCode::StaleRef,
+        ));
+    }
+    for _ in 0..64 {
+        let current = identity(&hit)?;
+        if current.is_empty() {
+            return Err(ProtocolError::new(
+                "Missing hit RuntimeId",
+                ErrorCode::StaleRef,
+            ));
+        }
+        if current == target {
+            return Ok(true);
+        }
+        let Some(next) = parent(&hit)? else {
+            return Ok(false);
+        };
+        hit = next;
+    }
+    Ok(false)
+}
+
 /// Current identity and geometry read from the same live UIA element.
 pub struct LiveTarget {
     /// UIA runtime identity; AutomationId alone is not authoritative.
@@ -63,6 +185,30 @@ pub fn deliver_to_live_target<T>(
     deliver: impl FnOnce(f64, f64) -> Result<T, ProtocolError>,
 ) -> Result<T, ProtocolError> {
     let target = snapshot()?;
+    validate_live_target(expected_runtime_id, window, &target)?;
+    let x = (target.bounds.x + target.bounds.width / 2.0).round();
+    let y = (target.bounds.y + target.bounds.height / 2.0).round();
+    if !window.contains(x, y) || !target.bounds.contains(x, y) {
+        return Err(ProtocolError::new(
+            "Rounded target is outside its bounds",
+            ErrorCode::CoordinateBlocked,
+        ));
+    }
+    if !hit_test(x, y)? {
+        return Err(ProtocolError::new(
+            "Target is occluded",
+            ErrorCode::OccludedTarget,
+        ));
+    }
+    deliver(x, y)
+}
+
+/// Read-only identity/geometry admission, before any foreground or focus mutation.
+pub fn validate_live_target(
+    expected_runtime_id: &[i32],
+    window: Bounds,
+    target: &LiveTarget,
+) -> Result<(), ProtocolError> {
     if expected_runtime_id.is_empty() || target.runtime_id != expected_runtime_id {
         return Err(ProtocolError::new(
             "Element reference is stale",
@@ -70,22 +216,8 @@ pub fn deliver_to_live_target<T>(
         ));
     }
     let bounds = target.bounds;
-    let valid = |rect: Bounds| {
-        [
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            rect.x + rect.width,
-            rect.y + rect.height,
-        ]
-        .iter()
-        .all(|value| value.is_finite())
-            && rect.width > 0.0
-            && rect.height > 0.0
-    };
-    if !valid(window)
-        || !valid(bounds)
+    if !window.valid()
+        || !bounds.valid()
         || bounds.x < window.x
         || bounds.y < window.y
         || bounds.x + bounds.width > window.x + window.width
@@ -96,13 +228,5 @@ pub fn deliver_to_live_target<T>(
             ErrorCode::CoordinateBlocked,
         ));
     }
-    let x = bounds.x + bounds.width / 2.0;
-    let y = bounds.y + bounds.height / 2.0;
-    if !hit_test(x, y)? {
-        return Err(ProtocolError::new(
-            "Target is occluded",
-            ErrorCode::OccludedTarget,
-        ));
-    }
-    deliver(x, y)
+    Ok(())
 }

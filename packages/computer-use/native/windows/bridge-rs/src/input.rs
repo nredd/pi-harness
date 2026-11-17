@@ -59,6 +59,29 @@ pub fn parse_act_request(args: &Value) -> Result<ParsedActRequest, ProtocolError
     })
 }
 
+/// Rebuild only public request fields; caller-derived resolution is never trusted.
+pub fn executable_request(request: &ParsedActRequest) -> Value {
+    fn public_params(value: &Value) -> Value {
+        match value {
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .filter(|(key, _)| !key.starts_with("resolved"))
+                    .map(|(key, value)| (key.clone(), public_params(value)))
+                    .collect(),
+            ),
+            Value::Array(values) => Value::Array(values.iter().map(public_params).collect()),
+            value => value.clone(),
+        }
+    }
+    let target = match &request.target {
+        ActTarget::Ref(reference) => json!({"ref":reference}),
+        ActTarget::Point { x, y } => json!({"x":x,"y":y}),
+    };
+    json!({"lookId":request.look_id,"pid":request.pid,"action":request.action,
+        "policy":request.policy,"target":target,"params":public_params(&request.params)})
+}
+
 pub fn policy_allows_raw_input(request: &ParsedActRequest) -> Result<(), ProtocolError> {
     if request.policy != "foreground" {
         Err(ProtocolError::new(

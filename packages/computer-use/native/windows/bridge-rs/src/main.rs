@@ -877,57 +877,42 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
                     ErrorCode::CoordinateUnavailableForRoot,
                 ));
             }
-            let mut executable = args.clone();
-            executable["resolvedPoint"] = json!(screen_point(&record, *x, *y));
-            if parsed.action == "drag" {
-                if let Some(path) = parsed.params.get("path").and_then(Value::as_array) {
-                    executable["resolvedPath"] = Value::Array(
-                        path.iter()
-                            .filter_map(|point| {
-                                Some(json!(screen_point(
-                                    &record,
-                                    point.get("x")?.as_f64()?,
-                                    point.get("y")?.as_f64()?
-                                )))
-                            })
-                            .collect(),
-                    );
-                }
-            }
             with_physical_input(|| {
-                let preserve_focus = parsed
-                    .params
-                    .get("preserveFocus")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if !preserve_focus {
-                    window::ensure_foreground(record.hwnd)?;
-                }
-                #[cfg(windows)]
+                let current =
+                    windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
+                if (current.x, current.y, current.width, current.height)
+                    != (
+                        record.frame_x,
+                        record.frame_y,
+                        record.frame_w,
+                        record.frame_h,
+                    )
                 {
-                    let current =
-                        windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
-                    if (current.x, current.y, current.width, current.height)
-                        != (
-                            record.frame_x,
-                            record.frame_y,
-                            record.frame_w,
-                            record.frame_h,
-                        )
-                    {
-                        return Err(ProtocolError::new(
-                            "Window moved since observation; observe again",
-                            ErrorCode::StaleLook,
-                        ));
-                    }
-                    window::ensure_point_owned(record.hwnd, &executable["resolvedPoint"])?;
-                    if let Some(path) = executable.get("resolvedPath").and_then(Value::as_array) {
-                        for point in path {
-                            window::ensure_point_owned(record.hwnd, point)?;
-                        }
-                    }
+                    return Err(ProtocolError::new(
+                        "Window moved since observation; observe again",
+                        ErrorCode::StaleLook,
+                    ));
                 }
-                input::act(&executable)
+                let start =
+                    project_vertex(current, (record.image_w, record.image_h), *x, *y, false)?;
+                let (executable, points) = resolved_executable(
+                    &parsed,
+                    current,
+                    (record.image_w, record.image_h),
+                    start,
+                    false,
+                )?;
+                // Act never restores/raises. Every vertex is admitted before mutation.
+                windows_bridge::guard::deliver_path(
+                    current,
+                    None,
+                    &points,
+                    |x, y| {
+                        window::ensure_point_owned(record.hwnd, &json!({"x":x,"y":y}))?;
+                        Ok(true)
+                    },
+                    || input::act(&executable),
+                )
             })?
         }
     };
@@ -1062,6 +1047,8 @@ fn act_on_ref(
         .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))?;
     #[cfg(windows)]
     windows_bridge::desktop::validated_bounds(element.hwnd, Some(record.pid))?;
+    // Even semantic mutation must start from the exact live identity/geometry.
+    live_ref_target(&element, Some(record.pid))?;
     match parsed.action.as_str() {
         "press" | "click" => match windows_bridge::uia::press(
             element.hwnd,
@@ -1141,35 +1128,23 @@ fn act_on_ref(
 }
 
 fn coordinate_fallback(
-    args: &Value,
+    _args: &Value,
     parsed: &input::ParsedActRequest,
     element: &ElementRecord,
 ) -> Result<Value, ProtocolError> {
     input::policy_allows_raw_input(parsed)?;
     with_physical_input(|| {
-        window::ensure_foreground(element.hwnd)?;
-        let window = windows_bridge::desktop::validated_bounds(element.hwnd, parsed.pid)?;
-        windows_bridge::guard::deliver_to_live_target(
-            &element.runtime_id,
-            window,
-            || {
-                let snapshot = windows_bridge::uia::snapshot(
-                    element.hwnd,
-                    &element.runtime_id,
-                    &element.automation_id,
-                )
-                .map_err(stale_ref_from_uia)?;
-                Ok(windows_bridge::guard::LiveTarget {
-                    runtime_id: snapshot.runtime_id,
-                    bounds: windows_bridge::guard::Bounds {
-                        x: snapshot.rect.0,
-                        y: snapshot.rect.1,
-                        width: snapshot.rect.2,
-                        height: snapshot.rect.3,
-                    },
-                })
-            },
-            |x, y| {
+        let (window, target) = live_ref_target(element, parsed.pid)?;
+        let start = (
+            (target.bounds.x + target.bounds.width / 2.0).round(),
+            (target.bounds.y + target.bounds.height / 2.0).round(),
+        );
+        let (mut executable, points) =
+            resolved_executable(parsed, target.bounds, (1.0, 1.0), start, true)?;
+        let validate = || -> Result<(), ProtocolError> {
+            let (window, target) = live_ref_target(element, parsed.pid)?;
+            windows_bridge::guard::validate_path(window, Some(target.bounds), &points, |x, y| {
+                window::ensure_point_owned(element.hwnd, &json!({"x":x,"y":y}))?;
                 windows_bridge::uia::occlusion_ok(
                     element.hwnd,
                     &element.runtime_id,
@@ -1177,28 +1152,144 @@ fn coordinate_fallback(
                     x,
                     y,
                 )
-                .map_err(stale_ref_from_uia)
-            },
+            })
+        };
+        windows_bridge::guard::deliver_path(
+            window,
+            Some(target.bounds),
+            &points,
             |x, y| {
-                windows_bridge::desktop::validated_bounds(element.hwnd, parsed.pid)?;
-                let mut executable = args.clone();
-                executable["resolvedPoint"] = json!({ "x": x, "y": y });
+                window::ensure_point_owned(element.hwnd, &json!({"x":x,"y":y}))?;
+                windows_bridge::uia::occlusion_ok(
+                    element.hwnd,
+                    &element.runtime_id,
+                    &element.automation_id,
+                    x,
+                    y,
+                )
+            },
+            || {
+                validate()?; // Re-resolve immediately before any mutation.
                 if matches!(parsed.action.as_str(), "setText" | "typeText" | "keypress") {
                     windows_bridge::uia::focus_for_input(
                         element.hwnd,
                         &element.runtime_id,
                         &element.automation_id,
                         parsed.action != "keypress",
-                    )
-                    .map_err(stale_ref_from_uia)?;
-                    // Focus was verified on this exact live control. Do not
-                    // click again and potentially move focus before typing.
+                    )?;
                     executable["resolvedPoint"] = Value::Null;
+                    return windows_bridge::guard::observe_after_delivery(|| {
+                        validate()?; // Focus may have changed layout or ownership.
+                        input::act(&executable)
+                    });
                 }
                 input::act(&executable)
             },
         )
     })
+}
+
+fn live_ref_target(
+    element: &ElementRecord,
+    pid: Option<u64>,
+) -> Result<
+    (
+        windows_bridge::guard::Bounds,
+        windows_bridge::guard::LiveTarget,
+    ),
+    ProtocolError,
+> {
+    let window = windows_bridge::desktop::validated_bounds(element.hwnd, pid)?;
+    let snapshot =
+        windows_bridge::uia::snapshot(element.hwnd, &element.runtime_id, &element.automation_id)
+            .map_err(stale_ref_from_uia)?;
+    let target = windows_bridge::guard::LiveTarget {
+        runtime_id: snapshot.runtime_id,
+        bounds: windows_bridge::guard::Bounds {
+            x: snapshot.rect.0,
+            y: snapshot.rect.1,
+            width: snapshot.rect.2,
+            height: snapshot.rect.3,
+        },
+    };
+    windows_bridge::guard::validate_live_target(&element.runtime_id, window, &target)?;
+    Ok((window, target))
+}
+
+fn project_vertex(
+    bounds: windows_bridge::guard::Bounds,
+    units: (f64, f64),
+    x: f64,
+    y: f64,
+    normalized: bool,
+) -> Result<(f64, f64), ProtocolError> {
+    if !bounds.valid()
+        || !x.is_finite()
+        || !y.is_finite()
+        || units.0 <= 0.0
+        || units.1 <= 0.0
+        || x < 0.0
+        || y < 0.0
+        || (if normalized {
+            x > units.0 || y > units.1
+        } else {
+            x >= units.0 || y >= units.1
+        })
+    {
+        return Err(invalid("Input vertex is outside its coordinate space"));
+    }
+    let width = if normalized {
+        bounds.width - 1.0
+    } else {
+        bounds.width
+    };
+    let height = if normalized {
+        bounds.height - 1.0
+    } else {
+        bounds.height
+    };
+    let point = (
+        (bounds.x + width * x / units.0).round(),
+        (bounds.y + height * y / units.1).round(),
+    );
+    if !bounds.contains(point.0, point.1) {
+        return Err(invalid("Rounded input vertex is outside its target"));
+    }
+    Ok(point)
+}
+
+fn resolved_executable(
+    parsed: &input::ParsedActRequest,
+    bounds: windows_bridge::guard::Bounds,
+    units: (f64, f64),
+    start: (f64, f64),
+    normalized: bool,
+) -> Result<(Value, Vec<(f64, f64)>), ProtocolError> {
+    let mut executable = input::executable_request(parsed);
+    let mut points = vec![start];
+    executable["resolvedPoint"] = json!({"x":start.0,"y":start.1});
+    if parsed.action == "drag" {
+        let path = parsed
+            .params
+            .get("path")
+            .and_then(Value::as_array)
+            .filter(|path| !path.is_empty() && path.len() <= 1024)
+            .ok_or_else(|| invalid("drag requires1...1024 path vertices"))?;
+        for point in path {
+            let x = point
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("Invalid drag x"))?;
+            let y = point
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("Invalid drag y"))?;
+            points.push(project_vertex(bounds, units, x, y, normalized)?);
+        }
+        executable["resolvedPath"] =
+            Value::Array(points.iter().map(|&(x, y)| json!({"x":x,"y":y})).collect());
+    }
+    Ok((executable, points))
 }
 
 fn stale_ref_from_uia(message: String) -> ProtocolError {
@@ -1207,13 +1298,6 @@ fn stale_ref_from_uia(message: String) -> ProtocolError {
     } else {
         ProtocolError::new(message, ErrorCode::InternalError)
     }
-}
-
-fn screen_point(record: &LookRecord, x: f64, y: f64) -> Value {
-    json!({
-        "x": record.frame_x + record.frame_w * (x / record.image_w.max(1.0)).clamp(0.0, 1.0),
-        "y": record.frame_y + record.frame_h * (y / record.image_h.max(1.0)).clamp(0.0, 1.0)
-    })
 }
 
 fn snapshot_roots(pid: u64) -> Result<RootSnapshot, ProtocolError> {
@@ -1646,6 +1730,28 @@ fn cancelled() -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attacker_resolution_is_discarded_and_ref_drag_is_built_from_live_bounds() {
+        let args = json!({"lookId":"look","action":"drag","policy":"foreground","target":{"ref":"ref"},
+            "resolvedPoint":{"x":99999,"y":99999},"resolvedPath":[{"x":99999,"y":99999}],"resolvedUnknown":true,
+            "params":{"path":[{"x":0.0,"y":1.0},{"x":1.0,"y":0.0}],"resolvedNested":{"resolvedOther":true}}});
+        let parsed = input::parse_act_request(&args).unwrap();
+        let bounds = windows_bridge::guard::Bounds {
+            x: -100.0,
+            y: 20.0,
+            width: 50.0,
+            height: 40.0,
+        };
+        let (executable, points) =
+            resolved_executable(&parsed, bounds, (1.0, 1.0), (-75.0, 40.0), true).unwrap();
+        assert_eq!(points, vec![(-75.0, 40.0), (-100.0, 59.0), (-51.0, 20.0)]);
+        assert!(executable.get("resolvedUnknown").is_none());
+        assert!(executable["params"].get("resolvedNested").is_none());
+        assert_eq!(executable["resolvedPath"][0], json!({"x":-75.0,"y":40.0}));
+        assert!(project_vertex(bounds, (100.0, 100.0), 101.0, 0.0, false).is_err());
+        assert!(project_vertex(bounds, (100.0, 100.0), f64::NAN, 0.0, false).is_err());
+    }
 
     #[test]
     fn terminal_cleanup_waits_for_current_owner_and_bounds_stuck_input() {

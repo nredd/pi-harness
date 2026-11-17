@@ -395,10 +395,12 @@ mod native {
                 break;
             }
             // SAFETY: owned interfaces remain live; unavailable parents are omitted.
-            let parent = unsafe { walker.GetParentElement(&element).ok() }
-                .and_then(|parent| runtime_id(&parent))
-                .unwrap_or_default();
-            if let Some(value) = element_to_json(store, &element, parent) {
+            let parent = match optional_element(unsafe { walker.GetParentElement(&element) })? {
+                Some(parent) => runtime_id(&parent)?,
+                None => Vec::new(),
+            };
+            let identity = runtime_id(&element)?;
+            if let Some(value) = element_to_json(store, &element, parent, identity) {
                 elements.push(value);
             }
         }
@@ -435,32 +437,33 @@ mod native {
         }
     }
 
-    fn runtime_id(element: &IUIAutomationElement) -> Option<Vec<i32>> {
-        let array = unsafe { element.GetRuntimeId().ok()? };
+    fn runtime_id(element: &IUIAutomationElement) -> Result<Vec<i32>, String> {
+        // SAFETY: caller owns the live COM interface; the returned array is owned here.
+        let array =
+            unsafe { element.GetRuntimeId() }.map_err(|error| format!("GetRuntimeId: {error}"))?;
         if array.is_null() {
-            return None;
+            return Err("GetRuntimeId returned null".to_owned());
         }
         let _owned = RuntimeArray(array);
-        let lower = unsafe { SafeArrayGetLBound(array, 1).ok()? };
-        let upper = unsafe { SafeArrayGetUBound(array, 1).ok()? };
-        let count = upper.checked_sub(lower)?.checked_add(1)?;
-        if !(1..=128).contains(&count) {
-            return None;
-        }
+        // SAFETY: array is nonnull, owned, and bounded before reading elements.
+        let lower = unsafe { SafeArrayGetLBound(array, 1) }
+            .map_err(|error| format!("RuntimeId lower bound: {error}"))?;
+        let upper = unsafe { SafeArrayGetUBound(array, 1) }
+            .map_err(|error| format!("RuntimeId upper bound: {error}"))?;
+        let count = upper
+            .checked_sub(lower)
+            .and_then(|value| value.checked_add(1))
+            .filter(|count| (1..=128).contains(count))
+            .ok_or("Invalid RuntimeId length")?;
         let mut values = Vec::with_capacity(count as usize);
         for index in lower..=upper {
             let mut value = 0i32;
-            unsafe {
-                SafeArrayGetElement(
-                    array,
-                    &index,
-                    &mut value as *mut i32 as *mut core::ffi::c_void,
-                )
-                .ok()?;
-            }
+            // SAFETY: index is in checked bounds and destination is one writable i32.
+            unsafe { SafeArrayGetElement(array, &index, (&mut value as *mut i32).cast()) }
+                .map_err(|error| format!("RuntimeId element: {error}"))?;
             values.push(value);
         }
-        Some(values)
+        Ok(values)
     }
 
     /// Convert a single UIA element to its JSON representation.
@@ -471,6 +474,7 @@ mod native {
         store: &mut RefStore,
         element: &IUIAutomationElement,
         parent_runtime_id: Vec<i32>,
+        runtime_id: Vec<i32>,
     ) -> Option<Value> {
         let ctrl_type = unsafe { element.CurrentControlType().ok()? };
         let role = control_type_to_role(ctrl_type.0 as u32);
@@ -482,7 +486,6 @@ mod native {
                 .unwrap_or_default()
                 .to_string()
         };
-        let runtime_id = runtime_id(element).unwrap_or_default();
         let class_name = unsafe { element.CurrentClassName().unwrap_or_default().to_string() };
 
         // Bounding rectangle.
@@ -651,7 +654,7 @@ mod native {
                 f64::from(rect.right - rect.left),
                 f64::from(rect.bottom - rect.top),
             ),
-            runtime_id: runtime_id(&element).unwrap_or_default(),
+            runtime_id: runtime_id(&element)?,
         })
     }
 
@@ -859,47 +862,54 @@ mod native {
         hwnd: isize,
         runtime_id_target: &[i32],
         automation_id: &str,
-    ) -> Result<(), String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
-        focus_element(&element, false)
+    ) -> Result<(), ProtocolError> {
+        focus_for_input(hwnd, runtime_id_target, automation_id, false)
     }
 
-    /// Focus and verify one live target; text delivery additionally requires an edit control.
+    /// Focus and verify the exact control, preserving mutating-call/read-back uncertainty.
     pub fn focus_for_input(
         hwnd: isize,
         runtime_id_target: &[i32],
         automation_id: &str,
         for_text: bool,
-    ) -> Result<(), String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+    ) -> Result<(), ProtocolError> {
+        let (_com, _uia, element) =
+            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
         focus_element(&element, for_text)
     }
 
-    fn focus_element(element: &IUIAutomationElement, for_text: bool) -> Result<(), String> {
-        ensure_actionable(element)?;
+    fn focus_element(element: &IUIAutomationElement, for_text: bool) -> Result<(), ProtocolError> {
+        ensure_actionable(element).map_err(before_delivery)?;
+        // SAFETY: all property calls use this thread's owned live COM interface.
         if for_text
             && unsafe { element.CurrentControlType() }
-                .map_err(|e| format!("CurrentControlType: {e}"))?
+                .map_err(|error| before_delivery(format!("CurrentControlType: {error}")))?
                 != UIA_EditControlTypeId
         {
-            return Err("Target is not a live editable control".to_owned());
+            return Err(before_delivery(
+                "Target is not a live editable control".to_owned(),
+            ));
         }
         if !unsafe { element.CurrentIsKeyboardFocusable() }
-            .map_err(|e| format!("CurrentIsKeyboardFocusable: {e}"))?
+            .map_err(|error| before_delivery(format!("CurrentIsKeyboardFocusable: {error}")))?
             .as_bool()
         {
-            return Err("Target does not accept keyboard focus".to_owned());
+            return Err(before_delivery(
+                "Target does not accept keyboard focus".to_owned(),
+            ));
         }
-        unsafe {
-            element.SetFocus().map_err(|e| format!("SetFocus: {e}"))?;
-        }
-        if !unsafe { element.CurrentHasKeyboardFocus() }
-            .map_err(|e| format!("CurrentHasKeyboardFocus: {e}"))?
-            .as_bool()
-        {
-            return Err("Target keyboard focus could not be verified".to_owned());
-        }
-        Ok(())
+        crate::guard::deliver_focus(
+            || {
+                // SAFETY: caller validated the exact live target before this mutation.
+                unsafe { element.SetFocus() }.map_err(|error| after_delivery("SetFocus", error))
+            },
+            || {
+                // SAFETY: same owned COM element; a read-back failure is uncertain.
+                unsafe { element.CurrentHasKeyboardFocus() }
+                    .map(|value| value.as_bool())
+                    .map_err(|error| after_delivery("SetFocus read-back", error))
+            },
+        )
     }
 
     pub fn scroll(
@@ -947,46 +957,31 @@ mod native {
         automation_id: &str,
         x: f64,
         y: f64,
-    ) -> Result<bool, String> {
-        let (_com, uia, target) = resolve(hwnd, runtime_id_target, automation_id)?;
+    ) -> Result<bool, ProtocolError> {
+        let (_com, uia, target) =
+            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
         let hit = unsafe {
             uia.ElementFromPoint(POINT {
                 x: x.round() as i32,
                 y: y.round() as i32,
             })
-            .map_err(|e| format!("ElementFromPoint: {e}"))?
+            .map_err(|e| before_delivery(format!("ElementFromPoint: {e}")))?
         };
-        let target_id = runtime_id(&target).unwrap_or_default();
-        let hit_id = runtime_id(&hit).unwrap_or_default();
-        if !target_id.is_empty() && target_id == hit_id {
-            return Ok(true);
-        }
+        let target_id = runtime_id(&target).map_err(before_delivery)?;
         let walker = unsafe {
             uia.ControlViewWalker()
-                .map_err(|e| format!("ControlViewWalker: {e}"))?
+                .map_err(|e| before_delivery(format!("ControlViewWalker: {e}")))?
         };
-        Ok(is_ancestor(&walker, &target_id, hit))
-    }
-
-    fn is_ancestor(
-        walker: &IUIAutomationTreeWalker,
-        ancestor_id: &[i32],
-        mut element: IUIAutomationElement,
-    ) -> bool {
-        if ancestor_id.is_empty() {
-            return false;
-        }
-        for _ in 0..64 {
-            let Some(parent) = (unsafe { walker.GetParentElement(&element).ok() }) else {
-                return false;
-            };
-            let parent_id = runtime_id(&parent).unwrap_or_default();
-            if parent_id == ancestor_id {
-                return true;
-            }
-            element = parent;
-        }
-        false
+        crate::guard::hit_ancestry(
+            &target_id,
+            hit,
+            |element| runtime_id(element).map_err(before_delivery),
+            |element| {
+                // SAFETY: owned walker/element; optional_element distinguishes null end from failure.
+                optional_element(unsafe { walker.GetParentElement(element) })
+                    .map_err(before_delivery)
+            },
+        )
     }
 
     fn resolve(
@@ -1005,7 +1000,7 @@ mod native {
                 .map_err(|e| format!("ElementFromHandle: {e}"))?
         };
         let _discovery = DiscoveryLease::begin(&uia, &root)?;
-        if runtime_id(&root).as_deref() == Some(runtime_id_target) {
+        if runtime_id(&root)?.as_slice() == runtime_id_target {
             ensure_observed_automation_id(&root, automation_id)?;
             return Ok((com, uia, root));
         }
@@ -1013,7 +1008,7 @@ mod native {
         // for the observed RuntimeId, even when only one matching node exists.
         let (found, _) = bounded_elements(&uia, &root)?;
         for element in found {
-            if runtime_id(&element).as_deref() == Some(runtime_id_target) {
+            if runtime_id(&element)?.as_slice() == runtime_id_target {
                 ensure_observed_automation_id(&element, automation_id)?;
                 return Ok((com, uia, element));
             }
@@ -1177,12 +1172,22 @@ pub fn focus_for_input(
     _runtime_id: &[i32],
     _automation_id: &str,
     _for_text: bool,
-) -> Result<(), String> {
-    Err("UIA is only supported on Windows".to_owned())
+) -> Result<(), crate::ProtocolError> {
+    Err(crate::ProtocolError::new(
+        "UIA is only supported on Windows",
+        crate::ErrorCode::UnsupportedPlatform,
+    ))
 }
 #[cfg(not(windows))]
-pub fn focus(_hwnd: isize, _runtime_id: &[i32], _automation_id: &str) -> Result<(), String> {
-    Err("UIA is only supported on Windows".to_owned())
+pub fn focus(
+    _hwnd: isize,
+    _runtime_id: &[i32],
+    _automation_id: &str,
+) -> Result<(), crate::ProtocolError> {
+    Err(crate::ProtocolError::new(
+        "UIA is only supported on Windows",
+        crate::ErrorCode::UnsupportedPlatform,
+    ))
 }
 #[cfg(not(windows))]
 pub fn scroll(
@@ -1204,8 +1209,11 @@ pub fn occlusion_ok(
     _automation_id: &str,
     _x: f64,
     _y: f64,
-) -> Result<bool, String> {
-    Err("UIA is only supported on Windows".to_owned())
+) -> Result<bool, crate::ProtocolError> {
+    Err(crate::ProtocolError::new(
+        "UIA is only supported on Windows",
+        crate::ErrorCode::UnsupportedPlatform,
+    ))
 }
 
 // ---------------------------------------------------------------------------

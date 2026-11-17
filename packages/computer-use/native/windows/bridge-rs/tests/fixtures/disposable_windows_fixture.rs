@@ -380,6 +380,23 @@ mod native {
             click["performed"]["delivery"], "hid",
             "non-invokable control must use the production fallback"
         );
+        let mut cursor_before = windows::Win32::Foundation::POINT::default();
+        // SAFETY: initialized writable POINT, read-only desktop observation.
+        unsafe { GetCursorPos(&mut cursor_before) }.expect("cursor before refused drag");
+        let foreground_before = unsafe { GetForegroundWindow() };
+        let mut attack = act_args.clone();
+        attack["action"] = json!("drag");
+        attack["params"] = json!({"path":[{"x":2.0,"y":2.0}]});
+        attack["resolvedPath"] = json!([{"x":0,"y":0},{"x":100000,"y":100000}]);
+        attack["resolvedPoint"] = json!({"x":100000,"y":100000});
+        assert_eq!(helper.request("act", attack)["ok"], false);
+        let mut cursor_after = windows::Win32::Foundation::POINT::default();
+        unsafe { GetCursorPos(&mut cursor_after) }.expect("cursor after refused drag");
+        assert_eq!(
+            (cursor_before.x, cursor_before.y),
+            (cursor_after.x, cursor_after.y)
+        );
+        assert_eq!(unsafe { GetForegroundWindow() }, foreground_before);
         let fixture_input = PhysicalLease::acquire().expect("resume owned fixture capture tests");
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         while CLICKS.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
@@ -480,6 +497,10 @@ mod native {
             snapshot(fixture.hwnd, &identity, automation_id).is_err(),
             "removed UIA identity cannot resolve inside the retained window"
         );
+        // A stale ref must not even restore/foreground its surviving minimized owner.
+        let _ = unsafe { ShowWindow(HWND(fixture.hwnd as *mut _), SW_MINIMIZE) };
+        assert!(unsafe { IsIconic(HWND(fixture.hwnd as *mut _)) }.as_bool());
+        let foreground_before = unsafe { GetForegroundWindow() };
         drop(fixture_input);
         let stale = helper.request("act", act_args);
         assert_eq!(
@@ -487,6 +508,15 @@ mod native {
             "actual helper must refuse its removed target"
         );
         assert_eq!(stale["error"]["code"], "stale_ref");
+        assert!(
+            unsafe { IsIconic(HWND(fixture.hwnd as *mut _)) }.as_bool(),
+            "stale refusal must not restore"
+        );
+        assert_eq!(
+            unsafe { GetForegroundWindow() },
+            foreground_before,
+            "stale refusal must not foreground"
+        );
         assert_eq!(
             CLICKS.load(Ordering::SeqCst),
             1,

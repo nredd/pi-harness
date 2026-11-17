@@ -511,11 +511,20 @@ pub fn focus_window(
     }
 }
 
-/// Bring an HWND to the foreground and confirm ownership before physical input.
-/// Windows can reject SetForegroundWindow, so success is based on observation,
-/// not the API's advisory return value.
+/// Read-only foreground admission. Only explicit focus/capture may raise/restore.
 pub fn ensure_foreground(hwnd: isize) -> Result<(), ProtocolError> {
-    foreground_impl(hwnd, false)
+    crate::desktop::validated_bounds(hwnd, None)?;
+    #[cfg(windows)]
+    {
+        // SAFETY: borrowed validated HWND; this only observes current focus.
+        if unsafe { GetForegroundWindow() } == HWND(hwnd as *mut _) {
+            return Ok(());
+        }
+    }
+    Err(ProtocolError::new(
+        "Explicit focus and fresh observation required",
+        ErrorCode::ForegroundRequired,
+    ))
 }
 
 /// Explicit focus/capture transition, including one paired Alt hint if needed.
@@ -556,8 +565,8 @@ fn foreground_impl(hwnd: isize, allow_input_hint: bool) -> Result<(), ProtocolEr
                 crate::input::foreground_hint()?;
                 unsafe { windows::Win32::UI::WindowsAndMessaging::BringWindowToTop(target) }
                     .map_err(|_| {
-                        ProtocolError::new(
-                            "Windows refused to raise the target",
+                        ProtocolError::uncertain(
+                            "Windows refused to raise the target after a focus attempt",
                             ErrorCode::TargetNotFound,
                         )
                     })?;
@@ -573,8 +582,8 @@ fn foreground_impl(hwnd: isize, allow_input_hint: bool) -> Result<(), ProtocolEr
         if unsafe { GetForegroundWindow() == target } {
             Ok(())
         } else {
-            Err(ProtocolError::new(
-                "Windows refused to foreground the target; physical input was not sent",
+            Err(ProtocolError::uncertain(
+                "Windows foreground transition could not be verified",
                 ErrorCode::TargetNotFound,
             ))
         }
@@ -620,6 +629,15 @@ pub fn ensure_point_owned(hwnd: isize, point: &Value) -> Result<(), ProtocolErro
     } else {
         Err(refused())
     }
+}
+
+/// Non-Windows builds cannot admit physical ownership.
+#[cfg(not(windows))]
+pub fn ensure_point_owned(_hwnd: isize, _point: &Value) -> Result<(), ProtocolError> {
+    Err(ProtocolError::new(
+        "Physical ownership requires Windows",
+        ErrorCode::UnsupportedPlatform,
+    ))
 }
 
 // ---------------------------------------------------------------------------
