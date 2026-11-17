@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { keyHint, keyText, type Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import {
@@ -144,9 +144,10 @@ test("active plan status reports the frozen tool summary", () => {
 
 test("message and widget components remain renderable after invalidation", () => {
 	const theme = { fg: (_role: string, text: string) => text, bold: (text: string) => text } as Theme;
+	const options = { expanded: false, outputPad: 0, keyText, keyHint };
 	const component = renderPlanMessage(
 		{ content: "", details: { version: 1, title: "Saved", plan: "# Task" } } as Parameters<typeof renderPlanMessage>[0],
-		{ expanded: false, outputPad: 0 },
+		options,
 		theme,
 	);
 	const before = component.render(80);

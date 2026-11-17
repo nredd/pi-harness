@@ -3,7 +3,6 @@ import { WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { expect, it } from "vitest";
 import type { QuotaObservation } from "../../src/stats/harness/common.ts";
 import { importStats } from "../../src/stats/snapshot.ts";
-import { RESIZES, TerminalFixture } from "../fixtures/session.ts";
 import {
 	AXIS_COLUMN,
 	chart,
@@ -19,6 +18,7 @@ import {
 	selectTotal,
 	start,
 } from "../fixtures/stats.ts";
+import { RESIZES, TerminalFixture } from "../fixtures/terminal.ts";
 
 /** Own teardown inside the test body: runner timeouts do not cancel an async callback. */
 function statsTest<Args extends unknown[]>(

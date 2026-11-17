@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { getApiProvider, getApiProviders } from "@earendil-works/pi-ai/compat";
-import { type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createReadTool, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, expect, test, vi } from "vitest";
 import {
@@ -240,6 +240,39 @@ test("models, tools, active names, cwd, session and start event options reach th
 		await allowed.session.bindExtensions({ mode: "print" });
 		expect(allowed.session.getActiveToolNames()).toEqual(["echo"]);
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("typed built-in tools execute real reads and report missing files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "harness-builtin-"));
+	let harness: Harness | undefined;
+	try {
+		writeFileSync(join(root, "input.txt"), "fixture content\n");
+		harness = await start({ cwd: root, tools: [createReadTool(root)] });
+		harness.setResponses([
+			fauxAssistantMessage([{ type: "toolCall", id: "read-ok", name: "read", arguments: { path: "input.txt" } }], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("read complete"),
+		]);
+		await harness.session.prompt("read the fixture");
+		expect(getMessageText(getToolResult(harness, "read"))).toContain("fixture content");
+		expect(getToolResult(harness, "read").isError).toBe(false);
+		harness.setResponses([
+			fauxAssistantMessage(
+				[{ type: "toolCall", id: "read-missing", name: "read", arguments: { path: "missing.txt" } }],
+				{
+					stopReason: "toolUse",
+				},
+			),
+			fauxAssistantMessage("missing file reported"),
+		]);
+		await harness.session.prompt("read a missing file");
+		expect(getMessageText(getToolResult(harness, "read"))).toContain("ENOENT");
+		expect(getToolResult(harness, "read").isError).toBe(true);
+	} finally {
+		harness?.cleanup();
 		rmSync(root, { recursive: true, force: true });
 	}
 });

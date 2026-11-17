@@ -216,7 +216,7 @@ def test_parse_lcov_reads_a_coveragepy_module_without_functions_as_zero_function
     Parameters:
         None.
     Returns:
-        None: The real `benchmarks/comparison` `__main__.py` record parses with zero functions under
+        None: The real `tests/benchmarks/comparison` `__main__.py` record parses with zero functions under
             coverage.py, and stays a truncated report for every other producer.
     Raises:
         AssertionError: The record is rejected for coverage.py or accepted for another producer.

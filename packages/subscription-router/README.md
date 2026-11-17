@@ -28,7 +28,7 @@ and Bun **alongside**, not instead of, the complete package gate on an isolated 
 The released graph retains its full root gate, including `@nredd/pi-stack-tests` and official
 release-artifact identity contracts. Candidate acceptance additionally runs the two new real-child
 stack scenarios in its fixed inventory. The real-child proofs live in the existing in-process stack suite,
-`integration/inprocess/router-{failover,ownership}.test.ts`, alongside its disk-loaded router fixtures.
+`tests/inprocess/router-{failover,ownership}.test.ts`, alongside its disk-loaded router fixtures.
 It deliberately fails on the current `v1.3.0-nredd.11` pin; no test is conditionally skipped or
 changed to pass on that pin. This source change is release-blocked until a reviewed core release
 contains [the cancellation fix](https://github.com/nredd/pi/pull/112) and coordinated dependency
@@ -447,7 +447,7 @@ family caps, confirmed recovery and shared-runtime isolation.
 
 `createSubscriptionRouter({ config, usage, tracker?, now?, codexResets? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
 
-`integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The optional-router absence case is `packages/subagents/tests/session-scenarios.test.ts` / `absent admission RPC admits physical child`. No installed Pi, owner checkout or `PI_SUBAGENTS_DIR` is needed.
+`tests/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The optional-router absence case is `packages/subagents/tests/session-scenarios.test.ts` / `absent admission RPC admits physical child`. No installed Pi, owner checkout or `PI_SUBAGENTS_DIR` is needed.
 
 ## Routing policies v1
 

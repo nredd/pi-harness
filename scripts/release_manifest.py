@@ -371,7 +371,7 @@ def third_party_identity(repo_root: Path) -> ThirdPartyIdentity:
     """
     files: list[LockedFile] = []
     lockfile_version: int | None = None
-    for relative in (Path("package-lock.json"), Path("integration/uv.lock")):
+    for relative in (Path("package-lock.json"), Path("tests/integration/uv.lock"), Path("release/uv.lock")):
         path = repo_root / relative
         if path.is_file():
             files.append(LockedFile(path=relative.as_posix(), sha256=sha256_file(path)))

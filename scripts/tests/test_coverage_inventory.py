@@ -428,7 +428,7 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
         AssertionError: Untracked source evades the repository-wide scan.
     """
     cfg = scope_fixture(tmp_path)
-    paths = {"scripts/unowned.py", "integration/providers/unowned.ts"}
+    paths = {"scripts/unowned.py", "tests/integration/providers/unowned.ts"}
     for path in paths:
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -457,7 +457,7 @@ def write_script(root: Path, relative: str) -> None:
     "stem",
     [
         "scripts/unclassified",
-        "integration/providers/unclassified",
+        "tests/integration/providers/unclassified",
         "packages/example/unclassified",
         "scripts/vitest.config",
     ],
