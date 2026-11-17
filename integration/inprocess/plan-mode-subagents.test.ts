@@ -6,7 +6,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
 import planMode from "../../packages/plan-mode/src/plan-mode.ts";
@@ -19,6 +18,8 @@ import {
 } from "../../packages/subagents/src/plan-mode-children.ts";
 import type { AgentRecord } from "../../packages/subagents/src/types.ts";
 import { answer, ScenarioSession, spawn } from "../../packages/subagents/tests/fixtures/scenario-session.ts";
+
+type Harness = Awaited<ReturnType<ScenarioSession["start"]>>;
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());

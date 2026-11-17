@@ -2305,7 +2305,7 @@ The full workspace check builds the runtime and runs Biome, strict TypeScript an
 suite on Node and Bun. `test:e2e` defaults to scripted faux providers;
 `PI_E2E_LIVE=1 npm run test:e2e` uses the operator's login (optional `PI_PROVIDER` /
 `PI_MODEL`), not an isolated gate. Benchmarks are opt-in and separate from ordinary performance
-tests, which assert operation counts. The benchmark entry points and sampling behavior remain unchanged.
+tests, which assert operation counts. The benchmark entry points and sampling behavior remain unchanged. `ScenarioSession` uses `@nredd/pi-test-lib/harness`; only an explicit `terminal: true` loads `tests/fixtures/scenario-terminal.ts` and the fork's interactive host. The fixed stock Pi `1.5.2` headless scope is `tests/{scenario-session-headless,session-scenarios,steer-resume-scenarios,stop-subagent-scenarios}.test.ts` (29 cases on Node and Bun), including a native subprocess that observes the import boundary, persists a real physical child session and removes its temporary roots. Injected eager testing imports and a terminal request are negative controls. This is not full upstream compatibility: requester-bound routing and stale-context recovery (`tests/stale-ctx-*.test.ts`), terminal/workflow rendering, credential-command retries, detached-session reload, fatal startup and injected-home discovery remain fork contracts, with their existing assertions retained in the full fork suite. Stock tests do not manufacture `ctx.session`, resource-loader `homeDir` or `ExtensionStartupError`.
 
 Read affected modules completely and check installed SDK types before changing APIs. Keep changes
 small, avoid unnecessary `any` and abstractions, and follow root Biome/type rules. Use

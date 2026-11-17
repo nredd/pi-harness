@@ -12,20 +12,18 @@ import {
 	unregisterApiProviders,
 } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import {
-	createHarness,
-	fauxAssistantMessage,
-	type Harness,
-	type HarnessOptions,
-} from "@earendil-works/pi-coding-agent/testing";
-import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { text } from "@nredd/pi-test-lib/faux";
+import { createHarness, fauxAssistantMessage, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
 import { createSubagentsExtension } from "../../src/index.ts";
 import type { AgentRecord } from "../../src/types.ts";
+import type { InteractiveHarness } from "./scenario-terminal.ts";
 
-export { fauxAssistantMessage as answer } from "@earendil-works/pi-coding-agent/testing";
+export { fauxAssistantMessage as answer } from "@nredd/pi-test-lib/harness";
+
+/** Shared observations only; the terminal host owns its fork-specific credential store. */
+type ScenarioHarness = Omit<Harness, "credentials">;
 
 /** Default child spawn; callers override only the scenario's distinguishing arguments. */
 export function spawn(description: string, extra: Record<string, unknown> = {}) {
@@ -43,7 +41,7 @@ export function spawn(description: string, extra: Record<string, unknown> = {}) 
 }
 
 /** Completion notices as actually delivered to the parent transcript. */
-export function notices(h: Harness) {
+export function notices(h: ScenarioHarness) {
 	return h.session.messages.filter((m) => m.role === "custom" && m.customType === "subagent-notification").map(text);
 }
 
@@ -57,7 +55,7 @@ export class ScenarioSession {
 	readonly admission = deferred();
 	private readonly previousCwd = process.cwd();
 	private readonly previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	private h?: Harness;
+	private h?: ScenarioHarness;
 	host?: InteractiveHarness;
 	pi?: ExtensionAPI;
 	private releases: (() => void)[] = [];
@@ -204,6 +202,8 @@ export class ScenarioSession {
 			...options.harness,
 		};
 		if (options.terminal) {
+			// A headless import never evaluates the fork's InteractiveMode or terminal testing exports.
+			const { createInteractiveHarness } = await import("./scenario-terminal.ts");
 			this.host = await createInteractiveHarness({ ...config, columns: 160, rows: 40 });
 			this.h = this.host.harness;
 		} else {
@@ -215,7 +215,7 @@ export class ScenarioSession {
 	}
 
 	/** Core reload clears global transports; restore owned doubles, never a live credential provider. */
-	restoreProviders(h: Harness) {
+	restoreProviders(h: ScenarioHarness) {
 		for (const transport of this.transports.values()) registerApiProvider(transport, this.root);
 		for (const p of this.providers) this.installProvider(h, p);
 	}
@@ -265,7 +265,7 @@ export class ScenarioSession {
 		}
 	}
 
-	private installProvider(h: Harness, p: FauxProviderRegistration) {
+	private installProvider(h: ScenarioHarness, p: FauxProviderRegistration) {
 		const model = p.getModel();
 		h.session.modelRuntime.registerProvider(model.provider, {
 			baseUrl: model.baseUrl,
