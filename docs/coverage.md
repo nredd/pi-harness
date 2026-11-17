@@ -118,7 +118,7 @@ tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child(
 tests now pin all three. Caps are references, not waivers: they never rise, and `target.branches` is 0.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
-zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's transitional `max_uncovered`
+zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
 percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
@@ -126,12 +126,17 @@ on WSL2 and the cell is explicitly **Linux-like, enforced**: its Ubuntu fan-in a
 against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwin` for the darwin ones (each from the plan's `coverage_os`). Native Windows coverage is not measured. WSL contract scenarios
 remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
-fail closed, including when the global target is enabled. `enforce_target: true` applies after every
-eligible pending inventory is measured, and holds every eligible primary signal to zero on every
-OS with no per-file or per-OS exception. That flip applies to primary signals;
-independent runtime signals retain their declared enforcement modes. Primary signals of eligible packages always remain
-`enforced`; the 100% goal is measured by PRIMARY signals, not the Bun compatibility subset.
-Eligible pending packages then fail, too; owner-excluded/report-only domains do not.
+fail closed, including when the global target is enabled. With `enforce_target: true`, the target
+overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
+use their explicit per-OS caps, not that target override; every currently declared Bun signal is
+`enforced` at zero uncovered lines/functions/branches/statements and measures its full owned inventory.
+`probes` and `import-audit` currently run Bun compatibility with coverage disabled, so neither has an
+independent Bun coverage signal yet (#320). Computer-use's Bun/native scope remains owned by #645.
+Primary signals of eligible packages remain `enforced`; pending eligible inventory also fails.
+Owner-excluded/report-only goals do not acquire the primary target override. Report-only means
+counter excess is informational, not that reporting is optional: every selected signal still needs
+complete, valid reports and per-OS references. Producer-side thresholds may independently fail a
+report-only signal, as `computer-use-async` does.
 
 ## Independent signals
 
@@ -368,7 +373,8 @@ still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` file
 implementation helper does not implicitly classify its regression test.
 
 `computer-use-async/primary` (#759) independently measures the whole
-`packages/computer-use/scripts/check-async.mjs`, not the 35-file runtime slice.
+`packages/computer-use/tests/fixtures/check-async.mjs`, not the runtime slice. Its exact inventory
+classification preserves measurement despite the conventional fixture-directory location.
 `npm run test:async --workspace @nredd/pi-computer-use` runs retained real-process
 `async.test.mjs` checks, real preload marker-write refusal in `async-observer.test.mjs`,
 and deterministic `async-safety.test.mjs` boundary tests with one worker, emitting `packages/computer-use/coverage/async/lcov.info`. The package's
@@ -377,27 +383,40 @@ Missing selected-host reports fail accounting, never become zero counters. Its
 verification-only goal/signal is report-only, while Vitest independently enforces
 100% lines/functions/branches/statements for this exact file. Runtime caps are unchanged.
 
-On darwin, the existing 14 async tests measured L/F/B/S misses of 4/0/13/7
-(101/17/55/108 total). Adding deterministic syscall, stream and timer cases measures
-0/0/0/0 over those same denominators. The tests assert completed-PID ownership,
-probe-only group cleanup, EPERM polling, TERM/KILL failure retention, no-shell argv,
-independent byte caps and primary/cleanup error identity. The sync-revert mutation
-that treats EPERM as quiescence must fail. Generated preload text is emitted by the
-measured helper, but its execution in Node subprocesses is *behavior evidence*, not
-separate instrumented preload coverage. The other nine computer-use verification
-helpers remain unmeasured under #697; no all-layer 100% claim follows from this slice.
+The async tests assert completed-PID ownership, probe-only group cleanup, EPERM polling,
+TERM/KILL failure retention, no-shell argv, independent byte caps and primary/cleanup error identity.
+The ordinary persistent-EPERM regression remains after retirement of the sync-revert mutation runner.
+Generated preload execution in Node subprocesses is *behavior evidence*, not separate instrumented
+preload coverage. Historical pre-move denominators do not establish current-path measurements.
 
-Shipped runtime code is NEVER a verification helper. In particular, computer-use's published
-`setup-helper.mjs`, `build-native.mjs` and `src/platform/macos/helper-path.mjs` remain owned,
-measurement-pending production source because computer-use has no standard coverage runner.
-Its non-shipped `check-*.mjs` assertion scripts (except measured `check-async.mjs`) and
-`pi-cubench-agent.mjs` benchmark harness have individual verification reasons. Runtime builder scripts
-and runnable workflow examples are explicitly pending source, not verification exemptions.
+Shipped runtime code is NEVER a verification helper. Computer-use's published `setup-helper.mjs`,
+`build-native.mjs` and `src/platform/macos/helper-path.mjs` are owned and measured by
+`computer-use-vitest`. The original gate inventory has explicit measured, replaced, retired or
+verification-only dispositions, not a blanket unmeasured-helper exception (#697):
+
+- The root `scripts/check-commit-messages.mjs` is measured by `import-audit`; the duplicate package
+  asset checker was replaced by measured `scripts/package_contracts.py`.
+- Sync-ledger/upstream-sync/mutation runners and inherited website/doc generators and checkers were
+  retired, not excluded or replaced with fabricated coverage. The unused cubench manual driver was deleted.
+- The opt-in `packages/computer-use/tests/fixtures/linux-live.mjs` launcher remains unmeasured
+  verification tooling in conventional test scope. That disposition is not proof of measured cleanup/refusal paths.
+- Subagents' real build wrapper and the shared runtime builder remain measured, as do runnable workflow
+  examples. The obsolete committed-dist checker was deleted; deterministic two-build equality and
+  build/output refusal tests retain the applicable guarantee without restoring committed `dist/`.
+- The exact `verification_helpers` list contains the non-shipped router contract test, the core-pin
+  lookup helper (selection/cache/digest behavior lives in measured `core-artifacts.ts`), and the shared
+  Vitest setup entry (Vitest excludes its own `setupFiles`; `home-guard.ts` is measured).
+
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
-`src/stats/cli.ts` remains owned and measured.
+`src/stats/cli.ts` remains owned and measured. None of these dispositions establishes all-layer 100% coverage.
+Swift's LLVM report does not produce branches or statements; Rust's native LLVM report omits branch
+counts and has no separate statement counter. Regions are retained as regions, never fabricated
+branches or statements. Explicit unsupported OS/host cells are NOT RUN, not zero misses; selected
+native reports remain mandatory. Native attribution and thin live-adapter exceptions stay with #645
+and the native coverage owners.
 
-`computer-use` retains the complete native/documentation inventory; Windows Rust and the documentation
-site remain **not measured, tracked**. Native Ubuntu Linux Rust is measured separately by the
+`computer-use` retains the complete native inventory; Windows Rust remains **not measured, tracked**.
+The inherited documentation site and its generators were retired (#870), not left as unmeasured source. Native Ubuntu Linux Rust is measured separately by the
 report-only/excluded `computer-use-linux-native` signal (#758); regions are not branches or statements,
 and inline/source test hits do not establish runtime coverage. The separate `computer-use-swift` report-only/excluded
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
@@ -407,9 +426,9 @@ Regions are not branches or statements; no `BRDA` is fabricated. Missing selecte
 fail closed; Linux/WSL2 explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
 or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
-policy entry (same root) measures the 36 executable JS/TS runtime/producer modules with Istanbul: `src`,
-`extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs`, `swift-coverage.mjs` and the documentation
-generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
+policy entry (same root) measures its executable JS/TS runtime/producer inventory with Istanbul,
+including `src`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and `swift-coverage.mjs`,
+with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
@@ -421,8 +440,7 @@ The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
 their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
-the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
-that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
+the global flip. The optional `scripts/rust-coverage.mjs` tooling is
 measured by the enforced ratchet signal above. The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
 `dev-tools` emits primary Istanbul after #155/#195. Since #320 its Bun report comes from the same
