@@ -140,6 +140,25 @@ report-only signal, as `computer-use-async` does.
 
 ## Independent signals
 
+`scripts/coverage_report.py` renders existing fan-in `coverage/summary.json` files or downloaded
+ZIPs locally, without collecting coverage or publishing anything. Example:
+`python scripts/coverage_report.py --artifacts artifacts --plan plan.json --repository OWNER/REPO --head-sha SHA --tested-sha SHA --run-id ID --attempt 1 --output report.md --badge-dir badges`.
+The trusted `plan.json` maps `ubuntu-24.04`, `macos-14` and `wsl2` to `{state, signals}`;
+`state` is `available`, `unavailable` (including expired), `pending` or `NOT RUN`. Each signal
+maps its `package/signal` name to `{enforcement, reason, semantics, state, source_root}`;
+signal `state` is `planned` or `NOT RUN`, `source_root` is the repository-relative package root,
+and `semantics` identifies the producer/version/counter meaning. The caller supplies the complete
+plan and authenticates repository, head/tested SHA, run/attempt and artifact freshness before rendering.
+Missing planned enforced signals stay in the headline denominator: `Ubuntu enforced signals: N/M
+zero uncovered (measured counters only)`. Missing/error inputs mark the report incomplete;
+unavailable/pending/NOT RUN cells discard stale numbers. Report-only signals stay outside that headline.
+L/F/B/S cells show covered/total (uncovered), `not measured` for unsupported counters and `N/A` for
+zero denominators. No cross-signal percentage is computed. Existing deltas are `vs policy reference`;
+optional `--baseline-artifacts` plus `--baseline-plan` enables `vs measured main` only for matching
+host, signal, producer semantics and supported counters, with added/removed/incompatible labels.
+Per-file links use the tested SHA; deterministic whole-row truncation caps Markdown at 60,000
+characters and reports omitted counts. SVGs are text-only, per OS, and not merge evidence.
+
 `check-probes` and `check-import-audit` retain these independent full-suite signals (#972):
 
 | Signal | Producer | Reports, relative to the repository |
