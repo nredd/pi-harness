@@ -37,7 +37,7 @@ def repository(tmp_path: Path) -> Path:
     Returns:
         Path: Minimal valid repository.
     """
-    subprocess.check_output([GIT, "init", "-q", str(tmp_path)])
+    subprocess.check_output([GIT, "init", "-q", str(tmp_path)], text=True, stderr=subprocess.STDOUT)
     (tmp_path / "script.sh").write_text("#!/bin/sh\nprintf '%s\\n' hello\n")
     (tmp_path / "script.ps1").write_text("Write-Output 'hello'\n")
     workflow = tmp_path / ".github/workflows/valid.yml"
@@ -45,7 +45,7 @@ def repository(tmp_path: Path) -> Path:
     workflow.write_text(
         "on: push\njobs:\n  test:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo hello\n"
     )
-    subprocess.check_output([GIT, "-C", str(tmp_path), "add", "."])
+    subprocess.check_output([GIT, "-C", str(tmp_path), "add", "."], text=True, stderr=subprocess.STDOUT)
     return tmp_path
 
 
@@ -124,7 +124,7 @@ def test_composite_shells(repository: Path, shell: str) -> None:
         "runs:\n  using: composite\n  steps:\n    - uses: example/action@main\n"
         f"    - shell: '{shell}'\n      run: '{'Write-Output hello' if shell == 'pwsh' else 'echo hello'}'\n"
     )
-    subprocess.check_output([GIT, "-C", str(repository), "add", "."])
+    subprocess.check_output([GIT, "-C", str(repository), "add", "."], text=True, stderr=subprocess.STDOUT)
     if shell == "unsupported":
         with pytest.raises(ValueError, match="Unsupported composite shell"):
             native_lint.lint(repository, PREFIX)
@@ -142,7 +142,9 @@ def test_empty_inventory_refusal(repository: Path, missing: str) -> None:
     Returns:
         None.
     """
-    subprocess.check_output([GIT, "-C", str(repository), "rm", "-f", missing])
+    subprocess.check_output(
+        [GIT, "-C", str(repository), "rm", "-f", missing], text=True, stderr=subprocess.STDOUT
+    )
     with pytest.raises(ValueError, match="Empty"):
         native_lint.lint(repository, PREFIX)
 
