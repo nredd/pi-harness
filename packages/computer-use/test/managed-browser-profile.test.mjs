@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -24,16 +24,27 @@ const gate = vi.hoisted(() => ({
 	statTarget: "",
 	statCalls: 0,
 	statFailureAt: 0,
+	afterMkdir: undefined,
+	afterLstatSync: undefined,
+	afterStat: undefined,
+	foreignAncestor: "",
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal();
 	return {
 		...actual,
+		mkdir: async (...args) => {
+			const result = await actual.mkdir(...args);
+			gate.afterMkdir?.(String(args[0]));
+			return result;
+		},
 		stat: async (...args) => {
 			if (String(args[0]) === gate.statTarget && ++gate.statCalls === gate.statFailureAt) {
 				throw Object.assign(new Error("synthetic metadata permission failure"), { code: "EACCES" });
 			}
-			return await actual.stat(...args);
+			const info = await actual.stat(...args);
+			gate.afterStat?.(String(args[0]));
+			return info;
 		},
 		rm: async (...args) => {
 			if (String(args[0]) !== gate.target && !gate.spawnParent) return await actual.rm(...args);
@@ -54,6 +65,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 				gate.outcomes.push({ path: String(args[0]), exists: fs.existsSync(args[0]), error });
 				throw error;
 			}
+		},
+	};
+});
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal();
+	return {
+		...actual,
+		lstatSync: (...args) => {
+			const info = actual.lstatSync(...args);
+			gate.afterLstatSync?.(String(args[0]));
+			// Non-root runners cannot chown fixtures to another UID; only this metadata owner field is simulated.
+			if (String(args[0]) === gate.foreignAncestor) return Object.assign(info, { uid: process.getuid() + 1 });
+			return info;
 		},
 	};
 });
@@ -822,6 +846,8 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 // Only disposable homes and fake browser processes are used for persistent-profile acceptance.
 describe("persistent profile opt-in", () => {
 	const executable = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
+	// Use a canonical sticky system temp root, not an unchecked volume or caller-selected TMPDIR ancestor.
+	const secureTemp = process.platform === "win32" ? os.tmpdir() : fs.realpathSync("/tmp");
 	let root;
 	let profile;
 	let saved;
@@ -845,9 +871,13 @@ describe("persistent profile opt-in", () => {
 	}
 
 	beforeEach(() => {
+		gate.afterMkdir = undefined;
+		gate.afterLstatSync = undefined;
+		gate.afterStat = undefined;
+		gate.foreignAncestor = "";
 		saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
 		for (const key of keys) delete process.env[key];
-		root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-persistent-")));
+		root = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-persistent-")));
 		home = path.join(root, "home");
 		fs.mkdirSync(home);
 		vi.spyOn(os, "homedir").mockReturnValue(home);
@@ -904,6 +934,160 @@ describe("persistent profile opt-in", () => {
 				await launch(order !== "persistent-first");
 			},
 		);
+
+		test.each([
+			["port", "symlink"],
+			["shutdown", "symlink"],
+			["lease", "symlink"],
+			["port", "directory"],
+			["shutdown", "directory"],
+			["lease", "directory"],
+		])("refuses profile replacement at %s allocation (%s) without writing through it", async (stage, kind) => {
+			if (stage === "shutdown") {
+				configure(null);
+				await testing.performLaunchBrowser({});
+				fs.unlinkSync(process.env.FAKE_BROWSER_LOG);
+				configure();
+			}
+			const replacement = path.join(home, "replacement");
+			fs.mkdirSync(replacement, { mode: kind === "symlink" ? 0o777 : 0o700 });
+			fs.chmodSync(replacement, kind === "symlink" ? 0o777 : 0o700);
+			fs.writeFileSync(path.join(replacement, "sentinel"), "unchanged");
+			const swap = () => {
+				fs.renameSync(profile, `${profile}-original`);
+				if (kind === "symlink") fs.symlinkSync(replacement, profile);
+				else fs.renameSync(replacement, profile);
+			};
+			if (stage === "port") {
+				const createServer = net.createServer.bind(net);
+				vi.spyOn(net, "createServer").mockImplementationOnce((...args) => {
+					swap();
+					return createServer(...args);
+				});
+			} else if (stage === "shutdown") {
+				const kill = ChildProcess.prototype.kill;
+				vi.spyOn(ChildProcess.prototype, "kill").mockImplementationOnce(function (...args) {
+					swap();
+					return kill.apply(this, args);
+				});
+			} else {
+				gate.afterMkdir = (directory) => {
+					if (directory !== path.join(profile, ".pi-computer-use.lock")) return;
+					gate.afterMkdir = undefined;
+					swap();
+				};
+			}
+			await assert.rejects(testing.performLaunchBrowser({}), /symlink|changed/);
+			const actual = kind === "symlink" ? replacement : profile;
+			assert.deepEqual(fs.readdirSync(actual), ["sentinel"]);
+			assert.equal(fs.readFileSync(path.join(actual, "sentinel"), "utf8"), "unchanged");
+			assert.equal(fs.statSync(actual).mode & 0o777, kind === "symlink" ? 0o777 : 0o700);
+			assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+		});
+
+		test.each(["checkout", "chromium-lock", "lease-symlink", "lease-mode", "profile-mode", "ancestor-mode"])(
+			"rechecks %s after lease creation without starting the browser or repairing permissions",
+			async (change) => {
+				const lease = path.join(profile, ".pi-computer-use.lock");
+				const victim = path.join(home, "lease-victim");
+				fs.mkdirSync(victim, { mode: 0o700 });
+				fs.writeFileSync(path.join(victim, "sentinel"), "unchanged");
+				gate.afterMkdir = (directory) => {
+					if (directory !== lease) return;
+					gate.afterMkdir = undefined;
+					if (change === "checkout") fs.writeFileSync(path.join(profile, ".git"), "synthetic worktree");
+					else if (change === "chromium-lock")
+						fs.symlinkSync("synthetic-host-123", path.join(profile, "SingletonLock"));
+					else if (change === "lease-symlink") {
+						fs.rmdirSync(lease);
+						fs.symlinkSync(victim, lease);
+					} else if (change === "lease-mode") fs.chmodSync(lease, 0o755);
+					else if (change === "profile-mode") fs.chmodSync(profile, 0o755);
+					else fs.chmodSync(home, 0o775);
+				};
+				await assert.rejects(
+					testing.performLaunchBrowser({}),
+					/Git checkout|Chromium lock|lease changed|0700|ancestor/,
+				);
+				assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+				assert(!fs.existsSync(path.join(profile, "Local State")));
+				assert.deepEqual(fs.readdirSync(victim), ["sentinel"]);
+				assert.equal(fs.readFileSync(path.join(victim, "sentinel"), "utf8"), "unchanged");
+				if (change === "chromium-lock") assert(fs.lstatSync(path.join(profile, "SingletonLock")).isSymbolicLink());
+				if (change === "lease-symlink") assert(fs.lstatSync(lease).isSymbolicLink());
+				if (change === "lease-mode") assert.equal(fs.statSync(lease).mode & 0o777, 0o755);
+				if (change === "profile-mode") assert.equal(fs.statSync(profile).mode & 0o777, 0o755);
+				if (change === "ancestor-mode") assert.equal(fs.statSync(home).mode & 0o777, 0o775);
+			},
+		);
+
+		test.each(["directory", "symlink"])("detects a %s swap during the post-lease refusal policy", async (kind) => {
+			const replacement = path.join(home, "late-replacement");
+			fs.mkdirSync(replacement, { mode: 0o700 });
+			gate.afterStat = (directory) => {
+				if (directory !== home || !fs.existsSync(path.join(profile, ".pi-computer-use.lock"))) return;
+				gate.afterStat = undefined;
+				fs.renameSync(profile, `${profile}-original`);
+				if (kind === "symlink") fs.symlinkSync(replacement, profile);
+				else fs.renameSync(replacement, profile);
+			};
+			await assert.rejects(testing.performLaunchBrowser({}), /changed|symlink/);
+			assert.deepEqual(fs.readdirSync(kind === "symlink" ? replacement : profile), []);
+			assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+			assert(fs.existsSync(path.join(`${profile}-original`, ".pi-computer-use.lock")));
+		});
+
+		test("does not use or release a replacement lease with otherwise valid metadata", async () => {
+			const lease = path.join(profile, ".pi-computer-use.lock");
+			gate.afterLstatSync = (directory) => {
+				if (directory !== lease) return;
+				gate.afterLstatSync = undefined;
+				fs.renameSync(lease, `${lease}-original`);
+				fs.mkdirSync(lease, { mode: 0o700 });
+			};
+			await assert.rejects(testing.performLaunchBrowser({}), /lease changed/);
+			assert(fs.existsSync(`${lease}-original`));
+			assert(fs.existsSync(lease));
+			assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+		});
+
+		test("refuses foreign lease ownership metadata without removing it", async () => {
+			const lease = path.join(profile, ".pi-computer-use.lock");
+			gate.foreignAncestor = lease;
+			await assert.rejects(testing.performLaunchBrowser({}), /lease changed/);
+			assert(fs.existsSync(lease));
+			assert.equal(fs.statSync(lease).uid, process.getuid());
+			assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+		});
+
+		test("refuses changed profile ownership metadata without touching the fixture", async () => {
+			gate.foreignAncestor = profile;
+			await assert.rejects(testing.performLaunchBrowser({}), /0700/);
+			assert.equal(fs.statSync(profile).uid, process.getuid());
+			assert.deepEqual(fs.readdirSync(profile), []);
+		});
+
+		test.each([0o775, 0o777])("refuses writable non-sticky ancestors (mode %s) without chmod", async (mode) => {
+			fs.chmodSync(home, mode);
+			await assert.rejects(testing.performLaunchBrowser({}), /ancestor/);
+			assert.equal(fs.statSync(home).mode & 0o7777, mode);
+			assert.deepEqual(fs.readdirSync(profile), []);
+			assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+		});
+
+		test("refuses foreign-owned ancestry metadata without touching the fixture", async () => {
+			gate.foreignAncestor = home;
+			await assert.rejects(testing.performLaunchBrowser({}), /ancestor/);
+			assert.equal(fs.statSync(home).uid, process.getuid());
+			assert.deepEqual(fs.readdirSync(profile), []);
+			assert(!fs.existsSync(process.env.FAKE_BROWSER_LOG));
+		});
+
+		test("accepts a current-user sticky writable ancestor without chmod", async () => {
+			fs.chmodSync(home, 0o1777);
+			assert.equal(await testing.persistentBrowserProfile(profile), profile);
+			assert.equal(fs.statSync(home).mode & 0o7777, 0o1777);
+		});
 
 		test("another Pi process cannot share a live persistent profile", async () => {
 			await testing.performLaunchBrowser({});
@@ -1095,7 +1279,7 @@ describe("persistent profile opt-in", () => {
 		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME", "HOME"])(
 			"preserves %s alias-parent ancestry",
 			async (variable) => {
-				const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-alias-parent-")));
+				const external = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-alias-parent-")));
 				const originalParent = path.join(root, "alias-parent");
 				fs.mkdirSync(originalParent, { mode: 0o700 });
 				const alias = path.join(originalParent, "linked-root");
@@ -1115,7 +1299,7 @@ describe("persistent profile opt-in", () => {
 		);
 
 		test("refuses HOME ancestors even when all default browser directories point outside them", async () => {
-			const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-external-defaults-")));
+			const external = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-external-defaults-")));
 			try {
 				const defaults = [
 					".config/google-chrome",

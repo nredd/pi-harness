@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, rmdirSync, rmSync, type Stats } from "node:fs";
+import { constants as fsConstants, lstatSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -444,7 +444,7 @@ export const testing = {
 	sameRootIdentity,
 	performSearchUi,
 	performLaunchBrowser,
-	persistentBrowserProfile,
+	persistentBrowserProfile: async (configured: string) => (await persistentBrowserProfile(configured)).directory,
 	removeProfileDirsOnExit,
 	managedBrowserNeedsHeadless,
 	managedBrowserArgs,
@@ -2994,11 +2994,22 @@ async function waitForCdpPort(port: number, signal: AbortSignal | undefined, bro
 // Enabled with `NODE_DEBUG=pi-computer-use`; the bridge otherwise never writes to the TUI's stdio.
 const debugLog = debuglog("pi-computer-use");
 
-/**
- * Profile dirs of launched browsers that are not removed yet, with the browser using each one.
- * The `exit` hook empties it on a hard exit that skips session shutdown.
- */
-const liveProfileDirs = new Map<string, { browser: ChildProcess; persistent: boolean }>();
+/** Identity retained across asynchronous launch stages; a path string alone cannot establish ownership. */
+interface ValidatedPersistentProfile {
+	directory: string;
+	dev: number;
+	ino: number;
+}
+
+/** Only this exact empty Pi lease may be released, inside the original validated profile. */
+interface PersistentProfileLease {
+	profile: ValidatedPersistentProfile;
+	dev: number;
+	ino: number;
+}
+
+/** Tracked profile ownership. Hard exit kills browsers, deletes temporary data and leaves persistent leases fail-closed. */
+const liveProfileDirs = new Map<string, { browser: ChildProcess; persistent?: PersistentProfileLease }>();
 const profileCleanup = new Map<string, Promise<void>>();
 let profileExitHookInstalled = false;
 
@@ -3007,7 +3018,7 @@ let profileExitHookInstalled = false;
  * @param profileDir Private profile dir passed to the browser as `--user-data-dir`.
  * @param browser The browser process that owns `profileDir`.
  */
-function trackProfileDir(profileDir: string, browser: ChildProcess, persistent: boolean): void {
+function trackProfileDir(profileDir: string, browser: ChildProcess, persistent?: PersistentProfileLease): void {
 	liveProfileDirs.set(profileDir, { browser, persistent });
 	if (profileExitHookInstalled) return;
 	profileExitHookInstalled = true;
@@ -3036,12 +3047,7 @@ async function removeProfileDirOnce(profileDir: string): Promise<void> {
 	const owner = liveProfileDirs.get(profileDir);
 	if (owner?.persistent) {
 		// Only called once the browser has closed. Never remove browser-owned lock files.
-		try {
-			rmdirSync(path.join(profileDir, ".pi-computer-use.lock"));
-			liveProfileDirs.delete(profileDir);
-		} catch (error) {
-			debugLog("could not release persistent profile lease: %s", error);
-		}
+		if (releasePersistentProfileLease(owner.persistent)) liveProfileDirs.delete(profileDir);
 		return;
 	}
 	try {
@@ -3235,8 +3241,74 @@ async function profilePathContains(parent: Stats, descendant: string): Promise<b
 	}
 }
 
+/** Match metadata identities, not path spellings, across validation and use. */
+function sameProfileIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+	return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** No other unprivileged UID may replace an ancestry component; root and sticky shared parents are trusted. */
+function assertSafeProfileAncestor(info: Stats): void {
+	if ((info.uid !== 0 && info.uid !== process.getuid!()) || ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0))
+		throw new Error(
+			"managed_browser_profile has an unsafe ancestor: require current-user/root ownership and no group/world write unless sticky.",
+		);
+}
+
+/** Inspect synchronously so final identity/permissions checks and spawn share one event-loop turn. */
+function inspectPersistentProfile(directory: string): Stats {
+	const info = lstatSync(directory);
+	if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid!() || (info.mode & 0o777) !== 0o700)
+		throw new Error(
+			"managed_browser_profile must be a real directory, not a symlink, owned by the current user with mode 0700.",
+		);
+	for (let parent = path.dirname(directory); ; parent = path.dirname(parent)) {
+		const ancestor = lstatSync(parent);
+		if (ancestor.isSymbolicLink())
+			throw new Error("managed_browser_profile must not contain symlink components; use its canonical path.");
+		assertSafeProfileAncestor(ancestor);
+		if (path.dirname(parent) === parent) break;
+	}
+	return info;
+}
+
+/** Refuse identity or permission changes without ever repairing an unvalidated directory. */
+function assertPersistentProfileIdentity(profile: ValidatedPersistentProfile): void {
+	if (!sameProfileIdentity(inspectPersistentProfile(profile.directory), profile))
+		throw new Error(
+			"managed_browser_profile identity changed during launch; retry only after verifying the dedicated directory.",
+		);
+}
+
+/** Validate the exact lease as well as its parent before releasing or launching through a pathname. */
+function assertPersistentProfileLease(lease: PersistentProfileLease): void {
+	assertPersistentProfileIdentity(lease.profile);
+	const info = lstatSync(path.join(lease.profile.directory, ".pi-computer-use.lock"));
+	if (
+		!info.isDirectory() ||
+		info.uid !== process.getuid!() ||
+		(info.mode & 0o777) !== 0o700 ||
+		!sameProfileIdentity(info, lease)
+	)
+		throw new Error("Persistent managed profile lease changed; refusing to use or remove it.");
+}
+
+/** Never follow a swapped parent or remove another owner's lease. Uncertain ownership stays fail-closed. */
+function releasePersistentProfileLease(lease: PersistentProfileLease): boolean {
+	try {
+		assertPersistentProfileLease(lease);
+		rmdirSync(path.join(lease.profile.directory, ".pi-computer-use.lock"));
+		return true;
+	} catch (error) {
+		debugLog("could not release persistent profile lease: %s", error);
+		return false;
+	}
+}
+
 /** Validate an operator-created profile without reading any profile contents or changing its permissions. */
-async function persistentBrowserProfile(configured: string): Promise<string> {
+async function persistentBrowserProfile(
+	configured: string,
+	expected?: ValidatedPersistentProfile,
+): Promise<ValidatedPersistentProfile> {
 	if (process.platform === "win32")
 		throw new Error(
 			"Persistent managed profiles require owner-only POSIX permissions; Windows ACL validation is not supported.",
@@ -3244,15 +3316,9 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 	const expanded = configured.startsWith("~/") ? path.join(os.homedir(), configured.slice(2)) : configured;
 	if (!path.isAbsolute(expanded)) throw new Error("managed_browser_profile must be an absolute path or start with ~/.");
 	const directory = path.resolve(expanded);
-	// Reject aliases, including symlinked ancestors, without opening profile contents.
-	for (let entry = directory; ; entry = path.dirname(entry)) {
-		if ((await lstat(entry)).isSymbolicLink())
-			throw new Error("managed_browser_profile must not contain symlink components; use its canonical path.");
-		if (path.dirname(entry) === entry) break;
-	}
-	const info = await lstat(directory);
-	if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid!() || (info.mode & 0o777) !== 0o700)
-		throw new Error("managed_browser_profile must be a real directory owned by the current user with mode 0700.");
+	const info = inspectPersistentProfile(directory);
+	if (expected && !sameProfileIdentity(info, expected))
+		throw new Error("managed_browser_profile identity changed during launch; refusing the replacement.");
 	const canonical = await realpath(directory);
 	const home = await realpath(os.homedir());
 	// Resolve directory metadata only, never enumerate or open browser profile contents.
@@ -3309,14 +3375,16 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 		}
 		if (path.dirname(parent) === parent) break;
 	}
-	return canonical;
+	const validated = { directory: canonical, dev: info.dev, ino: info.ino };
+	assertPersistentProfileIdentity(validated);
+	return validated;
 }
 
-/** Acquire our cross-process lease. Existing or stale leases fail closed, never get stolen. */
-async function lockPersistentBrowserProfile(directory: string): Promise<void> {
+/** Refuse browser-owned locks, including dangling symlinks, without removing any of them. */
+function assertNoChromiumProfileLocks(directory: string): void {
 	for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
 		try {
-			await lstat(path.join(directory, name));
+			lstatSync(path.join(directory, name));
 			throw new Error(
 				"Persistent managed profile is in use or has a stale Chromium lock. Close its browser and resolve the lock manually; Pi never removes browser locks.",
 			);
@@ -3324,14 +3392,23 @@ async function lockPersistentBrowserProfile(directory: string): Promise<void> {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 	}
+}
+
+/** Acquire our lease only after renewed validation; retain its identity and fail closed on any replacement. */
+async function lockPersistentBrowserProfile(profile: ValidatedPersistentProfile): Promise<PersistentProfileLease> {
+	assertPersistentProfileIdentity(profile);
+	assertNoChromiumProfileLocks(profile.directory);
 	try {
-		await mkdir(path.join(directory, ".pi-computer-use.lock"), { mode: 0o700 });
+		await mkdir(path.join(profile.directory, ".pi-computer-use.lock"), { mode: 0o700 });
 	} catch (error) {
 		throw new Error(
 			"Persistent managed profile could not be locked. It may be in use or have a stale .pi-computer-use.lock; after verifying all users of this profile have stopped, remove that empty lease directory manually.",
 			{ cause: error },
 		);
 	}
+	assertPersistentProfileIdentity(profile);
+	const info = lstatSync(path.join(profile.directory, ".pi-computer-use.lock"));
+	return { profile, dev: info.dev, ino: info.ino };
 }
 
 /** Stop the previous managed browser, acquire its replacement's profile, then spawn and track it. */
@@ -3341,31 +3418,39 @@ async function startManagedBrowser(
 ): Promise<{ managedBrowser: ChildProcess; port: number; executable: string }> {
 	const executable = await managedBrowserExecutable(browser);
 	const configured = getComputerUseConfig().managed_browser_profile;
-	const persistentDir = configured ? await persistentBrowserProfile(configured) : undefined;
+	const persistent = configured ? await persistentBrowserProfile(configured) : undefined;
 	const port = await freeTcpPort();
 	disconnectCdp();
 	await releaseManagedBrowser();
 	// A fixed name in a shared temp dir can be owned or pre-seeded by another account, so each
 	// launch gets a private profile dir that lives exactly as long as its browser process.
-	const profileDir = persistentDir ?? (await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`)));
-	if (persistentDir) await lockPersistentBrowserProfile(persistentDir);
+	// Revalidate before creating any lease: allocation and previous-browser shutdown may have yielded.
+	if (persistent) await persistentBrowserProfile(persistent.directory, persistent);
+	let profileDir = persistent?.directory ?? (await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`)));
+	const lease = persistent ? await lockPersistentBrowserProfile(persistent) : undefined;
 	let managedBrowser: ChildProcess;
 	try {
+		// Full refusal policy AFTER lease acquisition, followed by synchronous final identity/lock checks.
+		if (lease) {
+			profileDir = (await persistentBrowserProfile(profileDir, lease.profile)).directory;
+			assertPersistentProfileLease(lease);
+			assertNoChromiumProfileLocks(profileDir);
+		}
 		const args = managedBrowserArgs({ remoteDebuggingPort: port, userDataDir: profileDir, url });
 		managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
 	} catch (error) {
-		if (persistentDir) rmdirSync(path.join(profileDir, ".pi-computer-use.lock"));
+		if (lease) releasePersistentProfileLease(lease);
 		else await removeProfileDir(profileDir);
 		throw error;
 	}
 	// `close` also fires after an async spawn failure. Session shutdown waits for it and the exit hook
 	// covers a hard exit, so the profile never outlives the browser.
-	trackProfileDir(profileDir, managedBrowser, Boolean(persistentDir));
+	trackProfileDir(profileDir, managedBrowser, lease);
 	// spawn errors are asynchronous too; the readiness wait below reports them and cleans up.
 	managedBrowser.on("error", () => {});
 	managedBrowser.once("close", () => {
 		// The hard-exit hook forgets leases but must never turn a persistent profile into temp data.
-		if (persistentDir && liveProfileDirs.get(profileDir)?.browser !== managedBrowser) return;
+		if (lease && liveProfileDirs.get(profileDir)?.browser !== managedBrowser) return;
 		void removeProfileDir(profileDir);
 	});
 	managedBrowser.unref();

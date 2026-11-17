@@ -28,7 +28,9 @@ describe.skipIf(process.platform === "win32")("managed browser that outlives SIG
 	let scratch;
 
 	beforeEach(() => {
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cu-stuck-"));
+		scratch = fs.mkdtempSync(
+			path.join(process.platform === "win32" ? os.tmpdir() : fs.realpathSync("/tmp"), "pi-cu-stuck-"),
+		);
 		vi.stubEnv("TMPDIR", scratch);
 		vi.stubEnv("FAKE_BROWSER_LOG", path.join(scratch, "launch.json"));
 		vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", FAKE_BROWSER);
