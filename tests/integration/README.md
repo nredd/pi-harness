@@ -57,12 +57,12 @@ Boundary inventory:
 - `F`: `scenarios/bench/`, serial and quiet-runner only. Existing baselines are historical, not re-recorded on hosted runners. CI visibly reports NOT RUN until a quiet runner and one evidenced rebaseline exist. `make bench RUNTIME=bun-standalone STACK=../../release/stacks/personal.json` passes the runtime selection explicitly (default `node`).
 - `G`: `scenarios/live/`, never CI, opt-in with `HARNESS_LIVE=1` and explicit `HARNESS_AUTH_FILE=/absolute/auth.json`. Credentials are linked only from that supplied path; refresh writes through. The shared cost cap remains $0.50. The ledger records unpriced calls separately from its priced subtotal and refuses further spend when either events or child-session files contain unknown spend, since the cap cannot then be enforced
 - `D`: `scenarios/test_extension_coverage.py` adds installed memory write/read/path rejection, workflow registry/search/list/missing-run handling, raw web fetch refused-loopback tool error and a surviving faux reply. A test-only registry observer checks registered tools/commands separately from the active-schema golden. Computer-use must have installed extension entries and an evidenced `extensions: []` exclusion, no desktop tools and no GUI app. Sources/pins come only from the selected stack. qmd is a failing fixture shim; web requests use only loopback, not live providers
-- No unported non-boundary functions remain in the Python scenarios. CI selects only the seven root `test_*.py` files and `tui/test_footer_resize.py`, all marked `stack`; bench/live remain explicitly excluded
+- No unported non-boundary functions remain in the Python stack scenarios. Stack CI selects the seven root `stack` files and `tui/test_footer_resize.py` with `-m stack`; `Forks` separately selects `test_core_compaction.py` against the built candidate. Bench/live remain explicitly excluded
 - Thirteen machine-specific static rows and their schema/pin/Brew parser/discovery units are removed.
   Dotfiles implements their replacement in `pi-profile doctor`, with a warn-only after-apply hook.
   Its assertion ledger and recovery runbook are [here](https://github.com/nredd/dotfiles/blob/main/docs/pi-profile-doctor.md)
 
-Excluded scenario files (paths below are relative to `scenarios/`; the seven `stack` files above are the only CI-selected Python scenarios):
+Excluded scenario files (paths below are relative to `scenarios/`; the seven `stack` files above are selected by stack CI, while `Forks` separately selects `test_core_compaction.py`):
 
 | Files | Reason excluded from `stack` |
 | --- | --- |
