@@ -38,7 +38,10 @@ if (globalThis.Bun) {
 	nodeModule.registerHooks({
 		resolve(specifier, context, next) {
 			check(specifier);
-			return next(specifier, context);
+			// A relative import inside a fork package never names the testing path; its resolved URL does.
+			const resolved = next(specifier, context);
+			check(resolved.url);
+			return resolved;
 		},
 	});
 }

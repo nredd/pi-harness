@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { runTree } from "@nredd/pi-test-lib/run-tree";
 import { expect, it } from "vitest";
@@ -96,6 +96,16 @@ it.each([
 		const result = await run("node", "native-injected.mjs", [specifier]);
 		expect(result.publicSdk).toBe(true);
 		expect(result.error).toBe(`FORK_BOUNDARY: ${specifier}`);
+	},
+	TEST_TIMEOUT_MS,
+);
+
+it(
+	"the guard refuses a relative import that only resolves into a fork testing directory",
+	async () => {
+		const entry = fileURLToPath(new URL("./tests/fixtures/fork-like/pi-coding-agent/dist/entry.mjs", import.meta.url));
+		const result = await run("node", "native-injected.mjs", [pathToFileURL(entry).href]);
+		expect(result.error).toMatch(/^FORK_BOUNDARY: file:\/\/.*pi-coding-agent\/dist\/testing\/probe\.mjs$/);
 	},
 	TEST_TIMEOUT_MS,
 );
