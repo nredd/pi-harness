@@ -531,7 +531,7 @@ jobs:
             time cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked --root "$RUNNER_TEMP/cu-cov-tools"
             rustup run 1.97.1 rustc --version --verbose
           } 2>&1 | tee packages/computer-use/coverage/native-linux/setup.log
-          echo "$(dirname "$(rustup which --toolchain 1.97.1 cargo)")" >> "$GITHUB_PATH"
+          dirname "$(rustup which --toolchain 1.97.1 cargo)" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/cu-cov-tools/bin" >> "$GITHUB_PATH"
       - name: Collect native Ubuntu Rust coverage (headless, report-only)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.os == 'ubuntu-24.04' && contains(matrix.workspaces, 'packages/computer-use') }}
@@ -562,7 +562,8 @@ jobs:
           # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
           # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
           # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
-          export UV_PYTHON="$(tr -d '\n' < .python-version)"
+          UV_PYTHON="$(tr -d '\n' < .python-version)"
+          export UV_PYTHON
           make install-benchmark
           # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
           npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0

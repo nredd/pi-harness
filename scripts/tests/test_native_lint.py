@@ -183,6 +183,154 @@ def test_inherited_powershell_refusal(repository: Path, origin: str) -> None:
     assert diagnostic in caught.value.output
 
 
+@pytest.mark.parametrize(
+    ("origin", "declaration"),
+    [
+        ("workflow", "${{ true && 'bash' || 'bash' }}"),
+        (
+            "job",
+            "${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && "
+            "format('bash \"{0}/scripts/wsl2_host.sh\" {{0}}', github.workspace) || 'bash -e {0}' }}",
+        ),
+    ],
+)
+def test_expression_default_malformed_bash_refusal(repository: Path, origin: str, declaration: str) -> None:
+    """Close actionlint's dynamic-default bypass with a real malformed Bash block.
+
+    Parameters:
+        repository (Path): Disposable tracked repository.
+        origin (str): Workflow or job default declaration.
+        declaration (str): Expression with only literal Bash result alternatives.
+    Returns:
+        None.
+    """
+    job: dict[str, Any] = {
+        "runs-on": "ubuntu-24.04",
+        "steps": [{"run": "if then"}],
+        "strategy": {"matrix": {"guest": ["wsl2"], "host": ["windows"]}},
+    }
+    workflow: dict[str, Any] = {"on": "push", "jobs": {"test": job}}
+    if origin == "workflow":
+        workflow["defaults"] = {"run": {"shell": declaration}}
+    else:
+        job["defaults"] = {"run": {"shell": declaration}}
+    (repository / ".github/workflows/valid.yml").write_text(yaml.safe_dump(workflow))
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        native_lint.lint(repository, PREFIX)
+    assert "SC1072" in caught.value.output
+
+
+@pytest.mark.parametrize(
+    ("origin", "declaration"),
+    [
+        ("workflow", "${{ true && 'bash' || 'bash -e {0}' }}"),
+        ("job", "${{ !false && 'bash' || 'bash' }}"),
+        ("job", "${{ format('bash \"{0}/scripts/wsl2_host.sh\" {{0}}', github.workspace) || 'bash' }}"),
+        ("step", "${{ 'push' == 'it''s a test' && 'bash' || '/bin/bash -e {0}' }}"),
+    ],
+)
+def test_resolved_expression_bash_is_linted_not_executed(
+    repository: Path, origin: str, declaration: str
+) -> None:
+    """Admit known Bash alternatives at every shell-default precedence level.
+
+    Parameters:
+        repository (Path): Disposable tracked repository.
+        origin (str): Location of the shell declaration.
+        declaration (str): Statically classifiable shell expression.
+    Returns:
+        None.
+    """
+    step: dict[str, Any] = {"run": "exit 93"}
+    job: dict[str, Any] = {"runs-on": "ubuntu-24.04", "steps": [{"uses": "example/action@main"}, step]}
+    workflow: dict[str, Any] = {"on": "push", "jobs": {"test": job}}
+    if origin == "step":
+        step["shell"] = declaration
+    elif origin == "job":
+        job["defaults"] = {"run": {"shell": declaration}}
+    else:
+        workflow["defaults"] = {"run": {"shell": declaration}}
+    (repository / ".github/workflows/valid.yml").write_text(yaml.safe_dump(workflow))
+    native_lint.lint(repository, PREFIX)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "${{ github.event_name }}",
+        "${{ true && 'bash' || 'pwsh' }}",
+        "${{ format(github.event_name, 'bash') }}",
+        "${{ '' }}",
+        "${{ contains('bash', 'ash') }}",
+        "${{ 123 }}",
+        "${{ github.event.inputs.from && 'bash' || 'bash' }}",
+        "bash ${{ 'bash' }}",
+        "${{ 'bash' }} -e {0}",
+        "${{ format('bash{0}', github.event_name) }}",
+    ],
+)
+def test_unclassifiable_expression_refuses_named_workflow_job(repository: Path, declaration: str) -> None:
+    """Never pass an unresolved, mixed or unsupported shell expression silently.
+
+    Parameters:
+        repository (Path): Disposable tracked repository.
+        declaration (str): Valid GitHub expression with no provable Bash-only result.
+    Returns:
+        None.
+    """
+    workflow = {
+        "on": "push",
+        "jobs": {
+            "test": {
+                "runs-on": "ubuntu-24.04",
+                "defaults": {"run": {"shell": declaration}},
+                "steps": [{"run": "echo hello"}],
+            }
+        },
+    }
+    (repository / ".github/workflows/valid.yml").write_text(yaml.safe_dump(workflow))
+    with pytest.raises(ValueError, match="Unclassifiable shell expression") as caught:
+        native_lint.lint(repository, PREFIX)
+    assert ".github/workflows/valid.yml" in str(caught.value)
+    assert "job 'test'" in str(caught.value)
+
+
+def test_expression_shell_cli_refusal(repository: Path) -> None:
+    """Return a named nonzero CLI refusal for an unclassifiable dynamic shell.
+
+    Parameters:
+        repository (Path): Disposable tracked repository.
+    Returns:
+        None.
+    """
+    workflow = {
+        "on": "push",
+        "jobs": {
+            "test": {
+                "runs-on": "ubuntu-24.04",
+                "defaults": {"run": {"shell": "${{ github.event_name }}"}},
+                "steps": [{"run": "echo hello"}],
+            }
+        },
+    }
+    (repository / ".github/workflows/valid.yml").write_text(yaml.safe_dump(workflow))
+    cmd = [
+        sys.executable,
+        str(Path(native_lint.__file__)),
+        "check",
+        "--root",
+        str(repository),
+        "--prefix",
+        str(PREFIX),
+    ]
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+    assert caught.value.returncode == 1
+    assert "Unclassifiable shell expression" in caught.value.output
+    assert ".github/workflows/valid.yml" in caught.value.output
+    assert "job 'test'" in caught.value.output
+
+
 def test_step_shell_overrides_defaults(repository: Path) -> None:
     """A declared Bash step must not be parsed as its inherited PowerShell default.
 

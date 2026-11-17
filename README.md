@@ -55,7 +55,10 @@ make help                    # every target
   PowerShell parser on tracked PowerShell and extracted composite/workflow `pwsh` blocks, including
   job/workflow shell defaults and implicit Windows PowerShell. Step overrides take precedence. Tools
   run with disposable home/cache directories. Composite Bash blocks also run through ShellCheck. Expressions in extracted blocks become inert synthetic
-  text, not executed commands. Analyzer Error/Warning diagnostics block, except `PSAvoidUsingWriteHost`
+  text, not executed commands. Expression-valued workflow shells receive separate ShellCheck runs when
+  every literal result alternative (including `format` templates) starts with a fixed Bash executable.
+  Selectors are inspected without evaluation; unknown or mixed-shell alternatives refuse with the
+  workflow file, job and step, rather than relying on actionlint's expression-shell bypass. Analyzer Error/Warning diagnostics block, except `PSAvoidUsingWriteHost`
   (CI diagnostics must not pollute function success output) and `PSUseShouldProcessForStateChangingFunctions`
   (noninteractive disposable fixture constructors). Only the actual custom runner labels are declared.
   Native malformed-source, missing-tool, version and checksum controls run in the Python suite.

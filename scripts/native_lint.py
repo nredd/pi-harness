@@ -4,11 +4,13 @@ References:
     https://www.shellcheck.net/
     https://github.com/rhysd/actionlint
     https://github.com/PowerShell/PSScriptAnalyzer
+    https://docs.github.com/en/actions/learn-github-actions/expressions
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import logging
@@ -31,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("native_lint_tools.json")
 VERSIONS = {"shellcheck": "0.11.0", "actionlint": "1.7.12", "pwsh": "7.4.22"}
 EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+SHELL_TOKEN = re.compile(r"'(?:[^']|'')*'|&&|\|\||!(?!=)")
 # These are the actual custom labels in the workflows, not arbitrary runner-label waivers.
 LABELS = "self-hosted-runner:\n  labels: [xcode-27, pi-linux, pi-macos, pi-wsl2]\n"
 PS_SCRIPT = """$ErrorActionPreference = 'Stop'
@@ -224,6 +227,68 @@ def workflow_shell(step: dict[str, Any], job: dict[str, Any], workflow: dict[str
     return "pwsh" if "windows" in runners.lower() else "bash"
 
 
+def shell_token(match: re.Match[str]) -> str:
+    """Translate expression tokens without interpreting or executing their contents.
+
+    Parameters:
+        match (re.Match[str]): A GitHub string literal or boolean operator.
+    Returns:
+        str: Equivalent Python syntax for AST inspection only.
+    """
+    token = match.group()
+    if token.startswith("'"):
+        return json.dumps(token[1:-1].replace("''", "'"))
+    return {"&&": " and ", "||": " or ", "!": " not "}[token]
+
+
+def shell_candidates(node: ast.expr) -> list[str]:
+    """Collect literal result alternatives from boolean selectors and format calls.
+
+    Parameters:
+        node (ast.expr): Unevaluated expression tree.
+    Returns:
+        list[str]: Conservative shell-command templates, ignoring selector predicates.
+    Raises:
+        ValueError: A result cannot be statically classified as a literal template.
+    """
+    if isinstance(node, ast.BoolOp):
+        values = node.values[-1:] if isinstance(node.op, ast.And) else node.values
+        return [candidate for value in values for candidate in shell_candidates(value)]
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "format"
+        and node.args
+    ):
+        node = node.args[0]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    raise ValueError("Nonliteral shell expression result")
+
+
+def require_bash_expression(declaration: str, location: str) -> None:
+    """Admit only expression shells whose literal result alternatives are all Bash.
+
+    Parameters:
+        declaration (str): Complete expression-valued shell declaration.
+        location (str): Workflow file, job and step for refusal diagnostics.
+    Returns:
+        None.
+    Raises:
+        ValueError: A declaration is unknown, mixed-dialect or malformed.
+    """
+    try:
+        if not declaration.startswith("${{") or not declaration.endswith("}}"):
+            raise ValueError("Shell expression must occupy the complete declaration")
+        expression = SHELL_TOKEN.sub(shell_token, declaration[3:-2].strip()).strip()
+        for candidate in shell_candidates(ast.parse(expression, mode="eval").body):
+            command, *_ = candidate.split()
+            if command not in {"bash", "/bin/bash", "/usr/bin/bash"}:
+                raise ValueError(f"Unsupported expression shell: '{command}'")
+    except (SyntaxError, ValueError) as error:
+        raise ValueError(f"Unclassifiable shell expression in {location}: '{declaration}'") from error
+
+
 def lint(root: Path, prefix: Path) -> None:
     """Lint tracked source and embedded composite-action shell, never execute it.
 
@@ -274,7 +339,17 @@ def lint(root: Path, prefix: Path) -> None:
             data = yaml.safe_load(path.read_text())
             for job_name, job in data["jobs"].items():
                 for index, step in enumerate(job.get("steps", [])):
-                    if "run" in step and workflow_shell(step, job, data).split()[0] in {"pwsh", "powershell"}:
+                    if "run" not in step:
+                        continue
+                    shell = workflow_shell(step, job, data).strip()
+                    if "${{" in shell:
+                        location = f"'{path.relative_to(root)}' job '{job_name}' step '{index}'"
+                        require_bash_expression(shell, location)
+                        source = scratch / f"{path.stem}-{job_name}-{index}.bash"
+                        source.write_text("#!/usr/bin/env bash\n" + EXPRESSION.sub("synthetic", step["run"]))
+                        LOGGER.info(f"ShellCheck expression-valued shell in {location}")
+                        run([str(tools["shellcheck"]), str(source)], root)
+                    elif shell.split()[0] in {"pwsh", "powershell"}:
                         script = EXPRESSION.sub("synthetic", step["run"])
                         (ps_sources / f"{path.stem}-{job_name}-{index}.ps1").write_text(script)
         analyzer = prefix / "analyzer/PSScriptAnalyzer.psd1"
