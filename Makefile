@@ -23,6 +23,14 @@ install-owned: verify-root-overrides  ## Verify root core overrides, install own
 	env -u GH_TOKEN npm ci --ignore-scripts
 	$(MAKE) build
 	cd integration && env -u GH_TOKEN uv sync --locked
+	$(MAKE) install-lint-tools
+
+.PHONY: install-lint-tools check-native-lint
+install-lint-tools:  ## Bootstrap checksum-pinned shellcheck/actionlint/PowerShell/PSScriptAnalyzer in .native-lint (no global installs)
+	env -u GH_TOKEN uv run --locked --project integration python scripts/native_lint.py bootstrap
+
+check-native-lint:  ## Statically lint tracked shell/workflow/PowerShell sources; absent or wrong-version tools fail closed
+	uv run --locked --project integration python scripts/native_lint.py check
 
 build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first
 	env -u GH_TOKEN npm run build
@@ -54,7 +62,7 @@ check-commits:  ## Validate the complete PR/push commit range, or the latest loc
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
-check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
+check-scripts: check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../integration,,.)
 	uv run --locked --project integration python scripts/package_contracts.py --packed-files-only
