@@ -22,10 +22,6 @@ const priced = call(date, model.provider, model.id, 100, 10, { cost: 99 });
 
 // nredd/pi-harness#799: delegate arithmetic to core, price physical events before aggregating, preserve recorded data.
 describe("offline current-rate valuation", () => {
-	it("uses the requested native runtime", () => {
-		if (process.env.PRICING_TEST_RUNTIME)
-			expect(process.versions.bun ? "bun" : "node").toBe(process.env.PRICING_TEST_RUNTIME);
-	});
 	it("uses only exact loaded identities and the shared estimator, never a refresh or auth method", () => {
 		const estimate = vi.fn<Estimate>((resolved, tokens) => {
 			expect(tokens).toBe(priced);

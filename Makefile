@@ -39,11 +39,7 @@ build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `loca
 install-benchmark:  ## Install tests/benchmarks/comparison, only `check-benchmark` reads it
 	cd tests/benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
-.PHONY: check-stats-pricing check-core-compaction
-check-stats-pricing:  ## Require the matching core pricing engine and exercise real current-value contracts on Node and Bun
-	cd packages/session-kit && env -i PATH="$$PATH" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 AWS_EC2_METADATA_DISABLED=true PI_PRICING_CORE_REQUIRED=1 node ../../scripts/run-vitest.ts node tests/stats/pricing-core.test.ts --maxWorkers=1 --coverage.enabled=false
-	cd packages/session-kit && env -i PATH="$$PATH" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 AWS_EC2_METADATA_DISABLED=true PI_PRICING_CORE_REQUIRED=1 node ../../scripts/run-vitest.ts bun tests/stats/pricing-core.test.ts --maxWorkers=1 --coverage.enabled=false
-
+.PHONY: check-core-compaction
 check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
 	$(MAKE) build
 	node_modules/.bin/biome check tests/integration/core-source

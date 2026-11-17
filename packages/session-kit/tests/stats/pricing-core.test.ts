@@ -9,7 +9,6 @@ import { createValuer, type PricingModel, valuation } from "../../src/stats/pric
 import { exportStats, importStats, loadCombined, machineIdentity, makeSnapshot } from "../../src/stats/snapshot.ts";
 import { call } from "../fixtures/stats/fixtures.ts";
 
-const available = typeof Reflect.get(modelApi, "estimateTokenCost") === "function";
 const date = "2026-11-12";
 const assessment = {
 	status: "verified",
@@ -48,16 +47,12 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-// nredd/pi-harness#799: legacy hosts intentionally show unknown; a coherent release MUST supply the core estimator (nredd/pi#46, published in v1.3.0-nredd.12).
-it("requires the matching shared estimator when release admission is requested", () => {
-	if (process.env.PI_PRICING_CORE_REQUIRED === "1")
-		expect(available, "Matching core estimator is required before releasing current-rate pricing").toBe(true);
-	if (process.env.PI_EXPECT_BUN_RUNTIME === "1") expect(process.versions.bun).toBeDefined();
-	if (!available) expect(createValuer([model])(event).cost).toBeNull();
+// nredd/pi-harness#799: the pinned core (v1.3.0-nredd.12) ships `estimateTokenCost`; a peer without it must fail loudly.
+it("resolves the real shared estimator from the installed pi-ai peer", () => {
+	expect(typeof Reflect.get(modelApi, "estimateTokenCost")).toBe("function");
 });
 
-// Old-host compatibility is not release evidence. `make check-stats-pricing` fails if these cannot execute.
-describe.skipIf(!available)("matching-core pricing contract", () => {
+describe("matching-core pricing contract", () => {
 	it("converts per-million rates while preserving recorded zero/stale observations", () => {
 		const value = createValuer([model]);
 		const zero = { ...event, input: 1000000, output: 1000000, cacheRead: 1000000, cost: 0 };

@@ -754,14 +754,12 @@ Current-rate API-equivalent value:
   bridge. The packed stock-Pi extension-loading boundary is NOT exercised by this change.
   Custom overrides must provide their own assessment. Unavailable models, old hosts without
   the new core estimator, unsupported non-token charges and unaudited rates stay unpriced.
-- This depends on the core pricing engine published in `v1.3.0-nredd.12` (`nredd/pi#46`); the
-  package pins are NOT changed here. Older hosts
-  continue to display recorded costs and explicit unknown current-value coverage. The
-  release owner must run `make check-stats-pricing` on the matching candidate: it fails
-  without the shared estimator and runs the actual default-engine contracts on Node and
-  Bun. Conditional skips under old hosts are compatibility evidence only, never admission
-  of pricing. The fixtures also exercise historical zero/stale values, unknown TTL, free
-  versus unknown, exact boundaries, imported dedup, deleted cache and unchanged bytes/IDs.
+- This depends on the core pricing engine published in `v1.3.0-nredd.12` (`nredd/pi#46`), resolved
+  through the root `overrides`; the package pins are NOT changed here. Older hosts continue to
+  display recorded costs and explicit unknown current-value coverage. `tests/stats/pricing-core.test.ts`
+  runs in the normal suite on Node and Bun against the real estimator and fails if the peer lacks it. It
+  exercises historical zero/stale values, unknown TTL, free versus unknown, exact boundaries,
+  imported dedup, deleted cache and unchanged bytes/IDs.
   Both primary and native Bun coverage measure the complete owned `src/**/*.ts` inventory,
   including `src/stats/pricing.ts`; the validated static `src/stats/library.ts` facade
   remains excluded without excluding its executable targets. Root accounting rejects
