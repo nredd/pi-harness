@@ -439,13 +439,27 @@ describe("loadUsage", () => {
 			},
 		);
 
-		it("reads CRLF files and a last record with no trailing newline", async () => {
+		it("reads CRLF files with blank lines and a last record with no trailing newline", async () => {
 			const path = join(root, "crlf.jsonl");
 			sessionFile(path, { startMs: at("2026-10-01"), lines: [] });
+			const info = JSON.stringify({ type: "session_info", id: "i", timestamp: "2026-10-01T12:00:00Z", name: "n" });
+			// A blank CRLF line is `"\r"` unless the terminator is stripped, and then it is a bad line.
 			writeFileSync(
 				path,
-				`${readFileSync(path, "utf8").trimEnd()}\r\n${opus("2026-10-01", 1, 1)}\r\n${opus("2026-10-01", 2, 2)}`,
+				`${readFileSync(path, "utf8").trimEnd()}\r\n\r\n${info}\r\n${opus("2026-10-01", 1, 1)}\r\n\r\n${opus("2026-10-01", 2, 2)}`,
 			);
+			const loaded = await loadUsage({ root, cache });
+			expect(loaded.badLines).toBe(0);
+			expect(loaded.diagnostics).toEqual([]);
+			expect(loaded.calls.map((c) => c.input)).toEqual([1, 2]);
+		});
+
+		it("counts a call whose record carries a raw U+2028", async () => {
+			sessionFile(join(root, "assistant.jsonl"), {
+				startMs: at("2026-10-01"),
+				lines: [opus("2026-10-01", 1, 1).replace('"hi"', '"a\u2028b"'), opus("2026-10-01", 2, 2)],
+			});
+			expect(readFileSync(join(root, "assistant.jsonl"), "utf8")).toContain("a\u2028b");
 			const loaded = await loadUsage({ root, cache });
 			expect(loaded.badLines).toBe(0);
 			expect(loaded.calls.map((c) => c.input)).toEqual([1, 2]);
@@ -462,7 +476,7 @@ describe("loadUsage", () => {
 		});
 
 		it("joins a multibyte record split across stream chunks", async () => {
-			// 300 KB of two-byte characters spans several 64 KiB reads, with a separator in the middle.
+			// 300k two-byte characters (~600 KB) span several 64 KiB reads, with a separator in the middle.
 			const long = `${"\u00e9".repeat(150_000)}\u2028${"\u00e9".repeat(150_000)}`;
 			sessionFile(join(root, "long.jsonl"), {
 				startMs: at("2026-10-01"),

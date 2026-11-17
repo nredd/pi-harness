@@ -34,9 +34,9 @@ export const NUL_PADDING = /^\0+$/;
 /**
  * Stream a file's lines into `parser`, yielding to the event loop every 2000 lines so the TUI keeps painting.
  *
- * Lines end at `\n` only, with a trailing `\r` dropped, exactly like pi's own session reader. `node:readline` would
- * also split on U+2028, U+2029 and a lone `\r`; `JSON.stringify` leaves the first two raw inside strings, so a valid
- * record carrying one would be torn into two bad lines.
+ * Lines end at `\n` only, like pi's `loadEntriesFromFile`. `node:readline` would also split on U+2028, U+2029 and a
+ * lone `\r`; `JSON.stringify` leaves the first two raw inside strings, so a valid record carrying one would be torn
+ * into two bad lines. A trailing `\r` is dropped, which keeps the CRLF handling `readline` had.
  */
 export async function feedFile(path: string, parser: { accept(line: string): void }): Promise<void> {
 	let n = 0;
