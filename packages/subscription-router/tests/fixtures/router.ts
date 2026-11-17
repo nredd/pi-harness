@@ -24,7 +24,7 @@ export class Clock extends FakeClock {
 export class CachedUsage extends UsageService {
 	readonly snapshots = new Map<string, UsageSnapshot>();
 	readonly reads: { provider: string; options: UsageGetOptions }[] = [];
-	onRefresh?: (provider: string) => void;
+	onRefresh?: (provider: string) => void | Promise<void>;
 
 	constructor(readonly clock: Clock) {
 		super({
@@ -63,7 +63,7 @@ export class CachedUsage extends UsageService {
 
 	override async get(_ctx: ExtensionContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		this.reads.push({ provider, options });
-		if (options.fresh) this.onRefresh?.(provider);
+		if (options.fresh) await this.onRefresh?.(provider);
 		const snapshot = this.peek(provider) ?? {
 			provider,
 			status: "unavailable" as const,
@@ -119,7 +119,7 @@ export async function startRouter(
 			extensionFactories: [
 				...extensions,
 				createSubscriptionRouter({
-					config: { ok: true, profiles: [profile] },
+					config: { ok: true, profiles: [profile, { ...profile, id: "other", name: "Other profile" }] },
 					usage,
 					tracker,
 					now: usage.clock.now,

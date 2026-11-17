@@ -433,8 +433,35 @@ test("the producer table is exactly the Vitest configurations the policy invento
 			.flatMap((pattern) => globSync(pattern, { cwd: root }))
 			.filter((path) => /(^|\/)\.?vitest[^/]*\.config\.ts$/.test(path)),
 	);
-	assert.deepEqual(PRODUCERS.map(({ config }) => config).sort(), [...inventoried].sort());
+	assert.deepEqual(
+		[...PRODUCERS.map(({ config }) => config), "packages/subscription-router/vitest.acceptance.config.ts"].sort(),
+		[...inventoried].sort(),
+	);
 	assert.equal(new Set(PRODUCERS.map(({ policy }) => policy)).size, PRODUCERS.length);
+});
+
+/** This fixed supplemental contract runs on candidate bytes, never substitutes for a required primary producer. */
+test("router candidate acceptance is separately measured with the same source scope and a fixed inventory", async () => {
+	const config = (await import("../packages/subscription-router/vitest.acceptance.config.ts")).default;
+	const policy = realPolicy()["subscription-router"];
+	assert.ok(policy);
+	assert.deepEqual(config.test?.include, [
+		"tests/scenarios/core-settle-cancellation.acceptance.ts",
+		"tests/scenarios/ownership.acceptance.ts",
+		"../../integration/inprocess/router-failover.test.ts",
+		"../../integration/inprocess/router-ownership.test.ts",
+	]);
+	assert.equal(config.test?.maxWorkers, 1);
+	assert.equal(config.test?.fileParallelism, false);
+	assert.deepEqual(config.test?.coverage?.include, policy.owned);
+	assert.deepEqual(
+		config.test?.coverage?.exclude,
+		policy.exclusions.map(({ path }) => path),
+	);
+	assert.equal(config.test?.coverage?.reportsDirectory, "coverage/candidate");
+	assert.equal(config.test?.coverage?.reportOnFailure, true);
+	assert.deepEqual(config.test?.coverage?.reporter, ["text", "lcov", "json-summary"]);
+	assert.ok(config.test?.setupFiles);
 });
 
 for (const producer of PRODUCERS) {

@@ -165,9 +165,9 @@ describe("router recovery through a real session", () => {
 		scenario.providers[1].setResponses([fauxAssistantMessage("must not run")]);
 		await prompt(scenario);
 		expect(scenario.providers.map((provider) => provider.state.callCount)).toEqual([1, 0, 0]);
-		// Core's settle boundary has no streaming signal. A completed confirmation
-		// remains valid, but the host must suppress the requested continuation.
-		expect(scenario.tracker.active()).toMatchObject([{ provider: "spike-a" }]);
+		// Cancellation must not erase shared cached evidence. Whether this read can
+		// also confirm a mark depends on the host's active-run cancellation contract.
+		expect(usage.peek("spike-a")?.windows[0]?.usedPercent).toBe(100);
 	});
 
 	it("unconfirmed transient failures exhaust the core retry budget on the same model", async () => {

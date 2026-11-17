@@ -37,6 +37,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
+    "test:acceptance": "node ../../scripts/run-vitest.ts node --config vitest.acceptance.config.ts && node ../../scripts/run-vitest.ts bun --config vitest.acceptance.config.ts --coverage.reportsDirectory=coverage/candidate-bun",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {

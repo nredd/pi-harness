@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Guard asynchronous recovery with requester-owned selection generations and cancellation; prove same-child routed failover, retained mutation results, finite budgets and sibling isolation. Complete cancellation acceptance remains release-blocked on the corrected core contract from nredd/pi#112, not the current `.11` dependency pin (#971)
+
 - Add `/router resets codex` with a version-checked first-party app-server bound to Pi's current OAuth identity, actual FREE grant listing, explicit human confirmation, durable idempotency/reload reconciliation, authoritative quota refresh and exact-scope block reconciliation; exclude paid/automatic redemption and preserve manual resume (#776)
 
 - Add cached `/router resets [refresh]` schedules with local/UTC/DST timing, family scope, stale retention and bounded cancellable refresh; record the supported Codex app-server contract, initially keep grant operations unavailable in Pi with an official handoff, and label `/router reset` local-only (#776)

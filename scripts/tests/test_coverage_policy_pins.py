@@ -220,7 +220,8 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "scripts/vitest-package.ts",
         *configs,
     }
-    assert len(configs) == 18, configs
+    assert len(configs) == 19, configs
+    assert "packages/subscription-router/vitest.acceptance.config.ts" in configs
     assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]

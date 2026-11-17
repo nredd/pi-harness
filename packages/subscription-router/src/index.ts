@@ -39,6 +39,28 @@ import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage
 
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const DECISIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.decisions");
+const SELECTIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.selections");
+
+/** Selection epochs belong to the requester, even when a sibling registered its route. */
+function selectionEpoch(manager: object | undefined): { generation: number } {
+	// Partial legacy hosts have no session identity, just like sessionDecisions below.
+	if (!manager) return { generation: 0 };
+	const host = globalThis as typeof globalThis & { [SELECTIONS_KEY]?: WeakMap<object, { generation: number }> };
+	host[SELECTIONS_KEY] ??= new WeakMap();
+	let epoch = host[SELECTIONS_KEY].get(manager);
+	if (!epoch) {
+		epoch = { generation: 0 };
+		host[SELECTIONS_KEY].set(manager, epoch);
+	}
+	return epoch;
+}
+
+/** Capture before awaiting evidence. Physical response metadata never changes this epoch. */
+function captureSelection(ctx: ExtensionContext, signal: AbortSignal | undefined): () => boolean {
+	const epoch = selectionEpoch(ctx.sessionManager);
+	const generation = epoch.generation;
+	return () => !signal?.aborted && epoch.generation === generation;
+}
 const RPC_ADMIT = "router:rpc:admit";
 const RPC_USAGE = "router:rpc:usage";
 const PROMPT_SECTION = "subscription_usage";
@@ -78,7 +100,7 @@ interface SessionDecisions {
 
 /** What a core with request-owned routing passes to `route` instead of the registrant's context. */
 interface RequesterContext {
-	session?: Pick<ExtensionContext, "sessionManager">;
+	session?: ExtensionContext;
 	appendEntry?: (customType: string, data: unknown) => void;
 }
 
@@ -230,7 +252,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				id: profile.id,
 				name: profile.name,
 				thinkingLevels: THINKING_LEVELS,
-				route: (request, ctx) => {
+				route: async (request, ctx) => {
 					const { session, appendEntry } = ctx as RequesterContext;
 					// `in`, not a read: a stale session's `sessionManager` getter throws. A partial host without one has no owner to key on.
 					if (!session || !appendEntry || !("sessionManager" in session)) {
@@ -238,8 +260,12 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 						return router.route(profile, request, routeEnv(registry ?? ctx, usage));
 					}
 					const requester = { session, appendEntry };
-					// Only logging belongs to the requester; its route ctx getters can be stale, the registrant's registry is not.
-					return router.route(profile, request, routeEnv(registry ?? ctx, usage), (decision) =>
+					const current = request.reason === "retry" ? captureSelection(session, request.signal) : () => true;
+					const assertCurrent = (): void => {
+						if (!current()) throw new Error("subscription-router: request selection changed or was cancelled");
+					};
+					// Shared confirmation may finish, but only its original requester can commit a route.
+					return router.route(profile, request, { ...routeEnv(registry ?? ctx, usage), assertCurrent }, (decision) =>
 						recordFor(requester, decision),
 					);
 				},
@@ -247,6 +273,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		}
 
 		pi.on("session_start", (_event, ctx) => {
+			selectionEpoch(ctx.sessionManager).generation++;
 			registry = { modelRegistry: ctx.modelRegistry };
 			// A new or resumed session has no durable decision yet; its first pick must persist.
 			registrantState.persisted.clear();
@@ -269,10 +296,20 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			].join("\n");
 		});
 
+		pi.on("model_select", (_event, ctx) => {
+			selectionEpoch(ctx.sessionManager).generation++;
+		});
+		pi.on("session_shutdown", (_event, ctx) => {
+			selectionEpoch(ctx.sessionManager).generation++;
+		});
+
 		pi.on("agent_before_settle", async (event, ctx) => {
 			const profile = selectedProfile(ctx);
 			if (!profile) return undefined;
-			const outcome = await recovery.handle(event, profile, routeEnv(ctx, usage), ctx.signal);
+			const signal = ctx.signal;
+			const current = captureSelection(ctx, signal);
+			const outcome = await recovery.handle(event, profile, routeEnv(ctx, usage), signal, current);
+			if (!current()) return undefined;
 			if (outcome.kind === "exhausted") {
 				ctx.ui.notify(outcome.error.message, "error");
 				return undefined;

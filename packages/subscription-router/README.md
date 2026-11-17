@@ -17,6 +17,29 @@ recording Pi doubles come from `@nredd/pi-test-lib`. The byte-pinned legacy orac
 formatting, linting and assists there. Snapshot provenance and oracle rules are below;
 `tests/policy-compatibility.test.ts` and `tests/policy-differential.test.ts` keep warning headers.
 
+### Cancellation acceptance graph (release-blocked)
+
+The ordinary `npm run check` still exercises the released dependency graph. The additional
+`npm run test:acceptance` has a fixed inventory in `vitest.acceptance.config.ts` for the corrected
+core active-run signal and cancellation-before-settle-commit contract. It must run on both Node
+and Bun **alongside**, not instead of, the complete package gate on an isolated candidate install.
+The released graph retains its full root gate, including `@nredd/pi-stack-tests` and official
+release-artifact identity contracts. Candidate acceptance additionally runs the two new real-child
+stack scenarios in its fixed inventory. The real-child proofs live in the existing in-process stack suite,
+`integration/inprocess/router-{failover,ownership}.test.ts`, alongside its disk-loaded router fixtures.
+It deliberately fails on the current `v1.3.0-nredd.11` pin; no test is conditionally skipped or
+changed to pass on that pin. This source change is release-blocked until a reviewed core release
+contains [the cancellation fix](https://github.com/nredd/pi/pull/112) and coordinated dependency
+validation passes. Core PR merge alone does not publish those bytes. No production dependency,
+lockfile or Gitlink is changed here.
+
+The candidate used for acceptance is source `1cc68329e6a3f966c35edf79f95dbcb532aff64c`, package
+manifest version `1.3.0`, `release: false`, installed from immutable tarballs rather than a core
+checkout or shared `node_modules`. The new ownership probes preserve the original terminal/retry
+barriers; only the minimized signal probe's old diagnostic expectation changes: the retained
+streaming signal must now be aborted too. Core's ordinary retry omission happens *before* retry
+routing; the barrier asserts no additional stale recovery edit, not rollback of that earlier edit.
+
 ### Legacy routing receipts
 
 Both golden suites use the original implementation at
@@ -173,6 +196,34 @@ recoverable length/overflow retries are unchanged, including partial attempts co
 A retryable partial quota error is confirmed and marked before refusing failover; terminal partial
 quota errors are refused before confirmation. Prior successful tool turns remain in context and
 are not re-executed by router recovery.
+
+Continuous failover requires a routed binding, e.g. a subagent tier `deep: ["router/deep"]`.
+A static list of physical tier members selects once at admission; neither that list nor a manual
+physical pin gains implicit cross-provider recovery. A routed child keeps its agent/session,
+virtual selection, tools and completed results. Actual physical response/activity metadata and
+effective thinking follow the destination; core retains responsibility for thinking clamping,
+context limits and compaction. Failure to compact does not authorize truncation or tool replay;
+a provider context error remains explicit if ordinary core recovery cannot finish.
+
+The default remains hybrid: cached eligibility before each request and fresh confirmation after
+quota-looking failures. Low remaining quota alone is not exhaustion. Authentication, permission,
+model, billing and transport errors do not independently prove subscription exhaustion. There is
+no predictive switch, new recovery engine, cross-tier or paid API fallback.
+
+Recovery captures the requesting session's selection generation and cancellation signal before
+awaiting confirmation. Manual pins, another profile, away-and-back selection, session replacement
+or cancellation invalidate its permission to omit context, continue, record a routing decision or
+announce a switch. Physical response metadata updates do not invalidate selection. Valid shared
+quota observations remain shared; a cancelled collector still cannot confirm a block. Recovery
+budgets and edits remain session-owned, including when siblings share one runtime. An exhausted
+running child settles with error rather than becoming scheduled work; pre-dispatch wait/fail,
+parking, reset expiry and manual-resume semantics are unchanged.
+
+With the corrected core contract, terminal recovery announces the confirmed source and forecast
+destination once. It never hides partial text, thinking or tool calls. Confirmation must still
+precede the context edit and continuation; manual changes or aborts while it waits suppress both
+the edit and notice. Older core hosts lack the complete terminal cancellation contract; the
+additional candidate acceptance gate above is required before shipping this behavior.
 
 Usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
 auth has no subscription window and is never blocked. Codex window names follow the reported

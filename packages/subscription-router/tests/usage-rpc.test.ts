@@ -687,55 +687,64 @@ describe("router usage RPC", () => {
 		expect(await h.rpc({ refresh: true })).toMatchObject({ success: false, error: "collector failed" });
 	});
 
-	it("notifies a terminal quota error instead of continuing", async () => {
-		const profile: Profile = {
-			id: "default",
-			name: "Default",
-			chain: [{ provider: "anthropic", id: "sonnet" }],
-		};
-		const h = await harness(false, [profile]);
-		h.fetch.mockResolvedValue(
-			new Response(
-				JSON.stringify({ five_hour: { utilization: 100, resets_at: new Date(EXHAUSTED_RESET).toISOString() } }),
-			),
-		);
-		const notify = vi.fn();
-		const ctx = {
-			model: { provider: "router", id: "default" },
-			scopedModels: [],
-			ui: { notify },
-			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
-		} as unknown as ExtensionContext;
-		await h.usage.get(ctx, "anthropic");
-		const onSettle = h.handlers.get("agent_before_settle");
-		if (!onSettle) throw new Error("agent_before_settle handler missing");
-		const outcome = await (onSettle as (event: unknown, context: ExtensionContext) => Promise<unknown>)(
-			{
-				entries: [],
-				context: {
-					contextEntries: [
-						{
-							sourceEntry: { id: "failed", type: "message", message: {} },
-							messages: [
-								{
-									role: "assistant",
-									content: [],
-									provider: "anthropic",
-									model: "sonnet",
-									stopReason: "error",
-									errorMessage: "insufficient_quota",
-									timestamp: T0,
-								},
-							],
-						},
-					],
+	it.each([false, true])(
+		"notifies terminal exhaustion only for an active requester (cancelled=%s)",
+		async (cancelled) => {
+			const profile: Profile = {
+				id: "default",
+				name: "Default",
+				chain: [{ provider: "anthropic", id: "sonnet" }],
+			};
+			const h = await harness(false, [profile]);
+			h.fetch.mockResolvedValue(
+				new Response(
+					JSON.stringify({ five_hour: { utilization: 100, resets_at: new Date(EXHAUSTED_RESET).toISOString() } }),
+				),
+			);
+			const notify = vi.fn();
+			const ctx = {
+				model: { provider: "router", id: "default" },
+				signal: cancelled ? AbortSignal.abort() : undefined,
+				scopedModels: [],
+				ui: { notify },
+				modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+			} as unknown as ExtensionContext;
+			await h.usage.get(ctx, "anthropic");
+			const onSettle = h.handlers.get("agent_before_settle");
+			if (!onSettle) throw new Error("agent_before_settle handler missing");
+			const outcome = await (onSettle as (event: unknown, context: ExtensionContext) => Promise<unknown>)(
+				{
+					entries: [],
+					context: {
+						contextEntries: [
+							{
+								sourceEntry: { id: "failed", type: "message", message: {} },
+								messages: [
+									{
+										role: "assistant",
+										content: [],
+										provider: "anthropic",
+										model: "sonnet",
+										stopReason: "error",
+										errorMessage: "insufficient_quota",
+										timestamp: T0,
+									},
+								],
+							},
+						],
+					},
 				},
-			},
-			ctx,
-		);
-		expect(outcome).toBeUndefined();
-		expect(notify).toHaveBeenCalledWith(expect.stringContaining("router/default: every model is unavailable"), "error");
-	});
+				ctx,
+			);
+			expect(outcome).toBeUndefined();
+			if (cancelled) expect(notify).not.toHaveBeenCalled();
+			else
+				expect(notify).toHaveBeenCalledWith(
+					expect.stringContaining("router/default: every model is unavailable"),
+					"error",
+				);
+		},
+	);
 
 	it("runs the admission RPC only after session context exists", async () => {
 		const profile: Profile = {
