@@ -193,7 +193,7 @@ def test_runtime_agent_surfaces(
     """
     agents = sandbox.agent_dir / "agents"
     agents.mkdir(exist_ok=True)
-    fixture = REPO_ROOT / "inprocess/tests/fixtures/agents" / f"{agent_type}.md"
+    fixture = REPO_ROOT.parent / "inprocess/tests/fixtures/agents" / f"{agent_type}.md"
     shutil.copyfile(fixture, agents / fixture.name)
     if without_web:
         path = agents / fixture.name
