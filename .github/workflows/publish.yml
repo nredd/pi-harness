@@ -28,7 +28,7 @@ permissions: {}
 jobs:
   verify:
     # Swift compiles both architectures on macOS; no signing keys or desktop setup.
-    runs-on: ${{ startsWith(github.ref_name, '@nredd/pi-computer-use@') && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ startsWith(github.ref_name, '@nredd/pi-computer-use@') && 'xcode-27' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
