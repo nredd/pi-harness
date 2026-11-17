@@ -672,7 +672,8 @@ Harness readers (#367; exported by the CLI above and shown in `/stats`):
 pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;
 `CODEX_HOME` or `~/.codex`; `OPENCODE_DB`, else `$XDG_DATA_HOME/opencode/opencode.db`. Local file
 reads only. A missing root is silent ("not installed"). Parsed files are cached in
-`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
+`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept. A record that counted
+unreadable lines is re-read on every scan until it parses clean; a deleted file's record keeps its count.
 That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
 directory names live there as keys); its values and every reader result carry no paths. It also
 records a hash of the installation salt (never the salt). When that changes, usage records are kept
@@ -760,6 +761,20 @@ shared clocks/doubles in `@nredd/pi-test-lib`. Real core session/interactive har
 cover file-backed restore, child rename/reload, command completions, rules, titles, loops,
 monitor wakes/cursors/caps/timeouts, diffs, stats and resource views without operator credentials.
 Cross-extension Plan/subagent/todo behavior remains in the root integration tier.
+
+`tests/fixtures/session.ts` uses the public-SDK `@nredd/pi-test-lib/harness`; only
+`tests/fixtures/terminal.ts` imports the fork interactive host. The same fixed 38-case scope
+runs on fork and stock Pi 1.5.2, on Node and Bun: `tests/fixture-boundary.test.ts`,
+`tests/monitor/extension-boundaries.test.ts`, and `tests/scenarios/{goal,goal-restore,loop,monitor,
+child-identity,isolation,rules,command-callbacks}.test.ts`. These cover goal continuation,
+evidence/restore, loop scheduling/isolation, monitor lifecycle/failure/cleanup, child rename/reload,
+command completions and rules. Pass those ten files to `node ../../scripts/run-vitest.ts node
+--coverage.enabled=false` (replace the engine argument `node` with `bun` for Bun).
+The graph controls follow the shared helpers and reject the real terminal fixture's fork export.
+The full fork suite remains mandatory. Terminal scenarios still require the fork's
+`/testing/interactive` (`InteractiveMode`, runtime replacement, `TUI.flushRender` and virtual
+terminal disposal); title routing also uses `registerVirtualModel`. This fixed headless scope
+is not a full-package stock-compatibility claim.
 
 Native process tests require macOS or Linux. From `packages/session-kit`:
 

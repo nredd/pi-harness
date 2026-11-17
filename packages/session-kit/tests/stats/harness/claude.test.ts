@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -138,6 +138,26 @@ describe("readClaude", () => {
 		}
 		// the paths live only as local cache keys
 		expect(Object.keys(cache.claude ?? {}).every((k) => k.startsWith(root))).toBe(true);
+	});
+
+	it("keeps a valid row whose text holds a raw U+2028, and re-reads a cached record that counted bad lines", async () => {
+		const path = join(proj(), "a.jsonl");
+		const row = claudeRow();
+		const content = [{ type: "text", text: "a\u2028b\u2029c" }];
+		writeLines(path, [claudeUser(), { ...row, message: { ...(row.message as object), content } }]);
+		expect(readFileSync(path, "utf8")).toContain("a\u2028b");
+		const cache: HarnessCache = {};
+		const scan = await readClaude(root, cache);
+		expect(scan.problems).toEqual([]);
+		expect(scan.calls).toHaveLength(1);
+
+		// A record cached by a build that tore the row: same size and mtime, but it counted bad lines.
+		const record = cache.claude?.[path];
+		if (!record) throw new Error("expected a cached record");
+		record.badLines = 2;
+		const healed = await readClaude(root, cache);
+		expect(healed.problems).toEqual([]);
+		expect(cache.claude?.[path]?.badLines).toBe(0);
 	});
 
 	it("re-parses only changed files, keeps history for deleted ones and ignores other roots", async () => {

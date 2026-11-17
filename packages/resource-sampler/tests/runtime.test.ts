@@ -53,7 +53,7 @@ function exited(child: ChildProcess): boolean {
 }
 
 /**
- * Wait for a child with a bounded timer, like integration/inprocess/support.ts.
+ * Wait for a child with a bounded timer, like tests/inprocess/support.ts.
  * @param child Owned child handle.
  * @param ms Maximum wait in milliseconds.
  * @returns Whether the child exited before the timeout.

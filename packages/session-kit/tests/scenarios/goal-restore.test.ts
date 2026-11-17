@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { complete, configFor, goalStates, nudges, ScenarioFixture, sessionFile, spoken } from "../fixtures/session.ts";
 

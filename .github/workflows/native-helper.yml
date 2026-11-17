@@ -30,7 +30,7 @@ jobs:
           version: "0.13.1"
       - name: Compile both architectures and check packed compiler output
         run: >-
-          uv run --locked --project integration python scripts/npm_release.py native-check
+          uv run --locked --project tests/integration python scripts/npm_release.py native-check
           --artifact-dir "$RUNNER_TEMP/native-helper"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

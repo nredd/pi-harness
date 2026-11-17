@@ -2,8 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { exportStats, importStats } from "../../src/stats/snapshot.ts";
-import { TerminalFixture } from "../fixtures/session.ts";
 import { assistant, footer, history, hourly, layout, seed, start } from "../fixtures/stats.ts";
+import { TerminalFixture } from "../fixtures/terminal.ts";
 
 let fixture: TerminalFixture;
 afterEach(async () => fixture?.dispose());

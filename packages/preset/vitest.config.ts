@@ -1,7 +1,7 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
 // Interactive theme/keybinding state is process-global; keep hosts serial per worker.
-export default definePackageConfig("preset", {
+const config = definePackageConfig("preset", {
 	provider: "istanbul",
 	test: {
 		pool: "forks",
@@ -9,3 +9,5 @@ export default definePackageConfig("preset", {
 		testTimeout: 20_000,
 	},
 });
+
+export default config;

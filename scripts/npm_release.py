@@ -173,7 +173,7 @@ class Statement(BaseModel):
 def host_environment() -> dict[str, str]:
     """Return this process's environment without the integration venv that `uv run` activated.
 
-    `publish.yml` runs this script via `uv run --project integration`, which exports `VIRTUAL_ENV` and
+    `publish.yml` runs this script via `uv run --project tests/integration`, which exports `VIRTUAL_ENV` and
     puts its `bin` first on `PATH`. Child tools must see what CI's `owned` job sees: otherwise a
     package check that expects a tool to be missing from its own project (e.g. dev-tools' `uv run
     pytest` case) silently finds the harness's `pytest`.

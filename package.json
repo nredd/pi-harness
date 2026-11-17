@@ -7,7 +7,7 @@
   "packageManager": "npm@11.20.0",
   "workspaces": [
     "packages/*",
-    "integration/inprocess",
+    "tests/inprocess",
     "tests/lib"
   ],
   "scripts": {

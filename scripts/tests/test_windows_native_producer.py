@@ -58,7 +58,7 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
         "packages/computer-use/native/windows/bridge-rs/** text eol=lf"
         in (ROOT / ".gitattributes").read_text()
     )
-    verify = commands.index("python -m harness.release --verify-root-overrides --root .")
+    verify = commands.index("python -m pi_release.release --verify-root-overrides --root .")
     assert verify < commands.index("npm ci --ignore-scripts")
     assert "$env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP" in commands
     assert 'require("node:tls").rootCertificates' in commands
