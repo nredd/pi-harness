@@ -50,7 +50,7 @@ import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEE
 import { type Call, HARNESSES, type Harness, type Session } from "./load.ts";
 import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
-import { type ValueCall, valuation, valuationLines, valueSummary } from "./pricing.ts";
+import { briefValueLines, type ValueCall, valuation, valuationLines } from "./pricing.ts";
 import { claudeHasNoReading, gauge, NO_LOCAL_READING, quotaRows, usedLabel } from "./quota.ts";
 import { timeAxis } from "./ticks.ts";
 
@@ -122,6 +122,8 @@ export class StatsView implements Component {
 	private harnessIndex = 0;
 	private scroll = 0;
 	private readonly palettes = new Map<number, Color[]>();
+	/** Full valuation text per (harness, filter, range): `calls` never change, so render never re-runs the estimator. */
+	private readonly valueCache = new Map<string, string[]>();
 	private readonly counted: Call[];
 	/** `all`, then every harness with data; just `all` when one harness is all there is to choose. */
 	private readonly harnesses: HarnessFilter[];
@@ -346,19 +348,17 @@ export class StatsView implements Component {
 		return hint ? `${this.paint("muted", hint)}  ${keys}` : keys;
 	}
 
-	/** Valuation text per (harness, filter, range): `calls` never change, so render never re-runs the estimator. */
-	private readonly valueCache = new Map<string, string[]>();
-
+	/** Brief or full valuation text for the current scope; see `valueCache` for why render never re-runs the estimator. */
 	private valueLines(ranged: readonly Call[], brief: boolean): string[] {
 		const value = this.o.valueCall;
 		if (!value) return [];
-		const key = `${brief}|${this.harness}|${JSON.stringify(this.filter)}|${this.range}`;
+		const key = `${this.harness}|${JSON.stringify(this.filter)}|${this.range}`;
 		let lines = this.valueCache.get(key);
 		if (!lines) {
-			lines = brief ? valueSummary(ranged, value) : valuationLines(ranged, value);
+			lines = valuationLines(ranged, value);
 			this.valueCache.set(key, lines);
 		}
-		return lines;
+		return brief ? briefValueLines(lines) : lines;
 	}
 
 	private scoped(): { all: Call[]; ranged: Call[] } {

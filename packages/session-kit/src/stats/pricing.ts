@@ -91,6 +91,8 @@ export function valuation(calls: readonly Call[], value: ValueCall): Valuation {
 
 /** Headline lines (estimate and coverage) shown outside the Machines tab. */
 const SUMMARY_LINES = 2;
+/** Distinct price bases, and distinct unpriced reasons, listed before the rest collapse into `+N more`. */
+const MAX_DETAIL = 5;
 
 /** Labels are deliberately separate from recorded cost and subscription cash charges. Every line is sanitized: basis and reasons come from loaded model metadata such as a custom `models.json`. */
 export function valuationLines(calls: readonly Call[], value: ValueCall): string[] {
@@ -99,12 +101,24 @@ export function valuationLines(calls: readonly Call[], value: ValueCall): string
 		`Current-rate API-equivalent estimate: ${out.cost === null ? "unknown" : money(out.cost)}${out.unpricedEvents ? " (priced subset only)" : ""}`,
 		`Pricing coverage: ${out.pricedEvents} priced / ${out.unpricedEvents} unpriced events; ${out.pricedTokens} priced / ${out.unpricedTokens} unpriced tokens`,
 		"Assumes loaded catalog list-price conditions, not request-date billing or subscription spend; missing cache TTL stays unknown.",
-		...Array.from(out.bases, (basis) => `Price basis: ${basis}`),
-		...Array.from(out.reasons, ([reason, count]) => `Unpriced: ${count} events: ${reason}`),
+		...Array.from(out.bases)
+			.slice(0, MAX_DETAIL)
+			.map((basis) => `Price basis: ${basis}`),
+		...(out.bases.size > MAX_DETAIL ? [`Price basis: +${out.bases.size - MAX_DETAIL} more`] : []),
+		...Array.from(out.reasons)
+			.slice(0, MAX_DETAIL)
+			.map(([reason, count]) => `Unpriced: ${count} events: ${reason}`),
+		...(out.reasons.size > MAX_DETAIL
+			? [
+					`Unpriced: +${out.reasons.size - MAX_DETAIL} more reasons, ${Array.from(out.reasons.values())
+						.slice(MAX_DETAIL)
+						.reduce((n, c) => n + c, 0)} events`,
+				]
+			: []),
 	].map(sanitize);
 }
 
 /** The Overview and Models tabs show only the estimate and coverage, then point at Machines. */
-export function valueSummary(calls: readonly Call[], value: ValueCall): string[] {
-	return [...valuationLines(calls, value).slice(0, SUMMARY_LINES), "Pricing details: Machines tab."];
+export function briefValueLines(lines: readonly string[]): string[] {
+	return [...lines.slice(0, SUMMARY_LINES), "Pricing details: Machines tab."];
 }

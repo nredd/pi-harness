@@ -171,6 +171,66 @@ describe("offline current-rate valuation", () => {
 		expect(machines).toContain("bad basis");
 		expect(machines).not.toContain(esc);
 	});
+	it("caps distinct bases and reasons, keeping counts", () => {
+		const calls = Array.from({ length: 12 }, (_, i) => ({ ...priced, model: `m${i}`, input: i + 1 }));
+		const value = (c: typeof priced) => {
+			const n = Number(c.model.slice(1));
+			return n < 6 ? { cost: 1, basis: `basis ${n}` } : { cost: null, reason: `reason ${n}` };
+		};
+		const lines = valuationLines(calls, value);
+		expect(lines.filter((l) => l.startsWith("Price basis: basis"))).toHaveLength(5);
+		expect(lines).toContain("Price basis: +1 more");
+		expect(lines.filter((l) => /^Unpriced: 1 events: reason/.test(l))).toHaveLength(5);
+		expect(lines).toContain("Unpriced: +1 more reasons, 1 events");
+		expect(lines.join("\n")).toContain("6 priced / 6 unpriced events");
+		expect(valuationLines(calls.slice(0, 5), value).join("\n")).not.toContain("more");
+	});
+	it("caches valuation per harness, filter and range, and recomputes when any changes", () => {
+		const calls = [
+			priced,
+			{ ...priced, harness: "claude" as const, provider: "other", model: "alt", input: 7 },
+			{ ...priced, ms: priced.ms - 40 * 86400000, input: 3 },
+		];
+		const value = vi.fn((c: typeof priced) => ({ cost: c.input / 100, basis: "b" }));
+		const theme = {
+			fg: (_c: unknown, t: string) => t,
+			bg: (_c: unknown, t: string) => t,
+			bold: (t: string) => t,
+			style: (t: string) => t,
+			colors: { accent: parseColor("#426a79") },
+		};
+		const view = new StatsView({
+			calls,
+			sessions: [],
+			valueCall: value,
+			theme: theme as never,
+			rows: () => 100,
+			now: priced.ms + 1,
+			requestRender() {},
+			onClose() {},
+		});
+		const text = () => view.render(200).join("\n");
+		const first = text();
+		const baseline = value.mock.calls.length;
+		expect(baseline).toBeGreaterThan(0);
+		expect(text()).toBe(first);
+		view.handleInput("\t");
+		expect(value.mock.calls.length).toBe(baseline);
+		view.handleInput("\t");
+		expect(value.mock.calls.length).toBe(baseline);
+		view.handleInput("\t");
+		for (const key of ["r", "m", "h"]) {
+			const before = value.mock.calls.length;
+			const previous = text();
+			view.handleInput(key);
+			const next = text();
+			expect(value.mock.calls.length, key).toBeGreaterThan(before);
+			expect(next, key).not.toBe(previous);
+			const again = value.mock.calls.length;
+			expect(text()).toBe(next);
+			expect(value.mock.calls.length, key).toBe(again);
+		}
+	});
 	it("keeps copied/forked physical event IDs and transcript bytes unchanged", () => {
 		const entry = {
 			type: "message",
