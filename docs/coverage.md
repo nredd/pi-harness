@@ -168,7 +168,8 @@ mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of 
 calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
 optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
 and linux. Since #380 it also owns all 15 Vitest producer configurations (`packages/*/vitest*.config.ts`,
-`tests/integration/{inprocess,probes,providers}/vitest.config.ts` and `scripts/vitest.config.ts`; since #863 each is one
+`tests/inprocess/vitest.config.ts`, `tests/integration/{probes,providers}/vitest.config.ts` and
+`scripts/vitest.config.ts`; since #863 each is one
 `definePackageConfig` call from `scripts/vitest-package.ts`, which is owned in this signal at 0/0/0/0, and todo's
 config lost its dot prefix), and the pending `coverage-configurations` package is deleted (reclassified
 file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
