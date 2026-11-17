@@ -76,7 +76,7 @@ jobs:
   #
   # | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
   # | --- | --- | --- | --- | --- |
-  # | `owned (ubuntu-24.04, macos-14, wsl2)` | A fan-in over parallel `owned shard (<os>, <shard>)` jobs (see the shards section below). Each shard runs `make install-owned`, then one step per gate it owns: `make check-ts WORKSPACES=...` (its workspaces only), `make check-scripts`, `make check-integration` (the Python halves of the last two run through `PY_GATE`: ruff, ty, then pytest across cores, see below); `make install-benchmark` and `make check-benchmark` in the macOS `python` shard only, unless the plan lists it in `skipped_gates` (a PR without `benchmark_inputs`; the step then reports NOT RUN). The WSL guest shards run `make check-ts`, `make check-probes`, `make check-providers`, `make check-import-audit`, and on a PR only with WSL inputs. The fan-in requires every shard, then runs `make check-coverage` over their merged reports. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo, plan-mode, dev-tools, subagents, session-kit and inprocess run FULL Vitest suites on both engines with the shared homedir guard; probes and import-audit run Bun compatibility without independent Bun coverage; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
+  # | `owned (ubuntu-24.04, macos-14, wsl2)` | A fan-in over parallel `owned shard (<os>, <shard>)` jobs (see the shards section below). Each shard runs `make install-owned`, then one step per gate it owns: `make check-ts WORKSPACES=...` (its workspaces only), `make check-scripts`, `make check-integration` (the Python halves of the last two run through `PY_GATE`: ruff, ty, then pytest across cores, see below); `make install-benchmark` and `make check-benchmark` in the macOS `python` shard only, unless the plan lists it in `skipped_gates` (a PR without `benchmark_inputs`; the step then reports NOT RUN). The WSL guest shards run `make check-ts`, `make check-probes`, `make check-providers`, `make check-import-audit`, and on a PR only with WSL inputs. The fan-in requires every shard, then runs `make check-coverage` over their merged reports. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo, plan-mode, dev-tools, subagents, session-kit and inprocess run FULL Vitest suites on both engines with the shared homedir guard; probes and import-audit run full suites with independent enforced Bun coverage (#972); a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `tests/integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
   # | `contracts (ubuntu-24.04, macos-14, wsl2)` | `make install-owned`, `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract`. WSL runs these on a PR only with WSL inputs | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
   # | `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` run Node release-bundle D/E and build the core Gitlink with Bun for standalone D/E of their own stack. A PR with no stack inputs skips the personal steps. The other three cells report NOT RUN | `stack (ubuntu-24.04, personal)` only; the other two running cells log the selective smoke and the three bypass cells report NOT RUN | Every cell reports a bypass or NOT RUN | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; the auth transport cases run on standalone through the `BUN_OPTIONS --preload` adapter, no skips. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
   #
@@ -111,11 +111,11 @@ jobs:
   #
   # The root `make check-commits` target runs before path classification on every CI event, independent of workspace selection (including docs-only and todo-only PRs). It uses the PR base/head or push before/after from the event payload, refuses shallow history, and preserves explicit `COMMIT_RANGE` and CLI overrides for local use. Its CLI and in-process tests live in `scripts/tests/` and run under `check-import-audit`, with zero uncovered floors. Package checks do not run repository commit policy.
   #
-  # - `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, `integration/probes/`, `integration/providers/`, the lockfiles and `integration/pyproject.toml`, the guest bootstrap's `scripts/install_gh_linux.sh`, `scripts/install_gh_linux.py`, `scripts/install_wsl_owned_tools.sh` and `scripts/install_wsl_owned_tools.py`, the guest gates' `scripts/import_audit.ts`, `scripts/router_contract.mjs`, `scripts/run-vitest.ts`, the `tests/lib/src/isolated-home.ts` it imports, their tests and `scripts/vitest.config.ts`, `coverage/policy.json` (the inventory that config and the probes and providers configs read), `Makefile`, root `package.json` (`packageManager`), `.npmrc` (npm fetch retries), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
-  # - `stack_inputs`: `integration/{stacks,harness,scenarios,providers,golden,probes}`, `integration/conftest.py`, `integration/pyproject.toml`, `integration/uv.lock`, `Makefile`, `.github/`, `forks/`, root `package.json`, `package-lock.json` and `.npmrc`, `.gitmodules`, the same version pins, `scripts/wsl2_*`. `packages/` is not one: `harness.stack` maps those paths into `local`, the personal stack installs published bytes
-  # - `benchmark_inputs`: `benchmarks/comparison/` (code, tests, `pyproject.toml`, `uv.lock`, results), `Makefile` (`install-benchmark`, `check-benchmark`, `PY_CHECK`), `.python-version` (the step's `UV_PYTHON`), `.node-version` (the Node that installs the pinned Codex), `.github/workflows/ci.yml` (the Codex pin and the step), `.github/actions/setup-ci-tools/`, `scripts/ci_paths.py` (a broken predicate cannot switch the gate off on the PR that breaks it). Nothing else reads it: no product package imports it, and `coverage/policy.json` only inventories it
+  # - `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, `tests/integration/probes/`, `tests/integration/providers/`, the lockfiles and `tests/integration/pyproject.toml`, the guest bootstrap's `scripts/install_gh_linux.sh`, `scripts/install_gh_linux.py`, `scripts/install_wsl_owned_tools.sh` and `scripts/install_wsl_owned_tools.py`, the guest gates' `scripts/import_audit.ts`, `scripts/router_contract.mjs`, `scripts/run-vitest.ts`, the `tests/lib/src/isolated-home.ts` it imports, their tests and `scripts/vitest.config.ts`, `coverage/policy.json` (the inventory that config and the probes and providers configs read), `Makefile`, root `package.json` (`packageManager`), `.npmrc` (npm fetch retries), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
+  # - `stack_inputs`: `release/`, `tests/integration/{harness,scenarios,providers,golden,probes}`, `tests/integration/conftest.py`, `tests/integration/pyproject.toml`, `tests/integration/uv.lock`, `Makefile`, `.github/`, `forks/`, root `package.json`, `package-lock.json` and `.npmrc`, `.gitmodules`, the same version pins, `scripts/wsl2_*`. `packages/` is not one: `pi_release.stack` maps those paths into `local`, the personal stack installs published bytes
+  # - `benchmark_inputs`: `tests/benchmarks/comparison/` (code, tests, `pyproject.toml`, `uv.lock`, results), `Makefile` (`install-benchmark`, `check-benchmark`, `PY_CHECK`), `.python-version` (the step's `UV_PYTHON`), `.node-version` (the Node that installs the pinned Codex), `.github/workflows/ci.yml` (the Codex pin and the step), `.github/actions/setup-ci-tools/`, `scripts/ci_paths.py` (a broken predicate cannot switch the gate off on the PR that breaks it). Nothing else reads it: no product package imports it, and `coverage/policy.json` only inventories it
   #
-  # The macOS `Benchmark unit gate` (issue #315) is path-gated at step level, not by a workflow path filter, so `owned (macos-14)` still reports. It runs when `benchmark_inputs` is true or on every `push` to `main`, which still catches runner and image drift (#304). A PR without them prints `check-benchmark NOT RUN` with the reason in the log and step summary, and the macOS fan-in reports `python-benchmarks/primary` NOT RUN instead of failing on its missing report. That is not a pass. When the step runs, the report is required: `fail_under = 100` blocks the step and `check-coverage` enforces 0/0 on darwin (#387). `make check` still runs `check-benchmark` locally. A `benchmarks/comparison` break from a change outside the list above, e.g. a root `package.json` `packageManager` bump, fails on the `main` push, after merge. The NOT RUN reason points at `BENCHMARK_INPUT_FILES` and `BENCHMARK_INPUT_PREFIXES` in `scripts/ci_paths.py` instead of copying the list.
+  # The macOS `Benchmark unit gate` (issue #315) is path-gated at step level, not by a workflow path filter, so `owned (macos-14)` still reports. It runs when `benchmark_inputs` is true or on every `push` to `main`, which still catches runner and image drift (#304). A PR without them prints `check-benchmark NOT RUN` with the reason in the log and step summary, and the macOS fan-in reports `python-benchmarks/primary` NOT RUN instead of failing on its missing report. That is not a pass. When the step runs, the report is required: `fail_under = 100` blocks the step and `check-coverage` enforces 0/0 on darwin (#387). `make check` still runs `check-benchmark` locally. A `tests/benchmarks/comparison` break from a change outside the list above, e.g. a root `package.json` `packageManager` bump, fails on the `main` push, after merge. The NOT RUN reason points at `BENCHMARK_INPUT_FILES` and `BENCHMARK_INPUT_PREFIXES` in `scripts/ci_paths.py` instead of copying the list.
   #
   # Evidence given up to cut queue time (issue #297):
   #
@@ -130,11 +130,11 @@ jobs:
   #
   # `classify changed paths` compares the pull request base and head, or the pre-push and pushed `main` revisions, with real Git. It never path-filters a required job: all twelve required jobs start and report a terminal status (an `owned` cell through its fan-in; its shard jobs skip when the plan does not run the cell). A docs-only change skips the native Linux/macOS expensive steps; a WSL cell on a PR is a bypass cell then anyway, and a real WSL cell on `main` still runs. Every skipped job writes a notice plus a step summary. Each job's `plan` step reads its cell from the `classify` plan, emits `run=true` or `run=false`, logs the planned reason when bypassing, and gates every checkout-dependent step on `steps.plan.outputs.run`. `stack` also emits `scenarios`, which is false only for a personal cell on a PR with no stack inputs: setup still runs there, the `Replay`, Node D/E, build, startup, standalone and auth steps do not. `always()` cleanup and artifact steps, plus failure and cancellation conditions, remain in those step predicates. Windows-only steps gate on `runner.os == 'Windows'`, not `matrix.os`, because a WSL bypass cell keeps its matrix values on Ubuntu.
   #
-  # The allowed docs-only paths are Markdown under `docs/`, root Markdown, and a package-root `README.md` or `CHANGELOG.md`. The classifier is deliberately narrower than "all Markdown": workflow files, manifests, lockfiles, Gitlinks, `integration/**`, `scripts/**`, and `releases/*.json` are code because they do not match an allowed path. It also treats root `AGENTS.md`, `README.md`, `docs/coverage.md`, `docs/install.md` and the `computer-use`, `plan-mode`, `preset`, `session-kit` and `todo` package READMEs as code because repository tests read their text. A mixed change is code.
+  # The allowed docs-only paths are Markdown under `docs/`, root Markdown, and a package-root `README.md` or `CHANGELOG.md`. The classifier is deliberately narrower than "all Markdown": workflow files, manifests, lockfiles, Gitlinks, `tests/integration/**`, `scripts/**`, and `releases/*.json` are code because they do not match an allowed path. It also treats root `AGENTS.md`, `README.md`, `docs/coverage.md`, `docs/install.md` and the `computer-use`, `plan-mode`, `preset`, `session-kit` and `todo` package READMEs as code because repository tests read their text. A mixed change is code.
   #
   # The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s, p95 queue waits of 22m37s on macOS and 19m56s on Ubuntu, and four macOS jobs in each full run against five hosted macOS slots. A docs-only root Markdown PR alone consumed 100.25 runner-minutes across 18 stack executions. Bypassing that work reduces real contention without leaving a protected check pending.
   #
-  # `main` still validates the merged result: all `owned` and `contracts` OS cells including real WSL, and `stack (ubuntu-24.04, personal)`, which `harness.promotion` needs for its `stack-ubuntu-24.04-personal` artifact. `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` report the selective smoke. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings.
+  # `main` still validates the merged result: all `owned` and `contracts` OS cells including real WSL, and `stack (ubuntu-24.04, personal)`, which `pi_release.promotion` needs for its `stack-ubuntu-24.04-personal` artifact. `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` report the selective smoke. The same measurement found six explicit update-branch CI runs plus one Forks run used 180.07 assigned runner-minutes; full main-push workflows used 599.13 assigned runner-minutes, including 334.02 macOS minutes. Those are upper bounds, not promised savings.
   #
   # PR runs cancel each other per ref. `main` runs do not: `cancel-in-progress` is PR-only and the concurrency group is per SHA on push, because GitHub drops an older pending run in a shared group even without cancellation. A push cannot kill the run proving the previous merge.
   #
@@ -160,7 +160,7 @@ jobs:
   #
   # The twelve required check names are listed [here](../../README.md#required-checks).
   #
-  # Capacity: full PR CI requests six macOS jobs (four `owned` shards, `contracts`, `stack (macos-14, local)`) and three Windows jobs only with WSL inputs (two `owned` shards, `contracts`). Before #350 it requested three macOS jobs, and before that four of each, every run. The `owned` fan-ins are Ubuntu jobs that start after their shards. Ubuntu now builds the standalone twice, once per stack cell, where it used to build once and run both stacks serially. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid another build and two stack installs. Bun failures fail their own stack cell.
+  # Capacity: full PR CI requests seven macOS jobs (five `owned` shards, `contracts`, `stack (macos-14, local)`) and three Windows jobs only with WSL inputs (two `owned` shards, `contracts`). Before #350 it requested three macOS jobs, and before that four of each, every run. The `owned` fan-ins are Ubuntu jobs that start after their shards. Ubuntu now builds the standalone twice, once per stack cell, where it used to build once and run both stacks serially. Stack timeouts are 40 minutes. Linux ARM64 is omitted to avoid another build and two stack installs. Bun failures fail their own stack cell.
   #
   # Not in CI yet: bench on a quiet runner, live `G` (deliberately never CI).
 
@@ -286,22 +286,22 @@ jobs:
   # live desktop acceptance is claimed. macOS, WSL and ARM64 replacement cells explicitly skip this
   # Ubuntu-only signal. The ordinary packed-source/diagnostics contract is unchanged.
   #
-  # `check-scripts` also runs `scripts/package_layout.py` (#861), which checks every package under `packages/`, plus the script, Biome, binary and shell rules of the shared packages, against the layout standard in #860 and prints one `<package>: <path>: <rule>` line per violation. The test layout is plural `tests/` everywhere: per package `tests/*.test.ts` (and `tests/*.bench.ts`) plus `tests/fixtures/` for every non-test file, with no `support/`, `helpers/` or per-package `lib/`; root shared code goes in `tests/lib/` and data in `tests/fixtures/`. `SHARED_PACKAGES` (`integration/inprocess`, `tests/lib`) gets the script-name, Biome, tracked-binary and shell-script rules; a configured shared path with no tracked files is a hard error (exit 2), so a move cannot leave its tree unchecked. Today's deviations, including each package's `test/` directory, are one line each in `scripts/package_layout.json` (sorted, one entry per line, so rebases conflict only where two PRs touch the same line). The list can only shrink: an entry whose violation is gone fails as stale, and an entry the merge base of `HEAD` and `origin/main` (or `BASE`; an empty `BASE` also means `origin/main`) does not carry fails, so a new violation cannot be waived by listing it. A tracked path that is new since the merge base and sits under a waived banned entry (e.g. a file added to `test/` or `lib/`) fails as `added-under-banned-entry`, so the waiver covers the directory, not what is added to it (a pure rename inside the same entry is exempt, including staged index renames). Repeated occurrences of an allowlisted import specifier may not grow beyond the merge-base count. Content rules (`import-escape`, `test-extension`, `test-name`, `shell-script`, `tracked-binary`) keep running below a banned entry, so those lines stay in the allowlist as debt. No committed binaries: files under `prebuilt/` and any tracked file with an ELF, Mach-O or PE magic number are `tracked-binary`; standalone `.sh`, `.ps1`, `.bash` and `.cmd` files outside `tests/fixtures/` are `shell-script` (use a Makefile target); `test:upstream-sync` and `test:sync-reverts` are denied script names. Script commands and code also reject textual retired sync markers under renamed entry points. `pretest` is a standard script name (it builds the gitignored `dist/` a test loads), and a relative import of exactly `scripts/runtime-builder.mjs`, `scripts/run-vitest.ts` or `scripts/vitest-package.ts` (the `SHARED_TOOLCHAIN` set; a later PR extends it) is not an `import-escape`, any other root path is. A package PR deletes its own entries. The python shard is never path-gated, and a diff that adds or deletes a package's `README.md` or `CHANGELOG.md` is not docs-only, so the gate runs for every change it reads.
+  # `check-scripts` also runs `scripts/package_layout.py` (#861), which checks every package under `packages/`, plus the script, Biome, binary and shell rules of the shared packages, against the layout standard in #860 and prints one `<package>: <path>: <rule>` line per violation. The test layout is plural `tests/` everywhere: per package `tests/*.test.ts` (and `tests/*.bench.ts`) plus `tests/fixtures/` for every non-test file, with no `support/`, `helpers/` or per-package `lib/`; root shared code goes in `tests/lib/` and data in `tests/fixtures/`. `SHARED_PACKAGES` (`tests/inprocess`, `tests/lib`) gets the script-name, Biome, tracked-binary and shell-script rules; a configured shared path with no tracked files is a hard error (exit 2), so a move cannot leave its tree unchecked. Today's deviations, including each package's `test/` directory, are one line each in `scripts/package_layout.json` (sorted, one entry per line, so rebases conflict only where two PRs touch the same line). The list can only shrink: an entry whose violation is gone fails as stale, and an entry the merge base of `HEAD` and `origin/main` (or `BASE`; an empty `BASE` also means `origin/main`) does not carry fails, so a new violation cannot be waived by listing it. A tracked path that is new since the merge base and sits under a waived banned entry (e.g. a file added to `test/` or `lib/`) fails as `added-under-banned-entry`, so the waiver covers the directory, not what is added to it (a pure rename inside the same entry is exempt, including staged index renames). Repeated occurrences of an allowlisted import specifier may not grow beyond the merge-base count. Content rules (`import-escape`, `test-extension`, `test-name`, `shell-script`, `tracked-binary`) keep running below a banned entry, so those lines stay in the allowlist as debt. No committed binaries: files under `prebuilt/` and any tracked file with an ELF, Mach-O or PE magic number are `tracked-binary`; standalone `.sh`, `.ps1`, `.bash` and `.cmd` files outside `tests/fixtures/` are `shell-script` (use a Makefile target); `test:upstream-sync` and `test:sync-reverts` are denied script names. Script commands and code also reject textual retired sync markers under renamed entry points. `pretest` is a standard script name (it builds the gitignored `dist/` a test loads), and a relative import of exactly `scripts/runtime-builder.mjs`, `scripts/run-vitest.ts` or `scripts/vitest-package.ts` (the `SHARED_TOOLCHAIN` set; a later PR extends it) is not an `import-escape`, any other root path is. A package PR deletes its own entries. The python shard is never path-gated, and a diff that adds or deletes a package's `README.md` or `CHANGELOG.md` is not docs-only, so the gate runs for every change it reads.
   #
-  # `check-scripts` and `check-integration` share one Makefile recipe, `PY_GATE`: ruff format and check, ty, then `pytest -n auto --dist loadfile` (pytest-xdist is already locked) with `--cov=<project root>` writing LCOV to `<project>/coverage/python/lcov.info`. `--dist loadfile` keeps every test file on one worker, as the scenario runs already do (`integration/Makefile`). The reports are uploaded in the `coverage-<os>` artifact and `check-coverage` accounts for them as `python-scripts` and `python-harness`. The fan-in's accounting step sets `COVERAGE_HOST` to the plan's `guest` for the cell (`RUNNERS` in `scripts/ci_paths.py`) so the WSL cell, which has no pytest, reports those two signals NOT RUN instead of failing on a missing report (`skip_hosts` in `coverage/policy.json`, pinned to each cell's planned gates by a test). Serial and parallel runs were compared test by test: identical pass sets, no order-dependent test. `PY_GATE` also passes `--cov-fail-under=100` to pytest, for both `check-scripts` and `check-integration` (`harness`); for `scripts` the measured root is `.`, so the test files are held at 100% too. `check-benchmark` is its own recipe: pytest-cov at `fail_under = 100` with branch coverage, writing `benchmarks/comparison/coverage/python/lcov.info`, accounted as `python-benchmarks` (#387). The macOS `python` shard uploads that report after the benchmark steps, and the fan-in's `COVERAGE_SKIPPED_GATES` (the plan's `skipped_gates`) reports it NOT RUN on a PR that skipped the gate.
+  # `check-scripts` and `check-integration` share one Makefile recipe, `PY_GATE`: ruff format and check, ty, then `pytest -n 2 --dist loadfile` (pytest-xdist is already locked) with `--cov=<project root>` writing LCOV to `<project>/coverage/python/lcov.info`. `--dist loadfile` keeps every test file on one worker, as the scenario runs already do (`tests/integration/Makefile`). The reports are uploaded in the `coverage-<os>` artifact and `check-coverage` accounts for them as `python-scripts`, `python-release` and `python-harness`. The fan-in's accounting step sets `COVERAGE_HOST` to the plan's `guest` for the cell (`RUNNERS` in `scripts/ci_paths.py`) so the WSL cell, which has no pytest, reports those three signals NOT RUN instead of failing on a missing report (`skip_hosts` in `coverage/policy.json`, pinned to each cell's planned gates by a test). Serial and parallel runs were compared test by test: identical pass sets, no order-dependent test. `PY_GATE` also passes `--cov-fail-under=100` to pytest, for both `check-scripts` and `check-integration` (`harness` and `pi_release`, in separate uv projects); for `scripts` the measured root is `.`, so the test files are held at 100% too. `check-benchmark` is its own recipe: pytest-cov at `fail_under = 100` with branch coverage, writing `tests/benchmarks/comparison/coverage/python/lcov.info`, accounted as `python-benchmarks` (#387). The macOS `python` shard uploads that report after the benchmark steps, and the fan-in's `COVERAGE_SKIPPED_GATES` (the plan's `skipped_gates`) reports it NOT RUN on a PR that skipped the gate.
   #
-  # The macOS `Benchmark unit gate` exports `UV_PYTHON` from `.python-version` before `make install-benchmark`. The runner image's Homebrew Python moved to 3.15.1, `benchmarks/comparison/uv.lock` has no cp315 `pydantic-core` wheel, and uv compiled it from source: ~84s in the sync, then again in each cold-cache gate sync that `test_prepare_finalize.py` runs (the gates inherit `sys.executable`). That step went from 58s (3.14.7) to 464-500s (3.15.1) and pushed `owned (macos-14)` to the 30 min limit (#304). The pin keeps the same tests and the same timeout.
+  # The macOS `Benchmark unit gate` exports `UV_PYTHON` from `.python-version` before `make install-benchmark`. The runner image's Homebrew Python moved to 3.15.1, `tests/benchmarks/comparison/uv.lock` has no cp315 `pydantic-core` wheel, and uv compiled it from source: ~84s in the sync, then again in each cold-cache gate sync that `test_prepare_finalize.py` runs (the gates inherit `sys.executable`). That step went from 58s (3.14.7) to 464-500s (3.15.1) and pushed `owned (macos-14)` to the 30 min limit (#304). The pin keeps the same tests and the same timeout.
   #
-  # `owned` is sharded (#350). Each OS has an `owned-shards-<os>` job, whose `if` reads the cell's `run` and whose matrix `include` *is* the cell's `shards` list from the plan, and an `owned-<os>` fan-in job that reports the required `owned (<os>)` name. `scripts/ci_paths.py` `OWNED_SHARDS` owns the split; no step names a shard. Each shard runs one step per gate it lists (`Owned gate check-ts`, `check-scripts`, `check-integration`, and on WSL `check-probes`, `check-providers`, `check-import-audit`), each under `!cancelled()` after a successful `Install`, so a failing gate never hides another gate's evidence. A `check-ts` shard runs `make check-ts WORKSPACES="<paths>"`, which is `npm run check --workspace=<path>...`: each package's own `npm run check`, unchanged, in npm workspace order, one package at a time; no `-j`. A `check-ts` shard that names no workspaces takes every workspace no other shard of its cell names, computed from the root `package.json` when the plan is built, so a new workspace lands in a shard without a table edit, and the plan refuses a split that names an unknown workspace or leaves a `check-ts` shard empty. `make check-ts` with no `WORKSPACES` still runs every workspace locally. `harness.release_gate` requires each shard's gate steps and each fan-in's steps (see [frozen release verification](../../README.md#frozen-release-verification)); renaming a step means updating `OWNED_GATE_STEPS` there, and a test pins its `OWNED_SHARDS` to the plan's. The `Benchmark unit gate` step keeps its implicit `success()` (no `!cancelled()`) and runs when the shard's `gates` list `check-benchmark` and its `skipped_gates` do not. It runs before the shard's coverage upload, which carries its LCOV.
+  # `owned` is sharded (#350). Each OS has an `owned-shards-<os>` job, whose `if` reads the cell's `run` and whose matrix `include` *is* the cell's `shards` list from the plan, and an `owned-<os>` fan-in job that reports the required `owned (<os>)` name. `scripts/ci_paths.py` `OWNED_SHARDS` owns the split; no step names a shard. Each shard runs one step per gate it lists (`Owned gate check-ts`, `check-scripts`, `check-integration`, and on WSL `check-probes`, `check-providers`, `check-import-audit`), each under `!cancelled()` after a successful `Install`, so a failing gate never hides another gate's evidence. A `check-ts` shard runs `make check-ts WORKSPACES="<paths>"`, which is `npm run check --workspace=<path>...`: each package's own `npm run check`, unchanged, in npm workspace order, one package at a time; no `-j`. A `check-ts` shard that names no workspaces takes every workspace no other shard of its cell names, computed from the root `package.json` when the plan is built, so a new workspace lands in a shard without a table edit, and the plan refuses a split that names an unknown workspace or leaves a `check-ts` shard empty. `make check-ts` with no `WORKSPACES` still runs every workspace locally. `pi_release.release_gate` requires each shard's gate steps and each fan-in's steps (see [frozen release verification](../../README.md#frozen-release-verification)); renaming a step means updating `OWNED_GATE_STEPS` there, and a test pins its `OWNED_SHARDS` to the plan's. The `Benchmark unit gate` step keeps its implicit `success()` (no `!cancelled()`) and runs when the shard's `gates` list `check-benchmark` and its `skipped_gates` do not. It runs before the shard's coverage upload, which carries its LCOV.
   #
-  # A shard whose gates include `check-integration` (the Ubuntu and macOS `python` shards) installs tmux first with the `stack` job's own steps, `Install tmux (Linux)` (`apt-get install tmux`, only when `command -v tmux` finds none) and `Install tmux (macOS)` (`brew install tmux`) (#383). The integration units drive `harness.tmux`, `rpc`, `headless`, `interactive`, `probe` and `fleet_load` against `integration/tests/stub_pi.py` on private tmux servers, so those modules are measured in `python-harness` instead of only running in the uncovered `stack` scenarios. No shard runs a real Pi for this. The WSL guest never runs `check-integration` and needs no step.
+  # A shard whose gates include `check-integration` (the Ubuntu and macOS `python` shards) installs tmux first with the `stack` job's own steps, `Install tmux (Linux)` (`apt-get install tmux`, only when `command -v tmux` finds none) and `Install tmux (macOS)` (`brew install tmux`) (#383). The integration units drive `harness.tmux`, `rpc`, `headless`, `interactive`, `probe` and `fleet_load` against `tests/integration/tests/stub_pi.py` on private tmux servers, so those modules are measured in `python-harness` instead of only running in the uncovered `stack` scenarios. No shard runs a real Pi for this. The WSL guest never runs `check-integration` and needs no step.
   #
   # Shards (from the per-package timings in #350, run `41749405074`):
   #
   # | Cell | Shards | Why |
   # | --- | --- | --- |
   # | `owned (ubuntu-24.04)` | `subagents`; `computer-use`; `ts` (every other workspace); `python` (`check-scripts`, `check-integration`) | The issue's four units: about 196s, 157s, 254s and 271s of gate time, against 883s in one job |
-  # | `owned (macos-14)` | `subagents`; `computer-use`; `ts` (every other workspace); `python` (`check-scripts`, `check-integration`, `check-benchmark`) | One `ts` job ran every workspace in 15-28 min of a 30 min budget (#660), `packages/subagents` alone about 10-11 min and `packages/computer-use` about 5-6 min, so macOS mirrors the Ubuntu split: about 680s, 360s and 480s of estimated hosted job time (about 75s of setup included; `CELL_SECONDS` values derived from run 42799667706, re-measure after this lands) plus the 462s `python` shard. This trades the old "at most two" macOS shards for four: the three `check-ts` shards run concurrently, so the cell finishes in about the longest shard. |
+  # | `owned (macos-14)` | `subagents`; `computer-use`; `ts` (every other workspace); `scripts` (`check-scripts`); `python` (`check-integration`, `check-benchmark`) | Run 44008954118 spent 19m01s in scripts, then passed both full 2831-case release/harness coverage runs (228s/181s), but hit the unchanged 30m limit during probes. Separate scripts/import-audit from integration/probes/providers and benchmark; keep every gate, both independent coverage passes and the two-worker cap. No new timing estimate is treated as measured pool capacity. |
   # | `owned (wsl2)` | `subagents-computer-use`; `ts` (every other workspace, `check-probes`, `check-providers`, `check-import-audit`) | About 461s and 324s of gate time. Each Windows job pays about 3.5 min of WSL guest setup before its first gate, so a third shard would buy about 2.5 min on a cell that already finishes inside the macOS critical path |
   #
   # Computer-use's macOS Swift invariants explicitly prepare SDK-only imports in their private per-run
@@ -315,10 +315,10 @@ jobs:
   #
   # In the `owned` cells, `@nredd/pi-computer-use`'s macOS-only checks are not passes on Linux: Vitest reports `test/invariants.test.mjs` INV-8/INV-17, `test/macos-native-pure.test.mjs` and `test/desktop-tools.test.mjs`'s helper wire mapping and gating as skipped, and so are `macos-helper-live.test.mjs` (also opt-in) and `linux-live.test.mjs` (opt-in, Linux). Conversely, `linux-native.test.mjs` (`test/linux-native.test.mjs`) runs headless on the Ubuntu and WSL cells (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, desktop/display and live UI are NOT RUN. This is coverage inside the `owned` cells' computer-use shards' `npm test`, not a new required check (Vitest reports it passed on Ubuntu and skipped on macOS; the ARM64 case is skipped unless `PI_CU_LINUX_ARM64_CHECK=1`). `windows-build-scripts.test.mjs` stays opt-in like the script it replaced: it is skipped unless `PI_CU_WINDOWS_SCRIPTS=1`, which `PI_CU_WINDOWS_SCRIPTS=1 npm test -- test/windows-build-scripts.test.mjs --coverage.enabled=false` sets. Its two macOS helper builds took 10-56 s each locally and passed the scripts' 120 s deadline under fleet load.
   #
-  # `integration/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
+  # `tests/inprocess/`, the private `A-stack` workspace, runs in `check-ts` on Vitest and Bun:
   #
   # - `make install-owned` first runs `make verify-root-overrides` (see [releases](../../docs/releases.md)); `owned`, `contracts`, `stack` (a dedicated step before `npm ci`, plus the core fetch) and `publish.yml` verify pass the read-only job token as `GH_TOKEN` to those steps only, for non-legacy core tags. Hosted Linux and macOS runners ship a `gh` with `attestation`. A transient release-asset download failure (HTTP 502/503/504/429, connection reset, socket timeout) is retried up to 8 attempts with logged backoff (5s, 10s, 20s, then 30s, at most 155s per request); a 404/401/403, other status or checksum/size/redirect refusal fails the job on the first attempt. A `gh attestation verify` that fails with exactly `public good verifier is not available (initialization may have failed)` (the Sigstore public-good trust-root fetch) is retried up to 3 attempts with logged backoff; every other provenance failure, including other Sigstore init errors, fails the job on the first attempt. The `npm ci` that follows reads the root `.npmrc` (`fetch-retries=7`, the same 155s window) for the same CDN 5xx, and on native cells installs the core tarballs from the restored npm cache when it is warm (see [releases](../../docs/releases.md)).
-  # - `make install-owned` ends its npm step with `make build` (`npm run build --workspaces --if-present`): `packages/*/dist/` is gitignored, and the `local` stack, `integration/inprocess` and `pi -e packages/plan-mode` load it from the checkout. `check-scripts`, `check-core-compaction`, the inprocess `pretest` and the `local` stack runner build first, so a stale `dist/` is never loaded. The `stack` job runs `npm run build` after its own `npm ci`. Package-contract packing builds first too (`package_contracts.pack`).
+  # - `make install-owned` ends its npm step with `make build` (`npm run build --workspaces --if-present`): `packages/*/dist/` is gitignored, and the `local` stack, `tests/inprocess` and `pi -e packages/plan-mode` load it from the checkout. `check-scripts`, `check-core-compaction`, the inprocess `pretest` and the `local` stack runner build first, so a stale `dist/` is never loaded. The `stack` job runs `npm run build` after its own `npm ci`. Package-contract packing builds first too (`package_contracts.pack`).
   # - `owned` initializes only `forks/pi` (core) before `make install-owned`. The extensions load from
   #   `packages/{subagents,plan-mode,todo}`; no package-local `npm ci`, no package-local host copies
   # - `support.ts`: `startStack({ cwd?, factories, settings?, sessionManager?, useModelRuntimeStream?, withConfiguredAuth?, mode?, ui? })` creates and
@@ -358,13 +358,13 @@ jobs:
   #   resets pi-memory's own path/snapshot/qmd caches before a new fixture: Bun caches npm modules
   #   across test files, so import-time state must not retain a deleted prior private home.
   #
-  # The unit gates must not read the machine: the first CI run found three `integration/tests` that only
+  # The unit gates must not read the machine: the first CI run found three `tests/integration/tests` that only
   # passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are gone or isolated.
   #
   # Verification engines: Vitest stays the owned TypeScript runner, with Node primary (the shipped
   # runtime) and Bun the standalone target. Full Vitest runs on both engines for
   # `subscription-router`, `preset`, `resource-sampler`, `todo`, `plan-mode`, `dev-tools`, `subagents` and
-  # `integration/inprocess`.
+  # `tests/inprocess`.
   # `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
   # spawn-time home (the keys come from `isolatedHomeEnv` in `tests/lib/src/isolated-home.ts`, which nested runners such as
   # session-kit's worker-death test reuse as `@nredd/pi-test-lib/isolated-home`); `make check-ts` and the native `owned` cells' TypeScript shards run it.
@@ -425,6 +425,7 @@ jobs:
         # `defaults.run.shell` cannot read `runner.os`, so the plan's `host` picks it: a hosted wsl2 shard reaches its
         # guest through `wsl.exe`, a pooled one (`native`) already runs inside the linux-arm64 distro.
         shell: ${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
+    # Partition the native gates, never extend their 30-minute budget. WSL retains its existing guest bound.
     timeout-minutes: &owned-shard-timeout ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps: &owned-shard-steps
       - name: Select and verify Git Bash on the Windows host
@@ -560,7 +561,7 @@ jobs:
         if: contains(matrix.gates, 'check-benchmark') && !contains(matrix.skipped_gates, 'check-benchmark')
         run: |
           # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
-          # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
+          # `tests/benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
           # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
           export UV_PYTHON="$(tr -d '\n' < .python-version)"
           make install-benchmark
@@ -590,6 +591,8 @@ jobs:
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
+      # The macOS scripts shard owns scripts/python + import-audit reports; python owns release/harness,
+      # probes/providers and benchmark. Dynamic artifact names and downloads include both without a second list.
       # Reports only: the fan-in accounts for the whole cell. A shard that produces no report (computer-use) uploads
       # nothing, and the fan-in's accounting fails on any report the policy expects and no shard produced.
       - name: Preserve this shard's coverage reports
@@ -606,18 +609,19 @@ jobs:
             packages/computer-use/coverage/native-linux/*/summary.txt
             packages/computer-use/coverage/native-linux/*/*.log
             packages/*/coverage/**/coverage-summary.json
-            integration/inprocess/coverage/**/lcov.info
-            integration/inprocess/coverage/**/coverage-summary.json
+            tests/inprocess/coverage/**/lcov.info
+            tests/inprocess/coverage/**/coverage-summary.json
             tests/lib/coverage/**/lcov.info
             tests/lib/coverage/**/coverage-summary.json
-            integration/probes/coverage/**/lcov.info
-            integration/probes/coverage/**/coverage-summary.json
-            integration/providers/coverage/**/lcov.info
-            integration/providers/coverage/**/coverage-summary.json
-            integration/coverage/**/lcov.info
+            tests/integration/probes/coverage/**/lcov.info
+            tests/integration/probes/coverage/**/coverage-summary.json
+            tests/integration/providers/coverage/**/lcov.info
+            tests/integration/providers/coverage/**/coverage-summary.json
+            tests/integration/coverage/**/lcov.info
+            release/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
             scripts/coverage/**/coverage-summary.json
-            benchmarks/comparison/coverage/**/lcov.info
+            tests/benchmarks/comparison/coverage/**/lcov.info
           if-no-files-found: ignore
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
@@ -702,14 +706,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $env:PYTHONPATH = 'integration'
+          $env:PYTHONPATH = 'release'
           # The verifier intentionally uses only explicit OpenSSL CA defaults. Windows Python has none.
           # Export pinned Node's built-in public Mozilla roots, not private machine roots or a guessed Git layout.
           # This is a temporary CA input, not a system trust-store change or TLS bypass.
           $env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP 'cu-public-node-ca.pem'
           node -e 'require("node:fs").writeFileSync(process.argv[1], require("node:tls").rootCertificates.join("\n") + "\n")' "$env:SSL_CERT_FILE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run --no-project --python (Get-Content .python-version) python -m harness.release --verify-root-overrides --root .
+          uv run --no-project --python (Get-Content .python-version) python -m pi_release.release --verify-root-overrides --root .
       - name: Install pinned native compiler and LLVM tools
         run: |
           New-Item -ItemType Directory -Force packages/computer-use/coverage/native-windows | Out-Null
@@ -761,7 +765,7 @@ jobs:
   # Windows slot. Its one-cell matrix keeps the required name, and the `owned (${{ matrix.os }})` placeholder name of
   # a job a cancelled run never started.
   # Policy: Fan-in and independent coverage accounting
-  # The fan-in (`owned-<os>`) runs on `ubuntu-24.04` for every cell, with `if: !cancelled()` and `needs: [classify, owned-shards-<os>]`; `needs` is per job, so one fan-in matrix would hold Ubuntu's check until the macOS shards finish, which is why each OS has its own pair of jobs. The three shard jobs and the three fan-ins share their definitions through YAML anchors, and each fan-in is a one-cell matrix so a never-started fan-in keeps the `owned (${{ matrix.os }})` placeholder name. The fan-in reports the plan like every other cell, then `Require every planned shard to succeed` fails a running cell unless `needs.owned-shards-<os>.result` is `success`: that value folds the whole shard matrix, so any failed or cancelled shard, or a shard job skipped although the plan runs the cell, turns the required check red. It then downloads the cell's `coverage-<os>-<shard>` artifacts (each into its own directory), fails if two shards produced the same report path, copies them back to their repository paths and runs `make check-coverage` on them, under `always()` like before. The plan's `coverage_os` and `guest` become `COVERAGE_OS` and `COVERAGE_HOST`, so `darwin` accounts the macOS cell's reports against the darwin floors with no OS switch in the workflow; the accounting reads only reports, the policy and Git, as in the `--reports-root` replay. The fan-in uploads the merged reports plus `coverage/summary.json` as `coverage-<os>`, the artifact `harness.release_gate` binds to `owned (<os>)`. A NOT RUN, docs-only or blocked cell plans no shards and its fan-in reports exactly as a bypass cell did.
+  # The fan-in (`owned-<os>`) runs on `ubuntu-24.04` for every cell, with `if: !cancelled()` and `needs: [classify, owned-shards-<os>]`; `needs` is per job, so one fan-in matrix would hold Ubuntu's check until the macOS shards finish, which is why each OS has its own pair of jobs. The three shard jobs and the three fan-ins share their definitions through YAML anchors, and each fan-in is a one-cell matrix so a never-started fan-in keeps the `owned (${{ matrix.os }})` placeholder name. The fan-in reports the plan like every other cell, then `Require every planned shard to succeed` fails a running cell unless `needs.owned-shards-<os>.result` is `success`: that value folds the whole shard matrix, so any failed or cancelled shard, or a shard job skipped although the plan runs the cell, turns the required check red. It then downloads the cell's `coverage-<os>-<shard>` artifacts (each into its own directory), fails if two shards produced the same report path, copies them back to their repository paths and runs `make check-coverage` on them, under `always()` like before. The plan's `coverage_os` and `guest` become `COVERAGE_OS` and `COVERAGE_HOST`, so `darwin` accounts the macOS cell's reports against the darwin floors with no OS switch in the workflow; the accounting reads only reports, the policy and Git, as in the `--reports-root` replay. The fan-in uploads the merged reports plus `coverage/summary.json` as `coverage-<os>`, the artifact `pi_release.release_gate` binds to `owned (<os>)`. A NOT RUN, docs-only or blocked cell plans no shards and its fan-in reports exactly as a bypass cell did.
   #
   # Phase 0 coverage runs inside the existing primary and declared Bun test invocations, never a
   # second CI test pass. Each Vitest config reads its owned source from `coverage/policy.json`, uses text + LCOV and
@@ -777,7 +781,7 @@ jobs:
   # No counters are combined across runners. Native Windows has its separate raw LLVM producer;
   # it does not contribute to the Linux guest coverage accounting. WSL contract
   # scenarios remain separate acceptance evidence, not owned-source coverage. To regenerate a review-only policy diff from an
-  # artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
+  # artifact, run `uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure
   # --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
   # artifact for macOS). The full download/replay and independent-two-run comparison procedure is
   # [here](../../docs/coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Uncovered
@@ -810,7 +814,7 @@ jobs:
   # Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
   # `computer-use` stays not measured, tracked for its native Swift/Rust and documentation site. Its 35 JS/TS runtime modules are measured by the enforced `computer-use-vitest` ratchet (#347, #645): per-OS uncovered lines, functions and branches may not grow. `dev-tools` uses #195's primary Istanbul decision with
   # all 23 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
-  # Its Bun signal runs the same full Vitest suite on Bun and is enforced at 0/0 since #320. Python `scripts/` and `integration/harness/` are measured by `PY_GATE`, `benchmarks/comparison` by `check-benchmark` on macOS (see `docs/coverage.md`). The Vitest
+  # Its Bun signal runs the same full Vitest suite on Bun and is enforced at 0/0 since #320. Python `scripts/` and `tests/integration/harness/` are measured by `PY_GATE`, `tests/benchmarks/comparison` by `check-benchmark` on macOS (see `docs/coverage.md`). The Vitest
   # producer configurations are measured by `import-audit` (#380, see `docs/coverage.md`).
   # The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet
   # prevent silent source omission; reasoned reclassifications are required for membership losses.
@@ -923,18 +927,19 @@ jobs:
             packages/computer-use/coverage/native-linux/*/summary.txt
             packages/computer-use/coverage/native-linux/*/*.log
             packages/*/coverage/**/coverage-summary.json
-            integration/inprocess/coverage/**/lcov.info
-            integration/inprocess/coverage/**/coverage-summary.json
+            tests/inprocess/coverage/**/lcov.info
+            tests/inprocess/coverage/**/coverage-summary.json
             tests/lib/coverage/**/lcov.info
             tests/lib/coverage/**/coverage-summary.json
-            integration/probes/coverage/**/lcov.info
-            integration/probes/coverage/**/coverage-summary.json
-            integration/providers/coverage/**/lcov.info
-            integration/providers/coverage/**/coverage-summary.json
-            integration/coverage/**/lcov.info
+            tests/integration/probes/coverage/**/lcov.info
+            tests/integration/probes/coverage/**/coverage-summary.json
+            tests/integration/providers/coverage/**/lcov.info
+            tests/integration/providers/coverage/**/coverage-summary.json
+            tests/integration/coverage/**/lcov.info
+            release/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
             scripts/coverage/**/coverage-summary.json
-            benchmarks/comparison/coverage/**/lcov.info
+            tests/benchmarks/comparison/coverage/**/lcov.info
             coverage/summary.json
           if-no-files-found: error
       - name: Packages without a Bun run (not run)
@@ -1138,7 +1143,7 @@ jobs:
   # no stale `second/pi`.
   #
   # `harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
-  # included, through the shared `harness.credentials.require_safe_diagnostic` policy before atomically
+  # included, through the shared `pi_release.credentials.require_safe_diagnostic` policy before atomically
   # publishing the upload directory. This preserves #178's npm (at least 36 alphanumerics), short GitHub,
   # sk/pk, Slack and general private-key signatures alongside main's nonempty JSON/Bearer and release
   # URL/proxy policy. There is one shared scanner, not a collector-local duplicate. Signatures are
@@ -1180,9 +1185,9 @@ jobs:
   # To diagnose an already-built binary without running the whole suite:
   #
   # ```sh
-  # cd integration
+  # cd tests/integration
   # uv run --locked python -m harness.standalone_diagnostics startup \
-  #   --binary /absolute/path/to/linux-x64/pi --core ../forks/pi \
+  #   --binary /absolute/path/to/linux-x64/pi --core ../../forks/pi \
   #   --build-evidence /absolute/path/to/pi-build-evidence \
   #   --output /absolute/path/to/new-failure-evidence
   # ```
@@ -1202,10 +1207,10 @@ jobs:
   # than replacing the original failure. Only these named artifact patterns are added to the existing
   # allowlist, never arbitrary JSON, environment dumps or a recursive sandbox HOME. Every candidate's
   # complete raw bytes, including existing sessions/screens, are scanned **before publication**.
-  # `harness.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
+  # `pi_release.credentials.require_safe_diagnostic` is the shared publication policy: it reuses
   # `release.redact_diagnostic` for URL/known proxy credentials and centralizes the signature rules
   # extracted from the #191 collector. Scenario publication, the standalone collector and the WSL
-  # guest-state capture (through `python -m harness.credentials`) consume this same helper, with no
+  # guest-state capture (through `python -m pi_release.credentials`) consume this same helper, with no
   # collector-local credential regex or dependency from the shared helper back onto a collector. Long
   # token/key signatures remain checked. Explicit canonical JSON string
   # fields `access_token`, `refresh_token` and `api_key` are refused for **any nonempty string value**;
@@ -1220,7 +1225,7 @@ jobs:
   # or staging error refuses the whole set, removes stale publication and leaves the primary verdict
   # unchanged; raw bytes are never redacted into a misleading "exact" capture. Every ancestor from the
   # sandbox root itself through the candidate's parent must be an actual directory, including internal
-  # parent links that happen to resolve inside the sandbox. Candidate reads reuse the `harness.files`
+  # parent links that happen to resolve inside the sandbox. Candidate reads reuse the `pi_release.files`
   # regular-file pattern: reject known nonregular entries before opening, then use `O_NOFOLLOW`,
   # `O_NONBLOCK`, `O_NOCTTY` and descriptor `fstat` before reading. Final symlink/FIFO replacements cannot
   # turn cleanup into a blocking FIFO read. Ancestry checks are observations, not a descriptor-anchored
@@ -1256,7 +1261,7 @@ jobs:
   # The initial two-case command was `PI_BIN=<rebuilt-pi> uv run --locked pytest
   # 'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-tui]'
   # 'scenarios/test_startup.py::test_fatal_startup_modes[ordinary-session_start-rpc]'
-  # --stack stacks/local.json --runtime bun-standalone -q`: 2 passed. A diagnostic driver then invoked
+  # --stack ../../release/stacks/local.json --runtime bun-standalone -q`: 2 passed. A diagnostic driver then invoked
   # that unchanged scenario function on copied explicit fixtures: 12 serial pairs, then two concurrent
   # drivers of 8 pairs each (qmd failure shim for the concurrent run), all passed. Recorded local logs:
   # `/tmp/fix-tui-repro.log`, `/tmp/fix-tui-repeat.log`, `/tmp/fix-tui-stress-a.log` and
@@ -1313,14 +1318,14 @@ jobs:
   # subscription is used. Explicit pi-ai compat dispatch and legacy loops without `streamFn` bypass the
   # provider wrapper; compaction/modelRegistry coverage is upstream-documented, not asserted here.
   #
-  # The `stack` job explicitly selects `integration/scenarios/test_*.py` plus
-  # `integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
-  # No unported non-boundary Python scenarios remain. Package-native suites and `integration/inprocess/`
+  # The `stack` job explicitly selects `tests/integration/scenarios/test_*.py` plus
+  # `tests/integration/scenarios/tui/test_footer_resize.py`, marked `stack`, under xdist `--dist loadfile`.
+  # No unported non-boundary Python scenarios remain. Package-native suites and `tests/inprocess/`
   # own the ported assertions.
   # The thirteen historical `DOTFILES` rows belong to dotfiles, not a distribution check. Eleven
   # remain doctor checks; the two REA rows were retired in `nredd/dotfiles#58` and replaced with
   # absence/cleanup regressions in dotfiles' `tests/rea-retirement.test.mjs`. See
-  # [here](../../integration/README.md) for inputs, package sets and deliberate headless exclusions.
+  # [here](../../tests/integration/README.md) for inputs, package sets and deliberate headless exclusions.
   #
   # Tap and profile pin bumps require green CI on the candidate stack, not local `pi-harness-e2e make verify`.
   # A correctness failure blocks promotion; the existing one-fresh-whole-job-rerun policy applies unchanged.
@@ -1334,7 +1339,7 @@ jobs:
   #
   # - Native execution on `xcode-27`, macOS 27 (darwin-arm64) and `ubuntu-24.04` (baseline linux-x64).
   #   Each running cell builds once for its own stack
-  # - `--runtime bun-standalone` skips nothing in `integration/scenarios/test_auth_transport.py`: Bun
+  # - `--runtime bun-standalone` skips nothing in `tests/integration/scenarios/test_auth_transport.py`: Bun
   #   ignores the `NODE_OPTIONS --import` redirect, so `harness/runtime_hooks.py` also sets
   #   `BUN_OPTIONS=--preload` and the compiled core loads the shared redirect and egress/readiness hook
   #   before its entrypoint. The unchanged shaping, refresh and refusal assertions run in the ordinary
@@ -1430,7 +1435,7 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: PYTHONPATH=integration python3 -m harness.release --verify-root-overrides --root .
+        run: PYTHONPATH=release python3 -m pi_release.release --verify-root-overrides --root .
       - name: Install workspace and harness dependencies
         id: workspace
         if: steps.plan.outputs.run == 'true'
@@ -1438,15 +1443,15 @@ jobs:
           npm ci --ignore-scripts
           # `dist/` is gitignored; the `local` stack and inprocess tests load it from the checkout.
           npm run build
-          cd integration && uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
+          cd tests/integration && uv sync --locked --python "$(tr -d '\n' < ../../.python-version)"
       - name: Fetch exact Gitlinked core release, formula-equivalent install
         if: steps.plan.outputs.run == 'true'
-        working-directory: integration
+        working-directory: tests/integration
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git -C ../forks/pi fetch --tags origin
-          uv run --locked python -m harness.release --gitlink ../forks/pi --prefix "$RUNNER_TEMP/pi-release"
+          git -C ../../forks/pi fetch --tags origin
+          uv run --locked python -m pi_release.release --gitlink ../../forks/pi --prefix "$RUNNER_TEMP/pi-release"
           echo "PI_BIN=$RUNNER_TEMP/pi-release/bin/pi" >>"$GITHUB_ENV"
       - name: Report binary identity
         if: steps.plan.outputs.run == 'true'
@@ -1456,25 +1461,25 @@ jobs:
           git -C forks/pi describe --tags --exact-match
       - name: Replay source-selected installer runtime locks without lifecycle scripts
         if: steps.plan.outputs.scenarios == 'true' && matrix.stack == 'personal'
-        working-directory: integration
-        run: uv run --locked python -m harness.runtime_lock --stack stacks/personal.json --replay stacks/runtime-locks.json
+        working-directory: tests/integration
+        run: uv run --locked python -m pi_release.runtime_lock --stack ../../release/stacks/personal.json --replay ../../release/stacks/runtime-locks.json
       - name: Assembled D and E boundaries (explicit stack, no machine config)
         if: steps.plan.outputs.scenarios == 'true'
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
-            --stack "stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile \
+            --stack "../../release/stacks/${{ matrix.stack }}.json" -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml="artifacts/stack-${{ matrix.stack }}.xml"
       - name: Report installed package identities and stack digests
         if: always() && steps.plan.outputs.run == 'true'
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           uv run --locked python -c 'from pathlib import Path; [print(p.read_text()) for p in sorted(Path("artifacts").glob("stack-*.json"))]'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.plan.outputs.run == 'true'
         with:
           name: stack-${{ matrix.os }}-${{ matrix.stack }}
-          path: integration/artifacts/
+          path: tests/integration/artifacts/
           if-no-files-found: ignore
       # Each cell builds the core and runs only its own stack, so macOS keeps standalone evidence in `local`.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -1483,7 +1488,7 @@ jobs:
           bun-version-file: .bun-version
       - name: Preserve Node failure artifacts before standalone runs
         if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           if [ -d artifacts ]; then mv artifacts artifacts-node; fi
       - name: Build standalone
@@ -1500,7 +1505,7 @@ jobs:
           rm -rf packages/ai/src/providers/data
           cp -R "$RUNNER_TEMP/model-data/package/dist/providers/data" packages/ai/src/providers/data
           # Observe Bun's compile argv/module graph without changing core sources or build flags.
-          PYTHONPATH=../../integration ../../integration/.venv/bin/python -m harness.standalone_diagnostics \
+          PYTHONPATH=../../tests/integration ../../tests/integration/.venv/bin/python -m harness.standalone_diagnostics \
             prepare-build --directory "$RUNNER_TEMP/pi-build-evidence"
           set -o pipefail
           evidence="$RUNNER_TEMP/pi-build-evidence"
@@ -1526,15 +1531,15 @@ jobs:
           build_standalone
           # Evidence at the root now describes the second build, i.e. the executable exported as PI_BIN.
           cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"
-          PYTHONPATH=../../integration ../../integration/.venv/bin/python -m harness.standalone_diagnostics \
+          PYTHONPATH=../../tests/integration ../../tests/integration/.venv/bin/python -m harness.standalone_diagnostics \
             verify-reproducible --first "$RUNNER_TEMP/pi-first-build" \
             --second "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" \
-            --digest-out ../../integration/artifacts/standalone-pi.sha256
+            --digest-out ../../tests/integration/artifacts/standalone-pi.sha256
           echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
       - name: Scan standalone build failure evidence
         id: build_failure
         if: ${{ !cancelled() && steps.build.outcome == 'failure' }}
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           uv run --locked python -m harness.standalone_diagnostics collect-build-failure \
             --evidence "$RUNNER_TEMP/pi-build-evidence" --first "$RUNNER_TEMP/pi-first-build" \
@@ -1558,10 +1563,10 @@ jobs:
       - name: Strict standalone startup with failure-only diagnostics
         id: startup
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.platform == 'linux-x64' && matrix.stack == 'personal' }}
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           uv run --locked python -m harness.standalone_diagnostics startup \
-            --binary "$PI_BIN" --core ../forks/pi \
+            --binary "$PI_BIN" --core ../../forks/pi \
             --build-evidence "$RUNNER_TEMP/pi-build-evidence" \
             --output "$RUNNER_TEMP/standalone-startup-diagnostics" --github-output "$GITHUB_OUTPUT"
       - name: Upload scanned standalone startup failure evidence
@@ -1574,17 +1579,17 @@ jobs:
           retention-days: 7
       - name: Standalone D and E (personal)
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'personal' }}
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
-            --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --stack ../../release/stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
       - name: Standalone D and E (local)
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'local' }}
-        working-directory: integration
+        working-directory: tests/integration
         run: |
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
-            --stack stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
+            --stack ../../release/stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
       - name: Report coverage exclusions
         if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
@@ -1596,5 +1601,5 @@ jobs:
         if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
         with:
           name: standalone-${{ matrix.platform }}-${{ matrix.stack }}
-          path: integration/artifacts/
+          path: tests/integration/artifacts/
           if-no-files-found: ignore

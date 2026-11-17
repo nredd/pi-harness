@@ -57,7 +57,7 @@ def test_real_bun_helper_reports_fail_closed(tmp_path: Path, producer: str) -> N
         'test("called", () => expect(called).toBe(1));\n'
     )
     cfg_path = ROOT / (
-        "integration/probes/vitest.config.ts" if producer == "probes" else "scripts/vitest.config.ts"
+        "tests/integration/probes/vitest.config.ts" if producer == "probes" else "scripts/vitest.config.ts"
     )
     (directory / "vitest.config.ts").write_text(
         f"import original from {json.dumps(cfg_path.as_uri())};\n"

@@ -1,7 +1,7 @@
 /**
  * events.ts -- the top-level lifecycle channels this extension emits and listens on `pi.events`.
  * `pi-todo` redeclares them (either package installs without the other);
- * `integration/inprocess/channel-contracts.test.ts` pins the two sets together.
+ * `tests/inprocess/channel-contracts.test.ts` pins the two sets together.
  */
 
 export const SUBAGENT_CREATED_EVENT = "subagents:created";

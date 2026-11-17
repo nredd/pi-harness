@@ -73,7 +73,7 @@ def guest(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     """
     home = tmp_path / "guest home"
     worktree = home / "pi-harness-ci"
-    (worktree / "integration").mkdir(parents=True)
+    (worktree / "tests/integration").mkdir(parents=True)
     (worktree / ".ci-temp").mkdir()
     (worktree / ".ci-temp/tool-path").write_text(os.environ["PATH"] + "\n")
     step = tmp_path / "github-step"
@@ -82,7 +82,7 @@ def guest(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "HOME": str(home),
         "PATH": os.environ["PATH"],
         "WSL_STEP_SCRIPT": str(step),
-        "WSL_STEP_DIRECTORY": "integration",
+        "WSL_STEP_DIRECTORY": "tests/integration",
         "GH_TOKEN": "synthetic-sentinel",
     }
     return worktree, env
@@ -111,7 +111,7 @@ def test_runs_the_step_in_the_guest_checkout_and_retains_failures(
     env["OUT"] = str(out)
     Path(env["WSL_STEP_SCRIPT"]).write_bytes(
         (
-            'test "$PWD" = "$GITHUB_WORKSPACE/integration"\r\n'
+            'test "$PWD" = "$GITHUB_WORKSPACE/tests/integration"\r\n'
             'test "$RUNNER_TEMP" = "$GITHUB_WORKSPACE/.ci-temp"\r\n'
             'echo "$GH_TOKEN" > "$OUT"\r\n'
             f"exit {status}\r\n"
@@ -155,7 +155,7 @@ def test_a_step_killed_by_a_signal_reports_the_shell_status(guest: tuple[Path, d
     assert first_failure(worktree) == "143\n"
 
 
-@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link"])
+@pytest.mark.parametrize("directory", ["..", "../escape", "tests/integration/../../..", "escape-link"])
 def test_refuses_an_escaping_directory(
     guest: tuple[Path, dict[str, str]], directory: str, capfd: pytest.CaptureFixture[str]
 ) -> None:
@@ -176,7 +176,7 @@ def test_an_absolute_step_directory_never_replaces_the_checkout(
 ) -> None:
     """The directory is appended to the checkout like `cd -P "$worktree/$dir"`, never joined over it."""
     worktree, env = guest
-    env["WSL_STEP_DIRECTORY"] = str(worktree / "integration")
+    env["WSL_STEP_DIRECTORY"] = str(worktree / "tests/integration")
     Path(env["WSL_STEP_SCRIPT"]).write_text("echo unexpected-gate\n")
     assert adapter.main(Host(), env) == 1
     captured = capfd.readouterr()

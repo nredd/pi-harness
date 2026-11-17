@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -348,6 +349,44 @@ def test_existing_lock_and_missing_inputs_fail_closed(repo: Path) -> None:
     with pytest.raises(FileNotFoundError):
         changelog_fragments.run(repo, fold=True)
     assert not lock.exists()
+
+
+def test_real_make_targets_use_the_relocated_managed_project(repo: Path) -> None:
+    """Exercise check, fold and malformed-input refusal through the actual Makefile.
+
+    Parameters:
+        repo (Path): Disposable package tree with an isolated managed uv project.
+    """
+    root = Path(changelog_fragments.__file__).resolve().parents[1]
+    shutil.copyfile(root / "Makefile", repo / "Makefile")
+    (repo / "scripts").mkdir()
+    shutil.copyfile(root / "scripts/changelog_fragments.py", repo / "scripts/changelog_fragments.py")
+    project = repo / "tests/integration"
+    project.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "fragment-make-fixture"\nversion = "0.0.0"\nrequires-python = ">=3.13"\n'
+    )
+    uv = shutil.which("uv")
+    make = shutil.which("make")
+    assert uv is not None
+    assert make is not None
+    subprocess.run([uv, "lock", "--project", str(project)], check=True, capture_output=True, text=True)
+    checked = subprocess.run(
+        [make, "check-changelog-fragments"], cwd=repo, capture_output=True, text=True, check=False
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    package = repo / "packages/subagents"
+    assert (package / "changes/932.fixed.md").exists()
+    folded = subprocess.run([make, "fold-changelog"], cwd=repo, capture_output=True, text=True, check=False)
+    assert folded.returncode == 0, folded.stdout + folded.stderr
+    assert (package / "CHANGELOG.md").read_text() == CHANGELOG.replace("- Legacy.\n", "- Legacy.\n" + BULLET)
+    assert not (package / "changes/932.fixed.md").exists()
+    (package / "changes/invalid.md").write_text(BULLET)
+    refused = subprocess.run(
+        [make, "check-changelog-fragments"], cwd=repo, capture_output=True, text=True, check=False
+    )
+    assert refused.returncode != 0
+    assert "Cannot process changelog fragments" in refused.stderr
 
 
 def test_real_cli_success_and_failure(repo: Path) -> None:

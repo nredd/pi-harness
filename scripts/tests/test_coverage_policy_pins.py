@@ -121,12 +121,12 @@ def test_repository_owned_source_inventory_is_complete() -> None:
     "file",
     [
         "scripts/coverage_accounting.py",
-        "integration/harness/paths.py",
-        "integration/probes/anthropic-block-types.mjs",
-        "integration/probes/latency.ts",
-        "integration/probes/render.ts",
-        "integration/probes/session-kit-child-scope.ts",
-        "integration/probes/stack-resources.ts",
+        "tests/integration/harness/paths.py",
+        "tests/integration/probes/anthropic-block-types.mjs",
+        "tests/integration/probes/latency.ts",
+        "tests/integration/probes/render.ts",
+        "tests/integration/probes/session-kit-child-scope.ts",
+        "tests/integration/probes/stack-resources.ts",
     ],
 )
 def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
@@ -171,7 +171,7 @@ def test_providers_are_measured_in_the_goal_at_zero() -> None:
     providers = cfg.packages["providers"]
     sources = {
         path.name
-        for path in (ROOT / "integration/providers").iterdir()
+        for path in (ROOT / "tests/integration/providers").iterdir()
         if path.suffix in {".ts", ".mjs"}
         and not path.name.endswith(".test.ts")
         and path.name != "vitest.config.ts"
@@ -186,7 +186,7 @@ def test_providers_are_measured_in_the_goal_at_zero() -> None:
         "linux": (0, 0),
     }
     helpers = {helper.path for helper in cfg.verification_helpers}
-    assert not any(path.startswith("integration/providers/") for path in helpers)
+    assert not any(path.startswith("tests/integration/providers/") for path in helpers)
 
 
 def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
@@ -205,7 +205,8 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         path.relative_to(ROOT).as_posix()
         for pattern in [
             "packages/*/vitest*.config.ts",
-            "integration/*/vitest.config.ts",
+            "tests/integration/*/vitest.config.ts",
+            "tests/inprocess/vitest.config.ts",
             "scripts/vitest.config.ts",
             "tests/lib/vitest.config.ts",
         ]
@@ -492,7 +493,7 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
 
 
 def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> None:
-    """Keep `integration/conftest.py` in test scope (#386) instead of a `test-helper` exclusion.
+    """Keep `tests/integration/conftest.py` in test scope (#386) instead of a `test-helper` exclusion.
 
     Parameters:
         None.
@@ -504,8 +505,8 @@ def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> N
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     assert not cfg.packages["python-harness"].exclusions
     assert not cfg.packages["python-scripts"].exclusions
-    assert is_test_path(Path("integration/conftest.py"))
-    assert not is_test_path(Path("integration/harness/conftest_like.py"))
+    assert is_test_path(Path("tests/integration/conftest.py"))
+    assert not is_test_path(Path("tests/integration/harness/conftest_like.py"))
 
 
 def test_ported_computer_suites_are_conventional_tests() -> None:
@@ -612,8 +613,8 @@ INERT_BY_DECISION = {
     ".github/workflows/runner-smoke.yml",
     ".github/workflows/wsl-watchdog.yml",
     "Makefile",
-    "benchmarks/comparison/Makefile",
-    "integration/Makefile",
+    "tests/benchmarks/comparison/Makefile",
+    "tests/integration/Makefile",
     "packages/computer-use/Makefile",
 }
 

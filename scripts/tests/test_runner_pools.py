@@ -34,6 +34,7 @@ HOSTED_RUNNERS = {
     ("macos-14", "subagents"): "xcode-27",
     ("macos-14", "computer-use"): "xcode-27",
     ("macos-14", "ts"): "xcode-27",
+    ("macos-14", "scripts"): "xcode-27",
     ("macos-14", "python"): "xcode-27",
     ("wsl2", "subagents-computer-use"): "windows-2025",
     ("wsl2", "ts"): "windows-2025",

@@ -976,7 +976,7 @@ def test_artifact_destination_checked_before_install(
 def test_commands_run_outside_the_uv_run_venv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
 ) -> None:
-    """Child tools never see the venv `uv run --project integration` activated for this script.
+    """Child tools never see the venv `uv run --project tests/integration` activated for this script.
 
     Parameters:
         tmp_path (Path): Holds a fake activated venv with a tool found nowhere else.
