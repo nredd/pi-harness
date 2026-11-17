@@ -216,14 +216,14 @@ def test_parse_lcov_reads_a_coveragepy_module_without_functions_as_zero_function
     Parameters:
         None.
     Returns:
-        None: The real `tests/benchmarks/comparison` `__main__.py` record parses with zero functions under
+        None: A synthetic `__main__.py` record parses with zero functions under
             coverage.py, and stays a truncated report for every other producer.
     Raises:
         AssertionError: The record is rejected for coverage.py or accepted for another producer.
     """
     text = "\n".join(
         [
-            "SF:src/pi_harness_benchmark/__main__.py",
+            "SF:src/example/__main__.py",
             "DA:7,1",
             "DA:9,1",
             "DA:11,1",
@@ -238,7 +238,7 @@ def test_parse_lcov_reads_a_coveragepy_module_without_functions_as_zero_function
             "",
         ]
     )
-    counters = parse_lcov(text, bare_sources=True)["src/pi_harness_benchmark/__main__.py"]
+    counters = parse_lcov(text, bare_sources=True)["src/example/__main__.py"]
     assert (counters.lines, counters.uncovered_lines, counters.functions, counters.uncovered_functions) == (
         4,
         1,
@@ -315,16 +315,14 @@ def test_skipped_producer_gate_reports_not_run_but_a_run_gate_requires_its_repor
     setup_report(tmp_path)
     (tmp_path / "packages/example/coverage/lcov.info").unlink()
     gated = policy()
-    gated.packages["example"].signals["primary"].gate = "check-benchmark"
-    assert account(tmp_path, gated, skipped_gates=frozenset({"check-benchmark"})) == ([], [])
+    gated.packages["example"].signals["primary"].gate = "check-example"
+    assert account(tmp_path, gated, skipped_gates=frozenset({"check-example"})) == ([], [])
     _, errors = account(tmp_path, gated)
     missing = tmp_path / "packages/example/coverage/lcov.info"
     assert errors == [f"example/primary: [Errno 2] No such file or directory: '{missing}'"]
 
 
-@pytest.mark.parametrize(
-    "skipped", [frozenset({"check-benchmrk"}), frozenset({"check-benchmark", "check-ts"})]
-)
+@pytest.mark.parametrize("skipped", [frozenset({"check-exampl"}), frozenset({"check-example", "check-ts"})])
 def test_skipped_gates_reject_a_gate_no_signal_declares(tmp_path: Path, skipped: frozenset[str]) -> None:
     """Fail closed on a skipped-gate token no policy signal declares, so a typo cannot skip nothing silently.
 
@@ -338,8 +336,8 @@ def test_skipped_gates_reject_a_gate_no_signal_declares(tmp_path: Path, skipped:
     """
     setup_report(tmp_path)
     gated = policy()
-    gated.packages["example"].signals["primary"].gate = "check-benchmark"
-    unknown = sorted(skipped - {"check-benchmark"})
+    gated.packages["example"].signals["primary"].gate = "check-example"
+    unknown = sorted(skipped - {"check-example"})
     with pytest.raises(ValueError, match=re.escape(f"Skipped gates no policy signal declares: {unknown}")):
         account(tmp_path, gated, skipped_gates=skipped)
 
@@ -357,26 +355,24 @@ def test_skipped_gates_cli_reports_not_run(tmp_path: Path) -> None:
     setup_report(tmp_path)
     (tmp_path / "packages/example/coverage/lcov.info").unlink()
     gated = policy().model_dump(mode="json")
-    gated["packages"]["example"]["signals"]["primary"]["gate"] = "check-benchmark"
+    gated["packages"]["example"]["signals"]["primary"]["gate"] = "check-example"
     (tmp_path / "coverage").mkdir()
     (tmp_path / "coverage/policy.json").write_text(json.dumps(gated))
     git_read(tmp_path, ["init", "-q", "--template="])
     command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--measure", "--os", "linux"]
     skipped = subprocess.run(
-        [*command, "--skipped-gates", "check-benchmark"], capture_output=True, text=True, check=False
+        [*command, "--skipped-gates", "check-example"], capture_output=True, text=True, check=False
     )
     assert skipped.returncode == 0, skipped.stderr
-    assert (
-        "NOT RUN: 'example/primary': this run skipped its producer gate 'check-benchmark'" in skipped.stderr
-    )
+    assert "NOT RUN: 'example/primary': this run skipped its producer gate 'check-example'" in skipped.stderr
     required = subprocess.run(command, capture_output=True, text=True, check=False)
     assert required.returncode == 1
     assert "example/primary: [Errno 2] No such file or directory" in required.stderr
     typo = subprocess.run(
-        [*command, "--skipped-gates", "check-benchmrk"], capture_output=True, text=True, check=False
+        [*command, "--skipped-gates", "check-exampl"], capture_output=True, text=True, check=False
     )
     assert typo.returncode == 1
-    assert "Skipped gates no policy signal declares: ['check-benchmrk']" in typo.stderr
+    assert "Skipped gates no policy signal declares: ['check-exampl']" in typo.stderr
 
 
 def test_parse_lcov_keeps_commas_in_lcov_style_function_names() -> None:

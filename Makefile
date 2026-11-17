@@ -1,6 +1,4 @@
-.PHONY: help build verify-root-overrides install install-owned install-benchmark check check-commits check-ts check-scripts check-coverage check-integration check-probes check-providers check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
-
-PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
+.PHONY: help build verify-root-overrides install install-owned check check-commits check-ts check-scripts check-coverage check-integration check-probes check-providers check-import-audit check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
 
 # One Python gate: ruff, ty, then pytest across cores (`--dist loadfile` keeps each test file on one worker)
 # with branch-measured LCOV written under `<dir>/coverage/python/` for `scripts/coverage_accounting.py`.
@@ -17,7 +15,7 @@ help:  ## List targets
 verify-root-overrides:  ## Verify root core overrides against the lockfile, SHA256SUMS/legacy pins and provenance
 	PYTHONPATH=release python3 -m pi_release.release --verify-root-overrides --root .
 
-install: install-owned install-benchmark  ## Install everything `make check` needs. Never touches forks/
+install: install-owned  ## Install everything `make check` needs. Never touches forks/
 
 install-owned: verify-root-overrides  ## Verify root core overrides, install owned dependencies (npm ci --ignore-scripts, uv sync --locked), then `make build`. Never touches forks/
 	env -u GH_TOKEN npm ci --ignore-scripts
@@ -36,9 +34,6 @@ check-native-lint:  ## Statically lint tracked shell/workflow/PowerShell sources
 build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first
 	env -u GH_TOKEN npm run build
 
-install-benchmark:  ## Install tests/benchmarks/comparison, only `check-benchmark` reads it
-	cd tests/benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
-
 .PHONY: check-core-compaction
 check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
 	$(MAKE) build
@@ -54,7 +49,7 @@ check-core-compaction:  ## Assembled child compaction on built candidate forks/p
 	  node --import ./forks/pi/packages/coding-agent/src/experimental/source-resolver.ts \
 	  --test --test-concurrency=1 --test-timeout=120000 tests/integration/core-source/compaction-children.test.ts
 
-check: check-commits check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
+check: check-commits check-ts check-scripts check-integration  ## Owned-code gates only (NOT forks, NOT the full stack)
 	$(MAKE) check-coverage
 
 check-commits:  ## Validate the complete PR/push commit range, or the latest local commit (COMMIT_RANGE overrides)
@@ -107,10 +102,6 @@ check-import-audit:  ## Offline import audit: Biome + strict tsc, then independe
 	cd scripts && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
 	  node run-vitest.ts bun --coverage.reportsDirectory=scripts/coverage/bun
 
-check-benchmark:  ## tests/benchmarks/comparison unit gate, 100% statement+branch coverage, LCOV under coverage/python/
-	cd tests/benchmarks/comparison && $(PY_CHECK)
-	cd tests/benchmarks/comparison && uv run --locked pytest -p no:cacheprovider --cov --cov-report=lcov:coverage/python/lcov.info --cov-report=term-missing:skip-covered
-
 check-package-contracts: check-resource-sampler-contract  ## Pack, audit, install and exercise each @nredd/pi-* tarball alone through exact stock Pi 1.3.0, plus audit+install of the packed preset (npm registry on first run)
 	cd scripts && uv run --locked --project ../tests/integration python package_contracts.py $(if $(REPORT),--report $(REPORT))
 	cd scripts && uv run --locked --project ../tests/integration python package_contracts.py --audit-preset $(if $(REPORT),--report $(basename $(REPORT))-preset.json)
@@ -142,5 +133,5 @@ release-manifest:  ## Generate releases/<release-id>.json from Gitlinks and pack
 	cd scripts && uv run --locked --project ../tests/integration python release_manifest.py $(ARGS)
 
 clean:  ## Remove caches and build output (never touches forks/)
-	rm -rf node_modules tests/integration/.venv tests/benchmarks/comparison/.venv
+	rm -rf node_modules tests/integration/.venv
 	find packages tests release scripts -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .ty_cache \) -prune -exec rm -rf {} +

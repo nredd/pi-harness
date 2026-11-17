@@ -482,81 +482,6 @@ def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: st
     assert not classify_change(repo, {path: "input\n"}).inputs["stack_inputs"]
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "tests/benchmarks/comparison/src/pi_harness_benchmark/usage.py",
-        "tests/benchmarks/comparison/tests/test_usage.py",
-        "tests/benchmarks/comparison/pyproject.toml",
-        "tests/benchmarks/comparison/uv.lock",
-        "tests/benchmarks/comparison/results/runs/a/result.json",
-        "Makefile",
-        ".python-version",
-        ".node-version",
-        ".github/workflows/ci.yml",
-        ".github/actions/setup-ci-tools/action.yml",
-        "scripts/ci_paths.py",
-    ],
-)
-def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str) -> None:
-    """Run the gate for its code, tests, lockfile, pins, Makefile recipes and workflow step.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        path (str): Path `check-benchmark` or its CI step reads.
-
-    Returns:
-        None: Assertions verify classification.
-    """
-    assert classify_change(repo, {path: "input\n"}).inputs["benchmark_inputs"]
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "packages/router/src/index.ts",
-        "scripts/ci_guest_x.py",
-        "tests/integration/pyproject.toml",
-        "tests/integration/uv.lock",
-        "package.json",
-        ".bun-version",
-        ".github/workflows/release.yml",
-        ".github/actions/setup-ci-wsl/action.yml",
-        "tests/benchmarks/other/pyproject.toml",
-        "tests/benchmarks/comparison-notes.md",
-        "docs/guide.md",
-        "coverage/policy.json",
-    ],
-)
-def test_benchmark_inputs_reject_paths_the_unit_gate_never_reads(repo: Path, path: str) -> None:
-    """Skip the gate for product code, other Python projects, other workflows and docs.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        path (str): Path `check-benchmark` does not read.
-
-    Returns:
-        None: Assertions verify classification.
-    """
-    assert not classify_change(repo, {path: "input\n"}).inputs["benchmark_inputs"]
-
-
-def test_benchmark_inputs_follow_any_changed_path(repo: Path) -> None:
-    """Run the gate when one benchmark path rides along with unrelated changes.
-
-    Parameters:
-        repo (Path): Disposable repository.
-
-    Returns:
-        None: Assertions verify classification.
-    """
-    result = classify_change(
-        repo, {"packages/router/a.ts": "x\n", "tests/benchmarks/comparison/uv.lock": "lock\n"}
-    )
-    assert result.inputs["benchmark_inputs"]
-    assert not result.inputs["wsl_inputs"]
-
-
 def test_mixed_change_reports_each_input_family(repo: Path) -> None:
     """Keep the input flags independent of `docs_only` and of each other.
 
@@ -594,14 +519,12 @@ def test_input_flags_fail_closed(repo: Path, case: str) -> None:
     result = ci_paths.classify(repo, base, "HEAD")
     assert result.inputs["wsl_inputs"]
     assert result.inputs["stack_inputs"]
-    assert result.inputs["benchmark_inputs"]
 
 
 PULL_REQUEST = "pull_request"
 PUSH = "push"
 ALL_NATIVE_GATES = ("check-ts", "check-scripts", "check-integration")
-# The macOS `python` shard also carries the benchmark steps, which read the plan's `skipped_gates`.
-MAC_GATES = (*ALL_NATIVE_GATES, "check-benchmark")
+MAC_GATES = ALL_NATIVE_GATES
 WSL_GATES = ("check-ts", "check-probes", "check-providers", "check-import-audit")
 
 
@@ -928,7 +851,7 @@ def test_long_title_blocks_every_cell_before_any_slot_runs(repo: Path) -> None:
 def test_input_registry_drives_classification_and_outputs(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Add one input class with one registry entry, as the benchmark gate will.
+    """Add one input class with one registry entry, for an optional suite.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -940,7 +863,7 @@ def test_input_registry_drives_classification_and_outputs(
     monkeypatch.setitem(
         ci_paths.INPUT_CLASSES, "bench_inputs", lambda path: path.startswith("tests/benchmarks/")
     )
-    changed = classify_change(repo, {"tests/benchmarks/comparison/x.py": "x\n"})
+    changed = classify_change(repo, {"tests/benchmarks/synthetic/x.py": "x\n"})
     other = classify_change(repo, {"packages/dev-tools/src/index.ts": "x\n"})
     assert changed.inputs["bench_inputs"]
     assert not other.inputs["bench_inputs"]
@@ -968,7 +891,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     assert plan["owned (macos-14)"] == {
         "run": True,
         "scenarios": True,
-        "gates": "check-ts check-scripts check-integration check-benchmark",
+        "gates": "check-ts check-scripts check-integration",
         "reason": "",
         "blocked": False,
         "shards": [
@@ -1013,14 +936,14 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
                 "shard": "python",
                 "runner": "xcode-27",
                 "guest": "macos",
-                "gates": "check-integration check-benchmark",
+                "gates": "check-integration",
                 "workspaces": "",
-                "skipped_gates": "check-benchmark",
+                "skipped_gates": "",
             },
         ],
         "guest": "macos",
         "coverage_os": "darwin",
-        "skipped_gates": "check-benchmark",
+        "skipped_gates": "",
     }
     assert plan["contracts (macos-14)"]["shards"] == []
     assert (plan["contracts (macos-14)"]["guest"], plan["contracts (macos-14)"]["coverage_os"]) == ("", "")
@@ -1272,7 +1195,7 @@ def test_cli_full_plans_every_cell_to_run_without_reading_a_diff(tmp_path: Path)
     output = tmp_path / "out"
     assert ci_paths.main(["--full", "--event", "workflow_dispatch", "--github-output", str(output)]) == 0
     lines = output.read_text(encoding="utf-8").splitlines()
-    for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true", "benchmark_inputs=true"):
+    for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true"):
         assert flag in lines
     assert ci_paths.FULL_RELEASE_CANDIDATE in lines
     plan = read_plan(output)
@@ -1295,25 +1218,6 @@ def test_cli_requires_a_revision_range_unless_full(capsys: pytest.CaptureFixture
         ci_paths.parse_args(["--event", "push", "--github-output", "out"])
     assert raised.value.code == 2
     assert "--base and --head are required unless --full" in capsys.readouterr().err
-
-
-def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Path) -> None:
-    """Drive the real command line over a `tests/benchmarks/comparison/uv.lock` diff and read the output file.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        tmp_path (Path): Pytest temporary directory.
-    """
-    base = git(repo, "rev-parse", "HEAD")
-    classify_change(repo, {"tests/benchmarks/comparison/uv.lock": "lock\n"})
-    output = tmp_path / "github-output"
-    argv = ["--repo", str(repo), "--base", base, "--head", "HEAD", "--github-output", str(output)]
-    assert ci_paths.main([*argv, "--event", PUSH]) == 0
-    lines = output.read_text(encoding="utf-8").splitlines()
-    assert "benchmark_inputs=true" in lines
-    assert "docs_only=false" in lines
-    assert "tests/benchmarks/comparison/uv.lock" in lines
-    assert "wsl_inputs=false" in lines
 
 
 WORKSPACES = ci_paths.npm_workspaces(ci_paths.REPO_ROOT)
@@ -1366,11 +1270,10 @@ def test_macos_scripts_have_an_independent_budget_without_dropping_gates(repo: P
     integration = next(shard for shard in cell.shards if "check-integration" in shard.gates)
     assert scripts.name != integration.name
     assert scripts.gates == ("check-scripts",)
-    assert integration.gates == ("check-integration", "check-benchmark")
+    assert integration.gates == ("check-integration",)
     assert [gate for shard in cell.shards for gate in shard.gates if gate != "check-ts"] == [
         "check-scripts",
         "check-integration",
-        "check-benchmark",
     ]
 
 
@@ -1399,7 +1302,7 @@ def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> No
         if workspace not in {"packages/subagents", "packages/computer-use"}
     ]
     assert mac["scripts"]["gates"] == "check-scripts"
-    assert mac["python"]["gates"] == "check-integration check-benchmark"
+    assert mac["python"]["gates"] == "check-integration"
     wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
     assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
     assert wsl["ts"]["gates"] == "check-ts check-probes check-providers check-import-audit"
@@ -1567,42 +1470,18 @@ def test_main_fails_when_the_shard_plan_cannot_be_built(
     assert output.read_text(encoding="utf-8") == ""
 
 
-@pytest.mark.parametrize(
-    ("files", "event", "skips"),
-    [
-        ({"release/pi_release/stack.py": "x\n"}, PULL_REQUEST, True),
-        ({"tests/benchmarks/comparison/tests/test_cli.py": "x\n"}, PULL_REQUEST, False),
-        ({"release/pi_release/stack.py": "x\n"}, PUSH, False),
-    ],
-)
-def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs(
-    repo: Path, files: dict[str, str], event: str, skips: bool
-) -> None:
-    """Publish one skip decision that the macOS shard steps and the fan-in accounting both read.
+def test_optional_gate_skip_decisions_follow_registered_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the generic skip contract exercised with a synthetic, test-only gate.
 
     Parameters:
-        repo (Path): Disposable repository.
-        files (dict[str, str]): Committed change.
-        event (str): Triggering event name.
-        skips (bool): Whether `check-benchmark` reports NOT RUN on this run.
+        monkeypatch (pytest.MonkeyPatch): Register an isolated optional producer.
     """
-    plan = plan_change(repo, files, event)
-    expected = ("check-benchmark",) if skips else ()
-    mac = plan["owned (macos-14)"]
-    assert mac.gates == MAC_GATES
-    assert mac.skipped_gates == expected
-    assert {shard.name: shard.skipped_gates for shard in mac.shards} == {
-        "subagents": (),
-        "computer-use": (),
-        "ts": (),
-        "scripts": (),
-        "python": expected,
-    }
-    # A cell never skips a gate it does not plan: Ubuntu and WSL have no benchmark producer at all.
-    for os_name in ("ubuntu-24.04", "wsl2"):
-        cell = plan[f"owned ({os_name})"]
-        assert cell.skipped_gates == ()
-        assert all(shard.skipped_gates == () for shard in cell.shards)
+    monkeypatch.setitem(ci_paths.PATH_GATED_GATES, "check-example", "example_inputs")
+    changed = ci_paths.ChangeClassification(paths=(), docs_only=False, inputs={"example_inputs": True})
+    unchanged = ci_paths.ChangeClassification(paths=(), docs_only=False, inputs={"example_inputs": False})
+    assert ci_paths.skipped_gates(changed, PULL_REQUEST) == frozenset()
+    assert ci_paths.skipped_gates(unchanged, PULL_REQUEST) == frozenset({"check-example"})
+    assert ci_paths.skipped_gates(unchanged, PUSH) == frozenset()
 
 
 def test_full_verification_runs_every_path_gated_gate() -> None:

@@ -9,10 +9,10 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
 - Keep owned TypeScript in npm workspaces and Python environments under uv.
 - `forks/pi` is the only Gitlink. Publish core commits before referencing them. Parent worktrees do
   not isolate submodule edits; never change a dirty core checkout.
-- Preserve benchmark history, source attribution, and invalid-run annotations.
+- Preserve retained integration baselines, source attribution, and invalid-run annotations.
 - Run format checks, lint, type checks, tests, and relevant real-input/failure-path checks before review.
 - Do not regenerate baselines or relax thresholds to make a failing gate pass.
-- Keep credentials out of public PR code and the benchmark runner, with one exception: installer
+- Keep credentials out of public PR code and test harnesses, with one exception: installer
   CI provisions a temporary `gh` login using a read-only job token (`contents: read`, `attestations: read`)
   for main pushes/dispatches and same-repo PRs; fork PRs and non-main dispatches stay anonymous.
   Hosted runner IPs share GitHub's anonymous 60 requests/hour limit. A PATH-prepended gh shim selects it;

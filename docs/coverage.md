@@ -5,8 +5,7 @@ Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`
 `runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321, plus the root
 `run-vitest.ts` and `router_contract.mjs` helpers since #379),
 `probes` (every executable `tests/integration/probes` source, 0/0 since #377) and
-`inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals,
-and `python-benchmarks` (`tests/benchmarks/comparison`, darwin only, 0/0 since #387).
+`inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals.
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
 `goal: "report-only"` identifies verification infrastructure (helpers and
@@ -107,7 +106,7 @@ fail-closed checks are aggregate per signal, not per file: `Branch producer miss
 report to have zero `BRDA` rows.
 
 Python measures branches: `PY_GATE` in the `Makefile` passes `--cov-branch`, so both coverage.py
-producers emit `BRDA` rows like the benchmark's `branch = true` producer already did (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
+producers emit `BRDA` rows with `branch = true` (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
 `test_real_coveragepy_branch_report_parses` runs real coverage.py to pin that shape.
 
 Caps are per OS, from hosted artifacts (WSL folded into `linux` as the max). A cap is never a max over runs: a branch
@@ -490,16 +489,14 @@ pytest (`.github/workflows/ci.yml`), so the WSL fan-in's `check-coverage` (`COVE
 `skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
 a skipped host.
 
-`tests/benchmarks/comparison` (`python-benchmarks`, #387) is measured by its own `make check-benchmark`: pytest-cov with
-`branch = true` and `fail_under = 100` in its `pyproject.toml` (coverage.py 7.17.1, as `tests/integration/`), writing LCOV to
-`tests/benchmarks/comparison/coverage/python/lcov.info`.
-Its enforced `primary` signal is 0/0 on darwin only and declares `skip_hosts: ["linux", "wsl2"]`: the `native_runtime`
-test needs Seatbelt, so only the macOS cell runs the producer. The CI step is path-gated (#315), so the signal also
-declares `gate: "check-benchmark"`. `scripts/ci_paths.py` lists a skipped gate in the cell's `skipped_gates`, the fan-in
-passes it as `COVERAGE_SKIPPED_GATES` (`--skipped-gates`), and the signal reports NOT RUN on that run only; a run
-that executes the gate requires the report. Accounting fails closed on a `--skipped-gates` token no policy signal
-declares, so a typo cannot skip nothing silently, and a test keeps every `PATH_GATED_GATES` key declared. The ratchet rejects changing a signal's `gate`, as it rejects adding a
-skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`).
+The owner retired the historical operator-driven harness comparison and its recorded runs in #1014.
+Its CI dependency existed to probe native Codex sandbox isolation without model calls, but made
+unrelated unit gates depend on an installed third-party CLI and stale version pins (#495, #562).
+The retired source and its coverage inventory/signal were deleted together; all remaining coverage
+floors and exclusions are unchanged. CI no longer verifies that third-party sandbox. Accounting
+allows a measured package to disappear only when its entire tracked/nonignored tree is gone;
+a surviving source, README or new untracked file still blocks removal. Individual membership losses
+in retained packages still require the existing reasoned reclassifications.
 
 Both Python packages are `100-percent` with an enforced `primary` signal at 0 uncovered lines, functions and
 branches on each OS (#386; #420 removed the last `python-scripts` partial arc). `tests/integration/harness/__init__.py` is a
@@ -757,6 +754,5 @@ settings change. A failed earlier test may prevent later packages from running; 
 reports correctly fail rather than pretending full coverage. Do not reuse stale local reports
 to claim a clean gate.
 
-The Python benchmark's combined statement/branch gate is 100% (#387): still in `make check`, and in CI on `main` pushes and on PRs that touch `benchmark_inputs` (NOT RUN otherwise). Instrumented runs
-must not refresh performance baselines. Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
+Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
 The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](../.github/workflows/ci.yml) for platform boundaries.

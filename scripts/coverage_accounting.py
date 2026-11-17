@@ -637,7 +637,6 @@ def is_test_path(path: Path) -> bool:
         ("tests", "lib"),
         ("tests", "inprocess"),
         ("tests", "integration"),
-        ("tests", "benchmarks"),
     }:
         path = Path(*path.parts[1:])
     if path.suffix == ".rs" and "src" in path.parts:
@@ -841,8 +840,27 @@ def inventory_scopes(
     return scopes
 
 
+def deleted_packages(current: Policy, base: Policy, files: set[str]) -> set[str]:
+    """Identify removed packages whose entire tracked/nonignored tree is gone.
+
+    Parameters:
+        current (Policy): Current working-tree policy.
+        base (Policy): Policy read from the PR base commit.
+        files (set[str]): Existing tracked and nonignored working-tree paths.
+    Returns:
+        set[str]: Removed package names with no surviving file below their former root.
+    Raises:
+        None.
+    """
+    return {
+        name
+        for name, package in base.packages.items()
+        if name not in current.packages and not any(Path(file).is_relative_to(package.root) for file in files)
+    }
+
+
 def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision: str) -> None:
-    """Reject lost base-tree source membership without a new reasoned declaration.
+    """Reject undeclared membership loss except for entirely deleted package trees.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -850,16 +868,18 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
         base (Policy): Policy read from the PR base commit.
         revision (str): Immutable Git base tree used to expand the base policy.
     Returns:
-        None: All membership losses have explicit reviewed declarations.
+        None: Retained-package membership losses have explicit reviewed declarations.
     Raises:
         ValueError: A loss is undeclared, a declaration is stale or a replacement is invalid.
         subprocess.CalledProcessError: The base Git tree cannot be read.
     """
     before = inventory_scopes(root, base, repository_files(root, revision))
     after = inventory_scopes(root, current)
+    retired = deleted_packages(current, base, repository_files(root))
     losses = {
         (name, signal, path)
         for (name, signal), files in before.items()
+        if name not in retired
         for path in files - after.get((name, signal), set())
     }
     historical = {entry.model_dump_json() for entry in base.reclassifications}
@@ -1075,16 +1095,17 @@ def loosens(budget: Counts, floor: Counts) -> bool:
     )
 
 
-def check_ratchet(current: Policy, base: Policy) -> None:
+def check_ratchet(current: Policy, base: Policy, files: set[str] | None = None) -> None:
     """Ratchet enforced budgets and require explicit declarations for enforcement downgrades.
 
     Parameters:
         current (Policy): Current working-tree policy.
         base (Policy): Policy read from the PR base commit.
+        files (set[str] | None): Existing tracked/nonignored paths, or null to forbid measured removals.
     Returns:
-        None: Enforced budgets, OS membership and enforcement declarations preserve the base ratchet.
+        None: Surviving source budgets, OS membership and enforcement preserve the base ratchet.
     Raises:
-        ValueError: A measured package is removed, or membership, enforced budgets, enforcement
+        ValueError: A measured package with surviving files is removed, or budgets, enforcement
             transitions or the final target are weakened.
     """
     if base.enforce_target and not current.enforce_target:
@@ -1092,11 +1113,12 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     if loosens(current.target, base.target):
         raise ValueError("Cannot loosen the target")
     check_enforcement_changes(current, base)
+    retired = deleted_packages(current, base, files) if files is not None else set()
     for name, previous in base.packages.items():
         if name not in current.packages:
             # A pending package has no signals, hence no budget to lose; `check_inventory_ratchet`
             # still requires a `reclassifications` entry for each of its sources.
-            if previous.status == "pending":
+            if previous.status == "pending" or name in retired:
                 continue
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
@@ -1876,7 +1898,7 @@ def main() -> int:
         if tree.strip():
             previous = git_read(root, ["show", f"{args.base}:coverage/policy.json"])
             base = base_policy(previous)
-            check_ratchet(policy, base)
+            check_ratchet(policy, base, repository_files(root))
             check_inventory_ratchet(root, policy, base, args.base)
         results, errors = account(
             root,

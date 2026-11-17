@@ -492,7 +492,7 @@ def test_ratchet_rejects_changing_a_signal_producer_gate() -> None:
         AssertionError: A changed producer gate is accepted.
     """
     base, current = policy(), policy()
-    current.packages["example"].signals["primary"].gate = "check-benchmark"
+    current.packages["example"].signals["primary"].gate = "check-example"
     with pytest.raises(ValueError, match="Cannot change a signal's producer gate"):
         check_ratchet(current, base)
     with pytest.raises(ValueError, match="Cannot change a signal's producer gate"):

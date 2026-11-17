@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -68,7 +68,6 @@ class Trigger:
         docs_only (str): `classify` output.
         wsl_inputs (str): `classify` output, empty modelling a missing output.
         stack_inputs (str): `classify` output.
-        benchmark_inputs (str): `classify` output.
         title_problem (str): A PR title failure the plan turns into a blocked cell.
         classify_result (str): The `classify` job's result; anything but `success` publishes no plan.
     """
@@ -77,7 +76,6 @@ class Trigger:
     docs_only: str = "false"
     wsl_inputs: str = "true"
     stack_inputs: str = "true"
-    benchmark_inputs: str = "true"
     title_problem: str = ""
     classify_result: str = "success"
 
@@ -286,7 +284,6 @@ def classify_outputs(trigger: Trigger) -> dict[str, str]:
         inputs={
             "wsl_inputs": trigger.wsl_inputs != "false",
             "stack_inputs": trigger.stack_inputs != "false",
-            "benchmark_inputs": trigger.benchmark_inputs != "false",
         },
     )
     with tempfile.TemporaryDirectory() as directory:
@@ -396,7 +393,6 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
     context = {f"matrix.{key}": value for key, value in cell.items()}
     context |= {f"steps.plan.outputs.{key}": value for key, value in outputs.items()}
     context |= {
-        "needs.classify.outputs.benchmark_inputs": trigger.benchmark_inputs,
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
@@ -468,7 +464,6 @@ def shard_steps(os_name: str, entry: dict[str, str], trigger: Trigger = PULL_REQ
         set[str]: Display names of the steps the shard executes.
     """
     context = {f"matrix.{key}": value for key, value in entry.items()} | {
-        "needs.classify.outputs.benchmark_inputs": trigger.benchmark_inputs,
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[shard_runner(os_name, entry)],
     }
@@ -918,7 +913,7 @@ def test_dispatch_classifies_only_frozen_main_candidates(
     if admitted:
         assert result.returncode == 0, result.stderr
         lines = output.read_text().splitlines()
-        for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true", "benchmark_inputs=true"):
+        for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true"):
             assert flag in lines
         assert "Full frozen release candidate" in lines
         plan = json.loads(next(line for line in lines if line.startswith("plan="))[5:])
@@ -951,7 +946,6 @@ def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
             "DOCS_ONLY": "false",
             "WSL_INPUTS": "true",
             "STACK_INPUTS": "false",
-            "BENCHMARK_INPUTS": "true",
             "CHANGED_FILES": "a.txt",
             "GITHUB_STEP_SUMMARY": str(summary),
         },
@@ -960,178 +954,14 @@ def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
         check=True,
     )
     assert "::notice title=bench not run::" in result.stdout
-    assert "wsl-inputs=true stack-inputs=false benchmark-inputs=true" in result.stdout
-    assert "Benchmark inputs: `true`" in summary.read_text()
+    assert "wsl-inputs=true stack-inputs=false" in result.stdout
     assert "### bench: NOT RUN" in summary.read_text()
-    assert "This is not a pass." in summary.read_text()
-
-
-def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
-    """Sync `tests/benchmarks/comparison` only on macOS `owned`, keeping `make install` whole."""
-
-    def recipe(target: str) -> str:
-        """Return Make's real dry-run recipe.
-
-        Parameters:
-            target (str): Make target.
-
-        Returns:
-            str: Commands Make would run.
-        """
-        return subprocess.run(
-            ["make", "-n", target], cwd=ROOT, capture_output=True, text=True, check=True
-        ).stdout
-
-    assert "tests/benchmarks/comparison" not in recipe("install-owned")
-    assert "--verify-root-overrides" in recipe("install-owned")
-    assert "tests/benchmarks/comparison" in recipe("install-benchmark")
-    full = recipe("install")
-    assert (
-        full.index("--verify-root-overrides")
-        < full.index("npm ci")
-        < full.index("tests/benchmarks/comparison")
-    )
-    cfg = jobs()
-    for name in ("owned-shards-macos", "contracts"):
-        install = next(step for step in cfg[name]["steps"] if step.get("name") == "Install")
-        assert install["run"] == "make install-owned"
-    gate = next(
-        step for step in cfg["owned-shards-macos"]["steps"] if step.get("name") == "Benchmark unit gate"
-    )
-    assert "contains(matrix.gates, 'check-benchmark')" in gate["if"]
-    assert [
-        shard.name for shard in ci_paths.OWNED_SHARDS["macos-14"] if "check-benchmark" in shard.gates
-    ] == ["python"]
-    assert not any("check-benchmark" in ci_paths.OWNED_GATES[os_name] for os_name in ("ubuntu-24.04", "wsl2"))
-    assert gate["run"].index("make install-benchmark") < gate["run"].index("make check-benchmark")
-    # No cp315 `pydantic-core` wheel: an unpinned interpreter makes uv compile it, per sync.
-    run = gate["run"]
-    assert (
-        run.index('UV_PYTHON="$(tr -d')
-        < run.index("export UV_PYTHON\n")
-        < run.index("make install-benchmark")
-    )
-
-
-BENCHMARK_STEP = "Benchmark unit gate"
-BENCHMARK_SKIP_STEP = "Benchmark unit gate (not run, no benchmark inputs)"
-FAN_IN_BENCHMARK_NOTICE = "Benchmark unit gate (not run)"
-
-
-@pytest.mark.parametrize(
-    ("trigger", "runs"),
-    [
-        (Trigger(benchmark_inputs="true"), True),
-        (Trigger(benchmark_inputs="false"), False),
-        (Trigger(event="push", benchmark_inputs="false"), True),
-        (Trigger(event="push", benchmark_inputs="true"), True),
-        # A missing or empty output must fail open, like `wsl_inputs` and `stack_inputs`.
-        (Trigger(benchmark_inputs=""), True),
-        (Trigger(event="push", benchmark_inputs=""), True),
-    ],
-)
-def test_benchmark_gate_runs_on_inputs_or_main_push_only_on_macos(
-    tmp_path: Path, trigger: Trigger, runs: bool
-) -> None:
-    """Run `check-benchmark` for benchmark inputs and every push, report NOT RUN otherwise.
-
-    Parameters:
-        tmp_path (Path): Disposable output directory.
-        trigger (Trigger): Event and `classify` outputs.
-        runs (bool): Whether the macOS cell executes the gate.
-    """
-    trigger = replace(trigger, wsl_inputs="true")
-    mac = {
-        entry["shard"]: shard_steps("macos-14", entry, trigger)
-        for entry in shard_entries("macos-14", trigger)
-    }
-    assert {name for name, steps in mac.items() if BENCHMARK_STEP in steps} == ({"python"} if runs else set())
-    assert {name for name, steps in mac.items() if BENCHMARK_SKIP_STEP in steps} == (
-        set() if runs else {"python"}
-    )
-    for os_name in ("ubuntu-24.04", "wsl2"):
-        for entry in shard_entries(os_name, trigger):
-            other = shard_steps(os_name, entry, trigger)
-            assert BENCHMARK_STEP not in other
-            assert BENCHMARK_SKIP_STEP not in other
-    # The macOS-only notice reports from the fan-in of every cell that carries no benchmark shard.
-    for check in expand("owned"):
-        (tmp_path / check).mkdir()
-        fan_in = executed_steps("owned", check, tmp_path / check, trigger)
-        assert (FAN_IN_BENCHMARK_NOTICE in fan_in) is (check != "owned (macos-14)")
-
-
-@pytest.mark.parametrize(
-    ("gates", "skipped_gates"),
-    [
-        ("check-scripts check-integration check-benchmark", ""),
-        ("check-scripts check-integration check-benchmark", "check-benchmark"),
-        ("check-scripts check-integration", ""),
-        ("check-ts", ""),
-    ],
-)
-def test_benchmark_run_and_skip_conditions_are_exact_complements(gates: str, skipped_gates: str) -> None:
-    """Never both run and skip, and never neither, on the shard that carries the benchmark; nothing elsewhere.
-
-    `ci_paths.shard_plans` only ever skips a gate the shard plans, so those are the reachable entries.
-
-    Parameters:
-        gates (str): The shard's planned gates.
-        skipped_gates (str): The shard's plan-skipped gates.
-    """
-    steps = {step.get("name"): step for step in jobs()["owned-shards-macos"]["steps"]}
-    context = {"matrix.gates": gates, "matrix.skipped_gates": skipped_gates, "runner.os": "macOS"}
-    runs = bool(evaluate(steps[BENCHMARK_STEP]["if"], context))
-    skips = bool(evaluate(steps[BENCHMARK_SKIP_STEP]["if"], context))
-    assert runs != skips if "check-benchmark" in gates.split() else not (runs or skips)
-
-
-def test_benchmark_report_is_uploaded_after_the_benchmark_gate_writes_it() -> None:
-    """Upload the shard's coverage only after `check-benchmark`, and keep its LCOV in both artifact globs."""
-    shard = [step.get("name") for step in jobs()["owned-shards-macos"]["steps"]]
-    upload = shard.index("Preserve this shard's coverage reports")
-    assert shard.index(BENCHMARK_STEP) < upload
-    assert shard.index(BENCHMARK_SKIP_STEP) < upload
-    glob = "tests/benchmarks/comparison/coverage/**/lcov.info"
-    shard_upload = next(
-        step for step in jobs()["owned-shards-macos"]["steps"] if step.get("name") == shard[upload]
-    )
-    assert glob in shard_upload["with"]["path"].split()
-    assert glob in fan_in_step("Preserve independent coverage reports and summary")["with"]["path"].split()
-
-
-def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
-    """Run the skip step's real script and keep the NOT RUN disclosure honest.
-
-    Parameters:
-        tmp_path (Path): Disposable output directory.
-    """
-    step = next(
-        step for step in jobs()["owned-shards-macos"]["steps"] if step.get("name") == BENCHMARK_SKIP_STEP
-    )
-    script = tmp_path / "skip.sh"
-    script.write_text(step["run"])
-    summary = tmp_path / "summary"
-    result = subprocess.run(
-        ["/bin/bash", "-e", str(script)],
-        env=os.environ | {"GITHUB_STEP_SUMMARY": str(summary)},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "::notice title=check-benchmark NOT RUN::" in result.stdout
-    assert "changes no benchmark input" in result.stdout
-    # One list, in `ci_paths.py`: the reason points there instead of copying it.
-    assert "BENCHMARK_INPUT_FILES" in result.stdout
-    assert "tests/benchmarks/comparison" not in step["run"]
-    assert "### check-benchmark: NOT RUN" in summary.read_text()
     assert "This is not a pass." in summary.read_text()
 
 
 def test_every_planned_gate_has_a_step_that_survives_other_gate_failures() -> None:
     """Give each gate the plan can list its own step, so one red gate never hides another's evidence."""
-    # `check-benchmark` keeps its own run/skip pair and its old condition (no `!cancelled()`), tested above.
-    planned = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates} - {"check-benchmark"}
+    planned = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates}
     steps = {
         step["name"].removeprefix("Owned gate ").split(" ")[0]: step
         for step in jobs()["owned-shards-ubuntu"]["steps"]
@@ -1182,7 +1012,7 @@ def test_owned_shards_run_exactly_the_gates_the_plan_lists(os_name: str, gates: 
         entry["shard"]: shard_gates(shard_steps(os_name, entry, Trigger(event="push"))) for entry in entries
     }
     for entry in entries:
-        assert executed[entry["shard"]] == set(entry["gates"].split()) - {"check-benchmark"}
+        assert executed[entry["shard"]] == set(entry["gates"].split())
     assert set().union(*executed.values()) == gates
 
 
@@ -1379,7 +1209,6 @@ def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate(os_name: st
     for name, gate in (
         ("python-scripts", "check-scripts"),
         ("python-harness", "check-integration"),
-        ("python-benchmarks", "check-benchmark"),
     ):
         skipped = set(policy["packages"][name]["signals"]["primary"]["skip_hosts"])
         assert (guest in skipped) == (gate not in ci_paths.OWNED_GATES[os_name])
@@ -1659,12 +1488,11 @@ def test_macos_partition_keeps_the_complete_python_artifact_union(tmp_path: Path
             "tests/integration/probes/coverage/bun/lcov.info",
             "tests/integration/providers/coverage/primary/lcov.info",
             "tests/integration/providers/coverage/bun/lcov.info",
-            "tests/benchmarks/comparison/coverage/python/lcov.info",
         ],
     }
     entries = {entry["shard"]: entry for entry in shard_entries("macos-14", Trigger(event="push"))}
     assert entries["scripts"]["gates"] == "check-scripts"
-    assert entries["python"]["gates"] == "check-integration check-benchmark"
+    assert entries["python"]["gates"] == "check-integration"
     completed, workspace = run_merge(
         tmp_path, {f"coverage-macos-14-{name}": paths for name, paths in reports.items()}
     )
@@ -1752,25 +1580,21 @@ def test_fan_in_accounts_each_cell_against_its_own_os_floors(os_name: str, cover
     ).stdout
     assert recipe.strip().endswith(f'--base "base" --os "{coverage_os}"')
     skipping = subprocess.run(
-        ["make", "--no-print-directory", "-n", "check-coverage", "COVERAGE_SKIPPED_GATES=check-benchmark"],
+        ["make", "--no-print-directory", "-n", "check-coverage", "COVERAGE_SKIPPED_GATES=check-example"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    assert skipping.strip().endswith('--skipped-gates "check-benchmark"')
+    assert skipping.strip().endswith('--skipped-gates "check-example"')
 
 
 @pytest.mark.parametrize(
     ("trigger", "skipped"),
-    [
-        (Trigger(benchmark_inputs="false"), "check-benchmark"),
-        (Trigger(benchmark_inputs="true"), ""),
-        (Trigger(event="push", benchmark_inputs="false"), ""),
-    ],
+    [(Trigger(), ""), (Trigger(event="push"), "")],
 )
 def test_fan_in_accounting_skips_exactly_the_gates_its_shards_skipped(trigger: Trigger, skipped: str) -> None:
-    """Hand the fan-in's accounting the same `skipped_gates` the macOS shard's benchmark steps read.
+    """Hand the fan-in's accounting the same empty `skipped_gates` its shard plans publish.
 
     Parameters:
         trigger (Trigger): Event and `classify` outputs.
@@ -2439,17 +2263,6 @@ def test_setup_refuses_non_linux_filesystem(tmp_path: Path, filesystem: str) -> 
     assert result.returncode == 1
     assert "not on a Linux filesystem" in result.stderr
     assert "unexpected-download" not in result.stderr
-
-
-def test_docs_list_every_benchmark_input() -> None:
-    """Pin the workflow's `benchmark_inputs` policy comment to the classifier's constants."""
-    bullet = next(
-        line.removeprefix("  # ")
-        for line in (ROOT / ".github/workflows/ci.yml").read_text().splitlines()
-        if line.startswith("  # - `benchmark_inputs`")
-    )
-    for entry in sorted(ci_paths.BENCHMARK_INPUT_FILES) + list(ci_paths.BENCHMARK_INPUT_PREFIXES):
-        assert f"`{entry}`" in bullet
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:

@@ -38,6 +38,7 @@ from coverage_accounting import (
     account,
     audit_inventory,
     check_inventory_ratchet,
+    check_ratchet,
     git_read,
     inventory,
     inventory_scopes,
@@ -45,6 +46,48 @@ from coverage_accounting import (
     is_test_path,
     repository_files,
 )
+
+
+@pytest.mark.parametrize("remaining", [None, "README.md", "src/index.ts", "new.ts"])
+def test_removed_measured_package_requires_its_entire_tree_deleted(
+    tmp_path: Path, remaining: str | None
+) -> None:
+    """Allow real tree deletion, never policy-only removal or retained non-source files.
+
+    Parameters:
+        tmp_path (Path): Disposable committed repository.
+        remaining (str | None): A tracked or untracked survivor, or no surviving tree.
+    """
+    setup_report(tmp_path)
+    base = policy()
+    commit_base(tmp_path, base)
+    shutil.rmtree(tmp_path / "packages/example")
+    current = base.model_copy(deep=True)
+    current.packages.clear()
+    if remaining is not None:
+        survivor = tmp_path / "packages/example" / remaining
+        survivor.parent.mkdir(parents=True)
+        survivor.write_text("retained\n")
+        with pytest.raises(ValueError, match="Removed package"):
+            check_ratchet(current, base, repository_files(tmp_path))
+        with pytest.raises(ValueError, match="Inventory ratchet"):
+            check_inventory_ratchet(tmp_path, current, base, "HEAD")
+        return
+    sibling = tmp_path / "packages/example-other/src/index.ts"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("independent\n")
+    check_ratchet(current, base, repository_files(tmp_path))
+    check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    (tmp_path / "coverage/policy.json").write_text(current.model_dump_json())
+    git_read(tmp_path, ["add", "-A"])
+    git_read(tmp_path, ["commit", "-qm", "Retire the fixture package"])
+    command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--base", "HEAD~1"]
+    rejected = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert rejected.returncode == 1
+    assert "Executable source missing from policy" in rejected.stderr
+    sibling.unlink()
+    accepted = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert accepted.returncode == 0, accepted.stderr
 
 
 @pytest.mark.parametrize("reason", ["", "   "])

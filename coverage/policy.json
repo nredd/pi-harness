@@ -157,18 +157,6 @@
     {"package": "python-harness", "signal": "owned", "path": "integration/harness/stats.py", "replacement": "tests/integration/harness/stats.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "python-harness", "signal": "owned", "path": "integration/harness/tmux.py", "replacement": "tests/integration/harness/tmux.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "python-harness", "signal": "owned", "path": "integration/harness/transcript.py", "replacement": "tests/integration/harness/transcript.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/__init__.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/__init__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/__main__.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/__main__.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/artifacts.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/artifacts.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/cli.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/cli.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/finalize.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/finalize.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/fixtures.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/fixtures.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/matrix.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/matrix.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/models.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/models.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/prepare.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/prepare.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/process.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/process.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/report.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/report.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
-    {"package": "python-benchmarks", "signal": "owned", "path": "benchmarks/comparison/src/pi_harness_benchmark/usage.py", "replacement": "tests/benchmarks/comparison/src/pi_harness_benchmark/usage.py", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "providers", "signal": "owned", "path": "integration/providers/auth_guard.mjs", "replacement": "tests/integration/providers/auth_guard.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "providers", "signal": "owned", "path": "integration/providers/auth_runtime_fixture.mjs", "replacement": "tests/integration/providers/auth_runtime_fixture.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
     {"package": "providers", "signal": "owned", "path": "integration/providers/auth_transport.mjs", "replacement": "tests/integration/providers/auth_transport.mjs", "reason": "Relocate release and test ownership without changing behavior or zero uncovered floors (#884)."},
@@ -565,23 +553,6 @@
           "producer": "coverage.py",
           "skip_hosts": ["wsl2"],
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
-        }
-      }
-    },
-    "python-benchmarks": {
-      "root": "tests/benchmarks/comparison",
-      "owned": ["src/pi_harness_benchmark/*.py"],
-      "exclusions": [],
-      "status": "measured",
-      "note": "pytest-cov LCOV from `make check-benchmark` (`branch = true`, `fail_under = 100`). macOS only: its `native_runtime` test needs Seatbelt. Path-gated on pull requests (#315), where the plan's `skipped_gates` reports it NOT RUN.",
-      "signals": {
-        "primary": {
-          "report": "coverage/python/lcov.info",
-          "producer": "coverage.py",
-          "gate": "check-benchmark",
-          "skip_hosts": ["linux", "wsl2"],
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         }
       }
