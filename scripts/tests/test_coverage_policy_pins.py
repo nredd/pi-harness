@@ -235,6 +235,40 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("package", "report"),
+    [("probes", "coverage/bun/lcov.info"), ("import-audit", "scripts/coverage/bun/lcov.info")],
+)
+def test_helper_bun_signals_are_independent_full_source_at_zero(package: str, report: str) -> None:
+    """Pin both helper signals without a compatibility subset or unsupported cells.
+
+    Parameters:
+        package (str): Source-complete helper producer.
+        report (str): Report path relative to its policy root.
+    Returns:
+        None: Every counter is enforced at zero on both OSes, independently from primary.
+    Raises:
+        AssertionError: A helper loses source, a reporter, an OS floor or explicit enforcement.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    entry = cfg.packages[package]
+    bun = entry.signals["bun"]
+    assert entry.status == "measured"
+    assert entry.goal == "100-percent"
+    assert not entry.exclusions
+    assert bun.report == report
+    assert bun.report != entry.signals["primary"].report
+    assert bun.enforcement == "enforced"
+    assert bun.files is None
+    assert not bun.skip_os
+    assert not bun.skip_hosts
+    assert not bun.gate
+    assert bun.reporters == ["text", "lcov", "json-summary"]
+    assert set(bun.max_uncovered) == {"darwin", "linux"}
+    for counts in bun.max_uncovered.values():
+        assert counts.lines == counts.functions == counts.branches == counts.statements == 0
+
+
 def published_path(relative: Path, patterns: list[str]) -> bool:
     """Match this package's explicit files entries, including recursively included directories.
 

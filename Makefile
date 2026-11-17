@@ -70,7 +70,7 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	$(MAKE) check-probes
 	$(MAKE) check-providers
 
-check-probes:  ## Offline probes: Biome on the directory + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
+check-probes:  ## Offline probes: Biome + strict tsc, then independent Node/V8 and Bun/Istanbul coverage on the same explicit tests
 	node_modules/.bin/biome check integration/probes
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
@@ -78,7 +78,7 @@ check-probes:  ## Offline probes: Biome on the directory + strict tsc, then Node
 	  node ../../scripts/run-vitest.ts node --coverage
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
 	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
-	  node ../../scripts/run-vitest.ts bun --coverage.enabled=false
+	  node ../../scripts/run-vitest.ts bun
 
 check-providers:  ## Synthetic providers and auth preloads Biome on the directory + strict tsc, then Vitest on the config's explicit test files (no glob)
 	node_modules/.bin/biome check integration/providers
@@ -86,7 +86,7 @@ check-providers:  ## Synthetic providers and auth preloads Biome on the director
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
 	cd integration/providers && node ../../scripts/run-vitest.ts bun
 
-check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node coverage and Bun compatibility against the real TypeScript parser
+check-import-audit:  ## Offline import audit: Biome + strict tsc, then independent Node/V8 and Bun/Istanbul coverage against the real TypeScript parser
 	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs scripts/tests/*.mjs
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
@@ -95,7 +95,7 @@ check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node cove
 	  node run-vitest.ts node --coverage
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
 	cd scripts && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
-	  node run-vitest.ts bun --coverage.enabled=false
+	  node run-vitest.ts bun --coverage.reportsDirectory=scripts/coverage/bun
 
 check-benchmark:  ## benchmarks/comparison unit gate, 100% statement+branch coverage, LCOV under coverage/python/
 	cd benchmarks/comparison && $(PY_CHECK)

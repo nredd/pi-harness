@@ -4,7 +4,7 @@ import { definePackageConfig } from "../../scripts/vitest-package.ts";
 // `runtime-build-tooling`: plan-mode's `scripts/build-runtime.mjs` plus the shared root `scripts/runtime-builder.mjs`
 // that `test:runtime-build` measures, not `src/`. The root is the repository so both files sit inside it (as `import-audit`).
 // No home guard: this producer never read one.
-export default definePackageConfig("runtime-build-tooling", {
+const config = definePackageConfig("runtime-build-tooling", {
 	provider: "istanbul",
 	reportsDirectory: "packages/plan-mode/coverage/runtime-build-tooling",
 	homeGuard: false,
@@ -26,3 +26,5 @@ export default definePackageConfig("runtime-build-tooling", {
 		testTimeout: 5_000,
 	},
 });
+
+export default config;
