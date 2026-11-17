@@ -62,7 +62,7 @@ check-commits:  ## Validate the complete PR/push commit range, or the latest loc
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
-check-scripts: check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
+check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../integration,,.)
 	uv run --locked --project integration python scripts/package_contracts.py --packed-files-only
@@ -78,7 +78,7 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	$(MAKE) check-probes
 	$(MAKE) check-providers
 
-check-probes:  ## Offline probes: Biome on the directory + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
+check-probes:  ## Offline probes: Biome + strict tsc, then independent Node/V8 and Bun/Istanbul coverage on the same explicit tests
 	node_modules/.bin/biome check integration/probes
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
@@ -86,7 +86,7 @@ check-probes:  ## Offline probes: Biome on the directory + strict tsc, then Node
 	  node ../../scripts/run-vitest.ts node --coverage
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
 	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
-	  node ../../scripts/run-vitest.ts bun --coverage.enabled=false
+	  node ../../scripts/run-vitest.ts bun
 
 check-providers:  ## Synthetic providers and auth preloads Biome on the directory + strict tsc, then Vitest on the config's explicit test files (no glob)
 	node_modules/.bin/biome check integration/providers
@@ -94,7 +94,7 @@ check-providers:  ## Synthetic providers and auth preloads Biome on the director
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
 	cd integration/providers && node ../../scripts/run-vitest.ts bun
 
-check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node coverage and Bun compatibility against the real TypeScript parser
+check-import-audit:  ## Offline import audit: Biome + strict tsc, then independent Node/V8 and Bun/Istanbul coverage against the real TypeScript parser
 	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs scripts/tests/*.mjs
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
@@ -103,7 +103,7 @@ check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node cove
 	  node run-vitest.ts node --coverage
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
 	cd scripts && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
-	  node run-vitest.ts bun --coverage.enabled=false
+	  node run-vitest.ts bun --coverage.reportsDirectory=scripts/coverage/bun
 
 check-benchmark:  ## benchmarks/comparison unit gate, 100% statement+branch coverage, LCOV under coverage/python/
 	cd benchmarks/comparison && $(PY_CHECK)
@@ -128,6 +128,13 @@ check-subagents-package-contract:  ## Packed @nredd/pi-subagents (+ croner/nanoi
 
 check-todo-package-contract:  ## Packed @nredd/pi-todo through exact stock Pi 1.3.0
 	cd scripts && uv run --locked --project ../integration python stock_package_contract.py --package @nredd/pi-todo $(if $(REPORT),--report $(REPORT))
+
+.PHONY: check-changelog-fragments fold-changelog
+check-changelog-fragments:  ## Validate subagents fragment names, issue attribution, bullets and fold inputs without writing
+	uv run --locked --project integration python scripts/changelog_fragments.py
+
+fold-changelog: check-changelog-fragments  ## Explicitly fold subagents fragments into Unreleased, without publishing or releasing
+	uv run --locked --project integration python scripts/changelog_fragments.py --fold
 
 release-manifest:  ## Generate releases/<release-id>.json from Gitlinks and package manifests
 	cd scripts && uv run --locked --project ../integration python release_manifest.py $(ARGS)

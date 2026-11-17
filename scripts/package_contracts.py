@@ -495,6 +495,7 @@ CONTRACTS = (
             "src/stats/days.ts",
             "src/stats/format.ts",
             "src/stats/freshness.ts",
+            "src/stats/harness/claude-quota.ts",
             "src/stats/harness/claude.ts",
             "src/stats/harness/codex.ts",
             "src/stats/harness/common.ts",

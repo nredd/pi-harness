@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { configFor, ScenarioFixture, sessionFile } from "../fixtures/session.ts";
 

@@ -7,6 +7,8 @@ on:
     paths:
       - .github/workflows/runner-smoke.yml
       - scripts/wsl2_smoke.sh
+      - scripts/wsl2_smoke.py
+      - scripts/wsl2_exec.py
 
 permissions:
   contents: read
@@ -112,5 +114,7 @@ jobs:
           echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH user=$(id -un)"
           nproc
           free -g | head -2
+      # The golden image already requires system Python for the protected wsl.conf check.
+      # Keep the shell entry; measured Python calibrates HTTP/TCP before accepting blocked probes.
       - name: Isolation smoke
         run: bash scripts/wsl2_smoke.sh

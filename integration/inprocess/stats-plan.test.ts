@@ -2,7 +2,7 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { exportStats, importStats } from "../../packages/session-kit/src/stats/snapshot.ts";
-import { configFor, RESIZES, TerminalFixture } from "../../packages/session-kit/tests/fixtures/session.ts";
+import { configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
 import {
 	chart,
 	footer,
@@ -12,6 +12,7 @@ import {
 	selectFilter,
 	selectTotal,
 } from "../../packages/session-kit/tests/fixtures/stats.ts";
+import { RESIZES, TerminalFixture } from "../../packages/session-kit/tests/fixtures/terminal.ts";
 import { isolateStackHome, loadFork } from "./support.ts";
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;

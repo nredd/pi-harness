@@ -3,7 +3,7 @@ import { definePackageConfig } from "../../scripts/vitest-package.ts";
 // Match `integration/probes`: forks, so each file gets its own process. `preloads.test.ts` installs the
 // redirect preload's process-wide `fetch` accessor and `child_process` wrappers, which must not leak
 // into another file. Explicit test files, no glob.
-export default definePackageConfig("providers", {
+const config = definePackageConfig("providers", {
 	provider: "v8",
 	test: {
 		include: [
@@ -18,3 +18,5 @@ export default definePackageConfig("providers", {
 		testTimeout: 20_000,
 	},
 });
+
+export default config;

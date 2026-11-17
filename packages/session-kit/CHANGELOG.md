@@ -45,6 +45,8 @@
 
 - Raise the `monitor_start` `timeout_s` cap from 24h to 7 days (`604800`) so monitors can outlive long jobs
 
+- Read optional Claude statusLine `rate-limits.json` captures into the existing offline stats/export quota pipeline (#963). Allowlist the two numeric windows, reject future observations, keep missing/invalid windows unknown, and reuse reset/staleness display without adding account identity. Capture deployment (nredd/dotfiles#144) and reader publication remain separate.
+
 ## 0.8.0
 
 - Add `/mon`: a read-only TUI dashboard of host CPU history, non-free memory, load and sampled processes, on by default (`mon.enabled`)

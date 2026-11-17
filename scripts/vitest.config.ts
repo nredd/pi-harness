@@ -3,7 +3,7 @@ import { definePackageConfig } from "./vitest-package.ts";
 
 // Match `integration/inprocess`. Explicit test files, no glob: `tests/` is the pytest suite. The root is
 // the repository, not `scripts/`: the report names every producer configuration by a repo-relative path.
-export default definePackageConfig("import-audit", {
+const config = definePackageConfig("import-audit", {
 	provider: "v8",
 	reportsDirectory: "scripts/coverage/primary",
 	root: fileURLToPath(new URL("..", import.meta.url)),
@@ -20,5 +20,8 @@ export default definePackageConfig("import-audit", {
 		pool: "forks",
 		maxWorkers: 2,
 		testTimeout: 20_000,
+		coverage: { thresholds: { perFile: true, lines: 100, functions: 100, branches: 100, statements: 100 } },
 	},
 });
+
+export default config;

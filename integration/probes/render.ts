@@ -63,7 +63,14 @@ function timeSteadyFrame(tui: TUI): number {
 	return performance.now() - started;
 }
 
-export default function harnessProbe(pi: ExtensionAPI): void {
+/** Register the command; injected runtime facts let both engines exercise the other's identity and GC paths. */
+export default function harnessProbe(
+	pi: ExtensionAPI,
+	runtime: { globals: GcHost; versions: { node: string; bun?: string } } = {
+		globals: globalThis as GcHost,
+		versions: process.versions,
+	},
+): void {
 	pi.registerCommand("harness-probe", {
 		description: "Harness: time full frames and read the heap",
 		handler: async (args, ctx) => {
@@ -76,7 +83,7 @@ export default function harnessProbe(pi: ExtensionAPI): void {
 			const framesMs = Array.from({ length: frames }, () => timeFrame(tui));
 			for (let i = 0; i < WARMUP_FRAMES; i++) timeSteadyFrame(tui);
 			const steadyFramesMs = Array.from({ length: frames }, () => timeSteadyFrame(tui));
-			const gc = collector(globalThis as GcHost);
+			const gc = collector(runtime.globals);
 			gc?.run();
 			const record = {
 				frames_ms: framesMs,
@@ -85,8 +92,8 @@ export default function harnessProbe(pi: ExtensionAPI): void {
 				gc: gc !== undefined,
 				gc_method: gc?.method ?? "none",
 				runtime: {
-					engine: process.versions.bun ? "bun" : "node",
-					version: process.versions.bun ?? process.versions.node,
+					engine: runtime.versions.bun ? "bun" : "node",
+					version: runtime.versions.bun ?? runtime.versions.node,
 					platform: process.platform,
 					arch: process.arch,
 				},

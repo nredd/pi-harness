@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { globSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInstrumenter } from "@vitest/istanbul-lib-instrument";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
 interface Coverage {
@@ -438,6 +439,13 @@ test("the producer table is exactly the Vitest configurations the policy invento
 });
 
 for (const producer of PRODUCERS) {
+	test(`${producer.config} has an executable initializer in the real Istanbul statement map`, () => {
+		const instrumenter = createInstrumenter({ esModules: true, parserPlugins: ["typescript"] });
+		const path = resolve(REPO, producer.config);
+		instrumenter.instrumentSync(readFileSync(path, "utf8"), path);
+		assert.ok(Object.keys(instrumenter.lastFileCoverage()?.statementMap ?? {}).length > 0);
+	});
+
 	test(`${producer.config} reports text, LCOV and a statement summary from ${producer.provider} even on failure`, async () => {
 		const policy = realPolicy()[producer.policy];
 		assert.ok(policy, `${producer.policy} is in the policy`);
@@ -525,6 +533,20 @@ test("subagents runtime verification pins the complete script at zero L/F/B/S", 
 		"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
 	});
 });
+
+for (const signal of ["probes", "import-audit"]) {
+	test(`${signal} pins each owned file at zero L/F/B/S on either runtime`, async () => {
+		const producer = PRODUCERS.find(({ policy }) => policy === signal);
+		assert.ok(producer);
+		assert.deepEqual((await coverageOf(producer)).thresholds, {
+			perFile: true,
+			lines: 100,
+			functions: 100,
+			branches: 100,
+			statements: 100,
+		});
+	});
+}
 
 test("computer-use async verification pins the whole helper at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");
