@@ -179,12 +179,20 @@ export class WslHelperClient implements WindowsHelperTransport {
 					typeof response.ok !== "boolean"
 				)
 					throw new Error("WSL host helper returned an unexpected protocol frame.");
+				// Match the native Response union before treating delivery as acknowledged.
+				const validEnvelope = response.ok
+					? Object.hasOwn(response, "result") && !Object.hasOwn(response, "error")
+					: !Object.hasOwn(response, "result") &&
+						typeof response.error?.code === "string" &&
+						response.error.code.length > 0 &&
+						typeof response.error.message === "string";
+				if (!validEnvelope) throw new Error("WSL host helper returned an invalid response envelope.");
 				const pending = this.reply;
 				this.reply = undefined;
 				if (response.ok) pending.resolve(response.result);
 				else {
 					const error = new Error("WSL host helper command failed.") as Error & { code?: string };
-					error.code = typeof response.error?.code === "string" ? response.error.code : undefined;
+					error.code = response.error.code;
 					pending.reject(error, true);
 				}
 			} catch {

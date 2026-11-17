@@ -58,10 +58,21 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
  const reply = { protocolVersion: 4, id: r.id, ok: true, result: { pid: process.pid, cmd: r.cmd, args: r.args } };
  if (r.cmd === 'wrongId') reply.id = 'foreign';
  if (r.cmd === 'wrongVersion') reply.protocolVersion = 3;
- if (r.cmd === 'error') { reply.ok = false; reply.error = { code: 'fixture_refusal', message: 'private app title' }; }
- if (r.cmd === 'errorNoCode') reply.ok = false;
+ if (r.cmd === 'missingResult') delete reply.result;
+ if (r.cmd === 'successWithError') reply.error = null;
+ if (r.cmd.startsWith('error')) {
+  reply.ok = false; delete reply.result;
+  reply.error = { code: 'fixture_refusal', message: 'private app title' };
+  if (r.cmd === 'errorNoObject') delete reply.error;
+  if (r.cmd === 'errorNoCode') delete reply.error.code;
+  if (r.cmd === 'errorEmptyCode') reply.error.code = '';
+  if (r.cmd === 'errorCodeNumber') reply.error.code = 7;
+  if (r.cmd === 'errorNoMessage') delete reply.error.message;
+  if (r.cmd === 'errorMessageNumber') reply.error.message = 7;
+  if (r.cmd === 'errorWithResult') reply.result = {};
+ }
  if (['permission_denied', 'session_mismatch', 'screen_locked'].includes(r.cmd)) {
-  reply.ok = false; reply.error = { code: r.cmd, message: 'private fixture detail' };
+  reply.ok = false; delete reply.result; reply.error = { code: r.cmd, message: 'private fixture detail' };
  }
  const wire = JSON.stringify(reply) + '\\n';
  if (r.cmd === 'split') { process.stdout.write(wire.slice(0, 12)); setTimeout(() => process.stdout.write(wire.slice(12)), 5); }
@@ -138,7 +149,6 @@ test("WSL transport reuses one process, frames split replies and preserves Windo
 			(e) => e.code === "fixture_refusal" && !e.message.includes("private app title"),
 		);
 		assert.equal((await client.command("echo")).pid, first.pid);
-		await assert.rejects(client.command("errorNoCode"), (e) => e.code === undefined);
 	});
 });
 
@@ -233,7 +243,25 @@ test("WSL bounds requests and deadlines before execution", async () => {
 	});
 });
 
-for (const command of ["hang", "exit", "invalid", "invalidUtf8", "wrongId", "wrongVersion", "extra", "overflow"]) {
+for (const command of [
+	"hang",
+	"exit",
+	"invalid",
+	"invalidUtf8",
+	"wrongId",
+	"wrongVersion",
+	"extra",
+	"overflow",
+	"missingResult",
+	"successWithError",
+	"errorNoObject",
+	"errorNoCode",
+	"errorEmptyCode",
+	"errorCodeNumber",
+	"errorNoMessage",
+	"errorMessageNumber",
+	"errorWithResult",
+]) {
 	test(`WSL retains the lease and closes permanently after uncertain ${command}`, async () => {
 		await withClient(async (client, config) => {
 			await assert.rejects(client.command(command, {}, { timeoutMs: command === "hang" ? 150 : 3000 }));

@@ -61,6 +61,9 @@ replacement between verification and execution. `CI` refuses opt-in. Nothing ena
 installs tools, grants privileges, changes the screen-reader flag or falls back to PowerShell.
 
 One long-lived process speaks JSON lines directly over stdio (`shell: false`, no PATH lookup).
+A successful response must carry `result` and no `error`; a failure must carry an error with a
+nonempty string `code` and string `message`, and no `result`. Only a complete, correlated native
+envelope acknowledges delivery; raw error messages are not exposed to the tool caller.
 Every participating WSL session/distro must use the same physical, initially absent lease path.
 Directory creation serializes complete requests, including physical batches. It does not lock out
 Windows-native helpers, other automation or the human user. Do not run those concurrently.
