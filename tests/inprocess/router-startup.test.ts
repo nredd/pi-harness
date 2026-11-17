@@ -362,8 +362,9 @@ describe("router/default startup, quota dispatch and resume", () => {
 
 		it("loads the real router package through the packages setting", async () => {
 			const s = await launch({ router: "package" });
-			// Asserts the loaded extension, not the selection: selecting `router/default` through the real
-			// package path flaked ~1 in 4 full-file runs (#911).
+			// #911: package-loaded virtual models must remain available during startup.
+			expect(s.selected()).toBe(VIRTUAL);
+			expect(s.modelFallbackMessage).toBeUndefined();
 			expect(s.extensionPaths.map((path) => path.replaceAll("\\", "/"))).toEqual([
 				expect.stringMatching(/packages\/subscription-router\/src\/index\.ts$/),
 			]);
