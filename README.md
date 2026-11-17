@@ -45,6 +45,8 @@ make help                    # every target
 
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
+- `check-changelog-fragments` and explicit `fold-changelog` use the managed `tests/integration` uv project;
+  folding edits source fragments only, never publishes or releases
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
 - `check-scripts` enforces package layout with a shrinking allowlist. Retired sync markers are denied in

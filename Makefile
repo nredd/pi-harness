@@ -55,7 +55,7 @@ check-commits:  ## Validate the complete PR/push commit range, or the latest loc
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
-check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
+check-scripts: check-changelog-fragments  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../tests/integration,,.)
 	uv run --locked --project tests/integration python scripts/package_contracts.py --packed-files-only
@@ -122,6 +122,13 @@ check-subagents-package-contract:  ## Packed @nredd/pi-subagents (+ croner/nanoi
 
 check-todo-package-contract:  ## Packed @nredd/pi-todo through exact stock Pi 1.3.0
 	cd scripts && uv run --locked --project ../tests/integration python stock_package_contract.py --package @nredd/pi-todo $(if $(REPORT),--report $(REPORT))
+
+.PHONY: check-changelog-fragments fold-changelog
+check-changelog-fragments:  ## Validate subagents fragment names, issue attribution, bullets and fold inputs without writing
+	uv run --locked --project tests/integration python scripts/changelog_fragments.py
+
+fold-changelog: check-changelog-fragments  ## Explicitly fold subagents fragments into Unreleased, without publishing or releasing
+	uv run --locked --project tests/integration python scripts/changelog_fragments.py --fold
 
 release-manifest:  ## Generate releases/<release-id>.json from Gitlinks and package manifests
 	cd scripts && uv run --locked --project ../tests/integration python release_manifest.py $(ARGS)

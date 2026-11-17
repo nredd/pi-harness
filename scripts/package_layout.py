@@ -64,6 +64,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from changelog_fragments import PACKAGE as FRAGMENT_PACKAGE
+from changelog_fragments import fragment_path
 from ci_paths import ClassificationError, repo_root, run_git
 
 LOGGER = logging.getLogger(__name__)
@@ -223,16 +225,22 @@ def dot_entry(path: str) -> str | None:
     return None
 
 
-def markdown_allowed(path: str) -> bool:
+def markdown_allowed(path: str, package: str = "") -> bool:
     """Return whether a markdown file is one the standard permits.
 
     Parameters:
         path (str): Package-relative POSIX path ending in `.md`.
+        package (str): Repository-relative package, for the subagents fragment grammar only.
 
     Returns:
-        bool: Root `README.md`, `CHANGELOG.md` or `NOTICE.md`, a Pi resource, or a fixture.
+        bool: A root document, Pi resource, fixture, or canonical subagents fragment.
     """
-    return path in ROOT_MARKDOWN or path.split("/", maxsplit=1)[0] in PI_RESOURCE_DIRS or is_fixture(path)
+    return (
+        path in ROOT_MARKDOWN
+        or path.split("/", maxsplit=1)[0] in PI_RESOURCE_DIRS
+        or is_fixture(path)
+        or fragment_path(package, path)
+    )
 
 
 def tree_rule(path: str) -> str | None:
@@ -313,7 +321,9 @@ def file_violations(package: str, path: str) -> Iterable[Violation]:
     """
     top = path.split("/", maxsplit=1)[0]
     suffix = posixpath.splitext(path)[1].lower()
-    if suffix == ".md" and not markdown_allowed(path):
+    if top == "changes" and not fragment_path(package, path):
+        yield Violation(package, path, "fragment-path")
+    if suffix == ".md" and not markdown_allowed(path, package):
         yield Violation(package, path, "markdown")
     if suffix in MEDIA_SUFFIXES:
         yield Violation(package, path, "media")
@@ -486,6 +496,8 @@ def top_level_violation(package: str, entry: str, is_directory: bool) -> Violati
     """
     if entry.startswith("."):
         return Violation(package, entry, "dotfile")
+    if package == FRAGMENT_PACKAGE and entry == "changes" and is_directory:
+        return None
     if entry in TOP_LEVEL_ENTRIES or EXTRA_VITEST_CONFIG.fullmatch(entry):
         return None
     if is_directory:
