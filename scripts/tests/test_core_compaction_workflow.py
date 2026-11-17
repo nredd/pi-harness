@@ -30,7 +30,18 @@ def test_candidate_child_install_authenticates_root_overrides_first() -> None:
         for step in steps
         if step.get("name") == "Verify assembled direct and routed child compaction on candidate core"
     )
-    assert steps.index(preflight) < steps.index(install) < steps.index(probe)
+    build = next(
+        step
+        for step in steps
+        if step.get("name") == "Build owned packages before candidate-core child verification"
+    )
+    assert steps.index(preflight) < steps.index(install) < steps.index(build) < steps.index(probe)
+    assert build["working-directory"] == probe["working-directory"] == "."
+    assert build["run"] == "make build"
+    assert probe["run"] == (
+        "uv run --locked --project tests/integration pytest "
+        "tests/integration/scenarios/test_core_compaction.py"
+    )
     assert preflight["working-directory"] == install["working-directory"] == "."
     assert preflight["run"] == "make verify-root-overrides"
     assert preflight["env"] == {"GH_TOKEN": "${{ github.token }}"}
@@ -49,7 +60,13 @@ def test_candidate_child_inputs_trigger_the_fork_gate() -> None:
         ".gitmodules",
         ".github/workflows/forks.yml",
         "Makefile",
-        "tests/integration/core-source/**",
+        "tests/integration/probes/**",
+        "tests/integration/scenarios/test_core_compaction.py",
+        "tests/integration/harness/**",
+        "tests/integration/conftest.py",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
+        "release/**",
         "tests/inprocess/support.ts",
         "packages/subagents/**",
         "biome.json",

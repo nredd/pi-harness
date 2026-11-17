@@ -644,7 +644,7 @@
       "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S.",
+      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S. compaction-children.test.ts is a test, not owned probe source: the ordinary pytest candidate-core scenario runs its unchanged Node assertions in Forks CI; check-probes supplies directory lint and strict types, not released-host or Bun compaction evidence.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

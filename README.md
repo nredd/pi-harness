@@ -230,7 +230,11 @@ The twelve jobs are the configured required checks of ruleset `main required che
   release, then a parent PR that moves the Gitlink, root `overrides`, `release/stacks/personal.json`
   and the lockfiles together
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
-  `make check-core-compaction` runs the assembled child-compaction probes. Its non-rewriting
+  the ordinary `tests/integration/scenarios/test_core_compaction.py` pytest scenario runs the
+  assembled direct/routed child probes after authenticated root installation and `make build`.
+  It requires the built candidate core, fails rather than skips when missing, and owns its private
+  HOME/auth/tmp and offline environment through `harness.sandbox`. `make check-integration`
+  covers probe Biome/types through the normal `check-probes` path. The fork gate's non-rewriting
   check mirrors the entire selected core script, including worktree readiness and binary-release
   type checks; only Biome's `--write` is removed
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with

@@ -8,7 +8,13 @@ on:
       - .gitmodules
       - .github/workflows/forks.yml
       - Makefile
-      - tests/integration/core-source/**
+      - tests/integration/probes/**
+      - tests/integration/scenarios/test_core_compaction.py
+      - tests/integration/harness/**
+      - tests/integration/conftest.py
+      - tests/integration/pyproject.toml
+      - tests/integration/uv.lock
+      - release/**
       - tests/inprocess/support.ts
       - packages/subagents/**
       - biome.json
@@ -23,7 +29,13 @@ on:
       - .gitmodules
       - .github/workflows/forks.yml
       - Makefile
-      - tests/integration/core-source/**
+      - tests/integration/probes/**
+      - tests/integration/scenarios/test_core_compaction.py
+      - tests/integration/harness/**
+      - tests/integration/conftest.py
+      - tests/integration/pyproject.toml
+      - tests/integration/uv.lock
+      - release/**
       - tests/inprocess/support.ts
       - packages/subagents/**
       - biome.json
@@ -129,6 +141,10 @@ jobs:
       - name: Install owned packages for candidate-core child verification
         working-directory: .
         run: npm ci --ignore-scripts
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: Build owned packages before candidate-core child verification
+        working-directory: .
+        run: make build
       - name: Verify assembled direct and routed child compaction on candidate core
         working-directory: .
-        run: make check-core-compaction
+        run: uv run --locked --project tests/integration pytest tests/integration/scenarios/test_core_compaction.py
