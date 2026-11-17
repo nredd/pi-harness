@@ -199,7 +199,8 @@ export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 			try {
 				const s = await stat(path);
 				const hit = files[path];
-				if (hit && hit.size === s.size && hit.mtimeMs === s.mtimeMs) continue;
+				// A record that counted bad lines is re-read, so a parser fix heals it (as `loadUsage` does for pi).
+				if (hit && hit.badLines === 0 && hit.size === s.size && hit.mtimeMs === s.mtimeMs) continue;
 				const parser = options.parser(path, s.size, s.mtimeMs);
 				await feedFile(path, parser);
 				files[path] = parser.finish();

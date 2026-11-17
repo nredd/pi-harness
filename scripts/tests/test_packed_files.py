@@ -200,7 +200,7 @@ def test_package_check_runs_selected_tarball_gate_first(directory: str) -> None:
     manifest = json.loads((pc.REPO_ROOT / "packages" / directory / "package.json").read_text())
     first = manifest["scripts"]["check"].split(" && ")[0]
     assert first == (
-        "uv run --locked --project ../../integration python ../../scripts/package_contracts.py "
+        "uv run --locked --project ../../tests/integration python ../../scripts/package_contracts.py "
         f"--packed-files-only --package {directory}"
     )
 
@@ -278,7 +278,7 @@ def test_package_check_rejects_disposable_payload_mutation(
     done = subprocess.run(
         [pc.locate_tools().npm, "run", "check"],
         cwd=package,
-        env=os.environ | {"UV_PROJECT_ENVIRONMENT": str(pc.REPO_ROOT / "integration/.venv")},
+        env=os.environ | {"UV_PROJECT_ENVIRONMENT": str(pc.REPO_ROOT / "tests/integration/.venv")},
         text=True,
         capture_output=True,
         timeout=90,

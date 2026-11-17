@@ -631,10 +631,15 @@ def is_test_path(path: Path) -> bool:
         return False
     # Rust modules inside src belong to the instrumented source denominator, even when named
     # tests/fixtures. Only conventional test/fixture directories OUTSIDE src are excluded.
-    # `tests/lib` is the shared helper workspace: owned, measured code, not a test tree. Its own
-    # `test/` directory and `*.test.ts` files below it are still tests.
-    if path.parts[:2] == ("tests", "lib"):
-        path = Path(*path.parts[2:])
+    # Top-level test projects contain owned, measured support code. Strip only the umbrella
+    # directory; their own tests/fixtures and conventional test filenames remain tests.
+    if path.parts[:2] in {
+        ("tests", "lib"),
+        ("tests", "inprocess"),
+        ("tests", "integration"),
+        ("tests", "benchmarks"),
+    }:
+        path = Path(*path.parts[1:])
     if path.suffix == ".rs" and "src" in path.parts:
         path = Path(*path.parts[: path.parts.index("src")])
     return (

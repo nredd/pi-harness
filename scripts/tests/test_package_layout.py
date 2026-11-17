@@ -38,7 +38,7 @@ CLEAN = {
     "tests/fixtures/helper.ts": "export {};\n",
     "tests/fixtures/data.json": "{}\n",
 }
-SHARED = "integration/inprocess"
+SHARED = "tests/inprocess"
 
 
 def git(repo: Path, *args: str) -> str:
@@ -840,7 +840,7 @@ def test_shared_packages_skip_publish_layout_rules(repo: Path) -> None:
             f"{SHARED}/AGENTS.md": "x\n",
             f"{SHARED}/.gitignore": "x\n",
             f"{SHARED}/a.test.mjs": "x\n",
-            "integration/other/package.json": json.dumps({"scripts": {"build:x": "x"}}),
+            "tests/integration/other/package.json": json.dumps({"scripts": {"build:x": "x"}}),
         },
     )
     assert lines(repo) == [f"{SHARED}: biome.json: biome-config", f"{SHARED}: package.json: script-name docs"]
@@ -1337,7 +1337,7 @@ def test_real_violation_lines_follow_the_documented_shape() -> None:
     _, listed = package_layout.load_allowlist(REPO_ROOT)
     for entry in listed:
         package, path, rule = entry.split(": ", 2)
-        assert package.startswith(("packages/", "integration/inprocess"))
+        assert package.startswith(("packages/", "tests/inprocess"))
         assert path
         assert rule.split(" ")[0] in {
             "biome-config",

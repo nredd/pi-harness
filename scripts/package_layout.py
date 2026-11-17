@@ -73,7 +73,7 @@ LOGGER = logging.getLogger(__name__)
 ALLOWLIST = "scripts/package_layout.json"
 PUBLISH_ROOT = "packages"
 # Shared packages get script/config rules and the repository-wide binary/shell bans, not publish layout.
-SHARED_PACKAGES = ("integration/inprocess", "tests/lib")
+SHARED_PACKAGES = ("tests/inprocess", "tests/lib")
 
 REQUIRED_FILES = (
     "package.json",

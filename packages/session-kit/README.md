@@ -672,7 +672,8 @@ Harness readers (#367; exported by the CLI above and shown in `/stats`):
 pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;
 `CODEX_HOME` or `~/.codex`; `OPENCODE_DB`, else `$XDG_DATA_HOME/opencode/opencode.db`. Local file
 reads only. A missing root is silent ("not installed"). Parsed files are cached in
-`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
+`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept. A record that counted
+unreadable lines is re-read on every scan until it parses clean; a deleted file's record keeps its count.
 That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
 directory names live there as keys); its values and every reader result carry no paths. It also
 records a hash of the installation salt (never the salt). When that changes, usage records are kept
