@@ -28,7 +28,7 @@ REAL = {"ubuntu-24.04": (36, 735, 34), "macos-14": (37, 744, 35), "wsl2": (32, 6
 
 
 def test_provenance_sidecar_matches_constants_and_fixtures() -> None:
-    """The sidecar names the original run and artifacts, and the retained bytes match their recorded hash.
+    """The sidecar names the original run, and every retained fixture agrees with it and the constants.
 
     Parameters:
         None.
@@ -39,6 +39,8 @@ def test_provenance_sidecar_matches_constants_and_fixtures() -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
+    # The original sha256 values are provenance only: the originals are not retained, so they cannot be
+    # verified offline. What is checked here is that the fixtures, sidecar and constants agree.
     sidecar = json.loads((DIRECTORY / "provenance.json").read_text())
     assert sidecar["run_id"] == 44104072624
     assert sidecar["head_and_tested_sha"] == HEAD
@@ -46,6 +48,10 @@ def test_provenance_sidecar_matches_constants_and_fixtures() -> None:
         entry = sidecar["artifacts"][host]
         assert (entry["original_signals"], entry["original_file_rows"]) == (signals, rows)
         retained = (DIRECTORY / f"coverage-{host}.json").read_bytes()
+        fixture = json.loads(retained)
+        assert len(fixture["files"]) == entry["kept_file_rows"]
+        assert fixture["rows_trimmed"] == {"original_file_rows": rows}
+        assert len(fixture["packages"]) == signals
         assert hashlib.sha256(retained).hexdigest() == entry["fixture_sha256"]
         assert len(retained) < 100_000
 

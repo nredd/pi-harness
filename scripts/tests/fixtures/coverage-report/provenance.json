@@ -11,7 +11,7 @@
    "original_signals": 36,
    "original_file_rows": 735,
    "kept_file_rows": 72,
-   "fixture_sha256": "76c9a0b7ff87279df6d5656afc0995b7cf359f5bf4e57c681f85e5918016f7ef"
+   "fixture_sha256": "14dee4743f9c7dc096ce7fb7257e5759c4f81f2ade7167dc224608d3bc7b5532"
   },
   "macos-14": {
    "artifact_id": 14347919161,
@@ -19,7 +19,7 @@
    "original_signals": 37,
    "original_file_rows": 744,
    "kept_file_rows": 74,
-   "fixture_sha256": "897b735fafd2fbe6856877476ffe8de606bca0c61f54beccbe737ae43da29ead"
+   "fixture_sha256": "bc55d6c9ece25a8e9d7bbf7d1fb7fb570ce1ced1856af0b2d65323bda2e636cb"
   },
   "wsl2": {
    "artifact_id": 14338064184,
@@ -27,8 +27,8 @@
    "original_signals": 32,
    "original_file_rows": 663,
    "kept_file_rows": 62,
-   "fixture_sha256": "969e132bd0a462e6a268f0abef43bc255c1f6262140b240168bf9e9d6a9b4559"
+   "fixture_sha256": "48882b8ede8a5e20b13f52378d8464da1313bd7666dcfabcc087e7b91a4cae60"
   }
  },
- "trim": "Each fixture keeps os, measurement_only, packages, signals, not_measured and errors byte-equivalent in value, and at most 2 file rows per signal (4 when uncovered). measured_floors and the other file rows are dropped; package totals still describe every original row."
+ "trim": "Each fixture keeps os, measurement_only, packages, signals, not_measured and errors byte-equivalent in value, and at most 2 file rows per signal (4 when uncovered). measured_floors and the other file rows are dropped; package totals still describe every original row. Each fixture carries rows_trimmed.original_file_rows so the renderer accepts the subset and shows a partial-rows note; production summaries must match totals exactly."
 }

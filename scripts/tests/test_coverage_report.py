@@ -371,7 +371,7 @@ def test_text_types(value: object) -> None:
         (b'{"x":Infinity}', r"Non-finite JSON number: .Infinity."),
         (b'{"x":-Infinity}', r"Non-finite JSON number: .-Infinity."),
         (b'{"x":1e999}', r"Non-finite JSON number: .1e999."),
-        (b'{"x":' + b"9" * 5000 + b"}", r"Exceeds the limit"),
+        (b'{"x":' + b"9" * 5000 + b"}", r"^Cannot decode JSON: 'Integer literal too long'$"),
         (b"[" * 200_000, r"^Cannot decode JSON: .(Stack overflow|maximum recursion depth)"),
     ],
 )
@@ -445,7 +445,7 @@ def oversized_file() -> dict[str, object]:
         ({"files": {}}, r"^Expected file and error arrays$"),
         ({"errors": "error"}, r"^Expected file and error arrays$"),
         ({"signals": {}}, r"^Measured packages and signal metadata differ$"),
-        ({"files": [oversized_file()]}, r"^Measured file rows exceed the package counters$"),
+        ({"files": [oversized_file()]}, r"^Measured file rows disagree with the package counters$"),
         ({"signals": {"pkg/primary": {"enforcement": "optional", "reason": ""}}}, r"^Invalid enforcement$"),
         (
             {
@@ -733,3 +733,101 @@ def test_load_json_zip_states_and_cli(tmp_path: Path) -> None:
     )
     assert completed.returncode == 1
     assert "Cannot render" in completed.stderr
+
+
+def test_integer_bound_is_ours_not_the_interpreter_s() -> None:
+    """A 5000-digit integer is refused by the renderer's own bound even if the stdlib limit is disabled.
+
+    Parameters:
+        None.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        with pytest.raises(ValueError, match=r"^Cannot decode JSON: 'Integer literal too long'$"):
+            report.decode_json(b'{"x":' + b"9" * 5000 + b"}")
+    finally:
+        sys.set_int_max_str_digits(previous)
+    assert report.decode_json(b'{"x":12345678901234567890}') == {"x": 12345678901234567890}
+
+
+def trimmed_document(marker: object) -> dict[str, Any]:
+    """Build a summary whose single file row is a deliberate subset of the signal total.
+
+    Parameters:
+        marker (object): `rows_trimmed` value.
+
+    Returns:
+        dict[str, Any]: Summary with a short file row.
+
+    Raises:
+        None.
+    """
+    obj = document()
+    obj["files"][0]["lines"] = 9
+    obj["files"][0]["uncovered_lines"] = 1
+    return obj | {"rows_trimmed": marker}
+
+
+def test_trimmed_rows_need_the_marker_and_are_labelled() -> None:
+    """Production summaries must match totals; only an explicit marker admits a subset, shown as partial.
+
+    Parameters:
+        None.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    with pytest.raises(ValueError, match=r"^Measured file rows disagree with the package counters$"):
+        report.Summary.parse(trimmed_document(None))
+    summary = report.Summary.parse(trimmed_document({"original_file_rows": 3}))
+    assert summary.trimmed_from == 3
+    current = report.Evidence.parse("ubuntu-24.04", plan(), summary)
+    assert "File rows partial (1 of 3)." in report.render_markdown((current,), PROVENANCE)
+    assert "File rows partial" not in report.render_markdown((cell(),), PROVENANCE)
+
+
+@pytest.mark.parametrize(
+    "marker", [True, 1, 0, 10**13, "3", [], {}, {"original_file_rows": 1}, {"original_file_rows": True}]
+)
+def test_invalid_trimmed_marker(marker: object) -> None:
+    """Reject malformed or non-subset markers, including ones that would silently relax validation.
+
+    Parameters:
+        marker (object): Hostile marker.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    with pytest.raises(ValueError, match=r"^(Invalid trimmed file row marker|Expected a JSON object)$"):
+        report.Summary.parse(trimmed_document(marker))
+
+
+def test_trimmed_rows_still_cannot_exceed_totals() -> None:
+    """Even a marked subset may not claim more than the signal total.
+
+    Parameters:
+        None.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    obj = trimmed_document({"original_file_rows": 3})
+    obj["files"][0]["lines"] = 11
+    with pytest.raises(ValueError, match=r"^Measured file rows exceed the package counters$"):
+        report.Summary.parse(obj)

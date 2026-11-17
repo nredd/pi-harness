@@ -10,6 +10,7 @@ import json
 import struct
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
@@ -310,3 +311,123 @@ def test_finite_floats_still_decode() -> None:
         AssertionError: The boundary contract regresses.
     """
     assert report.decode_json(b'{"x":1.5}') == {"x": 1.5}
+
+
+def deflated_zip(path: Path) -> tuple[int, int]:
+    """Write a one-member deflated artifact ZIP and return its data offset and compressed size.
+
+    Parameters:
+        path (Path): Output archive.
+
+    Returns:
+        tuple[int, int]: Compressed data offset and size.
+
+    Raises:
+        None.
+    """
+    payload = json.dumps(summary_document() | {"filler": [str(i) for i in range(4000)]}).encode()
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("coverage/summary.json", payload)
+    data = path.read_bytes()
+    name_length, extra_length = struct.unpack_from("<HH", data, 26)
+    (compressed,) = struct.unpack_from("<I", data, 18)
+    return 30 + name_length + extra_length, compressed
+
+
+def test_corrupt_deflate_stream_is_a_clean_refusal(tmp_path: Path) -> None:
+    """A real corrupt deflate stream raises zlib.error inside zipfile and must become a ValueError.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    path = tmp_path / "corrupt.zip"
+    offset, size = deflated_zip(path)
+    data = bytearray(path.read_bytes())
+    data[offset : offset + size] = b"\xff" * size
+    path.write_bytes(data)
+    with pytest.raises(zlib.error):
+        zlib.decompress(bytes(data[offset : offset + size]), -15)
+    with pytest.raises(ValueError, match=r"^Cannot read artifact ZIP: "):
+        report.read_summary(path)
+
+
+def test_truncated_deflate_stream_is_a_clean_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file that shrinks after the directory is read makes zipfile raise EOFError, now a clean refusal.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        monkeypatch (pytest.MonkeyPatch): Truncates the real file between open and read.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    path = tmp_path / "truncated.zip"
+    offset, size = deflated_zip(path)
+    original = zipfile.ZipFile.getinfo
+
+    def shrink(self: zipfile.ZipFile, name: str) -> zipfile.ZipInfo:
+        """Truncate the real archive in half of its member data once the entry is located.
+
+        Parameters:
+            self (zipfile.ZipFile): Open archive.
+            name (str): Member name.
+
+        Returns:
+            zipfile.ZipInfo: The located entry.
+
+        Raises:
+            KeyError: The member does not exist.
+        """
+        info = original(self, name)
+        path.write_bytes(path.read_bytes()[: offset + size // 2])
+        return info
+
+    monkeypatch.setattr(zipfile.ZipFile, "getinfo", shrink)
+    # `EOFError` has an empty message, which pins this to the EOFError path.
+    with pytest.raises(ValueError, match=r"^Cannot read artifact ZIP: ''$"):
+        report.read_summary(path)
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "spliced"])
+def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> None:
+    """One damaged host archive leaves it unavailable while healthy hosts still render.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        damage (str): Kind of stream damage.
+
+    Returns:
+        None: The boundary contract is satisfied.
+
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    manifest = tmp_path / "plan.json"
+    manifest.write_text(json.dumps({host: plan_document() for host in ("ubuntu-24.04", "macos-14")}))
+    good = tmp_path / "coverage-ubuntu-24.04" / "coverage" / "summary.json"
+    good.parent.mkdir(parents=True)
+    good.write_text(json.dumps(summary_document()))
+    bad = tmp_path / "coverage-macos-14.zip"
+    offset, size = deflated_zip(bad)
+    data = bytearray(bad.read_bytes())
+    if damage == "corrupt":
+        data[offset : offset + size] = b"\xff" * size
+    else:
+        data[offset + size // 2 : offset + size] = b""
+    bad.write_bytes(data)
+    cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest)}
+    assert cells["macos-14"].summary is None
+    assert cells["macos-14"].state == "unavailable"
+    assert 0 < len(cells["macos-14"].reason) <= report.MAX_REASON
+    markdown = report.render_markdown(tuple(cells.values()), PROVENANCE)
+    assert "Ubuntu enforced signals: 1/1 zero uncovered" in markdown
+    assert "macOS enforced signals: unavailable" in markdown

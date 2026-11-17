@@ -29,9 +29,11 @@ import logging
 import math
 import re
 import stat
+import struct
 import sys
 import unicodedata
 import zipfile
+import zlib
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -42,6 +44,7 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_MARKDOWN = 60_000
 MAX_COUNT = 10**12
+MAX_INT_DIGITS = 20
 MAX_REASON = 200
 FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
 COUNTERS = ("lines", "functions", "branches", "statements")
@@ -115,6 +118,21 @@ def reject_constant(token: str) -> object:
     raise ValueError(f"Non-finite JSON number: '{token}'")
 
 
+def parse_int(token: str) -> int:
+    """Parse a JSON integer with our own length bound, before `int()` and any interpreter limit.
+
+    Parameters:
+        token (str): Decimal integer token.
+    Returns:
+        int: The value.
+    Raises:
+        ValueError: The literal is longer than `MAX_INT_DIGITS` characters.
+    """
+    if len(token) > MAX_INT_DIGITS:
+        raise ValueError("Integer literal too long")
+    return int(token)
+
+
 def parse_float(token: str) -> float:
     """Parse a JSON float, refusing overflow to infinity.
 
@@ -150,6 +168,7 @@ def decode_json(data: bytes) -> dict[str, object]:
                 object_pairs_hook=unique_object,
                 parse_constant=reject_constant,
                 parse_float=parse_float,
+                parse_int=parse_int,
             )
         )
     except (ValueError, RecursionError) as error:
@@ -200,7 +219,16 @@ def read_summary(path: Path) -> dict[str, object]:
                 raise ValueError("Invalid summary member")
             with archive.open(member) as stream:
                 return decode_json(stream.read(MAX_JSON_BYTES + 1))
-    except (zipfile.BadZipFile, KeyError, RuntimeError, NotImplementedError) as error:
+    except (
+        zipfile.BadZipFile,
+        KeyError,
+        RuntimeError,
+        NotImplementedError,
+        zlib.error,
+        EOFError,
+        struct.error,
+        OverflowError,
+    ) as error:
         raise ValueError(f"Cannot read artifact ZIP: '{error}'") from error
 
 
@@ -320,6 +348,7 @@ class Summary:
     files: tuple[File, ...]
     not_measured: dict[str, str]
     errors: tuple[str, ...]
+    trimmed_from: int | None = None
 
     @classmethod
     def parse(cls, obj: dict[str, object]) -> Summary:
@@ -369,7 +398,8 @@ class Summary:
                 raise ValueError("Invalid or duplicate file membership")
             seen.add((label, path))
             files.append(File(label, path, Counters.parse(row)))
-        validate_totals(packages, files)
+        trimmed = parse_trimmed(obj.get("rows_trimmed"), len(files))
+        validate_totals(packages, files, trimmed is not None)
         return cls(
             os_name,
             measurement,
@@ -378,21 +408,42 @@ class Summary:
             tuple(files),
             {text_value(k): text_value(v) for k, v in object_value(obj.get("not_measured")).items()},
             tuple(text_value(value) for value in raw_errors),
+            trimmed,
         )
 
 
-def validate_totals(packages: dict[str, Counters], files: list[File]) -> None:
-    """Reject per-file rows that exceed their signal's measured totals.
+def parse_trimmed(value: object, rows: int) -> int | None:
+    """Validate the explicit marker that file rows are a deliberate subset of the original rows.
 
-    Rows may be a subset (trimmed fixtures, truncated producers), never more than the total.
+    Parameters:
+        value (object): `rows_trimmed` summary field, `{"original_file_rows": M}` or absent.
+        rows (int): Retained file rows.
+    Returns:
+        int | None: Original row count, or None when the summary is complete.
+    Raises:
+        ValueError: The marker is malformed or does not exceed the retained rows.
+    """
+    if value is None:
+        return None
+    original = object_value(value).get("original_file_rows")
+    if type(original) is not int or not rows < original <= MAX_COUNT:
+        raise ValueError("Invalid trimmed file row marker")
+    return original
+
+
+def validate_totals(packages: dict[str, Counters], files: list[File], trimmed: bool) -> None:
+    """Require per-file rows to add up to their signal's measured totals.
+
+    Only a summary carrying the explicit `rows_trimmed` marker may hold a subset, never more than the total.
 
     Parameters:
         packages (dict[str, Counters]): Measured signal totals.
         files (list[File]): Validated unique source rows.
+        trimmed (bool): Whether the summary declares a deliberate row subset.
     Returns:
-        None: File rows fit within every measured counter.
+        None: File rows match (or, when trimmed, fit within) every measured counter.
     Raises:
-        ValueError: File rows exceed the signal totals.
+        ValueError: File rows disagree with, or when trimmed exceed, the signal totals.
     """
     for label, counters in packages.items():
         for metric, total, uncovered in counters.values:
@@ -403,8 +454,11 @@ def validate_totals(packages: dict[str, Counters], files: list[File]) -> None:
                 for name, t, u in file.counters.values
                 if name == metric
             ]
-            if sum(t for t, _ in measured) > total or sum(u for _, u in measured) > uncovered:
+            rows_total, rows_uncovered = sum(t for t, _ in measured), sum(u for _, u in measured)
+            if trimmed and (rows_total > total or rows_uncovered > uncovered):
                 raise ValueError("Measured file rows exceed the package counters")
+            if not trimmed and (rows_total, rows_uncovered) != (total, uncovered):
+                raise ValueError("Measured file rows disagree with the package counters")
 
 
 @dataclass(frozen=True)
@@ -641,6 +695,8 @@ def host_rows(cell: Evidence, main: Evidence | None) -> list[str]:
         if cell.reason:
             rows.append(f"\nUnavailable: {escape(cell.reason)}")
         return rows
+    if summary.trimmed_from is not None:
+        rows.append(f"\nFile rows partial ({len(summary.files)} of {summary.trimmed_from}).")
     rows.extend(f"Error: {escape(error)}" for error in summary.errors)
     rows.extend(
         f"Not measured: {escape(name)}: {escape(reason)}"
