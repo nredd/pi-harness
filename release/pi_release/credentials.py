@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from harness.release import redact_diagnostic
+from pi_release.release import redact_diagnostic
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

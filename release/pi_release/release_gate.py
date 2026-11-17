@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
 
-from harness.promotion import SHA_PATTERN, EvidenceError, run_command
+from pi_release.promotion import SHA_PATTERN, EvidenceError, run_command
 
 LOGGER = logging.getLogger(__name__)
 SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")

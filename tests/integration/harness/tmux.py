@@ -18,9 +18,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pi_release.paths import TMUX_BIN
 from pydantic import BaseModel, ConfigDict, Field
-
-from harness.paths import TMUX_BIN
 
 if TYPE_CHECKING:
     from pathlib import Path

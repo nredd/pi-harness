@@ -14,8 +14,9 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pi_release.stack import find_package, package_directory
+
 from harness.paths import PROVIDERS_DIR
-from harness.stack import find_package, package_directory
 
 if TYPE_CHECKING:
     from pathlib import Path

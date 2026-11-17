@@ -16,7 +16,7 @@ from textwrap import dedent
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ENTRY = dedent("""
 import probe from __PROBE__;
 const calls = [];
@@ -55,7 +55,9 @@ def compiled_render(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
     root = tmp_path_factory.mktemp("compiled-render")
     source = root / "entry.ts"
-    source.write_text(ENTRY.replace("__PROBE__", json.dumps(str(ROOT / "integration/probes/render.ts"))))
+    source.write_text(
+        ENTRY.replace("__PROBE__", json.dumps(str(ROOT / "tests/integration/probes/render.ts")))
+    )
     binary = root / "render"
     subprocess.run(
         [bun, "build", "--compile", str(source), "--outfile", str(binary)],
@@ -137,7 +139,7 @@ def test_benchmark_make_runtime_identity() -> None:
                 make,
                 "-n",
                 "-C",
-                str(ROOT / "integration"),
+                str(ROOT / "tests/integration"),
                 "bench",
                 "STACK=stacks/personal.json",
                 f"RUNTIME={runtime}",

@@ -1,7 +1,7 @@
 /**
  * plan-gate-tools.test.ts -- the Agent and steer_subagent tools refuse work that would outlive Plan
  * unrestricted (#437), driven by a recording `pi` whose bus answers Plan's state query. The same paths run
- * against the real pi-plan-mode in `integration/inprocess/plan-mode-subagents.test.ts` (#867); this keeps
+ * against the real pi-plan-mode in `tests/inprocess/plan-mode-subagents.test.ts` (#867); this keeps
  * the package's own signal at zero without it.
  */
 import { EventEmitter } from "node:events";

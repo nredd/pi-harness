@@ -21,7 +21,7 @@ from harness.runtime_hooks import runtime_hooks
 from harness.startup import Sample
 from scenarios import test_startup as readiness_scenario
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ENGINES = ["node", "bun", "compiled-bun"]
 PRELOAD = 'globalThis.__harnessPreload = "loaded";\n'
 ENTRYPOINT = dedent("""\

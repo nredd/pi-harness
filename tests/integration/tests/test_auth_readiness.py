@@ -2,7 +2,7 @@
 
 References:
 - https://docs.python.org/3/library/urllib.request.html
-- https://github.com/nredd/pi-harness/blob/main/integration/providers/auth_guard.mjs
+- https://github.com/nredd/pi-harness/blob/main/tests/integration/providers/auth_guard.mjs
 """
 
 from __future__ import annotations

@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pi_release.credentials import require_safe_diagnostic
+from pi_release.files import entry_kind, read_regular_bytes
+from pi_release.stack import find_package
 
-from harness.credentials import require_safe_diagnostic
-from harness.files import entry_kind, read_regular_bytes
 from harness.interactive import FIRST_FRAME_PATTERN, SOCKET_ROOT, launch_tui
 from harness.isolation import check_tier
 from harness.paths import ARTIFACTS_DIR, pi_command
 from harness.power import keep_awake
 from harness.sandbox import Sandbox, build_sandbox, install_stack
-from harness.stack import find_package
 from harness.tmux import reap_stale_servers
 
 if TYPE_CHECKING:

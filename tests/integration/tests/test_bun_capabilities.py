@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def run_engine(engine: str, *args: str, cwd: Path) -> subprocess.CompletedProcess[str]:

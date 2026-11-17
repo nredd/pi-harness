@@ -22,10 +22,11 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
+from pi_release.credentials import require_safe_diagnostic
+from pi_release.paths import GIT_BIN, NODE_BIN
 from pydantic import BaseModel, ConfigDict, Field
 
-from harness.credentials import require_safe_diagnostic
-from harness.paths import FAUX_EXTENSION, GIT_BIN, NODE_BIN, REPO_ROOT
+from harness.paths import FAUX_EXTENSION, REPO_ROOT
 from harness.sandbox import Sandbox, install_stack
 
 LOGGER = logging.getLogger(__name__)
@@ -280,7 +281,7 @@ def build_metadata(box: Sandbox, binary: Path, core: Path) -> BuildMetadata:
     """
     commands = {
         "core_sha": [GIT_BIN, "-C", str(core), "rev-parse", "HEAD"],
-        "harness_sha": [GIT_BIN, "-C", str(REPO_ROOT.parent), "rev-parse", "HEAD"],
+        "harness_sha": [GIT_BIN, "-C", str(REPO_ROOT.parents[1]), "rev-parse", "HEAD"],
         "node_version": [NODE_BIN, "--version"],
         "bun_version": [shutil.which("bun") or "/nonexistent/bun", "--version"],
         "pi_version": [str(binary), "--version"],
@@ -322,7 +323,7 @@ def capture_inputs(box: Sandbox, binary: Path, core: Path, evidence: Path) -> di
     files = {"pi": read_regular(binary, binary.parent)}
     entries = {
         "core/package-lock.json": (core / "package-lock.json", core),
-        "harness-package-lock.json": (REPO_ROOT.parent / "package-lock.json", REPO_ROOT.parent),
+        "harness-package-lock.json": (REPO_ROOT.parents[1] / "package-lock.json", REPO_ROOT.parents[1]),
         "core/loader.js": (core / "packages/coding-agent/dist/core/extensions/loader.js", core),
         "core/virtual-modules.js": (
             core / "packages/coding-agent/dist/core/extensions/virtual-modules.js",
@@ -433,7 +434,7 @@ def diagnose(box: Sandbox, binary: Path, core: Path, evidence: Path, output: Pat
             module_graph="module-graph.json" if "module-graph.json" in files else "unavailable",
         )
         files["build.json"] = metadata.model_dump_json(indent=2).encode()
-        files["stack.json"] = (REPO_ROOT / "stacks/personal.json").read_bytes()
+        files["stack.json"] = (REPO_ROOT.parents[1] / "release/stacks/personal.json").read_bytes()
         publish(files, output)
         LOGGER.error(f"Strict standalone startup failed (status {status}); scanned evidence: '{output}'")
     except Exception as error:
@@ -604,7 +605,9 @@ def main() -> int:
     output = opts.output.resolve()
     os.environ["PI_BIN"] = str(binary)
     with tempfile.TemporaryDirectory(prefix="standalone-startup-") as temporary:
-        box = install_stack(Path(temporary) / "fixture", REPO_ROOT / "stacks/personal.json")
+        box = install_stack(
+            Path(temporary) / "fixture", REPO_ROOT.parents[1] / "release/stacks/personal.json"
+        )
         status = diagnose(box, binary, opts.core.resolve(), opts.build_evidence.resolve(), output)
         if status != 0 and output.is_dir() and opts.github_output is not None:
             try:

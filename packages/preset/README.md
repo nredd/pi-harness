@@ -251,7 +251,7 @@ The native preset package gate separately loads its installed skill/extension re
 from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
 the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
 ignored) is exercised against real children from these sources by
-`integration/inprocess/{reviewer,specialists}.test.ts`.
+`tests/inprocess/{reviewer,specialists}.test.ts`.
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
 Bun compiled-artifact behavior, any other fork commit or Pi version, `pi install npm:@nredd/pi-preset` through a live Pi, and npm provenance attestation.

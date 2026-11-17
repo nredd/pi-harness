@@ -20,13 +20,15 @@ put the why in the commit.
   - `resource-sampler`: Pi-independent ESM library used by session-kit
 - `forks/pi`: the only Gitlink, the `nredd/pi` core fork
 - `tests/lib/`: private `@nredd/pi-test-lib` workspace, the one copy of shared test helpers: `FakeClock`, `deferred`, faux tool-call turns (`toolCall`, `settled`, `outcomes`, `nextEvent`), terminal constants, the disposable git fixture, temp/agent-dir/config-home sandboxes, the HOME guard, the recording `ExtensionAPI` / context doubles for tests that load an extension factory directly (`createRecordingPi`, `createRecordingContext`; typed against the public SDK types, so they compile on stock releases too) and the non-interactive in-process session harness (`createHarness`, `createTestUiContext`, `createTestExtensionsResult`; public `@earendil-works/pi-coding-agent` root export only, so it typechecks and runs on the fork and on stock releases; the interactive harness stays on the fork's `/testing/interactive`, which needs fork-only `InteractiveModeOptions.{keybindings,footerDataProvider,prepareTools,onInput,onEditorSubmit}`, `InteractiveMode.flushRender()` -> `TUI.flushRender()`, the `FooterDataProvider` and `KeybindingsManager` classes (stock exports only types) and `@earendil-works/pi-tui/testing` `VirtualTerminal`). It imports nothing under `packages/` and is measured at 0/0/0/0 by its own tests (`test-lib` in `coverage/policy.json`). Packages take it as an exact-pinned devDependency; package-specific fixtures stay in the package under its `fixtures/` directory (today `test/fixtures/`; the `test/` -> `tests/` rename is left to the package issues)
-- `integration/`: `inprocess/` (real extension factories on core's session harness, Vitest and
-  Bun), `scenarios/` (process and terminal boundaries, run by the CI `stack` jobs), `stacks/`
-  (`personal.json` is the one maintained package selection), `harness/` and its unit tests.
-  See [its README](integration/README.md)
+- `release/`: independent measured uv project, `pi_release/` product implementation and the
+  `pi-stack-install` entry point; `release/stacks/personal.json` is the maintained package selection
+- `tests/inprocess/`: the complete former `integration/inprocess/` npm workspace, unchanged internal
+  layout and Node/Bun invocation, real extension factories on core's session harness
+- `tests/integration/`: the remaining former `integration/` Python harness, scenarios, probes,
+  providers, goldens, historical baselines and all retained unit tests. See [here](tests/integration/README.md)
+- `tests/benchmarks/`: the former `benchmarks/` tree, including its independent uv project
 - `scripts/`: CI classification, coverage accounting, package contracts and release tooling
 - `coverage/policy.json`: enforced coverage policy
-- `benchmarks/comparison/`: historical comparison experiments
 - `releases/`: generated release manifests
 
 ## Development
@@ -47,7 +49,7 @@ make help                    # every target
 - `check-ts` takes `WORKSPACES=<paths>`
 - `check-scripts` enforces package layout with a shrinking allowlist. Retired sync markers are denied in
   script commands and code even under renamed entry points; repeated occurrences of an allowlisted
-  import escape cannot grow versus the merge base. Shared `integration/inprocess` and `tests/lib` also
+  import escape cannot grow versus the merge base. Shared `tests/inprocess` and `tests/lib` also
   reject tracked binaries and standalone shell scripts. Growth detection includes staged renames in
   the index, so a move within the same banned entry is not a new file.
 - Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
@@ -160,7 +162,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
 - Bootstrap this helper's own PR without replacing the scratch copy: after independent Standards +
   Spec reviews of its final HEAD and existing hosted checks are green, invoke its reviewed tracked
   helper directly from the candidate worktree:
-  Install the existing locked integration environment (`uv sync --locked` in `integration/`)
+  Install the existing locked integration environment (`uv sync --locked` in `tests/integration/`)
   for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
   storage directory explicitly; there is no PATH-based or workstation-specific fallback.
   Select `MERGE_PR_NODE` as a trusted absolute Node executable (the repository Node version supports
@@ -180,7 +182,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
   MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
   MERGE_PR_NODE=<absolute-node-executable> \
   MERGE_PR_GH=/opt/homebrew/bin/gh \
-  MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/integration/.venv/bin/python \
+  MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/tests/integration/.venv/bin/python \
   bash ~/code/pi-harness-merge-helper/scripts/merge-pr.sh \
     <helper-pr> <full-reviewed-head> <standards-task-id> <spec-task-id> \
     <gate-history-file> nredd/pi-harness
@@ -197,7 +199,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
   with `git submodule status`; add the `upstream` remote by hand when rebasing the queue
 - A parent worktree does NOT isolate the submodule. Never `--force`, clean or discard inside it
 - Order: core fork PR with its native gate and both reviews, publish the reviewed commit and
-  release, then a parent PR that moves the Gitlink, root `overrides`, `integration/stacks/personal.json`
+  release, then a parent PR that moves the Gitlink, root `overrides`, `release/stacks/personal.json`
   and the lockfiles together
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
   `make check-core-compaction` runs the assembled child-compaction probes
@@ -247,7 +249,7 @@ The verifier accepts only `main` or that exact frozen ref, never arbitrary PR br
 the temporary ref after release evidence is retained. Rerunning the original dispatch also keeps
 the original commit. No branch is moved forward merely to satisfy release freshness.
 
-`harness.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
+`pi_release.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
 candidate `head_sha`, the current attempt's complete matrix and core jobs, the successful actual
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
 contract, Node stack and standalone stack artifacts bound to that run and SHA.
@@ -258,7 +260,7 @@ the verifier that matches its candidate: `publish.yml` runs from the tag's commi
 change (e.g. the #660 macOS split) therefore verifies under its own commit's gate, not current
 `main`'s; do not promote such a candidate from a later `main` without re-freezing it.
 
-The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps, and the macOS `python` shard its `Benchmark unit gate` (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `harness.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
+The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps, and the macOS `python` shard its `Benchmark unit gate` (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
 uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
@@ -269,7 +271,7 @@ offset-aware instants. A naive timestamp refuses. Two uploads inside one window 
 never wins. After "Re-run failed jobs", the new attempt lists the carried-over successful jobs with
 their original timestamps, so their original uploads still qualify; a re-run job qualifies only
 through its new upload, never the failed attempt's same-named artifact. Missing, skipped, failed,
-expired or mismatched evidence refuses, and so does a malformed REST page. `python -m harness.release_gate` exits 0 with evidence and 1 when refused; a
+expired or mismatched evidence refuses, and so does a malformed REST page. `python -m pi_release.release_gate` exits 0 with evidence and 1 when refused; a
 harness defect raises instead of reading as a refusal. Ordinary push/main smoke and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
@@ -302,7 +304,7 @@ are not retroactively relabelled as fully verified by this lane.
 
 ## Stack promotion
 
-`integration/stacks/personal.json` is the only editable personal package list. A promotion turns one exact, already-gated `main` commit into an attested `stack/<sha>` release. Flow: verify -> attest -> `stack/<sha>` release -> dotfiles pins the sha. There is no moving pointer: consumers pin an exact `source_sha`, never `main`. This is the trust root for adoption, so every gate fails closed.
+`release/stacks/personal.json` is the only editable personal package list. A promotion turns one exact, already-gated `main` commit into an attested `stack/<sha>` release. Flow: verify -> attest -> `stack/<sha>` release -> dotfiles pins the sha. There is no moving pointer: consumers pin an exact `source_sha`, never `main`. This is the trust root for adoption, so every gate fails closed.
 
 Full [frozen-candidate verification](#frozen-release-verification) is mandatory before snapshot
 construction. It requires actual full matrix/core execution and retained artifacts for the exact
@@ -311,7 +313,7 @@ advancement does not invalidate a frozen verified candidate. No operation waives
 
 ### Snapshot format
 
-`stack-snapshot.json` is compact, sorted JSON with this strict schema (`integration/harness/promotion.py`):
+`stack-snapshot.json` is compact, sorted JSON with this strict schema (`release/pi_release/promotion.py`):
 
 - `schema_version`: currently `1`.
 - `source_sha`: the exact 40-character `main` commit selected.
@@ -323,7 +325,7 @@ advancement does not invalidate a frozen verified candidate. No operation waives
   - `owned_packages`: one `{package, integrity}` per `npm:@nredd/` source, with the registry's real SHA-512 integrity from `scripts/npm_release.py stack-check`.
   - `core`: the core release tag and asset SHA-256 digests, which must equal the stack's `core` and the release's `SHA256SUMS`.
 
-The snapshot's `stack` JSON obeys the canonical-JSON rules in `integration/README.md` (no floats, unsafe integers, non-string keys or lone surrogates); the producer guard lives in `integration/harness/stack.py`.
+The snapshot's `stack` JSON obeys the canonical-JSON rules in `tests/integration/README.md` (no floats, unsafe integers, non-string keys or lone surrogates); the producer guard lives in `release/pi_release/stack.py`.
 
 The module rejects unknown fields, malformed SHAs, non-personal stacks, digest mismatch, duplicate evidence, and owned-package evidence that is not exactly the stack's `@nredd/` sources.
 
@@ -331,13 +333,13 @@ The snapshot schema remains strict v1 and retains its historical owned-only inte
 
 ### What gets verified
 
-Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). The workflow concurrency group is `operation` plus the selected SHA, so a `verify-only` dispatch never replaces a pending `promote` of the same commit and two promotions of one SHA run one at a time. With 3+ duplicate same-SHA, same-operation dispatches GitHub keeps one pending run and cancels older pending ones, so duplicate pending dispatches coalesce. That is harmless: `stack/<sha>` creation is idempotent and fails closed on mismatch. Different SHAs are independent: each writes only its own `stack/<sha>` tag and release. Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in Python with fixture tests, and every `run:` is one Python (or one `gh`/action) call with inputs passed through `env:` only. The read-only `verify` job runs `harness.release_gate` followed by `python -m harness.promotion_verify`, which repeats the full barrier before candidate construction and fetches the remaining evidence itself (`gh`/`git` through `promotion.run_command`) and calls `select_source_sha`, `descends_from`, `verify_required_checks`, `verify_core`, `collect_owned_evidence` (worktree per owned tag plus `stack-check`), `build_gates` and `build_snapshot`. The verifier also reads `integration/stacks/runtime-locks.json` from that exact source commit, binds its roots/digest to the selected stack, cross-checks owned SRI, and verifies every selected tarball against standard npm SRI (plus authenticated core SHA-256). It never re-resolves the graph during promotion or resume. The write-privileged `attest-and-publish` job runs stdlib-only `python3 -m harness.publish_gate` subcommands `prepare-release` and `tag-target` (the complete set), plus `gh attestation verify`, `actions/attest-build-provenance` and `gh release create`. `harness.promotion` is a library with no CLI. Evidence failures and Git failures print `FAILED: ...`, never a traceback.
+Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` only). The workflow concurrency group is `operation` plus the selected SHA, so a `verify-only` dispatch never replaces a pending `promote` of the same commit and two promotions of one SHA run one at a time. With 3+ duplicate same-SHA, same-operation dispatches GitHub keeps one pending run and cancels older pending ones, so duplicate pending dispatches coalesce. That is harmless: `stack/<sha>` creation is idempotent and fails closed on mismatch. Different SHAs are independent: each writes only its own `stack/<sha>` tag and release. Every job has `if: github.ref == 'refs/heads/main'`. All gate logic lives in Python with fixture tests, and every `run:` is one Python (or one `gh`/action) call with inputs passed through `env:` only. The read-only `verify` job runs `pi_release.release_gate` followed by `python -m pi_release.promotion_verify`, which repeats the full barrier before candidate construction and fetches the remaining evidence itself (`gh`/`git` through `promotion.run_command`) and calls `select_source_sha`, `descends_from`, `verify_required_checks`, `verify_core`, `collect_owned_evidence` (worktree per owned tag plus `stack-check`), `build_gates` and `build_snapshot`. The verifier also reads `release/stacks/runtime-locks.json` from that exact source commit, binds its roots/digest to the selected stack, cross-checks owned SRI, and verifies every selected tarball against standard npm SRI (plus authenticated core SHA-256). It never re-resolves the graph during promotion or resume. The write-privileged `attest-and-publish` job runs stdlib-only `python3 -m pi_release.publish_gate` subcommands `prepare-release` and `tag-target` (the complete set), plus `gh attestation verify`, `actions/attest-build-provenance` and `gh release create`. `pi_release.promotion` is a library with no CLI. Evidence failures and Git failures print `FAILED: ...`, never a traceback.
 
 - Inputs: `select_source_sha` (called by `promotion_verify`) requires `operation` to be `verify-only` or `promote` and `source_sha` to match `^[0-9a-f]{40}$`. The commit must be an ancestor of `origin/main`. The `fetch origin main` that gets `origin/main` carries no credentials (`persist-credentials: false`), which is fine because the repository is public.
 - Required checks: every context from `GET /repos/nredd/pi-harness/rules/branches/main` (ruleset `main required checks`, readable by `GITHUB_TOKEN`) must be `completed`/`success` on that exact SHA, reported by the rule's `integration_id` app (`app.id`, 15368 for every configured context). No checks from the rules API fails closed. Review statuses are not required checks.
 - Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`.github/workflows/ci.yml`), so there is nothing to read; reviews stay a process step.
 - Deferred, tap readiness when core changes: not implemented; the core release's asset digests and attestation are the only core gate, and a tap bump is gated by its own green CI.
-- Registry-stack evidence: the exact full `workflow_dispatch` run validated by `harness.release_gate`. Every owned and contracts cell, each stack cell that runs a stack, and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
+- Registry-stack evidence: the exact full `workflow_dispatch` run validated by `pi_release.release_gate`. Every owned and contracts cell, each stack cell that runs a stack, and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
 - Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so docs-only and main-push smoke cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
 - Push, PR and docs-only runs never qualify: only a full `ci.yml` dispatch of the exact SHA does, and it skips no docs, WSL-input or stack-input shortcut, so a docs-only candidate is promotable once dispatched; see [release verification](#frozen-release-verification). WSL cells do not run a stack, and differently named artifacts are not promotion substitutes. Artifacts expire with CI retention, so an old SHA must be dispatched again before it can be promoted.
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit. The registry lookup (`npm view`) runs in a fresh empty directory with `NPM_CONFIG_USERCONFIG=/dev/null` and `--registry https://registry.npmjs.org`, so a `.npmrc` in the selected tag's tree cannot steer it.
@@ -368,7 +370,7 @@ Rollback is re-pinning: point dotfiles at an older retained `stack/<sha>`. Nothi
 
 Environment: `environment: stack-promotion` gates the whole `attest-and-publish` job, so a required reviewer (the owner) must approve before the job gets `contents`/`attestations`/`id-token` write. It is kept deliberately: it is the only human gate between a green `verify` and a permanent attested release, and a release cannot be retracted. It also restricts the job to `main`. No secret is stored in it any more.
 
-Privilege split: the `verify` job runs only `main` code plus data from the selected commit, holds `contents`/`actions`/`checks` read only, and runs no `npm ci` or `uv sync` from the selected commit. The `attest-and-publish` job holds `id-token`/`attestations`/`contents` write, installs nothing, and only downloads the verified artifact, runs `harness.publish_gate` (standard library only, from `main`, asserted by a test), attests, and publishes.
+Privilege split: the `verify` job runs only `main` code plus data from the selected commit, holds `contents`/`actions`/`checks` read only, and runs no `npm ci` or `uv sync` from the selected commit. The `attest-and-publish` job holds `id-token`/`attestations`/`contents` write, installs nothing, and only downloads the verified artifact, runs `pi_release.publish_gate` (standard library only, from `main`, asserted by a test), attests, and publishes.
 
 ### Release
 
@@ -395,7 +397,7 @@ gh attestation verify stack-snapshot.json --repo nredd/pi-harness \
   --source-ref refs/heads/main --deny-self-hosted-runners
 ```
 
-Then validate it with `StackSnapshot` (`integration/harness/promotion.py`) and require its `source_sha` to equal the pin. `load_promoted_snapshot` does both. `gh attestation verify` needs a GitHub login unless it is given the bundle: the public attestations API serves it anonymously, which is what the installer does (`--bundle`, see [install](docs/install.md)). An unattested file, or one attested from another workflow or ref, must be rejected, keeping the last good stack. To roll back, pin an older retained `stack/<sha>`.
+Then validate it with `StackSnapshot` (`release/pi_release/promotion.py`) and require its `source_sha` to equal the pin. `load_promoted_snapshot` does both. `gh attestation verify` needs a GitHub login unless it is given the bundle: the public attestations API serves it anonymously, which is what the installer does (`--bundle`, see [install](docs/install.md)). An unattested file, or one attested from another workflow or ref, must be rejected, keeping the last good stack. To roll back, pin an older retained `stack/<sha>`.
 
 ### Promoting
 

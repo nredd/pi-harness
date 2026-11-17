@@ -54,11 +54,11 @@ try:
 except ModuleNotFoundError:
     fcntl = None
 
-from harness.files import NonRegularFileError, entry_kind
-from harness.files import read_regular as read_regular_file
-from harness.install_paths import AnchoredStore, anchoring
-from harness.paths import is_wsl
-from harness.promotion import (
+from pi_release.files import NonRegularFileError, entry_kind
+from pi_release.files import read_regular as read_regular_file
+from pi_release.install_paths import AnchoredStore, anchoring
+from pi_release.paths import is_wsl
+from pi_release.promotion import (
     SHA_PATTERN,
     SNAPSHOT_ASSET,
     SNAPSHOT_REPO,
@@ -70,7 +70,7 @@ from harness.promotion import (
     snapshot_url,
     verify_core_assets,
 )
-from harness.release import (
+from pi_release.release import (
     FetchError,
     child_environment,
     detached_exception,
@@ -84,8 +84,8 @@ from harness.release import (
     verify_provenance_anonymously,
     verify_public_attestation,
 )
-from harness.runtime_lock import ASSET as DEPENDENCY_ASSET
-from harness.runtime_lock import (
+from pi_release.runtime_lock import ASSET as DEPENDENCY_ASSET
+from pi_release.runtime_lock import (
     DependencyGraph,
     RuntimeLockError,
     acquire,
@@ -93,8 +93,8 @@ from harness.runtime_lock import (
     install_graph,
     selected_graphs,
 )
-from harness.sandbox import deep_merge
-from harness.stack import (
+from pi_release.settings import deep_merge
+from pi_release.stack import (
     CORE_TAG,
     SHA256_HEX,
     installed_identities,
@@ -108,7 +108,7 @@ from harness.stack import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
 
-    from harness.stack import Stack
+    from pi_release.stack import Stack
 
 LOGGER = logging.getLogger(__name__)
 SEMVER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
@@ -367,7 +367,7 @@ def preflight(
     """Check the platform and every prerequisite, reporting all problems at once.
 
     WSL reports `Linux/x86_64` but was never an installer acceptance platform, so the physical
-    check (`harness.paths.is_wsl`) refuses it. There is no flag to bypass it.
+    check (`pi_release.paths.is_wsl`) refuses it. There is no flag to bypass it.
 
     Parameters:
         system (str): `platform.system()`.

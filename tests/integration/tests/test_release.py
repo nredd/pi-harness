@@ -37,9 +37,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 import pytest
-
-from harness import install, promotion, release
-from harness.release import (
+from pi_release import install, promotion, release
+from pi_release.release import (
     ATTESTATION_VERIFY_ATTEMPTS,
     ATTESTATION_WORKFLOW,
     FETCH_ATTEMPTS,
@@ -63,6 +62,7 @@ from harness.release import (
     verify_public_attestation,
     verify_root_overrides,
 )
+
 from tests.runtime_fixtures import model_supported_platform
 
 
@@ -897,7 +897,7 @@ def test_root_overrides_stay_tied_to_the_attested_core_release() -> None:
     `fork-release.yml` provenance before every install; this pin keeps the two paths from
     silently diverging. Legacy checksum-only tags are no longer accepted here.
     """
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     overrides = json.loads((root / "package.json").read_text())["overrides"]
     lock = json.loads((root / "package-lock.json").read_text())["packages"]
     prefix = "https://github.com/nredd/pi/releases/download/"
@@ -912,7 +912,7 @@ def test_root_overrides_stay_tied_to_the_attested_core_release() -> None:
         entry = lock[f"node_modules/{name}"]
         assert entry["resolved"] == url
         assert entry["integrity"] == ROOT_OVERRIDE_DIGESTS[asset][1]
-    core = json.loads((root / "integration" / "stacks" / "personal.json").read_text())["core"]
+    core = json.loads((root / "release" / "stacks" / "personal.json").read_text())["core"]
     if core["tag"] == ROOT_OVERRIDE_TAG:
         for asset, sha256 in core["integrity"].items():
             assert sha256 == ROOT_OVERRIDE_DIGESTS[asset][0], f"stack and override pins disagree on {asset}"
@@ -1543,8 +1543,8 @@ def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) ->
     """`make install` verifies first: a bad lock stops it before `npm` or `uv` ever run."""
     root = tmp_path / "root"
     root.mkdir()
-    shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
-    (root / "integration").symlink_to(Path(__file__).resolve().parents[1])
+    shutil.copy(Path(__file__).resolve().parents[3] / "Makefile", root / "Makefile")
+    (root / "release").symlink_to(Path(__file__).resolve().parents[3] / "release")
     write_root(root, "v1.3.0-nredd.6")
     rewrite(
         root / "package-lock.json",
@@ -1568,9 +1568,10 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
     """Only the preflight sees `GH_TOKEN`; `npm ci`, `npm run build` and `uv sync` run without it."""
     root = tmp_path / "root"
     root.mkdir()
-    shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
-    (root / "integration").symlink_to(Path(__file__).resolve().parents[1])
-    (root / "benchmarks" / "comparison").mkdir(parents=True)
+    shutil.copy(Path(__file__).resolve().parents[3] / "Makefile", root / "Makefile")
+    (root / "release").symlink_to(Path(__file__).resolve().parents[3] / "release")
+    (root / "tests/benchmarks/comparison").mkdir(parents=True)
+    (root / "tests/integration").mkdir()
     commands, log = tmp_path / "commands", tmp_path / "seen"
     commands.mkdir()
     for tool in ("python3", "npm", "uv"):
@@ -1587,6 +1588,7 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
         "python3=fixture-token",
         "npm=unset",
         "npm=unset",
+        "uv=unset",
         "uv=unset",
         "uv=unset",
     ]
@@ -1608,7 +1610,7 @@ def test_root_npmrc_bounds_npm_fetch_retries_for_every_workspace() -> None:
     Raises:
         AssertionError: the pins drift, the worst-case backoff grows, or npm ignores the file.
     """
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     settings = dict(
         line.split("=", 1)
         for line in (root / ".npmrc").read_text().splitlines()
@@ -2530,11 +2532,11 @@ def test_cli_verifies_root_overrides_or_fetches_the_selected_tag(
 def test_module_entrypoint_rejects_a_fetch_without_prefix(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`python -m harness.release --tag` without `--prefix` is a usage error before any download."""
+    """`python -m pi_release.release --tag` without `--prefix` is a usage error before any download."""
     monkeypatch.setattr(sys, "argv", ["release", "--tag", "v1.3.0-nredd.8"])
-    monkeypatch.delitem(sys.modules, "harness.release")
+    monkeypatch.delitem(sys.modules, "pi_release.release")
     with pytest.raises(SystemExit) as caught:
-        runpy.run_module("harness.release", run_name="__main__")
+        runpy.run_module("pi_release.release", run_name="__main__")
     assert caught.value.code == 2
     assert "`--prefix` is required with `--tag` or `--gitlink`" in capsys.readouterr().err
 

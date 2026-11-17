@@ -24,9 +24,9 @@ from typing import TYPE_CHECKING, Never, override
 from urllib.parse import quote, unquote
 
 import pytest
+from pi_release import install, release, runtime_lock
+from pi_release.install import verify_release, verify_snapshot
 
-from harness import install, release, runtime_lock
-from harness.install import verify_release, verify_snapshot
 from tests.test_install import SHA, Harness, shim_core_tarball
 
 if TYPE_CHECKING:

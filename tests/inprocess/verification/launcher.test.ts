@@ -165,7 +165,7 @@ test("scripts that bypass the launcher disable jiti's fs cache themselves", () =
 	const packages = readdirSync(join(root, "packages")).map((name) => join("packages", name));
 	const direct: string[] = [];
 	const unguarded: string[] = [];
-	for (const workspace of [".", ...packages, "integration/inprocess"]) {
+	for (const workspace of [".", ...packages, "tests/inprocess"]) {
 		// A workspace without a manifest is a broken checkout, not a reason to skip it.
 		const scripts: Record<string, string> =
 			JSON.parse(readFileSync(join(root, workspace, "package.json"), "utf8")).scripts ?? {};

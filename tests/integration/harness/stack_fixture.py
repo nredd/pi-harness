@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from harness.stack import Stack, canonical_stack_bytes
+from pi_release.stack import Stack, canonical_stack_bytes
 
 FIXTURE_PATH = Path(__file__).resolve().parents[1] / "tests/fixtures/stack-canonical-golden.json"
 

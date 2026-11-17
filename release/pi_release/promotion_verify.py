@@ -1,6 +1,6 @@
 """Single entry point for the read-only `verify` job of `promote-stack.yml`.
 
-The workflow passes every input through `env:` and runs `python -m harness.promotion_verify`;
+The workflow passes every input through `env:` and runs `python -m pi_release.promotion_verify`;
 all fetching and every `git`/`gh` call happens here, so the YAML carries no shell logic.
 
 Environment:
@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from harness import promotion
-from harness.promotion import (
+from pi_release import promotion
+from pi_release.promotion import (
     EvidenceError,
     GateEvidence,
     GitError,
@@ -36,9 +36,9 @@ from harness.promotion import (
     verify_core,
     verify_required_checks,
 )
-from harness.release_gate import require_full_verification
-from harness.runtime_lock import ASSET, SOURCE_LOCK, DependencyGraph, RuntimeLocks, acquire, core_checksums
-from harness.stack import Stack
+from pi_release.release_gate import require_full_verification
+from pi_release.runtime_lock import ASSET, SOURCE_LOCK, DependencyGraph, RuntimeLocks, acquire, core_checksums
+from pi_release.stack import Stack
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -135,6 +135,21 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     checks = verify_required_checks(required, flatten_pages(pages), source_sha)
     # Record the actual full dispatch, not the selective push/main smoke.
     stack_runs = [full_run]
+    # Resolve the layout from the selected commit, never from this workflow's checkout.
+    # Once selected, malformed or incomplete new content must fail without legacy fallback.
+    source_paths = run_command(
+        promotion.GIT_BIN,
+        "-C",
+        str(ctx.workspace),
+        "ls-tree",
+        "-r",
+        "--name-only",
+        source_sha,
+        "--",
+        "release/stacks",
+        "integration/stacks",
+    ).stdout.splitlines()
+    directory = "release/stacks" if "release/stacks/personal.json" in source_paths else "integration/stacks"
     stack_path = ctx.promo / "personal.json"
     stack_path.write_text(
         run_command(
@@ -142,7 +157,7 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
             "-C",
             str(ctx.workspace),
             "show",
-            f"{source_sha}:integration/stacks/personal.json",
+            f"{source_sha}:{directory}/personal.json",
         ).stdout
     )
     stack = Stack.model_validate_json(stack_path.read_bytes())
@@ -152,7 +167,13 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     gates: GateEvidence = build_gates(stack, checks, stack_runs, owned, core)
     snapshot = build_snapshot(stack_path, source_sha, gates)
     runtime = RuntimeLocks.model_validate_json(
-        run_command(promotion.GIT_BIN, "-C", str(ctx.workspace), "show", f"{source_sha}:{SOURCE_LOCK}").stdout
+        run_command(
+            promotion.GIT_BIN,
+            "-C",
+            str(ctx.workspace),
+            "show",
+            f"{source_sha}:{directory}/{Path(SOURCE_LOCK).name}",
+        ).stdout
     )
     runtime.bind(stack)
     for target, graphs in runtime.platforms.items():

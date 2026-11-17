@@ -29,8 +29,7 @@ from urllib.error import URLError
 from urllib.request import Request
 
 import pytest
-
-from harness import release
+from pi_release import release
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

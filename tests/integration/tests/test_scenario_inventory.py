@@ -1,7 +1,7 @@
 """Static inventory checks without importing or running process scenarios.
 
 References:
-- https://github.com/nredd/pi-harness/blob/main/integration/README.md
+- https://github.com/nredd/pi-harness/blob/main/tests/integration/README.md
 """
 
 from __future__ import annotations

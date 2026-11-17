@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Any
 
-from harness import process_group
+from pi_release import process_group
+
 from harness.paths import FAUX_EXTENSION, pi_command
 
 if TYPE_CHECKING:
@@ -251,7 +252,7 @@ def collect_json_process(
         TimeoutError: the process never settled before its deadline.
         RuntimeError: an output cap was exceeded.
         PermissionError: killing the session group was refused and not explained as zombie-only,
-            see `harness.process_group.kill_owned_group`.
+            see `pi_release.process_group.kill_owned_group`.
         OSError: waiting for the leader's exit failed.
     """
     events: list[dict[str, Any]] = []
@@ -342,7 +343,7 @@ def finish_process(
 
     Raises:
         PermissionError: killing the group was refused and not explained as zombie-only, see
-            `harness.process_group.kill_owned_group`.
+            `pi_release.process_group.kill_owned_group`.
         OSError: waiting for the leader's exit failed.
         RuntimeError: a process outside the group kept the output pipes open.
         subprocess.TimeoutExpired: the leader survived SIGKILL.

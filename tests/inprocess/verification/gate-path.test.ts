@@ -18,14 +18,14 @@ test.each([false, true])("check-ts preserves inherited fd precedence (inherited 
 		mkdirSync(tools, { recursive: true });
 		writeFileSync(join(tools, "fd"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
 		writeFileSync(join(bin, "npm"), '#!/bin/sh\ncommand -v fd\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
-		const result = spawnSync("/usr/bin/make", ["check-ts", "WORKSPACES=integration/inprocess"], {
+		const result = spawnSync("/usr/bin/make", ["check-ts", "WORKSPACES=tests/inprocess"], {
 			cwd: root,
 			env: { ...process.env, HOME: home, PATH: bin },
 			encoding: "utf8",
 		});
 		expect(result.status, result.stderr).toBe(0);
 		expect(result.stdout).toContain(join(inherited ? bin : tools, "fd"));
-		expect(result.stdout).toContain("--workspace=integration/inprocess");
+		expect(result.stdout).toContain("--workspace=tests/inprocess");
 	} finally {
 		rmSync(fixture, { recursive: true, force: true });
 	}

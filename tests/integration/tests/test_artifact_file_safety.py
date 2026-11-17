@@ -15,10 +15,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from pi_release import files
+from pi_release.credentials import main, require_safe_diagnostic
 
 import conftest
-from harness import files
-from harness.credentials import main, require_safe_diagnostic
 from harness.sandbox import build_sandbox
 from tests.test_capture_resilience import fail_with_cleanup
 
@@ -113,10 +113,10 @@ def test_scan_cli_accepts_only_wholly_safe_files(tmp_path: Path, caplog: pytest.
 
 
 def test_scan_cli_runs_as_module(tmp_path: Path) -> None:
-    """Exercise the exact `python -m harness.credentials` entry `scripts/wsl2_capture.sh` invokes."""
+    """Exercise the exact `python -m pi_release.credentials` entry `scripts/wsl2_capture.sh` invokes."""
     planted = tmp_path / "planted.txt"
     planted.write_text("Authorization: Bearer synthetic-value\n")
-    command = [sys.executable, "-m", "harness.credentials", str(planted)]
+    command = [sys.executable, "-m", "pi_release.credentials", str(planted)]
     integration = Path(__file__).resolve().parents[1]
     result = subprocess.run(command, cwd=integration, capture_output=True, text=True, check=False)
     assert result.returncode == 1
@@ -129,10 +129,10 @@ def test_scan_cli_main_guard_exits_with_the_verdict(tmp_path: Path, monkeypatch:
     """The module guard turns the scan verdict into the process exit status."""
     report = tmp_path / "guest-state.txt"
     report.write_text("SwapFree: 1 kB\n")
-    monkeypatch.setattr(sys, "argv", ["harness.credentials", str(report)])
-    monkeypatch.delitem(sys.modules, "harness.credentials")
+    monkeypatch.setattr(sys, "argv", ["pi_release.credentials", str(report)])
+    monkeypatch.delitem(sys.modules, "pi_release.credentials")
     with pytest.raises(SystemExit) as raised:
-        runpy.run_module("harness.credentials", run_name="__main__")
+        runpy.run_module("pi_release.credentials", run_name="__main__")
     assert raised.value.code == 0
 
 

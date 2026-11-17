@@ -1,6 +1,6 @@
 /**
  * In-process tests for the Vitest launcher's `main`. Only `spawnSync` is faked, so every case runs the
- * real home creation and cleanup; `integration/inprocess/verification/launcher.test.ts` and
+ * real home creation and cleanup; `tests/inprocess/verification/launcher.test.ts` and
  * `scripts/tests/test_coverage_producers.py` keep the real-subprocess coverage of the CLI dispatch.
  */
 import assert from "node:assert/strict";
@@ -190,7 +190,7 @@ test("an unknown or missing engine is rejected before any home is created", () =
 test("offline Make gates run both engines without replacing primary coverage", () => {
 	const makefile = readFileSync(new URL("../Makefile", import.meta.url), "utf8");
 	for (const [target, launcher] of [
-		["check-probes", "../../scripts/run-vitest.ts"],
+		["check-probes", "../../../scripts/run-vitest.ts"],
 		["check-import-audit", "run-vitest.ts"],
 	]) {
 		const recipe = makefile.split(`${target}:`)[1]?.split("\n\n")[0];

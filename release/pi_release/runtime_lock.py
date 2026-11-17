@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from harness.release import (
+from pi_release.release import (
     child_environment,
     detached_exception,
     fetch_bytes,
@@ -41,14 +41,14 @@ from harness.release import (
     release_checksums,
     release_package_urls,
 )
-from harness.stack import Stack, canonical_stack_bytes, source_string
+from pi_release.stack import Stack, canonical_stack_bytes, source_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
 
 LOGGER = logging.getLogger(__name__)
 ASSET = "dependency-graph.json"
-SOURCE_LOCK = "integration/stacks/runtime-locks.json"
+SOURCE_LOCK = "release/stacks/runtime-locks.json"
 SRI = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 NODE_KEY = re.compile(
     r"(?:node_modules/(?:@[a-z0-9._-]+/)?[a-z0-9._-]+/)*"

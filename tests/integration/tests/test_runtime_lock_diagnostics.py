@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pi_release import runtime_lock
+from pi_release.runtime_lock import RuntimeLockError, RuntimeLocks
+from pi_release.stack import Stack
 
-from harness import runtime_lock
-from harness.runtime_lock import RuntimeLockError, RuntimeLocks
-from harness.stack import Stack
 from tests.runtime_fixtures import fixture_graph, native_npm
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).parents[3]
 RECORD = re.compile(
     r"Runtime replay phase=([a-z-]+) status=(ok|error) elapsed_ms=1"
     r"(?: total=([0-9]+) attempted=([0-9]+) completed=([0-9]+))?"
@@ -72,7 +72,7 @@ def test_synthetic_source_replay_records_actual_native_phases(
         None: actual native phases and aggregate invocation counts are observed.
     """
     graph, bodies = fixture_graph()
-    stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
+    stack = Stack.model_validate_json((ROOT / "release/stacks/personal.json").read_bytes())
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
     monkeypatch.setattr(runtime_lock, "selected_graphs", lambda runtime: {"core": graph, "agent": graph})
     monkeypatch.setattr(runtime_lock, "core_checksums", lambda stack: {})
@@ -259,7 +259,7 @@ def test_source_failure_reports_status_without_exception_details(
         None: failed boundaries emit one sanitized error record and stop replay.
     """
     graph, bodies = fixture_graph()
-    stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
+    stack = Stack.model_validate_json((ROOT / "release/stacks/personal.json").read_bytes())
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
 
     def fail(*args: Any, **kwargs: Any) -> Any:

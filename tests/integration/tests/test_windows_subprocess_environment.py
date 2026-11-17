@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from harness import release
+from pi_release import release
 
 if TYPE_CHECKING:
     from pathlib import Path

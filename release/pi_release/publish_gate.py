@@ -75,7 +75,7 @@ def _command(
 ) -> subprocess.CompletedProcess[str]:
     """Run one workflow command with captured diagnostics.
 
-    Deliberately not `harness.promotion.run_command`: the write job installs nothing, so this
+    Deliberately not `pi_release.promotion.run_command`: the write job installs nothing, so this
     module may import only the standard library.
 
     Parameters:

@@ -128,11 +128,11 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../packages/todo/vitest.config.ts"),
 	},
 	{
-		config: "integration/inprocess/vitest.config.ts",
+		config: "tests/inprocess/vitest.config.ts",
 		policy: "inprocess",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/inprocess/vitest.config.ts"),
+		load: () => import("../tests/inprocess/vitest.config.ts"),
 	},
 	{
 		config: "tests/lib/vitest.config.ts",
@@ -142,18 +142,18 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../tests/lib/vitest.config.ts"),
 	},
 	{
-		config: "integration/probes/vitest.config.ts",
+		config: "tests/integration/probes/vitest.config.ts",
 		policy: "probes",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/probes/vitest.config.ts"),
+		load: () => import("../tests/integration/probes/vitest.config.ts"),
 	},
 	{
-		config: "integration/providers/vitest.config.ts",
+		config: "tests/integration/providers/vitest.config.ts",
 		policy: "providers",
 		provider: "v8",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../integration/providers/vitest.config.ts"),
+		load: () => import("../tests/integration/providers/vitest.config.ts"),
 	},
 	{
 		config: "scripts/vitest.config.ts",
@@ -208,10 +208,10 @@ const ZERO_UNCOVERED_FILES = [
  * subagents, todo had it last), so those entries list it first.
  */
 const RESOLVED: Record<string, unknown> = {
-	"integration/inprocess/vitest.config.ts": {
+	"tests/inprocess/vitest.config.ts": {
 		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
 	},
-	"integration/probes/vitest.config.ts": {
+	"tests/integration/probes/vitest.config.ts": {
 		test: {
 			include: [
 				"anthropic-block-types.test.ts",
@@ -228,7 +228,7 @@ const RESOLVED: Record<string, unknown> = {
 			setupFiles: ["tests/lib/src/home-setup.ts"],
 		},
 	},
-	"integration/providers/vitest.config.ts": {
+	"tests/integration/providers/vitest.config.ts": {
 		test: {
 			include: [
 				"bun_runtime.test.ts",

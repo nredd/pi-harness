@@ -15,10 +15,10 @@ import subprocess
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pi_release.paths import GIT_BIN
 
 from harness.bench import check_against_baseline, check_ceiling, measure_many
 from harness.headless import ToolOutcome, run_headless
-from harness.paths import GIT_BIN
 
 if TYPE_CHECKING:
     from pathlib import Path

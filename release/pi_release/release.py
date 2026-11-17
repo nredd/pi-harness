@@ -5,8 +5,8 @@ its nested `pi-agent-core`, `pi-ai` and `pi-tui` with the release tgzs, and prun
 prebuilds.
 
 `--verify-root-overrides` gates the root `package.json` overrides the same way before any
-`npm ci`: this module and `harness.paths` are standard library only, so it runs under a bare
-`PYTHONPATH=integration python3 -m harness.release` with no `uv sync`.
+`npm ci`: this module and `pi_release.paths` are standard library only, so it runs under a bare
+`PYTHONPATH=release python3 -m pi_release.release` with no `uv sync`.
 
 References:
 - https://github.com/nredd/homebrew-tap/blob/main/Formula/pi-coding-agent.rb
@@ -53,7 +53,7 @@ from urllib.request import (
     build_opener,
 )
 
-from harness.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
+from pi_release.paths import GH_BIN, GIT_BIN, NPM_BIN, REPO_ROOT
 
 LOGGER = logging.getLogger(__name__)
 CHILD_PATH: ContextVar[str | None] = ContextVar("installer_child_path", default=None)
@@ -1588,7 +1588,7 @@ def main() -> None:
     )
     parser.add_argument("--prefix", type=Path, help="empty install prefix (with --tag or --gitlink)")
     parser.add_argument(
-        "--root", type=Path, default=REPO_ROOT.parent, help="repository root for --verify-root-overrides"
+        "--root", type=Path, default=REPO_ROOT, help="repository root for --verify-root-overrides"
     )
     args = parser.parse_args()
     if args.verify_root_overrides:

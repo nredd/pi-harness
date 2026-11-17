@@ -56,8 +56,10 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     # shared factory.
     "coverage/policy.json",
     "package-lock.json",
-    "integration/pyproject.toml",
-    "integration/uv.lock",
+    "tests/integration/pyproject.toml",
+    "tests/integration/uv.lock",
+    "release/pyproject.toml",
+    "release/uv.lock",
     "scripts/check-commit-messages.mjs",
     "scripts/tests/commit-messages.test.mjs",
     "scripts/tests/commit-policy.test.mjs",
@@ -79,27 +81,29 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
 }
 WSL_INPUT_PREFIXES = (
     ".github/",
-    "integration/probes/",
-    "integration/providers/",
+    "tests/integration/probes/",
+    "tests/integration/providers/",
     "scripts/wsl2_",
     "scripts/ci",
 )
 STACK_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "package-lock.json",
-    "integration/conftest.py",
-    "integration/pyproject.toml",
-    "integration/uv.lock",
+    "tests/integration/conftest.py",
+    "tests/integration/pyproject.toml",
+    "tests/integration/uv.lock",
+    "release/pyproject.toml",
+    "release/uv.lock",
 }
-# `packages/` is absent on purpose: `harness.stack` maps those paths into `local` only.
+# `packages/` is absent on purpose: `pi_release.stack` maps those paths into `local` only.
 STACK_INPUT_PREFIXES = (
     ".github/",
     "forks/",
-    "integration/golden/",
-    "integration/harness/",
-    "integration/probes/",
-    "integration/providers/",
-    "integration/scenarios/",
-    "integration/stacks/",
+    "tests/integration/golden/",
+    "tests/integration/harness/",
+    "tests/integration/probes/",
+    "tests/integration/providers/",
+    "tests/integration/scenarios/",
+    "release/",
     "scripts/wsl2_",
 )
 EVENT_PULL_REQUEST = "pull_request"
@@ -201,7 +205,7 @@ SUBJECT_PATTERN = re.compile(rf"(?:[a-z][a-z0-9-]*: )?[A-Z][^\n]*[^.{JS_WHITESPA
 BENCHMARK_INPUT_FILES = frozenset(
     {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml", "scripts/ci_paths.py"}
 )
-BENCHMARK_INPUT_PREFIXES = ("benchmarks/comparison/", ".github/actions/setup-ci-tools/")
+BENCHMARK_INPUT_PREFIXES = ("tests/benchmarks/comparison/", ".github/actions/setup-ci-tools/")
 # Gates a pull request skips when it changes none of their `INPUT_CLASSES` inputs. Every push runs them, which
 # still catches runner and image drift. The shard steps and the fan-in's coverage accounting both read the
 # plan's `skipped_gates`, so a skipped producer's signal reports NOT RUN instead of a missing report.
@@ -480,7 +484,7 @@ def is_stack_input(path: str) -> bool:
 
 
 def is_benchmark_input(path: str) -> bool:
-    """Return whether one changed path reaches the `benchmarks/comparison` unit gate.
+    """Return whether one changed path reaches the `tests/benchmarks/comparison` unit gate.
 
     Parameters:
         path (str): Git-relative path with POSIX separators.

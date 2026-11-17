@@ -967,7 +967,7 @@ def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
 
 
 def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
-    """Sync `benchmarks/comparison` only on macOS `owned`, keeping `make install` whole."""
+    """Sync `tests/benchmarks/comparison` only on macOS `owned`, keeping `make install` whole."""
 
     def recipe(target: str) -> str:
         """Return Make's real dry-run recipe.
@@ -982,11 +982,15 @@ def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
             ["make", "-n", target], cwd=ROOT, capture_output=True, text=True, check=True
         ).stdout
 
-    assert "benchmarks/comparison" not in recipe("install-owned")
+    assert "tests/benchmarks/comparison" not in recipe("install-owned")
     assert "--verify-root-overrides" in recipe("install-owned")
-    assert "benchmarks/comparison" in recipe("install-benchmark")
+    assert "tests/benchmarks/comparison" in recipe("install-benchmark")
     full = recipe("install")
-    assert full.index("--verify-root-overrides") < full.index("npm ci") < full.index("benchmarks/comparison")
+    assert (
+        full.index("--verify-root-overrides")
+        < full.index("npm ci")
+        < full.index("tests/benchmarks/comparison")
+    )
     cfg = jobs()
     for name in ("owned-shards-macos", "contracts"):
         install = next(step for step in cfg[name]["steps"] if step.get("name") == "Install")
@@ -1084,7 +1088,7 @@ def test_benchmark_report_is_uploaded_after_the_benchmark_gate_writes_it() -> No
     upload = shard.index("Preserve this shard's coverage reports")
     assert shard.index(BENCHMARK_STEP) < upload
     assert shard.index(BENCHMARK_SKIP_STEP) < upload
-    glob = "benchmarks/comparison/coverage/**/lcov.info"
+    glob = "tests/benchmarks/comparison/coverage/**/lcov.info"
     shard_upload = next(
         step for step in jobs()["owned-shards-macos"]["steps"] if step.get("name") == shard[upload]
     )
@@ -1115,7 +1119,7 @@ def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
     assert "changes no benchmark input" in result.stdout
     # One list, in `ci_paths.py`: the reason points there instead of copying it.
     assert "BENCHMARK_INPUT_FILES" in result.stdout
-    assert "benchmarks/comparison" not in step["run"]
+    assert "tests/benchmarks/comparison" not in step["run"]
     assert "### check-benchmark: NOT RUN" in summary.read_text()
     assert "This is not a pass." in summary.read_text()
 
@@ -1607,7 +1611,7 @@ def test_fan_in_merges_each_shard_report_at_its_repository_path(tmp_path: Path) 
             "coverage-ubuntu-24.04-subagents": ["packages/subagents/coverage/primary/lcov.info"],
             "coverage-ubuntu-24.04-python": [
                 "scripts/coverage/primary/lcov.info",
-                "integration/probes/coverage/primary/lcov.info",
+                "tests/integration/probes/coverage/primary/lcov.info",
             ],
         },
     )
@@ -1616,7 +1620,7 @@ def test_fan_in_merges_each_shard_report_at_its_repository_path(tmp_path: Path) 
         "coverage-ubuntu-24.04-subagents\n"
     )
     assert (workspace / "scripts/coverage/primary/lcov.info").read_text() == "coverage-ubuntu-24.04-python\n"
-    assert (workspace / "integration/probes/coverage/primary/lcov.info").is_file()
+    assert (workspace / "tests/integration/probes/coverage/primary/lcov.info").is_file()
 
 
 def test_fan_in_refuses_a_report_two_shards_produced(tmp_path: Path) -> None:
@@ -1806,7 +1810,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in step["run"]
         assert "-m stack -n 2 --dist loadfile" in step["run"]
         assert "matrix.os" not in step["if"]  # No WSL-only elision.
-    assert '--stack "stacks/${{ matrix.stack }}.json"' in runs[0]["run"]
+    assert '--stack "../../release/stacks/${{ matrix.stack }}.json"' in runs[0]["run"]
     assert "stacks/personal.json --runtime bun-standalone" in runs[1]["run"]
     assert "stacks/local.json --runtime bun-standalone" in runs[2]["run"]
     uploads = [step for step in stack["steps"] if "upload-artifact@" in step.get("uses", "")]
@@ -1837,7 +1841,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     assert startup["with"]["name"] == "standalone-startup-linux-x64"
     standalone = next(step for step in uploads if step["with"]["name"].startswith("standalone-${{"))
     assert standalone["with"]["name"] == "standalone-${{ matrix.platform }}-${{ matrix.stack }}"
-    assert standalone["with"]["path"] == "integration/artifacts/"
+    assert standalone["with"]["path"] == "tests/integration/artifacts/"
     assert not (WORKFLOW.parent / "wsl2.yml").exists()
     for path in WORKFLOW.parent.glob("*.yml"):
         if path != WORKFLOW:
@@ -1860,12 +1864,13 @@ def guest_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     ti = worktree / ".ci-temp"
     ti.mkdir(parents=True)
     (ti / "tool-path").write_text(os.environ["PATH"])
-    (worktree / "integration").mkdir()
+    (worktree / "tests/integration").mkdir(parents=True)
+    (worktree / "release").mkdir()
     step = tmp_path / "host step.sh"
     env = dict(os.environ) | {
         "HOME": str(home),
         "WSL_STEP_SCRIPT": str(step),
-        "WSL_STEP_DIRECTORY": "integration",
+        "WSL_STEP_DIRECTORY": "tests/integration",
         "GITHUB_OUTPUT": str(tmp_path / "output"),
         "GITHUB_ENV": str(tmp_path / "env"),
         "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
@@ -1885,7 +1890,7 @@ def test_guest_adapter_real_execution_and_status(tmp_path: Path, status: int) ->
     worktree, env = guest_fixture(tmp_path)
     Path(env["WSL_STEP_SCRIPT"]).write_bytes(
         (
-            'test "$PWD" = "$GITHUB_WORKSPACE/integration"\r\n'
+            'test "$PWD" = "$GITHUB_WORKSPACE/tests/integration"\r\n'
             'test "$RUNNER_TEMP" = "$GITHUB_WORKSPACE/.ci-temp"\r\n'
             'echo "PI_BIN=$GITHUB_WORKSPACE/pi-release/bin/pi" >> "$GITHUB_ENV"\r\n'
             'echo "ran=true" >> "$GITHUB_OUTPUT"\r\n'
@@ -1906,7 +1911,7 @@ def test_guest_adapter_real_execution_and_status(tmp_path: Path, status: int) ->
     assert not list((worktree / ".ci-temp").glob("step.*"))
 
 
-@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link"])
+@pytest.mark.parametrize("directory", ["..", "../escape", "tests/integration/../../..", "escape-link"])
 def test_guest_adapter_refuses_escaping_directory(tmp_path: Path, directory: str) -> None:
     """Fail before running a host script outside the guest checkout.
 
@@ -1952,7 +1957,7 @@ def stub_guest_state_commands(commands: Path, *, dmesg: bool = False, kernel: st
         ),
         # GitHub's macos-14 image has no coreutils `timeout`; the guest's bounds are not under test here.
         "timeout": '#!/bin/sh\nshift\nexec "$@"\n',
-        "python3": f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        "python3": f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n',
     }
     for name, body in stubs.items():
         (commands / name).write_text(body)
@@ -1979,7 +1984,7 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     startup.mkdir()
     (startup / "SHA256SUMS").write_text("synthetic scanned manifest\n")
     for name in ("artifacts", "artifacts-node", "artifacts-personal"):
-        artifacts = worktree / "integration" / name
+        artifacts = worktree / "tests/integration" / name
         artifacts.mkdir()
         (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
     host = tmp_path / "host"
@@ -2015,7 +2020,7 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     assert result.returncode == 47
     assert not worktree.exists()
     for name in ("artifacts", "artifacts-node", "artifacts-personal"):
-        assert (host / "integration" / name / "wsl2-personal.xml").is_file() is not export_failure
+        assert (host / "tests/integration" / name / "wsl2-personal.xml").is_file() is not export_failure
     assert (host_temp / "package-contracts.json").is_file() is not export_failure
     assert (host_temp / "wsl2-diagnostics/artifacts/wsl2-personal.xml").is_file() is not export_failure
     assert not (host_temp / "secret.txt").exists()
@@ -2045,8 +2050,8 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     (ti / "first-failure").write_text("47\n")
     if case != "no-scanner":
         shutil.copytree(
-            ROOT / "integration/harness",
-            worktree / "integration/harness",
+            ROOT / "release/pi_release",
+            worktree / "release/pi_release",
             ignore=shutil.ignore_patterns("__pycache__"),
         )
     credential = "ghp_" + "A" * 36
@@ -2103,8 +2108,8 @@ def test_job_status_alone_triggers_guest_state(tmp_path: Path, job_status: str, 
     """
     worktree, env = guest_fixture(tmp_path)
     shutil.copytree(
-        ROOT / "integration/harness",
-        worktree / "integration/harness",
+        ROOT / "release/pi_release",
+        worktree / "release/pi_release",
         ignore=shutil.ignore_patterns("__pycache__"),
     )
     marker = stub_guest_state_commands(tmp_path / "commands", dmesg=True)
@@ -2176,18 +2181,18 @@ def test_capture_replaces_stale_node_snapshot(tmp_path: Path) -> None:
     host = tmp_path / "host"
     (host / "temp/wsl2-diagnostics").mkdir(parents=True)
     env |= {"WSL_HOST_WORKSPACE": str(host), "WSL_HOST_TEMP": str(host / "temp")}
-    artifacts = worktree / "integration/artifacts"
+    artifacts = worktree / "tests/integration/artifacts"
     artifacts.mkdir()
     (artifacts / "node.xml").write_text("Node report")
     command = ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh")]
     subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    artifacts.rename(worktree / "integration/artifacts-node")
+    artifacts.rename(worktree / "tests/integration/artifacts-node")
     artifacts.mkdir()
     (artifacts / "standalone.xml").write_text("Standalone report")
     subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    assert not (host / "integration/artifacts/node.xml").exists()
-    assert (host / "integration/artifacts/standalone.xml").read_text() == "Standalone report"
-    assert (host / "integration/artifacts-node/node.xml").read_text() == "Node report"
+    assert not (host / "tests/integration/artifacts/node.xml").exists()
+    assert (host / "tests/integration/artifacts/standalone.xml").read_text() == "Standalone report"
+    assert (host / "tests/integration/artifacts-node/node.xml").read_text() == "Node report"
 
 
 @pytest.mark.parametrize("ambiguous_path", [False, True])
@@ -2283,7 +2288,7 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
             ]
             commands = "\n".join(step.get("run", "") for step in steps)
             assert commands.index("--verify-root-overrides") < commands.index("npm ci --ignore-scripts")
-            assert commands.index("--gitlink ../forks/pi") < commands.index("pytest scenarios/")
+            assert commands.index("--gitlink ../../forks/pi") < commands.index("pytest scenarios/")
         else:
             assert [step["name"] for step in token_steps] == ["Install"]
         assert all(step["env"]["GH_TOKEN"] == "${{ github.token }}" for step in token_steps)

@@ -15,8 +15,8 @@ import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from harness import install
-from harness.runtime_lock import NpmGraph
+from pi_release import install
+from pi_release.runtime_lock import NpmGraph
 
 if TYPE_CHECKING:
     import pytest

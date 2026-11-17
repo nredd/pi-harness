@@ -17,12 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
-
-from harness import sandbox
-from harness.paths import pi_command
-from harness.release import gitlink_tag, release_asset_url, release_checksums
-from harness.stack import (
+from pi_release.release import gitlink_tag, release_asset_url, release_checksums
+from pi_release.stack import (
     PRESET_IDENTITY,
     LocalStackDocument,
     PackageSource,
@@ -40,6 +36,10 @@ from harness.stack import (
     validate_release_identity,
     validate_shipped_stack,
 )
+from pydantic import ValidationError
+
+from harness import sandbox
+from harness.paths import pi_command
 from harness.stack_fixture import FIXTURE_PATH, golden_fixture, golden_stack
 
 CORE = {
@@ -275,14 +275,14 @@ def test_stack_file_resolves_relative_to_document_not_cwd(tmp_path: Path) -> Non
 def test_shipped_stack_is_semantically_valid_and_matches_the_core_gitlink() -> None:
     """Validate exact pins, exclusions, core identity and the generated local selection."""
     root = Path(__file__).resolve().parents[1]
-    personal_path = root / "stacks/personal.json"
+    personal_path = root.parents[1] / "release/stacks/personal.json"
     personal = load_stack(personal_path)
-    local = load_stack(root / "stacks/local.json")
+    local = load_stack(root.parents[1] / "release/stacks/local.json")
 
     validate_shipped_stack(personal)
     validate_release_identity(
         personal,
-        gitlink_tag(root.parent / "forks/pi"),
+        gitlink_tag(root.parents[1] / "forks/pi"),
         release_checksums(personal.core.tag),
     )
     assert release_checksums(personal.core.tag)
@@ -321,7 +321,7 @@ def test_shipped_stack_is_semantically_valid_and_matches_the_core_gitlink() -> N
         assert stack.disabled_extensions.keys() <= declared
         assert all(reason.strip() for reason in stack.disabled_extensions.values())
     assert (
-        stack_digest(root / "stacks/local.json")
+        stack_digest(root.parents[1] / "release/stacks/local.json")
         == hashlib.sha256(
             json.dumps(local.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()

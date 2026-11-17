@@ -40,9 +40,8 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 import yaml
-
-from harness import install, release, runtime_lock
-from harness.install import (
+from pi_release import install, release, runtime_lock
+from pi_release.install import (
     ConsentError,
     ExitCode,
     InstallError,
@@ -61,8 +60,8 @@ from harness.install import (
     verify_release,
     verify_snapshot,
 )
-from harness.install_paths import AnchoredStore
-from harness.promotion import (
+from pi_release.install_paths import AnchoredStore
+from pi_release.promotion import (
     SNAPSHOT_REPO,
     SNAPSHOT_SIGNER_WORKFLOW,
     SNAPSHOT_SOURCE_REF,
@@ -73,13 +72,14 @@ from harness.promotion import (
     load_promoted_snapshot,
     stack_bytes,
 )
-from harness.release import (
+from pi_release.release import (
     FETCH_ATTEMPTS,
     GITHUB_TOKEN_VARIABLES,
     release_asset_url,
 )
-from harness.runtime_lock import acquire
-from harness.stack import Stack, install_overrides, package_declarations, source_string
+from pi_release.runtime_lock import acquire
+from pi_release.stack import Stack, install_overrides, package_declarations, source_string
+
 from scenarios.installer import test_installer as acceptance
 from tests.runtime_fixtures import fixture_graph, model_supported_platform, native_npm
 
@@ -140,7 +140,7 @@ def restoring_backup(src: Any, kwargs: dict[str, Any]) -> bool:
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json"
 INTEGRATION = Path(__file__).resolve().parent.parent
-INSTALLER_WORKFLOW = INTEGRATION.parent / ".github" / "workflows" / "installer.yml"
+INSTALLER_WORKFLOW = INTEGRATION.parents[1] / ".github" / "workflows" / "installer.yml"
 SHA = "24889f7896be7157bf9077a41465a3b29620879f"
 ATOMIC_SUFFIX = re.compile(r"[0-9a-f]{32}\.(tmp|replacement)")
 # Probe only synthetic/nonsecret keys, never dump arbitrary workstation credentials.
@@ -1154,7 +1154,7 @@ def test_windows_without_fcntl_refuses_cleanly(
                     delattr(os, name)
         platform.system = lambda: 'Windows'
         platform.machine = lambda: 'AMD64'
-        from harness.install import main
+        from pi_release.install import main
         sys.exit(main(sys.argv[1:]))
     """)
     result = subprocess.run(
@@ -1202,7 +1202,7 @@ def test_missing_unix_primitive_refuses_before_pending_plan(tmp_path: Path, miss
             sys.modules['fcntl'] = None
         if missing.startswith('os.'):
             delattr(os, missing.split('.')[1])
-        from harness import install
+        from pi_release import install
         if missing.startswith('fcntl.'):
             delattr(install.fcntl, missing.split('.')[1])
         platform.system = lambda: 'Linux'
@@ -2617,9 +2617,9 @@ import sys
 from pathlib import Path
 from pytest import MonkeyPatch
 from tests.runtime_fixtures import model_supported_platform
-from harness import install
-from harness.promotion import load_promoted_snapshot
-from harness.stack import source_string
+from pi_release import install
+from pi_release.promotion import load_promoted_snapshot
+from pi_release.stack import source_string
 snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
 sources = [source_string(package) for package in snapshot.stack.sources]
 fixture_platform = MonkeyPatch()
@@ -2849,27 +2849,36 @@ def harness_closure(*roots: Path) -> set[Path]:
     """Return every `harness` module the given files import, transitively, plus the files.
 
     Parameters:
-        *roots (Path): Python files under `integration/`.
+        *roots (Path): Python files under `tests/integration/`.
 
     Returns:
-        set[Path]: files relative to `integration/`.
+        set[Path]: files relative to `tests/integration/`.
     """
     seen: set[Path] = set()
-    pending = [root.relative_to(INTEGRATION) for root in roots]
+    pending = [root.relative_to(INTEGRATION.parents[1]) for root in roots]
     while pending:
         current = pending.pop()
         if current in seen:
             continue
         seen.add(current)
-        for node in ast.walk(ast.parse((INTEGRATION / current).read_text())):
+        for node in ast.walk(ast.parse((INTEGRATION.parents[1] / current).read_text())):
             names = []
-            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "harness":
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module
+                and node.module.split(".")[0] in {"harness", "pi_release"}
+            ):
                 names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
             elif isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names if alias.name.split(".")[0] == "harness"]
+                names = [
+                    alias.name
+                    for alias in node.names
+                    if alias.name.split(".")[0] in {"harness", "pi_release"}
+                ]
             for name in names:
-                module = Path(*name.split(".")).with_suffix(".py")
-                if (INTEGRATION / module).is_file():
+                package_root = "release" if name.split(".")[0] == "pi_release" else "tests/integration"
+                module = Path(package_root, *name.split(".")).with_suffix(".py")
+                if (INTEGRATION.parents[1] / module).is_file():
                     pending.append(module)
     return seen
 
@@ -2878,24 +2887,27 @@ def test_installer_workflow_covers_its_inputs() -> None:
     """Both trigger lists name every file the acceptance imports or is pinned by."""
     workflow = yaml.safe_load(INSTALLER_WORKFLOW.read_text())["on"]
     closure = harness_closure(
-        INTEGRATION / "harness" / "install.py",
+        INTEGRATION.parents[1] / "release/pi_release/install.py",
         INTEGRATION / "scenarios" / "installer" / "test_installer.py",
         INTEGRATION / "conftest.py",
     )
     required = {
         ".github/workflows/installer.yml",
         ".node-version",
-        "integration/Makefile",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
-        "integration/harness/__init__.py",
-        *(f"integration/{path}" for path in closure if path.parts[0] != "scenarios"),
+        "tests/integration/Makefile",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
+        "tests/integration/harness/__init__.py",
+        *(str(path) for path in closure if "scenarios" not in path.parts),
+        "release/pyproject.toml",
+        "release/uv.lock",
+        "release/pi_release/__init__.py",
     }
     for event in ("pull_request", "push"):
         paths = workflow[event]["paths"]
-        assert "integration/scenarios/installer/**" in paths
+        assert "tests/integration/scenarios/installer/**" in paths
         assert required - set(paths) == set(), event
-        assert all((INTEGRATION.parent / path).exists() for path in paths if "*" not in path), event
+        assert all((INTEGRATION.parents[1] / path).exists() for path in paths if "*" not in path), event
 
 
 @pytest.mark.parametrize(
@@ -3077,7 +3089,7 @@ def test_acceptance_login_wraps_eager_parent_gh_lookup(
 def test_ci_documents_residual_gh_capability() -> None:
     """Environment hygiene must not be advertised as denying same-UID package credential access."""
     for name in ("AGENTS.md", ".github/workflows/installer.yml"):
-        text = (INTEGRATION.parent / name).read_text()
+        text = (INTEGRATION.parents[1] / name).read_text()
         assert "KNOWN RESIDUAL" in text
         assert "same-UID package code" in text
         assert "PATH" in text
@@ -3172,8 +3184,8 @@ def test_rerun_manifest_read_race_is_bounded(
         """
         import os, sys
         from pathlib import Path
-        from harness import install, stack
-        from harness.promotion import load_promoted_snapshot
+        from pi_release import install, stack
+        from pi_release.promotion import load_promoted_snapshot
         snapshot = load_promoted_snapshot(Path(sys.argv[1]).read_bytes(), sys.argv[2])
         sources = [stack.source_string(p) for p in snapshot.stack.sources]
         layout = install.Layout.from_env({}, Path(sys.argv[3]), None)
@@ -4232,7 +4244,7 @@ def test_restore_intent_does_not_excuse_lost_backup(
 
 def test_installer_linux_helper_policy_documentation() -> None:
     """Installer policy is not a claim that the package lacks opt-in Linux support."""
-    text = (INTEGRATION.parent / "docs/install.md").read_text()
+    text = (INTEGRATION.parents[1] / "docs/install.md").read_text()
     assert "Linux has no supported helper" not in text
     assert "../packages/computer-use/README.md#linux" in text
     assert "disabled by installer policy" in text
@@ -4240,7 +4252,7 @@ def test_installer_linux_helper_policy_documentation() -> None:
 
 def test_installer_restore_retry_documentation() -> None:
     """The retry contract names write-ahead reconciliation and its lost-backup refusal."""
-    text = (INTEGRATION.parent / "docs/install.md").read_text()
+    text = (INTEGRATION.parents[1] / "docs/install.md").read_text()
     assert "`restoring`" in text
     assert "mtime and size" in text
     assert "missing backup with a nonmatching live target fails loudly" in text
@@ -4848,7 +4860,7 @@ def recovery_transitions() -> list[tuple[str, str, str, str]]:
     Returns:
         list[tuple[str, str, str, str]]: state, backup presence, live state and expected transition.
     """
-    text = (INTEGRATION.parent / "docs/install.md").read_text()
+    text = (INTEGRATION.parents[1] / "docs/install.md").read_text()
     table = text.split("<!-- recovery-transition-table -->")[1].split("<!-- /recovery-transition-table -->")[
         0
     ]
@@ -6337,7 +6349,7 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
     [
         "test_install.py",
         "test_install_ancestors.py",
-        "../harness/install_paths.py",
+        "../../../release/pi_release/install_paths.py",
         "test_release.py",
         "test_installer_process.py",
         "test_promotion.py",
@@ -7332,9 +7344,11 @@ def test_unreadable_core_tarball_is_a_verification_failure(tmp_path: Path) -> No
 def test_runtime_lock_must_match_owned_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An attested graph whose owned package integrity differs from the promotion is refused."""
     model_supported_platform(monkeypatch)
-    stack = Stack.model_validate_json((INTEGRATION / "stacks" / "personal.json").read_bytes())
+    stack = Stack.model_validate_json(
+        (INTEGRATION.parents[1] / "release" / "stacks" / "personal.json").read_bytes()
+    )
     runtime = runtime_lock.RuntimeLocks.model_validate_json(
-        (INTEGRATION.parent / runtime_lock.SOURCE_LOCK).read_bytes()
+        (INTEGRATION.parents[1] / runtime_lock.SOURCE_LOCK).read_bytes()
     )
     owned = [
         OwnedPackageEvidence(
@@ -7945,7 +7959,7 @@ def test_main_reports_an_interrupt_as_failed(
 def test_module_entry_point_runs_main(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`python -m harness.install` dispatches to `main`; `--help` exits before anything is read."""
+    """`python -m pi_release.install` dispatches to `main`; `--help` exits before anything is read."""
     monkeypatch.setattr(sys, "argv", ["pi-stack-install", "--help"])
     with pytest.raises(SystemExit) as raised:
         runpy.run_path(str(Path(install.__file__)), run_name="__main__")

@@ -20,10 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from harness import install, runtime_lock
-from harness.promotion import load_promoted_snapshot
-from harness.runtime_lock import (
+from pi_release import install, runtime_lock
+from pi_release.promotion import load_promoted_snapshot
+from pi_release.runtime_lock import (
     DependencyGraph,
     NpmGraph,
     RuntimeLockError,
@@ -33,7 +32,8 @@ from harness.runtime_lock import (
     install_graph,
     root_manifest,
 )
-from harness.stack import Stack, source_string
+from pi_release.stack import Stack, source_string
+
 from tests.runtime_fixtures import (
     LEAF,
     TOP,
@@ -44,7 +44,7 @@ from tests.runtime_fixtures import (
     package_bytes,
 )
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).parents[3]
 
 
 @pytest.mark.parametrize("mode", ["install", "plan", "noop"])
@@ -65,7 +65,7 @@ def test_verified_archives_survive_orchestration_until_consumed(
         AssertionError: archive lifetime or the selected orchestration path is wrong.
     """
     graph, responses = fixture_graph()
-    fixture = ROOT / "integration/tests/fixtures/stack-snapshot-24889f7.json"
+    fixture = ROOT / "tests/integration/tests/fixtures/stack-snapshot-24889f7.json"
     snapshot = load_promoted_snapshot(fixture.read_bytes(), "24889f7896be7157bf9077a41465a3b29620879f")
     layout = install.Layout(tmp_path / "state", tmp_path / "agent", tmp_path / "bin")
     paths: dict[str, Path] = {}
@@ -158,7 +158,7 @@ def test_verified_archives_survive_orchestration_until_consumed(
 
 def test_source_runtime_locks_match_the_selected_stack() -> None:
     """Every selected platform/root is explicit, strict and bound to canonical stack bytes."""
-    stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
+    stack = Stack.model_validate_json((ROOT / "release/stacks/personal.json").read_bytes())
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
     runtime.bind(stack)
     assert set(runtime.platforms) == {"darwin-arm64", "linux-x64"}
@@ -168,7 +168,7 @@ def test_source_runtime_locks_match_the_selected_stack() -> None:
 
 def test_every_fork_core_package_resolves_to_the_selected_release() -> None:
     """Both graphs on both targets install all four `pi-*` core packages from the selected release assets."""
-    stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
+    stack = Stack.model_validate_json((ROOT / "release/stacks/personal.json").read_bytes())
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
     urls = {
         f"@earendil-works/{name}": url
@@ -353,7 +353,7 @@ def test_supplemental_asset_does_not_accept_extra_fields_or_other_versions() -> 
             DependencyGraph.model_validate(invalid)
 
 
-STACK = ROOT / "integration/stacks/personal.json"
+STACK = ROOT / "release/stacks/personal.json"
 
 
 def selected_stack() -> Stack:
@@ -1021,10 +1021,10 @@ def test_main_requires_npm(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Captu
 def test_module_entrypoint_requires_a_mode(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`python -m harness.runtime_lock` without `--output`/`--replay` is a usage error."""
+    """`python -m pi_release.runtime_lock` without `--output`/`--replay` is a usage error."""
     monkeypatch.setattr(sys, "argv", ["runtime_lock", "--stack", str(STACK)])
-    monkeypatch.delitem(sys.modules, "harness.runtime_lock")
+    monkeypatch.delitem(sys.modules, "pi_release.runtime_lock")
     with pytest.raises(SystemExit) as exit_info:
-        runpy.run_module("harness.runtime_lock", run_name="__main__")
+        runpy.run_module("pi_release.runtime_lock", run_name="__main__")
     assert exit_info.value.code == 2
     assert "one of the arguments --output --replay is required" in capsys.readouterr().err

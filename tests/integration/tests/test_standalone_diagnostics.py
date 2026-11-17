@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pi_release.credentials import CREDENTIAL
 
 from harness import standalone_diagnostics as diag
-from harness.credentials import CREDENTIAL
 from harness.sandbox import build_sandbox
 
 
@@ -499,7 +499,7 @@ def test_workflow_captures_only_failed_linux_startup() -> None:
     Returns:
         None: workflow contract assertions complete.
     """
-    workflow = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())
+    workflow = yaml.safe_load((Path(__file__).parents[3] / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["stack"]["steps"]
     probe = next(step for step in steps if step.get("id") == "startup")
     assert "matrix.platform == 'linux-x64'" in probe["if"]
@@ -994,7 +994,7 @@ def test_cli_verify_reproducible(
 
 def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
     """Require a second identical build, verified before `PI_BIN` is exported or any stack runs."""
-    workflow = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())
+    workflow = yaml.safe_load((Path(__file__).parents[3] / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["stack"]["steps"]
     run = next(step for step in steps if step.get("id") == "build")["run"]
     # One wrapped function invoked twice: both builds share argv and tee their logs under pipefail.
@@ -1015,13 +1015,13 @@ def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
         for step in steps
         if step.get("with", {}).get("name") == "standalone-${{ matrix.platform }}-${{ matrix.stack }}"
     )
-    assert upload["with"]["path"] == "integration/artifacts/"
+    assert upload["with"]["path"] == "tests/integration/artifacts/"
     assert "always()" in upload["if"]
 
 
 def test_workflow_uploads_scanned_build_failure_evidence() -> None:
     """Failed builds publish both executables, logs and metafiles only after the collector's scan."""
-    steps = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())["jobs"][
+    steps = yaml.safe_load((Path(__file__).parents[3] / ".github/workflows/ci.yml").read_text())["jobs"][
         "stack"
     ]["steps"]
     collect = next(step for step in steps if step.get("id") == "build_failure")

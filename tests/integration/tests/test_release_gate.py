@@ -14,11 +14,10 @@ from typing import Any
 
 import pytest
 import yaml
-
-from harness import release_gate as gate
+from pi_release import release_gate as gate
 
 SHA = "a" * 40
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 # The CI plan owns which owned gates and stack cells run; load it by path, `scripts/` is not a package.
 # Its sibling modules (`runner_pools`) resolve through `sys.path`, which `run_path` does not extend.
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -297,21 +296,23 @@ def test_workflow_execution_names_and_barriers() -> None:
         cfg = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
         for name in job_names:
             steps = cfg["jobs"][name]["steps"]
-            barriers = [i for i, step in enumerate(steps) if "-m harness.release_gate" in step.get("run", "")]
+            barriers = [
+                i for i, step in enumerate(steps) if "-m pi_release.release_gate" in step.get("run", "")
+            ]
             assert len(barriers) == 1
             assert cfg["jobs"][name]["permissions"]["actions"] == "read"
             protected = [
                 i
                 for i, step in enumerate(steps)
                 if "npm publish" in step.get("run", "")
-                or "-m harness.promotion_verify" in step.get("run", "")
+                or "-m pi_release.promotion_verify" in step.get("run", "")
             ]
             assert all(barriers[0] < index for index in protected)
     # `verify` runs computer-use releases on macOS, where `/usr/bin/gh` does not exist.
     publish = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())
     verify = publish["jobs"]["verify"]
     assert "macos-" in verify["runs-on"]
-    barrier = next(step for step in verify["steps"] if "-m harness.release_gate" in step.get("run", ""))
+    barrier = next(step for step in verify["steps"] if "-m pi_release.release_gate" in step.get("run", ""))
     assert barrier["env"]["RELEASE_GATE_GH"] == (
         "${{ runner.os == 'macOS' && '/opt/homebrew/bin/gh' || '/usr/bin/gh' }}"
     )
@@ -690,7 +691,7 @@ def test_no_evidence_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_module_entrypoint_refuses_a_malformed_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`python -m harness.release_gate` exits 1 before any GitHub read.
+    """`python -m pi_release.release_gate` exits 1 before any GitHub read.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Isolated argv and executable.
@@ -700,7 +701,7 @@ def test_module_entrypoint_refuses_a_malformed_candidate(monkeypatch: pytest.Mon
     """
     monkeypatch.setenv("RELEASE_GATE_GH", "/nonexistent/gh")
     monkeypatch.setattr(sys, "argv", ["release_gate", "--repo", "nredd/pi-harness", "--source-sha", "short"])
-    monkeypatch.delitem(sys.modules, "harness.release_gate")
+    monkeypatch.delitem(sys.modules, "pi_release.release_gate")
     with pytest.raises(SystemExit) as exit_info:
-        runpy.run_module("harness.release_gate", run_name="__main__")
+        runpy.run_module("pi_release.release_gate", run_name="__main__")
     assert exit_info.value.code == 1

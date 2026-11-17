@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
+from pi_release.credentials import require_safe_diagnostic
 
 import conftest
 from harness import rpc
-from harness.credentials import require_safe_diagnostic
 from harness.sandbox import build_sandbox
 from harness.tmux import PaneExitEvidence, TmuxPane
 from scenarios import test_stack as stack

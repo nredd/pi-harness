@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { type TestContext, test } from "vitest";
-import { run } from "../../packages/dev-tools/src/core/process.ts";
-import { spawnMonitor } from "../../packages/session-kit/src/monitor/process.ts";
+import { run } from "../../../packages/dev-tools/src/core/process.ts";
+import { spawnMonitor } from "../../../packages/session-kit/src/monitor/process.ts";
 
 const READINESS_WATCHDOG_MS = 10_000;
 /** Explicit fixture-only completion deadline, not a production monitor default. */

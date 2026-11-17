@@ -10,7 +10,7 @@ import os
 import subprocess
 from typing import TYPE_CHECKING
 
-from harness.paths import GIT_BIN
+from pi_release.paths import GIT_BIN
 
 if TYPE_CHECKING:
     from pathlib import Path

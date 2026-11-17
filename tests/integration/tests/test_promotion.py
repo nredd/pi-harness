@@ -18,10 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
-from harness import promotion, promotion_verify, publish_gate
-from harness.promotion import (
+from pi_release import promotion, promotion_verify, publish_gate
+from pi_release.promotion import (
     AttestationError,
     CoreEvidence,
     EvidenceError,
@@ -45,16 +43,17 @@ from harness.promotion import (
     verify_core_assets,
     verify_required_checks,
 )
-from harness.publish_gate import PublishError, release_state, verify_tag_target
-from harness.release import LEGACY_CHECKSUMS, release_package_urls
-from harness.stack import Stack
+from pi_release.publish_gate import PublishError, release_state, verify_tag_target
+from pi_release.release import LEGACY_CHECKSUMS, release_package_urls
+from pi_release.stack import Stack
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 FIXTURES = Path(__file__).parent / "fixtures"
-CI_WORKFLOW = Path(__file__).parents[2] / ".github/workflows/ci.yml"
-PROMOTION_WORKFLOW = Path(__file__).parents[2] / ".github/workflows/promote-stack.yml"
+CI_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/ci.yml"
+PROMOTION_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/promote-stack.yml"
 FIXTURE_SHA = "40e119a68a286cf498968605bcf9217359184e40"
 FIXTURE_RUN = 39545048647
 
@@ -1216,7 +1215,7 @@ def test_build_candidate_records_the_full_dispatch_first(
         calls.append(f"build_gates {args[2]}")
         raise RuntimeError("stop")
 
-    personal = (CI_WORKFLOW.parents[2] / "integration/stacks/personal.json").read_text()
+    personal = (CI_WORKFLOW.parents[2] / "release/stacks/personal.json").read_text()
     monkeypatch.setattr(promotion_verify, "require_full_verification", gate)
     monkeypatch.setattr(promotion_verify, "gh_json", gh_json)
     monkeypatch.setattr(promotion_verify, "required_checks", lambda _rules: [])
@@ -1309,9 +1308,9 @@ def test_workflow_validates_the_tag_before_any_side_effect() -> None:
 
 
 ALLOWED_RUN_PREFIXES = (
-    "uv sync --locked --directory integration",
-    'uv run --locked --directory "$GITHUB_WORKSPACE/integration" python -m harness.',
-    'PYTHONPATH="$GITHUB_WORKSPACE/integration" python3 -m harness.publish_gate ',
+    "uv sync --locked --directory tests/integration",
+    'uv run --locked --directory "$GITHUB_WORKSPACE/tests/integration" python -m pi_release.',
+    'PYTHONPATH="$GITHUB_WORKSPACE/release" python3 -m pi_release.publish_gate ',
     "gh ",
 )
 

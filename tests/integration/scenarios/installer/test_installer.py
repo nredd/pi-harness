@@ -6,7 +6,7 @@ the caller's HOME, Pi install, credentials or Homebrew.
 
 Environment:
 - `INSTALLER_SPEC`: the `uvx --from` value, e.g.
-  `git+https://github.com/nredd/pi-harness@<sha>#subdirectory=integration`.
+  `git+https://github.com/nredd/pi-harness@<sha>#subdirectory=release`.
 - `STACK_SHA`: the promoted `stack/<sha>` to install.
 
 References:
@@ -29,10 +29,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from harness import process_group, release
-from harness.install import EXCLUDE_NEWER, INSTALLER_PYTHON, download
-from harness.promotion import (
+from pi_release import process_group, release
+from pi_release.install import EXCLUDE_NEWER, INSTALLER_PYTHON, download
+from pi_release.promotion import (
     SNAPSHOT_ASSET,
     SNAPSHOT_REPO,
     SNAPSHOT_SIGNER_WORKFLOW,
@@ -40,8 +39,8 @@ from harness.promotion import (
     load_promoted_snapshot,
     snapshot_url,
 )
-from harness.release import AttestationRateLimitedError, attestation_bundle, verify_attestation
-from harness.stack import package_declarations, source_string
+from pi_release.release import AttestationRateLimitedError, attestation_bundle, verify_attestation
+from pi_release.stack import package_declarations, source_string
 
 pytestmark = pytest.mark.installer
 INSTALL_TIMEOUT = 1200

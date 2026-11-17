@@ -91,7 +91,7 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 		"packages/subscription-router",
 		"packages/preset",
 		"packages/resource-sampler",
-		"integration/inprocess",
+		"tests/inprocess",
 		"packages/todo",
 		"packages/plan-mode",
 		"packages/dev-tools",

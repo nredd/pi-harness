@@ -136,7 +136,7 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
         "docs/install.md",
         "package-lock.json",
         "forks/pi",
-        "integration/README.md",
+        "tests/integration/README.md",
         "scripts/ci_paths.py",
         "releases/example.json",
         "packages/session-kit/docs/notes.md",
@@ -360,10 +360,10 @@ def test_write_github_output_keeps_input_flags_independent(
         ".gitmodules",
         "coverage/policy.json",
         "package-lock.json",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
-        "integration/probes/stack-resources.ts",
-        "integration/providers/faux.ts",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
+        "tests/integration/probes/stack-resources.ts",
+        "tests/integration/providers/faux.ts",
         "scripts/check-commit-messages.mjs",
         "scripts/tests/commit-messages.test.mjs",
         "scripts/tests/commit-policy.test.mjs",
@@ -398,7 +398,7 @@ def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> 
         "docs/guide.md",
         "NOTES.md",
         "packages/dev-tools/src/index.ts",
-        "integration/harness/stack.py",
+        "release/pi_release/stack.py",
         "scripts/merge_pr_checks.py",
         "scripts/tests/test_wsl2_workflow.py",
         "scripts/tests/ci_helper.py",
@@ -421,15 +421,15 @@ def test_wsl_inputs_reject_paths_outside_the_guest_path(repo: Path, path: str) -
 @pytest.mark.parametrize(
     "path",
     [
-        "integration/stacks/personal.json",
-        "integration/harness/stack.py",
-        "integration/scenarios/test_stack.py",
-        "integration/providers/auth_guard.mjs",
-        "integration/golden/personal-tools.txt",
-        "integration/probes/stack-resources.ts",
-        "integration/conftest.py",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
+        "release/stacks/personal.json",
+        "release/pi_release/stack.py",
+        "tests/integration/scenarios/test_stack.py",
+        "tests/integration/providers/auth_guard.mjs",
+        "tests/integration/golden/personal-tools.txt",
+        "tests/integration/probes/stack-resources.ts",
+        "tests/integration/conftest.py",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
         "Makefile",
         ".github/workflows/ci.yml",
         "forks/pi/README.md",
@@ -462,11 +462,11 @@ def test_stack_inputs_accept_paths_the_personal_stack_reads(repo: Path, path: st
         "docs/guide.md",
         "packages/session-kit/src/index.ts",
         "packages/preset/package.json",
-        "integration/README.md",
-        "integration/tests/test_stack.py",
-        "integration/inprocess/support.ts",
+        "tests/integration/README.md",
+        "tests/integration/tests/test_stack.py",
+        "tests/inprocess/support.ts",
         "scripts/merge_pr_checks.py",
-        "integration/stacksy/x.json",
+        "tests/integration/stacksy/x.json",
     ],
 )
 def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: str) -> None:
@@ -485,11 +485,11 @@ def test_stack_inputs_reject_local_only_and_unrelated_paths(repo: Path, path: st
 @pytest.mark.parametrize(
     "path",
     [
-        "benchmarks/comparison/src/pi_harness_benchmark/usage.py",
-        "benchmarks/comparison/tests/test_usage.py",
-        "benchmarks/comparison/pyproject.toml",
-        "benchmarks/comparison/uv.lock",
-        "benchmarks/comparison/results/runs/a/result.json",
+        "tests/benchmarks/comparison/src/pi_harness_benchmark/usage.py",
+        "tests/benchmarks/comparison/tests/test_usage.py",
+        "tests/benchmarks/comparison/pyproject.toml",
+        "tests/benchmarks/comparison/uv.lock",
+        "tests/benchmarks/comparison/results/runs/a/result.json",
         "Makefile",
         ".python-version",
         ".node-version",
@@ -516,14 +516,14 @@ def test_benchmark_inputs_accept_paths_the_unit_gate_reads(repo: Path, path: str
     [
         "packages/router/src/index.ts",
         "scripts/ci_guest_x.py",
-        "integration/pyproject.toml",
-        "integration/uv.lock",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
         "package.json",
         ".bun-version",
         ".github/workflows/release.yml",
         ".github/actions/setup-ci-wsl/action.yml",
-        "benchmarks/other/pyproject.toml",
-        "benchmarks/comparison-notes.md",
+        "tests/benchmarks/other/pyproject.toml",
+        "tests/benchmarks/comparison-notes.md",
         "docs/guide.md",
         "coverage/policy.json",
     ],
@@ -550,7 +550,9 @@ def test_benchmark_inputs_follow_any_changed_path(repo: Path) -> None:
     Returns:
         None: Assertions verify classification.
     """
-    result = classify_change(repo, {"packages/router/a.ts": "x\n", "benchmarks/comparison/uv.lock": "lock\n"})
+    result = classify_change(
+        repo, {"packages/router/a.ts": "x\n", "tests/benchmarks/comparison/uv.lock": "lock\n"}
+    )
     assert result.inputs["benchmark_inputs"]
     assert not result.inputs["wsl_inputs"]
 
@@ -673,7 +675,7 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
         "packages/x/src/shot.png",
         "packages/x/package.json",
         "packages/x/test/a.test.mjs",
-        "integration/inprocess/biome.json",
+        "tests/inprocess/biome.json",
         "scripts/package_layout.json",
     ],
 )
@@ -786,7 +788,7 @@ def test_stack_inputs_wake_the_personal_scenarios(repo: Path) -> None:
     Returns:
         None: Assertions verify the plan.
     """
-    plan = plan_change(repo, {"integration/harness/stack.py": "x\n"}, PULL_REQUEST)
+    plan = plan_change(repo, {"release/pi_release/stack.py": "x\n"}, PULL_REQUEST)
     assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
     assert not plan["owned (wsl2)"].run
 
@@ -935,8 +937,10 @@ def test_input_registry_drives_classification_and_outputs(
     Returns:
         None: Assertions verify classification and output.
     """
-    monkeypatch.setitem(ci_paths.INPUT_CLASSES, "bench_inputs", lambda path: path.startswith("benchmarks/"))
-    changed = classify_change(repo, {"benchmarks/comparison/x.py": "x\n"})
+    monkeypatch.setitem(
+        ci_paths.INPUT_CLASSES, "bench_inputs", lambda path: path.startswith("tests/benchmarks/")
+    )
+    changed = classify_change(repo, {"tests/benchmarks/comparison/x.py": "x\n"})
     other = classify_change(repo, {"packages/dev-tools/src/index.ts": "x\n"})
     assert changed.inputs["bench_inputs"]
     assert not other.inputs["bench_inputs"]
@@ -955,7 +959,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     Returns:
         None: Assertions verify workflow output.
     """
-    result = classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    result = classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     output = tmp_path / "out"
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
     plan = read_plan(output)
@@ -1053,7 +1057,7 @@ def test_cli_plans_a_pull_request_and_a_push(repo: Path, tmp_path: Path) -> None
     Returns:
         None: Assertions verify workflow output.
     """
-    classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     pr, push = tmp_path / "pr", tmp_path / "push"
     assert run_cli(repo, pr, "--event", PULL_REQUEST, "--pr-title", "Fix the thing", "--pr-number", "7") == 0
     assert run_cli(repo, push, "--event", PUSH) == 0
@@ -1074,7 +1078,7 @@ def test_cli_blocks_every_cell_for_a_long_title(repo: Path, tmp_path: Path) -> N
     Returns:
         None: Assertions verify workflow output.
     """
-    classify_change(repo, {"integration/harness/stack.py": "x\n"})
+    classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     output = tmp_path / "out"
     assert run_cli(repo, output, "--event", PULL_REQUEST, "--pr-title", "A" * 70, "--pr-number", "305") == 0
     plan = read_plan(output)
@@ -1285,21 +1289,21 @@ def test_cli_requires_a_revision_range_unless_full(capsys: pytest.CaptureFixture
 
 
 def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Path) -> None:
-    """Drive the real command line over a `benchmarks/comparison/uv.lock` diff and read the output file.
+    """Drive the real command line over a `tests/benchmarks/comparison/uv.lock` diff and read the output file.
 
     Parameters:
         repo (Path): Disposable repository.
         tmp_path (Path): Pytest temporary directory.
     """
     base = git(repo, "rev-parse", "HEAD")
-    classify_change(repo, {"benchmarks/comparison/uv.lock": "lock\n"})
+    classify_change(repo, {"tests/benchmarks/comparison/uv.lock": "lock\n"})
     output = tmp_path / "github-output"
     argv = ["--repo", str(repo), "--base", base, "--head", "HEAD", "--github-output", str(output)]
     assert ci_paths.main([*argv, "--event", PUSH]) == 0
     lines = output.read_text(encoding="utf-8").splitlines()
     assert "benchmark_inputs=true" in lines
     assert "docs_only=false" in lines
-    assert "benchmarks/comparison/uv.lock" in lines
+    assert "tests/benchmarks/comparison/uv.lock" in lines
     assert "wsl_inputs=false" in lines
 
 
@@ -1457,12 +1461,12 @@ def test_npm_workspaces_follow_the_manifest_patterns_in_order(tmp_path: Path) ->
         tmp_path (Path): Fixture repository root.
     """
     (tmp_path / "package.json").write_text(
-        json.dumps({"workspaces": ["packages/*", "integration/inprocess"]}), encoding="utf-8"
+        json.dumps({"workspaces": ["packages/*", "tests/inprocess"]}), encoding="utf-8"
     )
-    for relative in ("packages/zeta", "packages/alpha", "integration/inprocess"):
+    for relative in ("packages/zeta", "packages/alpha", "tests/inprocess"):
         write_workspace(tmp_path, relative)
     (tmp_path / "packages/no-manifest").mkdir()
-    assert ci_paths.npm_workspaces(tmp_path) == ("packages/alpha", "packages/zeta", "integration/inprocess")
+    assert ci_paths.npm_workspaces(tmp_path) == ("packages/alpha", "packages/zeta", "tests/inprocess")
 
 
 @pytest.mark.parametrize(
@@ -1537,9 +1541,9 @@ def test_main_fails_when_the_shard_plan_cannot_be_built(
 @pytest.mark.parametrize(
     ("files", "event", "skips"),
     [
-        ({"integration/harness/stack.py": "x\n"}, PULL_REQUEST, True),
-        ({"benchmarks/comparison/tests/test_cli.py": "x\n"}, PULL_REQUEST, False),
-        ({"integration/harness/stack.py": "x\n"}, PUSH, False),
+        ({"release/pi_release/stack.py": "x\n"}, PULL_REQUEST, True),
+        ({"tests/benchmarks/comparison/tests/test_cli.py": "x\n"}, PULL_REQUEST, False),
+        ({"release/pi_release/stack.py": "x\n"}, PUSH, False),
     ],
 )
 def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs(

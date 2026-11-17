@@ -13,17 +13,14 @@ import subprocess
 import sys
 import time
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
+from pi_release import process_group
+from pi_release.install import remove
 
-from harness import process_group
-from harness.install import remove
 from scenarios.installer import test_installer as installer
 from scenarios.installer.test_installer import kill_at_marker
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.mark.parametrize(
@@ -396,7 +393,12 @@ def test_marker_cleanup_quiesces_children_forked_during_group_signal(tmp_path: P
             f"runpy.run_path({__file__!r})['fork_writer_trial'](pathlib.Path({str(staging)!r}))"
         )
         result = subprocess.run(
-            [sys.executable, "-c", supervisor], capture_output=True, text=True, timeout=25, check=False
+            [sys.executable, "-c", supervisor],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
@@ -423,7 +425,12 @@ def test_writer_supervisor_bounds_broken_helper(tmp_path: Path, signal_once: boo
         " raise AssertionError('helper did not fail')\n"
     )
     result = subprocess.run(
-        [sys.executable, "-c", supervisor], capture_output=True, text=True, timeout=25, check=False
+        [sys.executable, "-c", supervisor],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=25,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

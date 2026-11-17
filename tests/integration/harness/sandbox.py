@@ -14,8 +14,8 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from harness.paths import pi_command
-from harness.stack import (
+from pi_release.settings import deep_merge
+from pi_release.stack import (
     install_overrides,
     installed_identities,
     load_stack,
@@ -25,10 +25,12 @@ from harness.stack import (
     stack_digest,
 )
 
+from harness.paths import pi_command
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from harness.stack import Stack
+    from pi_release.stack import Stack
 
 LOGGER = logging.getLogger(__name__)
 BASE_ENV = {
@@ -53,25 +55,6 @@ FAKE_AUTH: dict[str, Any] = {}
 SILENT_CHANGELOG_VERSION = "999.0.0"
 SHIMMED_COMMANDS = ("ssh", "scp", "rsync", "curl", "wget", "gh", "sudo", "brew", "npm", "open")
 SHIM_SCRIPT = '#!/bin/sh\necho "SHIM $(basename "$0") $*"\n'
-
-
-def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Recursively overlay objects, replacing arrays and scalars.
-
-    Parameters:
-        base (dict[str, Any]): original object.
-        overlay (dict[str, Any]): winning values.
-
-    Returns:
-        dict[str, Any]: merged copy.
-    """
-    merged = dict(base)
-    for key, value in overlay.items():
-        existing = merged.get(key)
-        merged[key] = (
-            deep_merge(existing, value) if isinstance(existing, dict) and isinstance(value, dict) else value
-        )
-    return merged
 
 
 @dataclass

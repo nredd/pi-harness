@@ -1,6 +1,6 @@
-import { definePackageConfig } from "../../scripts/vitest-package.ts";
+import { definePackageConfig } from "../../../scripts/vitest-package.ts";
 
-// Match `integration/inprocess`: forks, because `process-lifecycle.test.ts` spawns and signals real
+// Match `tests/inprocess`: forks, because `process-lifecycle.test.ts` spawns and signals real
 // process groups through the production runners. Explicit test files, no glob.
 export default definePackageConfig("probes", {
 	provider: "v8",

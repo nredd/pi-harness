@@ -12,22 +12,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from harness import install, promotion_verify, publish_gate, runtime_lock
-from harness.install import VerificationError
-from harness.install_paths import AnchoredStore
-from harness.promotion import (
+from pi_release import install, promotion_verify, publish_gate, runtime_lock
+from pi_release.install import VerificationError
+from pi_release.install_paths import AnchoredStore
+from pi_release.promotion import (
     CoreEvidence,
     GateEvidence,
     OwnedPackageEvidence,
     StackSnapshot,
     stack_bytes,
 )
-from harness.runtime_lock import DependencyGraph, RuntimeLocks
-from harness.stack import Stack, source_string
+from pi_release.runtime_lock import DependencyGraph, RuntimeLocks
+from pi_release.stack import Stack, source_string
+
 from tests.runtime_fixtures import model_supported_platform
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).parents[3]
 SHA = "a" * 40
 
 
@@ -40,7 +40,7 @@ def inputs() -> tuple[StackSnapshot, DependencyGraph]:
     Raises:
         OSError | ValueError: source fixtures cannot be read or validated.
     """
-    stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
+    stack = Stack.model_validate_json((ROOT / "release/stacks/personal.json").read_bytes())
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
     entries = runtime.platforms["darwin-arm64"]["agent"].lock["packages"]
     owned = []

@@ -26,7 +26,7 @@
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "lint": "biome check --error-on-warnings .",
     "typecheck": "tsc --noEmit",
-    "check": "uv run --locked --project ../../integration python ../../scripts/package_contracts.py --packed-files-only --package todo && npm run lint && npm run typecheck && npm test && npm run test:bun",
+    "check": "uv run --locked --project ../../tests/integration python ../../scripts/package_contracts.py --packed-files-only --package todo && npm run lint && npm run typecheck && npm test && npm run test:bun",
     "test:bun": "node ../../scripts/run-vitest.ts bun"
   },
   "files": [

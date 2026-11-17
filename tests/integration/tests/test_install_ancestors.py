@@ -15,9 +15,8 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-
-from harness import install, install_paths, runtime_lock
-from harness.install import (
+from pi_release import install, install_paths, runtime_lock
+from pi_release.install import (
     InstallError,
     Journal,
     Layout,
@@ -31,7 +30,8 @@ from harness.install import (
     stage,
     write_atomic,
 )
-from harness.install_paths import AnchoredStore
+from pi_release.install_paths import AnchoredStore
+
 from tests.test_install import Harness, real_snapshot, seed_existing, tree
 
 if TYPE_CHECKING:

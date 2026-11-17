@@ -6,10 +6,8 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.12,<3",
+    "pi-harness-release",
 ]
-
-[project.scripts]
-pi-stack-install = "harness.install:main"
 
 [build-system]
 requires = ["uv_build>=0.13,<0.14"]
@@ -26,9 +24,12 @@ dev = [
     "ty>=0.0.1a30",
 ]
 
+[tool.uv.sources]
+pi-harness-release = { path = "../../release", editable = true }
+
 [tool.uv]
-# The `harness` package is built only for `uvx --from git+...#subdirectory=integration
-# pi-stack-install` (docs/install.md); development and CI keep running from the source tree.
+# Test-only harness modules run from the source tree. The installer is the separate
+# `release` project, installed above as an editable product dependency.
 package = false
 
 [tool.uv.build-backend]

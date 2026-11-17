@@ -10,9 +10,9 @@ import {
 	fauxToolCall,
 	getMessageText,
 } from "@earendil-works/pi-coding-agent/testing";
-import { loadFactory } from "../inprocess/support.ts";
+import { loadFactory } from "../../inprocess/support.ts";
 
-const subagents = await loadFactory(new URL("../../packages/subagents/dist/index.ts", import.meta.url));
+const subagents = await loadFactory(new URL("../../../packages/subagents/dist/index.ts", import.meta.url));
 
 for (const routed of [false, true]) {
 	test(`candidate core compacts ${routed ? "routed" : "direct"} children with child-local settings`, async () => {

@@ -15,17 +15,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-
-from harness import promotion, promotion_verify, runtime_lock
-from harness.promotion import CoreEvidence, EvidenceError, OwnedPackageEvidence, StackSnapshot
-from harness.runtime_lock import DependencyGraph, NpmGraph, RuntimeLocks
-from harness.stack import Stack, source_string
+from pi_release import promotion, promotion_verify, runtime_lock
+from pi_release.promotion import CoreEvidence, EvidenceError, OwnedPackageEvidence, StackSnapshot
+from pi_release.runtime_lock import DependencyGraph, NpmGraph, RuntimeLocks
+from pi_release.stack import Stack, source_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-ROOT = Path(__file__).parents[2]
-PERSONAL = ROOT / "integration/stacks/personal.json"
+ROOT = Path(__file__).parents[3]
+PERSONAL = ROOT / "release/stacks/personal.json"
 SHA = "a" * 40
 
 
@@ -153,7 +152,14 @@ def candidate_context(
         acquired.append((graph, scratch, checksums or {}))
         return {}
 
-    run = replay({":integration/stacks/personal.json": personal, f":{runtime_lock.SOURCE_LOCK}": locks}, [])
+    run = replay(
+        {
+            "integration/stacks": "release/stacks/personal.json\nrelease/stacks/runtime-locks.json\n",
+            ":release/stacks/personal.json": personal,
+            f":{runtime_lock.SOURCE_LOCK}": locks,
+        },
+        [],
+    )
     monkeypatch.setattr(promotion_verify, "require_full_verification", lambda _repo, _sha: 777)
     monkeypatch.setattr(promotion_verify, "gh_json", lambda _path: [])
     monkeypatch.setattr(promotion_verify, "required_checks", lambda _rules: ["fixture"])
@@ -251,13 +257,13 @@ def test_build_candidate_refuses_a_lock_that_disagrees_with_owned_provenance(
 def test_module_entrypoint_exits_1_on_a_missing_environment(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`python -m harness.promotion_verify` turns a refusal into exit status 1 and a one-line error."""
+    """`python -m pi_release.promotion_verify` turns a refusal into exit status 1 and a one-line error."""
     for name in ("OPERATION", "GITHUB_REPOSITORY", "GITHUB_WORKSPACE", "GITHUB_OUTPUT", "PROMO"):
         monkeypatch.delenv(name, raising=False)
     assert "OPERATION" not in os.environ
-    monkeypatch.delitem(sys.modules, "harness.promotion_verify")
+    monkeypatch.delitem(sys.modules, "pi_release.promotion_verify")
     with pytest.raises(SystemExit) as exit_info:
-        runpy.run_module("harness.promotion_verify", run_name="__main__")
+        runpy.run_module("pi_release.promotion_verify", run_name="__main__")
     assert exit_info.value.code == 1
     assert capsys.readouterr().err == (
         "FAILED: Missing environment: OPERATION, GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_OUTPUT, PROMO\n"

@@ -18,7 +18,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from harness.release import (
+from pi_release.release import (
     LEGACY_RELEASE_TAGS,
     FetchError,
     fetch_bytes,
@@ -27,7 +27,7 @@ from harness.release import (
     release_package_urls,
     verify_provenance,
 )
-from harness.stack import Stack, canonical_stack_bytes, validate_release_identity
+from pi_release.stack import Stack, canonical_stack_bytes, validate_release_identity
 
 SNAPSHOT_SCHEMA_VERSION = 1
 SHA256_HEX_LENGTH = 64

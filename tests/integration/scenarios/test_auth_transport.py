@@ -14,6 +14,7 @@ import shutil
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pi_release.stack import find_package
 
 from harness.anthropic_mock import (
     AUTH_GUARD_EXTENSION,
@@ -25,7 +26,6 @@ from harness.anthropic_mock import (
     shim_calls,
 )
 from harness.headless import RunResult, run_headless
-from harness.stack import find_package
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

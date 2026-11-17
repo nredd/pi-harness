@@ -14,12 +14,12 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pi_release.stack import find_package, load_stack, source_string
 
 from harness.golden import assert_golden
 from harness.headless import run_headless
 from harness.paths import FAUX_EXTENSION, REPO_ROOT, pi_command
 from harness.rpc import RpcProcess
-from harness.stack import find_package, load_stack, source_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -132,7 +132,7 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
     else:
         assert name == "personal", name
         packages = sandbox.settings()["packages"]
-        declared = load_stack(REPO_ROOT / "stacks" / f"{name}.json")
+        declared = load_stack(REPO_ROOT.parents[1] / "release" / "stacks" / f"{name}.json")
         assert len(packages) == len(declared.sources) == 13
         assert packages[0] == {"source": source_string(declared.sources[0]), **expected}
         assert json.loads((sandbox.agent_dir / "subagents.json").read_text())["packageAgents"] is False

@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
+from pi_release import process_group
 
-from harness import headless, process_group
+from harness import headless
 from harness.sandbox import build_sandbox
 
 if TYPE_CHECKING:

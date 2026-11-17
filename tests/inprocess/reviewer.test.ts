@@ -48,7 +48,7 @@ it("reviewer exposes exactly seven reads plus the refusal helper", async () => {
 });
 
 it("reviewer executes each permitted read", async () => {
-	// Shared TS equivalent of integration/harness/git_fixture.py, with a real bare remote.
+	// Shared TS equivalent of tests/integration/harness/git_fixture.py, with a real bare remote.
 	const { repo } = fixture;
 	const calls: { name: string; args: Parameters<typeof toolCall>[1]; expected: string }[] = [
 		{ name: "git_diff", args: { cwd: repo }, expected: "+two" },

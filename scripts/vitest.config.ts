@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { definePackageConfig } from "./vitest-package.ts";
 
-// Match `integration/inprocess`. Explicit test files, no glob: `tests/` is the pytest suite. The root is
+// Match `tests/inprocess`. Explicit test files, no glob: `tests/` is the pytest suite. The root is
 // the repository, not `scripts/`: the report names every producer configuration by a repo-relative path.
 export default definePackageConfig("import-audit", {
 	provider: "v8",

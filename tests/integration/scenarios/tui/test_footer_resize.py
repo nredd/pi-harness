@@ -15,10 +15,10 @@ import time
 from typing import TYPE_CHECKING
 
 import pytest
+from pi_release.stack import find_package
 
 from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, install_usage_fixture
 from harness.sessions import write_session
-from harness.stack import find_package
 
 if TYPE_CHECKING:
     from collections.abc import Callable

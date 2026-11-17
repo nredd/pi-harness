@@ -2,7 +2,7 @@
 
 References:
 - https://github.com/nredd/pi-subscription-router
-- https://github.com/nredd/pi-harness/blob/main/integration/providers/usage_fixture.ts
+- https://github.com/nredd/pi-harness/blob/main/tests/integration/providers/usage_fixture.ts
 """
 
 from __future__ import annotations

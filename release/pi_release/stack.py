@@ -15,8 +15,8 @@ from typing import Any, Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from harness.files import read_regular
-from harness.release import release_asset_url
+from pi_release.files import read_regular
+from pi_release.release import release_asset_url
 
 LOGGER = logging.getLogger(__name__)
 PINNED_NPM = re.compile(r"^npm:(?:@[^/\s]+/)?[^@/\s]+@\d+\.\d+\.\d+(?:-[\w.-]+)?$")

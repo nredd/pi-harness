@@ -14,9 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from harness import publish_gate
-from harness.publish_gate import PublishError
+from pi_release import publish_gate
+from pi_release.publish_gate import PublishError
 
 SHA = "a" * 40
 TAG = f"stack/{SHA}"
@@ -214,12 +213,12 @@ def test_main_prepare_release_reports_a_refusal_as_exit_1(
 def test_module_entrypoint_exits_1_when_gh_cannot_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`python -m harness.publish_gate` with no `gh` on `PATH` is a one-line refusal, not a traceback."""
+    """`python -m pi_release.publish_gate` with no `gh` on `PATH` is a one-line refusal, not a traceback."""
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["publish_gate", "tag-target", "--repo", "o/r", "--source-sha", SHA])
-    monkeypatch.delitem(sys.modules, "harness.publish_gate")
+    monkeypatch.delitem(sys.modules, "pi_release.publish_gate")
     with pytest.raises(SystemExit) as exit_info:
-        runpy.run_module("harness.publish_gate", run_name="__main__")
+        runpy.run_module("pi_release.publish_gate", run_name="__main__")
     assert exit_info.value.code == 1
     err = capsys.readouterr().err
     assert err.startswith("FAILED: Command failed: gh api: ")

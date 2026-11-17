@@ -21,8 +21,8 @@ from harness.sandbox import build_sandbox
 if TYPE_CHECKING:
     from http.server import BaseHTTPRequestHandler
 
-ROOT = Path(__file__).resolve().parents[2]
-PROVIDERS = ROOT / "integration/providers"
+ROOT = Path(__file__).resolve().parents[3]
+PROVIDERS = ROOT / "tests/integration/providers"
 
 
 @pytest.fixture(scope="module")

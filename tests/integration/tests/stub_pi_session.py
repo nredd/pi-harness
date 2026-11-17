@@ -13,8 +13,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pi_release.paths import TMUX_BIN
+
 from harness import interactive
-from harness.paths import TMUX_BIN
 from harness.sandbox import build_sandbox
 from tests.stub_pi import stub_pi_command
 

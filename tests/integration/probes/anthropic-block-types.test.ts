@@ -8,7 +8,7 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 // in process (so V8 coverage sees it) with a fresh module registry and its own argv.
 const PROBE = new URL("./anthropic-block-types.mjs", import.meta.url).href;
 // The root workspace's installed pi-ai build, the same tree `make install` hands every package.
-const PI_AI = resolve(import.meta.dirname, "../../node_modules/@earendil-works/pi-ai");
+const PI_AI = resolve(import.meta.dirname, "../../../node_modules/@earendil-works/pi-ai");
 
 const argv = process.argv;
 let exitCode: typeof process.exitCode;
