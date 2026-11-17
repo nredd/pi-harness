@@ -610,7 +610,7 @@ export interface RunOptions {
 	 * (which replaces session.state.messages and resets stats-derived sums).
 	 *
 	 * `cost` is pi's own `usage.cost.total` for that message — priced from the
-	 * model's rates, so it is 0 (not missing) for a model pi has no pricing for.
+	 * model's rates. Unpriced markers distinguish unknown spend from free usage.
 	 * We never price anything ourselves; every dollar figure this extension shows
 	 * or reports traces back to this field.
 	 */
@@ -963,6 +963,13 @@ function observeRun(session: AgentSession, options: RunObserverOptions) {
 						cacheWrite: u.cacheWrite ?? 0,
 						cacheRead: u.cacheRead ?? 0,
 						cost: u.cost?.total ?? 0,
+						...(u.cost?.unpriced
+							? {
+									unpriced: u.cost.unpriced,
+									unpricedCalls: u.cost.unpricedCalls ?? 1,
+									pricedCalls: u.cost.pricedCalls ?? (u.cost.total > 0 ? 1 : 0),
+								}
+							: {}),
 					},
 					event.message as AssistantMessageInfo,
 				);

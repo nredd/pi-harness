@@ -64,12 +64,27 @@ def message_cost(message: dict[str, Any]) -> float:
         message (dict[str, Any]): message object.
 
     Returns:
-        float: cost in USD; 0 for non-assistant or unpriced messages.
+        float: priced USD subtotal. Consult `message_unpriced_calls` for unknown spend.
     """
     if message.get("role") != "assistant":
         return 0.0
     cost = (message.get("usage") or {}).get("cost") or {}
     return float(cost.get("total") or 0.0)
+
+
+def message_unpriced_calls(message: dict[str, Any]) -> int:
+    """Count unpriced assistant requests, preserving aggregate counts from core.
+
+    Parameters:
+        message (dict[str, Any]): recorded message object.
+
+    Returns:
+        int: unpriced request count, zero for unmarked or non-assistant records.
+    """
+    if message.get("role") != "assistant":
+        return 0
+    cost = (message.get("usage") or {}).get("cost") or {}
+    return int(cost.get("unpricedCalls", 1)) if cost.get("unpriced") else 0
 
 
 def event_cost(result: RunResult) -> float:
@@ -84,16 +99,17 @@ def event_cost(result: RunResult) -> float:
     return sum(message_cost(event.get("message") or {}) for event in result.of_type("message_end"))
 
 
-def session_cost(agent_dir: Path) -> float:
+def session_cost(agent_dir: Path, *, unpriced: bool = False) -> float:
     """Sum assistant cost over every session file under an agent dir, child sessions included.
 
     Symlinked extension dirs are not followed.
 
     Parameters:
         agent_dir (Path): sandbox agent dir.
+        unpriced (bool): count unpriced calls instead of the priced USD subtotal.
 
     Returns:
-        float: USD.
+        float: USD subtotal or unpriced request count.
     """
     total = 0.0
     for path in agent_dir.rglob("*.jsonl"):
@@ -103,7 +119,8 @@ def session_cost(agent_dir: Path) -> float:
             except json.JSONDecodeError:
                 continue
             if isinstance(entry, dict) and entry.get("type") == "message":
-                total += message_cost(entry.get("message") or {})
+                message = entry.get("message") or {}
+                total += message_unpriced_calls(message) if unpriced else message_cost(message)
     return total
 
 
@@ -113,11 +130,18 @@ class CostLedger:
 
     Attributes:
         cap_usd (float): hard limit.
-        charges (dict[str, float]): test name -> USD.
+        charges (dict[str, float]): test name -> priced USD subtotal.
+        unpriced_calls (dict[str, int]): test name -> requests whose spend is unknown.
     """
 
     cap_usd: float = COST_CAP_USD
     charges: dict[str, float] = field(default_factory=dict)
+    unpriced_calls: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def unpriced(self) -> int:
+        """Requests whose spend is unknown, not zero."""
+        return sum(self.unpriced_calls.values())
 
     @property
     def total(self) -> float:
@@ -128,8 +152,9 @@ class CostLedger:
         """Fail before spending more once the cap is reached.
 
         Raises:
-            AssertionError: the session total already reached `cap_usd`.
+            AssertionError: the session has unknown spend or already reached `cap_usd`.
         """
+        assert not self.unpriced, f"Live spend unknown: {self.unpriced} unpriced calls"
         assert self.total < self.cap_usd, f"Live spend ${self.total:.4f} reached the ${self.cap_usd:.2f} cap"
 
     def charge(self, name: str, result: RunResult, box: Sandbox) -> float:
@@ -147,10 +172,24 @@ class CostLedger:
             float: USD charged for this run.
 
         Raises:
-            AssertionError: the session total exceeds `cap_usd`.
+            AssertionError: the session has unknown spend or exceeds `cap_usd`.
         """
         cost = max(event_cost(result), session_cost(box.agent_dir))
+        unpriced = max(
+            sum(
+                message_unpriced_calls(event.get("message") or {}) for event in result.of_type("message_end")
+            ),
+            int(session_cost(box.agent_dir, unpriced=True)),
+        )
+        self.unpriced_calls[name] = self.unpriced_calls.get(name, 0) + unpriced
         self.charges[name] = self.charges.get(name, 0.0) + cost
+        if self.unpriced:
+            LOGGER.warning(
+                f"Live spend: '{name}' priced subtotal ${cost:.4f}, {self.unpriced} unpriced calls"
+            )
+        assert not self.unpriced, (
+            f"Live spend unknown: {self.unpriced} unpriced calls; cap cannot be enforced"
+        )
         LOGGER.warning(f"Live spend: '{name}' ${cost:.4f}, session ${self.total:.4f} of ${self.cap_usd:.2f}")
         assert self.total <= self.cap_usd, f"Live spend ${self.total:.4f} passed the ${self.cap_usd:.2f} cap"
         return cost

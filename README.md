@@ -49,6 +49,25 @@ make help                    # every target
   folding edits source fragments only, never publishes or releases
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
+- `install-owned` also runs `install-lint-tools`: checksum-pinned ShellCheck `0.11.0`, actionlint
+  `1.7.12`, PowerShell LTS `7.4.22` and PSScriptAnalyzer `1.24.0` unpack into the gitignored
+  `.native-lint/` prefix, never global tools or the live home. The manifest supports macOS x64/arm64
+  and Linux x64/arm64 (including the WSL guest). Downloads fail closed on checksum errors; native
+  version checks reject stale tools. `make install-lint-tools` rebuilds the isolated prefix.
+- `check-scripts` first runs `check-native-lint`. It requires the installed prefix, runs ShellCheck on
+  tracked `.sh`/`.bash` files, actionlint with ShellCheck on workflows, and PSScriptAnalyzer plus the
+  PowerShell parser on tracked PowerShell and extracted composite/workflow `pwsh` blocks, including
+  job/workflow shell defaults and implicit Windows PowerShell. Step overrides take precedence. Tools
+  run with disposable home/cache directories. Composite Bash blocks also run through ShellCheck. Expressions in extracted blocks become inert synthetic
+  text, not executed commands. Expression-valued workflow shells receive separate ShellCheck runs when
+  every literal result alternative (including `format` templates) starts with a fixed Bash executable.
+  Selectors are inspected without evaluation; unknown or mixed-shell alternatives refuse with the
+  workflow file, job and step, rather than relying on actionlint's expression-shell bypass. Analyzer Error/Warning diagnostics block, except `PSAvoidUsingWriteHost`
+  (CI diagnostics must not pollute function success output) and `PSUseShouldProcessForStateChangingFunctions`
+  (noninteractive disposable fixture constructors). Only the actual custom runner labels are declared.
+  Native malformed-source, missing-tool, version and checksum controls run in the Python suite.
+  This is static analysis, NOT execution or coverage. The existing inert workflow-data inventory and
+  per-file shell/PowerShell coverage decisions under #695 remain unchanged. No kcov/Pester policy is added.
 - `check-scripts` enforces package layout with a shrinking allowlist. Retired sync markers are denied in
   script commands and code even under renamed entry points; repeated occurrences of an allowlisted
   import escape cannot grow versus the merge base. Shared `tests/inprocess` and `tests/lib` also
@@ -211,7 +230,9 @@ The twelve jobs are the configured required checks of ruleset `main required che
   release, then a parent PR that moves the Gitlink, root `overrides`, `release/stacks/personal.json`
   and the lockfiles together
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
-  `make check-core-compaction` runs the assembled child-compaction probes
+  `make check-core-compaction` runs the assembled child-compaction probes. Its non-rewriting
+  check mirrors the entire selected core script, including worktree readiness and binary-release
+  type checks; only Biome's `--write` is removed
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with
   upstream; each README records where it came from
 

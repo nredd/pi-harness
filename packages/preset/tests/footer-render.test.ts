@@ -173,6 +173,28 @@ it.each([
 	}
 });
 
+it.each([
+	[{ total: 0, unpriced: true }, false, "unknown"],
+	[{ total: 0, unpriced: true }, true, "$0.000 + 1 unpriced"],
+	[{ total: 1.25, unpriced: true }, false, "$1.250 + 1 unpriced"],
+	[{ total: 0, unpriced: true, unpricedCalls: 3, pricedCalls: 1 }, false, "$0.000 + 3 unpriced"],
+	[{ total: 0, unpriced: true, unpricedCalls: 2, pricedCalls: 0 }, false, "unknown"],
+] as const)("renders unpriced subtotal %j with free=%s", async (cost, free, label) => {
+	const f = await mount();
+	try {
+		f.entries.push({ type: "usage", usage: { ...f.usage, cost } });
+		// A pre-stream failure contributes neither priced nor unpriced requests.
+		f.entries.push({ type: "usage", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } });
+		if (free)
+			f.entries.push({ type: "message", message: { role: "toolResult", usage: { ...f.usage, cost: { total: 0 } } } });
+		expect(f.component.render(300)[1]).toContain(`cost ${label}`);
+		f.ctx.modelRegistry.isUsingOAuth = () => true;
+		expect(f.component.render(300)[1]).toContain(`cost ${label} (sub)`);
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
 it("uses the injected home when formatting the cwd", async () => {
 	const f = await mount(false, "/isolated/home");
 	try {

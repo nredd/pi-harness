@@ -3,7 +3,6 @@
 	"scenarios/bench/test_render.py::test_render_2k_message_transcript": "Full-frame ms and live heap with a resumed 2000-message session, within 20% of baseline",
 	"scenarios/bench/test_render.py::test_render_50k_line_bash_output": "50k-line `bash` output: settle time and expanded full-frame ms within 20% of baseline",
 	"scenarios/bench/test_fanout.py::test_eight_agent_fanout_wall_time": "8 foreground faux children run concurrently; fan-out wall time within 20% of baseline",
-	"scenarios/bench/test_compaction.py::test_compaction_triggers_one_token_past_the_threshold": "Auto-compaction fires at `contextTokens > contextWindow - reserveTokens`: not at the threshold, at threshold + 1",
 	"scenarios/live/test_live.py::test_anthropic_through_router_and_subscription_usage": "Live: `router/default` answers on Anthropic; `subscription_usage` reports windows. Cost-capped at $0.50 for the tier",
 	"scenarios/live/test_live.py::test_codex_through_router": "Live: with Codex first in the `default` chain, `router/default` answers on Codex",
 	"scenarios/live/test_live.py::test_background_subagent": "Live: a background `general-purpose` child runs on a real model and `get_subagent_result` returns its reply",
