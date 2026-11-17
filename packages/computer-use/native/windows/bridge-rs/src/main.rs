@@ -127,6 +127,27 @@ fn with_physical_input<T>(
     result
 }
 
+/// Cancel admission and let an active physical operation clean up first.
+/// A stuck provider still forces a bounded stop with the host lease retained.
+fn terminate_without_ack(deadline: Instant) -> ! {
+    INPUT_CLOSED.store(true, Ordering::Release);
+    let _ = wait_for_input_cleanup(physical_input_lock(), deadline);
+    std::process::exit(3);
+}
+
+fn wait_for_input_cleanup(lock: &Mutex<()>, deadline: Instant) -> bool {
+    loop {
+        match lock.try_lock() {
+            Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => return true,
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep(Duration::from_millis(10));
+    }
+}
+
 fn main() {
     #[cfg(windows)]
     if !set_dpi_awareness() {
@@ -154,7 +175,7 @@ fn main() {
                         let response = handle_request(&request);
                         if response.error.as_ref().is_some_and(ProtocolError::outcome_uncertain) {
                             let _ = writeln!(io::stderr().lock(), "Mutating input outcome uncertain; terminating without acknowledgement or replay");
-                            std::process::exit(3);
+                            terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
                         }
                         emit_response(&response);
                     }
@@ -176,7 +197,7 @@ fn main() {
                     ),
                 );
                 emit_response(&resp);
-                std::process::exit(3);
+                terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
             }
         };
         let trimmed = line.trim().to_owned();
@@ -205,7 +226,7 @@ fn main() {
         if Instant::now() >= deadline {
             // A provider may be stuck in synchronous UIA/PrintWindow work.
             // Stop the process, never detach it or replay an uncertain action.
-            std::process::exit(3);
+            terminate_without_ack(deadline);
         }
         sleep(Duration::from_millis(10));
     }
@@ -1079,12 +1100,7 @@ fn act_on_ref(
                 text,
             )? {
                 windows_bridge::uia::SetTextResult::Set { value } => {
-                    if value != text && parsed.policy != "foreground" {
-                        return Err(ProtocolError::new(
-                            "The background UIA value write was accepted but did not take effect",
-                            ErrorCode::ForegroundRequired,
-                        ));
-                    }
+                    windows_bridge::guard::verify_written_text(text, &value)?;
                     Ok(
                         json!({ "outcome": if value == text { "worked" } else { "didnt" }, "performed": { "grounding": "description", "delivery": "ax" }, "evidence": { "value": value } }),
                     )
@@ -1608,14 +1624,14 @@ fn emit_response(response: &Response) {
             io::stderr().lock(),
             "Response serialization failed; stopping helper"
         );
-        std::process::exit(3);
+        terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
     };
     if writeln!(io::stdout().lock(), "{json}").is_err() {
         let _ = writeln!(
             io::stderr().lock(),
             "Output stream failed; stopping helper without replay"
         );
-        std::process::exit(3);
+        terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
     }
 }
 
@@ -1630,6 +1646,31 @@ fn cancelled() -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_cleanup_waits_for_current_owner_and_bounds_stuck_input() {
+        let lock = Mutex::new(());
+        let active = lock.lock().unwrap();
+        assert!(!wait_for_input_cleanup(&lock, Instant::now()));
+        drop(active);
+        assert!(wait_for_input_cleanup(
+            &lock,
+            Instant::now() + SHUTDOWN_GRACE
+        ));
+    }
+
+    #[test]
+    fn terminal_admission_cannot_start_another_physical_operation() {
+        INPUT_CLOSED.store(true, Ordering::Release);
+        let ran = Cell::new(false);
+        let result = with_physical_input(|| {
+            ran.set(true);
+            Ok(())
+        });
+        INPUT_CLOSED.store(false, Ordering::Release);
+        assert!(!ran.get());
+        assert!(result.unwrap_err().outcome_uncertain());
+    }
 
     fn root(id: i64, pid: u64, title: &str, focused: bool) -> Value {
         json!({ "windowId": id, "kind": "window", "title": title, "pid": pid, "rootRef": format!("@w{id}"), "isFocused": focused })

@@ -208,6 +208,7 @@ fn screenshot_impl(
     let (png_base64, output_width, output_height) = loop {
         crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
         let mut current_rect = RECT::default();
+        // SAFETY: borrowed HWND was just validated; RECT is writable and initialized.
         unsafe { GetWindowRect(hwnd, &mut current_rect) }
             .map_err(|_| ProtocolError::new("Capture window vanished", ErrorCode::CaptureFailed))?;
         if (
@@ -222,9 +223,11 @@ fn screenshot_impl(
                 ErrorCode::CaptureFailed,
             ));
         }
+        // SAFETY: current live extent is positive and capture owns all GDI resources.
         let frame = unsafe { gdi_capture_to_base64(hwnd, width, height, max_dimension) }?;
         crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
         let mut rendered_rect = RECT::default();
+        // SAFETY: revalidated borrowed HWND, with a live initialized output RECT.
         unsafe { GetWindowRect(hwnd, &mut rendered_rect) }.map_err(|_| {
             ProtocolError::new(
                 "Capture window vanished after rendering",
@@ -263,6 +266,7 @@ fn screenshot_impl(
     };
 
     let state_id = StateId::fresh("s");
+    // SAFETY: HWND remains borrowed; API returns zero if it ceased to be valid.
     let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) };
     if dpi == 0 {
         return Err(ProtocolError::new(
@@ -408,6 +412,8 @@ unsafe fn gdi_capture_to_base64(
 
     // GetDIBits requires the bitmap not to be selected into any DC.
     SelectObject(hdc_mem, old_bitmap);
+    // SAFETY: owned bitmap is deselected, BITMAPINFO describes exactly the checked
+    // four-byte-per-pixel buffer, and all handles remain live until cleanup below.
     let dib_ok = GetDIBits(
         hdc_mem,
         hbitmap,

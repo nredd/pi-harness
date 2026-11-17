@@ -18,6 +18,17 @@ pub fn observe_after_delivery<T>(
     })
 }
 
+/// A delivered value write must not invite replay when read-back differs.
+pub fn verify_written_text(expected: &str, actual: &str) -> Result<(), ProtocolError> {
+    if expected != actual {
+        return Err(ProtocolError::uncertain(
+            "Delivered UIA value write did not read back exactly; refusing replay",
+            ErrorCode::InternalError,
+        ));
+    }
+    Ok(())
+}
+
 /// Physical screen bounds in the helper's per-monitor-aware coordinate space.
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {

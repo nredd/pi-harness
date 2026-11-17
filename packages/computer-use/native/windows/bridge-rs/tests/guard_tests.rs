@@ -45,6 +45,14 @@ fn successful_post_delivery_observation_is_preserved() {
     assert_eq!(reads.get(), 1);
 }
 
+#[test]
+fn partial_text_readback_cannot_be_acknowledged_as_refusal() {
+    let error =
+        windows_bridge::guard::verify_written_text("complete text", "complete").unwrap_err();
+    assert!(error.outcome_uncertain());
+    assert!(windows_bridge::guard::verify_written_text("complete text", "complete text").is_ok());
+}
+
 const WINDOW: Bounds = Bounds {
     x: -1000.0,
     y: 20.0,

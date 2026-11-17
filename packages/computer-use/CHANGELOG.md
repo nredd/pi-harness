@@ -35,7 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
-- Preserve native Windows uncertainty after post-delivery observation failure; require explicit browser `appName` for `openBrowserLocation` and retain available failed-build diagnostics (#983).
+- Preserve native Windows uncertainty after post-delivery observation or value-read-back mismatch, and let active physical input clean up before bounded terminal exit. Exercise actual helper NDJSON in the disposable GUI fixture; require explicit browser `appName` and document `preserveFocus` foreground refusal (#983).
+- Retain available native Windows failed-build diagnostics without masking the original error (#983).
 
 - Refuse Windows ref-coordinate input when current UIA identity, bounds, hit testing or desktop/session permissions cannot be verified. Never substitute cached coordinates or reused AutomationIds. Add scoped discovery, bounded fresh selected-window capture, idempotent restore and a cross-process physical-input mutex; advertise guarded-helper capability without changing protocol `4`. Add disposable native Windows fixture/build artifacts, with real WSL and multi-monitor acceptance still outstanding (#983, refs #673).
 

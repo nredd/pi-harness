@@ -73,10 +73,15 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   failure, an uncertain UIA mutating-call/read-back failure, or a failed post-delivery delta read terminates the helper without
   acknowledging the request, stops the batch and leaves the
   WSL transport's uncertainty fence intact. It never replays the failed operation. Lost stdout is
-  terminal; stdin EOF cancels queued mutations and stops the helper after at most a two-second
+  terminal. Every terminal failure cancels admission and allows an active physical operation up to
+  two seconds to release keys/buttons before forcing exit; a stuck provider can still leave input
+  state uncertain, so the host lease stays fenced. A mismatched `SetValue` read-back is uncertain
+  under every policy, never an invitation to retry in the foreground. Stdin EOF cancels queued mutations and stops the helper after at most a two-second
   shutdown grace instead of joining a stuck provider indefinitely. An already admitted action may
   have run, and a forced stop can leave key/button state uncertain. The owner must verify the stopped
   process and input/app state before clearing the retained WSL lease.
+
+Coordinate acts with `preserveFocus` require the target to already be foreground; the option never authorizes input into a background window.
 
 Native `openBrowserLocation` requires an explicit nonempty `appName` matching a discovered browser root; it never types a URL into the first unrelated window.
 
@@ -92,7 +97,7 @@ cargo +1.97.1 run --locked --release --manifest-path native/windows/bridge-rs/Ca
 Native crate tests exercise real kernel input serialization and process-abandonment refusal without
 an interactive desktop. The example opens ONLY its own disposable Win32 windows. It exercises scoped
 assistive-client-dependent labels, pattern probing, current bounds after layout shifts, one actual
-non-invokable click, restore, selected-window PNG capture/read-back and refused invalid/PID identities.
+non-invokable click through the actual sibling helper executable's NDJSON `look`/`act` route, removed-ref refusal through that same process, restore, selected-window PNG capture/read-back and refused invalid/PID identities.
 It prints the actual observed DPI.
 It does not exercise owner apps, credentials, browser debug servers, PowerShell runtime control or WSL
 interop. Session 0 or denied `OpenInputDesktop` returns `NATIVE_FIXTURE_UNSUPPORTED` (exit `3`), not

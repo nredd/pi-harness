@@ -267,6 +267,8 @@ mod native {
                 }
             };
             let handler: IUIAutomationEventHandler = DiscoveryListener.into();
+            // SAFETY: COM is initialized; cloned interfaces keep root/handler alive
+            // until the matching serialized removal in Drop.
             unsafe {
                 uia.AddAutomationEventHandler(
                     UIA_LayoutInvalidatedEventId,
@@ -341,6 +343,7 @@ mod native {
         uia: &IUIAutomation,
         root: &IUIAutomationElement,
     ) -> Result<(Vec<IUIAutomationElement>, bool), String> {
+        // SAFETY: caller owns initialized COM and live automation/root interfaces.
         let walker = unsafe { uia.RawViewWalker() }.map_err(|e| format!("RawViewWalker: {e}"))?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
         let mut pending = std::collections::VecDeque::from([(root.clone(), 0usize)]);
@@ -356,6 +359,8 @@ mod native {
                 truncated = true;
                 continue;
             }
+            // SAFETY: walker and element are owned COM interfaces on this thread;
+            // a removed provider is reported as an HRESULT, never a raw pointer.
             let mut child = optional_element(unsafe { walker.GetFirstChildElement(&element) })?;
             while let Some(current) = child {
                 if pending.len() + found.len() >= MAX_ELEMENTS
@@ -365,6 +370,7 @@ mod native {
                     break;
                 }
                 pending.push_back((current.clone(), depth + 1));
+                // SAFETY: current is still owned; optional_element checks end/error.
                 child = optional_element(unsafe { walker.GetNextSiblingElement(&current) })?;
             }
         }
@@ -378,6 +384,7 @@ mod native {
     ) -> Result<Vec<Value>, String> {
         let _discovery = DiscoveryLease::begin(uia, root)?;
         let (found, truncated) = bounded_elements(uia, root)?;
+        // SAFETY: caller holds COM initialization and the automation interface.
         let walker = unsafe { uia.RawViewWalker() }.map_err(|e| format!("RawViewWalker: {e}"))?;
         let mut elements = Vec::with_capacity(found.len());
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
@@ -387,6 +394,7 @@ mod native {
                 truncated = true;
                 break;
             }
+            // SAFETY: owned interfaces remain live; unavailable parents are omitted.
             let parent = unsafe { walker.GetParentElement(&element).ok() }
                 .and_then(|parent| runtime_id(&parent))
                 .unwrap_or_default();

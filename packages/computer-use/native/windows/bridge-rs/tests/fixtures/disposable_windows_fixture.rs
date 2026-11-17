@@ -4,6 +4,9 @@
 mod native {
 
     use base64::Engine as _;
+    use serde_json::{json, Value};
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, ChildStdin, Command, Stdio};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc,
@@ -20,6 +23,93 @@ mod native {
     use windows_bridge::uia::{live_elements, press, snapshot, PressResult};
 
     static CLICKS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Drive the actual sibling release executable over its production NDJSON pipe.
+    struct HelperClient {
+        child: Child,
+        stdin: ChildStdin,
+        frames: mpsc::Receiver<Value>,
+        next_id: usize,
+    }
+
+    impl HelperClient {
+        fn new() -> Self {
+            let example = std::env::current_exe().expect("fixture executable path");
+            let helper = example
+                .parent()
+                .and_then(|dir| dir.parent())
+                .expect("release examples directory")
+                .join("windows-bridge.exe");
+            let mut child = Command::new(helper)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("run actual built native helper");
+            let stdin = child.stdin.take().expect("native stdin");
+            let stdout = child.stdout.take().expect("native stdout");
+            let (sender, frames) = mpsc::channel();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines() {
+                    let line = line.expect("read native frame");
+                    let frame = serde_json::from_str(&line).expect("parse native frame");
+                    if sender.send(frame).is_err() {
+                        break;
+                    }
+                }
+            });
+            Self {
+                child,
+                stdin,
+                frames,
+                next_id: 0,
+            }
+        }
+
+        fn request(&mut self, cmd: &str, args: Value) -> Value {
+            self.next_id += 1;
+            let id = format!("fixture-{}", self.next_id);
+            writeln!(
+                self.stdin,
+                "{}",
+                json!({"protocolVersion":4,"id":id,"cmd":cmd,"args":args})
+            )
+            .expect("write native request");
+            self.stdin.flush().expect("flush native request");
+            let frame = self
+                .frames
+                .recv_timeout(Duration::from_secs(5))
+                .expect("actual helper must return within the fixture deadline");
+            assert_eq!(frame["id"], id);
+            assert_eq!(frame["protocolVersion"], 4);
+            frame
+        }
+
+        fn success(&mut self, cmd: &str, args: Value) -> Value {
+            let frame = self.request(cmd, args);
+            assert_eq!(frame["ok"], true, "native request failed: {frame}");
+            frame["result"].clone()
+        }
+    }
+
+    impl Drop for HelperClient {
+        fn drop(&mut self) {
+            // Only this disposable child is stopped, never any owner process.
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn label_ref(node: &Value) -> Option<String> {
+        if node["title"] == "Unread message complete disposable label"
+            && node["ref"]
+                .as_str()
+                .is_some_and(|reference| reference.starts_with("win:"))
+        {
+            return node["ref"].as_str().map(str::to_owned);
+        }
+        node["children"].as_array()?.iter().find_map(label_ref)
+    }
 
     unsafe extern "system" fn fixture_proc(
         hwnd: HWND,
@@ -270,20 +360,27 @@ mod native {
         let fixture_input = PhysicalLease::acquire().expect("own explicit fixture focus/capture");
         windows_bridge::window::request_foreground(fixture.hwnd)
             .expect("foreground disposable fixture");
-        {
-            let _lease = PhysicalLease::acquire().expect("own physical click");
-            let window = validated_bounds(fixture.hwnd, Some(u64::from(std::process::id())))
-                .expect("live fixture window");
-            windows_bridge::guard::deliver_to_live_target(
-                &identity, window,
-                || {
-                    let live = snapshot(fixture.hwnd, &identity, automation_id).map_err(|message| windows_bridge::ProtocolError::new(message, windows_bridge::ErrorCode::StaleRef))?;
-                    Ok(windows_bridge::guard::LiveTarget { runtime_id: live.runtime_id, bounds: windows_bridge::guard::Bounds { x: live.rect.0, y: live.rect.1, width: live.rect.2, height: live.rect.3 } })
-                },
-                |x,y| windows_bridge::uia::occlusion_ok(fixture.hwnd, &identity, automation_id, x,y).map_err(|message| windows_bridge::ProtocolError::new(message, windows_bridge::ErrorCode::OccludedTarget)),
-                |x,y| windows_bridge::input::act(&serde_json::json!({ "lookId":"fixture", "action":"click", "policy":"foreground", "target":{"x":0,"y":0}, "resolvedPoint":{"x":x,"y":y}, "params":{} })),
-            ).expect("deliver one native non-invokable fixture click");
-        }
+        drop(fixture_input);
+        let mut helper = HelperClient::new();
+        let diagnostics = helper.success("diagnostics", json!({}));
+        assert_eq!(
+            diagnostics["capabilities"],
+            json!(["fail-closed-live-target-v1"])
+        );
+        helper.success("listRoots", json!({"pid":std::process::id()}));
+        let look = helper.success(
+            "look",
+            json!({"windowId":fixture.hwnd,"includeImage":false}),
+        );
+        let actual_ref =
+            label_ref(&look["outline"]).expect("actual helper discovers full owned label");
+        let act_args = json!({"lookId":look["lookId"],"action":"click","policy":"foreground","target":{"ref":actual_ref},"params":{}});
+        let click = helper.success("act", act_args.clone());
+        assert_eq!(
+            click["performed"]["delivery"], "hid",
+            "non-invokable control must use the production fallback"
+        );
+        let fixture_input = PhysicalLease::acquire().expect("resume owned fixture capture tests");
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         while CLICKS.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -383,44 +480,19 @@ mod native {
             snapshot(fixture.hwnd, &identity, automation_id).is_err(),
             "removed UIA identity cannot resolve inside the retained window"
         );
-        let delivered = std::cell::Cell::new(false);
-        let stale: Result<(), windows_bridge::ProtocolError> =
-            windows_bridge::guard::deliver_to_live_target(
-                &identity,
-                validated_bounds(fixture.hwnd, Some(u64::from(std::process::id())))
-                    .expect("retained fixture window"),
-                || {
-                    let current =
-                        snapshot(fixture.hwnd, &identity, automation_id).map_err(|message| {
-                            windows_bridge::ProtocolError::new(
-                                message,
-                                windows_bridge::ErrorCode::StaleRef,
-                            )
-                        })?;
-                    Ok(windows_bridge::guard::LiveTarget {
-                        runtime_id: current.runtime_id,
-                        bounds: windows_bridge::guard::Bounds {
-                            x: current.rect.0,
-                            y: current.rect.1,
-                            width: current.rect.2,
-                            height: current.rect.3,
-                        },
-                    })
-                },
-                |_, _| Ok(true),
-                |_, _| {
-                    delivered.set(true);
-                    Ok(())
-                },
-            );
-        assert!(stale.is_err());
-        assert!(!delivered.get(), "real UIA removal must deliver zero input");
+        drop(fixture_input);
+        let stale = helper.request("act", act_args);
+        assert_eq!(
+            stale["ok"], false,
+            "actual helper must refuse its removed target"
+        );
+        assert_eq!(stale["error"]["code"], "stale_ref");
         assert_eq!(
             CLICKS.load(Ordering::SeqCst),
             1,
             "removed target cannot replay the earlier click"
         );
-        drop(fixture_input);
+        drop(helper);
 
         println!("NATIVE_FIXTURE_PASS: scoped assistive-client labels, pattern probe, current layout bounds, actual click, restore, PNG read-back, PID refusals");
         0
