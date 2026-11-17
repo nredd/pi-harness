@@ -29,6 +29,7 @@ const ZERO_UNCOVERED_FILES = [
 	"src/platform/index.ts",
 	"src/platform/linux/backend.ts",
 	"src/platform/linux/helper.ts",
+	"src/platform/linux/wsl-helper.ts",
 	"src/platform/linux/wsl.ts",
 	"src/platform/macos/backend.ts",
 	"src/platform/macos/browser.ts",

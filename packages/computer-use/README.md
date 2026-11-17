@@ -28,6 +28,87 @@ without waiting for the command deadline. Cancellation clears the local pending 
 listener; late replies are ignored. It does not stop native work already sent or kill the helper.
 Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
+## Windows host control from WSL2
+
+Opt-in transport to the existing native Rust `windows-bridge.exe`, not PowerShell, WSLg or a
+network service. Default Linux behavior is unchanged. This is a partial implementation of
+[#673](https://github.com/nredd/pi-harness/issues/673), not completed Windows desktop acceptance.
+
+Build the helper from a trusted checkout on Windows, in the desktop owner's non-elevated session:
+
+```sh
+cargo build --locked --release --manifest-path packages/computer-use/native/windows/bridge-rs/Cargo.toml
+```
+
+Copy `target/release/windows-bridge.exe` from that crate to an owner-controlled host directory.
+Verify its build provenance and SHA-256 independently. No helper or Windows crate is packed or
+installed by this WSL path. From an interactive WSL2 guest with interop already enabled:
+
+```sh
+export PI_COMPUTER_USE_WSL_HOST=1
+export PI_COMPUTER_USE_WSL_HOST_HELPER=/mnt/c/Example/pi-computer-use/windows-bridge.exe
+export PI_COMPUTER_USE_WSL_HOST_SHA256='<verified-64-hex-sha256>'
+export PI_COMPUTER_USE_WSL_HOST_LOCK=/mnt/c/Example/pi-computer-use/shared-input-lease
+```
+
+Start Pi with these variables. `find_roots`, `observe_ui`, `search_ui`, `inspect_ui`, `act_ui`,
+`read_text` and `wait_for` reuse the Windows backend and its helper-owned observations. Native
+Windows pixel coordinates, including negative monitor origins, pass through unchanged. Browser
+launches still run in the Linux guest; whole-desktop tools remain macOS-only.
+
+The executable must be canonical, executable, regular, at most 64MiB and match the pin before
+*each* request. Before sending any requested command, the initial `diagnostics` response must
+advertise `fail-closed-live-target-v1` in a well-formed array of strings named `capabilities`.
+Additional string capabilities are ignored. Missing, malformed or unsupported-only capabilities
+refuse terminally: only diagnostics is sent, the acknowledged lease is removed and the helper
+is stopped. It cannot restart behind existing observations. A SHA-256 pin, protocol v4 and
+architecture v1 do not establish these safety semantics; existing architecture checks still apply.
+Keep its parent and the lease parent writable only by the trusted desktop owner, on a local host volume.
+This is not Authenticode verification, credential isolation or protection against same-user
+replacement between verification and execution. `CI` refuses opt-in. Nothing enables interop,
+installs tools, grants privileges, changes the screen-reader flag or falls back to PowerShell.
+
+One long-lived process speaks JSON lines directly over stdio (`shell: false`, no PATH lookup).
+A successful response must carry `result` and no `error`; a failure must carry an error with a
+nonempty string `code` and string `message`, and no `result`. Only a complete, correlated native
+envelope acknowledges delivery; raw error messages are not exposed to the tool caller.
+Every participating WSL session/distro must use the same physical, initially absent lease path.
+Directory creation serializes complete requests, including physical batches. It does not lock out
+Windows-native helpers, other automation or the human user. Do not run those concurrently.
+Requests cap at 1MiB, responses at 8MiB and queued commands at 32. The default command deadline
+is 15s, including verification, queueing, acquisition, UIA and release (maximum 30s). Readiness
+verification separately caps at 5s. Existing tool policies/refusals remain unchanged.
+
+Disconnect, malformed/mismatched frames, timeout or cancellation after delivery close the
+transport and retain its lease. Even a clean helper exit closes the transport: native references
+cannot survive a helper restart. Restart Pi only after checking the host. Killing the Linux interop
+proxy does NOT prove Windows work stopped. Stop all relevant host helpers and verify quiescence
+before manually removing a retained lease. Never steal or age out a lease. A late `mkdir` retains
+its lease. Cleanup checks device/inode; check and removal are not atomic against outside
+replacement. Filesystem calls cannot be cancelled: only the caller's wait is bounded, so late
+operations may need manual recovery.
+
+Verification and remaining release gate:
+- `test/wsl2-diagnostics.test.mjs` uses real disposable POSIX subprocesses and synthetic JSON,
+  with filesystem fault injection. It does not execute a Windows helper or touch a desktop.
+- Windows cross-compilation/type checking is not a native runtime run. Existing native CI tests
+  do not establish WSL interop, UIA, DPI/capture or foreground/session behavior.
+- On an authorized interactive Windows/WSL2 target, the owner must run Pi with the variables above:
+  find and observe a disposable target window, read a full unread-state label through `search_ui`
+  without clicking, act on a non-invokable control, screenshot/read back that one window, then
+  run two Pi sessions against the same lease and prove no physical interleaving.
+- Also verify minimized restore, layout changes, negative monitor origins/mixed DPI, refused
+  elevated/locked/different-session targets, disabled interop, helper crash and retained-lease
+  recovery. Real Windows and WSL2 desktop checks are **NOT RUN**. No test target is configured here.
+- Source limitations remain: the existing helper does not enable screen-reader discovery or
+  capture frame-change polling, and its desktop/session preflight and coordinate fallback still
+  need native acceptance/hardening. This transport does not resolve those acceptance requirements.
+  The older helper lacks the required capability and is intentionally refused even with a valid
+  owner-supplied pin. Native source hardening and capability emission are tracked in
+  [#983](https://github.com/nredd/pi-harness/issues/983); both changes and native acceptance
+  must be integrated before admitting this transport. Do not close #673 or remove its release
+  gate on synthetic tests.
+
 ## Tools
 
 State-consuming desktop tools require an observation; missing or blank `stateId` fails with
@@ -1014,7 +1095,7 @@ The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-
 
 Under WSL2, Pi runs in the Linux guest and the Linux backend only sees the guest's AT-SPI bus. Windows host windows (a WebView2 or Electron client, for example) never appear there. Linux apps inside the guest, e.g. through WSLg, work as usual.
 
-WSL is detected from `WSL_DISTRO_NAME`, `WSL_INTEROP`, the `/proc/sys/fs/binfmt_misc/WSLInterop` entry or a `microsoft`/`wsl` string in `/proc/version`. When the guest has no windows to report, `find_roots` appends the explanation to its empty or filter-miss result and `observe_ui`, `act_ui` and `search_ui` fail with `No frontmost window was available. Running under WSL2: Windows host windows are not reachable from the WSL2 guest ...` instead of the bare message. Reaching host windows needs a Windows-host bridge, tracked in [nredd/pi-harness#668](https://github.com/nredd/pi-harness/issues/668); it is not implemented. Native Linux behavior and messages are unchanged.
+WSL is detected from `WSL_DISTRO_NAME`, `WSL_INTEROP`, the `/proc/sys/fs/binfmt_misc/WSLInterop` entry or a `microsoft`/`wsl` string in `/proc/version`. When the guest has no windows to report, `find_roots` appends the explanation to its empty or filter-miss result and `observe_ui`, `act_ui` and `search_ui` fail with `No frontmost window was available. Running under WSL2: Windows host windows are not reachable from the WSL2 guest ...` instead of the bare message. These diagnostics describe the default guest-only backend. The explicit [Windows host transport](#windows-host-control-from-wsl2) selects the native Windows backend instead; its remaining desktop acceptance is tracked in [#673](https://github.com/nredd/pi-harness/issues/673). Native Linux behavior and messages are unchanged.
 
 ## Cancellation checks
 
@@ -1208,7 +1289,7 @@ AT-SPI semantic presses/clicks and editable-text replacement are attempted first
 
 ## Windows windows are missing under WSL2
 
-`find_roots` returns no roots, or `observe_ui` reports `No frontmost window was available. Running under WSL2: ...`, when the target is a Windows host app. The WSL2 guest cannot reach host windows; only Linux apps in the guest are visible. See [Run on Linux](./linux.mdx) and nredd/pi-harness#668.
+`find_roots` returns no roots, or `observe_ui` reports `No frontmost window was available. Running under WSL2: ...`, when the target is a Windows host app. The default backend sees only Linux apps in the guest. See the opt-in [Windows host transport](#windows-host-control-from-wsl2), its safety requirements and outstanding #673 acceptance before selecting the Windows backend.
 
 ## Repair a missing macOS helper
 

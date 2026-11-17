@@ -12,6 +12,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
+- Opt-in WSL-to-native-Windows helper transport with an explicit executable SHA-256 pin, bounded stdio requests and a shared host-volume input lease. No PowerShell, installer, interop activation or automatic lease recovery. Native Windows UI/session acceptance and remaining helper hardening stay release-gating under #673; this is partial source support.
 - Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).
 - Deterministic finite-input tests close the five remaining cursor-motion LLVM regions and ten pure-key/selection policy regions in `bridge.swift`. Numerical safeguards stay intact; no live desktop input, capture or TCC runs (nredd/pi-harness#810, #645).
 - Native Windows x64 compiler/test/LLVM CI producer with raw reports, source-hash metadata and deterministic input-policy/null-capture refusal controls. ARM64 and live desktop acceptance remain separate; absent native branch/statement counters remain unmeasured (nredd/pi-harness#696).
@@ -35,6 +36,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Refuse WSL helpers without the exact `fail-closed-live-target-v1` diagnostics capability before sending any requested command. Missing or malformed capabilities close permanently after diagnostics-only cleanup; executable pins and protocol versions do not authorize older unsafe fallback semantics. Native hardening remains separate under #983 and Windows/WSL acceptance is not established (#673).
 - Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).
 
 - Windows helper commands now reject promptly with `Operation aborted.` for post-write cancellation, clear the pending request, timer and listener on every completion/write-error path, and ignore late replies. This cancels the local wait, not native work already sent (nredd/pi-harness#750).
