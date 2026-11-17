@@ -332,7 +332,11 @@ const RESOLVED: Record<string, unknown> = {
 		resolve: { dedupe: ["@earendil-works/pi-ai"] },
 	},
 	"packages/subscription-router/vitest.config.ts": {
-		test: { maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"] },
+		test: {
+			maxWorkers: 2,
+			include: ["tests/*.test.ts", "tests/scenarios/*.test.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
 	},
 	"packages/todo/vitest.config.ts": {
 		test: {
@@ -446,8 +450,8 @@ test("router candidate acceptance is separately measured with the same source sc
 	const policy = realPolicy()["subscription-router"];
 	assert.ok(policy);
 	assert.deepEqual(config.test?.include, [
-		"tests/scenarios/core-settle-cancellation.acceptance.ts",
-		"tests/scenarios/ownership.acceptance.ts",
+		"tests/acceptance/core-settle-cancellation.test.ts",
+		"tests/acceptance/ownership.test.ts",
 		"../../integration/inprocess/router-failover.test.ts",
 		"../../integration/inprocess/router-ownership.test.ts",
 	]);

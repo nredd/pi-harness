@@ -56,6 +56,13 @@ export async function verifyOwnership(change: SelectionChange, errorMessage: str
 		}
 		await run;
 		await cancellation;
+		if (errorMessage === RETRY && change !== "abort") {
+			expect(harness.eventsOfType("message_end").at(-1)?.message).toMatchObject({
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: expect.stringContaining("request selection changed or was cancelled"),
+			});
+		}
 		// A cancelled collector cannot confirm; its valid cached observation is still shared.
 		if (change === "abort") expect(usage.peek("spike-a")?.windows[0]?.usedPercent).toBe(100);
 		else expect(tracker.active()).toMatchObject([{ provider: "spike-a" }]);

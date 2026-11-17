@@ -57,9 +57,26 @@ function selectionEpoch(manager: object | undefined): { generation: number } {
 
 /** Capture before awaiting evidence. Physical response metadata never changes this epoch. */
 function captureSelection(ctx: ExtensionContext, signal: AbortSignal | undefined): () => boolean {
-	const epoch = selectionEpoch(ctx.sessionManager);
+	const manager = ctx.sessionManager;
+	const epoch = selectionEpoch(manager);
 	const generation = epoch.generation;
-	return () => !signal?.aborted && epoch.generation === generation;
+	// A runtime may serve a requester that never loaded this extension. Its durable
+	// model-change identity still detects manual pins and ABA without an event listener.
+	const selectionId = () =>
+		manager
+			?.getBranch?.()
+			.filter((entry) => entry.type === "model_change")
+			.at(-1)?.id;
+	const selected = selectionId();
+	return () => {
+		if (signal?.aborted || epoch.generation !== generation) return false;
+		try {
+			return selectionId() === selected;
+		} catch {
+			// A retained manager view can become stale during session replacement.
+			return false;
+		}
+	};
 }
 const RPC_ADMIT = "router:rpc:admit";
 const RPC_USAGE = "router:rpc:usage";

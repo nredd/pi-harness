@@ -546,6 +546,25 @@ describe("router usage RPC", () => {
 		).resolves.toMatchObject({ model: { provider: "openai-codex", id: "terra" } });
 	});
 
+	it("refuses a retry when its captured manager view becomes stale", async () => {
+		const { h, ctx } = await routed();
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const getBranch = vi
+			.fn()
+			.mockReturnValueOnce([])
+			.mockImplementation(() => {
+				throw new Error("stale manager");
+			});
+		const appendEntry = vi.fn();
+		await expect(
+			registration?.route(
+				{ reason: "retry", thinkingLevel: "off" } as never,
+				{ modelRegistry: ctx.modelRegistry, session: { sessionManager: { getBranch } }, appendEntry } as never,
+			),
+		).rejects.toThrow("request selection changed or was cancelled");
+		expect(appendEntry).not.toHaveBeenCalled();
+	});
+
 	it("deduplicates through the registrant when the session has no sessionManager", async () => {
 		const { h, ctx, tick } = await routed();
 		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];

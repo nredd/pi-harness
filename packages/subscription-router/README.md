@@ -19,8 +19,10 @@ formatting, linting and assists there. Snapshot provenance and oracle rules are 
 
 ### Cancellation acceptance graph (release-blocked)
 
-The ordinary `npm run check` still exercises the released dependency graph. The additional
-`npm run test:acceptance` has a fixed inventory in `vitest.acceptance.config.ts` for the corrected
+The ordinary `npm run check` still exercises the released dependency graph, with its existing
+`tests/*.test.ts` and `tests/scenarios/*.test.ts` inventory explicit in `vitest.config.ts`.
+The additional `npm run test:acceptance` selects `tests/acceptance/` and the child stack proofs
+through a fixed inventory in `vitest.acceptance.config.ts` for the corrected
 core active-run signal and cancellation-before-settle-commit contract. It must run on both Node
 and Bun **alongside**, not instead of, the complete package gate on an isolated candidate install.
 The released graph retains its full root gate, including `@nredd/pi-stack-tests` and official
@@ -33,12 +35,10 @@ contains [the cancellation fix](https://github.com/nredd/pi/pull/112) and coordi
 validation passes. Core PR merge alone does not publish those bytes. No production dependency,
 lockfile or Gitlink is changed here.
 
-The candidate used for acceptance is source `1cc68329e6a3f966c35edf79f95dbcb532aff64c`, package
-manifest version `1.3.0`, `release: false`, installed from immutable tarballs rather than a core
-checkout or shared `node_modules`. The new ownership probes preserve the original terminal/retry
-barriers; only the minimized signal probe's old diagnostic expectation changes: the retained
-streaming signal must now be aborted too. Core's ordinary retry omission happens *before* retry
-routing; the barrier asserts no additional stale recovery edit, not rollback of that earlier edit.
+Candidate verification uses an isolated immutable-tarball install, not a core checkout or shared
+`node_modules`. Record its exact source and artifact identities separately from released pins.
+Core's ordinary retry omission happens *before* retry routing; invalidating that retry prevents
+new recovery edits, not rollback of an earlier committed edit.
 
 ### Legacy routing receipts
 
@@ -210,10 +210,12 @@ quota-looking failures. Low remaining quota alone is not exhaustion. Authenticat
 model, billing and transport errors do not independently prove subscription exhaustion. There is
 no predictive switch, new recovery engine, cross-tier or paid API fallback.
 
-Recovery captures the requesting session's selection generation and cancellation signal before
-awaiting confirmation. Manual pins, another profile, away-and-back selection, session replacement
+Recovery captures the requesting session's selection generation, durable model-change identity
+and cancellation signal before awaiting confirmation. The durable identity also guards requesters
+using a shared route without loading their own router extension. Manual pins, another profile, away-and-back selection, session replacement
 or cancellation invalidate its permission to omit context, continue, record a routing decision or
-announce a switch. Physical response metadata updates do not invalidate selection. Valid shared
+announce a switch. A stale retry route ends explicitly with a selection-changed error rather than
+dispatching under the new selection. Physical response metadata updates do not invalidate selection. Valid shared
 quota observations remain shared; a cancelled collector still cannot confirm a block. Recovery
 budgets and edits remain session-owned, including when siblings share one runtime. An exhausted
 running child settles with error rather than becoming scheduled work; pre-dispatch wait/fail,

@@ -7,8 +7,8 @@ export default definePackageConfig("subscription-router", {
 	test: {
 		maxWorkers: 1,
 		include: [
-			"tests/scenarios/core-settle-cancellation.acceptance.ts",
-			"tests/scenarios/ownership.acceptance.ts",
+			"tests/acceptance/core-settle-cancellation.test.ts",
+			"tests/acceptance/ownership.test.ts",
 			"../../integration/inprocess/router-failover.test.ts",
 			"../../integration/inprocess/router-ownership.test.ts",
 		],
