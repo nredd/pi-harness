@@ -72,6 +72,11 @@ vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal();
 	return {
 		...actual,
+		mkdirSync: (...args) => {
+			const result = actual.mkdirSync(...args);
+			gate.afterMkdir?.(String(args[0]));
+			return result;
+		},
 		lstatSync: (...args) => {
 			const info = actual.lstatSync(...args);
 			gate.afterLstatSync?.(String(args[0]));
@@ -1016,8 +1021,14 @@ describe("persistent profile opt-in", () => {
 				if (change === "chromium-lock") assert(fs.lstatSync(path.join(profile, "SingletonLock")).isSymbolicLink());
 				if (change === "lease-symlink") assert(fs.lstatSync(lease).isSymbolicLink());
 				if (change === "lease-mode") assert.equal(fs.statSync(lease).mode & 0o777, 0o755);
-				if (change === "profile-mode") assert.equal(fs.statSync(profile).mode & 0o777, 0o755);
-				if (change === "ancestor-mode") assert.equal(fs.statSync(home).mode & 0o777, 0o775);
+				if (change === "profile-mode") {
+					assert.equal(fs.statSync(profile).mode & 0o777, 0o755);
+					assert(fs.existsSync(lease), "post-creation permission uncertainty must retain the lease");
+				}
+				if (change === "ancestor-mode") {
+					assert.equal(fs.statSync(home).mode & 0o777, 0o775);
+					assert(fs.existsSync(lease), "post-creation ancestry uncertainty must retain the lease");
+				}
 			},
 		);
 

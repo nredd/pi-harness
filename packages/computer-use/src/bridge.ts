@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, lstatSync, rmdirSync, rmSync, type Stats } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { constants as fsConstants, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
+import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -3394,12 +3394,12 @@ function assertNoChromiumProfileLocks(directory: string): void {
 	}
 }
 
-/** Acquire our lease only after renewed validation; retain its identity and fail closed on any replacement. */
-async function lockPersistentBrowserProfile(profile: ValidatedPersistentProfile): Promise<PersistentProfileLease> {
+/** Check, create and capture the lease without yielding; fail closed on any post-creation replacement. */
+function lockPersistentBrowserProfile(profile: ValidatedPersistentProfile): PersistentProfileLease {
 	assertPersistentProfileIdentity(profile);
 	assertNoChromiumProfileLocks(profile.directory);
 	try {
-		await mkdir(path.join(profile.directory, ".pi-computer-use.lock"), { mode: 0o700 });
+		mkdirSync(path.join(profile.directory, ".pi-computer-use.lock"), { mode: 0o700 });
 	} catch (error) {
 		throw new Error(
 			"Persistent managed profile could not be locked. It may be in use or have a stale .pi-computer-use.lock; after verifying all users of this profile have stopped, remove that empty lease directory manually.",
@@ -3427,7 +3427,7 @@ async function startManagedBrowser(
 	// Revalidate before creating any lease: allocation and previous-browser shutdown may have yielded.
 	if (persistent) await persistentBrowserProfile(persistent.directory, persistent);
 	let profileDir = persistent?.directory ?? (await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`)));
-	const lease = persistent ? await lockPersistentBrowserProfile(persistent) : undefined;
+	const lease = persistent ? lockPersistentBrowserProfile(persistent) : undefined;
 	let managedBrowser: ChildProcess;
 	try {
 		// Full refusal policy AFTER lease acquisition, followed by synchronous final identity/lock checks.
