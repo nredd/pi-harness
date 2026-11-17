@@ -1,7 +1,8 @@
 # @nredd/pi-preset
 
-Published to npm as `@nredd/pi-preset` (public). Install the footer with explicit resource filters;
-the rest of the preset is opt-in content, not an automatic machine-configuration installer.
+Published to npm as `@nredd/pi-preset` (public). This package is the canonical source of the
+generic agent and workflow skill definitions below. Deployments select resources explicitly;
+it is not an automatic machine-configuration installer.
 Releases use the monorepo [publication workflow](../../docs/releases.md); the initial `0.1.0`
 manual-publication receipt is `releases/2026-10-18-npm-publication.json`.
 
@@ -44,6 +45,39 @@ agents, not local/global/project agents. If you need other packaged agents, use 
 Retire the old local `extensions/expanded-footer.ts` and `lib/footer-{cache,quota}.ts` through
 your configuration manager in the same activation; loading both footers is unsupported. Keep
 local themes, skills, agents and their configuration. Restart sessions after activation.
+
+## Select the shared agents and skills
+
+For a release containing the workspace entry, select its exact published version unfiltered in
+`settings.json`'s `packages` (or a stack's `sources`) to load the footer, skills and themes.
+To keep themes disabled, use this shape with `VERSION` replaced by that published version:
+
+```json
+{
+  "source": "npm:@nredd/pi-preset@VERSION",
+  "extensions": ["src/index.ts"],
+  "skills": ["skills/**"],
+  "prompts": [],
+  "themes": []
+}
+```
+
+Separately set `"packageAgents": ["pi-preset"]` in the deployment's `subagents.json`,
+or use `true` to allow all declaring packages. Remove `packageAgents: false`; Pi's resource
+filters do not control agents. The manifest already declares `pi.skills: ["./skills"]` for
+Pi and `pi.subagents.agents: ["./agents"]` for pi-subagents. No copying is needed.
+
+Retire duplicate generic definitions through the deployment's configuration manager only
+when the selected release is published and available. Keep machine-local agents, skills,
+third-party skill installs and `AGENTS.md` local. Do not remove working local copies before
+the replacement package is selected. Publication, stack promotion and activation are separate
+steps; a version bump alone changes none of them.
+
+Keep `agentModels` and `modelTiers` in each user's own `subagents.json`, not this package.
+Model precedence is: explicit dispatch parameter -> `agentModels[type]` -> `agentModels["*"]`
+-> definition `model:` -> parent. Thus even a wildcard binding outranks a definition's model.
+The built-in `Explore` already requests `@cheap`; no duplicate Explore definition is needed.
+Bind that tier locally, and keep any intentional `agentModels["Explore"]` binding locally too.
 
 ## Footer behavior and configuration
 
@@ -182,12 +216,10 @@ Local overrides shadow these packaged definitions; update their managed source s
 ## Models and roles
 
 Agents carry no `model:`. Skills name tiers only, never model ids or `router/*` profiles:
-`code-review` spawns `code-reviewer` with no `model`, so `agentModels` routes it (personally to
-`@review`), and `ship-issue` adds a second `critic` on `@frontier` only for design-level issues (new
+`code-review` spawns `code-reviewer` with no `model`, so the user's `agentModels` routes it, and `ship-issue` adds a second `critic` on `@frontier` only for design-level issues (new
 module or public interface, concurrency, persistence or wire format, auth). `agentModels` binds agent
-types to tiers; `modelTiers` binds tiers to a router profile or exact members. Both are profile
-config (dotfiles on personal, the enterprise manifest on work), not preset content, so both profiles
-ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
+types to tiers; `modelTiers` binds tiers to a router profile or exact members. Both are deployment
+config, not preset content, so deployments ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
 falls back to another tier.
 
 `principal-investigator` (a multi-round judge of findings, not diffs) is unpinned too; route it with
@@ -245,11 +277,9 @@ pi-subagents source (below):
 - Agents: package agents load first and any global (`~/.pi/agent/agents`) or project agent of the
   same name overrides them
 
-Retirement of the old global copies is **not done here and must not be done by hand-deleting**.
-Prerequisites, all before any activation: the old file is positively identified as an unchanged,
-migrated copy of this package's content (hash match against a recorded source), modified files and
-unrelated packages survive, the symlinked `mattpocock/skills` `code-review` is retired only when it
-is exactly the known managed link, and it happens only during explicit activation.
+Retirement of old global copies belongs to the deployment's configuration manager, not this
+package. Reconcile intentional changes first, preserve unrelated local resources and retire
+known managed copies only during explicit activation. Tests never read a deployment's dotfiles.
 
 ## Evidence and what is pending
 

@@ -29,7 +29,15 @@ One pass, before touching anything. Scope is the full requested set, not the fir
 
 Disable any armed auto-merge before a PR's HEAD changes, then renew every review from the preserved original merge-base through the new full HEAD; corrective-delta reviews are supplemental only.
 Parent only: use native session-kit monitors (`monitor_start`, discover via `search_tools` if deferred) for passive waiting, including bounded-interval
-pollers. A worker returns the proposed monitor command instead. Keep model turns and subagents for substantive work, not repeated status polling.
+pollers. Pass `todo: <id>` (or a list) when a todo tracks the wait: only a linked monitor arms that in_progress todo. A worker returns the proposed monitor command instead. Keep model turns and subagents for substantive work, not repeated status polling.
+
+If native monitors remain unavailable after `search_tools`, the PARENT alone uses bounded
+foreground waits: `timeout 1500 gh run watch <run-id> --interval 60 --exit-status` for each
+exact-HEAD run, then bounded `gh pr view <N> --json state,mergedAt,mergeCommit` polls until
+merged, closed or failed. Use the platform's equivalent bounded timeout if `timeout` is absent.
+Never use `gh pr checks --watch` or a watcher agent. On HTTP 403/429 rate limiting, wait until
+the recorded reset rather than retry-spinning. Report that no continuation monitor exists,
+the next owner and the exact command to resume. Workers still return handles, never poll.
 
 ## 2. Order candidates
 
@@ -54,11 +62,11 @@ For the next unblocked PR in the order:
 - Verify effective protection FIRST. Arming auto-merge merges IMMEDIATELY when the base branch has no effective required checks. Protection is proven only when readable applicable rulesets and classic branch protection establish effective required checks for this base *and* that the merging caller cannot bypass them. A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected. Never change protections or upgrade the account to find out
 - Backend not proven protected: keep auto-merge OFF. Wait with a native monitor for every applicable exact-HEAD CI run to COMPLETE successfully and for all reviews and the parent's critic, then merge explicitly with `gh pr merge <N> --<method> --match-head-commit <full-sha>`. Never use `--admin` or any bypass
 - Backend proven protected: arm protected auto-merge with the repository's configured method and head pinning: `gh pr merge <N> --auto --<method> --match-head-commit <full-sha>`. Never merge past failing or missing required checks, and never bypass protection
-- Start `monitor_start` (discover via `search_tools` if deferred) to watch complete exact-HEAD workflow runs around `gh run watch <run-id> --exit-status`. Early check rollups may contain only classification jobs and are not terminal workflow evidence. Use a native bounded-interval poller around `gh pr view <N> --json state,mergedAt,mergeCommit` until the PR is `MERGED`, closed, or has a failed required check; one status query is not a watcher
+- Start `monitor_start` (discover via `search_tools` if deferred) to watch complete exact-HEAD workflow runs around `gh run watch <run-id> --interval 60 --exit-status`. Early check rollups may contain only classification jobs and are not terminal workflow evidence. Use a native bounded-interval poller around `gh pr view <N> --json state,mergedAt,mergeCommit` until the PR is `MERGED`, closed, or has a failed required check; one status query is not a watcher
 - On `MERGED`: record the merge commit, then return to step 3 for the next unblocked PR. A PR that depended on it is now unblocked; update it only if there is a real conflict (disable auto-merge before any HEAD change and renew all reviews)
 - On failure: diagnose the real cause. Fix through a delegated worker or inline, renew reviews on the new HEAD, and continue. Rerun only per the repository's flake policy
-- Keep a heartbeat monitor while any PR remains so the loop continues unprompted
-- Stop only when every requested PR is merged, or the remaining ones have a genuine external blocker (e.g. required human approval, an outage) with a named owner and a continuation monitor armed. Ordinary docs, test, or conflict work is not a blocker
+- Keep a heartbeat monitor linked to the tracked todos (`todo: [<id>, ...]`) while any PR remains so the loop continues unprompted. Without native monitors, continue the bounded foreground waits from step 1
+- Stop only when every requested PR is merged, or the remaining ones have a genuine external blocker (e.g. required human approval, an outage) with a named owner and a continuation monitor armed and linked to its todo (without native monitors: the exact resume command). Ordinary docs, test, or conflict work is not a blocker
 
 A release or deployment is different: run the repository's frozen combined gate immediately before
 publish/deploy. Do not impose that gate on ordinary PR merges.

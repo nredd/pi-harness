@@ -1,6 +1,6 @@
 ---
 name: ship-issue
-description: Address a GitHub issue in a dedicated git worktree -- implement, gate, obtain exact-HEAD reviews, open a PR, and hand protected merge ownership to the parent. Use when the user names an issue URL or number and wants it shipped.
+description: Take PR-bound work to a reviewed PR in a dedicated git worktree -- implement, gate, obtain exact-HEAD reviews, and hand protected merge ownership to the parent. Use for an issue or a request to fix and open a PR, including delegated work. Skip only for draft-only or no-PR requests.
 argument-hint: <issue-url-or-number> [extra instructions]
 ---
 
@@ -21,6 +21,8 @@ markdown headers, no checkbox lists, `--` never em-dashes, backtick every identi
 The headers in *this* file are instructions to you, not a template.
 
 ## 1. Resolve the issue
+
+No issue yet? File one first with `gh issue create`, then use its number and `Closes #N`.
 
 Accept a full URL, `#128`, or a bare `128`. From a URL, pull owner/repo too -- it may not be the
 cwd repo.
@@ -162,9 +164,11 @@ spawned by a parent for this issue. Never hand off to yourself.
 - Do not require a rebase merely because the base advanced. Update only for a functional dependency or actual conflict; release/deploy work separately requires the frozen combined gate
 - Never delegate passive watching or waiting to a watcher agent
 - Parent driver: for admission, protection, merge and terminal monitoring, follow `/skill:get-it-merged` steps 3-4 as a one-PR train. That shared procedure requires effective non-bypassable protection before auto-merge; otherwise it keeps auto-merge off, completes exact-HEAD CI and merges explicitly. Do not duplicate or weaken it here
-- Parent completion: continue until this PR is `MERGED`, or a genuine external blocker has a named owner and an armed continuation monitor. Queued CI, ordinary setup, tests and review fixes are unfinished work, not successful completion
+- Parent completion: continue until this PR is `MERGED`, or a genuine external blocker has a named owner and an armed continuation monitor linked to its todo (without native monitors: the exact resume command). Queued CI, ordinary setup, tests and review fixes are unfinished work, not successful completion
 - Delegated worker: keep auto-merge off, do not merge or arm it. Once the substantive work is done, return the PR URL, final SHA, exact review handles, and concrete CI run IDs or monitor command to the parent, once. Never declare the overall task done
-- Do NOT remove the worktree before the PR lands. The follow-up is `git worktree remove <path> && git -C <repo> worktree prune` once it merges
+- Do NOT remove the worktree before the PR lands. The parent uses the repository's safe worktree cleanup helper after merge when available; a delegated worker leaves its worktree for that sweep. Never force-remove a worktree or discard another worker's changes
+- Before cleanup, remove only your own named untracked scratch, never unclaimed paths or modified tracked files. Report retained worktrees and the reason
+- Without native monitors, the parent follows `/skill:get-it-merged` step 1's bounded foreground fallback. Workers never poll. Report the next owner and exact resume command rather than claiming a continuation monitor exists
 
 ## 10. Report
 

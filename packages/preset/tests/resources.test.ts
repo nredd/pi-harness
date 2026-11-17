@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { modelLeaks, modelValues, TIER_REF } from "@nredd/pi-test-lib/model-guard";
 import Schema from "typebox/schema";
 import { test } from "vitest";
@@ -153,6 +153,50 @@ test("agent extension selectors use short names, never the scoped form", () => {
 		for (const name of list(frontmatter.exclude_extensions ?? [])) assert.match(name, SHORT_NAME);
 		assert.ok(!readText(`agents/${agent}.md`).includes("ext:@"), `${agent}: scoped selector`);
 	}
+});
+
+/** Public tool names granted by the installed dev-tools dependency, not arbitrary selector strings. */
+const DEV_TOOLS = new Set([
+	"git_diff",
+	"git_show",
+	"git_log",
+	"git_status",
+	"py_test",
+	"cargo_test",
+	"git_commit",
+	"git_worktree_remove",
+	"git_worktree_prune",
+]);
+const BUILTINS = new Set([...createCodingTools("."), ...createReadOnlyTools(".")].map((tool) => tool.name));
+const validTool = (tool: string): boolean => {
+	if (BUILTINS.has(tool) || DEV_TOOLS.has(tool)) return true;
+	const selector = SELECTOR.exec(tool);
+	if (!selector) return false;
+	if (selector[1] === "pi-web-access") return tool === "ext:pi-web-access";
+	return selector[1] === "pi-dev-tools" && DEV_TOOLS.has(tool.split("/")[1] ?? "");
+};
+
+test("every agent tool list names real builtins or supported extension tools", () => {
+	for (const agent of AGENTS) {
+		const { frontmatter } = frontmatterOf(`agents/${agent}.md`);
+		for (const field of ["tools", "disallowed_tools"]) {
+			const tools = list(frontmatter[field] ?? []);
+			assert.equal(new Set(tools).size, tools.length, `${agent}: duplicate ${field}`);
+			if (field === "tools" && tools.length === 1 && tools[0] === "all") continue;
+			for (const tool of tools) assert.ok(validTool(tool), `${agent}: unknown ${field} '${tool}'`);
+		}
+	}
+	for (const bad of ["reed", "all, read", "ext:@nredd/pi-dev-tools/git_diff", "ext:pi-dev-tools/typo", "ext:unknown"]) {
+		assert.equal(validTool(bad), false, bad);
+	}
+});
+
+test("general-purpose delegates only independent reviews and returns monitor ownership", () => {
+	const { frontmatter, body } = frontmatterOf("agents/general-purpose.md");
+	assert.deepEqual(list(frontmatter.allowed_subagents), ["code-reviewer"]);
+	assert.ok(body.includes("Standards and Spec reviews"));
+	assert.ok(body.includes("Children cannot use monitor or goal tools"));
+	assert.ok(body.includes("A completion notice is new"));
 });
 
 test("no preset agent pins thinking, so callers and pi defaults decide", () => {
