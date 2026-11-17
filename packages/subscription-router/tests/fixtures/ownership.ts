@@ -1,4 +1,4 @@
-/** Shared real-session barrier used by released-host and candidate-host ownership contracts. */
+/** Shared real-session barrier for the router ownership scenarios. */
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { expect } from "vitest";
