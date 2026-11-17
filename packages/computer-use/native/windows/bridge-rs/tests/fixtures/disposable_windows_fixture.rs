@@ -171,6 +171,7 @@ mod native {
     struct Fixture {
         hwnd: isize,
         child: isize,
+        sentinel: isize,
     }
 
     impl Fixture {
@@ -225,8 +226,24 @@ mod native {
                     None,
                 )
                 .expect("create fixture label");
+                // Hidden until the refusal test needs a deterministic, owned foreground.
+                let sentinel = CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("STATIC"),
+                    w!("Disposable foreground sentinel"),
+                    WS_OVERLAPPEDWINDOW,
+                    650,
+                    100,
+                    400,
+                    250,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("create owned foreground sentinel");
                 sender
-                    .send((root.0 as isize, child.0 as isize))
+                    .send((root.0 as isize, child.0 as isize, sentinel.0 as isize))
                     .expect("send fixture identity");
                 let mut message = MSG::default();
                 while GetMessageW(&mut message, None, 0, 0).as_bool() {
@@ -237,16 +254,28 @@ mod native {
                     }
                 }
             });
-            let (hwnd, child) = receiver
+            let (hwnd, child, sentinel) = receiver
                 .recv_timeout(Duration::from_secs(5))
                 .expect("disposable interactive fixture unavailable");
-            Self { hwnd, child }
+            Self {
+                hwnd,
+                child,
+                sentinel,
+            }
         }
     }
 
     impl Drop for Fixture {
         fn drop(&mut self) {
-            // No owner application is targeted; our window thread destroys its root.
+            // No owner application is targeted; both disposable roots are ours.
+            let _ = unsafe {
+                PostMessageW(
+                    HWND(self.sentinel as *mut _),
+                    WM_CLOSE,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+            };
             let _ =
                 unsafe { PostMessageW(HWND(self.hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
@@ -500,7 +529,16 @@ mod native {
         // A stale ref must not even restore/foreground its surviving minimized owner.
         let _ = unsafe { ShowWindow(HWND(fixture.hwnd as *mut _), SW_MINIMIZE) };
         assert!(unsafe { IsIconic(HWND(fixture.hwnd as *mut _)) }.as_bool());
+        let _ = unsafe { ShowWindow(HWND(fixture.sentinel as *mut _), SW_SHOW) };
+        windows_bridge::window::request_foreground(fixture.sentinel)
+            .expect("activate only the owned foreground sentinel");
         let foreground_before = unsafe { GetForegroundWindow() };
+        assert_eq!(
+            foreground_before,
+            HWND(fixture.sentinel as *mut _),
+            "no transient HWND0 baseline"
+        );
+        assert!(unsafe { IsIconic(HWND(fixture.hwnd as *mut _)) }.as_bool());
         drop(fixture_input);
         let stale = helper.request("act", act_args);
         assert_eq!(
