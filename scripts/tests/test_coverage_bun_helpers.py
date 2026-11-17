@@ -38,7 +38,7 @@ def test_real_bun_helper_reports_fail_closed(tmp_path: Path, producer: str) -> N
     bun = shutil.which("bun")
     assert bun, "The pinned Bun is required, not a skipped check"
     assert (
-        subprocess.check_output([bun, "--version"], text=True).strip()
+        subprocess.check_output([bun, "--version"], text=True, stderr=subprocess.STDOUT).strip()
         == (ROOT / ".bun-version").read_text().strip()
     )
     directory = tmp_path / "packages/example"
