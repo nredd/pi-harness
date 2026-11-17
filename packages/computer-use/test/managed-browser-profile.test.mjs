@@ -983,6 +983,24 @@ describe("persistent profile opt-in", () => {
 			},
 		);
 
+		test.each(["parent", "directory"])("rejects canonical macOS defaults through a %s alias", async (aliasKind) => {
+			const actual = path.join(home, "relocated");
+			fs.mkdirSync(actual, { mode: 0o700 });
+			const parent = path.join(home, "Library/Application Support/Google");
+			fs.mkdirSync(path.dirname(parent), { recursive: true });
+			let candidate;
+			if (aliasKind === "parent") {
+				fs.symlinkSync(actual, parent);
+				candidate = path.join(actual, "Chrome");
+				fs.mkdirSync(candidate, { mode: 0o700 });
+			} else {
+				fs.mkdirSync(parent);
+				fs.symlinkSync(actual, path.join(parent, "Chrome"));
+				candidate = actual;
+			}
+			await assert.rejects(testing.persistentBrowserProfile(candidate), /default browser/);
+		});
+
 		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])(
 			"rejects Chrome channel default roots under %s",
 			async (variable) => {

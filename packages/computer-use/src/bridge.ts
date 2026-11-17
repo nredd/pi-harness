@@ -3209,6 +3209,17 @@ function managedBrowserArgs({
 	];
 }
 
+/** Resolve directory metadata only; missing roots retain their lexical path and other failures refuse launch. */
+async function canonicalProfileRoot(root: string): Promise<string> {
+	const absolute = path.resolve(root);
+	try {
+		return await realpath(absolute);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return absolute;
+		throw error;
+	}
+}
+
 /** Validate an operator-created profile without reading any profile contents or changing its permissions. */
 async function persistentBrowserProfile(configured: string): Promise<string> {
 	if (process.platform === "win32")
@@ -3229,38 +3240,32 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 		throw new Error("managed_browser_profile must be a real directory owned by the current user with mode 0700.");
 	const canonical = await realpath(directory);
 	const home = await realpath(os.homedir());
-	// Resolve only configured parent roots, never enumerate or inspect browser profile contents.
+	// Resolve directory metadata only, never enumerate or open browser profile contents.
 	const configuredRoots = await Promise.all(
 		[path.join(home, ".config"), process.env.XDG_CONFIG_HOME, process.env.CHROME_CONFIG_HOME]
 			.filter((root): root is string => Boolean(root))
-			.map(async (root) => {
-				const absolute = path.resolve(root);
-				try {
-					return await realpath(absolute);
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code === "ENOENT") return absolute;
-					throw error;
-				}
-			}),
+			.map(canonicalProfileRoot),
 	);
-	const defaults = [
-		path.join(home, "Library/Application Support/Google/Chrome"),
-		path.join(home, "Library/Application Support/Chromium"),
-		path.join(home, "Library/Application Support/Google/Chrome Canary"),
-		path.join(home, "Library/Application Support/Google/Chrome Beta"),
-		path.join(home, "Library/Application Support/Google/Chrome Dev"),
-		path.join(home, "Library/Application Support/net.imput.helium"),
-		path.join(home, ".config/google-chrome"),
-		path.join(home, ".config/chromium"),
-		path.join(home, ".config/google-chrome-beta"),
-		path.join(home, ".config/google-chrome-unstable"),
-		path.join(home, ".config/helium"),
-		...configuredRoots.flatMap((root) =>
-			["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"].map((name) =>
-				path.join(root, name),
+	const defaults = await Promise.all(
+		[
+			path.join(home, "Library/Application Support/Google/Chrome"),
+			path.join(home, "Library/Application Support/Chromium"),
+			path.join(home, "Library/Application Support/Google/Chrome Canary"),
+			path.join(home, "Library/Application Support/Google/Chrome Beta"),
+			path.join(home, "Library/Application Support/Google/Chrome Dev"),
+			path.join(home, "Library/Application Support/net.imput.helium"),
+			path.join(home, ".config/google-chrome"),
+			path.join(home, ".config/chromium"),
+			path.join(home, ".config/google-chrome-beta"),
+			path.join(home, ".config/google-chrome-unstable"),
+			path.join(home, ".config/helium"),
+			...configuredRoots.flatMap((root) =>
+				["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"].map((name) =>
+					path.join(root, name),
+				),
 			),
-		),
-	];
+		].map(canonicalProfileRoot),
+	);
 	if (
 		canonical === home ||
 		defaults.some(
