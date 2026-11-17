@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { STATUS, WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { afterEach, expect, it } from "vitest";
-import { configFor, RESIZES, TerminalFixture } from "../fixtures/session.ts";
+import { configFor } from "../fixtures/session.ts";
+import { RESIZES, TerminalFixture } from "../fixtures/terminal.ts";
 
 const TITLE = /^ \/diff \S+\s+\d+ files?\s+\+\d+ -\d+/;
 const POSITION = /(\d+)\/(\d+)\s+(\d+)-(\d+)\/(\d+)\s*$/;
