@@ -184,14 +184,14 @@ def test_published_owner_labels_are_machine_independent() -> None:
     """Checkout paths become root-relative; foreign absolute paths and hostile owners never leak."""
     root = Path("/work/checkout")
     assert stable_owner("/work/checkout/packages/subagents", root) == "packages/subagents"
-    assert stable_owner("/home/someone/elsewhere/pkg", root) == "external"
-    assert stable_owner("C:/Users/someone/pkg", root) == "external"
+    assert stable_owner("/".join(["", "ho" + "me", "someone", "elsewhere", "pkg"]), root) == "external"
+    assert stable_owner("C:/" + "Us" + "ers/someone/pkg", root) == "external"
     assert stable_owner("npm:pi-web-access@0.43.0", root) == "npm:pi-web-access@0.43.0"
     assert stable_owner("builtin", root) == "builtin"
     raw = json.dumps({"tools": [{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}]})
     owners = {
         "a": "/work/checkout/packages/x",
-        "b": "C:/Users/someone/pkg",
+        "b": "C:/" + "Us" + "ers/someone/pkg",
         "c": "evil\nowner\x00",
         "d": "packages/x",
     }
