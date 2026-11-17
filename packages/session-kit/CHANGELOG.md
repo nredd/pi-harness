@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Show a separately labelled current-rate API-equivalent estimate in `/stats` beside recorded costs ([#799](https://github.com/nredd/pi-harness/issues/799)): each retained physical event is priced offline by the host's `estimateTokenCost` over already-loaded exact model identities, with priced/unpriced event and token coverage, source/date/units/conditions and unknown reasons; a partial sum reads `priced subset only`, unknown is never `$0`. Recorded costs, snapshots and event IDs are unchanged. `summary` takes an optional fourth `valueCall` argument
+- Show a separately labelled, offline current-rate API-equivalent estimate in `/stats` next to recorded costs, with priced/unpriced coverage; partial sums read `priced subset only` and unknown is never `$0` ([#799](https://github.com/nredd/pi-harness/issues/799))
 
 - Split session and harness JSONL on `\n` only (a trailing `\r` is dropped): `node:readline` also broke lines at U+2028 and U+2029, which `JSON.stringify` leaves raw inside strings, so one valid record became two bad lines and `pi-stats-export` failed with `Incomplete local scan` ([#991](https://github.com/nredd/pi-harness/issues/991)). Cached pi and Claude/Codex records that counted bad lines are re-read on the next scan, so no cache bump; a record for a file that is deleted or outside the scanned root cannot be re-read and keeps its old count
 

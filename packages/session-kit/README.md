@@ -165,12 +165,7 @@ not installed, last event, unreadable-line counts locally; last clean read and `
 machines) and remote exported-at UTC instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
 Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
 not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
-Print/JSON output includes the same provenance. Recorded costs stay unchanged. A separate
-current-rate API-equivalent estimate uses only the already-loaded catalogue and core's shared
-estimator, with priced/unpriced event and token coverage. Partial value is a priced subset,
-not a full total. Machines shows price sources, dates, conditions and unknown reasons.
-Older hosts without the estimator report unknown current value; a coherent core/package
-release is required. No pins or live configuration change here. Details: [here](#offline-stats-and-portable-snapshots).
+Print/JSON output includes the same provenance. Recorded costs stay unchanged; a separate offline current-rate API-equivalent estimate shows priced/unpriced coverage, never presenting a partial sum as complete. Details: [here](#offline-stats-and-portable-snapshots).
 
 Pinned header: tabs and the coverage note, then the date ranges, the harness and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
@@ -735,53 +730,23 @@ the published snapshots. To drop a harness on purpose, export without it using
 
 Current-rate API-equivalent value:
 
-- `Recorded cost` remains the saved numeric observation. It is never overwritten, used as
-  a current-rate fallback, or treated as subscription cash spend. Price changes do not alter
-  transcripts, snapshot bytes, event fingerprints, fork dedup or deleted-file history.
-- The interactive and print `/stats` viewer separately estimates each retained physical
-  event through core's synchronous `estimateTokenCost` over the **already-loaded** model
-  registry. It does not refresh the catalogue, resolve authentication or make requests.
-  Context tiers apply per event before summing, not to an aggregated model token total.
-- Overview and Models show the selected range/filter's current estimate and exact
-  priced/unpriced event and token coverage. The existing model filter scopes the estimate
-  to an individual model. Print mode adds a per-model estimate column. A partial sum is
-  labelled `priced subset only`; no priced events means `unknown`, not $0. Verified free
-  events are priced zero. Machines includes source, checked date, units, conditions and
-  unpriced reasons for the current range/filter, below machine freshness.
-- The shared engine requires assessed rates and exact provider/model identities. It does
-  not guess private aliases or apply another provider's prices to a similarly named model.
-  It uses the root `pi-ai` host peer, not a subpath that stock extension loaders may not
-  bridge. The packed stock-Pi extension-loading boundary is NOT exercised by this change.
-  Custom overrides must provide their own assessment. Unavailable models, old hosts without
-  the new core estimator, unsupported non-token charges and unaudited rates stay unpriced.
-- This depends on the core pricing engine published in `v1.3.0-nredd.12` (`nredd/pi#46`), resolved
-  through the root `overrides`; the package pins are NOT changed here. Older hosts continue to
-  display recorded costs and explicit unknown current-value coverage. `tests/stats/pricing-core.test.ts`
-  runs in the normal suite on Node and Bun against the real estimator and fails if the peer lacks it. It
-  exercises historical zero/stale values, unknown TTL, free versus unknown, exact boundaries,
-  imported dedup, deleted cache and unchanged bytes/IDs.
-  Both primary and native Bun coverage measure the complete owned `src/**/*.ts` inventory,
-  including `src/stats/pricing.ts`; the validated static `src/stats/library.ts` facade
-  remains excluded without excluding its executable targets. Root accounting rejects
-  missing expected measurements. Both signals retain zero line, function, branch and
-  statement caps; Bun is enforced against the same complete owned inventory.
-- This is current loaded list-price value, not request-date billing or an account invoice.
-  The assessed Bedrock baseline uses published Standard/on-demand, Global Cross-region
-  Inference, US East (N. Virginia), USD per million tokens. Regional-profile IDs may be
-  normalized to that documented baseline; it is not an assertion of actual routing or
-  account-specific rates. Loaded metadata supplies the applicable source and assumptions.
-- Version 1 snapshots and the parser cache do not retain cache-write lifetime, service mode,
-  region/profile or historical provenance. A consumed write with unknown TTL remains
-  unpriced rather than inventing a short or one-hour duration. Known cached reads still
-  use their own rate, not uncached input; output already includes reasoning. Unsupported
-  image/time/storage charges are not converted to token charges. The existing parser counts
-  physical assistant calls only; classifier/image calls reported inside tool results are not
-  included in this event coverage or repriced as chat. Core's catalogue inventory includes
-  those operations separately, but this is not complete accounting for every operation.
-  Other-harness events use the same exact loaded-model lookup; unavailable physical mappings stay unknown.
-- The portable exporter/importer still carries only recorded values. It does not import
-  core or price history. Existing v1 snapshots need no migration or re-export; local,
-  imported and deleted cached events all reach the same viewer valuation path after dedup.
+- `Recorded cost` is the saved observation: never overwritten, never a current-rate fallback, not
+  subscription spend. Transcripts, snapshots, event IDs, dedup and deleted-file history are unchanged.
+- `/stats` also estimates each retained physical event with `estimateTokenCost` from the host's
+  `@earendil-works/pi-ai`, over already-loaded models only (no catalogue refresh, auth or network).
+  Context tiers apply per event before summing.
+- Overview and Models show the range/filter estimate and priced/unpriced event and token coverage;
+  print mode adds a per-model column. Machines adds source, checked date, units, conditions and
+  unpriced reasons. A partial sum reads `priced subset only`; no priced events reads `unknown`, never
+  $0. Verified free events price at zero.
+- Lookups are exact provider/model identities with assessed rates; aliases are never guessed. A host
+  without the estimator, unavailable models, non-token charges and unassessed rates stay unpriced.
+- It is list-price value, not request-date billing or an invoice. Bedrock uses published Standard,
+  global cross-region, US East (N. Virginia) USD per million tokens as a baseline, not actual routing.
+- Snapshots do not keep cache-write lifetime, service mode, region or provenance, so a write with
+  unknown TTL stays unpriced. Classifier/image calls reported inside tool results are not counted.
+- The exporter/importer carries recorded values only; no snapshot migration.
+- `tests/stats/pricing-core.test.ts` runs in the normal suite against the real estimator.
 
 Harness API:
 

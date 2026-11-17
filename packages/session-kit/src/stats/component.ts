@@ -50,7 +50,7 @@ import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEE
 import { type Call, HARNESSES, type Harness, type Session } from "./load.ts";
 import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
-import { type ValueCall, valuation, valuationLines } from "./pricing.ts";
+import { type ValueCall, valuation, valuationLines, valueSummary } from "./pricing.ts";
 import { claudeHasNoReading, gauge, NO_LOCAL_READING, quotaRows, usedLabel } from "./quota.ts";
 import { timeAxis } from "./ticks.ts";
 
@@ -227,7 +227,7 @@ export class StatsView implements Component {
 			body = this.scrolled(
 				[
 					...(this.o.freshness ?? ["Per-machine freshness unknown (no source metadata)."]),
-					...(this.o.valueCall ? valuationLines(this.scoped().ranged, this.o.valueCall) : []),
+					...this.valueLines(this.scoped().ranged, false),
 				].flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), contentWidth(w))),
 				room,
 			);
@@ -344,6 +344,21 @@ export class StatsView implements Component {
 		const picker = this.harnesses.length > 1 ? "h harness · " : "";
 		const keys = this.paint("dim", `tab tabs · r dates · ${picker}m/M filter · ↑↓ scroll · q close`);
 		return hint ? `${this.paint("muted", hint)}  ${keys}` : keys;
+	}
+
+	/** Valuation text per (harness, filter, range): `calls` never change, so render never re-runs the estimator. */
+	private readonly valueCache = new Map<string, string[]>();
+
+	private valueLines(ranged: readonly Call[], brief: boolean): string[] {
+		const value = this.o.valueCall;
+		if (!value) return [];
+		const key = `${brief}|${this.harness}|${JSON.stringify(this.filter)}|${this.range}`;
+		let lines = this.valueCache.get(key);
+		if (!lines) {
+			lines = brief ? valueSummary(ranged, value) : valuationLines(ranged, value);
+			this.valueCache.set(key, lines);
+		}
+		return lines;
 	}
 
 	private scoped(): { all: Call[]; ranged: Call[] } {
@@ -482,14 +497,8 @@ export class StatsView implements Component {
 			out.push("", this.paint("muted", "No usage in this range."));
 			return out;
 		}
-		if (this.o.valueCall)
-			out.push(
-				"",
-				...valuationLines(ranged, this.o.valueCall)
-					.slice(0, 2)
-					.concat("Pricing details: Machines tab.")
-					.flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), inner)),
-			);
+		const value = this.valueLines(ranged, true);
+		if (value.length > 0) out.push("", ...value.flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), inner)));
 		// Grow the chart into whatever the pane has left, in whole tick steps.
 		const smallest = this.chart(ranged, width, TICKS).lines;
 		const height = chartHeight(room - out.length - 1 - smallest.length + TICKS);
@@ -639,12 +648,9 @@ export class StatsView implements Component {
 		const head = [
 			...chart.lines,
 			"",
-			...(this.o.valueCall
-				? valuationLines(ranged, this.o.valueCall)
-						.slice(0, 2)
-						.concat("Pricing details: Machines tab.")
-						.flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), contentWidth(width)))
-				: []),
+			...this.valueLines(ranged, true).flatMap((line) =>
+				wrapTextWithAnsi(this.paint("muted", line), contentWidth(width)),
+			),
 			"",
 		];
 		return {
@@ -807,6 +813,12 @@ function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], 
 	];
 }
 
+/** Per-model current estimate cell; a partial sum says `subset`. */
+function estimateLabel(calls: readonly Call[], valueCall: ValueCall): string {
+	const price = valuation(calls, valueCall);
+	return price.cost === null ? "unknown" : `${money(price.cost)}${price.unpricedEvents ? " subset" : ""}`;
+}
+
 /**
  * Plain-text per-model table for print/json/rpc modes, all time, then the harness split and quota readings.
  * Quota stands on its own: readings with no usage still print.
@@ -835,6 +847,12 @@ export function summary(
 		"%",
 		...(valueCall ? ["current estimate"] : []),
 	];
+	const byModel = new Map<string, Call[]>();
+	for (const c of valueCall ? calls : []) {
+		const group = byModel.get(modelName(c));
+		if (group) group.push(c);
+		else byModel.set(modelName(c), [c]);
+	}
 	const body = totals.map((m) => [
 		sanitize(m.provider),
 		sanitize(m.model),
@@ -845,17 +863,7 @@ export function summary(
 		formatTokens(m.cacheWrite),
 		costLabel(m.cost, m.unpriced, m.calls),
 		percent(tokensOf(m), grand),
-		...(valueCall
-			? [
-					(() => {
-						const price = valuation(
-							calls.filter((c) => modelName(c) === m.name),
-							valueCall,
-						);
-						return price.cost === null ? "unknown" : `${money(price.cost)}${price.unpricedEvents ? " subset" : ""}`;
-					})(),
-				]
-			: []),
+		...(valueCall ? [estimateLabel(byModel.get(m.name) ?? [], valueCall)] : []),
 	]);
 	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => nth(r, c).length)));
 	const textual = split ? 3 : 2;
@@ -875,6 +883,6 @@ export function summary(
 			lines.push(`  ${h}: ${formatTokens(sum)} (${percent(sum, grand)}), ${costLabel(cost, unpriced, mine.length)}`);
 		}
 	}
-	lines.push(...quotas, ...(valueCall ? valuationLines(calls, valueCall).map(sanitize) : []));
+	lines.push(...quotas, ...(valueCall ? valuationLines(calls, valueCall) : []));
 	return lines.join("\n");
 }

@@ -4,20 +4,10 @@ import { StatsView, summary } from "../../src/stats/component.ts";
 import { dedupCalls, flatten, parseSession } from "../../src/stats/load.ts";
 import { createValuer, type Estimate, type PricingModel, valuation, valuationLines } from "../../src/stats/pricing.ts";
 import { call } from "../fixtures/stats/fixtures.ts";
+import { PRICING_DATE, PRICING_MODEL } from "../fixtures/stats/pricing.ts";
 
-const date = "2026-11-12";
-const model: PricingModel = {
-	provider: "example-provider",
-	id: "physical",
-	cost: {
-		assessment: {
-			source: "https://example.test/pricing",
-			checkedAt: date,
-			unit: "usd-per-million-tokens",
-			conditions: "Synthetic Standard baseline",
-		},
-	},
-};
+const date = PRICING_DATE;
+const model = PRICING_MODEL;
 const priced = call(date, model.provider, model.id, 100, 10, { cost: 99 });
 
 // nredd/pi-harness#799: delegate arithmetic to core, price physical events before aggregating, preserve recorded data.
@@ -32,7 +22,7 @@ describe("offline current-rate valuation", () => {
 		const result = createValuer([model], estimate)(priced);
 		expect(result).toEqual({
 			cost: 1.5,
-			basis: `https://example.test/pricing; ${date}; usd-per-million-tokens; Synthetic Standard baseline`,
+			basis: `https://example.test/pricing; ${date}; usd-per-million-tokens; Synthetic Standard token baseline`,
 		});
 		expect(priced).toEqual(before);
 		const missing = vi.fn<Estimate>((resolved) => {
@@ -145,6 +135,41 @@ describe("offline current-rate valuation", () => {
 		expect(view.state.tab).toBe("Machines");
 		expect(view.render(320).join("\n")).toContain("AWS Standard/global published baseline");
 		expect(view.render(320).join("\n")).toContain("request-date billing");
+	});
+	it("strips control sequences from model-supplied basis and reasons on every surface", () => {
+		const esc = "\u001b";
+		const hostile = (c: typeof priced) => ({
+			cost: c.model === "unmapped" ? null : 2,
+			reason: `${esc}[31mbad reason${esc}]0;title\u0007`,
+			basis: `${esc}[2Jbad basis\u0007`,
+		});
+		const calls = [priced, { ...priced, model: "unmapped", input: 1 }];
+		const lines = valuationLines(calls, hostile).join("\n");
+		expect(lines).toContain("bad basis");
+		expect(lines).toContain("bad reason");
+		expect([...lines].filter((ch) => ch !== "\n" && (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127))).toEqual([]);
+		const theme = {
+			fg: (_c: unknown, t: string) => t,
+			bg: (_c: unknown, t: string) => t,
+			bold: (t: string) => t,
+			style: (t: string) => t,
+			colors: { accent: parseColor("#426a79") },
+		};
+		const view = new StatsView({
+			calls,
+			sessions: [],
+			valueCall: hostile,
+			theme: theme as never,
+			rows: () => 100,
+			now: priced.ms + 1,
+			requestRender() {},
+			onClose() {},
+		});
+		view.handleInput("\t");
+		view.handleInput("\t");
+		const machines = view.render(320).join("\n");
+		expect(machines).toContain("bad basis");
+		expect(machines).not.toContain(esc);
 	});
 	it("keeps copied/forked physical event IDs and transcript bytes unchanged", () => {
 		const entry = {

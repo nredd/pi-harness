@@ -5,38 +5,15 @@ import { join } from "node:path";
 import * as modelApi from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { opaqueId } from "../../src/stats/load.ts";
-import { createValuer, type PricingModel, valuation } from "../../src/stats/pricing.ts";
+import { createValuer, valuation } from "../../src/stats/pricing.ts";
 import { exportStats, importStats, loadCombined, machineIdentity, makeSnapshot } from "../../src/stats/snapshot.ts";
 import { call } from "../fixtures/stats/fixtures.ts";
+import { PRICING_ASSESSMENT, PRICING_DATE, PRICING_MODEL, PRICING_RATES } from "../fixtures/stats/pricing.ts";
 
-const date = "2026-11-12";
-const assessment = {
-	status: "verified",
-	source: "https://example.test/pricing",
-	checkedAt: date,
-	unit: "usd-per-million-tokens",
-	conditions: "Synthetic Standard token baseline",
-};
-const rates = { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, cacheWrite1h: 4, cacheWrite12h: 5 };
-const model: PricingModel = {
-	provider: "example-provider",
-	id: "physical",
-	cost: {
-		...rates,
-		assessment,
-		tiers: [
-			{
-				inputTokensAbove: 100,
-				input: 4,
-				output: 15,
-				cacheRead: 0.2,
-				cacheWrite: 5,
-				cacheWrite1h: 8,
-				cacheWrite12h: 10,
-			},
-		],
-	},
-};
+const date = PRICING_DATE;
+const assessment = PRICING_ASSESSMENT;
+const rates = PRICING_RATES;
+const model = PRICING_MODEL;
 const event = call(date, model.provider, model.id, 0, 0, { cost: 99 });
 const roots: string[] = [];
 beforeEach(() => {
@@ -47,7 +24,7 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-// nredd/pi-harness#799: the pinned core (v1.3.0-nredd.12) ships `estimateTokenCost`; a peer without it must fail loudly.
+// nredd/pi-harness#799: the installed peer must ship `estimateTokenCost`; a peer without it fails loudly here.
 it("resolves the real shared estimator from the installed pi-ai peer", () => {
 	expect(typeof Reflect.get(modelApi, "estimateTokenCost")).toBe("function");
 });

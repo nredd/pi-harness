@@ -1,6 +1,7 @@
 /** Offline valuation of immutable usage records through the host's shared pricing engine. */
 // Stock extension loaders bridge root host peers, not every package subpath.
 import * as modelApi from "@earendil-works/pi-ai";
+import { sanitize } from "../diff/view.ts";
 import { tokensOf } from "./aggregate.ts";
 import { money } from "./format.ts";
 import type { Call } from "./load.ts";
@@ -18,7 +19,11 @@ export type Estimate = (
 ) => { cost: { total: number } | null; reason?: string };
 export type ValueCall = (call: Call) => { cost: number | null; reason?: string; basis?: string };
 
-/** Capture only already-loaded models. This function never refreshes catalogs or resolves authentication. */
+/**
+ * Capture only already-loaded models. This function never refreshes catalogs or resolves authentication.
+ * The `estimateTokenCost` cast hides a missing export so an older host degrades to unknown, not a crash;
+ * the plain test in `tests/stats/pricing-core.test.ts` is the loud guard that the peer provides it.
+ */
 export function createValuer(
 	models: readonly PricingModel[],
 	estimate: Estimate | null | undefined = (modelApi as typeof modelApi & { estimateTokenCost?: Estimate })
@@ -84,7 +89,10 @@ export function valuation(calls: readonly Call[], value: ValueCall): Valuation {
 	return out;
 }
 
-/** Labels are deliberately separate from recorded cost and subscription cash charges. */
+/** Headline lines (estimate and coverage) shown outside the Machines tab. */
+const SUMMARY_LINES = 2;
+
+/** Labels are deliberately separate from recorded cost and subscription cash charges. Every line is sanitized: basis and reasons come from loaded model metadata such as a custom `models.json`. */
 export function valuationLines(calls: readonly Call[], value: ValueCall): string[] {
 	const out = valuation(calls, value);
 	return [
@@ -93,5 +101,10 @@ export function valuationLines(calls: readonly Call[], value: ValueCall): string
 		"Assumes loaded catalog list-price conditions, not request-date billing or subscription spend; missing cache TTL stays unknown.",
 		...Array.from(out.bases, (basis) => `Price basis: ${basis}`),
 		...Array.from(out.reasons, ([reason, count]) => `Unpriced: ${count} events: ${reason}`),
-	];
+	].map(sanitize);
+}
+
+/** The Overview and Models tabs show only the estimate and coverage, then point at Machines. */
+export function valueSummary(calls: readonly Call[], value: ValueCall): string[] {
+	return [...valuationLines(calls, value).slice(0, SUMMARY_LINES), "Pricing details: Machines tab."];
 }
