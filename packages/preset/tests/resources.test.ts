@@ -202,10 +202,19 @@ test("architect preloads the vocabulary with read-only and web tool grants", () 
 	assert.deepEqual(list(frontmatter.extensions), ["pi-dev-tools", "pi-web-access"]);
 	assert.equal(frontmatter.prompt_mode, "replace");
 	assert.ok(!("allowed_subagents" in frontmatter));
-	assert.deepEqual(
-		list(frontmatter.tools).filter((tool) => !tool.startsWith("ext:")),
-		["read", "grep", "find"],
-	);
+	assert.deepEqual(list(frontmatter.tools), [
+		"read",
+		"grep",
+		"find",
+		"ext:pi-dev-tools/git_log",
+		"ext:pi-dev-tools/git_diff",
+		"ext:pi-dev-tools/git_show",
+		"ext:pi-dev-tools/git_status",
+		"ext:pi-web-access/web_search",
+		"ext:pi-web-access/fetch_content",
+		"ext:pi-web-access/get_search_content",
+		"ext:pi-web-access/source_check",
+	]);
 });
 
 test("general-purpose delegates only to code-reviewer leaves", () => {

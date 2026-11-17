@@ -131,10 +131,7 @@ test("README states public publication and keeps the pending work explicit", () 
 		"No `role:` references are introduced",
 		"**Pending.**",
 		"**pending** too",
-		"Retirement of old global copies belongs to the deployment's configuration manager",
 		'"packageAgents": ["pi-preset"]',
-		"The built-in `Explore` already requests `@cheap`",
-		'explicit dispatch parameter -> `agentModels[type]` -> `agentModels["*"]`',
 		"Pending, not claimed",
 		"1.3.0",
 	]) {

@@ -211,33 +211,18 @@ scoped selector.
 
 `researcher`, `architect`, `critic`, `code-reviewer` and `principal-investigator` have no shell/SSH and cannot run commands. Their descriptions say so in the first sentence, which survives pi-subagents compact listings. `critic` and `principal-investigator` can run existing tests via `py_test`/`cargo_test`, not arbitrary shell commands. Each prompt requires a FIRST-turn explanation before tool calls when requested commands are unavailable, then a handoff to the caller or a shell-capable agent. Use `general-purpose`/`debugger` for command investigations or `verifier` for gates. There is no per-call tool-override flag.
 
-`architect` keeps the deepening survey and preloaded `codebase-design` vocabulary, adds cited
-web evidence and explicit opt-in follow-up grilling. It proposes decision-record edits in its
-reply, never writes them or starts implementation. Fetch tools may cache material; this is not
-a filesystem sandbox. Survey reports identify scope and flow, separate confirmed evidence
-from inference, classify dependencies and name unexamined sources and the cost of skipping
-a candidate. Follow-up proposals use `Decision record:` and `Proposed edits:` labels.
+Grant changes in `0.5.0`: `architect` gains the four `pi-web-access` research tools (`web_search`,
+`fetch_content`, `get_search_content`, `source_check`; fetch tools may cache material, so read-only
+is not a filesystem sandbox), and `general-purpose` may delegate only to `code-reviewer` (was
+`all`). Passive waits and cleanup stay with the continuing parent; see the shipping skills.
 
-`general-purpose` delegates only independent Standards and Spec reviews to read-only
-`code-reviewer` leaves. Passive waits remain with the continuing parent's monitor, linked to
-its tracked todo. The shipping skills preserve that ownership, including bounded parent-only
-foreground waits when native monitors are unavailable. Monitor availability comes from tool
-discovery, not error wording; a timeout is a resumable wait, not a terminal result. Parents run
-the deployment's safe merged-worktree sweep after each merge and before stopping. Without
-one, cleanup is limited to clean, fully pushed worktrees/branches of merged PRs, never forced.
-An explicit no-PR sweep mode is deployment-specific; without it, retain the worktree and
-report its owner rather than guessing a cleanup command.
-
-Local overrides shadow these packaged definitions; update their managed source separately. This change does not activate a preset or alter tool grants.
+Local overrides shadow these packaged definitions; update their managed source separately.
+Installing this package does not activate anything else or change a deployment's model bindings.
 
 ## Models and roles
 
-Agents carry no `model:`. Skills name tiers only, never model ids or `router/*` profiles:
-`code-review` spawns `code-reviewer` with no `model`, so the user's `agentModels` routes it, and `ship-issue` adds a second `critic` on `@frontier` only for design-level issues (new
-module or public interface, concurrency, persistence or wire format, auth). `agentModels` binds agent
-types to tiers; `modelTiers` binds tiers to a router profile or exact members. Both are deployment
-config, not preset content, so deployments ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
-falls back to another tier.
+Agents carry no `model:`; skills name tiers only. Bind tiers in your own `subagents.json`
+(`agentModels`, `modelTiers`), never here. A quota-parked tier waits; it never falls back to another tier.
 
 `principal-investigator` (a multi-round judge of findings, not diffs) is unpinned too; route it with
 `agentModels["principal-investigator"] = "@deep"` next to `code-reviewer` -> `@review`, and pass
