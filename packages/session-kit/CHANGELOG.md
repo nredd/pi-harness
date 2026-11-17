@@ -2,7 +2,6 @@
 
 ## [Unreleased]
 
-- Split session and harness JSONL on `\n` only (a trailing `\r` is dropped): `node:readline` also broke lines at U+2028 and U+2029, which `JSON.stringify` leaves raw inside strings, so one valid record became two bad lines and `pi-stats-export` failed with `Incomplete local scan` ([#991](https://github.com/nredd/pi-harness/issues/991)). Cached pi and Claude/Codex records that counted bad lines are re-read on the next scan, so no cache bump; a record for a file that is deleted or outside the scanned root cannot be re-read and keeps its old count
 
 - Neutralize the complete Unicode `Bidi_Control` set in local scan paths, including ALM, LRM and RLM; preserve C1 replacement and JSON C0 escaping (#960).
 
@@ -23,17 +22,11 @@
 
 - Pin published `@nredd/pi-resource-sampler@0.2.1` for `/mon`, removing the known Linux `/proc` iterator PID-exit collection race (#499); the historical #557 WSL incident errno remains unproven
 
-- Add an optional `todo` (an id, or a list of up to 20) to `monitor_start`, and carry `wake`, `match` and `todos` on `session-kit:monitor:started` / `:stopped` (`{ sessionId, id, name, wake, match?, todos? }`), so todo can show the linked work as waiting on the monitor instead of held; a monitor without `todo` no longer counts as a todo's continuation ([#522](https://github.com/nredd/pi-harness/issues/522))
 
-- Skip all-NUL crash-padding lines in session JSONL instead of counting them as bad lines, so `exportStats` no longer fails closed on them ([#585](https://github.com/nredd/pi-harness/issues/585)); NULs mixed with data still count. Bump the stats cache to version 3: older entries with bad lines are marked stale (`size: -1`) and re-parsed whenever their root is next listed; records for deleted or out-of-root files are kept. A migrated record for a since-deleted file keeps its old `badLines` (it cannot be re-derived), so export still fails closed for it
 
-- Cover every `/stats`, title and rule branch ([#408](https://github.com/nredd/pi-harness/issues/408)); remove unreachable fallbacks (`stats/nth.ts` replaces `?? default` after bounded index reads) and drop the primary branch cap to 0
 
-- Emit `session-kit:monitor:started` and `session-kit:monitor:stopped` on `pi.events` (`{ sessionId, id, name }`; once per monitor, `stopped` also at session shutdown) so other extensions can tell a wake is armed ([#586](https://github.com/nredd/pi-harness/issues/586), part of [#522](https://github.com/nredd/pi-harness/issues/522))
 
-- Stop counting a background agent stopped before it starts as awaiting a completion notice ([#525](https://github.com/nredd/pi-harness/issues/525)); started background agents still wait for their notices
 
-- Report a run that settles with monitors running, naming what each is armed to wake the parent on: `every batch`, its `/match/` (terminal controls stripped), or exit ([#292](https://github.com/nredd/pi-harness/issues/292))
 - Add a `homeDir` option to `createSessionKit`: config, rules, title aliases and stats session/cache defaults derive from it when no `agentDir` is given; `PI_CODING_AGENT_DIR` still wins
 - Remove the `agentDir` re-exports from `src/config.ts` and `src/stats/load.ts`; deep imports now use `src/agent-dir.ts`. The rules `register` takes `{ agentDir, homeDir }` like titles and stats and resolves the user rule directory at use time
 

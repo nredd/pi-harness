@@ -208,10 +208,8 @@ def test_nonregular_duplicate_and_invalid_utf8_fragments(repo: Path) -> None:
         "## [Unreleased]\n## [Unreleased]\n",
         "## [Unreleased]\n### Unknown\n",
         "## [Unreleased]\n### fixed\n",
-        "## [Unreleased]\n- Orphan.\n",
         "## [Unreleased]\n### Fixed\n- Duplicate.\n- Duplicate.\n",
         "## [Unreleased]\n### Fixed\n- Unterminated",
-        "## [Unreleased]\nBad data\n",
         "## [Unreleased]\n### Added\n" + BULLET,
     ],
 )
@@ -407,3 +405,56 @@ def test_real_cli_success_and_failure(repo: Path) -> None:
     refused = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert refused.returncode == 1
     assert "Cannot process changelog fragments" in refused.stderr
+
+
+@pytest.mark.parametrize(
+    "package", ["session-kit", "dev-tools", "todo", "preset", "plan-mode", "resource-sampler"]
+)
+def test_additional_packages_preserve_legacy_and_plain_release_headers(tmp_path: Path, package: str) -> None:
+    """Fold strict fragments without rewriting uncategorized, wrapped or prose legacy data.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        package (str): Newly enrolled package.
+
+    Returns:
+        None: Literal legacy and released bytes survive validation and repeated folding.
+    """
+    directory = tmp_path / "packages" / package
+    changes = directory / "changes"
+    changes.mkdir(parents=True)
+    legacy = (
+        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\nLegacy release history note.\n\n"
+    )
+    released = "## 0.59.2-nredd.3\n\n### Fixed\n\n- Released.\n  Continuation.\n"
+    target = directory / "CHANGELOG.md"
+    target.write_text(legacy + released)
+    fragment = changes / "932.fixed.md"
+    fragment.write_text(BULLET)
+    cmd = [sys.executable, str(Path(changelog_fragments.__file__)), "--repo", str(tmp_path)]
+    assert subprocess.run(cmd, capture_output=True, check=False).returncode == 0
+    assert target.read_text() == legacy + released
+    assert subprocess.run([*cmd, "--fold"], capture_output=True, check=False).returncode == 0
+    expected = legacy + "\n### Fixed\n" + BULLET + "\n" + released
+    assert target.read_text() == expected
+    assert not fragment.exists()
+    assert subprocess.run([*cmd, "--fold"], capture_output=True, check=False).returncode == 0
+    assert target.read_text() == expected
+
+
+def test_cli_validates_every_package_before_folding(repo: Path) -> None:
+    """Refuse an invalid later package before mutating the first package.
+
+    Parameters:
+        repo (Path): Disposable subagents package with a valid fragment.
+
+    Returns:
+        None: No changelog or fragment is changed by the failed command.
+    """
+    later = repo / "packages/todo/changes"
+    later.mkdir(parents=True)
+    (later.parent / "CHANGELOG.md").write_text(CHANGELOG)
+    (later / "invalid.md").write_text(BULLET)
+    assert changelog_fragments.main(["--repo", str(repo), "--fold"]) == 1
+    assert (repo / "packages/subagents/CHANGELOG.md").read_text() == CHANGELOG
+    assert (repo / "packages/subagents/changes/932.fixed.md").exists()

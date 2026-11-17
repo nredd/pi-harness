@@ -355,3 +355,15 @@ Before a tag, run the monorepo gates and the matching stack checks described in
 - `tests/scenarios/` the extension inside a real `AgentSession` (`@nredd/pi-test-lib/harness`):
   faux model tool calls, pi's validation, `tool_call` hooks, the real `bash` tool and result
   serialization. Run under Vitest on both Node and Bun
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The #932 migration preserves 1 historical bullets: 1 exact bullets move to fragments
+and 0 remain in `CHANGELOG.md`. The formerly ungrouped layout change uses `changed`.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

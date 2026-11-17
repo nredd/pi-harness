@@ -846,3 +846,15 @@ Escape or `Stay in Plan mode` on a ready plan, or a message sent while a plan aw
 
 MIT.
 See [`LICENSE`](./LICENSE).
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The #932 migration preserves 16 historical bullets: 0 exact bullets move to fragments
+and 16 remain in `CHANGELOG.md`. All entries lack the required matching issue link; wrapped legacy bullets and unbracketed release headings remain verbatim.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

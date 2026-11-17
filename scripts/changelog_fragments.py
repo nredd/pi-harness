@@ -1,4 +1,4 @@
-"""Validate and explicitly fold subagents changelog fragments, without releasing anything.
+"""Validate and explicitly fold enrolled packages' changelog fragments, without releasing anything.
 
 References:
     https://github.com/nredd/pi-harness/issues/932
@@ -18,9 +18,18 @@ from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
 PACKAGE = "packages/subagents"
+PACKAGES = (
+    PACKAGE,
+    "packages/session-kit",
+    "packages/dev-tools",
+    "packages/todo",
+    "packages/preset",
+    "packages/plan-mode",
+    "packages/resource-sampler",
+)
 CATEGORIES = ("added", "changed", "fixed", "refactored", "removed", "deprecated", "security")
 FRAGMENT_NAME = re.compile(r"([1-9][0-9]*)\.(added|changed|fixed|refactored|removed|deprecated|security)\.md")
-RELEASE_HEADER = re.compile(r"^## \[[^\]\n]+\].*$", re.MULTILINE)
+RELEASE_HEADER = re.compile(r"^## [^\n]+$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -46,10 +55,10 @@ def fragment_path(package: str, path: str) -> bool:
         path (str): Package-relative path.
 
     Returns:
-        bool: Only a direct subagents changes file with a canonical issue/category name.
+        bool: Only a direct enrolled changes file with a canonical issue/category name.
     """
     return (
-        package == PACKAGE
+        package in PACKAGES
         and path.startswith("changes/")
         and FRAGMENT_NAME.fullmatch(path.removeprefix("changes/")) is not None
     )
@@ -76,11 +85,12 @@ def safe_path(root: Path, relative: str) -> Path:
     return current
 
 
-def read_fragments(root: Path) -> list[Fragment]:
+def read_fragments(root: Path, package: str = PACKAGE) -> list[Fragment]:
     """Read all directory entries, refusing malformed names, payloads and duplicates.
 
     Parameters:
         root (Path): Repository root.
+        package (str): Enrolled repository-relative package directory.
 
     Returns:
         list[Fragment]: Canonical numeric issue order, then category order.
@@ -89,7 +99,7 @@ def read_fragments(root: Path) -> list[Fragment]:
         ValueError: An entry is malformed, linked, duplicated or not a regular file.
         OSError: A file cannot be read.
     """
-    directory = safe_path(root, f"{PACKAGE}/changes")
+    directory = safe_path(root, f"{package}/changes")
     if not directory.exists():
         return []
     fragments: list[Fragment] = []
@@ -166,7 +176,7 @@ def unreleased_data(lines: list[str]) -> tuple[dict[str, str], dict[str, int]]:
     Raises:
         ValueError: Existing headings, bullets or other data are ambiguous/malformed.
     """
-    category: str | None = None
+    category = ""
     existing: dict[str, str] = {}
     positions: dict[str, int] = {}
     for index, line in enumerate(lines):
@@ -176,16 +186,21 @@ def unreleased_data(lines: list[str]) -> tuple[dict[str, str], dict[str, int]]:
                 raise ValueError(f"Invalid Unreleased category '{line.rstrip()}'")
             positions[category] = index + 1
         elif line.startswith("- "):
-            if category is None or line in existing or not line.endswith("\n"):
+            end = index + 1
+            while end < len(lines) and lines[end].startswith("  "):
+                end += 1
+            bullet = "".join(lines[index:end])
+            if bullet in existing or not bullet.endswith("\n"):
                 raise ValueError("Ambiguous Unreleased bullet")
-            existing[line] = category
-            positions[category] = index + 1
-        elif line.strip() and not line.startswith("> "):
-            raise ValueError("Malformed Unreleased data")
+            existing[bullet] = category
+            if category:
+                positions[category] = end
+        # Existing uncategorized bullets, wrapped continuations, warnings and prose are legacy
+        # source, not new fragments. Preserve them verbatim without inventing attribution.
     return existing, positions
 
 
-def run(root: Path, *, fold: bool) -> None:
+def run(root: Path, *, fold: bool, package: str = PACKAGE) -> None:
     """Validate, or atomically replace the changelog before consuming fragments.
 
     An exclusive package-local lock serializes cooperating folds. A failure before replacement
@@ -195,6 +210,7 @@ def run(root: Path, *, fold: bool) -> None:
     Parameters:
         root (Path): Trusted checkout root, not an untrusted concurrently mutated directory.
         fold (bool): Explicitly opt into mutation.
+        package (str): Enrolled repository-relative package directory.
 
     Returns:
         None: Validation succeeds, or a complete/restartable fold is written.
@@ -203,15 +219,15 @@ def run(root: Path, *, fold: bool) -> None:
         ValueError: Fragment/changelog validation fails.
         OSError: Reading, locking, writing or deleting fails; retry after resolving the error.
     """
-    changelog = safe_path(root, f"{PACKAGE}/CHANGELOG.md")
-    lock = safe_path(root, f"{PACKAGE}/.changelog-fold.lock")
+    changelog = safe_path(root, f"{package}/CHANGELOG.md")
+    lock = safe_path(root, f"{package}/.changelog-fold.lock")
     # Checks never create a lock or write anything.
     if not fold:
-        folded_text(changelog.read_bytes().decode("utf-8"), read_fragments(root))
+        folded_text(changelog.read_bytes().decode("utf-8"), read_fragments(root, package))
         return
     lock.mkdir()
     try:
-        fragments = read_fragments(root)
+        fragments = read_fragments(root, package)
         original = changelog.read_bytes().decode("utf-8")
         replacement = folded_text(original, fragments)
         if replacement != original:
@@ -242,11 +258,19 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--fold", action="store_true", help="Fold subagents fragments, without releasing")
+    parser.add_argument("--fold", action="store_true", help="Fold enrolled fragments, without releasing")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        run(args.repo.absolute(), fold=args.fold)
+        root = args.repo.absolute()
+        packages = [package for package in PACKAGES if safe_path(root, package).exists()]
+        # Preflight the entire enrolled checkout before mutating any package. Each fold rechecks
+        # its own inputs under its own lock; this is not a whole-checkout transaction.
+        for package in packages:
+            run(root, fold=False, package=package)
+        if args.fold:
+            for package in packages:
+                run(root, fold=True, package=package)
     except (OSError, ValueError) as error:
         LOGGER.error(f"Cannot process changelog fragments: {error}")
         return 1

@@ -17,21 +17,23 @@ import changelog_fragments
 import package_layout
 
 
+@pytest.mark.parametrize("package", changelog_fragments.PACKAGES)
 @pytest.mark.parametrize("category", changelog_fragments.CATEGORIES)
-def test_canonical_subagents_fragment_layout(tmp_path: Path, category: str) -> None:
-    """Accept only canonical direct fragment names in subagents.
+def test_canonical_fragment_layout(tmp_path: Path, category: str, package: str) -> None:
+    """Accept only canonical direct fragment names in enrolled packages.
 
     Parameters:
         tmp_path (Path): Disposable empty root.
         category (str): Canonical fragment category.
+        package (str): Enrolled package directory.
 
     Returns:
         None: Assert no fragment layout violations and no other package exception.
     """
     path = f"changes/932.{category}.md"
-    problems = package_layout.check_package("packages/subagents", [path], tmp_path, publish=True)
+    problems = package_layout.check_package(package, [path], tmp_path, publish=True)
     assert [problem for problem in problems if problem.rule != "missing-file"] == []
-    assert not changelog_fragments.fragment_path("packages/todo", path)
+    assert not changelog_fragments.fragment_path("packages/computer-use", path)
     assert not changelog_fragments.fragment_path("packages/subagents", "README.md")
 
 
@@ -59,5 +61,5 @@ def test_fragment_exception_is_not_a_markdown_or_directory_waiver(tmp_path: Path
     problems = package_layout.check_package("packages/subagents", [path], tmp_path, publish=True)
     assert any(problem.rule in {"fragment-path", "top-level-entry"} for problem in problems)
     assert not package_layout.markdown_allowed("src/932.fixed.md", "packages/subagents")
-    assert not package_layout.markdown_allowed("changes/932.fixed.md", "packages/todo")
-    assert package_layout.top_level_violation("packages/todo", "changes", True) is not None
+    assert not package_layout.markdown_allowed("changes/932.fixed.md", "packages/subscription-router")
+    assert package_layout.top_level_violation("packages/subscription-router", "changes", True) is not None

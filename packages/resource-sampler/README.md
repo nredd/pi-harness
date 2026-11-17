@@ -165,3 +165,15 @@ tarball, with no Pi or siblings. Both run on existing macOS/Linux CI jobs.
 `dist` contains compiled ESM and declarations; the exact packed payload is contract-pinned. No install
 scripts or runtime dependencies. Releases publish through `publish.yml` with npm provenance; see
 [releases](../../docs/releases.md).
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The #932 migration preserves 1 historical bullets: 0 exact bullets move to fragments
+and 1 remain in `CHANGELOG.md`. The legacy `#878` attribution is not the required matching Markdown issue link.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

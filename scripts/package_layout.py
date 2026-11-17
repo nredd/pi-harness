@@ -64,7 +64,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from changelog_fragments import PACKAGE as FRAGMENT_PACKAGE
+from changelog_fragments import PACKAGES as FRAGMENT_PACKAGES
 from changelog_fragments import fragment_path
 from ci_paths import ClassificationError, repo_root, run_git
 
@@ -230,10 +230,10 @@ def markdown_allowed(path: str, package: str = "") -> bool:
 
     Parameters:
         path (str): Package-relative POSIX path ending in `.md`.
-        package (str): Repository-relative package, for the subagents fragment grammar only.
+        package (str): Repository-relative package, for the enrolled fragment grammar only.
 
     Returns:
-        bool: A root document, Pi resource, fixture, or canonical subagents fragment.
+        bool: A root document, Pi resource, fixture, or canonical enrolled fragment.
     """
     return (
         path in ROOT_MARKDOWN
@@ -496,7 +496,7 @@ def top_level_violation(package: str, entry: str, is_directory: bool) -> Violati
     """
     if entry.startswith("."):
         return Violation(package, entry, "dotfile")
-    if package == FRAGMENT_PACKAGE and entry == "changes" and is_directory:
+    if package in FRAGMENT_PACKAGES and entry == "changes" and is_directory:
         return None
     if entry in TOP_LEVEL_ENTRIES or EXTRA_VITEST_CONFIG.fullmatch(entry):
         return None

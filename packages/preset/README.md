@@ -288,3 +288,15 @@ Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.
 They run in the test process, so a path Pi computed at import time would not be redirected; Pi 1.3.0
 computes none of the ones used (see the comment in `tests/discovery.test.ts`).
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The #932 migration preserves 2 historical bullets: 0 exact bullets move to fragments
+and 2 remain in `CHANGELOG.md`. Neither legacy bullet has issue attribution.
+Historical attribution and released sections are unchanged; no issue IDs are invented.
