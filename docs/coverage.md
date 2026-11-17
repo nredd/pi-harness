@@ -494,9 +494,11 @@ Its CI dependency existed to probe native Codex sandbox isolation without model 
 unrelated unit gates depend on an installed third-party CLI and stale version pins (#495, #562).
 The retired source and its coverage inventory/signal were deleted together; all remaining coverage
 floors and exclusions are unchanged. CI no longer verifies that third-party sandbox. Accounting
-allows a measured package to disappear only when its entire tracked/nonignored tree is gone;
-a surviving source, README or new untracked file still blocks removal. Individual membership losses
-in retained packages still require the existing reasoned reclassifications.
+allows a measured package to disappear only when its entire tracked/nonignored tree is gone and
+none of its base inventory reappears anywhere in current inventory by package-relative path or
+Git blob hash. A surviving source, README or new untracked file still blocks removal. Moves,
+renames and splits cannot claim retirement to escape the existing ratchets; retained-package
+membership losses still require the existing reasoned reclassifications.
 
 Both Python packages are `100-percent` with an enforced `primary` signal at 0 uncovered lines, functions and
 branches on each OS (#386; #420 removed the last `python-scripts` partial arc). `tests/integration/harness/__init__.py` is a
