@@ -76,24 +76,24 @@ class HTTPBody(io.BytesIO):
 # sha256 its release `SHA256SUMS` publishes and the npm SRI sha512 of the same downloaded bytes.
 # Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
 # `shasum -a 256 <asset>` and `printf 'sha512-%s' "$(openssl dgst -sha512 -binary <asset> | base64)"`.
-ROOT_OVERRIDE_TAG = "v1.3.0-nredd.11"
+ROOT_OVERRIDE_TAG = "v1.3.0-nredd.12"
 ROOT_OVERRIDE_DIGESTS = MappingProxyType(
     {
         "earendil-works-pi-coding-agent-1.3.0.tgz": (
-            "0b9c18bef7f020ea93d4335328e5fc42961d96acc1498033ad835e5da884556b",
-            "sha512-YVHXNGuLqt3kMQdAHvOlFJwfALJTa80Z8Fzbh3gd1PtXVFD34aiiStswxrMjH6CMvtnKNBjwIfGA0bZ58Ky+6A==",
+            "32042879cb8d1d559edf9785f1809dfc9c0cdf4e0f8ef1e1d216b49028c7a732",
+            "sha512-c/bGarQieJ6gPwUCeYFA6FLBANbuRFQ38Lz7W0ak6GEvItxEqRw6Ztg/KlZhULECAELag+6oFbw4fAJu8WaAyw==",
         ),
         "earendil-works-pi-tui-1.3.0.tgz": (
-            "95bc378f807c53a648f8550c28545045d18df5d5ed993f3c85d08a067c5d6bc2",
-            "sha512-gP2Z41TxlGFca2enbzmDtx1mT7aSx7z4NSl7qHhfRY+eLwxenKbyTj9js4A2HwhHzaWP3JnQdjMQGS95fHJYbA==",
+            "882a979b8c26be39f5f63cf5f905b1ebe423ab48417b35e2812840e5654a2f57",
+            "sha512-oT/3Lq24JnYPdCKaO533o7o6ZRt90FnIs7x4JS1WmvzO9EQ5mKNlSoZDnnZqkQA0TfiQTqpE5m1gPkxtxED7qw==",
         ),
         "earendil-works-pi-agent-core-1.3.0.tgz": (
-            "c5899339f26d0c2c2b191a991eb057e61a8cd134767092fa744f9b7dde0f268c",
-            "sha512-0smBZpBKCq9vVP2NQ9U5eVocPatE8USwl59fAnSPt8eM9rpVNZeMHPr9cxaYwiobbGvLMSWiY2VDB/U+WKU0OA==",
+            "c28b52160d62b902ff25322d10b279f97b7378f065d79ae8c1260f4e14246655",
+            "sha512-rMqFVJ6z2ZkxTlj8j8a+KUWKA/SV69LgbV9UFQwJIV6GzMn72tpFzqeYhjeeoqt5uzQ/sCGkE6ps8BadTjwjZg==",
         ),
         "earendil-works-pi-ai-1.3.0.tgz": (
-            "aad21094ab1fe9a6d74d0fc07e0ab423b958760f00100495952f02cbff823f25",
-            "sha512-esbQpv0iUImqY5iE67wcjfVua8qCrfA7kq1vE+2fMgdb/YefCwVi5V1N5cvPXQ1QLqGtA/CgeYvFmDcsJ7OJRg==",
+            "67742ad37e76540212c967ff6bc403e625302f9752a9df82548b250edbd7e062",
+            "sha512-6AhQmtchfIOv7JaRc70MKAuIqdqUE8dWsa1wRW1ABaAv/5nhfVJX4VUINKekgSoQdqibqLPM2IzxS7xk4BsnIg==",
         ),
     }
 )

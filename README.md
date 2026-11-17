@@ -211,7 +211,9 @@ The twelve jobs are the configured required checks of ruleset `main required che
   release, then a parent PR that moves the Gitlink, root `overrides`, `release/stacks/personal.json`
   and the lockfiles together
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
-  `make check-core-compaction` runs the assembled child-compaction probes
+  `make check-core-compaction` runs the assembled child-compaction probes. Its non-rewriting
+  check mirrors the entire selected core script, including worktree readiness and binary-release
+  type checks; only Biome's `--write` is removed
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with
   upstream; each README records where it came from
 
