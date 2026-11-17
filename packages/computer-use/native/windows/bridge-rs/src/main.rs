@@ -912,7 +912,9 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
     };
 
     if let Some(before) = before {
-        let (after, source, events) = await_delta_snapshot(target_pid, &before, event_cursor)?;
+        let (after, source, events) = windows_bridge::guard::observe_after_delivery(|| {
+            await_delta_snapshot(target_pid, &before, event_cursor)
+        })?;
         response = input::response_with_delta(
             response,
             source,
@@ -1009,7 +1011,9 @@ fn handle_act_batch(args: &Value) -> Result<Value, ProtocolError> {
     if let Some(index) = stopped_at {
         response["stoppedAt"] = json!(index);
     }
-    let (after, source, events) = await_delta_snapshot(target_pid, &before, event_cursor)?;
+    let (after, source, events) = windows_bridge::guard::observe_after_delivery(|| {
+        await_delta_snapshot(target_pid, &before, event_cursor)
+    })?;
     response = input::response_with_delta(
         response,
         source,

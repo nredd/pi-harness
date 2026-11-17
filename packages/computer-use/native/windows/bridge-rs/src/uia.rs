@@ -998,18 +998,37 @@ mod native {
         };
         let _discovery = DiscoveryLease::begin(&uia, &root)?;
         if runtime_id(&root).as_deref() == Some(runtime_id_target) {
+            ensure_observed_automation_id(&root, automation_id)?;
             return Ok((com, uia, root));
         }
         // An AutomationId can be reused after destruction. Never substitute it
         // for the observed RuntimeId, even when only one matching node exists.
-        let _ = automation_id;
         let (found, _) = bounded_elements(&uia, &root)?;
         for element in found {
             if runtime_id(&element).as_deref() == Some(runtime_id_target) {
+                ensure_observed_automation_id(&element, automation_id)?;
                 return Ok((com, uia, element));
             }
         }
         Err("Element reference is stale".to_owned())
+    }
+
+    fn ensure_observed_automation_id(
+        element: &IUIAutomationElement,
+        observed: &str,
+    ) -> Result<(), String> {
+        // An observed ID is an additional constraint, never a locator fallback.
+        if observed.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: the element is live and COM is initialized on this thread.
+        let actual = unsafe { element.CurrentAutomationId() }
+            .map_err(|error| format!("CurrentAutomationId: {error}"))?
+            .to_string();
+        if actual != observed {
+            return Err("Element reference is stale".to_owned());
+        }
+        Ok(())
     }
 
     fn read_text_from_element(element: &IUIAutomationElement) -> String {

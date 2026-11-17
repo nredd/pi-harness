@@ -67,13 +67,15 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   requires the owner's documented review, never automatic lease stealing. No guarantee is made against
   a human, a nonparticipating program or hostile same-user code injecting input.
   Ordinary delivery failures attempt key/button release once. A possibly partial physical-input
-  failure, or an uncertain UIA mutating-call/read-back failure, terminates the helper without
+  failure, an uncertain UIA mutating-call/read-back failure, or a failed post-delivery delta read terminates the helper without
   acknowledging the request, stops the batch and leaves the
   WSL transport's uncertainty fence intact. It never replays the failed operation. Lost stdout is
   terminal; stdin EOF cancels queued mutations and stops the helper after at most a two-second
   shutdown grace instead of joining a stuck provider indefinitely. An already admitted action may
   have run, and a forced stop can leave key/button state uncertain. The owner must verify the stopped
   process and input/app state before clearing the retained WSL lease.
+
+Native `openBrowserLocation` requires an explicit nonempty `appName` matching a discovered browser root; it never types a URL into the first unrelated window.
 
 Build and execute on an authorized Windows checkout, not inside an interop-disabled CI guest:
 
@@ -98,7 +100,7 @@ runs those cases; portable negative-coordinate tests do not substitute for that 
 
 The `windows-helper` job in `.github/workflows/native-helper.yml` links an actual MSVC x64 executable and runs these native
 checks on disposable Windows infrastructure. Its `windows-helper-native-<SHA>` artifact contains
-`windows-bridge.exe`, `SHA256SUMS`, source/target metadata, compiler log and explicit fixture status/log. Download the exact
+`windows-bridge.exe`, `SHA256SUMS`, source/target metadata, compiler log and explicit fixture status/log after a successful build. Failed builds preserve available logs and record `NOT_BUILT`/`NOT_REACHED`, never a usable delivery claim. Download the exact
 reviewed commit's artifact, verify `SHA256SUMS` independently and inspect the native log before manually
 placing the executable at the owner-controlled path described by #981. This is build delivery, NOT
 publication, release acceptance or activation. The unchanged macOS `build` job is separate; its passing result is not Windows link/run proof. Existing Windows LLVM coverage production is unchanged; absent native branch

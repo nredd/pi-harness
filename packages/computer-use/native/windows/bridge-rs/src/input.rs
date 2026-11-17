@@ -194,10 +194,7 @@ mod native {
     use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
     pub fn foreground_hint() -> Result<(), ProtocolError> {
-        with_input_cleanup(
-            || send(&[key(VK_MENU, false)]),
-            || send(&[key(VK_MENU, true)]),
-        )
+        press_chord(&[VK_MENU])
     }
 
     pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
@@ -446,22 +443,7 @@ mod native {
             .iter()
             .map(|name| vk_for(name).ok_or_else(|| invalid(format!("Unsupported key '{name}'"))))
             .collect::<Result<Vec<_>, _>>()?;
-        with_input_cleanup(
-            || {
-                for vk in &vks {
-                    send(&[key(*vk, false)])?;
-                }
-                Ok(())
-            },
-            || {
-                send(
-                    &vks.iter()
-                        .rev()
-                        .map(|vk| key(*vk, true))
-                        .collect::<Vec<_>>(),
-                )
-            },
-        )
+        press_chord(&vks)
     }
 
     fn hotkey(mods: &[VIRTUAL_KEY], key_vk: VIRTUAL_KEY) -> Result<(), ProtocolError> {
@@ -470,9 +452,13 @@ mod native {
             .copied()
             .chain(std::iter::once(key_vk))
             .collect::<Vec<_>>();
+        press_chord(&keys)
+    }
+
+    fn press_chord(keys: &[VIRTUAL_KEY]) -> Result<(), ProtocolError> {
         with_input_cleanup(
             || {
-                for vk in &keys {
+                for vk in keys {
                     send(&[key(*vk, false)])?;
                 }
                 Ok(())

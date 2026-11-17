@@ -76,7 +76,12 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           & packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/examples/disposable_windows_fixture.exe 2>&1 | Tee-Object native-fixture.log
           $fixtureExit = $LASTEXITCODE
-          if ($fixtureExit -eq 3) {
+          $headlessReasons = @(
+            'NATIVE_FIXTURE_UNSUPPORTED: session 0 is a noninteractive service session',
+            'NATIVE_FIXTURE_UNSUPPORTED: OpenInputDesktop denied access to the interactive desktop'
+          )
+          $knownHeadless = Select-String -Quiet -SimpleMatch -Pattern $headlessReasons -Path native-fixture.log
+          if ($fixtureExit -eq 3 -and $knownHeadless) {
             'NOT_RUN_HEADLESS' | Set-Content -Encoding ascii native-fixture-status.txt
             'Native GUI fixture: NOT RUN. Session 0 or input-desktop access denied; exact reason in native-fixture.log. Native link/unit evidence is separate.' >> $env:GITHUB_STEP_SUMMARY
           } elseif ($fixtureExit -ne 0) {
@@ -92,21 +97,25 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force native-helper-artifact | Out-Null
           $exe = 'packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/windows-bridge.exe'
-          Copy-Item $exe native-helper-artifact/windows-bridge.exe
-          $hash = (Get-FileHash native-helper-artifact/windows-bridge.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  windows-bridge.exe" | Set-Content -Encoding ascii native-helper-artifact/SHA256SUMS
-          "source=$env:HELPER_SOURCE_SHA`ntarget=x86_64-pc-windows-msvc`nrust=1.97.1`nprotocol=4`ncapability=fail-closed-live-target-v1`nfixture=$(Get-Content native-fixture-status.txt)" | Set-Content -Encoding ascii native-helper-artifact/build.txt
-          Copy-Item native-fixture.log native-helper-artifact/native-fixture.log
-          Copy-Item native-compiler.log native-helper-artifact/native-compiler.log
-          Copy-Item native-fixture-status.txt native-helper-artifact/native-fixture-status.txt
+          $executableStatus = 'NOT_BUILT'
+          if (Test-Path $exe) {
+            Copy-Item $exe native-helper-artifact/windows-bridge.exe
+            $hash = (Get-FileHash native-helper-artifact/windows-bridge.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  windows-bridge.exe" | Set-Content -Encoding ascii native-helper-artifact/SHA256SUMS
+            $executableStatus = 'PRESENT'
+          }
+          $fixtureStatus = 'NOT_REACHED'
+          if (Test-Path native-fixture-status.txt) {
+            $fixtureStatus = (Get-Content -Raw native-fixture-status.txt).Trim()
+          }
+          "source=$env:HELPER_SOURCE_SHA`ntarget=x86_64-pc-windows-msvc`nrust_requested=1.97.1`nprotocol=4`ncapability=fail-closed-live-target-v1`nexecutable=$executableStatus`nfixture=$fixtureStatus" | Set-Content -Encoding ascii native-helper-artifact/build.txt
+          foreach ($log in @('native-fixture.log', 'native-compiler.log', 'native-fixture-status.txt')) {
+            if (Test-Path $log) { Copy-Item $log native-helper-artifact/ }
+          }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: windows-helper-native-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            native-helper-artifact/*
-            native-fixture.log
-            native-compiler.log
-            native-fixture-status.txt
+          path: native-helper-artifact/*
           if-no-files-found: error
           retention-days: 7

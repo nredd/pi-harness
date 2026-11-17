@@ -1,6 +1,6 @@
 //! The production decision seam, with failures injected only at UIA boundaries.
 use std::cell::Cell;
-use windows_bridge::guard::{deliver_to_live_target, Bounds, LiveTarget};
+use windows_bridge::guard::{deliver_to_live_target, observe_after_delivery, Bounds, LiveTarget};
 use windows_bridge::{ErrorCode, ProtocolError};
 
 #[test]
@@ -16,6 +16,33 @@ fn uncertain_physical_failure_cannot_acknowledge_or_continue_a_batch() {
         serde_json::to_value(&uncertain).unwrap(),
         serde_json::json!({"message":"partial OS input","code":"capture_failed"})
     );
+}
+
+#[test]
+fn post_delivery_enumeration_failure_is_uncertain_without_retry() {
+    let reads = Cell::new(0);
+    let result: Result<(), ProtocolError> = observe_after_delivery(|| {
+        reads.set(reads.get() + 1);
+        Err(ProtocolError::new(
+            "EnumWindows failed",
+            ErrorCode::InternalError,
+        ))
+    });
+    let error = result.unwrap_err();
+    assert_eq!(reads.get(), 1);
+    assert_eq!(error.code, ErrorCode::InternalError);
+    assert!(error.outcome_uncertain());
+}
+
+#[test]
+fn successful_post_delivery_observation_is_preserved() {
+    let reads = Cell::new(0);
+    let result = observe_after_delivery(|| {
+        reads.set(reads.get() + 1);
+        Ok(42)
+    });
+    assert_eq!(result.unwrap(), 42);
+    assert_eq!(reads.get(), 1);
 }
 
 const WINDOW: Bounds = Bounds {

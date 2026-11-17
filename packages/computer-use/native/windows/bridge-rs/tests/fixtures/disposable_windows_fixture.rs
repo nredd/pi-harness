@@ -242,6 +242,10 @@ mod native {
                 .is_err(),
             "a noneditable label cannot receive text fallback"
         );
+        assert!(
+            snapshot(fixture.hwnd, &identity, &format!("{automation_id}-changed")).is_err(),
+            "an observed AutomationId is an additional identity constraint, not a locator"
+        );
         let before = snapshot(fixture.hwnd, &identity, automation_id).expect("current rect");
         unsafe {
             SetWindowPos(

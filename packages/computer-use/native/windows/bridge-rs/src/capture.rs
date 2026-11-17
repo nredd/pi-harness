@@ -165,18 +165,9 @@ fn screenshot_impl(
     );
     let baseline = if requires_transition && !is_minimized {
         // A failed pre-transition render is not evidence of a changed frame.
-        unsafe {
-            gdi_capture_to_base64(
-                hwnd,
-                baseline_rect.0,
-                baseline_rect.1,
-                baseline_rect.2,
-                baseline_rect.3,
-                max_dimension,
-            )
-        }
-        .ok()
-        .map(|frame| fingerprint(&frame.0))
+        unsafe { gdi_capture_to_base64(hwnd, baseline_rect.2, baseline_rect.3, max_dimension) }
+            .ok()
+            .map(|frame| fingerprint(&frame.0))
     } else {
         None
     };
@@ -231,7 +222,7 @@ fn screenshot_impl(
                 ErrorCode::CaptureFailed,
             ));
         }
-        let frame = unsafe { gdi_capture_to_base64(hwnd, x, y, width, height, max_dimension) }?;
+        let frame = unsafe { gdi_capture_to_base64(hwnd, width, height, max_dimension) }?;
         crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
         let mut rendered_rect = RECT::default();
         unsafe { GetWindowRect(hwnd, &mut rendered_rect) }.map_err(|_| {
@@ -328,8 +319,6 @@ fn fingerprint(encoded: &str) -> u64 {
 #[cfg(windows)]
 unsafe fn gdi_capture_to_base64(
     hwnd: HWND,
-    _window_x: i32,
-    _window_y: i32,
     width: i32,
     height: i32,
     max_dimension: Option<u32>,

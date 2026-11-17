@@ -35,6 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Preserve native Windows uncertainty after post-delivery observation failure; require explicit browser `appName` for `openBrowserLocation` and retain available failed-build diagnostics (#983).
+
 - Refuse Windows ref-coordinate input when current UIA identity, bounds, hit testing or desktop/session permissions cannot be verified. Never substitute cached coordinates or reused AutomationIds. Add scoped discovery, bounded fresh selected-window capture, idempotent restore and a cross-process physical-input mutex; advertise guarded-helper capability without changing protocol `4`. Add disposable native Windows fixture/build artifacts, with real WSL and multi-monitor acceptance still outstanding (#983, refs #673).
 
 - Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).

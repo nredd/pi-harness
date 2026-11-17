@@ -5,6 +5,19 @@
 
 use crate::{ErrorCode, ProtocolError};
 
+/// Observe the result of an already delivered mutation exactly once.
+/// Post-delivery read failures cannot acknowledge that no action happened.
+pub fn observe_after_delivery<T>(
+    read: impl FnOnce() -> Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
+    read().map_err(|error| {
+        ProtocolError::uncertain(
+            format!("Post-delivery observation failed: {error}"),
+            error.code,
+        )
+    })
+}
+
 /// Physical screen bounds in the helper's per-monitor-aware coordinate space.
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {
