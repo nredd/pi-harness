@@ -51,13 +51,14 @@ class Pool:
 
 
 # Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
-# started in a median 30 s (p90 141 s). An idle `pi-macos` takes up to three cells from a run (two free slots
-# plus one queued); a busy one queues only one more, so a host death strands little. Disk pressure is not
-# modelled here: the host publishes `<epoch>:drain` when storage is low (nredd/ci-runners#5), which already
-# fails closed to hosted. Hosted Linux queues for seconds: strict.
+# started in a median 30 s (p90 141 s). `pi-macos` has three slots and queues up to three more cells, uncapped
+# per run: every trusted macOS cell prefers it while its beat is fresh and not draining; a dead or draining
+# pool (and a fork PR) falls back to hosted `xcode-27`, and the rescue workflow moves stranded jobs. Disk
+# pressure is not modelled here: the host publishes `<epoch>:drain` when storage is low (nredd/ci-runners#5),
+# which already fails closed to hosted. Hosted Linux queues for seconds: strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
-    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=1, run_cap=3),
+    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 3, queue_depth=3),
     # One ARM64 WSL2 slot and strict: nothing else can run that guest, and the hosted x64 `windows-2025`
     # cell keeps the required check names green whenever the pool is down or busy.
     "pi-wsl2": Pool("pi-wsl2", "PI_WSL2_HEARTBEAT", 1),
@@ -83,6 +84,7 @@ CELL_SECONDS: dict[CellKey, int] = {
     ("owned", "macos-14", "ts"): 480,
     ("stack", "macos-14", "local"): 711,
     ("owned", "macos-14", "python"): 462,
+    ("owned", "macos-14", "scripts"): 1140,
     ("contracts", "macos-14", ""): 331,
     ("owned", "ubuntu-24.04", "ts"): 428,
     # UNMEASURED best estimates for the ARM64 WSL2 pool (#736): a pooled cell skips the ~3.5 min guest setup
