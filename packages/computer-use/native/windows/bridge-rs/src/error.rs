@@ -61,6 +61,8 @@ impl fmt::Display for ErrorCode {
 pub struct ProtocolError {
     pub message: String,
     pub code: ErrorCode,
+    #[serde(skip)]
+    outcome_uncertain: bool,
 }
 
 impl ProtocolError {
@@ -68,7 +70,23 @@ impl ProtocolError {
         Self {
             message: message.into(),
             code,
+            outcome_uncertain: false,
         }
+    }
+
+    /// Record a possibly applied mutation. This is internal delivery state,
+    /// never a new protocol field: the helper exits without acknowledging it.
+    pub fn uncertain(message: impl Into<String>, code: ErrorCode) -> Self {
+        Self {
+            message: message.into(),
+            code,
+            outcome_uncertain: true,
+        }
+    }
+
+    /// Whether acknowledging this error would lose uncertain-input ownership.
+    pub fn outcome_uncertain(&self) -> bool {
+        self.outcome_uncertain
     }
 }
 

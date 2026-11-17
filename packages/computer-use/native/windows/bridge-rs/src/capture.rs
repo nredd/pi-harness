@@ -39,6 +39,8 @@ use serde_json::json;
 /// * `target_ref` - Reference to the window to capture.
 /// * `include_elements` - When true, also extracts UIA elements and includes
 ///   them in the response as an `axTargets` array.
+/// * `expected_pid` - Owning process recorded during root discovery; revalidated
+///   before focus and around every completed render.
 ///
 /// # Returns
 ///
@@ -60,13 +62,14 @@ pub fn screenshot(
     target_ref: &WindowRef,
     include_elements: bool,
     max_dimension: Option<u32>,
+    expected_pid: u64,
 ) -> Result<Value, ProtocolError> {
     #[cfg(not(windows))]
     {
         let _ = store;
         let _ = target_ref;
         let _ = include_elements;
-        let _ = max_dimension;
+        let _ = (max_dimension, expected_pid);
         Err(ProtocolError::new(
             "Screenshot capture is only supported on Windows",
             ErrorCode::UnsupportedPlatform,
@@ -75,7 +78,13 @@ pub fn screenshot(
 
     #[cfg(windows)]
     {
-        screenshot_impl(store, target_ref, include_elements, max_dimension)
+        screenshot_impl(
+            store,
+            target_ref,
+            include_elements,
+            max_dimension,
+            expected_pid,
+        )
     }
 }
 
@@ -87,9 +96,8 @@ pub fn screenshot(
 use windows::Win32::Foundation::{HWND, RECT};
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
     ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
-    SRCCOPY,
 };
 #[cfg(windows)]
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
@@ -121,6 +129,7 @@ fn screenshot_impl(
     target_ref: &WindowRef,
     include_elements: bool,
     max_dimension: Option<u32>,
+    expected_pid: u64,
 ) -> Result<Value, ProtocolError> {
     // 1. Look up the window handle.
     let native = store.get_window(target_ref).ok_or_else(|| {
@@ -136,13 +145,47 @@ fn screenshot_impl(
         ));
     }
     let hwnd = HWND(native.raw() as *mut _);
+    crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
 
     let mut warnings: Vec<String> = Vec::new();
 
     // 2. Check for minimized state.
     let is_minimized = unsafe { IsIconic(hwnd).as_bool() };
+    let requires_transition = is_minimized
+        || unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() != hwnd };
+    let mut before_rect = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut before_rect) }.map_err(|_| {
+        ProtocolError::new("Capture baseline unavailable", ErrorCode::CaptureFailed)
+    })?;
+    let baseline_rect = (
+        before_rect.left,
+        before_rect.top,
+        before_rect.right - before_rect.left,
+        before_rect.bottom - before_rect.top,
+    );
+    let baseline = if requires_transition && !is_minimized {
+        // A failed pre-transition render is not evidence of a changed frame.
+        unsafe {
+            gdi_capture_to_base64(
+                hwnd,
+                baseline_rect.0,
+                baseline_rect.1,
+                baseline_rect.2,
+                baseline_rect.3,
+                max_dimension,
+            )
+        }
+        .ok()
+        .map(|frame| fingerprint(&frame.0))
+    } else {
+        None
+    };
+    let mut freshness =
+        crate::freshness::Freshness::new(baseline_rect, baseline, requires_transition);
+    crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
+    crate::window::request_foreground(native.raw())?;
     if is_minimized {
-        warnings.push("window_minimized".to_owned());
+        warnings.push("window_restored".to_owned());
     }
 
     // 3. Get the window rect so we know capture dimensions.
@@ -160,32 +203,82 @@ fn screenshot_impl(
     };
 
     if width == 0 || height == 0 {
-        warnings.push("zero_sized_window".to_owned());
-        // Return capture metadata with zero dimensions and no image data.
-        let state_id = StateId::fresh("s");
-        return Ok(json!({
-            "target": target_ref.to_string(),
-            "capture": {
-                "stateId": state_id,
-                "x": x,
-                "y": y,
-                "width": 0,
-                "height": 0,
-                "imageFormat": "png",
-                "imageBase64": null,
-            },
-            "warnings": warnings,
-        }));
+        return Err(ProtocolError::new(
+            "Window has no capturable extent",
+            ErrorCode::CaptureFailed,
+        ));
     }
 
     // 4. GDI capture (unsafe FFI block).
     // SAFETY: All GDI objects are created and destroyed within this
     // function.  Object lifetimes follow the Acquire → Use → Release
     // pattern with proper cleanup on every error path.
-    let (png_base64, output_width, output_height) =
-        unsafe { gdi_capture_to_base64(hwnd, x, y, width, height, max_dimension) }?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    let (png_base64, output_width, output_height) = loop {
+        crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
+        let mut current_rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut current_rect) }
+            .map_err(|_| ProtocolError::new("Capture window vanished", ErrorCode::CaptureFailed))?;
+        if (
+            current_rect.left,
+            current_rect.top,
+            current_rect.right - current_rect.left,
+            current_rect.bottom - current_rect.top,
+        ) != (x, y, width, height)
+        {
+            return Err(ProtocolError::new(
+                "Window moved during capture; observe again",
+                ErrorCode::CaptureFailed,
+            ));
+        }
+        let frame = unsafe { gdi_capture_to_base64(hwnd, x, y, width, height, max_dimension) }?;
+        crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;
+        let mut rendered_rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut rendered_rect) }.map_err(|_| {
+            ProtocolError::new(
+                "Capture window vanished after rendering",
+                ErrorCode::CaptureFailed,
+            )
+        })?;
+        if (
+            rendered_rect.left,
+            rendered_rect.top,
+            rendered_rect.right,
+            rendered_rect.bottom,
+        ) != (
+            current_rect.left,
+            current_rect.top,
+            current_rect.right,
+            current_rect.bottom,
+        ) {
+            return Err(ProtocolError::new(
+                "Window moved while rendering; observe again",
+                ErrorCode::CaptureFailed,
+            ));
+        }
+        if freshness.observe(crate::freshness::Frame {
+            rect: (x, y, width, height),
+            fingerprint: fingerprint(&frame.0),
+        }) {
+            break frame;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(ProtocolError::new(
+                "Capture freshness could not be established",
+                ErrorCode::CaptureFailed,
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    };
 
     let state_id = StateId::fresh("s");
+    let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        return Err(ProtocolError::new(
+            "Capture window DPI is unavailable",
+            ErrorCode::CaptureFailed,
+        ));
+    }
 
     // Build the base response.
     let mut result = json!({
@@ -196,6 +289,9 @@ fn screenshot_impl(
             "y": y,
             "width": output_width,
             "height": output_height,
+            "sourceWidth": width,
+            "sourceHeight": height,
+            "scaleFactor": f64::from(dpi) / 96.0,
             "imageFormat": "png",
             "imageBase64": png_base64,
         },
@@ -204,7 +300,8 @@ fn screenshot_impl(
 
     // 5. Optionally extract UIA accessibility elements.
     if include_elements {
-        let elements = crate::uia::extract_elements(store, hwnd.0 as isize);
+        let elements = crate::uia::live_elements(hwnd.0 as isize)
+            .map_err(|message| ProtocolError::new(message, ErrorCode::CapabilityDeferred))?;
         if !elements.is_empty() {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("axTargets".to_owned(), Value::Array(elements));
@@ -215,6 +312,14 @@ fn screenshot_impl(
     Ok(result)
 }
 
+#[cfg(windows)]
+fn fingerprint(encoded: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    encoded.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Perform GDI capture of the given window and return a base64-encoded PNG.
 ///
 /// # Safety
@@ -223,12 +328,18 @@ fn screenshot_impl(
 #[cfg(windows)]
 unsafe fn gdi_capture_to_base64(
     hwnd: HWND,
-    window_x: i32,
-    window_y: i32,
+    _window_x: i32,
+    _window_y: i32,
     width: i32,
     height: i32,
     max_dimension: Option<u32>,
 ) -> Result<(String, u32, u32), ProtocolError> {
+    if width <= 0 || height <= 0 || i64::from(width) * i64::from(height) > 16 * 1024 * 1024 {
+        return Err(ProtocolError::new(
+            "Window capture exceeds pixel budget",
+            ErrorCode::CaptureFailed,
+        ));
+    }
     // Acquire the window DC.
     let hdc_window = GetDC(hwnd);
     if hdc_window.is_invalid() {
@@ -260,7 +371,11 @@ unsafe fn gdi_capture_to_base64(
     let old_bitmap = SelectObject(hdc_mem, hbitmap);
 
     // Render the window content using PrintWindow (client area).
-    let pw_ok = PrintWindow(hwnd, hdc_mem, PRINT_WINDOW_FLAGS(0));
+    let pw_ok = PrintWindow(
+        hwnd,
+        hdc_mem,
+        PRINT_WINDOW_FLAGS(windows::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT),
+    );
     if !pw_ok.as_bool() {
         // PrintWindow can fail for various reasons.  We note it but
         // continue — the DC might still have partial content.
@@ -286,10 +401,25 @@ unsafe fn gdi_capture_to_base64(
     };
 
     // Allocate the pixel buffer.
-    let buf_size = (width as usize) * (height as usize) * 4;
+    let buf_size = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|size| size.checked_mul(4))
+        .filter(|size| *size <= 64 * 1024 * 1024);
+    let Some(buf_size) = buf_size else {
+        SelectObject(hdc_mem, old_bitmap);
+        let _ = DeleteObject(HGDIOBJ(hbitmap.0));
+        let _ = DeleteDC(hdc_mem);
+        ReleaseDC(hwnd, hdc_window);
+        return Err(ProtocolError::new(
+            "Window capture exceeds byte budget",
+            ErrorCode::CaptureFailed,
+        ));
+    };
     let mut bits: Vec<u8> = vec![0u8; buf_size];
 
-    let mut dib_ok = GetDIBits(
+    // GetDIBits requires the bitmap not to be selected into any DC.
+    SelectObject(hdc_mem, old_bitmap);
+    let dib_ok = GetDIBits(
         hdc_mem,
         hbitmap,
         0,
@@ -299,32 +429,8 @@ unsafe fn gdi_capture_to_base64(
         DIB_RGB_COLORS,
     );
 
-    // PrintWindow frequently returns a successful but black bitmap for GPU
-    // surfaces (Chromium/Electron). Fall back to the compositor-visible screen
-    // pixels only when the semantic capture failed or is effectively blank.
-    let print_window_blank = is_effectively_blank_bgra(&bits);
-    if !pw_ok.as_bool() || dib_ok == 0 || print_window_blank {
-        let screen_dc = GetDC(HWND(std::ptr::null_mut()));
-        if !screen_dc.is_invalid()
-            && BitBlt(
-                hdc_mem, 0, 0, width, height, screen_dc, window_x, window_y, SRCCOPY,
-            )
-            .is_ok()
-        {
-            dib_ok = GetDIBits(
-                hdc_mem,
-                hbitmap,
-                0,
-                height as u32,
-                Some(bits.as_mut_ptr() as *mut std::ffi::c_void),
-                &mut bmi,
-                DIB_RGB_COLORS,
-            );
-        }
-        if !screen_dc.is_invalid() {
-            ReleaseDC(HWND(std::ptr::null_mut()), screen_dc);
-        }
-    }
+    // Never substitute screen pixels: another window can cover this HWND.
+    let valid_render = pw_ok.as_bool() && dib_ok == height && !is_effectively_blank_bgra(&bits);
 
     // Restore old bitmap and destroy GDI objects.
     SelectObject(hdc_mem, old_bitmap);
@@ -332,7 +438,7 @@ unsafe fn gdi_capture_to_base64(
     let _ = DeleteDC(hdc_mem);
     ReleaseDC(hwnd, hdc_window);
 
-    if dib_ok == 0 {
+    if !valid_render {
         return Err(ProtocolError::new(
             "GetDIBits failed to retrieve bitmap data",
             ErrorCode::CaptureFailed,
@@ -342,6 +448,7 @@ unsafe fn gdi_capture_to_base64(
     // Convert BGRA → RGBA (GDI returns B,G,R,A; PNG expects R,G,B,A).
     for chunk in bits.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
+        chunk[3] = 255;
     }
 
     let source_width = width as u32;
@@ -436,7 +543,7 @@ mod unit_tests {
     fn test_screenshot_unsupported_platform() {
         let mut store = RefStore::new();
         let wref = WindowRef { id: 1 };
-        let result = screenshot(&mut store, &wref, false, None);
+        let result = screenshot(&mut store, &wref, false, None, 0);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::UnsupportedPlatform);
@@ -508,7 +615,7 @@ mod unit_tests {
         // on Windows an empty store would return TargetNotFound.
         let mut store = RefStore::new();
         let wref = WindowRef { id: 999 };
-        let result = screenshot(&mut store, &wref, false, None);
+        let result = screenshot(&mut store, &wref, false, None, 0);
         assert!(result.is_err());
         let err = result.unwrap_err();
         #[cfg(not(windows))]
@@ -524,7 +631,7 @@ mod unit_tests {
         let mut store = RefStore::new();
         let wref = store.insert_window(NativeHandle::new(0));
         for _ in 0..2 {
-            let error = screenshot(&mut store, &wref, false, None).unwrap_err();
+            let error = screenshot(&mut store, &wref, false, None, 0).unwrap_err();
             assert_eq!(error.code, ErrorCode::CaptureFailed);
             assert_eq!(error.message, "Invalid null window handle");
         }

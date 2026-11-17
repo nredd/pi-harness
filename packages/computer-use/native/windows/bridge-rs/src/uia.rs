@@ -1,6 +1,6 @@
 //! Read-only UIA (UI Automation) element extraction for Windows.
 //!
-//! On Windows, uses the [`windows`] crate to walk the UIA accessibility tree
+//! On Windows, uses the `windows` crate to walk the UIA accessibility tree
 //! of a given top-level window and extract semantic elements with their
 //! properties.  On non-Windows platforms all entry points are stubbed out
 //! and return empty results.
@@ -207,33 +207,103 @@ pub fn annotation_can_set_text(signals: &ElementAnnotationSignals) -> bool {
 #[cfg(windows)]
 mod native {
     use serde_json::{json, Value};
-    use std::collections::HashSet;
 
     use super::{
         annotation_can_press, annotation_can_set_text, control_type_to_role,
         ElementAnnotationSignals,
     };
     use crate::refs::{NativeHandle, RefStore};
+    use crate::{ErrorCode, ProtocolError};
 
-    use windows::core::{BSTR, VARIANT};
+    use windows::core::{Interface, BSTR};
     use windows::Win32::Foundation::*;
     use windows::Win32::System::Com::*;
     use windows::Win32::System::Ole::{
-        SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+        SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
     };
     use windows::Win32::UI::Accessibility::*;
 
     const MAX_ELEMENTS: usize = 200;
-    const MAX_TRUNCATION_SCAN: usize = 1_000;
+
+    #[windows::core::implement(IUIAutomationEventHandler)]
+    struct DiscoveryListener;
+
+    impl IUIAutomationEventHandler_Impl for DiscoveryListener_Impl {
+        fn HandleAutomationEvent(
+            &self,
+            _sender: Option<&IUIAutomationElement>,
+            _event_id: UIA_EVENT_ID,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Scoped assistive-client registration. It asks only this provider for
+    /// events; unlike SPI_SETSCREENREADER it cannot alter owner-global state.
+    struct DiscoveryLease {
+        _registration: std::sync::MutexGuard<'static, ()>,
+        uia: IUIAutomation,
+        root: IUIAutomationElement,
+        handler: IUIAutomationEventHandler,
+    }
+
+    impl DiscoveryLease {
+        fn begin(uia: &IUIAutomation, root: &IUIAutomationElement) -> Result<Self, String> {
+            // UIA forbids overlapping add/remove operations in one client.
+            static REGISTRATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let registration = loop {
+                match REGISTRATION.try_lock() {
+                    Ok(guard) => break guard,
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        return Err("UIA discovery registration poisoned".to_owned())
+                    }
+                    Err(std::sync::TryLockError::WouldBlock)
+                        if std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
+                    Err(_) => return Err("UIA discovery registration busy".to_owned()),
+                }
+            };
+            let handler: IUIAutomationEventHandler = DiscoveryListener.into();
+            unsafe {
+                uia.AddAutomationEventHandler(
+                    UIA_LayoutInvalidatedEventId,
+                    root,
+                    TreeScope_Subtree,
+                    None,
+                    &handler,
+                )
+            }
+            .map_err(|e| format!("Scoped UIA discovery registration: {e}"))?;
+            Ok(Self {
+                _registration: registration,
+                uia: uia.clone(),
+                root: root.clone(),
+                handler,
+            })
+        }
+    }
+
+    impl Drop for DiscoveryLease {
+        fn drop(&mut self) {
+            // SAFETY: remove only the registration owned by this operation.
+            let _ = unsafe {
+                self.uia.RemoveAutomationEventHandler(
+                    UIA_LayoutInvalidatedEventId,
+                    &self.root,
+                    &self.handler,
+                )
+            };
+        }
+    }
 
     /// Entry point called from the public stub on cfg(windows).
     pub fn uia_extract(store: &mut RefStore, hwnd: isize) -> Result<Vec<Value>, String> {
+        crate::desktop::validated_bounds(hwnd, None).map_err(|error| error.to_string())?;
         let _com = ComGuard::new()?;
-
-        let uia: IUIAutomation = unsafe {
-            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("CoCreateInstance IUIAutomation: {e}"))?
-        };
+        let uia = automation()?;
 
         let root = unsafe {
             uia.ElementFromHandle(HWND(hwnd as *mut _))
@@ -253,113 +323,108 @@ mod native {
         extract_from_root(store, &uia, &root)
     }
 
+    /// windows-rs represents an S_OK/null tree-walker result as Error::empty.
+    /// Only that successful end-of-tree sentinel is optional; real provider
+    /// failures must not silently turn a sparse extraction into a complete one.
+    fn optional_element(
+        result: windows::core::Result<IUIAutomationElement>,
+    ) -> Result<Option<IUIAutomationElement>, String> {
+        match result {
+            Ok(element) => Ok(Some(element)),
+            Err(error) if error.code().is_ok() => Ok(None),
+            Err(error) => Err(format!("UIA tree-walker provider failure: {error}")),
+        }
+    }
+
+    /// Walk one selected subtree, never an unbounded provider-side FindAll.
+    fn bounded_elements(
+        uia: &IUIAutomation,
+        root: &IUIAutomationElement,
+    ) -> Result<(Vec<IUIAutomationElement>, bool), String> {
+        let walker = unsafe { uia.RawViewWalker() }.map_err(|e| format!("RawViewWalker: {e}"))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let mut pending = std::collections::VecDeque::from([(root.clone(), 0usize)]);
+        let mut found = Vec::new();
+        let mut truncated = false;
+        while let Some((element, depth)) = pending.pop_front() {
+            if found.len() >= MAX_ELEMENTS || std::time::Instant::now() >= deadline {
+                truncated = true;
+                break;
+            }
+            found.push(element.clone());
+            if depth >= 64 {
+                truncated = true;
+                continue;
+            }
+            let mut child = optional_element(unsafe { walker.GetFirstChildElement(&element) })?;
+            while let Some(current) = child {
+                if pending.len() + found.len() >= MAX_ELEMENTS
+                    || std::time::Instant::now() >= deadline
+                {
+                    truncated = true;
+                    break;
+                }
+                pending.push_back((current.clone(), depth + 1));
+                child = optional_element(unsafe { walker.GetNextSiblingElement(&current) })?;
+            }
+        }
+        Ok((found, truncated))
+    }
+
     fn extract_from_root(
         store: &mut RefStore,
         uia: &IUIAutomation,
         root: &IUIAutomationElement,
     ) -> Result<Vec<Value>, String> {
-        let condition = unsafe {
-            uia.CreateTrueCondition()
-                .map_err(|e| format!("CreateTrueCondition: {e}"))?
-        };
-
-        let found = unsafe {
-            root.FindAll(TreeScope_Subtree, &condition)
-                .map_err(|e| format!("FindAll: {e}"))?
-        };
-
-        let count = unsafe {
-            found
-                .Length()
-                .map_err(|e| format!("ElementArray.Length: {e}"))?
-        } as usize;
-
-        let limit = count.min(MAX_ELEMENTS);
-        let mut elements = Vec::with_capacity(limit);
-        let walker = unsafe {
-            uia.ControlViewWalker()
-                .map_err(|e| format!("ControlViewWalker: {e}"))?
-        };
-
-        for i in 0..limit {
-            let element = unsafe {
-                found
-                    .GetElement(i as _)
-                    .map_err(|e| format!("GetElement({i}): {e}"))?
-            };
-            let parent_runtime_id = unsafe { walker.GetParentElement(&element).ok() }
+        let _discovery = DiscoveryLease::begin(uia, root)?;
+        let (found, truncated) = bounded_elements(uia, root)?;
+        let walker = unsafe { uia.RawViewWalker() }.map_err(|e| format!("RawViewWalker: {e}"))?;
+        let mut elements = Vec::with_capacity(found.len());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let mut truncated = truncated;
+        for element in found {
+            if std::time::Instant::now() >= deadline {
+                truncated = true;
+                break;
+            }
+            let parent = unsafe { walker.GetParentElement(&element).ok() }
                 .and_then(|parent| runtime_id(&parent))
                 .unwrap_or_default();
-            if let Some(json_val) = element_to_json(store, &element, parent_runtime_id) {
-                elements.push(json_val);
+            if let Some(value) = element_to_json(store, &element, parent) {
+                elements.push(value);
             }
         }
-
-        if count > limit {
-            let retained = elements
-                .iter()
-                .filter_map(|element| element.get("runtimeId").and_then(Value::as_array))
-                .map(|runtime_id| {
-                    runtime_id
-                        .iter()
-                        .filter_map(Value::as_i64)
-                        .map(|value| value.to_string())
-                        .collect::<Vec<_>>()
-                        .join(".")
-                })
-                .collect::<HashSet<_>>();
-            let mut truncated = HashSet::new();
-            for i in limit..count.min(limit + MAX_TRUNCATION_SCAN) {
-                let mut candidate = unsafe { found.GetElement(i as _).ok() };
-                for _ in 0..64 {
-                    let Some(element) = candidate else { break };
-                    let Some(parent) = (unsafe { walker.GetParentElement(&element).ok() }) else {
-                        break;
-                    };
-                    let key = runtime_id(&parent)
-                        .unwrap_or_default()
-                        .iter()
-                        .map(i32::to_string)
-                        .collect::<Vec<_>>()
-                        .join(".");
-                    if retained.contains(&key) {
-                        truncated.insert(key);
-                        break;
-                    }
-                    candidate = Some(parent);
-                }
-            }
-            // If the omitted tail is larger than the bounded ancestry scan,
-            // mark the retained extraction root as an honest coarse boundary.
-            if count > limit + MAX_TRUNCATION_SCAN {
-                let root_key = runtime_id(root)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(i32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(".");
-                truncated.insert(root_key);
-            }
-            for element in &mut elements {
-                let key = element
-                    .get("runtimeId")
-                    .and_then(Value::as_array)
-                    .map(|runtime_id| {
-                        runtime_id
-                            .iter()
-                            .filter_map(Value::as_i64)
-                            .map(|value| value.to_string())
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    })
-                    .unwrap_or_default();
-                if truncated.contains(&key) {
-                    element["truncated"] = json!(true);
-                }
+        if truncated {
+            if let Some(root) = elements.first_mut() {
+                root["truncated"] = json!(true);
             }
         }
-
         Ok(elements)
+    }
+
+    /// First-party UIA client activation scoped to the requested HWND. Raw-view
+    /// traversal discovers provider labels excluded by control-view filtering.
+    /// No SPI_SETSCREENREADER or other global owner setting is changed.
+    fn automation() -> Result<IUIAutomation, String> {
+        let uia: IUIAutomation2 =
+            unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
+                .map_err(|e| format!("CoCreateInstance IUIAutomation2: {e}"))?;
+        unsafe {
+            uia.SetConnectionTimeout(500)
+                .map_err(|e| format!("ConnectionTimeout: {e}"))?;
+            uia.SetTransactionTimeout(500)
+                .map_err(|e| format!("TransactionTimeout: {e}"))?;
+        }
+        uia.cast().map_err(|e| format!("IUIAutomation: {e}"))
+    }
+
+    struct RuntimeArray(*mut SAFEARRAY);
+
+    impl Drop for RuntimeArray {
+        fn drop(&mut self) {
+            // SAFETY: GetRuntimeId transfers this SAFEARRAY to the caller.
+            let _ = unsafe { SafeArrayDestroy(self.0) };
+        }
     }
 
     fn runtime_id(element: &IUIAutomationElement) -> Option<Vec<i32>> {
@@ -367,9 +432,14 @@ mod native {
         if array.is_null() {
             return None;
         }
+        let _owned = RuntimeArray(array);
         let lower = unsafe { SafeArrayGetLBound(array, 1).ok()? };
         let upper = unsafe { SafeArrayGetUBound(array, 1).ok()? };
-        let mut values = Vec::with_capacity((upper - lower + 1).max(0) as usize);
+        let count = upper.checked_sub(lower)?.checked_add(1)?;
+        if !(1..=128).contains(&count) {
+            return None;
+        }
+        let mut values = Vec::with_capacity(count as usize);
         for index in lower..=upper {
             let mut value = 0i32;
             unsafe {
@@ -516,6 +586,12 @@ mod native {
         automation_id: &str,
     ) -> Result<String, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        if unsafe { element.CurrentIsPassword() }
+            .map_err(|e| format!("CurrentIsPassword: {e}"))?
+            .as_bool()
+        {
+            return Err("Secure text is unreadable".to_owned());
+        }
         Ok(read_text_from_element(&element))
     }
 
@@ -554,6 +630,7 @@ mod native {
         automation_id: &str,
     ) -> Result<ElementSnapshot, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        ensure_actionable(&element)?;
         let rect = unsafe {
             element
                 .CurrentBoundingRectangle()
@@ -574,77 +651,134 @@ mod native {
         hwnd: isize,
         runtime_id_target: &[i32],
         automation_id: &str,
-    ) -> Result<PressResult, String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
-        if let Ok(pattern) = unsafe {
-            element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
-        } {
+    ) -> Result<PressResult, ProtocolError> {
+        let (_com, _uia, element) =
+            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+        ensure_actionable(&element).map_err(before_delivery)?;
+        if let Some(pattern) = probe_pattern::<IUIAutomationInvokePattern>(
+            &element,
+            UIA_InvokePatternId,
+            UIA_IsInvokePatternAvailablePropertyId,
+        )? {
             unsafe {
-                pattern.Invoke().map_err(|e| format!("Invoke: {e}"))?;
+                pattern.Invoke().map_err(|e| after_delivery("Invoke", e))?;
             }
             return Ok(PressResult::Invoked);
         }
-        if let Ok(pattern) = unsafe {
-            element.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
-        } {
+        if let Some(pattern) = probe_pattern::<IUIAutomationTogglePattern>(
+            &element,
+            UIA_TogglePatternId,
+            UIA_IsTogglePatternAvailablePropertyId,
+        )? {
             unsafe {
-                pattern.Toggle().map_err(|e| format!("Toggle: {e}"))?;
+                pattern.Toggle().map_err(|e| after_delivery("Toggle", e))?;
             }
             let state = unsafe {
                 pattern
                     .CurrentToggleState()
-                    .map(|s| s.0 != 0)
-                    .unwrap_or(false)
+                    .map_err(|e| after_delivery("Toggle read-back", e))?
+                    .0
+                    != 0
             };
             return Ok(PressResult::Toggled(state));
         }
-        if let Ok(pattern) = unsafe {
-            element.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
-                UIA_SelectionItemPatternId,
-            )
-        } {
+        if let Some(pattern) = probe_pattern::<IUIAutomationSelectionItemPattern>(
+            &element,
+            UIA_SelectionItemPatternId,
+            UIA_IsSelectionItemPatternAvailablePropertyId,
+        )? {
             unsafe {
-                pattern.Select().map_err(|e| format!("Select: {e}"))?;
+                pattern.Select().map_err(|e| after_delivery("Select", e))?;
             }
             let selected = unsafe {
                 pattern
                     .CurrentIsSelected()
-                    .map(|b| b.as_bool())
-                    .unwrap_or(false)
+                    .map_err(|e| after_delivery("Select read-back", e))?
+                    .as_bool()
             };
             return Ok(PressResult::Selected(selected));
         }
-        if let Ok(pattern) = unsafe {
-            element.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
-                UIA_ExpandCollapsePatternId,
-            )
-        } {
+        if let Some(pattern) = probe_pattern::<IUIAutomationExpandCollapsePattern>(
+            &element,
+            UIA_ExpandCollapsePatternId,
+            UIA_IsExpandCollapsePatternAvailablePropertyId,
+        )? {
             unsafe {
-                pattern.Expand().map_err(|e| format!("Expand: {e}"))?;
+                pattern.Expand().map_err(|e| after_delivery("Expand", e))?;
             }
             return Ok(PressResult::Expanded);
         }
-        if let Ok(pattern) = unsafe {
-            element.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
-                UIA_LegacyIAccessiblePatternId,
-            )
-        } {
+        if let Some(pattern) = probe_pattern::<IUIAutomationLegacyIAccessiblePattern>(
+            &element,
+            UIA_LegacyIAccessiblePatternId,
+            UIA_IsLegacyIAccessiblePatternAvailablePropertyId,
+        )? {
             let default_action = unsafe {
                 pattern
                     .CurrentDefaultAction()
-                    .map(|s| s.to_string())
-                    .unwrap_or_default()
+                    .map_err(|error| before_delivery(format!("CurrentDefaultAction: {error}")))?
+                    .to_string()
             };
             if !default_action.trim().is_empty() {
                 unsafe {
                     pattern
                         .DoDefaultAction()
-                        .map_err(|e| format!("DoDefaultAction: {e}"))?;
+                        .map_err(|e| after_delivery("DoDefaultAction", e))?;
                 }
                 return Ok(PressResult::LegacyDefaultAction);
             }
         }
         Ok(PressResult::NoPattern)
+    }
+
+    /// Pattern absence is a successful false capability query, not an arbitrary
+    /// provider error. Never turn denied/stale/failed probes into raw input.
+    fn probe_pattern<T: Interface>(
+        element: &IUIAutomationElement,
+        pattern_id: UIA_PATTERN_ID,
+        availability: UIA_PROPERTY_ID,
+    ) -> Result<Option<T>, ProtocolError> {
+        let value = unsafe { element.GetCurrentPropertyValue(availability) }
+            .map_err(|error| before_delivery(format!("Pattern availability: {error}")))?;
+        let available = bool::try_from(&value)
+            .map_err(|error| before_delivery(format!("Pattern availability type: {error}")))?;
+        if !available {
+            return Ok(None);
+        }
+        unsafe { element.GetCurrentPatternAs::<T>(pattern_id) }
+            .map(Some)
+            .map_err(|error| before_delivery(format!("Supported pattern query failed: {error}")))
+    }
+
+    /// Query failures refuse safely; no mutating pattern has been attempted.
+    fn before_delivery(message: String) -> ProtocolError {
+        let code = if message == "Element reference is stale" {
+            ErrorCode::StaleRef
+        } else {
+            ErrorCode::InternalError
+        };
+        ProtocolError::new(message, code)
+    }
+
+    /// A failed mutation/read-back cannot acknowledge that nothing happened.
+    fn after_delivery(operation: &str, error: impl std::fmt::Display) -> ProtocolError {
+        ProtocolError::uncertain(
+            format!("UIA '{operation}' outcome uncertain: {error}"),
+            ErrorCode::CaptureFailed,
+        )
+    }
+
+    fn ensure_actionable(element: &IUIAutomationElement) -> Result<(), String> {
+        if !unsafe { element.CurrentIsEnabled() }
+            .map_err(|e| format!("CurrentIsEnabled: {e}"))?
+            .as_bool()
+            || unsafe { element.CurrentIsOffscreen() }
+                .map_err(|e| format!("CurrentIsOffscreen: {e}"))?
+                .as_bool()
+        {
+            return Err("Element reference is disabled or offscreen".to_owned());
+        }
+        Ok(())
     }
 
     fn pattern_available(element: &IUIAutomationElement, property_id: UIA_PROPERTY_ID) -> bool {
@@ -678,22 +812,35 @@ mod native {
         runtime_id_target: &[i32],
         automation_id: &str,
         text: &str,
-    ) -> Result<SetTextResult, String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
-        if let Ok(pattern) =
-            unsafe { element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
-        {
+    ) -> Result<SetTextResult, ProtocolError> {
+        let (_com, _uia, element) =
+            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+        ensure_actionable(&element).map_err(before_delivery)?;
+        if let Some(pattern) = probe_pattern::<IUIAutomationValuePattern>(
+            &element,
+            UIA_ValuePatternId,
+            UIA_IsValuePatternAvailablePropertyId,
+        )? {
+            if unsafe { pattern.CurrentIsReadOnly() }
+                .map_err(|error| before_delivery(format!("CurrentIsReadOnly: {error}")))?
+                .as_bool()
+            {
+                return Err(ProtocolError::new(
+                    "Target value is read-only",
+                    ErrorCode::CoordinateBlocked,
+                ));
+            }
             let value = BSTR::from(text);
             unsafe {
                 pattern
                     .SetValue(&value)
-                    .map_err(|e| format!("SetValue: {e}"))?;
+                    .map_err(|e| after_delivery("SetValue", e))?;
             }
             let value = unsafe {
                 pattern
                     .CurrentValue()
-                    .map(|s| s.to_string())
-                    .unwrap_or_default()
+                    .map_err(|e| after_delivery("SetValue read-back", e))?
+                    .to_string()
             };
             return Ok(SetTextResult::Set { value });
         }
@@ -706,7 +853,45 @@ mod native {
         automation_id: &str,
     ) -> Result<(), String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
-        unsafe { element.SetFocus().map_err(|e| format!("SetFocus: {e}")) }
+        focus_element(&element, false)
+    }
+
+    /// Focus and verify one live target; text delivery additionally requires an edit control.
+    pub fn focus_for_input(
+        hwnd: isize,
+        runtime_id_target: &[i32],
+        automation_id: &str,
+        for_text: bool,
+    ) -> Result<(), String> {
+        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        focus_element(&element, for_text)
+    }
+
+    fn focus_element(element: &IUIAutomationElement, for_text: bool) -> Result<(), String> {
+        ensure_actionable(element)?;
+        if for_text
+            && unsafe { element.CurrentControlType() }
+                .map_err(|e| format!("CurrentControlType: {e}"))?
+                != UIA_EditControlTypeId
+        {
+            return Err("Target is not a live editable control".to_owned());
+        }
+        if !unsafe { element.CurrentIsKeyboardFocusable() }
+            .map_err(|e| format!("CurrentIsKeyboardFocusable: {e}"))?
+            .as_bool()
+        {
+            return Err("Target does not accept keyboard focus".to_owned());
+        }
+        unsafe {
+            element.SetFocus().map_err(|e| format!("SetFocus: {e}"))?;
+        }
+        if !unsafe { element.CurrentHasKeyboardFocus() }
+            .map_err(|e| format!("CurrentHasKeyboardFocus: {e}"))?
+            .as_bool()
+        {
+            return Err("Target keyboard focus could not be verified".to_owned());
+        }
+        Ok(())
     }
 
     pub fn scroll(
@@ -715,11 +900,15 @@ mod native {
         automation_id: &str,
         x: f64,
         y: f64,
-    ) -> Result<ScrollResult, String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
-        if let Ok(pattern) = unsafe {
-            element.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
-        } {
+    ) -> Result<ScrollResult, ProtocolError> {
+        let (_com, _uia, element) =
+            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+        ensure_actionable(&element).map_err(before_delivery)?;
+        if let Some(pattern) = probe_pattern::<IUIAutomationScrollPattern>(
+            &element,
+            UIA_ScrollPatternId,
+            UIA_IsScrollPatternAvailablePropertyId,
+        )? {
             let horizontal = if x > 0.0 {
                 ScrollAmount_SmallIncrement
             } else if x < 0.0 {
@@ -737,7 +926,7 @@ mod native {
             unsafe {
                 pattern
                     .Scroll(horizontal, vertical)
-                    .map_err(|e| format!("Scroll: {e}"))?;
+                    .map_err(|e| after_delivery("Scroll", e))?;
             }
             return Ok(ScrollResult::Scrolled);
         }
@@ -768,7 +957,7 @@ mod native {
             uia.ControlViewWalker()
                 .map_err(|e| format!("ControlViewWalker: {e}"))?
         };
-        Ok(is_ancestor(&walker, &target_id, hit) || is_ancestor(&walker, &hit_id, target))
+        Ok(is_ancestor(&walker, &target_id, hit))
     }
 
     fn is_ancestor(
@@ -797,83 +986,28 @@ mod native {
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<(ComGuard, IUIAutomation, IUIAutomationElement), String> {
+        crate::desktop::validated_bounds(hwnd, None).map_err(|error| error.to_string())?;
+        if runtime_id_target.is_empty() {
+            return Err("Element reference is stale".to_owned());
+        }
         let com = ComGuard::new()?;
-        let uia: IUIAutomation = unsafe {
-            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
-                .map_err(|e| format!("CoCreateInstance IUIAutomation: {e}"))?
-        };
+        let uia = automation()?;
         let root = unsafe {
             uia.ElementFromHandle(HWND(hwnd as *mut _))
                 .map_err(|e| format!("ElementFromHandle: {e}"))?
         };
+        let _discovery = DiscoveryLease::begin(&uia, &root)?;
         if runtime_id(&root).as_deref() == Some(runtime_id_target) {
             return Ok((com, uia, root));
         }
-        // UIA RuntimeId is exposed as a SAFEARRAY and is not reliably accepted by
-        // CreatePropertyCondition across providers/windows-rs VARIANT conversion,
-        // so use AutomationId as the fast server-side lookup when available and
-        // keep RuntimeId as the authoritative equality check/fallback scan.
-        if !automation_id.is_empty() {
-            let value = VARIANT::from(automation_id);
-            if let Ok(condition) =
-                unsafe { uia.CreatePropertyCondition(UIA_AutomationIdPropertyId, &value) }
-            {
-                if let Ok(element) = unsafe { root.FindFirst(TreeScope_Subtree, &condition) } {
-                    if runtime_id(&element).as_deref() == Some(runtime_id_target)
-                        || runtime_id_target.is_empty()
-                    {
-                        return Ok((com, uia, element));
-                    }
-                    let candidate_id = unsafe {
-                        element
-                            .CurrentAutomationId()
-                            .unwrap_or_default()
-                            .to_string()
-                    };
-                    if candidate_id == automation_id && runtime_id_target.is_empty() {
-                        return Ok((com, uia, element));
-                    }
-                }
-            }
-        }
-
-        let condition = unsafe {
-            uia.CreateTrueCondition()
-                .map_err(|e| format!("CreateTrueCondition: {e}"))?
-        };
-        let found = unsafe {
-            root.FindAll(TreeScope_Subtree, &condition)
-                .map_err(|e| format!("FindAll: {e}"))?
-        };
-        let count = unsafe {
-            found
-                .Length()
-                .map_err(|e| format!("ElementArray.Length: {e}"))?
-        };
-        let mut automation_fallback = None;
-        for i in 0..count {
-            let element = unsafe {
-                found
-                    .GetElement(i)
-                    .map_err(|e| format!("GetElement({i}): {e}"))?
-            };
+        // An AutomationId can be reused after destruction. Never substitute it
+        // for the observed RuntimeId, even when only one matching node exists.
+        let _ = automation_id;
+        let (found, _) = bounded_elements(&uia, &root)?;
+        for element in found {
             if runtime_id(&element).as_deref() == Some(runtime_id_target) {
                 return Ok((com, uia, element));
             }
-            if !automation_id.is_empty() {
-                let candidate_id = unsafe {
-                    element
-                        .CurrentAutomationId()
-                        .unwrap_or_default()
-                        .to_string()
-                };
-                if candidate_id == automation_id && automation_fallback.is_none() {
-                    automation_fallback = Some(element);
-                }
-            }
-        }
-        if let Some(element) = automation_fallback {
-            return Ok((com, uia, element));
         }
         Err("Element reference is stale".to_owned())
     }
@@ -916,7 +1050,7 @@ mod native {
             // SAFETY: COM must be initialised for the calling thread before
             // any UIA calls.  S_OK (0) and S_FALSE (1) are both success
             // indicators; only a negative HRESULT means failure.
-            let hr = unsafe { CoInitializeEx(Some(std::ptr::null()), COINIT_APARTMENTTHREADED) };
+            let hr = unsafe { CoInitializeEx(Some(std::ptr::null()), COINIT_MULTITHREADED) };
             if hr.0 < 0 {
                 return Err(format!("CoInitializeEx failed: {:#010x}", hr.0));
             }
@@ -937,8 +1071,8 @@ mod native {
 
 #[cfg(windows)]
 pub use native::{
-    focus, live_elements, occlusion_ok, press, read_live_text, scroll, set_text, snapshot,
-    uia_extract, ElementSnapshot, PressResult, ScrollResult, SetTextResult,
+    focus, focus_for_input, live_elements, occlusion_ok, press, read_live_text, scroll, set_text,
+    snapshot, uia_extract, ElementSnapshot, PressResult, ScrollResult, SetTextResult,
 };
 
 #[cfg(not(windows))]
@@ -991,8 +1125,11 @@ pub fn press(
     _hwnd: isize,
     _runtime_id: &[i32],
     _automation_id: &str,
-) -> Result<PressResult, String> {
-    Err("UIA is only supported on Windows".to_owned())
+) -> Result<PressResult, crate::ProtocolError> {
+    Err(crate::ProtocolError::new(
+        "UIA is only supported on Windows",
+        crate::ErrorCode::UnsupportedPlatform,
+    ))
 }
 #[cfg(not(windows))]
 pub fn set_text(
@@ -1000,7 +1137,20 @@ pub fn set_text(
     _runtime_id: &[i32],
     _automation_id: &str,
     _text: &str,
-) -> Result<SetTextResult, String> {
+) -> Result<SetTextResult, crate::ProtocolError> {
+    Err(crate::ProtocolError::new(
+        "UIA is only supported on Windows",
+        crate::ErrorCode::UnsupportedPlatform,
+    ))
+}
+/// Verify the exact live target owns keyboard focus before physical key input.
+#[cfg(not(windows))]
+pub fn focus_for_input(
+    _hwnd: isize,
+    _runtime_id: &[i32],
+    _automation_id: &str,
+    _for_text: bool,
+) -> Result<(), String> {
     Err("UIA is only supported on Windows".to_owned())
 }
 #[cfg(not(windows))]
@@ -1014,8 +1164,11 @@ pub fn scroll(
     _automation_id: &str,
     _x: f64,
     _y: f64,
-) -> Result<ScrollResult, String> {
-    Err("UIA is only supported on Windows".to_owned())
+) -> Result<ScrollResult, crate::ProtocolError> {
+    Err(crate::ProtocolError::new(
+        "UIA is only supported on Windows",
+        crate::ErrorCode::UnsupportedPlatform,
+    ))
 }
 #[cfg(not(windows))]
 pub fn occlusion_ok(

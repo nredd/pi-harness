@@ -269,6 +269,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

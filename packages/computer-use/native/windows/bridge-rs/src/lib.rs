@@ -4,7 +4,10 @@
 //! between the TypeScript host and the Rust helper binary.
 
 pub mod capture;
+pub mod desktop;
 pub mod error;
+pub mod freshness;
+pub mod guard;
 pub mod input;
 pub mod protocol;
 pub mod refs;
@@ -42,7 +45,7 @@ The helper declares per-monitor-v2 DPI awareness at startup and reports `scaleFa
 
 ## Refs, actions, and deltas
 
-Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted actions resolve a live `IUIAutomationElement` first:
+Observed `@e` refs store UIA RuntimeId and AutomationId metadata. RuntimeId is authoritative; a reused AutomationId cannot revive a removed element. Ref-targeted actions resolve a live `IUIAutomationElement` first:
 
 - `press`/`click`: `InvokePattern`, then `TogglePattern`, then `SelectionItemPattern`, then `ExpandCollapsePattern`, then LegacyIAccessible default action; successful pattern grounding reports `grounding: "description"`, `delivery: "ax"`. Coordinate fallback is blocked by `ax_only` and preflights occlusion with `ElementFromPoint`.
 - `setText`: `ValuePattern.SetValue`, then `CurrentValue` read-back. `evidence.value` is the value actually read.
@@ -50,6 +53,10 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
 `readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals.
+
+Discovery uses a selected-subtree UIA event registration and a bounded raw-view walk, never provider-side `FindAll(Subtree)` or a global screen-reader setting change. UIA connections/transactions have 500-ms limits. Coordinate fallback requires successful live snapshot, valid current bounds within the owning window and successful hit testing. Errors refuse before input; cached screenshot bounds are never used.
+
+Window/session/desktop and mandatory-integrity checks precede mutation. Physical work takes a session-local named Win32 mutex, including complete physical batches. A five-second wait or abandoned owner refuses without replay. This kernel lease is not the WSL transport's persistent uncertain-delivery fence. Diagnostics advertise `fail-closed-live-target-v1`; protocol and architecture remain `4` and `1`.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 

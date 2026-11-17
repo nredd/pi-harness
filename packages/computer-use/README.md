@@ -25,6 +25,90 @@ without waiting for the command deadline. Cancellation clears the local pending 
 listener; late replies are ignored. It does not stop native work already sent or kill the helper.
 Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
+## Windows native helper safety
+
+The native source is `native/windows/bridge-rs/`. This source change is a sibling of the
+opt-in WSL transport (#981), not a second transport. It does not enable WSL interop,
+install a helper, change accessibility settings or grant privileges. #673 remains release-gating.
+
+- Protocol `4` and architecture `1` remain compatible. Diagnostics advertise
+  `capabilities: ["fail-closed-live-target-v1"]`. The coordinated WSL client must require this
+  capability before accepting a helper; an owner-pinned SHA alone does not make an older executable safe.
+- Ref fallback resolves the observed RuntimeId again, reads current bounds and checks the selected
+  window/session/desktop, token integrity and hit-tested ownership before input. Missing, disabled,
+  offscreen, occluded, reused or inaccessible elements refuse. No error falls back to screenshot
+  coordinates, and no uncertain mutating result is replayed. A reused AutomationId cannot revive a ref.
+  A failed pattern-availability query is an error, not an absent pattern or permission to fall back.
+  Read-only value patterns refuse before writing. Ref keyboard fallback verifies live keyboard focus;
+  text fallback additionally requires an edit
+  control. It does not click again after that verification or type into the previously focused field.
+- Discovery registers a temporary UIA event listener on the selected subtree and walks raw-view
+  children, at most 200 nodes/64 levels with a 1.5-second traversal budget and 500-ms UIA provider
+  connection/transaction limits. The listener is removed on scope exit. UIA can exceed a traversal
+  budget inside an outstanding provider call; the transport's terminal timeout remains necessary.
+  Rich apps that ignore scoped assistive-client discovery still need owner-enabled accessibility.
+  The helper NEVER sets the global `SPI_SETSCREENREADER` flag; scoped discovery does not guarantee rich-app labels.
+- Startup requires per-monitor-v2 DPI awareness. Geometry stays in physical pixels, including negative
+  origins. Restore uses `SW_RESTORE`, never a taskbar toggle. Explicit focus/capture may try one paired
+  Alt hint and `BringWindowToTop` under the physical-input lease. Ref action preflight never sends
+  that hint: stale or failed hit-testing cannot send even a focus keystroke.
+  Window images use selected-window `PrintWindow` rendering, not an occluder's screen pixels. Capture
+  requires two matching completed renders, plus changed frame or rectangle evidence after activation
+  or restoration, within 1.5 seconds. Missing freshness, moving windows, blank/failed renders and captures
+  over 16 million pixels refuse explicitly. A static/background window whose freshness cannot be proved
+  may refuse rather than return an old frame.
+- Participating native helper processes share a session-local kernel mutex for physical input,
+  including restore/focus/capture and complete foreground batches. A foreground batch reserves input
+  before live pattern probing, even if its observation advertised usable patterns. Kernel acquisition
+  waits at most five seconds.
+  Kernel abandonment refuses the waiting action; it never retries the crashed action. Windows releases
+  thread ownership on death, but this is NOT a persistent uncertain-delivery fence. The WSL transport's
+  retained host-volume lease remains authoritative after cancellation/timeout/helper failure; recovery
+  requires the owner's documented review, never automatic lease stealing. No guarantee is made against
+  a human, a nonparticipating program or hostile same-user code injecting input.
+  Ordinary delivery failures attempt key/button release once. A possibly partial physical-input
+  failure, or an uncertain UIA mutating-call/read-back failure, terminates the helper without
+  acknowledging the request, stops the batch and leaves the
+  WSL transport's uncertainty fence intact. It never replays the failed operation. Lost stdout is
+  terminal; stdin EOF cancels queued mutations and stops the helper after at most a two-second
+  shutdown grace instead of joining a stuck provider indefinitely. An already admitted action may
+  have run, and a forced stop can leave key/button state uncertain. The owner must verify the stopped
+  process and input/app state before clearing the retained WSL lease.
+
+Build and execute on an authorized Windows checkout, not inside an interop-disabled CI guest:
+
+```sh
+rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+cargo +1.97.1 build --locked --release --bin windows-bridge --manifest-path native/windows/bridge-rs/Cargo.toml
+cargo +1.97.1 test --locked --all-targets --manifest-path native/windows/bridge-rs/Cargo.toml -- --test-threads=1
+cargo +1.97.1 run --locked --release --manifest-path native/windows/bridge-rs/Cargo.toml --example disposable_windows_fixture
+```
+
+Native crate tests exercise real kernel input serialization and process-abandonment refusal without
+an interactive desktop. The example opens ONLY its own disposable Win32 windows. It exercises scoped
+assistive-client-dependent labels, pattern probing, current bounds after layout shifts, one actual
+non-invokable click, restore, selected-window PNG capture/read-back and refused invalid/PID identities.
+It prints the actual observed DPI.
+It does not exercise owner apps, credentials, browser debug servers, PowerShell runtime control or WSL
+interop. Session 0 or denied `OpenInputDesktop` returns `NATIVE_FIXTURE_UNSUPPORTED` (exit `3`), not
+an assertion pass. CI records that exact GUI case as `NOT_RUN_HEADLESS`, separately from native
+link/unit proof. Unexpected API failures and fixture assertions still fail the job. Mixed-DPI
+and negative-monitor execution remain explicit `NOT RUN` unless an authorized multi-monitor target
+runs those cases; portable negative-coordinate tests do not substitute for that execution.
+
+The `windows-helper` job in `.github/workflows/native-helper.yml` links an actual MSVC x64 executable and runs these native
+checks on disposable Windows infrastructure. Its `windows-helper-native-<SHA>` artifact contains
+`windows-bridge.exe`, `SHA256SUMS`, source/target metadata, compiler log and explicit fixture status/log. Download the exact
+reviewed commit's artifact, verify `SHA256SUMS` independently and inspect the native log before manually
+placing the executable at the owner-controlled path described by #981. This is build delivery, NOT
+publication, release acceptance or activation. The unchanged macOS `build` job is separate; its passing result is not Windows link/run proof. Existing Windows LLVM coverage production is unchanged; absent native branch
+and statement counters remain unmeasured.
+
+Local Rust tests and Windows-target type checks are NOT Windows link/run proof. The full #673 matrix
+still needs an authorized interactive Windows/WSL2 owner: rich-app labels, non-invokable control input,
+image read-back, minimized/focus/layout changes, mixed DPI/negative origins, desktop/session/permission
+refusals, two actual Pi sessions and retained-lease recovery. No owner target or CI interop is activated.
+
 ## Tools
 
 State-consuming desktop tools require an observation; missing or blank `stateId` fails with

@@ -89,6 +89,22 @@ pub fn response_with_delta(mut response: Value, source: &str, delta: Vec<Value>)
     response
 }
 
+/// Send a paired Alt hint for an explicitly requested foreground transition.
+/// The caller must own the physical-input lease for the complete transition.
+pub fn foreground_hint() -> Result<(), ProtocolError> {
+    #[cfg(windows)]
+    {
+        native::foreground_hint()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(ProtocolError::new(
+            "Foreground input requires Windows",
+            ErrorCode::UnsupportedPlatform,
+        ))
+    }
+}
+
 pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
     #[cfg(not(windows))]
     {
@@ -151,6 +167,22 @@ fn dispatch(
     }
 }
 
+/// Run one physical-input operation and its bounded key/button release exactly once.
+/// Cleanup also runs after partial OS failure; neither callback is retried. A
+/// failed cleanup cannot report success; cleanup uncertainty outranks an ordinary refusal.
+pub fn with_input_cleanup<T>(
+    work: impl FnOnce() -> Result<T, ProtocolError>,
+    release: impl FnOnce() -> Result<(), ProtocolError>,
+) -> Result<T, ProtocolError> {
+    let result = work();
+    let cleanup = release();
+    match (result, cleanup) {
+        (Err(_), Err(cleanup)) if cleanup.outcome_uncertain() => Err(cleanup),
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 fn invalid(message: impl Into<String>) -> ProtocolError {
     ProtocolError::new(message.into(), ErrorCode::InvalidRequest)
 }
@@ -160,6 +192,13 @@ mod native {
     use super::*;
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+
+    pub fn foreground_hint() -> Result<(), ProtocolError> {
+        with_input_cleanup(
+            || send(&[key(VK_MENU, false)]),
+            || send(&[key(VK_MENU, true)]),
+        )
+    }
 
     pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
         hotkey(&[VK_CONTROL], VK_L)?;
@@ -267,7 +306,7 @@ mod native {
     }
 
     fn input_failed(error: impl std::fmt::Display) -> ProtocolError {
-        ProtocolError::new(format!("Input failed: {error}"), ErrorCode::CaptureFailed)
+        ProtocolError::uncertain(format!("Input failed: {error}"), ErrorCode::CaptureFailed)
     }
 
     fn point_value(value: &Value) -> Option<(i32, i32)> {
@@ -348,7 +387,7 @@ mod native {
             "middle" => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
             _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
         };
-        send(&[mouse(down, 0), mouse(up, 0)])
+        with_input_cleanup(|| send(&[mouse(down, 0)]), || send(&[mouse(up, 0)]))
     }
 
     fn drag(points: &[(i32, i32)]) -> Result<(), ProtocolError> {
@@ -356,11 +395,16 @@ mod native {
             return Err(invalid("drag requires at least two points"));
         }
         unsafe { SetCursorPos(points[0].0, points[0].1) }.map_err(input_failed)?;
-        send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
-        for &(x, y) in &points[1..] {
-            unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
-        }
-        send(&[mouse(MOUSEEVENTF_LEFTUP, 0)])
+        with_input_cleanup(
+            || {
+                send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
+                for &(x, y) in &points[1..] {
+                    unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
+                }
+                Ok(())
+            },
+            || send(&[mouse(MOUSEEVENTF_LEFTUP, 0)]),
+        )
     }
 
     fn scroll(x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
@@ -402,27 +446,47 @@ mod native {
             .iter()
             .map(|name| vk_for(name).ok_or_else(|| invalid(format!("Unsupported key '{name}'"))))
             .collect::<Result<Vec<_>, _>>()?;
-        for vk in &vks[..vks.len().saturating_sub(1)] {
-            send(&[key(*vk, false)])?;
-        }
-        if let Some(last) = vks.last() {
-            send(&[key(*last, false), key(*last, true)])?;
-        }
-        for vk in vks[..vks.len().saturating_sub(1)].iter().rev() {
-            send(&[key(*vk, true)])?;
-        }
-        Ok(())
+        with_input_cleanup(
+            || {
+                for vk in &vks {
+                    send(&[key(*vk, false)])?;
+                }
+                Ok(())
+            },
+            || {
+                send(
+                    &vks.iter()
+                        .rev()
+                        .map(|vk| key(*vk, true))
+                        .collect::<Vec<_>>(),
+                )
+            },
+        )
     }
 
     fn hotkey(mods: &[VIRTUAL_KEY], key_vk: VIRTUAL_KEY) -> Result<(), ProtocolError> {
-        for vk in mods {
-            send(&[key(*vk, false)])?;
-        }
-        send(&[key(key_vk, false), key(key_vk, true)])?;
-        for vk in mods.iter().rev() {
-            send(&[key(*vk, true)])?;
-        }
-        Ok(())
+        let keys = mods
+            .iter()
+            .copied()
+            .chain(std::iter::once(key_vk))
+            .collect::<Vec<_>>();
+        with_input_cleanup(
+            || {
+                for vk in &keys {
+                    send(&[key(*vk, false)])?;
+                }
+                Ok(())
+            },
+            || {
+                send(
+                    &keys
+                        .iter()
+                        .rev()
+                        .map(|vk| key(*vk, true))
+                        .collect::<Vec<_>>(),
+                )
+            },
+        )
     }
 
     fn vk_for(name: &str) -> Option<VIRTUAL_KEY> {

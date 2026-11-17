@@ -35,6 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Refuse Windows ref-coordinate input when current UIA identity, bounds, hit testing or desktop/session permissions cannot be verified. Never substitute cached coordinates or reused AutomationIds. Add scoped discovery, bounded fresh selected-window capture, idempotent restore and a cross-process physical-input mutex; advertise guarded-helper capability without changing protocol `4`. Add disposable native Windows fixture/build artifacts, with real WSL and multi-monitor acceptance still outstanding (#983, refs #673).
+
 - Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).
 
 - Windows helper commands now reject promptly with `Operation aborted.` for post-write cancellation, clear the pending request, timer and listener on every completion/write-error path, and ignore late replies. This cancels the local wait, not native work already sent (nredd/pi-harness#750).
