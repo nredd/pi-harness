@@ -83,8 +83,25 @@ def test_removed_measured_package_requires_its_entire_tree_deleted(
     check_ratchet(current, base, root=tmp_path)
     check_inventory_ratchet(tmp_path, current, base, "HEAD")
     (tmp_path / "coverage/policy.json").write_text(current.model_dump_json())
+    # Forbid platform-dependent identity guessing even on developer machines.
+    git_read(tmp_path, ["config", "user.useConfigOnly", "true"])
     git_read(tmp_path, ["add", "-A"])
-    git_read(tmp_path, ["commit", "-qm", "Retire the fixture package"])
+    git_read(
+        tmp_path,
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-qm",
+            "Retire the fixture package",
+        ],
+    )
     command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--base", "HEAD~1"]
     rejected = subprocess.run(command, capture_output=True, text=True, check=False)
     assert rejected.returncode == 1
