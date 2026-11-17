@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
@@ -8,18 +8,16 @@ import path from "node:path";
 import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	type ActionState,
 	canRetryInForeground,
 	outcomeAfterCheck,
 	outcomeAfterObservedValues,
-	type PreparedAction,
 	prepareAction,
 	strictHeadlessRejection,
 	unsupportedActionRejection,
+	type ActionState,
+	type PreparedAction,
 } from "./actions.ts";
 import {
-	type CdpConsoleEntry,
-	type CdpPageSnapshot,
 	cdpClickForContext,
 	cdpDragForContext,
 	cdpEvaluateForContext,
@@ -33,6 +31,8 @@ import {
 	cdpTypeForContext,
 	disconnectCdp,
 	listCdpPageContexts,
+	type CdpConsoleEntry,
+	type CdpPageSnapshot,
 } from "./cdp.ts";
 import {
 	type ComputerUseConfig,
@@ -42,15 +42,50 @@ import {
 	isHeadlessMode,
 	loadComputerUseConfig,
 } from "./config.ts";
+import { normalizeFindParams } from "./find-params.ts";
+import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
 import {
-	type ActParams,
+	controlLine,
+	foldToBudget,
+	graftScopedOutline,
+	nodeByRef,
+	outlineNodeLabel,
+	outlineNodePath,
+	rankedTextMatch,
+	renderInteractiveControls,
+	restoreOutline,
+	searchOutline,
+	searchOutlineRanked,
+	serializeOutline,
+	serializeOutlineNodeShallow,
+	serializeOutlineSearchMatch,
+	type LookResponse,
+	type Outline,
+	type OutlineChange,
+	type OutlineDiff,
+	type OutlineNode,
+	type OutlineSearchMatch,
+	type SerializedOutline,
+	type SerializedOutlineNode,
+	type SerializedOutlineSearchMatch,
+} from "./outline.ts";
+import {
+	applyOutputEnvelope,
+	boundToolError,
+	clearStoredOutputs,
+	readStoredOutput,
+	UI_TEXT_PAGE_CHARS,
+} from "./output.ts";
+import {
 	AGENT_TOOL_NAMES,
+	type ActParams,
 	type EvaluateBrowserParams,
 	type ExpandUiParams,
-	type FindParams,
 	type ImageMode,
 	type InspectUiParams,
 	type LaunchBrowserParams,
+	type FindParams,
 	type NavigateBrowserParams,
 	type ObserveDetail,
 	type ObserveParams,
@@ -61,70 +96,34 @@ import {
 	type UiAction,
 	type WaitForParams,
 } from "./contract.ts";
-import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
-import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
-import {
-	controlLine,
-	foldToBudget,
-	graftScopedOutline,
-	type LookResponse,
-	nodeByRef,
-	type Outline,
-	type OutlineChange,
-	type OutlineDiff,
-	type OutlineNode,
-	type OutlineSearchMatch,
-	outlineNodeLabel,
-	outlineNodePath,
-	rankedTextMatch,
-	renderInteractiveControls,
-	restoreOutline,
-	type SerializedOutline,
-	type SerializedOutlineNode,
-	type SerializedOutlineSearchMatch,
-	searchOutline,
-	searchOutlineRanked,
-	serializeOutline,
-	serializeOutlineNodeShallow,
-	serializeOutlineSearchMatch,
-} from "./outline.ts";
-import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
-import {
-	applyOutputEnvelope,
-	boundToolError,
-	clearStoredOutputs,
-	readStoredOutput,
-	UI_TEXT_PAGE_CHARS,
-} from "./output.ts";
-import type { PermissionStatus } from "./permissions.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import type {
 	FramePoints,
-	PlatformFrontmostResult as FrontmostResult,
 	HelperActPerformed,
 	HelperActResult,
-	PlatformApp as HelperApp,
-	PlatformRoot as HelperWindow,
 	NativeInputDelivery,
 	PlatformActRequest,
+	PlatformApp as HelperApp,
 	PlatformDiagnostics,
-	PlatformRoot,
+	PlatformFrontmostResult as FrontmostResult,
+	PlatformRoot as HelperWindow,
 } from "./platform/types.ts";
-import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
+import type { PermissionStatus } from "./permissions.ts";
 import { ResourceScheduler } from "./runtime.ts";
-import { type CurrentCapture, type CurrentTarget, type OperationState, SavedStates } from "./state.ts";
+import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
+import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
+import type { PlatformRoot } from "./platform/types.ts";
+import { SavedStates, type CurrentCapture, type CurrentTarget, type OperationState } from "./state.ts";
 import { changesBetween, renderChanges, stabilizeRefs } from "./view.ts";
-
 export type {
 	ActParams,
 	EvaluateBrowserParams,
 	ExpandUiParams,
-	FindParams,
 	ImageMode,
 	InspectUiParams,
 	LaunchBrowserParams,
+	FindParams,
 	MouseButtonName,
 	NavigateBrowserParams,
 	ObserveParams,
@@ -2197,7 +2196,7 @@ async function performExpandUi(
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	const outline = currentOutlineOrThrow();
+	let outline = currentOutlineOrThrow();
 	const ref = trimOrUndefined(params.ref);
 	if (!ref) throw new Error("expand_ui.ref is required.");
 	const initialTarget = nodeByRef(outline, ref);
@@ -2937,7 +2936,6 @@ async function managedBrowserExecutable(browser: ComputerUseConfig["managed_brow
 	for (const candidate of candidates) {
 		try {
 			await access(candidate, fsConstants.X_OK);
-			if (!(await lstat(await realpath(candidate))).isFile()) continue;
 			return candidate;
 		} catch {
 			// Try the next platform-appropriate installation location.
@@ -2962,33 +2960,19 @@ function freeTcpPort(): Promise<number> {
 	});
 }
 
-async function waitForCdpPort(port: number, signal: AbortSignal | undefined, browser: ChildProcess): Promise<void> {
-	const failed = new AbortController();
-	const onError = (error: Error): void => failed.abort(error);
-	browser.once("error", onError);
-	const waiting = AbortSignal.any([failed.signal, ...(signal ? [signal] : [])]);
-	try {
-		const deadline = Date.now() + MANAGED_BROWSER_READY_TIMEOUT_MS;
-		while (Date.now() < deadline) {
-			if (signal?.aborted) throw new Error("Browser launch was aborted.");
-			try {
-				const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
-					signal: AbortSignal.any([waiting, AbortSignal.timeout(500)]),
-				});
-				if (response.ok) return;
-			} catch {
-				// Browser is still starting, unless its process failed.
-			}
-			if (failed.signal.aborted) throw failed.signal.reason;
-			await sleep(200, waiting);
+async function waitForCdpPort(port: number, signal?: AbortSignal): Promise<void> {
+	const deadline = Date.now() + MANAGED_BROWSER_READY_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (signal?.aborted) throw new Error("Browser launch was aborted.");
+		try {
+			const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(500) });
+			if (response.ok) return;
+		} catch {
+			// Browser is still starting.
 		}
-		throw new Error(`Managed browser did not expose CDP on port ${port} within ${MANAGED_BROWSER_READY_TIMEOUT_MS}ms.`);
-	} catch (error) {
-		if (failed.signal.aborted) throw failed.signal.reason;
-		throw error;
-	} finally {
-		browser.off("error", onError);
+		await sleep(200, signal);
 	}
+	throw new Error(`Managed browser did not expose CDP on port ${port} within ${MANAGED_BROWSER_READY_TIMEOUT_MS}ms.`);
 }
 
 // Enabled with `NODE_DEBUG=pi-computer-use`; the bridge otherwise never writes to the TUI's stdio.
@@ -3304,7 +3288,17 @@ function releasePersistentProfileLease(lease: PersistentProfileLease): boolean {
 	}
 }
 
-/** Validate an operator-created profile without reading any profile contents or changing its permissions. */
+/**
+ * Validate an operator-created profile without reading any profile contents or changing its permissions.
+ *
+ * Check-then-use design: a pathname does not pin an inode, so the validated `dev`/`ino` is retained and the
+ * full policy is repeated after port allocation and previous-browser shutdown (which yield), and again after
+ * the lease is acquired. Lease check/create/capture and the final profile, lease and Chromium-lock checks run
+ * synchronously immediately before `spawn`, using the verified resolved path. Ancestors must be owned by the
+ * current user or root and not group/world writable unless sticky, so another UID cannot swap them. Cleanup
+ * releases only the lease whose identity was captured inside the unchanged profile; uncertainty leaves it in
+ * place. Same-UID attackers are out of scope, and only POSIX owner/mode bits are read (no extended ACLs).
+ */
 async function persistentBrowserProfile(
 	configured: string,
 	expected?: ValidatedPersistentProfile,
@@ -3446,8 +3440,6 @@ async function startManagedBrowser(
 	// `close` also fires after an async spawn failure. Session shutdown waits for it and the exit hook
 	// covers a hard exit, so the profile never outlives the browser.
 	trackProfileDir(profileDir, managedBrowser, lease);
-	// spawn errors are asynchronous too; the readiness wait below reports them and cleans up.
-	managedBrowser.on("error", () => {});
 	managedBrowser.once("close", () => {
 		// The hard-exit hook forgets leases but must never turn a persistent profile into temp data.
 		if (lease && liveProfileDirs.get(profileDir)?.browser !== managedBrowser) return;
@@ -3481,19 +3473,7 @@ async function performLaunchBrowser(
 		return await startManagedBrowser(browser, requestedUrl ?? "about:blank");
 	});
 	try {
-		await waitForCdpPort(port, signal, managedBrowser);
-		const page = (await listCdpPageContexts())[0];
-		if (!page) throw new Error("Managed browser launched without a CDP page context.");
-		const resourceKey = `cdp:${page.targetId}`;
-		const scheduled = await resourceScheduler.read(
-			resourceKey,
-			async () => await cdpSnapshotForContext(page.contextId),
-		);
-		if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
-		const result = browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
-		result.details.executable = executable;
-		result.content.push({ type: "text", text: `Managed browser executable: ${JSON.stringify(executable)}.` });
-		return result;
+		await waitForCdpPort(port, signal);
 	} catch (error) {
 		// A later launch or a shutdown that already took this browser over has stopped it.
 		await withManagedBrowserLifecycle(async () => {
@@ -3501,6 +3481,15 @@ async function performLaunchBrowser(
 		});
 		throw error;
 	}
+	const page = (await listCdpPageContexts())[0];
+	if (!page) throw new Error("Managed browser launched without a CDP page context.");
+	const resourceKey = `cdp:${page.targetId}`;
+	const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(page.contextId));
+	if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
+	const result = browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+	result.details.executable = executable;
+	result.content.push({ type: "text", text: `Managed browser executable: ${JSON.stringify(executable)}.` });
+	return result;
 }
 
 async function performNavigateBrowser(

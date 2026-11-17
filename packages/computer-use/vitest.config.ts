@@ -47,7 +47,8 @@ const ZERO_UNCOVERED_FILES = [
 const config = definePackageConfig("computer-use-vitest", {
 	provider: "istanbul",
 	test: {
-		dir: "test",
+		// Legacy `test/*.test.mjs` plus the standard `tests/*.test.ts`; new tests belong in `tests/` (#860).
+		include: ["test/**/*.test.mjs", "tests/**/*.test.ts"],
 		// The suites came from `node --test` and chained `node`/`tsx` scripts, which ran one at a time.
 		// Keep that: real process groups, Swift/cargo builds and git fixtures share the host. Forks like
 		// `dev-tools`, one worker like `resource-sampler`.
