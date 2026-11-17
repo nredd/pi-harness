@@ -891,9 +891,20 @@ must fall back into the same injected home, not the operator's. Present malforme
 back. `home-injection.test.ts` checks zero real-home probes. Setup retains upstream state/i18n reset
 and config cleanup; the JSON loader stays upstream's `loadJsonConfig`.
 
+`tests/todo-prompt-composition.test.ts` uses `@nredd/pi-test-lib/harness` with the real
+`DefaultResourceLoader`, active `todo` tool and composed system prompt. Its fixed headless scope runs
+unchanged on fork tarballs and stock Pi `1.5.2`, on Node and pinned Bun, including a real `list` and
+missing-task refusal through the session. Select that exact file with
+`node ../../scripts/run-vitest.ts node tests/todo-prompt-composition.test.ts` (replace `node` with
+`bun` for the second engine). Stock verification uses an isolated dependency tree with all Pi siblings
+pinned to `1.5.2`; it does not replace the complete fork gate or claim the remaining tests stock-compatible.
+
 The real core interactive harness and VirtualTerminal check legacy snapshot-less update/delete rows
-refresh after the live subject changes. Valid historical snapshots intentionally remain unchanged.
-These are rendering regressions, not a reason to weaken result-history assertions.
+refresh after the live subject changes. Both cases in `tests/todo-settled-row.test.ts` remain fork-only:
+`tests/fixtures/settled-row.ts` imports core `/testing/interactive` and TUI `/testing`, which stock Pi
+does not export. The headless test does not import this fixture, so no neutral helper split is needed.
+Valid historical snapshots intentionally remain unchanged. These are rendering regressions, not a
+reason to weaken result-history assertions.
 
 ## Package layout
 
