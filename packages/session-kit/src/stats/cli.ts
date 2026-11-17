@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness } from "./load.ts";
 import { exportStats, importStats } from "./snapshot.ts";
+import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
 	"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] " +
-	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO";
+	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO | " +
+	"subagents [--agent-dir DIR] [--sessions-dir DIR]";
 const FLAGS = [
 	"--agent-dir",
 	"--output",
@@ -50,7 +52,13 @@ export async function main(): Promise<void> {
 	const dir = resolve(options.get("--agent-dir") ?? agentDir());
 	const output = options.get("--output");
 	const input = options.get("--input");
-	if (command === "export" && output !== undefined && input === undefined) {
+	if (
+		command === "subagents" &&
+		[...options.keys()].every((flag) => flag === "--agent-dir" || flag === "--sessions-dir")
+	) {
+		const result = await reportSubagents(resolve(options.get("--sessions-dir") ?? resolve(dir, "sessions")));
+		console.log(JSON.stringify(result));
+	} else if (command === "export" && output !== undefined && input === undefined) {
 		const path = (flag: string): string | undefined => {
 			const value = options.get(flag);
 			return value ? resolve(value) : undefined;

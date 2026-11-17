@@ -155,6 +155,50 @@ navigate, `q` or Escape closes. Output is capped. Invalid refs and non-repositor
 errors. Print mode emits a stat (pi currently redirects extension stdout to stderr); JSON emits a
 non-triggering display message. The overlay is TUI-only and works in Plan mode.
 
+## Local subagent usage report
+
+The portable stats CLI also reports existing local pi child-session history:
+
+```sh
+node dist/pi-stats-export.mjs subagents --sessions-dir ./session-history > ./subagent-usage.json
+```
+
+Omit `--sessions-dir` to use the selected `--agent-dir`'s `sessions/` directory. This mode
+only reads original session files. It never writes the stats cache, imports remote snapshots,
+changes configuration, or uploads anything. Output may contain local model labels and diagnostic
+paths; keep the report private. Export/import behavior and the `/stats` pane are unchanged.
+
+`groups` are ordered by agent type, physical provider/model, recorded workflow and traffic class.
+Each has assistant API `calls`, `input`, `output`, `cacheRead`, `cacheWrite`, `recordedCost`,
+`pricedCalls`, `unpricedCalls`, `costComplete` and `unmatchedSessions`. These are API call counts,
+not spawn counts or cost shares. `recordedCost` is the recorded notional priced subtotal, not an
+invoice; `costComplete: false` means it MUST NOT be presented as a complete cost. Missing costs
+are unpriced, while recorded zero prices remain priced. Marked aggregate usage preserves core's
+`pricedCalls`/`unpricedCalls` semantics. `totals` includes every group, including omitted rows.
+
+The report reuses `/stats`' physical usage parser and copied/forked-event deduplication. Parent
+Agent usage reports are never charged again. Original child names, `subagents:record` metadata,
+Agent tool arguments/result IDs and persisted native workflow progress supply attribution.
+Missing/deleted referenced children contribute to `missingSessions` and `unmatchedSessions`,
+not invented tokens or dollars. Children with no identifiable type appear as `unknown` and
+contribute to unmatched counts. Historical custom names may differ from the configured agent type;
+unrecorded workflow membership stays `unknown`. Usage-only remote snapshots cannot recover this
+metadata and are deliberately excluded.
+
+Review traffic is kept separate: `review-standards` and `review-spec` require explicit `Axis:`
+prompt evidence; `review-critic` identifies critic sessions. These describe the mandated review
+lanes, not proof of policy compliance. `retry-repeat` contains resumed runs and another review of
+the same explicit full-HEAD target/axis within a parent session. A changed HEAD is a fresh review;
+other review history stays `review-unknown`. Historical prompts without joinable result IDs cannot
+be classified reliably. Provider retries that never persisted usage are not measurable. Nothing
+in this report recommends weakening either required review axis or the independent critic.
+
+At most 200 groups and 20 diagnostics are returned; `omittedGroups` makes truncation explicit.
+Labels are terminal-safe and bounded. `errors`, `badLines`, unmatched sessions and unpriced calls
+make `complete` false. Unreadable directories/files and malformed/truncated lines are reported,
+not fatal; totals from a damaged scan are partial. Concurrently growing files are not an atomic
+snapshot. There is no cache fallback for deleted originals.
+
 ## Stats
 
 `/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,
