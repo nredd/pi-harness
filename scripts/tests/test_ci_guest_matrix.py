@@ -1002,7 +1002,11 @@ def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
     assert gate["run"].index("make install-benchmark") < gate["run"].index("make check-benchmark")
     # No cp315 `pydantic-core` wheel: an unpinned interpreter makes uv compile it, per sync.
     run = gate["run"]
-    assert run.index("export UV_PYTHON=") < run.index("make install-benchmark")
+    assert (
+        run.index('UV_PYTHON="$(tr -d')
+        < run.index("export UV_PYTHON\n")
+        < run.index("make install-benchmark")
+    )
 
 
 BENCHMARK_STEP = "Benchmark unit gate"
