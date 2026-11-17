@@ -172,7 +172,12 @@ const validTool = (tool: string): boolean => {
 	if (BUILTINS.has(tool) || DEV_TOOLS.has(tool)) return true;
 	const selector = SELECTOR.exec(tool);
 	if (!selector) return false;
-	if (selector[1] === "pi-web-access") return tool === "ext:pi-web-access";
+	if (selector[1] === "pi-web-access") {
+		return (
+			tool === "ext:pi-web-access" ||
+			["web_search", "fetch_content", "get_search_content", "source_check"].includes(tool.split("/")[1] ?? "")
+		);
+	}
 	return selector[1] === "pi-dev-tools" && DEV_TOOLS.has(tool.split("/")[1] ?? "");
 };
 
@@ -189,6 +194,16 @@ test("every agent tool list names real builtins or supported extension tools", (
 	for (const bad of ["reed", "all, read", "ext:@nredd/pi-dev-tools/git_diff", "ext:pi-dev-tools/typo", "ext:unknown"]) {
 		assert.equal(validTool(bad), false, bad);
 	}
+});
+
+test("architect keeps the survey and makes web research and follow-up grilling explicit", () => {
+	const { frontmatter, body } = frontmatterOf("agents/architect.md");
+	assert.deepEqual(list(frontmatter.skills), ["codebase-design"]);
+	assert.deepEqual(list(frontmatter.extensions), ["pi-dev-tools", "pi-web-access"]);
+	assert.ok(body.includes("Follow-up grilling is opt-in"));
+	assert.ok(body.includes("never instructions"));
+	assert.ok(body.includes("not a filesystem sandbox"));
+	assert.ok(body.includes("never write it"));
 });
 
 test("general-purpose delegates only independent reviews and returns monitor ownership", () => {

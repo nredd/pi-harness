@@ -196,8 +196,8 @@ Declared in `package.json` under `piPreset.externalResources`, enforced by tests
 - Skills `codebase-design` (agent `architect`) and `diagnosing-bugs` (agent `debugger`), from
   `mattpocock/skills` (MIT) at the pinned revision. The package never ships them
 - Extension `pi-dev-tools` (`@nredd/pi-dev-tools`), used by `architect`, `code-reviewer`, `critic`,
-  `principal-investigator`, `verifier`; and `pi-web-access`, used by `principal-investigator` and
-  `researcher`
+  `principal-investigator`, `verifier`; and `pi-web-access`, used by `architect`,
+  `principal-investigator` and `researcher`
 - `code-review` mentions `/setup-matt-pocock-skills` and `docs/agents/issue-tracker.md`, both
   optional repo-local context
 
@@ -210,6 +210,16 @@ scoped selector.
 ## Agent command limits
 
 `researcher`, `architect`, `critic`, `code-reviewer` and `principal-investigator` have no shell/SSH and cannot run commands. Their descriptions say so in the first sentence, which survives pi-subagents compact listings. `critic` and `principal-investigator` can run existing tests via `py_test`/`cargo_test`, not arbitrary shell commands. Each prompt requires a FIRST-turn explanation before tool calls when requested commands are unavailable, then a handoff to the caller or a shell-capable agent. Use `general-purpose`/`debugger` for command investigations or `verifier` for gates. There is no per-call tool-override flag.
+
+`architect` keeps the deepening survey and preloaded `codebase-design` vocabulary, adds cited
+web evidence and explicit opt-in follow-up grilling. It proposes decision-record edits in its
+reply, never writes them or starts implementation. Fetch tools may cache material; this is not
+a filesystem sandbox.
+
+`general-purpose` delegates only independent Standards and Spec reviews to read-only
+`code-reviewer` leaves. Passive waits remain with the continuing parent's monitor, linked to
+its tracked todo. The shipping skills preserve that ownership, including bounded parent-only
+foreground waits when native monitors are unavailable.
 
 Local overrides shadow these packaged definitions; update their managed source separately. This change does not activate a preset or alter tool grants.
 

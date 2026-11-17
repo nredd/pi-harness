@@ -104,6 +104,7 @@
         {
           "name": "pi-web-access",
           "requiredBy": [
+            "agents/architect.md",
             "agents/principal-investigator.md",
             "agents/researcher.md"
           ],
