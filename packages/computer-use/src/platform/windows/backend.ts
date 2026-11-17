@@ -1,4 +1,5 @@
-import { parseLookResponse, type LookResponse } from "../../outline.ts";
+import { type LookResponse, parseLookResponse } from "../../outline.ts";
+import { assertPlatformArchitecture } from "../architecture.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
 	ComputerUsePlatformBackend,
@@ -20,7 +21,6 @@ import type {
 	PlatformWaitForResponse,
 } from "../types.ts";
 import { WINDOWS_HELPER_PROTOCOL_VERSION, windowsHelper } from "./helper.ts";
-import { assertPlatformArchitecture } from "../architecture.ts";
 
 function normalizedProcessName(appName: string): string {
 	return appName.toLowerCase().replace(/\.exe$/i, "");
@@ -107,8 +107,8 @@ function helperAction(request: PlatformActRequest): Record<string, unknown> {
 	return { ...request, target: request.target.focus, params: { ...request.params, preserveFocus: true } };
 }
 
-async function ensureReady(
-	_ctx: unknown,
+async function ensureReadyWithTransport(
+	windowsHelper: WindowsHelperTransport,
 	state: PlatformReadyState,
 	signal?: AbortSignal,
 ): Promise<PlatformReadyState> {
@@ -123,99 +123,115 @@ async function ensureReady(
 	return { ...state, lastPermissionCheckAt: Date.now(), helperDiagnostics: diagnostics };
 }
 
-export const windowsBackend: ComputerUsePlatformBackend = {
-	name: "windows",
-	shutdown(): void {
-		windowsHelper.dispose();
-	},
-	ensureReady,
-	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
-		return appsFromRoots(parseRoots(await windowsHelper.command("listRoots", {}, { signal })));
-	},
-	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
-		const roots = parseRoots(
-			await windowsHelper.command("listRoots", Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, {
-				signal,
-			}),
-		);
-		const title = query.title?.trim().toLowerCase();
-		return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
-	},
-	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
-		const roots = parseRoots(await windowsHelper.command("listRoots", {}, { signal }));
-		const focused = roots.find((root) => root.isFocused) ?? roots[0];
-		if (!focused?.pid) throw new Error("No frontmost window was available.");
-		return {
-			appName: focused.appName ?? "Unknown",
-			bundleId: focused.bundleId,
-			pid: focused.pid,
-			windowTitle: focused.title,
-			windowId: focused.windowId,
-			rootRef: focused.rootRef,
-		};
-	},
-	async focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult> {
-		return await windowsHelper.command<PlatformFocusWindowResult>("focusWindow", { ...target }, { signal });
-	},
-	async observe(
-		request: PlatformObserveRequest,
+/** Existing native helper surface, also used by the explicit WSL stdio transport. */
+export interface WindowsHelperTransport {
+	ensureInstalled(signal?: AbortSignal): Promise<void>;
+	command<T>(
+		cmd: string,
+		args?: Record<string, unknown>,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
-	): Promise<LookResponse> {
-		return parseLookResponse(
-			await windowsHelper.command(
-				"look",
-				{
-					...request.target,
-					baseLookId: request.baseLookId,
-					maxDimension: request.maxDimension,
-					readText: request.readText,
-					scopeRef: request.scopeRef,
-					includeImage: request.includeImage,
-				},
-				options,
-			),
-		);
-	},
-	async act(
-		request: PlatformActRequest,
-		options?: { timeoutMs?: number; signal?: AbortSignal },
-	): Promise<HelperActResult> {
-		return await windowsHelper.command<HelperActResult>("act", helperAction(request), options);
-	},
-	async actBatch(
-		requests: PlatformActRequest[],
-		options?: { timeoutMs?: number; signal?: AbortSignal },
-	): Promise<HelperActResult> {
-		return await windowsHelper.command<HelperActResult>("actBatch", { actions: requests.map(helperAction) }, options);
-	},
-	async readText(
-		args: PlatformReadTextRequest,
-		options?: { timeoutMs?: number; signal?: AbortSignal },
-	): Promise<PlatformReadTextResponse> {
-		return await windowsHelper.command("uiaReadText", { ...args }, options);
-	},
-	async waitFor(
-		args: PlatformWaitForRequest,
-		options?: { timeoutMs?: number; signal?: AbortSignal },
-	): Promise<PlatformWaitForResponse> {
-		return await windowsHelper.command("uiaWaitFor", { ...args }, options);
-	},
-	isBrowserApp(appName: string): boolean {
-		return classifyBrowser(appName) !== false;
-	},
-	isChromeFamilyApp(appName: string): boolean {
-		return (
-			classifyBrowser(appName) === "chrome" ||
-			classifyBrowser(appName) === "edge" ||
-			classifyBrowser(appName) === "brave"
-		);
-	},
-	async openBrowserLocation(
-		target: { appName: string; bundleId?: string },
-		url: string,
-		signal?: AbortSignal,
-	): Promise<boolean> {
-		await windowsHelper.command("openBrowserLocation", { ...target, url }, { signal, timeoutMs: 10_000 });
-		return true;
-	},
-};
+	): Promise<T>;
+	dispose(): void;
+}
+
+/** Reuse Windows command mapping without guest coordinate conversions or installation. */
+export function createWindowsBackend(windowsHelper: WindowsHelperTransport): ComputerUsePlatformBackend {
+	return {
+		name: "windows",
+		shutdown(): void {
+			windowsHelper.dispose();
+		},
+		ensureReady: (_ctx, state, signal) => ensureReadyWithTransport(windowsHelper, state, signal),
+		async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
+			return appsFromRoots(parseRoots(await windowsHelper.command("listRoots", {}, { signal })));
+		},
+		async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
+			const roots = parseRoots(
+				await windowsHelper.command("listRoots", Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, {
+					signal,
+				}),
+			);
+			const title = query.title?.trim().toLowerCase();
+			return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
+		},
+		async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
+			const roots = parseRoots(await windowsHelper.command("listRoots", {}, { signal }));
+			const focused = roots.find((root) => root.isFocused) ?? roots[0];
+			if (!focused?.pid) throw new Error("No frontmost window was available.");
+			return {
+				appName: focused.appName ?? "Unknown",
+				bundleId: focused.bundleId,
+				pid: focused.pid,
+				windowTitle: focused.title,
+				windowId: focused.windowId,
+				rootRef: focused.rootRef,
+			};
+		},
+		async focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult> {
+			return await windowsHelper.command<PlatformFocusWindowResult>("focusWindow", { ...target }, { signal });
+		},
+		async observe(
+			request: PlatformObserveRequest,
+			options?: { timeoutMs?: number; signal?: AbortSignal },
+		): Promise<LookResponse> {
+			return parseLookResponse(
+				await windowsHelper.command(
+					"look",
+					{
+						...request.target,
+						baseLookId: request.baseLookId,
+						maxDimension: request.maxDimension,
+						readText: request.readText,
+						scopeRef: request.scopeRef,
+						includeImage: request.includeImage,
+					},
+					options,
+				),
+			);
+		},
+		async act(
+			request: PlatformActRequest,
+			options?: { timeoutMs?: number; signal?: AbortSignal },
+		): Promise<HelperActResult> {
+			return await windowsHelper.command<HelperActResult>("act", helperAction(request), options);
+		},
+		async actBatch(
+			requests: PlatformActRequest[],
+			options?: { timeoutMs?: number; signal?: AbortSignal },
+		): Promise<HelperActResult> {
+			return await windowsHelper.command<HelperActResult>("actBatch", { actions: requests.map(helperAction) }, options);
+		},
+		async readText(
+			args: PlatformReadTextRequest,
+			options?: { timeoutMs?: number; signal?: AbortSignal },
+		): Promise<PlatformReadTextResponse> {
+			return await windowsHelper.command("uiaReadText", { ...args }, options);
+		},
+		async waitFor(
+			args: PlatformWaitForRequest,
+			options?: { timeoutMs?: number; signal?: AbortSignal },
+		): Promise<PlatformWaitForResponse> {
+			return await windowsHelper.command("uiaWaitFor", { ...args }, options);
+		},
+		isBrowserApp(appName: string): boolean {
+			return classifyBrowser(appName) !== false;
+		},
+		isChromeFamilyApp(appName: string): boolean {
+			return (
+				classifyBrowser(appName) === "chrome" ||
+				classifyBrowser(appName) === "edge" ||
+				classifyBrowser(appName) === "brave"
+			);
+		},
+		async openBrowserLocation(
+			target: { appName: string; bundleId?: string },
+			url: string,
+			signal?: AbortSignal,
+		): Promise<boolean> {
+			await windowsHelper.command("openBrowserLocation", { ...target, url }, { signal, timeoutMs: 10_000 });
+			return true;
+		},
+	};
+}
+
+export const windowsBackend = createWindowsBackend(windowsHelper);

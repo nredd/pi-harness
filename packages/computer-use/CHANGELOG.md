@@ -12,6 +12,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
+- Opt-in WSL-to-native-Windows helper transport with an explicit executable SHA-256 pin, bounded stdio requests and a shared host-volume input lease. No PowerShell, installer, interop activation or automatic lease recovery. Native Windows UI/session acceptance and remaining helper hardening stay release-gating under #673; this is partial source support.
 - Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).
 - Deterministic finite-input tests close the five remaining cursor-motion LLVM regions and ten pure-key/selection policy regions in `bridge.swift`. Numerical safeguards stay intact; no live desktop input, capture or TCC runs (nredd/pi-harness#810, #645).
 - Native Windows x64 compiler/test/LLVM CI producer with raw reports, source-hash metadata and deterministic input-policy/null-capture refusal controls. ARM64 and live desktop acceptance remain separate; absent native branch/statement counters remain unmeasured (nredd/pi-harness#696).
