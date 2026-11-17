@@ -1,5 +1,5 @@
 /** Quota settlement/retry competes with goal continuation in the actual router/kit stack. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { GoalStack, goalStates, nudges, spoken, tool } from "./goal-support.ts";

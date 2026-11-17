@@ -1,5 +1,5 @@
 /** Admission refusals traverse the real subagents RPC client and router policy. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { GoalStack, outcomes, spoken, tool } from "./goal-support.ts";
 

@@ -24,11 +24,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-	createTestUiContext,
-	type FauxProviderRegistration,
-	fauxAssistantMessage,
-} from "@earendil-works/pi-coding-agent/testing";
+import { createTestUiContext, type FauxProviderRegistration, fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile } from "../../packages/subscription-router/src/config.ts";
 import { loadConfig } from "../../packages/subscription-router/src/config.ts";

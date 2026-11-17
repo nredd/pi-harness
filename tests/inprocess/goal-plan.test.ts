@@ -1,6 +1,6 @@
 /** Plan/goal command and execution policy through both real factories. */
 import { getCurrentTools } from "@earendil-works/pi-ai/compat";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { complete, GoalStack, goalStates, nudges, outcomes, spoken } from "./goal-support.ts";
 import { loadFork } from "./support.ts";

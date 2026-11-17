@@ -2,8 +2,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import type { Harness } from "@nredd/pi-test-lib/harness";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { runTools } from "../../packages/dev-tools/tests/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";

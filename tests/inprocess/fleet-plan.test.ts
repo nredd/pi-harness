@@ -2,8 +2,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { deferred, GoalStack, nextEvent, outcomes, tool } from "./goal-support.ts";
 import { loadFork } from "./support.ts";

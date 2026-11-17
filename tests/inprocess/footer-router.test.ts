@@ -1,5 +1,5 @@
 /** Real quota admission/routing -> assistant metadata -> preset footer, without paid calls. */
-import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, registerFauxProvider } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { FooterFixture } from "../../packages/preset/tests/fixtures/footer.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";

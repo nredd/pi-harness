@@ -1,5 +1,5 @@
 /** The router alone owns parked/refused work, including explicit kit resume attempts. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { GoalStack, goalStates, nudges, outcomes, spoken, tool } from "./goal-support.ts";
 
