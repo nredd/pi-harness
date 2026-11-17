@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,7 +25,13 @@ RELEASE_HEADER = re.compile(r"^## \[[^\]\n]+\].*$", re.MULTILINE)
 
 @dataclass(frozen=True)
 class Fragment:
-    """Validated path, category and exact one-line Markdown bullet."""
+    """Validated fragment data.
+
+    Parameters:
+        path (Path): Canonical fragment file.
+        category (str): Closed lowercase category.
+        bullet (str): Exact attributed, LF-terminated, one-line Markdown bullet.
+    """
 
     path: Path
     category: str
@@ -97,9 +104,9 @@ def read_fragments(root: Path) -> list[Fragment]:
         if (
             not bullet.startswith("- ")
             or not bullet.endswith("\n")
-            or bullet.count("\n") != 1
+            or bullet.splitlines(keepends=True) != [bullet]
             or bullet[2:-1] != bullet[2:-1].strip()
-            or any(ord(char) < 32 for char in bullet[:-1])
+            or any(unicodedata.category(char) == "Cc" for char in bullet[:-1])
             or reference not in bullet
         ):
             raise ValueError(f"Expected one exact bullet with issue attribution in '{path}'")

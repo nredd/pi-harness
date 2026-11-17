@@ -123,10 +123,10 @@ check-todo-package-contract:  ## Packed @nredd/pi-todo through exact stock Pi 1.
 
 .PHONY: check-changelog-fragments fold-changelog
 check-changelog-fragments:  ## Validate subagents fragment names, issue attribution, bullets and fold inputs without writing
-	python3 scripts/changelog_fragments.py
+	uv run --locked --project integration python scripts/changelog_fragments.py
 
 fold-changelog: check-changelog-fragments  ## Explicitly fold subagents fragments into Unreleased, without publishing or releasing
-	python3 scripts/changelog_fragments.py --fold
+	uv run --locked --project integration python scripts/changelog_fragments.py --fold
 
 release-manifest:  ## Generate releases/<release-id>.json from Gitlinks and package manifests
 	cd scripts && uv run --locked --project ../integration python release_manifest.py $(ARGS)

@@ -22,7 +22,14 @@ BULLET = "- New fix ([#932](https://github.com/nredd/pi-harness/issues/932)).\n"
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """Create a package with a changelog and one valid fragment."""
+    """Create a package with a changelog and one valid fragment.
+
+    Parameters:
+        tmp_path (Path): Disposable root.
+
+    Returns:
+        Path: Populated repository root.
+    """
     package = tmp_path / "packages/subagents"
     changes = package / "changes"
     changes.mkdir(parents=True)
@@ -32,7 +39,14 @@ def repo(tmp_path: Path) -> Path:
 
 
 def test_fold_is_explicit_preserves_history_and_is_idempotent(repo: Path) -> None:
-    """Validate without mutation, fold once, then safely repeat on the consumed tree."""
+    """Validate without mutation, fold once, then safely repeat on the consumed tree.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+
+    Returns:
+        None: Assert exact history preservation and idempotence.
+    """
     package = repo / "packages/subagents"
     changelog = package / "CHANGELOG.md"
     fragment = package / "changes/932.fixed.md"
@@ -67,7 +81,15 @@ def test_fold_is_explicit_preserves_history_and_is_idempotent(repo: Path) -> Non
     ],
 )
 def test_invalid_entries_refuse_without_mutation(repo: Path, name: str) -> None:
-    """Every entry must use the one closed filename grammar."""
+    """Require every entry to use the one closed filename grammar.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+        name (str): Invalid entry name.
+
+    Returns:
+        None: Assert refusal without any input mutation.
+    """
     package = repo / "packages/subagents"
     invalid = package / "changes" / name
     invalid.write_text(BULLET)
@@ -89,6 +111,10 @@ def test_invalid_entries_refuse_without_mutation(repo: Path, name: str) -> None:
         " " + BULLET,
         BULLET + "- Second.\n",
         BULLET.replace("New fix", "New\tfix"),
+        BULLET.replace("New fix", "New\u0085fix"),
+        BULLET.replace("New fix", "New\u2028fix"),
+        BULLET.replace("New fix", "New\u2029fix"),
+        BULLET.replace("New fix", "New\u007ffix"),
         BULLET.replace("New fix", "New\x00fix"),
         BULLET.replace(".\n", ". \n"),
         BULLET.replace("issues/932", "pull/932"),
@@ -98,12 +124,21 @@ def test_invalid_entries_refuse_without_mutation(repo: Path, name: str) -> None:
     ],
 )
 def test_payload_is_one_attributed_exact_bullet(repo: Path, payload: str) -> None:
-    """No frontmatter, extra bullets, whitespace ambiguity or missing/mismatched issue links."""
+    """Reject frontmatter, extra lines, controls and missing/mismatched issue links.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+        payload (str): Invalid fragment payload.
+
+    Returns:
+        None: Assert rejected bytes remain intact.
+    """
     target = repo / "packages/subagents/changes/932.fixed.md"
     target.write_bytes(payload.encode())
     with pytest.raises(ValueError, match="Expected one exact bullet"):
-        changelog_fragments.run(repo, fold=False)
+        changelog_fragments.run(repo, fold=True)
     assert target.read_bytes() == payload.encode()
+    assert (repo / "packages/subagents/CHANGELOG.md").read_text() == CHANGELOG
 
 
 @pytest.mark.parametrize(
@@ -118,7 +153,16 @@ def test_payload_is_one_attributed_exact_bullet(repo: Path, payload: str) -> Non
     ],
 )
 def test_symlinks_are_refused(repo: Path, relative: str, tmp_path: Path) -> None:
-    """Reject a linked ancestor, directory, changelog, fragment or lock."""
+    """Reject a linked ancestor, directory, changelog, fragment or lock.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+        relative (str): Component to replace with a symlink.
+        tmp_path (Path): Temporary directory holding the link destination.
+
+    Returns:
+        None: Assert symlink refusal.
+    """
     path = repo / relative
     outside = tmp_path / "outside"
     if path.exists():
@@ -131,7 +175,14 @@ def test_symlinks_are_refused(repo: Path, relative: str, tmp_path: Path) -> None
 
 
 def test_nonregular_duplicate_and_invalid_utf8_fragments(repo: Path) -> None:
-    """Reject directories, duplicate exact bullets and undecodable source data."""
+    """Reject directories, duplicate exact bullets and undecodable source data.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+
+    Returns:
+        None: Assert each invalid input is rejected.
+    """
     changes = repo / "packages/subagents/changes"
     directory = changes / "933.fixed.md"
     directory.mkdir()
@@ -164,7 +215,15 @@ def test_nonregular_duplicate_and_invalid_utf8_fragments(repo: Path) -> None:
     ],
 )
 def test_ambiguous_changelog_refuses_without_deleting(repo: Path, text: str) -> None:
-    """Refuse malformed headings, bullets, categories and conflicting retry data."""
+    """Refuse malformed headings, bullets, categories and conflicting retry data.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+        text (str): Malformed changelog bytes decoded as text.
+
+    Returns:
+        None: Assert the changelog and fragment remain intact.
+    """
     package = repo / "packages/subagents"
     target = package / "CHANGELOG.md"
     target.write_text(text)
@@ -175,7 +234,14 @@ def test_ambiguous_changelog_refuses_without_deleting(repo: Path, text: str) -> 
 
 
 def test_order_empty_categories_blockquote_and_no_released_section(repo: Path) -> None:
-    """Sort numeric issues, retain legacy warnings/repeated headings and add missing categories."""
+    """Sort issues, retain warnings/repeated headings and add missing categories.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+
+    Returns:
+        None: Assert literal ordered output, including empty/repeated legacy categories.
+    """
     package = repo / "packages/subagents"
     changes = package / "changes"
     (changes / "932.fixed.md").unlink()
@@ -200,17 +266,48 @@ def test_order_empty_categories_blockquote_and_no_released_section(repo: Path) -
 def test_interrupted_fold_keeps_inputs_or_is_restart_safe(
     repo: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
 ) -> None:
-    """Inject actual filesystem boundary failures before commit and during consumption."""
+    """Inject filesystem failures before replacement and during consumption.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+        monkeypatch (pytest.MonkeyPatch): Filesystem boundary fault injection.
+        boundary (str): Replacement or deletion boundary to fail.
+
+    Returns:
+        None: Assert retry preserves and consumes each exact bullet once.
+    """
     package = repo / "packages/subagents"
     original_replace = Path.replace
     original_unlink = Path.unlink
 
     def fail_replace(source: Path, target: Path) -> None:
-        """Fail the atomic replacement boundary."""
+        """Fail the atomic replacement boundary.
+
+        Parameters:
+            source (Path): Temporary replacement file.
+            target (Path): Changelog destination.
+
+        Returns:
+            None: Never returns normally.
+
+        Raises:
+            OSError: Simulated replacement refusal.
+        """
         raise OSError("replacement refused")
 
     def fail_delete(path: Path, *, missing_ok: bool = False) -> None:
-        """Fail fragment consumption, not temporary cleanup."""
+        """Fail fragment consumption, not temporary cleanup.
+
+        Parameters:
+            path (Path): File to remove.
+            missing_ok (bool): Permit absent temporary files.
+
+        Returns:
+            None: Remove temporary files normally.
+
+        Raises:
+            OSError: Simulated fragment deletion refusal.
+        """
         if path.name == "932.fixed.md":
             raise OSError("deletion refused")
         original_unlink(path, missing_ok=missing_ok)
@@ -232,7 +329,14 @@ def test_interrupted_fold_keeps_inputs_or_is_restart_safe(
 
 
 def test_existing_lock_and_missing_inputs_fail_closed(repo: Path) -> None:
-    """An existing lock is never stolen, and absent inputs remain errors."""
+    """Refuse existing locks and absent required inputs.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+
+    Returns:
+        None: Assert refusal and lock cleanup without stealing an existing lock.
+    """
     package = repo / "packages/subagents"
     lock = package / ".changelog-fold.lock"
     lock.mkdir()
@@ -247,7 +351,14 @@ def test_existing_lock_and_missing_inputs_fail_closed(repo: Path) -> None:
 
 
 def test_real_cli_success_and_failure(repo: Path) -> None:
-    """Exercise stdlib CLI success, explicit folding and error exit status."""
+    """Exercise stdlib CLI success, explicit folding and error exit status.
+
+    Parameters:
+        repo (Path): Disposable package tree.
+
+    Returns:
+        None: Assert actual CLI success and failure exits.
+    """
     cmd = [sys.executable, str(Path(changelog_fragments.__file__)), "--repo", str(repo)]
     checked = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert checked.returncode == 0, checked.stderr
