@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Split session and harness JSONL on `\n` only (a trailing `\r` is dropped): `node:readline` also broke lines at U+2028 and U+2029, which `JSON.stringify` leaves raw inside strings, so one valid record became two bad lines and `pi-stats-export` failed with `Incomplete local scan` ([#991](https://github.com/nredd/pi-harness/issues/991)). Cached pi and Claude/Codex records that counted bad lines are re-read on the next scan, so no cache bump; a record for a file that is deleted or outside the scanned root cannot be re-read and keeps its old count
+
 - Neutralize the complete Unicode `Bidi_Control` set in local scan paths, including ALM, LRM and RLM; preserve C1 replacement and JSON C0 escaping (#960).
 
 - Report bounded local-only file/physical-line diagnostics for incomplete pi exports, including filesystem and cached-history failures; keep prior publication unchanged (#960, Refs nredd/dotfiles#1).
@@ -44,6 +46,8 @@
 - Explain RSS versus footprint, compressed pages, executable names (`pi` as `node`), strong native identity and unavailable-CPU fallback in `?`; native metrics require the subsequent published sampler dependency bump
 
 - Raise the `monitor_start` `timeout_s` cap from 24h to 7 days (`604800`) so monitors can outlive long jobs
+
+- Read optional Claude statusLine `rate-limits.json` captures into the existing offline stats/export quota pipeline (#963). Allowlist the two numeric windows, reject future observations, keep missing/invalid windows unknown, and reuse reset/staleness display without adding account identity. Capture deployment (nredd/dotfiles#144) and reader publication remain separate.
 
 ## 0.8.0
 

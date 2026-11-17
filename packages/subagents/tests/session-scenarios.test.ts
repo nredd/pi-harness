@@ -1,4 +1,4 @@
-/** Ports of integration/test_subagents.py and router run.sh/no-router on the real core host. */
+/** Ports of tests/integration/test_subagents.py and router run.sh/no-router on the real core host. */
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";

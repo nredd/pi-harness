@@ -93,15 +93,25 @@ def make_repo(tmp_path: Path) -> Path:
     parent = init_repo(tmp_path / "parent")
     write_packages(parent)
     (parent / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
-    (parent / "integration").mkdir()
-    (parent / "integration" / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (parent / "tests/integration").mkdir(parents=True)
+    (parent / "release").mkdir()
+    (parent / "release/uv.lock").write_text("version = 1\n", encoding="utf-8")
+    (parent / "tests/integration" / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     (parent / ".gitmodules").write_text(
         f'[submodule "forks/fake"]\n\tpath = forks/fake\n\turl = {source}\n',
         encoding="utf-8",
     )
     subprocess.run([GIT, "clone", "-q", str(source), str(parent / "forks" / "fake")], check=True)
     git(parent, "update-index", "--add", "--cacheinfo", f"160000,{commit},forks/fake")
-    git(parent, "add", ".gitmodules", "packages", "package-lock.json", "integration/uv.lock")
+    git(
+        parent,
+        "add",
+        ".gitmodules",
+        "packages",
+        "package-lock.json",
+        "tests/integration/uv.lock",
+        "release/uv.lock",
+    )
     git(parent, "commit", "-q", "-m", "parent")
     git(parent, "submodule", "update", "--init", "--quiet", "forks/fake")
     return parent

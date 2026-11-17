@@ -1,13 +1,13 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
 import {
 	type FauxResponseFactory,
 	type FauxResponseStep,
 	fauxAssistantMessage,
 	type Harness,
-} from "@earendil-works/pi-coding-agent/testing";
-import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
+} from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { MESSAGE_TYPE } from "../../src/monitor/index.ts";
 import { OUTPUT_TRUNCATED_PREFIX } from "../../src/monitor/output.ts";

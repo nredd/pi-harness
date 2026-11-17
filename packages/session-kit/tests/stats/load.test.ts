@@ -410,6 +410,84 @@ describe("loadUsage", () => {
 		expect(retained.diagnostics).toEqual([{ path, line: 0, reason: "cached-invalid-record" }]);
 	});
 
+	describe("line framing", () => {
+		/** `JSON.stringify` leaves U+2028/U+2029 raw, so this is one valid physical line that `readline` would tear. */
+		const toolResult = (text: string): string => {
+			const line = JSON.stringify({
+				type: "message",
+				id: "tool",
+				timestamp: new Date(at("2026-10-01")).toISOString(),
+				message: { role: "toolResult", content: [{ type: "text", text }] },
+			});
+			expect(() => JSON.parse(line)).not.toThrow();
+			return line;
+		};
+
+		it.each(["\u2028", "\u2029", "\u2028\u2029"])(
+			"keeps a valid record with %j inside a string on one line",
+			async (separator) => {
+				const path = join(root, "separators.jsonl");
+				sessionFile(path, {
+					startMs: at("2026-10-01"),
+					lines: [opus("2026-10-01", 1, 1), toolResult(`a${separator}b`), opus("2026-10-01", 2, 2)],
+				});
+				expect(readFileSync(path, "utf8")).toContain(separator);
+				const loaded = await loadUsage({ root, cache });
+				expect(loaded.badLines).toBe(0);
+				expect(loaded.diagnostics).toEqual([]);
+				expect(loaded.calls.map((c) => c.input)).toEqual([1, 2]);
+			},
+		);
+
+		it("reads CRLF files with blank lines and a last record with no trailing newline", async () => {
+			const path = join(root, "crlf.jsonl");
+			sessionFile(path, { startMs: at("2026-10-01"), lines: [] });
+			const info = JSON.stringify({ type: "session_info", id: "i", timestamp: "2026-10-01T12:00:00Z", name: "n" });
+			// A blank CRLF line is `"\r"` unless the terminator is stripped, and then it is a bad line.
+			writeFileSync(
+				path,
+				`${readFileSync(path, "utf8").trimEnd()}\r\n\r\n${info}\r\n${opus("2026-10-01", 1, 1)}\r\n\r\n${opus("2026-10-01", 2, 2)}`,
+			);
+			const loaded = await loadUsage({ root, cache });
+			expect(loaded.badLines).toBe(0);
+			expect(loaded.diagnostics).toEqual([]);
+			expect(loaded.calls.map((c) => c.input)).toEqual([1, 2]);
+		});
+
+		it("counts a call whose record carries a raw U+2028", async () => {
+			sessionFile(join(root, "assistant.jsonl"), {
+				startMs: at("2026-10-01"),
+				lines: [opus("2026-10-01", 1, 1).replace('"hi"', '"a\u2028b"'), opus("2026-10-01", 2, 2)],
+			});
+			expect(readFileSync(join(root, "assistant.jsonl"), "utf8")).toContain("a\u2028b");
+			const loaded = await loadUsage({ root, cache });
+			expect(loaded.badLines).toBe(0);
+			expect(loaded.calls.map((c) => c.input)).toEqual([1, 2]);
+		});
+
+		it("counts a truncated final line as bad and reports its physical line", async () => {
+			const path = join(root, "truncated.jsonl");
+			sessionFile(path, { startMs: at("2026-10-01"), lines: [toolResult("a\u2028b"), opus("2026-10-01", 1, 1)] });
+			writeFileSync(path, `${readFileSync(path, "utf8")}{"type":"message","id":"cut"`);
+			const loaded = await loadUsage({ root, cache });
+			expect(loaded.badLines).toBe(1);
+			expect(loaded.diagnostics).toEqual([{ path, line: 4, reason: "invalid-record" }]);
+			expect(loaded.calls.map((c) => c.input)).toEqual([1]);
+		});
+
+		it("joins a multibyte record split across stream chunks", async () => {
+			// 300k two-byte characters (~600 KB) span several 64 KiB reads, with a separator in the middle.
+			const long = `${"\u00e9".repeat(150_000)}\u2028${"\u00e9".repeat(150_000)}`;
+			sessionFile(join(root, "long.jsonl"), {
+				startMs: at("2026-10-01"),
+				lines: [toolResult(long), opus("2026-10-01", 3, 3)],
+			});
+			const loaded = await loadUsage({ root, cache });
+			expect(loaded.badLines).toBe(0);
+			expect(loaded.calls.map((c) => c.input)).toEqual([3]);
+		});
+	});
+
 	it("streams files bigger than one yield window", async () => {
 		const lines = Array.from({ length: 4500 }, (_, i) => opus("2026-10-01", i + 1, 1));
 		sessionFile(join(root, "big.jsonl"), { startMs: at("2026-10-01"), lines });

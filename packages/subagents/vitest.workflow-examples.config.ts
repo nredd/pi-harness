@@ -1,6 +1,6 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-export default definePackageConfig("workflow-examples", {
+const config = definePackageConfig("workflow-examples", {
 	provider: "istanbul",
 	reportsDirectory: "coverage/workflow-examples",
 	test: {
@@ -11,3 +11,5 @@ export default definePackageConfig("workflow-examples", {
 	},
 	resolve: { dedupe: ["@earendil-works/pi-ai"] },
 });
+
+export default config;

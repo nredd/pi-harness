@@ -20,7 +20,7 @@ per-file-ignores = { "tests/**" = ["E402"] }
 [tool.ty.environment]
 python-version = "3.13"
 # `package_contracts.py` imports `harness` from the source tree; see its `sys.path` entry.
-root = [".", "../integration"]
+root = [".", "../tests/integration", "../release"]
 
 [tool.ty.terminal]
 error-on-warning = true

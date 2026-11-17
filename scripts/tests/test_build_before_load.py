@@ -27,8 +27,8 @@ def _recipe(makefile: Path, target: str) -> str:
 
 
 def test_inprocess_test_script_builds_every_package_first() -> None:
-    """`npm run test` in `integration/inprocess` loads built packages, so `pretest` runs the root build."""
-    scripts = json.loads((ROOT / "integration/inprocess/package.json").read_text())["scripts"]
+    """`npm run test` in `tests/inprocess` loads built packages, so `pretest` runs the root build."""
+    scripts = json.loads((ROOT / "tests/inprocess/package.json").read_text())["scripts"]
     assert scripts["pretest"] == "npm run --prefix ../.. build"
     assert "npm run test" in scripts["check"]
 
@@ -45,6 +45,6 @@ def test_root_targets_build_before_loading_dist(target: str) -> None:
 
 def test_local_stack_runner_builds_first() -> None:
     """The `local` stack loads the built packages, so `stack` builds when it runs the local stack."""
-    lines = _recipe(ROOT / "integration/Makefile", "stack")
-    assert "$(MAKE) -C .. build" in lines
+    lines = _recipe(ROOT / "tests/integration/Makefile", "stack")
+    assert "$(MAKE) -C ../.. build" in lines
     assert "local.json" in lines

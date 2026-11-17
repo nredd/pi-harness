@@ -50,6 +50,9 @@ local themes, skills, agents and their configuration. Restart sessions after act
 - TUI only, installed on `session_start`; print, JSON and RPC modes never mount it or poll.
 - Cwd/home abbreviation, branch, session name; usage totals for assistant/tool-result messages,
   standalone usage, compaction and branch summaries; sorted, whitespace-sanitized statuses.
+- Unpriced usage keeps its tokens but contributes no invented spend: mixed totals show the priced
+  subtotal plus `N unpriced`; wholly unpriced totals show `unknown`, including on subscriptions.
+  Free requests with billable tokens count as priced; zero-usage failures count as neither.
 - Word labels when they fit with the selected model, compact labels otherwise. Every row is
   width-bounded, including provider, model and thinking-level labels. Context warnings are
   strictly above 70%/90%; `(auto)` is always displayed, not the live compaction toggle.
@@ -261,7 +264,7 @@ The native preset package gate separately loads its installed skill/extension re
 from the tarball path. Child behavior of the `code-reviewer` agent (tools exactly
 the read-only allowlist, denied tools refused, global/project overrides, untrusted project agents
 ignored) is exercised against real children from these sources by
-`integration/inprocess/{reviewer,specialists}.test.ts`.
+`tests/inprocess/{reviewer,specialists}.test.ts`.
 
 Pending, not claimed: profile resolution, model roles, activation, the full assembled-stack check,
 Bun compiled-artifact behavior, any other fork commit or Pi version, `pi install npm:@nredd/pi-preset` through a live Pi, and npm provenance attestation.

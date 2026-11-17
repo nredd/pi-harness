@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import {
 	createTestExtensionsResult,
 	createTestResourceLoader,
 	fauxAssistantMessage,
 	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
-import { toolCall } from "@nredd/pi-test-lib/faux";
+} from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { createSessionKit } from "../../src/index.ts";

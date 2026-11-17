@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-export default definePackageConfig("todo", {
+const config = definePackageConfig("todo", {
 	provider: "istanbul",
 	resolve: {
 		alias: {
@@ -20,3 +20,5 @@ export default definePackageConfig("todo", {
 		restoreMocks: true,
 	},
 });
+
+export default config;

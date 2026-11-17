@@ -45,7 +45,7 @@ const ZERO_UNCOVERED_FILES = [
 ];
 
 // `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
-export default definePackageConfig("computer-use-vitest", {
+const config = definePackageConfig("computer-use-vitest", {
 	provider: "istanbul",
 	test: {
 		dir: "test",
@@ -66,3 +66,5 @@ export default definePackageConfig("computer-use-vitest", {
 		},
 	},
 });
+
+export default config;

@@ -97,6 +97,8 @@ export interface HarnessLoadOptions {
 	roots?: Partial<HarnessRoots>;
 	env?: Record<string, string | undefined>;
 	home?: string;
+	/** Evaluation time for optional local observations. */
+	now?: number;
 	/** Cache file; default under the agent dir. */
 	cache?: string;
 	loadSqlite?: LoadSqlite;
@@ -120,7 +122,7 @@ export async function loadHarnesses(options: HarnessLoadOptions): Promise<Record
 		return read();
 	};
 	const scans = {
-		claude: await reading("claude", () => readClaude(roots.claude, cache), emptyScan(false)),
+		claude: await reading("claude", () => readClaude(roots.claude, cache, options.now), emptyScan(false)),
 		codex: await reading("codex", () => readCodex(roots.codex, cache, options.salt), emptyScan(false)),
 		opencode: await reading(
 			"opencode",

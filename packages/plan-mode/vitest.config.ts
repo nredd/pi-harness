@@ -1,6 +1,6 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-export default definePackageConfig("plan-mode", {
+const config = definePackageConfig("plan-mode", {
 	provider: "istanbul",
 	test: {
 		maxWorkers: 2,
@@ -20,3 +20,5 @@ export default definePackageConfig("plan-mode", {
 		testTimeout: 5_000,
 	},
 });
+
+export default config;

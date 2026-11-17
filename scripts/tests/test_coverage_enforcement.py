@@ -405,9 +405,11 @@ def test_cli_downgrade_against_real_base_requires_entry(tmp_path: Path) -> None:
 
 ENFORCED_BUN_PACKAGES = {
     "dev-tools",
+    "import-audit",
     "inprocess",
     "plan-mode",
     "preset",
+    "probes",
     "providers",
     "resource-sampler",
     "session-kit",

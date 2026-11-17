@@ -16,10 +16,27 @@
  *
  * `cost` is a plain sum for the same reason: it is what pi charged for that one
  * message (`usage.cost.total`, priced from the model's rates), not a cumulative
- * figure. Both are optional because a model with no pricing data reports no
- * cost, and because every accumulator predates them; absent reads as 0.
+ * figure. Optional fields preserve compatibility with older accumulators.
+ * `unpriced` and its request counts qualify that sum as a priced subtotal;
+ * they must survive every accumulation and report, never be interpreted as free.
  */
-export type LifetimeUsage = { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number };
+export type LifetimeUsage = {
+	input: number;
+	output: number;
+	cacheWrite: number;
+	cacheRead?: number;
+	cost?: number;
+	/** Cost is a priced subtotal when any calls were unpriced. */
+	unpriced?: true;
+	unpricedCalls?: number;
+	pricedCalls?: number;
+};
+
+/** Match core's request counts, including free usage but excluding empty failures. */
+function pricedCalls(u: LifetimeUsage): number {
+	if (u.unpriced) return u.pricedCalls ?? ((u.cost ?? 0) > 0 ? 1 : 0);
+	return u.input + u.output + u.cacheWrite + (u.cacheRead ?? 0) > 0 || (u.cost ?? 0) > 0 ? 1 : 0;
+}
 
 /**
  * Sum of lifetime *token* components for DISPLAY, or 0 if undefined.
@@ -31,13 +48,20 @@ export function getLifetimeTotal(u?: LifetimeUsage): number {
 	return u ? u.input + u.output + u.cacheWrite : 0;
 }
 
-/** Accumulated cost in USD, or 0 when unpriced/undefined. */
+/** Accumulated priced subtotal in USD, or 0 when absent. See `unpricedCalls` for unknown spend. */
 export function getLifetimeCost(u?: LifetimeUsage): number {
 	return u?.cost ?? 0;
 }
 
 /** Add a usage delta into a target accumulator (mutates target). */
 export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
+	const priced = (into.pricedCalls ?? pricedCalls(into)) + (delta.pricedCalls ?? pricedCalls(delta));
+	const unpriced = (into.unpricedCalls ?? (into.unpriced ? 1 : 0)) + (delta.unpricedCalls ?? (delta.unpriced ? 1 : 0));
+	if (unpriced > 0) {
+		into.pricedCalls = priced;
+		into.unpriced = true;
+		into.unpricedCalls = unpriced;
+	}
 	into.input += delta.input;
 	into.output += delta.output;
 	into.cacheWrite += delta.cacheWrite;
@@ -65,7 +89,16 @@ export type ReportedUsage = {
 	cacheRead: number;
 	cacheWrite: number;
 	totalTokens: number;
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	cost: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+		unpriced?: true;
+		unpricedCalls?: number;
+		pricedCalls?: number;
+	};
 };
 
 /**
@@ -80,14 +113,23 @@ export type ReportedUsage = {
  */
 export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
 	const { input, output, cacheWrite, cacheRead = 0, cost = 0 } = u;
-	if (input === 0 && output === 0 && cacheWrite === 0 && cacheRead === 0 && cost === 0) return undefined;
+	if (input === 0 && output === 0 && cacheWrite === 0 && cacheRead === 0 && cost === 0 && !u.unpriced) return undefined;
 	return {
 		input,
 		output,
 		cacheRead,
 		cacheWrite,
 		totalTokens: input + output + cacheRead + cacheWrite,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+		cost: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: cost,
+			...(u.unpriced
+				? { unpriced: true, unpricedCalls: u.unpricedCalls ?? 1, pricedCalls: u.pricedCalls ?? pricedCalls(u) }
+				: {}),
+		},
 	};
 }
 

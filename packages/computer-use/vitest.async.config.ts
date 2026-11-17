@@ -1,7 +1,7 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
 // Verification tooling is measured independently of the runtime's 35-file slice.
-export default definePackageConfig("computer-use-async", {
+const config = definePackageConfig("computer-use-async", {
 	provider: "istanbul",
 	reportsDirectory: "coverage/async",
 	test: {
@@ -14,3 +14,5 @@ export default definePackageConfig("computer-use-async", {
 		},
 	},
 });
+
+export default config;

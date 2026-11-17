@@ -3,8 +3,8 @@
 import { createReadStream, type Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
+import { nth } from "./nth.ts";
 
 const YIELD_EVERY_LINES = 2000;
 
@@ -31,17 +31,32 @@ export function looksLikeObject(line: string): boolean {
 /** A line of only NULs: crash padding (file size extended, data never written) that carries no data. */
 export const NUL_PADDING = /^\0+$/;
 
-/** Stream a file's lines into `parser`, yielding to the event loop every 2000 lines so the TUI keeps painting. */
+/**
+ * Stream a file's lines into `parser`, yielding to the event loop every 2000 lines so the TUI keeps painting.
+ *
+ * Lines end at `\n` only, like pi's `loadEntriesFromFile`. `node:readline` would also split on U+2028, U+2029 and a
+ * lone `\r`; `JSON.stringify` leaves the first two raw inside strings, so a valid record carrying one would be torn
+ * into two bad lines. A trailing `\r` is dropped, which keeps the CRLF handling `readline` had.
+ */
 export async function feedFile(path: string, parser: { accept(line: string): void }): Promise<void> {
-	const rl = createInterface({
-		input: createReadStream(path, { encoding: "utf8" }),
-		crlfDelay: Number.POSITIVE_INFINITY,
-	});
 	let n = 0;
-	for await (const line of rl) {
-		parser.accept(line);
+	const emit = async (line: string): Promise<void> => {
+		parser.accept(line.endsWith("\r") ? line.slice(0, -1) : line);
 		if (++n % YIELD_EVERY_LINES === 0) await tick();
+	};
+	let pending = "";
+	for await (const chunk of createReadStream(path, { encoding: "utf8" })) {
+		const parts = (chunk as string).split("\n");
+		const last = parts.length - 1;
+		if (last === 0) {
+			pending += nth(parts, 0);
+			continue;
+		}
+		await emit(pending + nth(parts, 0));
+		for (let i = 1; i < last; i++) await emit(nth(parts, i));
+		pending = nth(parts, last);
 	}
+	if (pending) await emit(pending);
 }
 
 /** Local-only scan location, never transcript data or an exception message. Line 0 means no record was read. */

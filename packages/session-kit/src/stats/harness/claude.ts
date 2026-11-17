@@ -7,10 +7,12 @@
  * usage, so rows collapse by `(message.id, requestId)` (see `flatten`). Project directory names
  * encode the cwd: they appear only in the local cache's path keys (never in a result, cached
  * value, diagnostic or snapshot). Cost is not recorded per message.
- * `stats-cache.json`, `.credentials.json` and everything else under the root is never opened.
+ * The optional allowlisted `rate-limits.json` statusLine capture is read separately; `stats-cache.json`,
+ * `.credentials.json` and other non-transcript files are never opened.
  */
 
 import { basename, join, sep } from "node:path";
+import { readClaudeQuota } from "./claude-quota.ts";
 import { anyPresent, asRecord, counters, entryHash, type HarnessScan, sessionHash, str } from "./common.ts";
 import { type HarnessCache, RowParser, scanJsonl } from "./scan.ts";
 
@@ -66,12 +68,14 @@ const agentOf = (path: string): string | null =>
 	path.split(sep).at(-2) === "subagents" ? basename(path, ".jsonl") : null;
 
 /** Read every Claude Code transcript under `root` (the config dir). A missing root is "not installed". */
-export async function readClaude(root: string, cache: HarnessCache): Promise<HarnessScan> {
-	return scanJsonl({
+export async function readClaude(root: string, cache: HarnessCache, now?: number): Promise<HarnessScan> {
+	const scan = await scanJsonl({
 		harness: "claude",
 		root,
 		dirs: [join(root, "projects")],
 		cache,
 		parser: (path, size, mtimeMs) => new ClaudeParser(size, mtimeMs, agentOf(path)),
 	});
+	scan.quota = await readClaudeQuota(root, now);
+	return scan;
 }

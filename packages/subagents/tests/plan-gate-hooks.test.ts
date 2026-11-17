@@ -1,7 +1,7 @@
 /**
  * plan-gate-hooks.test.ts -- #437: the hooks a child session installs for a Plan gate, driven through the real
  * `runAgent` on a faux model with a hand-written policy. The same gate under the real pi-plan-mode runs in
- * `integration/inprocess/plan-mode-children.test.ts` (#867).
+ * `tests/inprocess/plan-mode-children.test.ts` (#867).
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

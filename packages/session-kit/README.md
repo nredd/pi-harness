@@ -187,9 +187,9 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
 - Quota: Overview shows one row per quota window with a gauge, percent used, `resets in ...` and
   `observed 12m ago via codex`, dimmed once older than 15 minutes. A window that has already reset
   shows `reset 5m ago, no newer reading` and no percent (unknown, not the old value). Readings come
-  from local Codex rollouts and imported snapshots only, are account-wide (no harness, model or range
-  filter applies), and are never fetched. Claude Code persists none locally, so its row says
-  `no local reading`.
+  from local Codex rollouts, optional Claude statusLine captures and imported snapshots, are
+  account-wide (no harness, model or range filter applies), and are never fetched. Claude without
+  a valid capture says `no local reading`.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per
   harness when several have data and none is picked), else the top three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
@@ -672,7 +672,8 @@ Harness readers (#367; exported by the CLI above and shown in `/stats`):
 pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;
 `CODEX_HOME` or `~/.codex`; `OPENCODE_DB`, else `$XDG_DATA_HOME/opencode/opencode.db`. Local file
 reads only. A missing root is silent ("not installed"). Parsed files are cached in
-`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
+`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept. A record that counted
+unreadable lines is re-read on every scan until it parses clean; a deleted file's record keeps its count.
 That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
 directory names live there as keys); its values and every reader result carry no paths. It also
 records a hash of the installation salt (never the salt). When that changes, usage records are kept
@@ -686,7 +687,23 @@ the published snapshots. To drop a harness on purpose, export without it using
 
 - Claude: `projects/**/*.jsonl` including `subagents/`. One response is written once per content
   block, so rows collapse by `(message.id, requestId)`, keeping the largest output count.
-  Subagent files and sidechain rows count toward tokens, not Sessions. Cost `null`, no quota on disk.
+  Subagent files and sidechain rows count toward tokens, not Sessions. Cost `null`.
+  The optional `<Claude config root>/rate-limits.json` capture is read on every scan, outside the
+  transcript cache. Root selection is unchanged: explicit `--claude-dir`/`roots.claude`, then
+  `CLAUDE_CONFIG_DIR`, then the injected home or native `~/.claude` (an injected home ignores
+  process environment). Contract: `{observed_at:<epoch seconds>,rate_limits:{five_hour?:
+  {used_percentage,resets_at},seven_day?:{used_percentage,resets_at}}}`. Observation time must be
+  finite, positive and not in the future; percentages finite 0..100; resets positive safe-integer
+  epoch seconds within the canonical snapshot timestamp bound (8,640,000,000,000 seconds). Only these named windows become
+  canonical `anthropic` quota (`5h`/`7d`, account `""`, plan `null`), never arbitrary fields or IDs.
+  Missing, unreadable, malformed, non-file or over-64-KiB captures silently contribute no quota;
+  invalid/absent windows are unknown, not zero. They never fail a transcript scan or replace its
+  history. Partial captures do not retain a previous sibling; expired readings follow the reset
+  display policy above, not old usage as current. Snapshot v2 and v1 import compatibility stay unchanged.
+  Source reader integration is #963; capture producer nredd/dotfiles#144 is merged. The reader must
+  still be published and the producer configured before an installed exporter/viewer can consume
+  captures. Merging capture alone never enabled this reader. This change does not publish, activate
+  or bump pins.
 - Codex: `sessions/` and `archived_sessions/` rollouts. `token_usage_record` rows are joined to
   `turn_context.model` by turn. `input` is `input_tokens` minus the cached and cache-write subsets.
   Turns without per-turn records (older Codex, including old turns of a resumed rollout) are
@@ -744,6 +761,20 @@ shared clocks/doubles in `@nredd/pi-test-lib`. Real core session/interactive har
 cover file-backed restore, child rename/reload, command completions, rules, titles, loops,
 monitor wakes/cursors/caps/timeouts, diffs, stats and resource views without operator credentials.
 Cross-extension Plan/subagent/todo behavior remains in the root integration tier.
+
+`tests/fixtures/session.ts` uses the public-SDK `@nredd/pi-test-lib/harness`; only
+`tests/fixtures/terminal.ts` imports the fork interactive host. The same fixed 38-case scope
+runs on fork and stock Pi 1.5.2, on Node and Bun: `tests/fixture-boundary.test.ts`,
+`tests/monitor/extension-boundaries.test.ts`, and `tests/scenarios/{goal,goal-restore,loop,monitor,
+child-identity,isolation,rules,command-callbacks}.test.ts`. These cover goal continuation,
+evidence/restore, loop scheduling/isolation, monitor lifecycle/failure/cleanup, child rename/reload,
+command completions and rules. Pass those ten files to `node ../../scripts/run-vitest.ts node
+--coverage.enabled=false` (replace the engine argument `node` with `bun` for Bun).
+The graph controls follow the shared helpers and reject the real terminal fixture's fork export.
+The full fork suite remains mandatory. Terminal scenarios still require the fork's
+`/testing/interactive` (`InteractiveMode`, runtime replacement, `TUI.flushRender` and virtual
+terminal disposal); title routing also uses `registerVirtualModel`. This fixed headless scope
+is not a full-package stock-compatibility claim.
 
 Native process tests require macOS or Linux. From `packages/session-kit`:
 

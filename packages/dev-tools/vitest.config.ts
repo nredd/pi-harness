@@ -4,7 +4,7 @@ import { definePackageConfig } from "../../scripts/vitest-package.ts";
 // runner's signal handling showed stalls under the threads pool that never reproduce in forks.
 // Two workers at most: the cargo and uv suites compile real projects, and a cold build running
 // next to the timing-sensitive core tests made them flaky.
-export default definePackageConfig("dev-tools", {
+const config = definePackageConfig("dev-tools", {
 	provider: "istanbul",
 	test: {
 		pool: "forks",
@@ -12,3 +12,5 @@ export default definePackageConfig("dev-tools", {
 		testTimeout: 20_000,
 	},
 });
+
+export default config;

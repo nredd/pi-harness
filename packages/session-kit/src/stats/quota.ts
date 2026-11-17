@@ -73,6 +73,6 @@ export function quotaRows(allReadings: readonly QuotaObservation[], now: number)
 /** `47.3%`, or `100%` / `5%` without a pointless decimal. */
 export const usedLabel = (percent: number): string => `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`;
 
-/** Claude Code persists no quota locally (see dotfiles#131): say so rather than show nothing. */
+/** Claude without a valid local capture or imported reading: say so rather than invent usage. */
 export const claudeHasNoReading = (readings: readonly QuotaObservation[], claudeSeen: boolean): boolean =>
 	claudeSeen && !readings.some((q) => q.provider === "anthropic");
