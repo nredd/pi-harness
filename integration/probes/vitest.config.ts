@@ -2,7 +2,7 @@ import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
 // Match `integration/inprocess`: forks, because `process-lifecycle.test.ts` spawns and signals real
 // process groups through the production runners. Explicit test files, no glob.
-export default definePackageConfig("probes", {
+const config = definePackageConfig("probes", {
 	provider: "v8",
 	test: {
 		include: [
@@ -17,5 +17,8 @@ export default definePackageConfig("probes", {
 		pool: "forks",
 		maxWorkers: 2,
 		testTimeout: 20_000,
+		coverage: { thresholds: { perFile: true, lines: 100, functions: 100, branches: 100, statements: 100 } },
 	},
 });
+
+export default config;

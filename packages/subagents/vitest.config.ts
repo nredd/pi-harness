@@ -1,6 +1,6 @@
 import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-export default definePackageConfig("subagents", {
+const config = definePackageConfig("subagents", {
 	// `istanbul`, NOT the `v8` default. v8 under-reports badly on this suite:
 	// `src/env.ts` came out at 54.54% for the full run but 90.9% for
 	// `vitest run --coverage test/env.test.ts` — coverage cannot fall as more
@@ -40,3 +40,5 @@ export default definePackageConfig("subagents", {
 	},
 	resolve: { dedupe: ["@earendil-works/pi-ai"] },
 });
+
+export default config;

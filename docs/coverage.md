@@ -140,6 +140,25 @@ report-only signal, as `computer-use-async` does.
 
 ## Independent signals
 
+`check-probes` and `check-import-audit` retain these independent full-suite signals (#972):
+
+| Signal | Producer | Reports, relative to the repository |
+| --- | --- | --- |
+| `probes/bun` | `check-probes`, `run-vitest.ts bun`, Istanbul | `integration/probes/coverage/bun/{lcov.info,coverage-summary.json}` |
+| `import-audit/bun` | `check-import-audit`, `run-vitest.ts bun --coverage.reportsDirectory=scripts/coverage/bun`, Istanbul | `scripts/coverage/bun/{lcov.info,coverage-summary.json}` |
+
+Both run the same explicit test files and full owned inventory as Node/V8, without exclusions or
+subsets. Their caps and per-file Vitest thresholds require zero L/F/B/S misses on both OSes;
+Node's `coverage/primary` reports are retained separately. Config initializers use a named `const`
+before the default export: Istanbul emits no statement for a bare `export default factory(...)`,
+which otherwise makes executable configs appear empty in V8 and disappear from Istanbul LCOV.
+`coverage-configs.test.ts` checks real statement maps as well as resolved options. The render probe's
+injected runtime facts let either engine exercise Node/Bun identity and GC/no-GC paths without
+mutating Bun's immutable global. Real disposable producer tests retain an unimported gate as
+uncovered, exercise its success/refusal paths, and reject missing/malformed LCOV or statement
+summaries. Hosted receipts must bind these reports to the PR's own final HEAD; historical primary
+artifacts are not evidence for these new signals. Computer-use Bun/native work remains #645.
+
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
 recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
 not hosted floors or a hosted-CI timing claim. Hosted artifact measurements and their independent

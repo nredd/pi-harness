@@ -528,10 +528,16 @@
       ],
       "exclusions": [],
       "status": "measured",
-      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root verification scripts measured in process on Node and Bun by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. Named config initializers retain real executable statement maps on both engines. The Vitest root is the repository root so both reports cover configurations outside `scripts/`, with the complete owned inventory at zero L/F/B/S. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "scripts/coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "scripts/coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
@@ -542,10 +548,16 @@
       "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Every executable probe runs in process under `check-probes`: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Joins the 100-percent goal at 0/0.",
+      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "enforcement": "enforced",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
