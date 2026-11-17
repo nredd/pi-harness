@@ -1,7 +1,7 @@
 /** Native graph controls for the public-SDK stack fixture, on both supported hosts. */
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { runTree } from "@nredd/pi-test-lib/run-tree";
@@ -35,8 +35,19 @@ if (globalThis.Bun) {
 }
 `;
 
+/** What a native child prints: shared by both scenarios, each filling only its own fields. */
+interface Receipt {
+	first?: string;
+	results?: { isError: boolean; text: string }[];
+	pending?: number;
+	cleaned?: boolean;
+	imports?: string[];
+	publicSdk?: boolean;
+	error?: string;
+}
+
 /** Launch this engine without provider credentials, then remove every fixture path. */
-async function run(body: string) {
+async function run(body: string): Promise<Receipt> {
 	const root = mkdtempSync(join(tmpdir(), "stack-headless-process-"));
 	const home = join(root, "home");
 	const temp = join(root, "tmp");
@@ -60,7 +71,7 @@ async function run(body: string) {
 		expect(result.error).toBeUndefined();
 		expect(result.timedOut).toBe(false);
 		expect(result.status, result.stderr || result.stdout).toBe(0);
-		return JSON.parse(result.stdout);
+		return JSON.parse(result.stdout) as Receipt;
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 		expect(existsSync(root)).toBe(false);
@@ -86,9 +97,28 @@ try {
 console.log(JSON.stringify({...receipt, cleaned: !existsSync(home.root)}));
 `);
 	expect(result).toMatchObject({ first: "STACK OK", pending: 0, cleaned: true, results: [{ isError: true }] });
-	expect(result.results[0].text).toContain("missing_tool");
-	expect(result.imports).toEqual(expect.arrayContaining([expect.stringMatching(/pi-coding-agent/)]));
+	expect(result.results?.[0]?.text).toContain("missing_tool");
+	// The shared public harness was evaluated, and no fork testing specifier was ever resolved.
+	expect(result.imports).toEqual(
+		expect.arrayContaining([expect.stringMatching(/(?:pi-test-lib\/harness|harness\.ts)$/)]),
+	);
+	expect(
+		result.imports?.filter((specifier) => /(?:pi-coding-agent|pi-tui)\/(?:dist\/)?testing/.test(specifier)),
+	).toEqual([]);
 });
+
+/** Whether the installed host package publishes `specifier`'s subpath in its `exports` map. */
+function hostExports(specifier: string): boolean {
+	const [scope, name, ...subpath] = specifier.split("/");
+	let directory = dirname(fileURLToPath(import.meta.url));
+	while (!existsSync(join(directory, "node_modules", scope ?? "", name ?? "", "package.json")))
+		directory = dirname(directory);
+	directory = join(directory, "node_modules", scope ?? "", name ?? "");
+	const { exports } = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as {
+		exports?: Record<string, unknown>;
+	};
+	return Object.hasOwn(exports ?? {}, `./${subpath.join("/")}`);
+}
 
 it.each([
 	"@earendil-works/pi-coding-agent/testing",
@@ -102,7 +132,13 @@ try { await import(${JSON.stringify(specifier)}); } catch (cause) { error = caus
 console.log(JSON.stringify({publicSdk: typeof sdk.AgentSession === "function", error}));
 `);
 	expect(result.publicSdk).toBe(true);
-	expect(result.error).toMatch(
-		/FORK_BOUNDARY|not exported|not defined by "exports"|Cannot find package '@earendil-works\/pi-/,
-	);
+	// Node's resolve hook always runs first. Bun's `onResolve` only runs for a subpath the host exports, so
+	// a stock host on Bun fails earlier with its own resolution error; that case expects exactly that.
+	if (hostExports(specifier) || !process.versions.bun) {
+		// Bun's `onLoad` names the resolved file rather than the specifier, so match the package and `testing`.
+		const name = specifier.split("/")[1];
+		expect(result.error).toMatch(new RegExp(`^FORK_BOUNDARY: .*${name}.*testing`));
+	} else {
+		expect(result.error).toMatch(/^Cannot find package '@earendil-works\/pi-/);
+	}
 });

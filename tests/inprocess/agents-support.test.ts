@@ -1,5 +1,4 @@
 /** Teardown must settle an unfinished reviewer turn before another test can run. */
-
 import { toolCall } from "@nredd/pi-test-lib/faux";
 import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
