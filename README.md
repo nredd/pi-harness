@@ -458,6 +458,48 @@ prove these paths locally, not real WSL isolation or image acceptance; those rem
 
 The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` with explicit `false` values for interop, Windows PATH injection, automount and fstab mounting in their respective sections. Inherited `[DEFAULT]` settings and boolean aliases such as `off`, `no` or `0` do not satisfy this check. WSL may retain binfmt registrations or broker paths even with execution disabled. A `WSLInterop` or `WSLInterop-late` registration must read exactly `disabled` on its first line (anything else, including `enabled`, empty or unreadable, fails) and then is only a diagnostic note; broker paths are notes. Mount, PATH and Windows-command checks remain blocking. Image acceptance must separately verify rejection of a checksum-verified Windows executable, including explicit broker overrides; mocked smoke fixtures do not prove that runtime property.
 
+### Throttled synthetic PTY experiment
+
+`tests/integration/scenarios/bench/test_throttled_pty.py` is a separate POSIX experiment
+(#977), dependent on the integration layout move in #884. It reuses the generated 2,000-message
+session, faux provider, installed fixture homes and latency probe. No existing multisession
+threshold, history or baseline changes. From `tests/integration`, run serially on an admitted
+quiet runner with explicit `PI_BIN` and `--stack`:
+
+```sh
+uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/local.json -n 0 --log-cli-level=INFO
+```
+
+- Each 1/4/8-child fleet has an uncapped control and a **65,536 bytes/s aggregate cap**, not a
+  per-child allowance. One rotating 1,024-byte quantum services ready PTYs; elapsed monotonic
+  time paces reads without catch-up bursts. Startup drains uncapped, then each measured window
+  lasts six seconds. Readiness is bounded at 60 seconds; input writes at one second; teardown
+  kills owned groups before reaping their leaders and closes all masters, including partial
+  startup and cancellation. Output tails are bounded at 64 KiB per child.
+- Calibration first runs a real fast synchronous writer with and without the same cap. It
+  refuses absent writes, low uncapped throughput, failure to deliver the capped rate, or no
+  observed increase in completed write duration. Retain the raw calibration JSON, not just a
+  claimed cap. A hung writer, exited child, absent measured probe windows, missing terminal
+  output or fewer than four input-to-paint samples per child fails the experiment.
+- The report separates actual delivered bytes/s from probe write volume, event-loop lag,
+  synchronous write duration and raw input-to-paint samples. Input-to-paint is stdin receipt
+  to the *next write invocation*, not terminal display or the rendering of that exact input.
+  Node may buffer asynchronous stdout writes: a short or zero `max_block_ms` does NOT establish
+  absence of pressure, a drained queue, or responsive terminal painting. Only the calibrated
+  synchronous writer establishes this driver's backpressure; compare paired controls before
+  attributing any Pi observation to rendering, runtime or polling.
+- An initial 16,384 bytes/s aggregate trial passed the one-child pair but the four-child
+  capped cell was refused for missing probe heartbeats. That is a failed observation, not a
+  zero-latency result. The 65,536 bytes/s condition measures a less severe terminal link;
+  it does not replace or relax any existing performance ceiling.
+- A synthetic Node/Pi trial on macOS completed both 1/4-child conditions and the uncapped
+  8-child condition. The capped 8-child condition was refused for missing measured probe
+  windows, NOT recorded as a passing latency result. Failed cells retain raw probe records
+  and delivered-byte observations in their `throttled-pty.json` and error log.
+- Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
+  baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider
+  claim is made. The experiment requires only standard-library POSIX PTY operations in its driver.
+
 ### Remaining
 
 - `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
