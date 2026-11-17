@@ -25,6 +25,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	return {
 		...actual,
 		rm: async (...args) => {
+			if (String(args[0]) !== gate.target && !gate.spawnParent) return await actual.rm(...args);
 			if (String(args[0]) === gate.target) {
 				gate.calls++;
 				if (gate.calls === 1) {
@@ -519,9 +520,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 
 	test("a launch whose spawn throws removes its profile dir and rethrows the spawn error", async () => {
 		// Pins the sync-`spawn` failure path: the profile dir is gone, no CDP port is left set, and the
-		// rejection is the spawn error itself. The masking case, a failed removal, needs the profile
-		// dir to become unremovable between `mkdtemp` and `spawn`, which has no seam, so this test
-		// does not exercise it.
+		// rejection is the spawn error itself. The cleanup race suite also covers a failed removal.
 		const before = new Set(fs.readdirSync(tmp));
 		// The URL passes the scheme check, but `spawn` rejects the NUL byte synchronously.
 		await assert.rejects(testing.performLaunchBrowser({ url: "http://example.test/\0" }), {
