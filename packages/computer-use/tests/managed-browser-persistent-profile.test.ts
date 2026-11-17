@@ -551,7 +551,12 @@ describe("persistent profile opt-in", () => {
 			},
 		);
 
-		test.each([1, 2])("fails closed on metadata failure during root check %s", async (failureAt) => {
+		// Call 1 fails inside the ancestry comparison (`profilePathContains` rethrow); call 2 fails the direct `stat`
+		// of the protected root. Both must refuse rather than treat an unreadable root as absent.
+		test.each([
+			[1, "ancestry comparison"],
+			[2, "protected-root stat"],
+		])("fails closed on non-ENOENT metadata failure %s (%s)", async (failureAt) => {
 			const directory = path.join(home, "metadata-error");
 			fs.mkdirSync(directory, { mode: 0o700 });
 			process.env.XDG_CONFIG_HOME = directory;
@@ -636,6 +641,22 @@ describe("persistent profile opt-in", () => {
 			assert(fs.existsSync(profile));
 			assert(fs.existsSync(path.join(profile, ".pi-computer-use.lock")));
 		});
+	});
+
+	test.each([
+		{ title: "Sign in", url: "http://127.0.0.1/" },
+		{ title: "Home", url: "http://127.0.0.1/login" },
+	])("launch_browser flags a possible login wall through the real launch path ($title $url)", async (page) => {
+		process.env.FAKE_BROWSER_TITLE = page.title;
+		process.env.FAKE_BROWSER_URL = page.url;
+		try {
+			const result = await testing.performLaunchBrowser({});
+			assert.equal(result.details.warning, "authentication_required");
+			assert.match(result.content[0].text, /Ask the user before any sign-in/);
+		} finally {
+			delete process.env.FAKE_BROWSER_TITLE;
+			delete process.env.FAKE_BROWSER_URL;
+		}
 	});
 
 	test("synthetic login walls are marked as heuristics, ordinary pages are not claimed authenticated", async () => {

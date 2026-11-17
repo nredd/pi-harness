@@ -3288,6 +3288,25 @@ function releasePersistentProfileLease(lease: PersistentProfileLease): boolean {
 	}
 }
 
+/** Chromium-family default data directories under HOME and under every configuration root. */
+function browserDefaultProfileRoots(home: string, configurationRoots: readonly string[]): string[] {
+	const channels = ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"];
+	return [
+		path.join(home, "Library/Application Support/Google/Chrome"),
+		path.join(home, "Library/Application Support/Chromium"),
+		path.join(home, "Library/Application Support/Google/Chrome Canary"),
+		path.join(home, "Library/Application Support/Google/Chrome Beta"),
+		path.join(home, "Library/Application Support/Google/Chrome Dev"),
+		path.join(home, "Library/Application Support/net.imput.helium"),
+		path.join(home, ".config/google-chrome"),
+		path.join(home, ".config/chromium"),
+		path.join(home, ".config/google-chrome-beta"),
+		path.join(home, ".config/google-chrome-unstable"),
+		path.join(home, ".config/helium"),
+		...configurationRoots.flatMap((root) => channels.map((name) => path.join(root, name))),
+	];
+}
+
 /**
  * Validate an operator-created profile without reading any profile contents or changing its permissions.
  *
@@ -3322,24 +3341,7 @@ async function persistentBrowserProfile(
 		process.env.CHROME_CONFIG_HOME,
 	].filter((root): root is string => Boolean(root));
 	const configuredRoots = await Promise.all(configuredRootPaths.map(canonicalProfileRoot));
-	const defaultPaths = [
-		path.join(home, "Library/Application Support/Google/Chrome"),
-		path.join(home, "Library/Application Support/Chromium"),
-		path.join(home, "Library/Application Support/Google/Chrome Canary"),
-		path.join(home, "Library/Application Support/Google/Chrome Beta"),
-		path.join(home, "Library/Application Support/Google/Chrome Dev"),
-		path.join(home, "Library/Application Support/net.imput.helium"),
-		path.join(home, ".config/google-chrome"),
-		path.join(home, ".config/chromium"),
-		path.join(home, ".config/google-chrome-beta"),
-		path.join(home, ".config/google-chrome-unstable"),
-		path.join(home, ".config/helium"),
-		...configuredRoots.flatMap((root) =>
-			["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"].map((name) =>
-				path.join(root, name),
-			),
-		),
-	];
+	const defaultPaths = browserDefaultProfileRoots(home, configuredRoots);
 	const defaults = await Promise.all(defaultPaths.map(canonicalProfileRoot));
 	const refusal =
 		"managed_browser_profile must not use a default browser data directory (or its ancestor/descendants).";
@@ -3405,7 +3407,17 @@ function lockPersistentBrowserProfile(profile: ValidatedPersistentProfile): Pers
 	return { profile, dev: info.dev, ino: info.ino };
 }
 
-/** Stop the previous managed browser, acquire its replacement's profile, then spawn and track it. */
+/**
+ * Stop the previous managed browser, acquire its replacement's profile, then spawn and track it.
+ * Call only inside `withManagedBrowserLifecycle`.
+ * @param browser Configured managed browser, which names the executable and the temporary profile prefix.
+ * @param url First page to open.
+ * @returns The spawned browser, its `--remote-debugging-port` and the executable used.
+ * @throws {Error} If no executable is found, `mkdtemp` or a synchronous `spawn` fails (a temporary profile is
+ * removed first), or a persistent `managed_browser_profile` is refused: native Windows, a missing or unsafe
+ * directory, a default or configuration root, an unsafe ancestor, a Git checkout, an existing Pi lease or Chromium
+ * lock, or a profile or lease that changed identity during launch. Refusals leave the profile untouched.
+ */
 async function startManagedBrowser(
 	browser: ComputerUseConfig["managed_browser"],
 	url: string,
@@ -3453,8 +3465,10 @@ async function startManagedBrowser(
 	return { managedBrowser, port, executable };
 }
 
-// Side effects: stops any previous managed browser (SIGTERM, then SIGKILL) and removes its profile,
-// creates a private profile dir under os.tmpdir() tracked in `liveProfileDirs` until removed,
+// Side effects: stops any previous managed browser (SIGTERM, then SIGKILL) and releases its profile,
+// then either creates a private temporary profile dir under os.tmpdir() (removed with the browser) or,
+// when `managed_browser_profile` is set, validates that dedicated profile and takes Pi's lease on it
+// (the profile itself is never deleted). Either is tracked in `liveProfileDirs` until released,
 // installs the `exit` hook once, starts a Pi-managed browser process, and sets
 // PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery. Waits for any earlier launch or
 // shutdown to finish its lifecycle step first.
