@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isExpired, mergeQuota, type QuotaObservation } from "../../src/stats/harness/common.ts";
 import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
+	decodeShard,
 	eventId,
 	exportStats,
 	importStats,
@@ -160,7 +161,7 @@ describe("snapshot v2 schema", () => {
 		);
 		expect(validateShard(ok, manifest2, "2026-10")).toBe(ok);
 		expect(() => validateManifest(manifest2)).not.toThrow();
-		expect(() => validateManifest({ ...manifest2, version: 3 })).toThrow();
+		expect(() => validateManifest({ ...manifest2, version: 99 })).toThrow();
 	});
 
 	it("rejects bad v2 events and quota", () => {
@@ -336,7 +337,7 @@ describe("mixed-version machines", () => {
 		expect(combined.sessions).toHaveLength(1);
 	});
 
-	it("keeps a v1 global cache readable and rewrites it as v2", async () => {
+	it("keeps a v1 global cache readable and rewrites it as v3", async () => {
 		publish(OLD_MACHINE, 1, [v1Event("a")]);
 		await importStats(viewer, repo);
 		const path = join(viewer, "pi-session-kit", "stats-global.json");
@@ -344,7 +345,7 @@ describe("mixed-version machines", () => {
 		writeFileSync(path, JSON.stringify({ ...doc, version: 1 }));
 		expect(Object.keys((await readGlobal(viewer)).machines)).toEqual([OLD_MACHINE]);
 		await importStats(viewer, repo);
-		expect(JSON.parse(readFileSync(path, "utf8")).version).toBe(2);
+		expect(JSON.parse(readFileSync(path, "utf8")).version).toBe(3);
 	});
 
 	it("sums null cost as zero in model totals", async () => {
@@ -379,7 +380,7 @@ describe("exportStats with harnesses", () => {
 	/** All published shard contents of one machine. */
 	function published(snapshotDir: string): Shard[] {
 		const manifest = JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
-		return manifest.shards.map((s) => JSON.parse(readFileSync(join(snapshotDir, s.file), "utf8")) as Shard);
+		return manifest.shards.map((s) => decodeShard(readFileSync(join(snapshotDir, s.file)), manifest, s.month));
 	}
 
 	it("exports Claude, Codex and OpenCode alongside pi with null cost and Codex quota", async () => {

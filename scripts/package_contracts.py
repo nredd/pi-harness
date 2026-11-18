@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import json
 import logging
@@ -51,6 +52,7 @@ from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Self, TypedDict
@@ -1121,7 +1123,7 @@ class PackedManifest(BaseModel):
 class StatsShardRef(BaseModel):
     model_config = PROTOCOL_MODEL
     month: SnapshotMonth = Field(description="UTC month the shard covers")
-    file: NonEmptyText = Field(description="Shard file name, exactly `<month>-<sha256>.json`")
+    file: NonEmptyText = Field(description="Content-addressed `.json` or v3 `.json.gz` shard name")
     sha256: Sha256Hex = Field(description="SHA-256 of the exact shard bytes")
     bytes: int = Field(ge=0, le=STATS_MAX_BYTES, description="Shard size in bytes")
 
@@ -1135,7 +1137,7 @@ class StatsShardRef(BaseModel):
         Raises:
             ValueError: If `file` is not `<month>-<sha256>.json`.
         """
-        if self.file != f"{self.month}-{self.sha256}.json":
+        if self.file not in (f"{self.month}-{self.sha256}.json", f"{self.month}-{self.sha256}.json.gz"):
             raise ValueError(f"shard file '{self.file}' is not '{self.month}-{self.sha256}.json'")
         return self
 
@@ -1146,7 +1148,7 @@ STATS_HARNESS_VERSION = 2  # First snapshot version with `harness`, null `cost`,
 
 class StatsManifest(BaseModel):
     model_config = PROTOCOL_MODEL
-    version: int = Field(ge=1, le=2, description="Snapshot schema version: 1 (legacy) or 2")
+    version: int = Field(ge=1, le=3, description="Snapshot schema version: legacy 1/2 or compact 3")
     machineId: UuidV4 = Field(description="Persistent installation UUID, matching its directory")
     label: Annotated[str, StringConstraints(min_length=1, max_length=1024)] = Field(
         description="Installation label"
@@ -1155,7 +1157,9 @@ class StatsManifest(BaseModel):
     lastGoodAt: dict[StatsHarness, Annotated[int, Field(gt=0, le=STATS_MAX_MS)]] | None = Field(
         default=None, description="v2 only: when each harness was last read cleanly, at most `exportedAt`"
     )
-    shards: list[StatsShardRef] = Field(description="One shard reference per month")
+    shards: list[StatsShardRef] = Field(
+        description="Unique file references; v3 may append sealed-month deltas"
+    )
 
     @model_validator(mode="after")
     def _months_are_unique(self) -> Self:
@@ -1168,8 +1172,14 @@ class StatsManifest(BaseModel):
             ValueError: If a month appears twice.
         """
         months = [ref.month for ref in self.shards]
-        if len(set(months)) != len(months):
+        if self.version < 3 and len(set(months)) != len(months):
             raise ValueError(f"duplicate month in shards: {months}")
+        files = [ref.file for ref in self.shards]
+        if len(set(files)) != len(files):
+            raise ValueError("duplicate shard file")
+        suffix = ".json.gz" if self.version == 3 else ".json"
+        if any(ref.file != f"{ref.month}-{ref.sha256}{suffix}" for ref in self.shards):
+            raise ValueError("shard extension does not match version")
         return self
 
     @model_validator(mode="after")
@@ -1235,7 +1245,7 @@ class StatsQuota(BaseModel):
 
 class StatsShard(BaseModel):
     model_config = PROTOCOL_MODEL
-    version: int = Field(ge=1, le=2, description="Month-shard schema version: 1 (legacy) or 2")
+    version: int = Field(ge=1, le=3, description="Expanded month-shard schema version")
     machineId: UuidV4 = Field(description="Producer installation UUID")
     month: SnapshotMonth = Field(description="UTC month covered by this shard")
     events: list[StatsEvent] = Field(description="Usage-only assistant events")
@@ -1263,6 +1273,78 @@ class StatsShard(BaseModel):
             if not v2 and event.cost is None:
                 raise ValueError("null event cost requires version 2")
         return self
+
+
+StatsIndex = Annotated[int, Field(ge=0)]
+StatsBase64Id = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9+/]{43}=$")]
+StatsCompactEntry = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9+/]{16}$")]
+
+
+class StatsCompactShard(BaseModel):
+    model_config = PROTOCOL_MODEL
+    v: Literal[3] = Field(description="Compact gzip schema version")
+    m: UuidV4 = Field(description="Producer installation UUID")
+    t: SnapshotMonth = Field(description="UTC month")
+    s: list[StatsBase64Id] = Field(description="Session identity table")
+    p: list[tuple[NonEmptyText, NonEmptyText]] = Field(description="Provider/model table")
+    d: list[tuple[StatsIndex, StatsIndex, StatsIndex, Literal[0, 1]]] = Field(description="Session rows")
+    e: list[
+        tuple[
+            StatsIndex,
+            StatsIndex,
+            StatsCompactEntry | None,
+            StatsIndex,
+            StatsIndex,
+            StatsIndex,
+            StatsIndex,
+            StatsIndex,
+            StatsIndex,
+            float | None,
+        ]
+    ] = Field(description="Compact usage rows")
+    q: list[StatsQuota] = Field(description="Quota observations")
+
+
+def compact_stats_shard(shard: StatsShard) -> StatsCompactShard:
+    """Independently project expanded cache data into the v3 wire contract.
+
+    Parameters:
+        shard (StatsShard): Validated expanded cache shard.
+
+    Returns:
+        StatsCompactShard: Canonical table and row values, independently of the JS encoder.
+    """
+    ids = sorted({s.id for s in shard.sessions} | {e.sessionId for e in shard.events})
+    pairs = sorted({(e.provider, e.model) for e in shard.events})
+    epoch = int(datetime.fromisoformat(f"{shard.month}-01T00:00:00+00:00").timestamp() * 1000)
+    harnesses = ("pi", "claude", "codex", "opencode")
+    return StatsCompactShard(
+        v=3,
+        m=shard.machineId,
+        t=shard.month,
+        s=[base64.b64encode(bytes.fromhex(i)).decode() for i in ids],
+        p=pairs,
+        d=[
+            (ids.index(s.id), s.startMs - epoch, s.endMs - s.startMs, int(s.child))
+            for s in sorted(shard.sessions, key=lambda s: s.id)
+        ],
+        e=[
+            (
+                ids.index(e.sessionId),
+                harnesses.index(e.harness or "pi"),
+                None if e.entryId is None else base64.b64encode(bytes.fromhex(e.entryId)).decode(),
+                e.ms - epoch,
+                pairs.index((e.provider, e.model)),
+                e.input,
+                e.output,
+                e.cacheRead,
+                e.cacheWrite,
+                e.cost,
+            )
+            for e in sorted(shard.events, key=lambda e: (e.ms, e.id))
+        ],
+        q=shard.quota or [],
+    )
 
 
 class StatsHarnessStatus(BaseModel):
@@ -4347,7 +4429,11 @@ def inspect_stats_snapshot(directory: Path, machine_id: str, forbidden: Sequence
         manifest = parse_stats_json(StatsManifest, manifest_text, "manifest")
         require(manifest.machineId == machine_id, "export manifest changed its installation UUID")
         require(bool(manifest.shards), "export: the manifest references no shards")
-        texts = [path.read_text() for path in directory.rglob("*") if path.is_file()]
+        texts = [
+            (gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()).decode()
+            for path in directory.rglob("*")
+            if path.is_file()
+        ]
         events = 0
         for ref in manifest.shards:
             data = (directory / ref.file).read_bytes()
@@ -4355,13 +4441,16 @@ def inspect_stats_snapshot(directory: Path, machine_id: str, forbidden: Sequence
                 len(data) == ref.bytes and hashlib.sha256(data).hexdigest() == ref.sha256,
                 "export month shard disagrees with its content identity",
             )
-            text = data.decode()
-            shard = parse_stats_json(StatsShard, text, "month shard")
-            require(
-                (shard.machineId, shard.month, shard.version) == (machine_id, ref.month, manifest.version),
-                "export shard header mismatch",
-            )
-            events += len(shard.events)
+            text = (gzip.decompress(data) if manifest.version == 3 else data).decode()
+            if manifest.version == 3:
+                compact = parse_stats_json(StatsCompactShard, text, "compact month shard")
+                header = (compact.m, compact.t, compact.v)
+                events += len(compact.e)
+            else:
+                shard = parse_stats_json(StatsShard, text, "month shard")
+                header = (shard.machineId, shard.month, shard.version)
+                events += len(shard.events)
+            require(header == (machine_id, ref.month, manifest.version), "export shard header mismatch")
         require(events > 0, "export produced no usage events")
         exported = "\n".join(texts)
         for secret in forbidden:
@@ -4399,8 +4488,23 @@ def inspect_stats_cache(viewer: Path, manifest: StatsManifest, snapshot_dir: Pat
     require(
         machine.get("manifest") == manifest.model_dump(exclude_none=True), "import cache changed the manifest"
     )
-    expected = [json.loads((snapshot_dir / ref.file).read_text()) for ref in manifest.shards]
-    require(machine.get("shards") == expected, "import cache changed or duplicated month events")
+    if manifest.version == 3:
+        actual = TypeAdapter(list[StatsShard]).validate_python(machine.get("shards"))
+        expected = [
+            parse_stats_json(
+                StatsCompactShard,
+                gzip.decompress((snapshot_dir / ref.file).read_bytes()).decode(),
+                "compact month shard",
+            )
+            for ref in manifest.shards
+        ]
+        require(
+            [compact_stats_shard(shard) for shard in actual] == expected,
+            "import cache changed compact month events",
+        )
+    else:
+        expected = [json.loads((snapshot_dir / ref.file).read_text()) for ref in manifest.shards]
+        require(machine.get("shards") == expected, "import cache changed or duplicated month events")
     return machines
 
 

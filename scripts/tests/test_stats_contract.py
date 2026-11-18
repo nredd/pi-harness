@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -194,3 +195,69 @@ def test_artifact_matrix_uses_clean_homes_and_rejects_false_success(
         )
         assert manifest.machineId == MACHINE
         assert calls == ["export", "export", "import", "import", "export"]
+
+
+def test_compact_contract_matches_expanded_cache(tmp_path: Path) -> None:
+    """Verify gzip headers, compact rows and independently projected expanded cache data.
+
+    Parameters:
+        tmp_path (Path): Isolated snapshot and viewer directory.
+    """
+    snapshot(tmp_path / "source")
+    source = json.loads((tmp_path / "source" / "manifest.json").read_text())
+    shard_data = json.loads((tmp_path / "source" / source["shards"][0]["file"]).read_text())
+    shard_data["version"] = 3
+    shard_data["quota"] = []
+    shard_data["events"][0]["harness"] = "pi"
+    shard_data["events"][0]["entryId"] = "a" * 24
+    shard_data["events"].append(shard_data["events"][0] | {"entryId": None, "id": "c" * 64})
+    shard_data["sessions"] = [{"id": "b" * 64, "startMs": STAMP, "endMs": STAMP + 1, "child": False}]
+    shard = pc.StatsShard.model_validate(shard_data)
+    wire = pc.compact_stats_shard(shard)
+    assert wire.e[0][2] == "qqqqqqqqqqqqqqqq"
+    assert wire.e[1][2] is None
+    assert wire.d == [(0, 1790000001000 - 1788220800000, 1, 0)]
+    data = gzip.compress(wire.model_dump_json().encode(), mtime=0)
+    sha = hashlib.sha256(data).hexdigest()
+    file = f"2026-09-{sha}.json.gz"
+    directory = tmp_path / "compact"
+    directory.mkdir()
+    (directory / file).write_bytes(data)
+    manifest = pc.StatsManifest.model_validate(
+        source
+        | {
+            "version": 3,
+            "lastGoodAt": {},
+            "shards": [{"month": "2026-09", "file": file, "sha256": sha, "bytes": len(data)}],
+        }
+    )
+    (directory / "manifest.json").write_text(manifest.model_dump_json())
+    assert pc.inspect_stats_snapshot(directory, MACHINE, []) == manifest
+    cache_dir = tmp_path / "viewer" / "pi-session-kit"
+    cache_dir.mkdir(parents=True)
+    machine = {"manifest": manifest.model_dump(exclude_none=True), "shards": [shard.model_dump()]}
+    (cache_dir / "stats-global.json").write_text(json.dumps({"machines": {MACHINE: machine}}))
+    assert pc.inspect_stats_cache(cache_dir.parent, manifest, directory)
+    machine["shards"][0]["events"][0]["input"] += 1
+    (cache_dir / "stats-global.json").write_text(json.dumps({"machines": {MACHINE: machine}}))
+    with pytest.raises(pc.ContractError, match="changed compact month events"):
+        pc.inspect_stats_cache(cache_dir.parent, manifest, directory)
+
+
+def test_compact_manifest_requires_unique_versioned_files(tmp_path: Path) -> None:
+    """Allow sealed-month deltas but reject duplicates and cross-version filenames.
+
+    Parameters:
+        tmp_path (Path): Isolated fixture directory.
+    """
+    snapshot(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text()) | {"version": 3, "lastGoodAt": {}}
+    ref = manifest["shards"][0] | {"file": f"2026-09-{'a' * 64}.json.gz", "sha256": "a" * 64}
+    other = ref | {"file": f"2026-09-{'b' * 64}.json.gz", "sha256": "b" * 64}
+    assert pc.StatsManifest.model_validate(manifest | {"shards": [ref, other]})
+    with pytest.raises(pc.ContractError, match="duplicate shard file"):
+        pc.parse_stats_json(pc.StatsManifest, json.dumps(manifest | {"shards": [ref, ref]}), "manifest")
+    for version, reference in [(1, ref), (3, ref | {"file": ref["file"].removesuffix(".gz")})]:
+        invalid = manifest | {"version": version, "shards": [reference]}
+        with pytest.raises(pc.ContractError, match="extension does not match version"):
+            pc.parse_stats_json(pc.StatsManifest, json.dumps(invalid), "manifest")

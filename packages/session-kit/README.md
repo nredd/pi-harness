@@ -548,40 +548,65 @@ Snapshot version 2 (version 1 is still imported, see Compatibility):
 
 ```
 machines/<UUID>/manifest.json
-machines/<UUID>/<YYYY-MM>-<sha256>.json
+machines/<UUID>/<YYYY-MM>-<sha256>.json.gz
 ```
 
 Manifest exact keys:
 
-- `version`: `2` (`1` for legacy exports).
+- `version`: `3` (`1`/`2` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
 - `exportedAt`: positive UTC Unix milliseconds.
-- `lastGoodAt` (v2 only): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
+- `lastGoodAt` (v2+): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
   for a snapshot with none), never later than `exportedAt` even if the previous snapshot's clock ran
   ahead; absent when that is unknown.
-- `shards`: unique month references, each exactly `{month, file, sha256, bytes}`. `file` MUST
-  equal `<month>-<sha256>.json`. No absolute paths, traversal or arbitrary filenames.
+- `shards`: unique file references, each exactly `{month, file, sha256, bytes}`. `file` MUST
+  equal `<month>-<sha256>.json.gz` (v1/v2: `.json`). No absolute paths, traversal or arbitrary filenames.
 
-Shard exact keys: `{version, machineId, month, events, sessions, quota}`; v1 shards have no `quota`. All shard JSON is canonical
-`JSON.stringify` output (no indentation/newline), bounded to 128 MiB per file. Manifest hashes
-cover exact UTF-8 shard bytes. Immutable content-addressed shards are published first, manifest
-last; unreferenced old shard generations are deliberately retained and ignored. No cleanup races
-with readers. Each manifest references exactly one shard per month.
+v3 wire keys: `{v, m, t, s, p, d, e, q}`. `v` is `3`; `m`/`t` are machine/month. `s` is a sorted
+session identity table (32-byte hashes in canonical base64); `p` is a sorted table of
+`[provider, model]` pairs. Metadata rows in `d` are `[sessionIndex, startOffset, duration, child]`,
+where `child` is `0` or `1`. Event rows in `e` are
+`[sessionIndex, harnessIndex, entryId, offset, modelIndex, input, output, cacheRead, cacheWrite, cost]`.
+Offsets are milliseconds from the UTC month start; `harnessIndex` indexes
+`["pi", "claude", "codex", "opencode"]`. `entryId` is canonical base64 of the first 12 bytes of
+the full entry hash, or `null`. Export and deduplication refuse collisions between known full
+identities rather than merging them. Cross-version matching uses that same 96-bit prefix plus
+attribution, timestamp and counters; legacy entry hashes remain unchanged on disk.
+`q` contains the quota objects below. Metadata sorts by identity; events sort by timestamp then
+fingerprint. All other identity fields are reconstructed, not repeated per event.
+
+The canonical compact JSON is compressed with gzip level 9 and zero mtime. Digests and `bytes`
+cover the compressed bytes. Imports reject noncanonical encodings, invalid indexes/rows and
+expanded JSON above 128 MiB, in addition to the 128 MiB regular-file bound. The expanded cache
+still uses `{version, machineId, month, events, sessions, quota}` and strict validation below;
+v1 shards have no `quota` and use canonical uncompressed `JSON.stringify` bytes.
+
+Shards are published first, manifest last. After publication the serialized exporter removes
+unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
+machine snapshot and retry next sync. Unchanged files are never rewritten. The active UTC month
+replaces its previous generation; past months are sealed and retain their referenced immutable
+files. Late historical events, session-end extensions and quota observations append small delta
+shards, not whole-month rewrites. A v3 month can therefore have multiple referenced shards.
+Session metadata repeats only with consistent start/child attribution; aggregation takes the
+maximum end. Quota aggregation selects the freshest observation, not their sum. Sealed event
+prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
+The transport must publish only manifest-referenced files and prune unreferenced files in the
+producer's own directory, never another machine's directory.
 
 Event exact keys:
 
 - `id`: SHA-256 event fingerprint.
-- `harness`: `pi`, `claude`, `codex` or `opencode` (v2 only).
-- `entryId`: SHA-256 of `entry:<preserved assistant entry ID>`, or `null` for legacy records.
+- `harness`: `pi`, `claude`, `codex` or `opencode` (v2+).
+- `entryId`: SHA-256 of `entry:<preserved assistant entry ID>` (v3: first 24 hex characters), or `null` for legacy records.
 - `sessionId`: opaque session ID.
 - `ms`: original positive UTC Unix milliseconds, in the shard's UTC month.
 - `provider`, `model`: raw physical attribution, each nonempty and at most 1024 characters.
 - `input`, `output`, `cacheRead`, `cacheWrite`: nonnegative safe integers, not all zero.
 - `cost`: finite nonnegative recorded notional cost, or `null` when the harness records none
-  (Claude, Codex; v2 only). `null` is not 0: totals treat it as 0, but it is not a recorded price.
+  (Claude, Codex; v2+). `null` is not 0: totals treat it as 0, but it is not a recorded price.
 
 The identified fingerprint is SHA-256 of the JSON array
 `[harness, entryId, ms, provider, model, input, output, cacheRead, cacheWrite]` (v1 had no
@@ -592,7 +617,7 @@ fingerprinting and matching use `[provider, model, ms, input, output, cacheRead,
 intentionally without cost to preserve the old tuple rule; identified counterparts supersede
 legacy duplicates.
 
-Quota observation exact keys (v2; stored in the UTC month of `observedAt`):
+Quota observation exact keys (v2+; stored in the UTC month of `observedAt`):
 `{harness, provider, limitId, window, usedPercent, resetAt, durationMs, observedAt, planType, account}`.
 `harness` is the observer, `provider` the router provider name (Codex: `openai-codex`), `window`
 `5h`, `7d` or `<seconds>s`, times are epoch ms, `planType` is a string or `null`. No account email,
@@ -609,10 +634,16 @@ readings are never summed. An expired reading is kept only when nothing live exi
 as `reset, no newer reading`; it never beats a live one however fresh its clock. `loadCombined`
 returns the merged `quota`, evaluated at its `now` argument.
 
-Compatibility: import accepts v1 and v2 machines side by side, in one global cache (still
-validated with each manifest's own version). A v1 event loads as `harness: "pi"`. v1 shards are
-never rewritten; a machine moves to v2 on its next export, and the viewer's `exportedAt` ordering
-applies as before. Older kits cannot read v2 manifests, so update viewers before producers.
+Compatibility: import accepts v1, v2 and v3 machines side by side, validated with each manifest's
+own version. A v1 event loads as `harness: "pi"`. Producers migrate on their next export;
+`exportedAt` ordering and atomic last-good imports are unchanged. Update viewers before producers:
+older kits cannot read v3 manifests.
+
+Removing superseded files bounds the published tree, not existing Git history. To reclaim an
+already-bloated data branch, the maintainer must stop scheduled writers, back up the branch,
+validate every manifest and referenced file, then explicitly replace its history with a new root
+containing only those files. Coordinate that owner-run rewrite and fresh checkouts for all writers
+before restarting sync. The exporter and helper never rewrite history or force-push automatically.
 
 Session exact keys: `{id, startMs, endMs, child}`. Header IDs hash as `session:<header ID>`;
 unidentified legacy sessions use a local path hash and therefore cannot always be matched across
