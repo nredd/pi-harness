@@ -1,5 +1,5 @@
 /** The real todo settle handler owns continuation ahead of the real goal handler. */
-import { fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, getMessageText } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { complete, GoalStack, goalStates, nudges, outcomes, spoken, tool } from "./goal-support.ts";
 import { loadFork } from "./support.ts";

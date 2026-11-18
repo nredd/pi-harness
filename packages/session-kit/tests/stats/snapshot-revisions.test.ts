@@ -1,5 +1,5 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { readdir, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -18,7 +18,12 @@ import { seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
-	return { ...actual, unlink: vi.fn(actual.unlink) };
+	return {
+		...actual,
+		unlink: vi.fn(actual.unlink),
+		readdir: vi.fn(actual.readdir),
+		writeFile: vi.fn(actual.writeFile),
+	};
 });
 let root: string;
 let agent: string;
@@ -34,6 +39,8 @@ beforeEach(() => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.mocked(unlink).mockRestore();
+	vi.mocked(readdir).mockRestore();
+	vi.mocked(writeFile).mockRestore();
 	rmSync(root, { recursive: true, force: true });
 });
 const manifest = (path: string): Manifest => JSON.parse(readFileSync(join(path, "manifest.json"), "utf8")) as Manifest;
@@ -133,16 +140,37 @@ it("preserves recoverable files when the previous transaction and harness are un
 	const home = join(root, "home");
 	const roots = seedHarnessHome(home);
 	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
+	writeLines(join(roots.claude, "projects", `-Users-${CANARY}-work`, "sess-A.jsonl"), [
+		claudeRow({ id: "sept", requestId: "sept", ts: "2026-09-01T12:00:00Z" }),
+		claudeRow({ id: "oct", requestId: "oct", ts: "2026-10-01T12:00:00Z" }),
+	]);
 	const first = await exportStats(agent, out, undefined, options);
-	const ref = manifest(first.snapshotDir).shards[0];
+	const before = manifest(first.snapshotDir);
+	const valid = before.shards.find((shard) => shard.month === "2026-09");
+	if (!valid) throw new Error("Missing valid recovery shard");
+	const validBytes = readFileSync(join(first.snapshotDir, valid.file));
+	const ref = before.shards.find((shard) => shard.month === "2026-10");
 	if (!ref) throw new Error("Missing shard");
 	const path = join(first.snapshotDir, ref.file);
 	const bytes = readFileSync(path);
 	bytes[bytes.length - 1] = 1;
 	writeFileSync(path, bytes);
 	rmSync(roots.claude, { recursive: true, force: true });
-	await exportStats(agent, out, undefined, options);
-	expect(readdirSync(first.snapshotDir)).toContain(ref.file);
+	for (let run = 0; run < 3; run++) {
+		const result = await exportStats(agent, out, undefined, options);
+		expect(readdirSync(first.snapshotDir)).toContain(ref.file);
+		expect(readFileSync(join(first.snapshotDir, valid.file))).toEqual(validBytes);
+		expect(result.harnesses?.claude?.failed).toBe("lost");
+		expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
+		expect(result.warnings).toContain("obsolete shard cleanup skipped: previous history unavailable");
+	}
+	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryPending).toBe(true);
+	const accepted = await exportStats(agent, out, undefined, { ...options, replaceHarnesses: true });
+	expect(accepted.warnings ?? []).toEqual([]);
+	expect(readdirSync(first.snapshotDir)).not.toContain(ref.file);
+	expect(readdirSync(first.snapshotDir)).not.toContain(valid.file);
+	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryPending).toBe(false);
 });
 
 it.each(["EACCES", "ENOENT"])(
@@ -161,13 +189,79 @@ it.each(["EACCES", "ENOENT"])(
 			return actual.unlink(path);
 		});
 		const result = await exportStats(agent, out);
-		expect(result.warnings ?? []).toEqual(code === "ENOENT" ? [] : ["obsolete shard cleanup failed"]);
+		expect(result.warnings ?? []).toEqual(code === "ENOENT" ? [] : ["obsolete shard cleanup failed: EACCES=1"]);
 		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 		expect(JSON.parse(readFileSync(join(agent, "pi-session-kit", "export-state.json"), "utf8")).harnesses).toEqual([
 			"pi",
 		]);
 	},
 );
+
+it("continues pruning other entries and reports errno counts without raw error details", async () => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-10-01"),
+		lines: [assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out);
+	const orphans = ["a", "b", "c", "d"].map((id) => `2025-01-${id.repeat(64)}.json`);
+	for (const name of orphans) writeFileSync(join(first.snapshotDir, name), "{}");
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(unlink).mockImplementation(async (path) => {
+		const name = String(path);
+		if (name.endsWith(orphans[0] ?? "missing") || name.endsWith(orphans[1] ?? "missing"))
+			throw Object.assign(new Error("private diagnostic"), { code: "EACCES" });
+		if (name.endsWith(orphans[2] ?? "missing")) throw Object.assign(new Error("private diagnostic"), { code: "EPERM" });
+		return actual.unlink(path);
+	});
+	const result = await exportStats(agent, out);
+	expect(result.warnings).toEqual(["obsolete shard cleanup failed: EACCES=2, EPERM=1"]);
+	expect(readdirSync(first.snapshotDir)).not.toContain(orphans[3]);
+});
+
+it("reports a failed directory scan without publishing an unbounded diagnostic", async () => {
+	const first = await exportStats(agent, out);
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(readdir).mockImplementation(async (path, options) => {
+		if (String(path) === first.snapshotDir) throw null;
+		return actual.readdir(path, options);
+	});
+	const result = await exportStats(agent, out);
+	expect(result.warnings).toEqual(["obsolete shard cleanup failed: UNKNOWN=1"]);
+	expect(manifest(first.snapshotDir).shards).toEqual([]);
+});
+
+it("refuses publication when the durable recovery barrier cannot be written", async () => {
+	const home = join(root, "home");
+	const roots = seedHarnessHome(home);
+	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
+	const first = await exportStats(agent, out, undefined, options);
+	const ref = manifest(first.snapshotDir).shards[0];
+	if (!ref) throw new Error("Missing shard");
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	const before = readFileSync(manifestPath);
+	writeFileSync(join(first.snapshotDir, ref.file), "corrupt");
+	rmSync(roots.claude, { recursive: true, force: true });
+	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(writeFile).mockImplementation(async (path, data, options) => {
+		if (String(path).startsWith(`${statePath}.`)) throw Object.assign(new Error("barrier denied"), { code: "EACCES" });
+		return actual.writeFile(path, data, options);
+	});
+	await expect(exportStats(agent, out, undefined, options)).rejects.toThrow("barrier denied");
+	expect(readFileSync(manifestPath)).toEqual(before);
+	expect(readdirSync(first.snapshotDir)).toContain(ref.file);
+});
+
+it("reads legacy export state but rejects malformed recovery markers", async () => {
+	await exportStats(agent, out);
+	const path = join(agent, "pi-session-kit", "export-state.json");
+	const state = JSON.parse(readFileSync(path, "utf8"));
+	delete state.recoveryPending;
+	writeFileSync(path, JSON.stringify(state));
+	await exportStats(agent, out);
+	writeFileSync(path, JSON.stringify({ ...state, recoveryPending: "invalid" }));
+	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+});
 
 it("keeps many sealed deltas proportional to new events and leaves no superseded files", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
@@ -201,6 +295,30 @@ it("keeps many sealed deltas proportional to new events and leaves no superseded
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(["manifest.json", ...after.shards.map((s) => s.file)].sort());
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	expect((await loadCombined(viewer)).calls).toHaveLength(140);
+});
+
+it("appends a delta when distinct sessions share a preserved entry identity", async () => {
+	const a = join(agent, "sessions", "a.jsonl");
+	const b = join(agent, "sessions", "b.jsonl");
+	const row = (id: string, input: number) => {
+		const value = JSON.parse(assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input }));
+		value.id = id;
+		return JSON.stringify(value);
+	};
+	const firstCall = row("deadbeef", 7);
+	sessionFile(a, { startMs: at("2026-10-01"), lines: [firstCall] });
+	sessionFile(b, { startMs: at("2026-10-01"), lines: [row("deadbeef", 9)] });
+	const first = await exportStats(agent, out);
+	const before = manifest(first.snapshotDir);
+	expect(before.shards).toHaveLength(1);
+	sessionFile(a, { startMs: at("2026-10-01"), lines: [firstCall, row("late", 11)] });
+	await exportStats(agent, out);
+	const after = manifest(first.snapshotDir);
+	expect(after.shards).toEqual(expect.arrayContaining(before.shards));
+	// One base plus one late delta. A single replacement file would reproduce the regeneration bug.
+	expect(after.shards).toHaveLength(2);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls).toHaveLength(3);
 });
 
 it("keeps unidentified legacy events stable across repeated sealed-month exports", async () => {

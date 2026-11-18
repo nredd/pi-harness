@@ -790,6 +790,7 @@ SUBAGENTS_CONTRACT = PackageContract(
         "src/agent-color.ts",
         "src/agent-file-toggle.ts",
         "src/agent-manager.ts",
+        "src/agent-roster.ts",
         "src/agent-runner.ts",
         "src/agent-source-badge.ts",
         "src/agent-types.ts",
@@ -829,6 +830,7 @@ SUBAGENTS_CONTRACT = PackageContract(
         "src/prompts.ts",
         "src/quota-admission.ts",
         "src/resource-loader.ts",
+        "src/roster-tools.ts",
         "src/saved-agent-record.ts",
         "src/schedule-store.ts",
         "src/schedule.ts",
@@ -1321,6 +1323,8 @@ def compact_stats_shard(shard: StatsShard) -> StatsCompactShard:
             "utf-16-be", errors="surrogatepass"
         ),
     )
+    session_index = {identity: index for index, identity in enumerate(ids)}
+    pair_index = {pair: index for index, pair in enumerate(pairs)}
     epoch = int(datetime.fromisoformat(f"{shard.month}-01T00:00:00+00:00").timestamp() * 1000)
     harnesses = get_args(StatsHarness)
     return StatsCompactShard(
@@ -1330,16 +1334,16 @@ def compact_stats_shard(shard: StatsShard) -> StatsCompactShard:
         s=[base64.b64encode(bytes.fromhex(i)).decode() for i in ids],
         p=pairs,
         d=[
-            (ids.index(s.id), s.startMs - epoch, s.endMs - s.startMs, int(s.child))
+            (session_index[s.id], s.startMs - epoch, s.endMs - s.startMs, int(s.child))
             for s in sorted(shard.sessions, key=lambda s: s.id)
         ],
         e=[
             (
-                ids.index(e.sessionId),
+                session_index[e.sessionId],
                 harnesses.index(e.harness or "pi"),
                 None if e.entryId is None else base64.b64encode(bytes.fromhex(e.entryId)).decode(),
                 e.ms - epoch,
-                pairs.index((e.provider, e.model)),
+                pair_index[(e.provider, e.model)],
                 e.input,
                 e.output,
                 e.cacheRead,

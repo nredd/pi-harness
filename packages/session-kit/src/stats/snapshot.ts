@@ -221,14 +221,18 @@ export interface ExportState {
 	harnesses: Harness[] | null;
 	/** Consecutive exports whose scan of a harness failed and carried its old data; absent means 0. */
 	failures: Partial<Record<Harness, number>>;
+	/** Sticky recovery barrier; only an explicit successful replacement may clear it. */
+	recoveryPending: boolean;
 }
 const stateFile = (dir: string): string => join(dir, "pi-session-kit", "export-state.json");
 function validateState(value: unknown): ExportState {
-	exact(value, ["version", "salt", "harnesses", "failures"]);
+	const hasRecovery = record(value) && "recoveryPending" in value;
+	exact(value, ["version", "salt", "harnesses", "failures", ...(hasRecovery ? ["recoveryPending"] : [])]);
 	const harnesses = value.harnesses;
 	const failures = value.failures;
 	if (
 		value.version !== 1 ||
+		(hasRecovery && typeof value.recoveryPending !== "boolean") ||
 		typeof value.salt !== "string" ||
 		!/^[a-f0-9]{32}$/.test(value.salt) ||
 		!(
@@ -245,13 +249,20 @@ function validateState(value: unknown): ExportState {
 		salt: value.salt,
 		harnesses: harnesses as Harness[] | null,
 		failures: failures as ExportState["failures"],
+		recoveryPending: value.recoveryPending === true,
 	};
 }
 /** Created on first use with a fresh salt and no recorded set. */
 async function exportState(dir: string): Promise<ExportState> {
 	return installationFile(
 		stateFile(dir),
-		() => ({ version: 1, salt: randomBytes(16).toString("hex"), harnesses: null, failures: {} }),
+		() => ({
+			version: 1,
+			salt: randomBytes(16).toString("hex"),
+			harnesses: null,
+			failures: {},
+			recoveryPending: false,
+		}),
 		validateState,
 	);
 }
@@ -787,7 +798,7 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<string> {
 	const revised = new Set<string>();
 	const entries = new Map<string, { id: string; month: string }[]>();
-	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.entryId]);
+	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.entryId]);
 	for (const shard of previous.shards)
 		for (const event of shard.events) {
 			if (event.entryId === null) continue;
@@ -900,24 +911,27 @@ export async function exportStats(
 		const gone =
 			!scan.found &&
 			!options.replaceHarnesses &&
-			(old === null ? last.has(h) : old.calls.length + old.quota.length > 0);
+			(old === null || state.recoveryPending ? last.has(h) : old.calls.length + old.quota.length > 0);
+		const missingHistory = old === null || (state.recoveryPending && old.calls.length === 0 && old.quota.length === 0);
 		const failed = scan.problems.some(fatalProblem) || gone;
 		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
 		const problems = [
 			...scan.problems,
 			...(gone ? [`${h}: not found, but data was published before`] : []),
-			...(failed && old === null ? [`${h}: last published contents unreadable`] : []),
+			...(failed && missingHistory ? [`${h}: last published contents unreadable`] : []),
 		];
 		if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
 		// Carried data is as fresh as it was: the previous snapshot's own mark, else when it was published.
 		const was = previous !== null && previous !== "unreadable" ? previous.manifest : undefined;
-		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? was?.exportedAt) : exportedAt;
+		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? (missingHistory ? undefined : was?.exportedAt)) : exportedAt;
 		// Never after the export itself: a carried mark from a snapshot written under a faster clock must stay valid.
 		if (lastGood !== undefined) lastGoodAt[h] = Math.min(lastGood, exportedAt);
 		report[h] = {
 			found: scan.found,
 			problems,
-			...(failed ? { failed: old ? ("kept" as const) : ("lost" as const), consecutiveFailures: failures[h] } : {}),
+			...(failed
+				? { failed: missingHistory ? ("lost" as const) : ("kept" as const), consecutiveFailures: failures[h] }
+				: {}),
 		};
 		calls.push(...use.calls);
 		sessionMetadata.push(...use.sessions);
@@ -925,8 +939,14 @@ export async function exportStats(
 	}
 	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
 	validateSnapshot(snapshot);
+	const lost = Object.values(report).some((r) => r.failed === "lost");
+	const recoveryPending = !options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || lost);
+	// Persist the barrier BEFORE a reduced manifest can replace unreadable history. A failed marker
+	// write must leave the previous manifest intact, not silently enable destructive cleanup next run.
+	if (recoveryPending && !state.recoveryPending)
+		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending: true });
 	await mkdir(snapshotDir, { recursive: true });
-	// Past months are sealed: retain their bytes and append only newly discovered events/metadata.
+	// Uncorrected past months stay sealed: append only newly discovered events/metadata.
 	// An explicit harness replacement starts a new generation rather than retaining dropped history.
 	const sealed =
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
@@ -936,31 +956,35 @@ export async function exportStats(
 	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
 	const publishedShards: Shard[] = [];
 	if (sealed)
-		for (const [i, s] of sealed.shards.entries()) {
-			if (s.month >= current || revised.has(s.month)) continue;
+		for (const [i, previousShard] of sealed.shards.entries()) {
+			if (previousShard.month >= current || revised.has(previousShard.month)) continue;
 			snapshot.manifest.shards.push(nth(sealed.manifest.shards, i));
-			publishedShards.push(s);
+			publishedShards.push(previousShard);
 		}
 	for (const full of snapshot.shards) {
-		const old = publishedShards.filter((s) => s.month === full.month);
-		const events = new Set(old.flatMap((s) => s.events.map((e) => e.id)));
-		const sessions = new Map(old.flatMap((s) => s.sessions.map((s) => [s.id, s] as const)));
-		const quotas = new Set(old.flatMap((s) => (s.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))));
-		const s: Shard = {
+		const old = publishedShards.filter((previousShard) => previousShard.month === full.month);
+		const events = new Set(old.flatMap((previousShard) => previousShard.events.map((event) => event.id)));
+		const sessions = new Map(
+			old.flatMap((previousShard) => previousShard.sessions.map((session) => [session.id, session] as const)),
+		);
+		const quotas = new Set(
+			old.flatMap((previousShard) => (previousShard.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))),
+		);
+		const delta: Shard = {
 			...full,
-			events: full.events.filter((e) => !events.has(e.id)),
-			sessions: full.sessions.filter((s) => {
-				const prior = sessions.get(s.id);
-				return !prior || s.endMs > prior.endMs;
+			events: full.events.filter((event) => !events.has(event.id)),
+			sessions: full.sessions.filter((session) => {
+				const prior = sessions.get(session.id);
+				return !prior || session.endMs > prior.endMs;
 			}),
 			quota: (full.quota as SnapshotQuota[]).filter((q) => !quotas.has(JSON.stringify(q))),
 		};
-		if (!s.events.length && !s.sessions.length && !(s.quota as SnapshotQuota[]).length) continue;
-		validateShard(s, snapshot.manifest, s.month);
-		const bytes = encodeShard(s);
+		if (!delta.events.length && !delta.sessions.length && !(delta.quota as SnapshotQuota[]).length) continue;
+		validateShard(delta, snapshot.manifest, delta.month);
+		const bytes = encodeShard(delta);
 		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
 		const sha256 = digest(bytes);
-		const file = `${s.month}-${sha256}.json.gz`;
+		const file = `${delta.month}-${sha256}.json.gz`;
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {
 			await writeFile(join(snapshotDir, file), bytes, { flag: "wx", mode: 0o600 });
@@ -969,8 +993,8 @@ export async function exportStats(
 			if (!(await readFile(join(snapshotDir, file))).equals(bytes))
 				await atomicContents(join(snapshotDir, file), bytes);
 		}
-		snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: bytes.length });
-		publishedShards.push(s);
+		snapshot.manifest.shards.push({ month: delta.month, file, sha256, bytes: bytes.length });
+		publishedShards.push(delta);
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
@@ -978,27 +1002,39 @@ export async function exportStats(
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
 	const warnings: string[] = [];
-	const lost = Object.values(report).some((r) => r.failed === "lost");
-	if (previous === "unreadable" || lost) warnings.push("obsolete shard cleanup skipped: previous history unavailable");
+	if (recoveryPending) warnings.push("obsolete shard cleanup skipped: previous history unavailable");
 	else {
 		const referenced = new Set(snapshot.manifest.shards.map((ref) => ref.file));
-		try {
-			for (const entry of await readdir(snapshotDir, { withFileTypes: true })) {
-				if (
-					entry.isFile() &&
-					/^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/.test(entry.name) &&
-					!referenced.has(entry.name)
-				) {
-					try {
-						await unlink(join(snapshotDir, entry.name));
-					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-					}
+		const cleanupErrors = new Map<string, number>();
+		const recordCleanupError = (error: unknown): void => {
+			const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
+			const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
+			cleanupErrors.set(code, (cleanupErrors.get(code) ?? 0) + 1);
+		};
+		const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
+			recordCleanupError(error);
+			return [];
+		});
+		for (const entry of entries) {
+			if (
+				entry.isFile() &&
+				/^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/.test(entry.name) &&
+				!referenced.has(entry.name)
+			) {
+				try {
+					await unlink(join(snapshotDir, entry.name));
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") recordCleanupError(error);
 				}
 			}
-		} catch {
-			warnings.push("obsolete shard cleanup failed");
 		}
+		if (cleanupErrors.size)
+			warnings.push(
+				`obsolete shard cleanup failed: ${[...cleanupErrors]
+					.sort(([a], [b]) => codeUnits(a, b))
+					.map(([code, count]) => `${code}=${count}`)
+					.join(", ")}`,
+			);
 	}
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
@@ -1009,6 +1045,7 @@ export async function exportStats(
 		salt: state.salt,
 		harnesses: published,
 		failures,
+		recoveryPending,
 	}).then(
 		() => [],
 		() => ["export state not recorded"],

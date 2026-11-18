@@ -561,6 +561,7 @@ describe("exportStats with harnesses", () => {
 				salt: expect.stringMatching(/^[a-f0-9]{32}$/),
 				harnesses: ["pi", "codex"],
 				failures: {},
+				recoveryPending: false,
 			});
 			// the salt never reaches the published snapshot
 			const out = Object.values(files(repo))

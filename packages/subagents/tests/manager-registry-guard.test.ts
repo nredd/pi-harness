@@ -112,6 +112,19 @@ describe("the registry spawn strips internal capabilities", () => {
 		return { entry, id, root, runOpts: () => vi.mocked(runAgent).mock.calls[0]![3] as any };
 	}
 
+	it("a spawn with no description still renders in the parent roster", async () => {
+		const { root } = forge({ description: undefined });
+		const context = { hasUI: true, ui: { notify: vi.fn() }, sessionManager: { getSessionId: () => "s1" } };
+		await root.commands.get("agents").handler("roster", context);
+		const [body, level] = context.ui.notify.mock.calls.at(-1)!;
+		expect(level).toBe("info");
+		expect(JSON.parse(body).agents).toMatchObject([
+			{ type: "orchestrator" },
+			{ type: "general-purpose", assignment: "" },
+		]);
+		await root.lifecycle.get("session_shutdown")?.();
+	});
+
 	it("refuses a forged nesting, so the agent cannot hide under someone else's id", async () => {
 		// A nested record is filtered out of every top-level surface and inherits
 		// its parent's delegation budget.
@@ -131,6 +144,8 @@ describe("the registry spawn strips internal capabilities", () => {
 		const { entry, id, root, runOpts } = forge({ rootSessionId: "../../elsewhere", configCwd: "/etc" });
 
 		expect(entry.getRecord(id).rootSessionId).toBeUndefined();
+		// Roster membership is separate and never taken from the forged option.
+		expect(entry.getRecord(id).rosterRootId).toBe("s1");
 		expect(runOpts().configCwd).toBeUndefined();
 		await root.lifecycle.get("session_shutdown")?.();
 	});

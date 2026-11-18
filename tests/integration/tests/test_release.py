@@ -1570,8 +1570,7 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
     root.mkdir()
     shutil.copy(Path(__file__).resolve().parents[3] / "Makefile", root / "Makefile")
     (root / "release").symlink_to(Path(__file__).resolve().parents[3] / "release")
-    (root / "tests/benchmarks/comparison").mkdir(parents=True)
-    (root / "tests/integration").mkdir()
+    (root / "tests/integration").mkdir(parents=True)
     commands, log = tmp_path / "commands", tmp_path / "seen"
     commands.mkdir()
     for tool in ("python3", "npm", "uv"):
@@ -1588,7 +1587,6 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
         "python3=fixture-token",
         "npm=unset",
         "npm=unset",
-        "uv=unset",
         "uv=unset",
         "uv=unset",
         "uv=unset",

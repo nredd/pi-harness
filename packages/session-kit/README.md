@@ -531,7 +531,10 @@ Installation state, never synced:
   cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
   child markers apply only to the matching session ID, surviving user-visible renames.
 - `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex) and the harness set
-  the last successful export published (`null` until one is recorded). `failures` holds the consecutive failed exports per harness.
+  the last successful export published (`null` until one is recorded). `failures` holds consecutive failed exports.
+  `recoveryPending` is a sticky local cleanup barrier, persisted before publishing over unreadable
+  history. Older state without the flag reads as `false`; only an explicit successful
+  `--replace-harnesses` publication clears it. A failed barrier write aborts before replacing the manifest.
   The salt keys the quota
   account discriminators below and never appears in a snapshot; like `machine.json`, it is created
   exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
@@ -597,16 +600,22 @@ gzip files; its separate assembled 128 MiB bound and last-good replacement rule 
 Shards are published first, manifest last. After publication the serialized exporter removes
 unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
 machine snapshot and retry next sync. Valid content-addressed files are never rewritten; corrupt
-bytes at an existing filename are repaired through an atomic rename. Cleanup is skipped when
-previous history is unreadable or a harness reports lost history, retaining recoverable copies;
-cleanup failures become warnings, not failed exports or missing export-state bookkeeping.
+bytes at an existing filename are repaired through an atomic rename. Unreadable previous history or a lost harness sets the durable `recoveryPending` barrier before
+publication. Cleanup remains disabled on every later export, with a warning, even when the new
+manifest is readable. Missing lost harnesses do not become fresh empty history. Recover or back up
+those files before explicitly accepting replacement with `--replace-harnesses`; ordinary exports
+never clear the barrier. Cleanup otherwise continues per file, reporting safe errno counts on
+failure rather than failing the export or skipping export-state bookkeeping.
 
 The active UTC month replaces its previous generation. Past-month files stay immutable for
 append-only late events, session-end extensions and quota observations. A corrected identified
-call (same harness/entry identity, different timestamp/counters) or changed session start/child
+call (same harness/session/entry identity, different timestamp/counters) or changed session start/child
 attribution retires the affected months' references and regenerates those months from the clean
 scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
-corrections regenerate both affected months. Old file bytes are not changed, only superseded.
+corrections regenerate both affected months. Entry identities shared by distinct sessions are not
+revisions of one another. Legacy events without an `entryId` retain tuple matching: corrected
+counters or timestamps cannot be identified and can append beside the old row in a sealed month.
+This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 
 A v3 month can have multiple referenced delta shards. There is no fixed per-month delta-count
@@ -617,7 +626,9 @@ rewriting sealed generations; never drop referenced files just to reduce their c
 Session metadata repeats only with consistent start/child attribution; aggregation takes the
 maximum end. Quota aggregation selects the freshest observation, not their sum.
 The transport must publish only manifest-referenced files and prune unreferenced files in the
-producer's own directory, never another machine's directory.
+producer's own directory, never another machine's directory. This PR only fixes the exporter/outbox:
+the published tree and the 60-second `git add` budget still require the separate sync-helper pruning
+follow-up. Issue #1033 remains partly open until that lands.
 
 Event exact keys:
 
@@ -662,28 +673,23 @@ own version. A v1 event loads as `harness: "pi"`. Producers migrate on their nex
 `exportedAt` ordering and atomic last-good imports are unchanged. Update viewers before producers:
 older kits cannot read v3 manifests.
 
-Removing superseded files bounds the published tree, not existing Git history. Owner-run history
-replacement requires all writers stopped and a separate staging clone, never an ordinary sync checkout.
-Here `$EXPORTER` is the verified standalone bundle, `$DATA` is the stopped source checkout, and
-`$BEFORE`/`$AFTER`/`$STAGED` are disposable directories; `$BACKUP` is the explicit backup destination:
+An encoding-only sample from one installation's three months measured 58,607,359 bytes for the
+same events re-encoded as one v2 generation versus 5,091,659 v3 gzip bytes (11.51x). It is not a
+bloated-tree or Git-history comparison. The complete read-only measurement script and captured
+aggregate output are [here](https://github.com/nredd/pi-harness/pull/1036#issuecomment-6977251237).
 
-- Save an offline backup with `git -C "$DATA" bundle create "$BACKUP" --all` and verify it with
-  `git -C "$DATA" bundle verify "$BACKUP"` before changing history.
-- Run `node "$EXPORTER" import --agent-dir "$BEFORE" --input "$DATA"` into a new disposable
-  viewer directory. Require exit zero, no problems, and the expected machine count; this verifies
-  canonical schemas, every referenced size/digest and cross-shard references.
-- Copy only each `machines/<UUID>/manifest.json` and its exact `shards[].file` references into the
-  staging tree. Check its file inventory equals that union, with no symlinks, extra generations,
-  temporary files or other state. Commit that tree as a signed orphan root in the staging clone.
-- Import the staged tree into another new disposable viewer with
-  `node "$EXPORTER" import --agent-dir "$AFTER" --input "$STAGED"`. Require exit zero and compare
-  the two `pi-session-kit/stats-global.json` documents' `machines` objects for deep equality,
-  excluding only top-level `importedAt`/`problems`. Run `git fsck --full` on the staging clone.
-- Only after those checks may the owner explicitly replace the remote branch history. Verify the
-  remote HEAD equals the approved staging commit; all writers must use fresh clones and re-run
-  the same import/inventory checks before scheduling resumes. Keep the bundle until recovery is proven.
+Removing superseded files bounds the published tree, not Git history. Owner-run history replacement:
+- Stop every writer; create and verify an offline bundle (`git bundle create "$BACKUP" --all`,
+  `git bundle verify "$BACKUP"`).
+- In a separate staging clone, make a signed orphan root containing exactly each machine's manifest
+  and its referenced shards, with no symlinks or extra generations.
+- Import old and staged trees into disposable viewers with the verified standalone exporter.
+  Require no problems, the expected machine count and deep equality of their cached `machines`
+  objects; top-level import timestamps may differ. Run `git fsck --full` on staging.
+- The owner alone approves replacement of remote history. Verify its HEAD equals the approved root;
+  fresh-clone and repeat validation for every writer before scheduling resumes. Keep the backup.
 
-The exporter and helper never rewrite history or force-push automatically.
+Neither the exporter nor the sync helper automates history replacement or force-pushing.
 
 Session exact keys: `{id, startMs, endMs, child}`. Header IDs hash as `session:<header ID>`;
 unidentified legacy sessions use a local path hash and therefore cannot always be matched across

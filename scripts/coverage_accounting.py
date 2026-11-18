@@ -637,7 +637,6 @@ def is_test_path(path: Path) -> bool:
         ("tests", "lib"),
         ("tests", "inprocess"),
         ("tests", "integration"),
-        ("tests", "benchmarks"),
     }:
         path = Path(*path.parts[1:])
     if path.suffix == ".rs" and "src" in path.parts:
@@ -841,8 +840,51 @@ def inventory_scopes(
     return scopes
 
 
+def deleted_packages(root: Path, current: Policy, base: Policy, revision: str) -> set[str]:
+    """Identify genuinely deleted packages, rejecting relocated or renamed inventory.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        current (Policy): Current working-tree policy.
+        base (Policy): Policy read from the PR base commit.
+        revision (str): Immutable Git base tree containing the original source blobs.
+    Returns:
+        set[str]: Removed packages with no surviving tree, relative source path or content hash.
+    Raises:
+        ValueError: Inventory expansion fails.
+        subprocess.CalledProcessError: Git cannot read source identities.
+    """
+    files = repository_files(root)
+    candidates = {
+        name
+        for name, package in base.packages.items()
+        if name not in current.packages and not any(Path(file).is_relative_to(package.root) for file in files)
+    }
+    if not candidates:
+        return set()
+    after = inventory_scopes(root, current)
+    current_paths = set().union(*after.values())
+    relative_paths = {
+        Path(path).relative_to(current.packages[name].root).as_posix()
+        for (name, _signal), paths in after.items()
+        for path in paths
+    }
+    hashes = set(git_read(root, ["hash-object", "--no-filters", "--", *sorted(current_paths)]).splitlines())
+    before = inventory_scopes(root, base, repository_files(root, revision))
+    retired: set[str] = set()
+    for name in sorted(candidates):
+        paths = before[name, "owned"]
+        original_relative = {Path(path).relative_to(base.packages[name].root).as_posix() for path in paths}
+        original_hashes = set(
+            git_read(root, ["rev-parse", *[f"{revision}:{path}" for path in sorted(paths)]]).splitlines()
+        )
+        if original_relative.isdisjoint(relative_paths) and original_hashes.isdisjoint(hashes):
+            retired.add(name)
+    return retired
+
+
 def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision: str) -> None:
-    """Reject lost base-tree source membership without a new reasoned declaration.
+    """Reject undeclared membership loss except for entirely deleted package trees.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -850,16 +892,18 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
         base (Policy): Policy read from the PR base commit.
         revision (str): Immutable Git base tree used to expand the base policy.
     Returns:
-        None: All membership losses have explicit reviewed declarations.
+        None: Retained-package membership losses have explicit reviewed declarations.
     Raises:
         ValueError: A loss is undeclared, a declaration is stale or a replacement is invalid.
         subprocess.CalledProcessError: The base Git tree cannot be read.
     """
     before = inventory_scopes(root, base, repository_files(root, revision))
     after = inventory_scopes(root, current)
+    retired = deleted_packages(root, current, base, revision)
     losses = {
         (name, signal, path)
         for (name, signal), files in before.items()
+        if name not in retired
         for path in files - after.get((name, signal), set())
     }
     historical = {entry.model_dump_json() for entry in base.reclassifications}
@@ -1075,16 +1119,18 @@ def loosens(budget: Counts, floor: Counts) -> bool:
     )
 
 
-def check_ratchet(current: Policy, base: Policy) -> None:
+def check_ratchet(current: Policy, base: Policy, *, root: Path | None = None, revision: str = "HEAD") -> None:
     """Ratchet enforced budgets and require explicit declarations for enforcement downgrades.
 
     Parameters:
         current (Policy): Current working-tree policy.
         base (Policy): Policy read from the PR base commit.
+        root (Path | None): Repository root for genuine-deletion proof, or null to forbid measured removals.
+        revision (str): Immutable Git base tree containing the original inventory and source blobs.
     Returns:
-        None: Enforced budgets, OS membership and enforcement declarations preserve the base ratchet.
+        None: Surviving source budgets, OS membership and enforcement preserve the base ratchet.
     Raises:
-        ValueError: A measured package is removed, or membership, enforced budgets, enforcement
+        ValueError: A measured package with surviving files is removed, or budgets, enforcement
             transitions or the final target are weakened.
     """
     if base.enforce_target and not current.enforce_target:
@@ -1092,11 +1138,12 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     if loosens(current.target, base.target):
         raise ValueError("Cannot loosen the target")
     check_enforcement_changes(current, base)
+    retired = deleted_packages(root, current, base, revision) if root is not None else set()
     for name, previous in base.packages.items():
         if name not in current.packages:
             # A pending package has no signals, hence no budget to lose; `check_inventory_ratchet`
             # still requires a `reclassifications` entry for each of its sources.
-            if previous.status == "pending":
+            if previous.status == "pending" or name in retired:
                 continue
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
@@ -1876,7 +1923,7 @@ def main() -> int:
         if tree.strip():
             previous = git_read(root, ["show", f"{args.base}:coverage/policy.json"])
             base = base_policy(previous)
-            check_ratchet(policy, base)
+            check_ratchet(policy, base, root=root, revision=args.base)
             check_inventory_ratchet(root, policy, base, args.base)
         results, errors = account(
             root,
