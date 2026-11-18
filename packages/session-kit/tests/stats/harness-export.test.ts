@@ -562,6 +562,9 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "codex"],
 				failures: {},
 				recoveryPending: false,
+				recoveryFiles: [],
+				lostHarnesses: [],
+				historyHarnesses: ["pi", "codex"],
 			});
 			// the salt never reaches the published snapshot
 			const out = Object.values(files(repo))

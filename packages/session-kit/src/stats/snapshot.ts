@@ -36,6 +36,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 const HASH = /^[a-f0-9]{64}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_BYTES = 128 * 1024 * 1024;
+const SHARD_FILE = /^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/;
 export interface Identity {
 	machineId: string;
 	label: string;
@@ -221,26 +222,38 @@ export interface ExportState {
 	harnesses: Harness[] | null;
 	/** Consecutive exports whose scan of a harness failed and carried its old data; absent means 0. */
 	failures: Partial<Record<Harness, number>>;
-	/** Sticky recovery barrier; only an explicit successful replacement may clear it. */
+	/** Recovery is unresolved, but only the frozen recoveryFiles set is protected from pruning. */
 	recoveryPending: boolean;
+	/** Files frozen at a read failure; null denotes an older state that has not captured its set yet. */
+	recoveryFiles: string[] | null;
+	/** Only these harnesses had unavailable history; empty enrolled harnesses are not lost. */
+	lostHarnesses: Harness[];
+	/** Harnesses with published events/quota; null for legacy states without this knowledge. */
+	historyHarnesses: Harness[] | null;
 }
+const harnessList = (value: unknown): value is Harness[] =>
+	Array.isArray(value) && value.every((h) => HARNESSES.includes(h as Harness)) && new Set(value).size === value.length;
+const shardFileList = (value: unknown): value is string[] =>
+	Array.isArray(value) &&
+	value.every((file) => typeof file === "string" && SHARD_FILE.test(file)) &&
+	new Set(value).size === value.length;
 const stateFile = (dir: string): string => join(dir, "pi-session-kit", "export-state.json");
 function validateState(value: unknown): ExportState {
-	const hasRecovery = record(value) && "recoveryPending" in value;
-	exact(value, ["version", "salt", "harnesses", "failures", ...(hasRecovery ? ["recoveryPending"] : [])]);
+	const optional = ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"].filter(
+		(key) => record(value) && Object.hasOwn(value, key),
+	);
+	exact(value, ["version", "salt", "harnesses", "failures", ...optional]);
 	const harnesses = value.harnesses;
 	const failures = value.failures;
 	if (
 		value.version !== 1 ||
-		(hasRecovery && typeof value.recoveryPending !== "boolean") ||
+		("recoveryPending" in value && typeof value.recoveryPending !== "boolean") ||
+		("recoveryFiles" in value && value.recoveryFiles !== null && !shardFileList(value.recoveryFiles)) ||
+		("lostHarnesses" in value && !harnessList(value.lostHarnesses)) ||
+		("historyHarnesses" in value && value.historyHarnesses !== null && !harnessList(value.historyHarnesses)) ||
 		typeof value.salt !== "string" ||
 		!/^[a-f0-9]{32}$/.test(value.salt) ||
-		!(
-			harnesses === null ||
-			(Array.isArray(harnesses) &&
-				harnesses.every((h) => HARNESSES.includes(h as Harness)) &&
-				new Set(harnesses).size === harnesses.length)
-		) ||
+		!(harnesses === null || harnessList(harnesses)) ||
 		!record(failures) ||
 		!Object.entries(failures).every(([h, n]) => HARNESSES.includes(h as Harness) && count(n) && n > 0)
 	)
@@ -250,6 +263,9 @@ function validateState(value: unknown): ExportState {
 		harnesses: harnesses as Harness[] | null,
 		failures: failures as ExportState["failures"],
 		recoveryPending: value.recoveryPending === true,
+		recoveryFiles: (value.recoveryFiles as string[] | null | undefined) ?? null,
+		lostHarnesses: (value.lostHarnesses as Harness[] | undefined) ?? [],
+		historyHarnesses: (value.historyHarnesses as Harness[] | null | undefined) ?? null,
 	};
 }
 /** Created on first use with a fresh salt and no recorded set. */
@@ -262,6 +278,9 @@ async function exportState(dir: string): Promise<ExportState> {
 			harnesses: null,
 			failures: {},
 			recoveryPending: false,
+			recoveryFiles: [],
+			lostHarnesses: [],
+			historyHarnesses: [],
 		}),
 		validateState,
 	);
@@ -828,6 +847,37 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 	return revised;
 }
 
+/** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
+async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
+	const cleanupErrors = new Map<string, number>();
+	const recordCleanupError = (error: unknown): void => {
+		const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
+		const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
+		cleanupErrors.set(code, (cleanupErrors.get(code) ?? 0) + 1);
+	};
+	const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
+		recordCleanupError(error);
+		return [];
+	});
+	for (const entry of entries) {
+		if (entry.isFile() && SHARD_FILE.test(entry.name) && !keep.has(entry.name)) {
+			try {
+				await unlink(join(snapshotDir, entry.name));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") recordCleanupError(error);
+			}
+		}
+	}
+	return cleanupErrors.size
+		? [
+				`obsolete shard cleanup failed: ${[...cleanupErrors]
+					.sort(([a], [b]) => codeUnits(a, b))
+					.map(([code, count]) => `${code}=${count}`)
+					.join(", ")}`,
+			]
+		: [];
+}
+
 /** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
 export interface ExportResult {
 	machineId: string;
@@ -911,8 +961,11 @@ export async function exportStats(
 		const gone =
 			!scan.found &&
 			!options.replaceHarnesses &&
-			(old === null || state.recoveryPending ? last.has(h) : old.calls.length + old.quota.length > 0);
-		const missingHistory = old === null || (state.recoveryPending && old.calls.length === 0 && old.quota.length === 0);
+			(old === null
+				? (state.historyHarnesses?.includes(h) ?? false)
+				: old.calls.length + old.quota.length > 0 || state.lostHarnesses.includes(h));
+		const missingHistory =
+			old === null || (state.lostHarnesses.includes(h) && old.calls.length === 0 && old.quota.length === 0);
 		const failed = scan.problems.some(fatalProblem) || gone;
 		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
 		const problems = [
@@ -939,13 +992,24 @@ export async function exportStats(
 	}
 	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
 	validateSnapshot(snapshot);
-	const lost = Object.values(report).some((r) => r.failed === "lost");
-	const recoveryPending = !options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || lost);
-	// Persist the barrier BEFORE a reduced manifest can replace unreadable history. A failed marker
-	// write must leave the previous manifest intact, not silently enable destructive cleanup next run.
-	if (recoveryPending && !state.recoveryPending)
-		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending: true });
+	const reportedLost = EXTERNAL_HARNESSES.filter((h) => report[h]?.failed === "lost");
+	const lostHarnesses = options.replaceHarnesses
+		? []
+		: HARNESSES.filter((h) => state.lostHarnesses.includes(h) || reportedLost.some((lost) => lost === h));
+	const recoveryPending =
+		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
+	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));
+	const captureRecovery = recoveryPending && (previous === "unreadable" || state.recoveryFiles === null);
 	await mkdir(snapshotDir, { recursive: true });
+	if (captureRecovery) {
+		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
+			if (entry.isFile() && SHARD_FILE.test(entry.name)) protectedFiles.add(entry.name);
+	}
+	const recoveryFiles = [...protectedFiles].sort();
+	// Freeze recovery scope BEFORE replacing unreadable history. Ordinary exports never add newly
+	// superseded files to this set, so subsequent active generations still prune automatically.
+	if (recoveryPending && (captureRecovery || !state.recoveryPending))
+		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending, recoveryFiles, lostHarnesses });
 	// Uncorrected past months stay sealed: append only newly discovered events/metadata.
 	// An explicit harness replacement starts a new generation rather than retaining dropped history.
 	const sealed =
@@ -1001,41 +1065,9 @@ export async function exportStats(
 	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
-	const warnings: string[] = [];
-	if (recoveryPending) warnings.push("obsolete shard cleanup skipped: previous history unavailable");
-	else {
-		const referenced = new Set(snapshot.manifest.shards.map((ref) => ref.file));
-		const cleanupErrors = new Map<string, number>();
-		const recordCleanupError = (error: unknown): void => {
-			const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
-			const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
-			cleanupErrors.set(code, (cleanupErrors.get(code) ?? 0) + 1);
-		};
-		const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
-			recordCleanupError(error);
-			return [];
-		});
-		for (const entry of entries) {
-			if (
-				entry.isFile() &&
-				/^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/.test(entry.name) &&
-				!referenced.has(entry.name)
-			) {
-				try {
-					await unlink(join(snapshotDir, entry.name));
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") recordCleanupError(error);
-				}
-			}
-		}
-		if (cleanupErrors.size)
-			warnings.push(
-				`obsolete shard cleanup failed: ${[...cleanupErrors]
-					.sort(([a], [b]) => codeUnits(a, b))
-					.map(([code, count]) => `${code}=${count}`)
-					.join(", ")}`,
-			);
-	}
+	const warnings = recoveryPending ? ["recovery files retained: explicit replacement required"] : [];
+	const keep = new Set([...snapshot.manifest.shards.map((ref) => ref.file), ...recoveryFiles]);
+	warnings.push(...(await pruneOutbox(snapshotDir, keep)));
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
@@ -1046,6 +1078,15 @@ export async function exportStats(
 		harnesses: published,
 		failures,
 		recoveryPending,
+		recoveryFiles,
+		lostHarnesses,
+		historyHarnesses: HARNESSES.filter((h) =>
+			publishedShards.some(
+				(shard) =>
+					shard.events.some((event) => event.harness === h) ||
+					(shard.quota as SnapshotQuota[]).some((q) => q.harness === h),
+			),
+		),
 	}).then(
 		() => [],
 		() => ["export state not recorded"],

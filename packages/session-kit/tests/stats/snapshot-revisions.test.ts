@@ -138,8 +138,9 @@ it("rejects a real gzip stream expanding beyond 128 MiB", () => {
 
 it("preserves recoverable files when the previous transaction and harness are unreadable", async () => {
 	const home = join(root, "home");
-	const roots = seedHarnessHome(home);
-	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
+	const seeded = seedHarnessHome(home);
+	const roots = { ...seeded, codex: join(root, "not-installed") };
+	const options = { harnesses: ["pi", "claude", "codex"] as const, roots, home, env: {} };
 	writeLines(join(roots.claude, "projects", `-Users-${CANARY}-work`, "sess-A.jsonl"), [
 		claudeRow({ id: "sept", requestId: "sept", ts: "2026-09-01T12:00:00Z" }),
 		claudeRow({ id: "oct", requestId: "oct", ts: "2026-10-01T12:00:00Z" }),
@@ -157,20 +158,51 @@ it("preserves recoverable files when the previous transaction and harness are un
 	writeFileSync(path, bytes);
 	rmSync(roots.claude, { recursive: true, force: true });
 	for (let run = 0; run < 3; run++) {
+		vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + (run + 1) * 60_000);
 		const result = await exportStats(agent, out, undefined, options);
 		expect(readdirSync(first.snapshotDir)).toContain(ref.file);
 		expect(readFileSync(join(first.snapshotDir, valid.file))).toEqual(validBytes);
 		expect(result.harnesses?.claude?.failed).toBe("lost");
+		expect(result.harnesses?.codex?.failed).toBeUndefined();
 		expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
-		expect(result.warnings).toContain("obsolete shard cleanup skipped: previous history unavailable");
+		expect(manifest(first.snapshotDir).lastGoodAt?.codex).toBe(Date.now());
+		expect(result.warnings).toContain("recovery files retained: explicit replacement required");
 	}
 	const statePath = join(agent, "pi-session-kit", "export-state.json");
-	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryPending).toBe(true);
+	const recovery = JSON.parse(readFileSync(statePath, "utf8"));
+	expect(recovery.recoveryPending).toBe(true);
+	expect(recovery.lostHarnesses).toEqual(["claude"]);
+	expect(recovery.failures.codex).toBeUndefined();
 	const accepted = await exportStats(agent, out, undefined, { ...options, replaceHarnesses: true });
 	expect(accepted.warnings ?? []).toEqual([]);
 	expect(readdirSync(first.snapshotDir)).not.toContain(ref.file);
 	expect(readdirSync(first.snapshotDir)).not.toContain(valid.file);
 	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryPending).toBe(false);
+});
+
+it("prunes post-recovery active generations while retaining only the frozen recovery files", async () => {
+	const path = join(agent, "sessions", "active.jsonl");
+	const seed = (input: number) => {
+		const row = JSON.parse(assistantLine({ ms: Date.now(), provider: "physical", model: "fixture", input }));
+		row.id = "active";
+		sessionFile(path, { startMs: Date.now(), lines: [JSON.stringify(row)] });
+	};
+	seed(7);
+	const first = await exportStats(agent, out);
+	const original = manifest(first.snapshotDir).shards[0];
+	if (!original) throw new Error("Missing shard");
+	writeFileSync(join(first.snapshotDir, original.file), "corrupt");
+	await exportStats(agent, out);
+	for (let i = 0; i < 5; i++) {
+		seed(8 + i);
+		await exportStats(agent, out);
+	}
+	const current = manifest(first.snapshotDir);
+	const expected = [...new Set(["manifest.json", original.file, ...current.shards.map((ref) => ref.file)])].sort();
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(expected);
+	const state = JSON.parse(readFileSync(join(agent, "pi-session-kit", "export-state.json"), "utf8"));
+	expect(state.recoveryFiles).toEqual([original.file]);
+	expect(state.lostHarnesses).toEqual([]);
 });
 
 it.each(["EACCES", "ENOENT"])(
@@ -256,11 +288,70 @@ it("reads legacy export state but rejects malformed recovery markers", async () 
 	await exportStats(agent, out);
 	const path = join(agent, "pi-session-kit", "export-state.json");
 	const state = JSON.parse(readFileSync(path, "utf8"));
-	delete state.recoveryPending;
+	for (const key of ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"]) delete state[key];
 	writeFileSync(path, JSON.stringify(state));
 	await exportStats(agent, out);
 	writeFileSync(path, JSON.stringify({ ...state, recoveryPending: "invalid" }));
 	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+});
+
+it.each([
+	["recoveryFiles", "invalid"],
+	["recoveryFiles", [7]],
+	["recoveryFiles", ["../outside.json"]],
+	["recoveryFiles", [`2026-11-${"a".repeat(64)}.json.gz`, `2026-11-${"a".repeat(64)}.json.gz`]],
+	["lostHarnesses", "invalid"],
+	["lostHarnesses", ["unknown"]],
+	["lostHarnesses", ["pi", "pi"]],
+	["historyHarnesses", "invalid"],
+	["historyHarnesses", ["unknown"]],
+	["historyHarnesses", ["pi", "pi"]],
+])("rejects invalid scoped recovery state in %s", async (field, value) => {
+	await exportStats(agent, out);
+	const path = join(agent, "pi-session-kit", "export-state.json");
+	const state = JSON.parse(readFileSync(path, "utf8"));
+	writeFileSync(path, JSON.stringify({ ...state, [String(field)]: value }));
+	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+});
+
+it("migrates a legacy boolean recovery marker to a frozen file set once", async () => {
+	const options = {
+		harnesses: ["pi", "codex"] as const,
+		roots: { codex: join(root, "not-installed") },
+		home: root,
+		env: {},
+	};
+	const path = join(agent, "sessions", "active.jsonl");
+	const seed = (input: number) =>
+		sessionFile(path, {
+			startMs: Date.now(),
+			lines: [assistantLine({ ms: Date.now(), provider: "physical", model: "fixture", input })],
+		});
+	seed(7);
+	const first = await exportStats(agent, out, undefined, options);
+	const before = manifest(first.snapshotDir).shards;
+	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	const state = JSON.parse(readFileSync(statePath, "utf8"));
+	delete state.lostHarnesses;
+	state.recoveryFiles = null;
+	state.historyHarnesses = null;
+	state.recoveryPending = true;
+	writeFileSync(statePath, JSON.stringify(state));
+	const ref = before[0];
+	if (!ref) throw new Error("Missing shard");
+	writeFileSync(join(first.snapshotDir, ref.file), "corrupt");
+	const migrated = await exportStats(agent, out, undefined, options);
+	expect(migrated.harnesses?.codex?.failed).toBeUndefined();
+	const frozen = JSON.parse(readFileSync(statePath, "utf8")).recoveryFiles;
+	expect(frozen).toEqual(before.map((ref) => ref.file));
+	seed(8);
+	await exportStats(agent, out, undefined, options);
+	seed(9);
+	await exportStats(agent, out, undefined, options);
+	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryFiles).toEqual(frozen);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(
+		["manifest.json", ...new Set([...frozen, ...manifest(first.snapshotDir).shards.map((ref) => ref.file)])].sort(),
+	);
 });
 
 it("keeps many sealed deltas proportional to new events and leaves no superseded files", async () => {

@@ -531,10 +531,14 @@ Installation state, never synced:
   cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
   child markers apply only to the matching session ID, surviving user-visible renames.
 - `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex) and the harness set
-  the last successful export published (`null` until one is recorded). `failures` holds consecutive failed exports.
-  `recoveryPending` is a sticky local cleanup barrier, persisted before publishing over unreadable
-  history. Older state without the flag reads as `false`; only an explicit successful
-  `--replace-harnesses` publication clears it. A failed barrier write aborts before replacing the manifest.
+  the last successful export published (`null` until one is recorded). `failures` holds consecutive failed exports per harness.
+  `historyHarnesses` records which harnesses published events or quota, not merely enrolled empty tools.
+  Recovery metadata is persisted before publishing over unreadable history: `recoveryFiles` freezes
+  the filenames present at that failure, while `lostHarnesses` records only unavailable history.
+  `recoveryPending` keeps the recovery warning visible; it does NOT disable normal pruning.
+  Old boolean-only recovery state captures its protected files once on upgrade; unknown old data
+  coverage does not invent lost harnesses. Explicit `--replace-harnesses` publication clears recovery
+  metadata. Failure to persist the protected set aborts before replacing the manifest.
   The salt keys the quota
   account discriminators below and never appears in a snapshot; like `machine.json`, it is created
   exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
@@ -600,12 +604,15 @@ gzip files; its separate assembled 128 MiB bound and last-good replacement rule 
 Shards are published first, manifest last. After publication the serialized exporter removes
 unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
 machine snapshot and retry next sync. Valid content-addressed files are never rewritten; corrupt
-bytes at an existing filename are repaired through an atomic rename. Unreadable previous history or a lost harness sets the durable `recoveryPending` barrier before
-publication. Cleanup remains disabled on every later export, with a warning, even when the new
-manifest is readable. Missing lost harnesses do not become fresh empty history. Recover or back up
-those files before explicitly accepting replacement with `--replace-harnesses`; ordinary exports
-never clear the barrier. Cleanup otherwise continues per file, reporting safe errno counts on
-failure rather than failing the export or skipping export-state bookkeeping.
+bytes at an existing filename are repaired through an atomic rename. A read failure freezes the
+then-present recovery filenames before publication. Only that set is protected: later superseded
+active-month generations still prune normally, even while recovery remains pending. A genuinely
+new read failure can extend the protected set; ordinary exports cannot. Recovery copies therefore
+survive repeated exports without reintroducing full-month accumulation after one transient failure.
+Only recorded lost harnesses stay lost; an enrolled tool that never had data remains non-failed
+and fresh. Recover or back up the frozen files before accepting replacement with
+`--replace-harnesses`. Cleanup continues per file with safe errno counts; post-publication errors
+warn without skipping export-state bookkeeping.
 
 The active UTC month replaces its previous generation. Past-month files stay immutable for
 append-only late events, session-end extensions and quota observations. A corrected identified
