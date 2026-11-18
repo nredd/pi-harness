@@ -92,7 +92,15 @@ def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]
 
 
 def _normalized(value: str, box: Sandbox) -> str:
-    """Normalize only sandbox/workspace locations and absolute ISO timestamps."""
+    """Normalize only sandbox/workspace locations and absolute ISO timestamps.
+
+    Parameters:
+        value (str): recorded request or provenance text.
+        box (Sandbox): isolated stack whose temporary path is normalized.
+
+    Returns:
+        str: text with stable sandbox, workspace and timestamp placeholders.
+    """
     value = value.replace(str(box.root), "/sandbox").replace(
         str(Path(__file__).resolve().parents[3]), "/workspace"
     )

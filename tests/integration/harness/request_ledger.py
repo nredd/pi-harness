@@ -78,6 +78,12 @@ class _Node:
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Refuse duplicate keys rather than silently losing structural evidence.
 
+    Parameters:
+        pairs (list[tuple[str, Any]]): decoded object entries in wire order.
+
+    Returns:
+        dict[str, Any]: unique-key object.
+
     Raises:
         ValueError: an object repeats a key.
     """
@@ -92,6 +98,9 @@ def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _nodes(raw: str) -> dict[tuple[str | int, ...], _Node]:
     """Index validated JSON spans using the standard decoder, preserving whitespace.
 
+    Parameters:
+        raw (str): original JSON body.
+
     Returns:
         dict[tuple[str | int, ...], _Node]: nodes indexed by structural path.
 
@@ -105,7 +114,15 @@ def _nodes(raw: str) -> dict[tuple[str | int, ...], _Node]:
     result: dict[tuple[str | int, ...], _Node] = {}
 
     def visit(start: int, path: tuple[str | int, ...]) -> int:
-        """Visit one value and its descendants, returning its exclusive end."""
+        """Visit one value and its descendants.
+
+        Parameters:
+            start (int): character offset before the value.
+            path (tuple[str | int, ...]): structural path to the value.
+
+        Returns:
+            int: exclusive character offset after the value.
+        """
         while raw[start].isspace():
             start += 1
         value, end = decoder.raw_decode(raw, start)
@@ -128,7 +145,15 @@ def _nodes(raw: str) -> dict[tuple[str | int, ...], _Node]:
 
 
 def _prefix(current: bytes, other: str | None) -> int | None:
-    """Return literal common UTF-8 prefix length, or None without a comparator."""
+    """Measure the literal common UTF-8 prefix.
+
+    Parameters:
+        current (bytes): original encoded request.
+        other (str | None): comparator body, or no comparator.
+
+    Returns:
+        int | None: matching byte count, or None without a comparator.
+    """
     if other is None:
         return None
     encoded = other.encode()
@@ -139,7 +164,14 @@ def _prefix(current: bytes, other: str | None) -> int | None:
 
 
 def _digest(value: str) -> str:
-    """Return a short stable digest, tolerating lone surrogates from hostile bodies."""
+    """Return a short stable digest, tolerating lone surrogates from hostile bodies.
+
+    Parameters:
+        value (str): untrusted label text.
+
+    Returns:
+        str: first twelve hexadecimal SHA-256 characters.
+    """
     return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
@@ -174,7 +206,14 @@ def stable_owner(source: str, root: Path) -> str:
 
 
 def _owner_label(owner: str | None) -> str:
-    """Label an owner for a bucket key; absent, absolute or unsafe values never leak."""
+    """Label an owner for a bucket key without leaking unsafe values.
+
+    Parameters:
+        owner (str | None): registered source label, or no known owner.
+
+    Returns:
+        str: safe label, `unknown`, or `external`.
+    """
     if not owner:
         return "unknown"
     if owner.startswith("/") or WINDOWS_DRIVE.match(owner):
@@ -184,6 +223,12 @@ def _owner_label(owner: str | None) -> str:
 
 def _categories(provenance: dict[str, str]) -> dict[str, str]:
     """Validate caller provenance and sanitize extension custom types.
+
+    Parameters:
+        provenance (dict[str, str]): exact message text mapped to known categories.
+
+    Returns:
+        dict[str, str]: validated categories with safe extension labels.
 
     Raises:
         ValueError: a category is neither fixed nor `extension:<customType>`.
@@ -282,17 +327,41 @@ class _Attributor:
         self.calls: dict[str, str] = {}
 
     def claim(self, path: tuple[str | int, ...], bucket: str) -> None:
-        """Charge an indivisible serialized value if present."""
+        """Charge an indivisible serialized value if present.
+
+        Parameters:
+            path (tuple[str | int, ...]): structural path to the value.
+            bucket (str): destination bucket key.
+
+        Returns:
+            None: charges the collector in place.
+        """
         node = self.nodes.get(path)
         if node is not None:
             self.collector.add(bucket, node.start, node.end)
 
     def tool_bucket(self, name: object) -> str:
-        """Return the schema bucket for a tool, with its registered owner."""
+        """Return the schema bucket for a tool, with its registered owner.
+
+        Parameters:
+            name (object): body-derived tool name.
+
+        Returns:
+            str: safe tool-and-owner bucket key.
+        """
         return f"tool:{_safe(name, SAFE_NAME)}:owner:{_owner_label(self.owners.get(str(name)))}"
 
     def text(self, path: tuple[str | int, ...], category: str, *, system: bool = False) -> None:
-        """Charge escaped string payload, splitting explicit XML sections only."""
+        """Charge escaped string payload, splitting explicit XML sections only.
+
+        Parameters:
+            path (tuple[str | int, ...]): structural path to the string value.
+            category (str): destination for text outside tagged system sections.
+            system (bool): attribute explicit tags as system sections.
+
+        Returns:
+            None: charges the collector in place.
+        """
         node = self.nodes[path]
         if not isinstance(node.value, str):
             self.claim(path, "shared")
@@ -317,7 +386,14 @@ class _Attributor:
         self.collector.add(category, offsets[cursor], node.end - 1)
 
     def system(self, body: dict[str, Any]) -> None:
-        """Attribute the system prompt, string or text blocks."""
+        """Attribute the system prompt, string or text blocks.
+
+        Parameters:
+            body (dict[str, Any]): decoded request object.
+
+        Returns:
+            None: charges the collector in place.
+        """
         system = body.get("system", [])
         if isinstance(system, str):
             self.text(("system",), "shared", system=True)
@@ -327,12 +403,26 @@ class _Attributor:
                 self.text(("system", index, "text"), "shared", system=True)
 
     def tools(self, body: dict[str, Any]) -> None:
-        """Attribute each top-level tool schema to its registered owner."""
+        """Attribute each top-level tool schema to its registered owner.
+
+        Parameters:
+            body (dict[str, Any]): decoded request object.
+
+        Returns:
+            None: charges the collector in place.
+        """
         for index, tool in enumerate(body.get("tools", [])):
             self.claim(("tools", index), self.tool_bucket(tool.get("name", "unknown")))
 
     def messages(self, body: dict[str, Any]) -> None:
-        """Attribute message components by wire role, tool identity and exact provenance."""
+        """Attribute message components by wire role, tool identity and exact provenance.
+
+        Parameters:
+            body (dict[str, Any]): decoded request object.
+
+        Returns:
+            None: records tool identities and charges the collector in place.
+        """
         self.calls = {
             block["id"]: block["name"]
             for message in body.get("messages", [])
