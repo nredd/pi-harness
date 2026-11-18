@@ -30,16 +30,19 @@ export function createRosterTools(options: {
 	)
 		return [];
 	const grants = config.allowedSubagents;
-	// Resolved once per run, on first use: agent files are not re-read from disk on every call.
-	let allowedTypes: Set<string> | undefined;
+	// Resolved once per run (keyed by the caller's run identity, so a resume re-resolves): agent files
+	// are not re-read from disk on every call.
+	let cached: { run: string | undefined; types: Set<string> } | undefined;
 	const allowed = (): Set<string> => {
-		if (allowedTypes) return allowedTypes;
+		const run = runtime?.manager.roster?.runOf(runtime.parentAgentId);
+		if (cached && cached.run === run) return cached.types;
 		const registry = buildAgentRegistry(
 			loadCustomAgents(options.configCwd, false, { homeDir: options.homeDir, projectTrusted: options.projectTrusted }),
 		);
 		const granted = grants === "all" ? undefined : new Set(grants.map((name) => resolveTypeIn(registry, name) ?? name));
-		allowedTypes = new Set(getAvailableTypesIn(registry).filter((name) => !granted || granted.has(name)));
-		return allowedTypes;
+		const types = new Set(getAvailableTypesIn(registry).filter((name) => !granted || granted.has(name)));
+		cached = { run, types };
+		return types;
 	};
 	return [
 		defineTool({

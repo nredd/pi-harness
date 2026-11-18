@@ -56,6 +56,14 @@ it("emits explicit headless inspection output without requesting inference", asy
 	expect(boot.pi.sendUserMessage).not.toHaveBeenCalled();
 });
 
+it("reports missing SDK root identity for audit as an error, not an empty log", async () => {
+	for (const sessionManager of [undefined, {}, { getSessionId: () => "" }]) {
+		const context = ctx({ sessionManager, hasUI: true });
+		await boot.commands.get("agents").handler("audit", context);
+		expect(context.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("Agent roster unavailable"), "error");
+	}
+});
+
 it("reports missing SDK root identity without falling back to another session", async () => {
 	for (const sessionManager of [undefined, {}, { getSessionId: () => "" }]) {
 		const context = ctx({ sessionManager, hasUI: true });

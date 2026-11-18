@@ -958,7 +958,11 @@ export class AgentManager {
 			maxSubagentDepth: options.maxSubagentDepth,
 			rootSessionId: options.rootSessionId,
 			// Roster membership only; `rootSessionId` keeps its transcript-directory meaning.
-			rosterRootId: this.agents.get(options.parentAgentId ?? "")?.rosterRootId ?? ctx.sessionManager?.getSessionId?.(),
+			// A nested child takes its root ONLY from its parent record (fail closed when unknown).
+			rosterRootId:
+				options.parentAgentId !== undefined
+					? this.agents.get(options.parentAgentId)?.rosterRootId
+					: ctx.sessionManager?.getSessionId?.(),
 			runId: randomUUID(),
 		};
 		this.decidePlanGate(record, () => queryPlanPolicy(pi.events));

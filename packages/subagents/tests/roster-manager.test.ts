@@ -49,3 +49,32 @@ it("binds the roster root, leaves rootSessionId semantics alone, retains it for 
 	expect(manager.roster.parent("root-one").agents.map((r) => r.id)).toContain(branch.id);
 	expect(manager.roster.parent("root-one").agents.map((r) => r.id)).not.toContain(unscoped.id);
 });
+
+it("fails closed: a nested child of a record with no roster root never starts a new root", async () => {
+	manager = new AgentManager();
+	vi.mocked(runAgent).mockResolvedValue({
+		responseText: "x",
+		session: { dispose: vi.fn() } as never,
+		aborted: false,
+		steered: false,
+	});
+	const pi = {} as never;
+	const unscoped = await manager.spawnAndWait(pi, { cwd: "/tmp", sessionManager: {} } as never, "Explore", "x", {
+		description: "root-less",
+	});
+	const childContext = { cwd: "/tmp", sessionManager: { getSessionId: () => "child-session" } } as never;
+	const nested = await manager.spawnAndWait(pi, childContext, "Explore", "x", {
+		description: "nested",
+		parentAgentId: unscoped.id,
+		depth: 2,
+	});
+	expect(nested.record.rosterRootId).toBeUndefined();
+	const orphan = await manager.spawnAndWait(pi, childContext, "Explore", "x", {
+		description: "evicted parent",
+		parentAgentId: "gone",
+		depth: 2,
+	});
+	expect(orphan.record.rosterRootId).toBeUndefined();
+	expect(() => manager.roster.parent("child-session").agents.length).not.toThrow();
+	expect(manager.roster.parent("child-session").agents.map((a) => a.id)).toEqual(["root:child-session"]);
+});

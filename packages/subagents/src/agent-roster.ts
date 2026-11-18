@@ -36,8 +36,8 @@ export interface RosterEntry {
 }
 
 /** Strip terminal/control syntax and bound each display field before JSON framing. */
-function display(text: string, limit: number): string {
-	const cleaned = text
+function display(value: unknown, limit: number): string {
+	const cleaned = String(value ?? "")
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
 		.replace(/\s+/g, " ")
@@ -49,6 +49,29 @@ function display(text: string, limit: number): string {
 /** JSON data framing also escapes markup boundaries; readers must still treat values as untrusted. */
 export function rosterJson(value: unknown): string {
 	return JSON.stringify(value).replace(/[<>&]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/** One bounded row. A malformed record becomes a placeholder, never a failure of the whole roster. */
+function assertRoot(root: string): void {
+	if (!root || root.length > 128) throw new Error("Agent roster unavailable: valid root session identity required.");
+}
+
+function entryOf(record: AgentRecord): RosterEntry {
+	try {
+		return {
+			id: record.id,
+			run: String(record.runId),
+			handle: display(record.alias ?? record.handle ?? record.type, 64),
+			type: display(record.type, 64),
+			status:
+				record.status === "running" || record.status === "queued" || record.status === "error"
+					? record.status
+					: "finished",
+			assignment: display(record.description, 160),
+		};
+	} catch {
+		return { id: "unknown", run: "", handle: "unknown", type: "unknown", status: "error", assignment: "" };
+	}
 }
 
 /** One manager owns this store. No global registry, event emission, timers or disk persistence. */
@@ -75,6 +98,11 @@ export class AgentRoster {
 		return this.read(caller.rosterRootId, caller.id, caller.runId, allowed);
 	}
 
+	/** The current run identity of a record, or undefined when unknown. */
+	runOf(id: string): string | undefined {
+		return this.records().find((record) => record.id === id)?.runId;
+	}
+
 	/** Inspect retained audit metadata without modifying it or emitting an event. */
 	audit(root: string): RootAuditEvent[] {
 		return structuredClone(this.logs.get(root)?.events ?? []);
@@ -82,6 +110,7 @@ export class AgentRoster {
 
 	/** Bounded audit view: newest events that fit the roster byte cap, oldest dropped with `truncated: true`. */
 	auditView(root: string): { events: RootAuditEvent[]; truncated: boolean } {
+		assertRoot(root);
 		const events = this.audit(root);
 		let truncated = false;
 		while (events.length > 0 && Buffer.byteLength(rosterJson({ events, truncated }), "utf8") > ROSTER_BYTES) {
@@ -92,7 +121,7 @@ export class AgentRoster {
 	}
 
 	private read(root: string, caller: string, run: string, allowed: ReadonlySet<string> | undefined) {
-		if (!root || root.length > 128) throw new Error("Agent roster unavailable: valid root session identity required.");
+		assertRoot(root);
 		let log = this.logs.get(root);
 		if (!log) {
 			if (this.logs.size >= ROOT_LIMIT) throw new Error("Agent roster unavailable: root audit capacity reached.");
@@ -124,17 +153,7 @@ export class AgentRoster {
 				truncated = true;
 				break;
 			}
-			agents.push({
-				id: record.id,
-				run: record.runId,
-				handle: display(record.alias ?? record.handle ?? record.type, 64),
-				type: display(record.type, 64),
-				status:
-					record.status === "running" || record.status === "queued" || record.status === "error"
-						? record.status
-						: "finished",
-				assignment: display(record.description, 160),
-			});
+			agents.push(entryOf(record));
 			if (Buffer.byteLength(rosterJson({ agents, truncated: true }), "utf8") > ROSTER_BYTES) {
 				agents.pop();
 				truncated = true;

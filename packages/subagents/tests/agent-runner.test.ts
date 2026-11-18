@@ -2646,6 +2646,23 @@ describe("agent-runner unknown built-in tools", () => {
 		expect(errorMessages.some((m) => m.includes('"edt"'))).toBe(true);
 	});
 
+	it("does not flag the opt-in list_agents tool as an unknown built-in", async () => {
+		vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
+		vi.mocked(getAgentConfig).mockReturnValueOnce(
+			makeAgentConfig({ extensions: false, builtinToolNames: ["read", "list_agents"] }),
+		);
+		vi.mocked(getToolNamesForType).mockReturnValueOnce(["read", "list_agents"]);
+		const { session } = createSession("OK");
+		createAgentSession.mockResolvedValue({ session });
+		const onToolActivity = vi.fn();
+
+		await runAgent(ctx, "Explore", "go", { pi, onToolActivity });
+
+		expect(
+			onToolActivity.mock.calls.map((c) => c[0]?.toolName).filter((n) => String(n).startsWith("tools-error:")),
+		).toEqual([]);
+	});
+
 	it("stays quiet when all plain tool names are valid built-ins", async () => {
 		vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions: false }));
 		vi.mocked(getAgentConfig).mockReturnValueOnce(

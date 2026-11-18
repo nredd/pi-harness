@@ -1230,7 +1230,7 @@ export async function runAgent(
 	// this produced a silently broken agent (#75) — pi-mono accepted the bogus name
 	// into the allowlist, then dropped it at registration with no signal back.
 	if (agentConfig?.builtinToolNames?.length) {
-		const knownBuiltins = new Set(BUILTIN_TOOL_NAMES);
+		const knownBuiltins = new Set([...BUILTIN_TOOL_NAMES, LIST_AGENTS]);
 		for (const name of agentConfig.builtinToolNames) {
 			if (!knownBuiltins.has(name)) {
 				options.onToolActivity?.({

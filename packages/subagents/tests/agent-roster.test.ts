@@ -246,3 +246,55 @@ it("resolves grants once per run and does not re-read agent files on later calls
 	rmSync(file);
 	expect(await ids()).toEqual(["root:one", "self", "peer"]);
 });
+
+it("renders a record with no description, and a hostile one as a placeholder, without failing the roster", async () => {
+	const hostile = record("hostile", {
+		description: {
+			toString: () => {
+				throw new Error("boom");
+			},
+		} as never,
+	});
+	const roster = new AgentRoster(() => [
+		record("self", { type: "viewer" }),
+		record("blank", { description: undefined as never }),
+		hostile,
+	]);
+	expect(roster.parent("one").agents.map((a) => [a.id, a.assignment])).toEqual([
+		["root:one", ""],
+		["self", "investigate"],
+		["blank", ""],
+		["unknown", ""],
+	]);
+	const [tool] = tools({ runtime: { manager: { roster }, parentAgentId: "self" } });
+	const result = await tool!.execute("call", {}, undefined, undefined, {} as never);
+	expect(result.isError).toBeUndefined();
+	expect(roster.audit("one")).toHaveLength(2);
+});
+
+it("re-resolves type grants when the caller's run identity changes (resume)", async () => {
+	const dir = join(home, ".pi", "agents");
+	mkdirSync(dir, { recursive: true });
+	const file = join(dir, "custom.md");
+	writeFileSync(file, "---\nname: custom\ndescription: fixture\n---\nbody\n");
+	const rows = [record("self", { type: "viewer" }), record("peer", { type: "custom" })];
+	const roster = new AgentRoster(() => rows);
+	const [tool] = tools({
+		config: { ...config, allowedSubagents: ["custom"] },
+		projectTrusted: true,
+		runtime: { manager: { roster }, parentAgentId: "self" },
+	});
+	const ids = async () =>
+		JSON.parse(
+			((await tool!.execute("call", {}, undefined, undefined, {} as never)).content[0] as { text: string }).text,
+		).agents.map((a: { id: string }) => a.id);
+	expect(await ids()).toEqual(["root:one", "self", "peer"]);
+	rmSync(file);
+	rows[0]!.runId = "run-resumed";
+	expect(await ids()).toEqual(["root:one", "self"]);
+});
+
+it("rejects the audit view for an invalid root like the roster", () => {
+	const roster = new AgentRoster(() => []);
+	for (const root of ["", "x".repeat(129)]) expect(() => roster.auditView(root)).toThrow("valid root session identity");
+});
