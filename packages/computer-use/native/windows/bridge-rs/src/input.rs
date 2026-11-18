@@ -49,14 +49,94 @@ pub fn parse_act_request(args: &Value) -> Result<ParsedActRequest, ProtocolError
     } else {
         return Err(invalid("act target must include ref or x/y"));
     };
+    let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
+    if !params.is_object() {
+        return Err(invalid("act params must be an object"));
+    }
+    match action.as_str() {
+        "setText" | "typeText" if params.get("text").and_then(Value::as_str).is_none() => {
+            return Err(invalid("text must be an explicit string"))
+        }
+        "press" | "click" => {
+            if let Some(button) = params.get("button") {
+                if !matches!(button.as_str(), Some("left" | "right" | "middle")) {
+                    return Err(invalid("Unsupported mouse button"));
+                }
+            }
+        }
+        "keypress" => {
+            if !params
+                .get("keys")
+                .and_then(Value::as_array)
+                .is_some_and(|keys| {
+                    !keys.is_empty()
+                        && keys
+                            .iter()
+                            .all(|key| key.as_str().is_some_and(|name| !name.is_empty()))
+                })
+            {
+                return Err(invalid("keys must contain only nonempty strings"));
+            }
+        }
+        "scroll" => {
+            for axis in ["scrollX", "scrollY"] {
+                if params
+                    .get(axis)
+                    .is_some_and(|value| !value.as_f64().is_some_and(f64::is_finite))
+                {
+                    return Err(invalid("Scroll deltas must be finite numbers"));
+                }
+            }
+        }
+        "drag" | "moveMouse" | "setText" | "typeText" => {}
+        _ => return Err(invalid("Unsupported action")),
+    }
     Ok(ParsedActRequest {
         look_id,
         pid: args.get("pid").and_then(Value::as_u64),
         action,
         policy,
         target,
-        params: args.get("params").cloned().unwrap_or_else(|| json!({})),
+        params,
     })
+}
+
+/// Rebuild only public request fields; caller-derived resolution is never trusted.
+pub fn executable_request(request: &ParsedActRequest) -> Value {
+    fn public_params(value: &Value) -> Value {
+        match value {
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .filter(|(key, _)| !key.starts_with("resolved"))
+                    .map(|(key, value)| (key.clone(), public_params(value)))
+                    .collect(),
+            ),
+            Value::Array(values) => Value::Array(values.iter().map(public_params).collect()),
+            value => value.clone(),
+        }
+    }
+    let target = match &request.target {
+        ActTarget::Ref(reference) => json!({"ref":reference}),
+        ActTarget::Point { x, y } => json!({"x":x,"y":y}),
+    };
+    json!({"lookId":request.look_id,"pid":request.pid,"action":request.action,
+        "policy":request.policy,"target":target,"params":public_params(&request.params)})
+}
+
+/// Keyboard text/keys have no pointer target: a validated point is never focused
+/// or read back, so such input would go to whatever control already has focus.
+/// Callers must target a ref, whose control is focused and verified first.
+pub fn refuse_keyboard_at_point(request: &ParsedActRequest) -> Result<(), ProtocolError> {
+    if matches!(request.target, ActTarget::Point { .. })
+        && matches!(request.action.as_str(), "typeText" | "keypress" | "setText")
+    {
+        return Err(ProtocolError::new(
+            "Keyboard input cannot target a coordinate; target a ref so its control is focused and verified",
+            ErrorCode::CoordinateBlocked,
+        ));
+    }
+    Ok(())
 }
 
 pub fn policy_allows_raw_input(request: &ParsedActRequest) -> Result<(), ProtocolError> {
@@ -87,6 +167,22 @@ pub fn response_with_delta(mut response: Value, source: &str, delta: Vec<Value>)
         response["rootDelta"] = Value::Array(delta);
     }
     response
+}
+
+/// Send a paired Alt hint for an explicitly requested foreground transition.
+/// The caller must own the physical-input lease for the complete transition.
+pub fn foreground_hint() -> Result<(), ProtocolError> {
+    #[cfg(windows)]
+    {
+        native::foreground_hint()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(ProtocolError::new(
+            "Foreground input requires Windows",
+            ErrorCode::UnsupportedPlatform,
+        ))
+    }
 }
 
 pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
@@ -151,6 +247,22 @@ fn dispatch(
     }
 }
 
+/// Run one physical-input operation and its bounded key/button release exactly once.
+/// Cleanup also runs after partial OS failure; neither callback is retried. A
+/// failed cleanup cannot report success; cleanup uncertainty outranks an ordinary refusal.
+pub fn with_input_cleanup<T>(
+    work: impl FnOnce() -> Result<T, ProtocolError>,
+    release: impl FnOnce() -> Result<(), ProtocolError>,
+) -> Result<T, ProtocolError> {
+    let result = work();
+    let cleanup = release();
+    match (result, cleanup) {
+        (Err(_), Err(cleanup)) if cleanup.outcome_uncertain() => Err(cleanup),
+        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 fn invalid(message: impl Into<String>) -> ProtocolError {
     ProtocolError::new(message.into(), ErrorCode::InvalidRequest)
 }
@@ -160,6 +272,10 @@ mod native {
     use super::*;
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+
+    pub fn foreground_hint() -> Result<(), ProtocolError> {
+        press_chord(&[VK_MENU])
+    }
 
     pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
         hotkey(&[VK_CONTROL], VK_L)?;
@@ -189,6 +305,7 @@ mod native {
             }
             "moveMouse" => {
                 let (x, y) = point.ok_or_else(|| invalid("moveMouse requires resolvedPoint"))?;
+                // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
                 unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
                 ok("unknown", "coordinates", "hid")
             }
@@ -267,7 +384,7 @@ mod native {
     }
 
     fn input_failed(error: impl std::fmt::Display) -> ProtocolError {
-        ProtocolError::new(format!("Input failed: {error}"), ErrorCode::CaptureFailed)
+        ProtocolError::uncertain(format!("Input failed: {error}"), ErrorCode::CaptureFailed)
     }
 
     fn point_value(value: &Value) -> Option<(i32, i32)> {
@@ -282,6 +399,7 @@ mod native {
     }
 
     fn send(inputs: &[INPUT]) -> Result<(), ProtocolError> {
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent == inputs.len() as u32 {
             Ok(())
@@ -342,28 +460,37 @@ mod native {
     }
 
     fn click(x: i32, y: i32, button: &str) -> Result<(), ProtocolError> {
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
         let (down, up) = match button {
             "right" => (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
             "middle" => (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
             _ => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
         };
-        send(&[mouse(down, 0), mouse(up, 0)])
+        with_input_cleanup(|| send(&[mouse(down, 0)]), || send(&[mouse(up, 0)]))
     }
 
     fn drag(points: &[(i32, i32)]) -> Result<(), ProtocolError> {
         if points.len() < 2 {
             return Err(invalid("drag requires at least two points"));
         }
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         unsafe { SetCursorPos(points[0].0, points[0].1) }.map_err(input_failed)?;
-        send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
-        for &(x, y) in &points[1..] {
-            unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
-        }
-        send(&[mouse(MOUSEEVENTF_LEFTUP, 0)])
+        with_input_cleanup(
+            || {
+                send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
+                for &(x, y) in &points[1..] {
+                    // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
+                    unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
+                }
+                Ok(())
+            },
+            || send(&[mouse(MOUSEEVENTF_LEFTUP, 0)]),
+        )
     }
 
     fn scroll(x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
+        // SAFETY: plain Win32 call on borrowed values; caller holds the physical-input lease, and failure is returned (never retried) so cleanup runs once.
         unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
         let mut inputs = Vec::new();
         if dy != 0.0 {
@@ -402,27 +529,36 @@ mod native {
             .iter()
             .map(|name| vk_for(name).ok_or_else(|| invalid(format!("Unsupported key '{name}'"))))
             .collect::<Result<Vec<_>, _>>()?;
-        for vk in &vks[..vks.len().saturating_sub(1)] {
-            send(&[key(*vk, false)])?;
-        }
-        if let Some(last) = vks.last() {
-            send(&[key(*last, false), key(*last, true)])?;
-        }
-        for vk in vks[..vks.len().saturating_sub(1)].iter().rev() {
-            send(&[key(*vk, true)])?;
-        }
-        Ok(())
+        press_chord(&vks)
     }
 
     fn hotkey(mods: &[VIRTUAL_KEY], key_vk: VIRTUAL_KEY) -> Result<(), ProtocolError> {
-        for vk in mods {
-            send(&[key(*vk, false)])?;
-        }
-        send(&[key(key_vk, false), key(key_vk, true)])?;
-        for vk in mods.iter().rev() {
-            send(&[key(*vk, true)])?;
-        }
-        Ok(())
+        let keys = mods
+            .iter()
+            .copied()
+            .chain(std::iter::once(key_vk))
+            .collect::<Vec<_>>();
+        press_chord(&keys)
+    }
+
+    fn press_chord(keys: &[VIRTUAL_KEY]) -> Result<(), ProtocolError> {
+        with_input_cleanup(
+            || {
+                for vk in keys {
+                    send(&[key(*vk, false)])?;
+                }
+                Ok(())
+            },
+            || {
+                send(
+                    &keys
+                        .iter()
+                        .rev()
+                        .map(|vk| key(*vk, true))
+                        .collect::<Vec<_>>(),
+                )
+            },
+        )
     }
 
     fn vk_for(name: &str) -> Option<VIRTUAL_KEY> {
@@ -506,7 +642,7 @@ mod tests {
                     ErrorCode::ForegroundRequired
                 };
                 let args = json!({"lookId":"look_1","action":action,"policy":policy,
-                    "target":{"x":1,"y":2},"resolvedPoint":{"x":1,"y":2}});
+                    "target":{"x":1,"y":2},"resolvedPoint":{"x":1,"y":2},"params":{"text":"explicit text","keys":["enter"],"path":[{"x":0,"y":0}],"scrollY":1}});
                 let mut delivered = false;
                 let error = act_with(&args, |_, _, _| {
                     delivered = true;
