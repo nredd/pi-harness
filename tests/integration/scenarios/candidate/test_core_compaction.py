@@ -13,7 +13,7 @@ from pathlib import Path
 
 from harness.sandbox import build_sandbox
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_candidate_core_child_compaction(tmp_path: Path) -> None:

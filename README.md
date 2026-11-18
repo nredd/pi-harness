@@ -230,7 +230,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
   release, then a parent PR that moves the Gitlink, root `overrides`, `release/stacks/personal.json`
   and the lockfiles together
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
-  the ordinary `tests/integration/scenarios/test_core_compaction.py` pytest scenario runs the
+  the ordinary `tests/integration/scenarios/candidate/test_core_compaction.py` pytest scenario runs the
   assembled direct/routed child probes after authenticated root installation and `make build`.
   It requires the built candidate core, fails rather than skips when missing, and owns its private
   HOME/auth/tmp and offline environment through `harness.sandbox`. `make check-integration`

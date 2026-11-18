@@ -9,7 +9,7 @@ on:
       - .github/workflows/forks.yml
       - Makefile
       - tests/integration/probes/**
-      - tests/integration/scenarios/test_core_compaction.py
+      - tests/integration/scenarios/candidate/test_core_compaction.py
       - tests/integration/harness/**
       - tests/integration/conftest.py
       - tests/integration/pyproject.toml
@@ -30,7 +30,7 @@ on:
       - .github/workflows/forks.yml
       - Makefile
       - tests/integration/probes/**
-      - tests/integration/scenarios/test_core_compaction.py
+      - tests/integration/scenarios/candidate/test_core_compaction.py
       - tests/integration/harness/**
       - tests/integration/conftest.py
       - tests/integration/pyproject.toml
@@ -149,4 +149,4 @@ jobs:
         run: make build
       - name: Verify assembled direct and routed child compaction on candidate core
         working-directory: .
-        run: uv run --locked --project tests/integration pytest tests/integration/scenarios/test_core_compaction.py
+        run: uv run --locked --project tests/integration pytest tests/integration/scenarios/candidate/test_core_compaction.py
