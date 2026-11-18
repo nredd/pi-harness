@@ -484,7 +484,13 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	disconnectCdp();
 
 	// Waits for a `launch_browser` already stopping, creating or spawning a browser, then stops what it produced.
-	await withManagedBrowserLifecycle(releaseManagedBrowser);
+	let browserStopError: unknown;
+	try {
+		await withManagedBrowserLifecycle(releaseManagedBrowser);
+	} catch (error) {
+		// A retained persistent-profile lease must not retain unrelated session state or native handles.
+		browserStopError = error;
+	}
 
 	savedStates.clear();
 	clearStoredOutputs();
@@ -497,6 +503,7 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	runtimeState.helperDiagnostics = undefined;
 	runtimeState.lastPermissionCheckAt = 0;
 	await currentPlatformBackend.shutdown?.();
+	if (browserStopError) throw browserStopError;
 }
 
 function currentRuntimeMode(): ExecutionVariant {
@@ -3490,9 +3497,14 @@ async function performLaunchBrowser(
 		await waitForCdpPort(port, signal);
 	} catch (error) {
 		// A later launch or a shutdown that already took this browser over has stopped it.
-		await withManagedBrowserLifecycle(async () => {
-			if (runtimeState.managedBrowser === managedBrowser) await releaseManagedBrowser();
-		});
+		try {
+			await withManagedBrowserLifecycle(async () => {
+				if (runtimeState.managedBrowser === managedBrowser) await releaseManagedBrowser();
+			});
+		} catch (stopError) {
+			// waitForCdpPort rejects with an Error; keep that readiness failure primary.
+			Object.assign(error as Error, { cause: stopError });
+		}
 		throw error;
 	}
 	const page = (await listCdpPageContexts())[0];

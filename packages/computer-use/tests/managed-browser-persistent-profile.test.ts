@@ -19,11 +19,15 @@ const gate = vi.hoisted(() => ({
 	afterLstatSync: undefined as ((directory: string) => void) | undefined,
 	afterStat: undefined as ((directory: string) => void) | undefined,
 	foreignAncestor: "",
+	safeAncestors: new Set<string>(),
+	caseAlias: undefined as { from: string; to: string } | undefined,
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
 	return {
 		...actual,
+		realpath: (...args: Parameters<typeof actual.realpath>) =>
+			actual.realpath(gate.caseAlias?.from === String(args[0]) ? gate.caseAlias.to : args[0], args[1]),
 		stat: async (...args: Parameters<typeof actual.stat>) => {
 			if (String(args[0]) === gate.statTarget && ++gate.statCalls === gate.statFailureAt) {
 				throw Object.assign(new Error("synthetic metadata permission failure"), { code: "EACCES" });
@@ -44,8 +48,14 @@ vi.mock("node:fs", async (importOriginal) => {
 			return result;
 		},
 		lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
-			const info = actual.lstatSync(...args) as import("node:fs").Stats;
-			gate.afterLstatSync?.(String(args[0]));
+			const directory = String(args[0]);
+			const info = actual.lstatSync(
+				gate.caseAlias?.from === directory ? gate.caseAlias.to : args[0],
+				args[1],
+			) as import("node:fs").Stats;
+			// Model safe temp ancestry independently of the runner's mount permissions.
+			if (gate.safeAncestors.has(directory)) Object.assign(info, { uid: process.getuid?.(), mode: 0o40700 });
+			gate.afterLstatSync?.(directory);
 			// Non-root runners cannot chown fixtures to another UID; only this metadata owner field is simulated.
 			if (String(args[0]) === gate.foreignAncestor) return Object.assign(info, { uid: (process.getuid?.() ?? 0) + 1 });
 			return info;
@@ -56,8 +66,7 @@ vi.mock("node:fs", async (importOriginal) => {
 // Only disposable homes and fake browser processes are used for persistent-profile acceptance.
 describe("persistent profile opt-in", () => {
 	const executable = fileURLToPath(new URL("../test/fixtures/fake-browser.mjs", import.meta.url));
-	// A canonical sticky system temp root, not an unchecked volume or caller-selected TMPDIR ancestor.
-	const secureTemp = fs.realpathSync("/tmp");
+	const secureTemp = fs.realpathSync(os.tmpdir());
 	let root: string;
 	let profile: string;
 	let saved: Record<string, string | undefined>;
@@ -85,6 +94,11 @@ describe("persistent profile opt-in", () => {
 		gate.afterLstatSync = undefined;
 		gate.afterStat = undefined;
 		gate.foreignAncestor = "";
+		gate.caseAlias = undefined;
+		for (let ancestor = secureTemp; ; ancestor = path.dirname(ancestor)) {
+			gate.safeAncestors.add(ancestor);
+			if (path.dirname(ancestor) === ancestor) break;
+		}
 		saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
 		for (const key of keys) delete process.env[key];
 		root = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-persistent-")));
@@ -309,7 +323,24 @@ describe("persistent profile opt-in", () => {
 
 		test("another Pi process cannot share a live persistent profile", async () => {
 			await testing.performLaunchBrowser({});
-			const script = `import { loadComputerUseConfig } from ${JSON.stringify(new URL("../src/config.ts", import.meta.url).href)}; import { testing } from ${JSON.stringify(new URL("../src/bridge.ts", import.meta.url).href)}; loadComputerUseConfig(process.env.TEST_CWD); try { await testing.performLaunchBrowser({}); process.exitCode = 1; } catch (error) { if (!/locked/.test(error.message)) throw error; }`;
+			// Apply the same safe-ancestry metadata seam to the second process; the lease itself stays real.
+			const script = `
+				import fs from "node:fs";
+				import { syncBuiltinESMExports } from "node:module";
+				const ancestors = new Set(${JSON.stringify([...gate.safeAncestors])});
+				const original = fs.lstatSync;
+				fs.lstatSync = (...args) => {
+					const info = original(...args);
+					if (ancestors.has(String(args[0]))) Object.assign(info, { uid: process.getuid(), mode: 0o40700 });
+					return info;
+				};
+				syncBuiltinESMExports();
+				const { loadComputerUseConfig } = await import(${JSON.stringify(new URL("../src/config.ts", import.meta.url).href)});
+				const { testing } = await import(${JSON.stringify(new URL("../src/bridge.ts", import.meta.url).href)});
+				loadComputerUseConfig(process.env.TEST_CWD);
+				try { await testing.performLaunchBrowser({}); process.exitCode = 1; }
+				catch (error) { if (!/locked/.test(error.message)) throw error; }
+			`;
 			const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
 				cwd: fileURLToPath(new URL("..", import.meta.url)),
 				env: { ...process.env, TEST_CWD: root },
@@ -473,18 +504,15 @@ describe("persistent profile opt-in", () => {
 		});
 
 		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])(
-			"honours filesystem case identity for %s",
+			"rejects a case-insensitive filesystem alias of %s",
 			async (variable) => {
 				const configuredRoot = path.join(home, "Config");
 				const alternate = path.join(home, "config");
 				fs.mkdirSync(configuredRoot, { mode: 0o700 });
 				process.env[variable] = configuredRoot;
-				if (fs.existsSync(alternate)) {
-					await assert.rejects(testing.persistentBrowserProfile(alternate), /default browser/);
-				} else {
-					fs.mkdirSync(alternate, { mode: 0o700 });
-					assert.equal(await testing.persistentBrowserProfile(alternate), alternate);
-				}
+				// Inject the same inode and canonical name for both spellings on every filesystem.
+				gate.caseAlias = { from: alternate, to: configuredRoot };
+				await assert.rejects(testing.persistentBrowserProfile(alternate), /default browser/);
 			},
 		);
 

@@ -306,11 +306,13 @@ Only the **user-global** config may set this option; project config cannot. Set 
 
 Checks read POSIX owner and mode bits only; extended ACLs are not inspected. Pi repairs nothing and never opens profile contents. Same-UID attackers are out of scope: another process running as you can modify your directories at any time. Native Windows persistent profiles are refused because POSIX modes do not establish an owner-only ACL; temporary profiles remain available.
 
+**SECURITY: persistent mode trusts every local process that can reach Chromium's debugging port, including other UIDs.** CDP uses an unauthenticated loopback TCP listener, not a UID-bound pipe. A local client can discover its websocket through `/json/version`, control pages and request cookies with `Storage.getCookies`. Directory mode `0700` and Pi's lease protect the profile on disk, NOT this live endpoint. Do not enable persistence on shared or untrusted hosts; loopback and a random port do not provide authentication. A UID-bound transport is not implemented.
+
 This directory holds **live credentials**, cookies and browsing history. Never commit, sync or share it. You may sign in manually once, then later launches reuse the profile. Pi does not import a personal browser profile or log in for you. Close other browsers using the directory first.
 
 - Lease: Pi creates a `.pi-computer-use.lock` directory and refuses to launch if one exists.
 - Chromium locks: Pi refuses any `SingletonLock`, `SingletonCookie` or `SingletonSocket` entry, including dangling symlinks, and never removes them or steals a lease.
-- Shutdown: normal shutdown and failed launches stop the browser and release only Pi's own lease; Pi never deletes the profile. If Pi cannot confirm the profile and lease are unchanged, it leaves the lease in place.
+- Shutdown: normal shutdown and failed launches stop the browser and release only Pi's own lease; Pi never deletes the profile. If the browser will not stop, shutdown still clears saved state and stored output and shuts down the platform backend before reporting the error. A failed launch keeps its readiness error primary, with a stop failure attached as its cause. If Pi cannot confirm the profile and lease are unchanged, it leaves the lease in place.
 - Exit, crash or kill: on a normal Node `exit` Pi kills the browser and keeps the lease. If Pi itself is killed or crashes, that hook does not run: the browser may keep running, and the lease and Chromium locks remain. Verify that nothing is using the profile, then remove a stale lease with `rmdir <profile>/.pi-computer-use.lock`.
 - Revocation: remove the profile directory to revoke local reuse; server-side sessions may need separate revocation.
 

@@ -46,8 +46,10 @@ The normal loop is find a root, observe it, then query or act from the returned 
 Upstream's opt-in `activity_glow` is retained and defaults to false.
 
 `launch_browser` uses a fresh temporary profile by default. An explicit user-global
-`managed_browser_profile` can reuse a dedicated profile directory; see the
-[configuration reference](#preserved-configuration). The result reports the selected executable, and
+`managed_browser_profile` can reuse a dedicated profile directory. **SECURITY: this exposes its live
+sessions and cookies through unauthenticated loopback CDP to any local process that can reach the
+port, including other UIDs.** Use only on a trusted single-user host; owner-only directory permissions
+do not protect the debugging endpoint. See the [configuration reference](#preserved-configuration). The result reports the selected executable, and
 browser observations warn with `authentication_required` on a possible login wall (a heuristic, not
 proof of authentication).
 
@@ -1164,7 +1166,7 @@ There is no portal session, PipeWire frame, input dispatch, or restore-token imp
 - Password-role values are omitted and explicit reads are rejected, though application mislabeling remains possible.
 - On X11, capture can read window pixels and non-headless physical fallback can control the global pointer/keyboard and request focus. These are broad desktop capabilities; strict headless/background policy blocks XTEST and focus, but does not make AT-SPI or requested X11 observation private.
 - On Wayland, portal diagnostics are read-only; capture and input are not implemented.
-- CDP is separate and gives local processes that can reach its loopback port powerful page access. `launch_browser` uses a fresh non-default temporary profile, matching modern Chrome's [remote-debugging security policy](https://developer.chrome.com/blog/remote-debugging-port), rather than the user's normal profile.
+- CDP is separate: its loopback TCP listener is unauthenticated, not UID-bound. Any local process that can reach the port, including another UID, can discover the websocket at `/json/version`, control pages and request cookies with `Storage.getCookies`. A random port and profile mode `0700` do not authenticate clients. `launch_browser` defaults to a fresh non-default temporary profile, matching modern Chrome's [remote-debugging security policy](https://developer.chrome.com/blog/remote-debugging-port), but opt-in `managed_browser_profile` exposes the reused profile's live sessions. Do not enable persistence on shared or untrusted hosts; a UID-bound pipe is not implemented.
 
 ## Browser discovery
 
@@ -2041,11 +2043,13 @@ Only the **user-global** config may set this option; project config cannot. Set 
 
 Checks read POSIX owner and mode bits only; extended ACLs are not inspected. Pi repairs nothing and never opens profile contents. Same-UID attackers are out of scope: another process running as you can modify your directories at any time. Native Windows persistent profiles are refused because POSIX modes do not establish an owner-only ACL; temporary profiles remain available.
 
+**SECURITY: persistent mode trusts every local process that can reach Chromium's debugging port, including other UIDs.** CDP uses an unauthenticated loopback TCP listener, not a UID-bound pipe. A local client can discover its websocket through `/json/version`, control pages and request cookies with `Storage.getCookies`. Directory mode `0700` and Pi's lease protect the profile on disk, NOT this live endpoint. Do not enable persistence on shared or untrusted hosts; loopback and a random port do not provide authentication. A UID-bound transport is not implemented.
+
 This directory holds **live credentials**, cookies and browsing history. Never commit, sync or share it. You may sign in manually once, then later launches reuse the profile. Pi does not import a personal browser profile or log in for you. Close other browsers using the directory first.
 
 - Lease: Pi creates a `.pi-computer-use.lock` directory and refuses to launch if one exists.
 - Chromium locks: Pi refuses any `SingletonLock`, `SingletonCookie` or `SingletonSocket` entry, including dangling symlinks, and never removes them or steals a lease.
-- Shutdown: normal shutdown and failed launches stop the browser and release only Pi's own lease; Pi never deletes the profile. If Pi cannot confirm the profile and lease are unchanged, it leaves the lease in place.
+- Shutdown: normal shutdown and failed launches stop the browser and release only Pi's own lease; Pi never deletes the profile. If the browser will not stop, shutdown still clears saved state and stored output and shuts down the platform backend before reporting the error. A failed launch keeps its readiness error primary, with a stop failure attached as its cause. If Pi cannot confirm the profile and lease are unchanged, it leaves the lease in place.
 - Exit, crash or kill: on a normal Node `exit` Pi kills the browser and keeps the lease. If Pi itself is killed or crashes, that hook does not run: the browser may keep running, and the lease and Chromium locks remain. Verify that nothing is using the profile, then remove a stale lease with `rmdir <profile>/.pi-computer-use.lock`.
 - Revocation: remove the profile directory to revoke local reuse; server-side sessions may need separate revocation.
 
