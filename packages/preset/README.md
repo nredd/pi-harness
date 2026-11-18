@@ -48,13 +48,13 @@ local themes, skills, agents and their configuration. Restart sessions after act
 
 ## Select the shared agents and skills
 
-For a release containing the workspace entry, select its exact published version unfiltered in
+After `0.5.0` is published, select `npm:@nredd/pi-preset@0.5.0` unfiltered in
 `settings.json`'s `packages` (or a stack's `sources`) to load the footer, skills and themes.
-To keep themes disabled, use this shape with `VERSION` replaced by that published version:
+To keep themes disabled, use:
 
 ```json
 {
-  "source": "npm:@nredd/pi-preset@VERSION",
+  "source": "npm:@nredd/pi-preset@0.5.0",
   "extensions": ["src/index.ts"],
   "skills": ["skills/**"],
   "prompts": [],
@@ -154,8 +154,8 @@ and `InteractiveHarnessOptions` from the fork's `/testing/interactive`, and
 `tests/scenarios/footer-model.test.ts` still imports its `InteractiveHarness` type.
 Those hosts depend on private `InteractiveMode` and TUI render flushing; private model-route
 and interactive behavior are unchanged. Run `npm run check` for lint, types, Node and Bun tests plus the
-packed-file contract. `CHANGELOG.md` tracks unreleased changes; earlier history remains
-in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
+packed-file contract. `CHANGELOG.md` records releases from `0.5.0` on, with unreleased changes under `[Unreleased]`;
+earlier history remains in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
 
 ## Contents
 
