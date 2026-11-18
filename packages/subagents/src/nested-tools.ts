@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { abortable } from "./abortable.ts";
+import type { AgentRoster } from "./agent-roster.ts";
 import {
 	buildAgentRegistry,
 	getAgentConfigIn,
@@ -98,6 +99,8 @@ interface NestedSpawnOptions {
 }
 
 export interface NestedAgentManager {
+	/** Optional on hosts without root-scoped discovery; callers fail closed. */
+	readonly roster?: AgentRoster;
 	spawn(pi: ExtensionAPI, ctx: ExtensionContext, type: string, prompt: string, options: NestedSpawnOptions): string;
 	/** Resolves once the spawned agent is running; rejects on a startup failure. */
 	awaitStartup(id: string): Promise<void>;
