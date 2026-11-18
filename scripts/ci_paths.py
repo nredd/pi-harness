@@ -27,7 +27,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from runner_pools import OS_POOLS, POOLS, CellKey, assign_cells, parse_heartbeats, pool_capacity
+from runner_pools import (
+    OS_POOLS,
+    POOLS,
+    CellKey,
+    assign_cells,
+    live_capacity,
+    parse_heartbeats,
+    pool_capacity,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -882,6 +890,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Never route a cell to a self-hosted pool (fork PR, or the PI_POOLS_DISABLED kill switch)",
     )
+    parser.add_argument("--pool-run-id", type=int, default=0, help="Read cross-run admission for this CI run")
+    parser.add_argument("--pool-repository", default="", help="Repository for read-only admission census")
+    parser.add_argument(
+        "--pool-attempt", type=int, default=1, help="Run attempt; excludes the previous attempt's pools"
+    )
     args = parser.parse_args(argv)
     if not args.full and not (args.base and args.head):
         parser.error("--base and --head are required unless --full is given")
@@ -904,7 +917,13 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error(f"Invalid --pool-heartbeat: {e}")
         return 2
     capacity = pool_capacity(heartbeats, time.time(), trusted=not args.no_pools)
-    LOGGER.info(f"Self-hosted pools up (free slots): {capacity}")
+    if args.pool_run_id > 0:
+        capacity = live_capacity(capacity, args.pool_repository, args.pool_run_id, args.pool_attempt)
+    elif capacity:
+        # Without the run's identity there is no admission census: fail closed, never spend the raw beat.
+        LOGGER.warning("No `--pool-run-id`: pool admission is unavailable, so every cell stays hosted")
+        capacity = {}
+    LOGGER.info(f"Self-hosted pools admitted (working slots): {capacity}")
     problem = ""
     if args.event == EVENT_PULL_REQUEST:
         # Block the cells rather than exit non-zero: a missing title must not skip the one rule only this
