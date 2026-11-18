@@ -449,6 +449,20 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 
 ### Pools
 
+`classify` shares fresh capacity across unfinished CI runs instead of letting every run spend the same
+heartbeat. Legacy macOS beats advertise configured slots, not working accounts: admission caps them
+at one usable account, with zero queue allowance and at most one cell per run/pool. Earlier classifiers
+reserve capacity until their cells appear; observed pooled jobs consume it. `CELL_SECONDS` gives the
+longest eligible cell the early self-hosted start; overflow goes hosted immediately. Forks and
+`PI_POOLS_DISABLED` remain hosted. Missing/incomplete API evidence also falls back hosted.
+
+Rescue works in both directions after ten minutes queued (five for dead/draining pools), only toward
+observed room. It refuses runs with any observed running sibling, started queued jobs, forks or full
+job pages, and rechecks before cancellation. Retries exclude the previous attempt's pools and stop at
+three attempts. GitHub has no per-job migration or atomic cancel-if-queued: API visibility and the
+read/cancel race remain residuals. Running siblings, cron delay and the per-tick cap can extend waits;
+no hard queue-time guarantee is claimed. The full policy lives in `ci.yml` and `runner-rescue.yml`.
+
 | Label | Host | Isolation |
 | --- | --- | --- |
 | `pi-linux` | Linux VM host | One linked-clone VM per job, destroyed after the job. Per-VM PVE firewall drops every private net, so no LAN, no tailnet. 8 vCPU, 10 GiB, 50 min cap |

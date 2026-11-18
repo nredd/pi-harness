@@ -1,10 +1,11 @@
-"""Re-route CI runs stranded on a self-hosted pool that went away.
+"""Re-plan CI runs stranded in either hosted or self-hosted queues.
 
-`ci_paths.py` sends a cell to a pool only while its heartbeat is fresh, but a pool can die after a run was
-classified (NAS power cut, laptop lid closed). Its queued jobs then wait for a runner that never comes, and
-`timeout-minutes` does not apply to queued jobs. This script finds runs with a job queued on a dead pool's
-label for longer than `MIN_QUEUED_S`, cancels each run and starts it over; the rerun's `classify` job sees the
-stale heartbeat and puts the cells back on hosted runners.
+Only runs whose unfinished jobs are all unstarted may restart, with at least one stranded cell.
+A fresh job snapshot is checked immediately before cancelling. GitHub has no atomic cancel-if-queued
+API, so a cell can start between that read and cancellation. Running siblings observed in either
+snapshot block rescue.
+Retries exclude pools used by the previous attempt; the attempt cap also bounds old runs.
+See `runner_pools.py` for admission and queue-window tradeoffs.
 
 It only reads runs and cancels/reruns them: no secret, and the workflow token needs `actions: write` alone.
 
@@ -27,12 +28,21 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from runner_pools import POOLS, parse_heartbeats, pool_is_up
+from runner_pools import (
+    CELL_SECONDS,
+    MIN_HEAVY_S,
+    OS_POOLS,
+    POOLS,
+    parse_heartbeats,
+    pool_capacity,
+    pool_is_up,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 GH = "/usr/bin/gh"
 MIN_QUEUED_S = 300
+LIVE_QUEUED_S = 600
 # A run is rescued at most this many attempts in total, so a cell that cannot start anywhere cannot loop.
 MAX_ATTEMPT = 3
 # Per tick, so one outage cannot cancel the whole queue at once, and so a tick fits its job timeout.
@@ -45,6 +55,7 @@ PAGE_SIZE = 100
 POLL_S = 5
 RERUN_EVENTS = frozenset({"pull_request", "push", "workflow_dispatch"})
 POOL_LABELS = {pool.label: name for name, pool in POOLS.items()}
+HOSTED_POOLS = {"ubuntu-24.04": "pi-linux", "xcode-27": "pi-macos", "windows-2025": "pi-wsl2"}
 
 
 def parse_time(stamp: str) -> float:
@@ -92,24 +103,104 @@ def stranded_runs(
         repo (str): `owner/name` of this repository.
 
     Returns:
-        list[int]: Ids of candidate runs with a job queued past `MIN_QUEUED_S` on a pool label whose
-            heartbeat is stale, oldest first, capped at `MAX_RUNS_PER_TICK`.
+        list[int]: Oldest eligible runs, capped at `MAX_RUNS_PER_TICK`. Every unfinished job must be
+            unstarted, with at least one overdue cell and observed destination room.
+            Full job pages are refused because an unseen sibling could be running.
     """
+    # A queued hosted peer is evidence that the destination has no immediate room. GitHub does not
+    # expose hosted concurrency availability; this census is a conservative observable proxy.
+    hosted_busy = {
+        label
+        for jobs in jobs_by_run.values()
+        for job in jobs
+        if job["status"] == "queued"
+        for label in job["labels"]
+        if label in HOSTED_POOLS
+    }
+    pool_busy = {
+        label
+        for jobs in jobs_by_run.values()
+        for job in jobs
+        if job["status"] != "completed"
+        for label in job["labels"]
+        if label in POOLS
+    }
     picked: list[int] = []
     for run in sorted(runs, key=lambda r: r["created_at"]):
         if not is_candidate(run, repo):
             continue
-        for job in jobs_by_run.get(run["id"], ()):
-            pools = {POOL_LABELS[label] for label in job["labels"] if label in POOL_LABELS}
-            waited = now - parse_time(job["created_at"])
-            if (
-                job["status"] == "queued"
-                and waited > MIN_QUEUED_S
-                and any(not pool_is_up(heartbeats.get(pool, ""), now) for pool in pools)
-            ):
-                picked.append(run["id"])
-                break
+        jobs = jobs_by_run.get(run["id"], ())
+        unfinished = [job for job in jobs if job["status"] != "completed"]
+        if (
+            len(jobs) < PAGE_SIZE
+            and unfinished
+            and all(
+                job["status"] in {"queued", "waiting", "pending", "requested"} and not job.get("started_at")
+                for job in unfinished
+            )
+            and any(job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy) for job in unfinished)
+        ):
+            picked.append(run["id"])
     return picked[:MAX_RUNS_PER_TICK]
+
+
+def eligible_pool(job: Mapping[str, Any]) -> str | None:
+    """Map a real poolable hosted job name to its pool; never migrate an unproven cell.
+
+    Parameters:
+        job (Mapping[str, Any]): GitHub job with its stable check name.
+
+    Returns:
+        str | None: Compatible pool, or None for unsupported work.
+    """
+    for (kind, os_name, variant), seconds in CELL_SECONDS.items():
+        name = (
+            f"owned shard ({os_name}, {variant})"
+            if kind == "owned"
+            else f"{kind} ({os_name}{', ' + variant if variant else ''})"
+        )
+        if job.get("name") == name and seconds >= MIN_HEAVY_S:
+            return OS_POOLS[os_name]
+    return None
+
+
+def job_is_stranded(
+    job: Mapping[str, Any],
+    heartbeats: Mapping[str, str],
+    now: float,
+    hosted_busy: set[str] | None = None,
+    pool_busy: set[str] | None = None,
+) -> bool:
+    """Return whether a queued pool job has exceeded its takeover window.
+
+    Parameters:
+        job (Mapping[str, Any]): API job object.
+        heartbeats (Mapping[str, str]): Pool heartbeat values.
+        now (float): Current epoch seconds.
+        hosted_busy (set[str] | None): Hosted labels with observed queued peers.
+        pool_busy (set[str] | None): Pools with observed unfinished jobs.
+
+    Returns:
+        bool: False for any started job, or a queued job outside the pool takeover policy.
+    """
+    if job["status"] != "queued" or job.get("started_at"):
+        return False
+    waited = now - parse_time(job["created_at"])
+    pools = {POOL_LABELS[label] for label in job["labels"] if label in POOL_LABELS}
+    if pools:
+        return any(
+            waited > (MIN_QUEUED_S if not pool_is_up(heartbeats.get(pool, ""), now) else LIVE_QUEUED_S)
+            and not any(HOSTED_POOLS.get(label) == pool for label in hosted_busy or ())
+            for pool in pools
+        )
+    pool = eligible_pool(job)
+    return (
+        waited > LIVE_QUEUED_S
+        and pool is not None
+        and pool not in (pool_busy or ())
+        and pool in {HOSTED_POOLS.get(label) for label in job["labels"]}
+        and pool_capacity(heartbeats, now, trusted=True).get(pool, 0) > 0
+    )
 
 
 def gh_api(*args: str, method: str = "GET") -> Any:
@@ -241,6 +332,17 @@ def main(argv: list[str] | None = None) -> int:
     failed = False
     for run_id in [] if args.dry_run else picked:
         try:
+            # Re-read both attempt and jobs immediately before cancellation, not the tick's old snapshot.
+            current = gh_api(f"repos/{args.repo}/actions/runs/{run_id}")
+            fresh_jobs = {
+                ident: gh_api(
+                    f"repos/{args.repo}/actions/runs/{ident}/jobs?filter=latest&per_page={PAGE_SIZE}"
+                )["jobs"]
+                for ident in jobs_by_run
+            }
+            if not stranded_runs([current], fresh_jobs, heartbeats, time.time(), args.repo):
+                LOGGER.info(f"Leaving run '{run_id}': no longer safe to restart")
+                continue
             restart(args.repo, run_id)
             LOGGER.info(f"Restarted run '{run_id}'")
         except (subprocess.CalledProcessError, TimeoutError) as e:

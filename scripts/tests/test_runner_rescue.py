@@ -91,16 +91,65 @@ def run(
         # A draining pool beats but starts nothing: its queued job is stranded despite the fresh beat.
         ([job("queued", ["pi-macos"], LATE)], {"pi-macos": f"{FRESH}:drain"}, [1]),
         ([job("queued", ["pi-macos"], 10)], STALE, []),
+        ([job("queued", ["pi-macos"], 300)], STALE, []),
+        ([job("queued", ["pi-macos"], 301)], STALE, [1]),
+        ([job("queued", ["pi-linux"], 600)], {"pi-linux": FRESH}, []),
+        ([job("queued", ["pi-linux"], 601)], {"pi-linux": FRESH}, [1]),
+        ([job("queued", ["pi-macos"], 900)], {"pi-macos": FRESH}, [1]),
         ([job("in_progress", ["pi-macos"], LATE)], STALE, []),
         ([job("queued", ["ubuntu-24.04"], LATE)], STALE, []),
         ([job("queued", ["pi-macos"], LATE), job("completed", ["xcode-27"], LATE)], STALE, [1]),
     ],
 )
-def test_stranded_runs_need_a_late_queued_job_on_a_dead_pool(
+def test_stranded_runs_need_a_late_queued_job_on_an_eligible_pool(
     jobs: list[dict[str, Any]], beats: dict[str, str], picked: list[int]
 ) -> None:
-    """Only a job that has waited, on a pool label whose beat is not fresh, strands its run."""
+    """Dead pools use the five-minute window; live macOS pools use ten minutes."""
     assert runner_rescue.stranded_runs([run(1)], {1: jobs}, beats, NOW, REPO) == picked
+
+
+@pytest.mark.parametrize(("age", "picked"), [(599, []), (600, []), (601, [1])])
+def test_live_macos_queue_age_threshold(age: int, picked: list[int]) -> None:
+    """Live macOS queues spill to hosted only after ten minutes."""
+    jobs = [job("queued", ["pi-macos"], age)]
+    assert runner_rescue.stranded_runs([run(1)], {1: jobs}, {"pi-macos": FRESH}, NOW, REPO) == picked
+
+
+@pytest.mark.parametrize("status", ["in_progress", "waiting", "queued"])
+def test_rescue_preserves_running_but_can_replan_unstarted_siblings(status: str) -> None:
+    """Pending dependencies do not prevent rescuing a run; running siblings do."""
+    jobs = [job("queued", ["pi-macos"], 900), job(status, ["ubuntu-24.04"], 900)]
+    expected = [] if status == "in_progress" else [1]
+    assert runner_rescue.stranded_runs([run(1)], {1: jobs}, STALE, NOW, REPO) == expected
+
+
+def test_started_job_and_incomplete_page_cannot_be_rescued() -> None:
+    """A queued status with a start time, or a potentially truncated page, fails closed."""
+    started = job("queued", ["pi-macos"], 900) | {"started_at": iso(NOW - 1)}
+    assert runner_rescue.stranded_runs([run(1)], {1: [started]}, STALE, NOW, REPO) == []
+    jobs = [job("queued", ["pi-macos"], 900)] * runner_rescue.PAGE_SIZE
+    assert runner_rescue.stranded_runs([run(1)], {1: jobs}, STALE, NOW, REPO) == []
+
+
+def test_pre_cancel_snapshot_refuses_a_newly_started_sibling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tick's queued snapshot cannot authorize cancellation after a sibling starts."""
+    calls = 0
+    base_api = api([run(1)], [job("queued", ["pi-macos"], 900)])
+
+    def changing(*args: str, method: str = "GET") -> Any:
+        """Start the cell between selection and the pre-cancel snapshot."""
+        nonlocal calls
+        if "/jobs?" in args[0]:
+            calls += 1
+            if calls > 1:
+                return {"jobs": [job("in_progress", ["pi-macos"], 900)]}
+        return base_api(*args, method=method)
+
+    monkeypatch.setattr(runner_rescue, "gh_api", changing)
+    monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
+    monkeypatch.setattr(runner_rescue, "restart", lambda *_: pytest.fail("must not cancel"))
+    assert runner_rescue.main(["--repo", REPO]) == 0
+    assert calls == 2
 
 
 def test_stranded_runs_skip_ineligible_runs_and_cap_the_batch() -> None:
@@ -220,7 +269,9 @@ def api(runs: list[dict[str, Any]], jobs: list[dict[str, Any]], seen: list[str] 
             seen.append(f"{method} {args[0]}")
         if "actions/runs?" in args[0]:
             return {"workflow_runs": runs if "status=queued" in args[0] else []}
-        return {"jobs": jobs}
+        if "/jobs?" in args[0]:
+            return {"jobs": jobs}
+        return next(r for r in runs if args[0].endswith(f"/{r['id']}"))
 
     return fake
 
@@ -239,10 +290,10 @@ def test_main_dry_run_reports_and_changes_nothing(monkeypatch: pytest.MonkeyPatc
 def test_pools_disabled_makes_a_fresh_pool_count_as_down(monkeypatch: pytest.MonkeyPatch) -> None:
     """With the kill switch set, a pool that still beats is rescued from anyway."""
     restarted: list[int] = []
-    monkeypatch.setattr(runner_rescue, "gh_api", api([run(1, 5000)], [job("queued", ["pi-macos"], 4000)]))
+    monkeypatch.setattr(runner_rescue, "gh_api", api([run(1, 5000)], [job("queued", ["pi-linux"], 400)]))
     monkeypatch.setattr(runner_rescue, "restart", lambda _r, run_id: restarted.append(run_id))
     monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
-    args = ["--repo", REPO, "--pool-heartbeat", f"pi-macos={FRESH}"]
+    args = ["--repo", REPO, "--pool-heartbeat", f"pi-linux={FRESH}"]
     assert runner_rescue.main(args) == 0
     assert restarted == []
     assert runner_rescue.main([*args, "--pools-disabled"]) == 0

@@ -107,10 +107,10 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
 @pytest.mark.parametrize(
     ("beat", "capacity"),
     [
-        (f"{FRESH}:3", 6),  # idle: three free plus three queued, uncapped per run
-        (f"{FRESH}:1", 4),
-        (f"{FRESH}:0", 3),  # full: three may wait
-        (f"{FRESH}:-2", 1),
+        (f"{FRESH}:3", 1),  # legacy configured slots cannot prove healthy accounts
+        (f"{FRESH}:1", 1),
+        (f"{FRESH}:0", 0),  # busy: overflow immediately
+        (f"{FRESH}:-2", 0),
         (f"{FRESH}:-3", 0),  # the allowed queue is taken
         (f"{FRESH}:-9", 0),  # deeper backlog never goes negative
         (FRESH, 1),  # no count means no backlog report: the one free slot, no queue allowance
@@ -119,18 +119,19 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
     ],
 )
 def test_a_busy_macos_pool_queues_a_bounded_run_share(beat: str, capacity: int | None) -> None:
-    """An idle pool takes free plus queue depth; a count-less beat never queues."""
+    """Only measured free capacity is admitted; no speculative macOS queue."""
     got = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
     assert got.get("pi-macos") == capacity
 
 
 @pytest.mark.usefixtures("table")
-def test_an_idle_run_sends_every_listed_macos_cell_to_the_pool() -> None:
-    """With room, every running macOS cell takes `pi-macos`: no per-run cap."""
+def test_an_idle_run_keeps_hosted_macos_in_play() -> None:
+    """Only the longest cell takes the one proven account; hosted executes the rest."""
     capacity = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:3"}, NOW, trusted=True)
     planned = plan_runners(full_plan(capacity=capacity))
-    assert planned[("owned", "macos-14", "ts")] == planned[("owned", "macos-14", "python")] == "pi-macos"
-    assert planned[("contracts", "macos-14", "")] == "pi-macos"
+    assert planned[("owned", "macos-14", "ts")] == "pi-macos"
+    assert planned[("owned", "macos-14", "python")] == "xcode-27"
+    assert planned[("contracts", "macos-14", "")] == ""
 
 
 @pytest.mark.usefixtures("table")
@@ -142,10 +143,10 @@ def test_a_saturated_or_draining_macos_pool_takes_nothing_from_a_run(beat: str) 
 
 
 def test_assign_cells_queues_the_longest_macos_cells_on_a_full_pool(table: dict[Any, int]) -> None:
-    """With the pool full, depth alone takes the longest cells, longest first; a deep backlog takes none."""
+    """A full pool overflows hosted; explicit capacity still assigns longest first."""
     running = [("owned", "macos-14", "ts"), ("owned", "macos-14", "python"), ("contracts", "macos-14", "")]
     full = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-2"}, NOW, trusted=True)
-    assert set(runner_pools.assign_cells(running, full)) == {("owned", "macos-14", "ts")}
+    assert runner_pools.assign_cells(running, full) == {}
     two = {"pi-macos": 2}
     assert set(runner_pools.assign_cells(running, two)) == {
         ("owned", "macos-14", "python"),
@@ -391,7 +392,8 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
         tmp_path, "a", "--pool-heartbeat", f"pi-linux={beat}:2", "--pool-heartbeat", f"pi-macos={beat}:1"
     )
     assert cell_runners(routed, "owned (ubuntu-24.04)")["ts"] == "pi-linux"
-    assert cell_runners(routed, "owned (macos-14)")["subagents"] == "pi-macos"
+    assert cell_runners(routed, "owned (macos-14)")["subagents"] == "xcode-27"
+    assert routed["stack (macos-14, local)"]["runner"] == "pi-macos"
     blocked = plan_with(tmp_path, "b", "--pool-heartbeat", f"pi-linux={beat}:2", "--no-pools")
     assert set(cell_runners(blocked, "owned (ubuntu-24.04)").values()) == {"ubuntu-24.04"}
     stale = plan_with(tmp_path, "c", "--pool-heartbeat", "pi-macos=0", "--pool-heartbeat", "pi-linux=")
