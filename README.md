@@ -451,6 +451,11 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 
 ### Pools
 
+CI plans cells across these pools and hosted runners by effective capacity, and a cron rescue moves cells
+queued too long on a pool back to hosted. Policy, bounds and residuals live in the `Self-hosted routing policy` comment
+in [`ci.yml`](.github/workflows/ci.yml) and the header of [`runner-rescue.yml`](.github/workflows/runner-rescue.yml);
+there is no hard queue-time guarantee.
+
 | Label | Host | Isolation |
 | --- | --- | --- |
 | `pi-linux` | Linux VM host | One linked-clone VM per job, destroyed after the job. Per-VM PVE firewall drops every private net, so no LAN, no tailnet. 8 vCPU, 10 GiB, 50 min cap |
@@ -498,7 +503,7 @@ The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` wi
 
 ### Remaining
 
-- `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
+- `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; the rescue moves an idle-queued cell to hosted after five minutes on a stale pool, but not while a sibling job of the run is already running (it never cancels a started job)
 - Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](.github/workflows/ci.yml)
 - `pi-wsl2` acceptance before `PI_WSL2_HEARTBEAT` is set: three consecutive green real jobs and a clean smoke on the laptop, then replace the estimated `CELL_SECONDS` entries for the `wsl2` cells with measured ones. Until the variable exists the pool reads as down and every `wsl2` cell stays hosted. Pooled cells keep reporting as `owned (wsl2)` and `contracts (wsl2)`, and the pool's own job is `smoke (pi-wsl2)`; no new required check name is added
 - Alerting: the daemon only logs to journald; nothing pages when it is down
