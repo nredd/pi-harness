@@ -29,6 +29,7 @@ import {
 	isHourly,
 	type ModelTotals,
 	matches,
+	modelName,
 	modelTotals,
 	type Overview,
 	overview,
@@ -43,12 +44,21 @@ import {
 } from "./aggregate.ts";
 import { bucketize, GUTTER, plot, TICKS } from "./chart.ts";
 import { dayKey, keyDate, shortDate } from "./days.ts";
-import { costLabel, duration, formatTokens, percent } from "./format.ts";
+import { costLabel, duration, formatTokens, money, percent } from "./format.ts";
 import type { QuotaObservation } from "./harness/common.ts";
 import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEEKS } from "./heatmap.ts";
 import { type Call, HARNESSES, type Harness, type Session } from "./load.ts";
 import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
+import {
+	briefValueLines,
+	type Valuation,
+	type ValueCall,
+	valuation,
+	valuationLines,
+	valuationText,
+	valueCells,
+} from "./pricing.ts";
 import { claudeHasNoReading, gauge, NO_LOCAL_READING, quotaRows, usedLabel } from "./quota.ts";
 import { timeAxis } from "./ticks.ts";
 
@@ -96,6 +106,8 @@ export interface StatsViewOptions {
 	coverage?: string;
 	/** Offline per-source provenance, rendered as a scrollable Machines tab. */
 	freshness?: readonly string[];
+	/** Synchronous host estimator over an already-loaded catalog; never network or auth. */
+	valueCall?: ValueCall;
 	/** Merged subscription quota readings, shown at the end of Overview. */
 	quota?: readonly QuotaObservation[];
 	tab?: Tab;
@@ -118,6 +130,8 @@ export class StatsView implements Component {
 	private harnessIndex = 0;
 	private scroll = 0;
 	private readonly palettes = new Map<number, Color[]>();
+	/** Valuation per (harness, filter, range): `calls` never change, so render never re-runs the estimator. */
+	private readonly valueCache = new Map<string, Valuation>();
 	private readonly counted: Call[];
 	/** `all`, then every harness with data; just `all` when one harness is all there is to choose. */
 	private readonly harnesses: HarnessFilter[];
@@ -221,9 +235,10 @@ export class StatsView implements Component {
 		if (this.tab === "Overview") body = this.scrolled(this.overviewBody(w, room), room);
 		else if (this.tab === "Machines")
 			body = this.scrolled(
-				(this.o.freshness ?? ["Per-machine freshness unknown (no source metadata)."]).flatMap((line) =>
-					wrapTextWithAnsi(this.paint("muted", line), contentWidth(w)),
-				),
+				[
+					...(this.o.freshness ?? ["Per-machine freshness unknown (no source metadata)."]),
+					...this.valueLines(this.scoped().ranged, false),
+				].flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), contentWidth(w))),
 				room,
 			);
 		else {
@@ -341,6 +356,26 @@ export class StatsView implements Component {
 		return hint ? `${this.paint("muted", hint)}  ${keys}` : keys;
 	}
 
+	/** Valuation for the current scope; see `valueCache` for why render never re-runs the estimator. */
+	private valued(ranged: readonly Call[]): Valuation | undefined {
+		const value = this.o.valueCall;
+		if (!value) return undefined;
+		const key = `${this.harness}|${JSON.stringify(this.filter)}|${this.range}`;
+		let out = this.valueCache.get(key);
+		if (!out) {
+			out = valuation(ranged, value);
+			this.valueCache.set(key, out);
+		}
+		return out;
+	}
+
+	/** Brief or full valuation text, empty without an estimator. */
+	private valueLines(ranged: readonly Call[], brief: boolean): string[] {
+		const out = this.valued(ranged);
+		if (!out) return [];
+		return brief ? briefValueLines(valuationText(out)) : valuationText(out);
+	}
+
 	private scoped(): { all: Call[]; ranged: Call[] } {
 		const all = this.o.calls.filter(
 			(c) => this.inHarness(c) && matches(this.filter, c) && inRange("all", this.today, c.ms, this.now),
@@ -352,7 +387,7 @@ export class StatsView implements Component {
 	 * Headline numbers as `label  value` cells, in reading order: favorite model and total tokens,
 	 * sessions and longest session, and so on.
 	 */
-	private statCells(ov: Overview): { label: string; value: string }[] {
+	private statCells(ov: Overview, valued?: Valuation): { label: string; value: string }[] {
 		const t = this.o.theme;
 		const v = (s: string) => this.paint("accent", s);
 		// Only called for a non-empty range, so the overview has a favorite model and a most active day.
@@ -370,7 +405,13 @@ export class StatsView implements Component {
 				label: "Cache tokens",
 				value: `${v(formatTokens(ov.cacheRead))} read · ${v(formatTokens(ov.cacheWrite))} write`,
 			},
-			{ label: "Notional cost", value: v(costLabel(ov.cost, ov.unpriced, ov.calls)) },
+			{ label: "Recorded cost", value: v(costLabel(ov.cost, ov.unpriced, ov.calls)) },
+			...(valued
+				? [
+						{ label: "Current-rate value", value: v(valueCells(valued).estimate) },
+						{ label: "Pricing coverage", value: v(valueCells(valued).coverage) },
+					]
+				: []),
 		];
 	}
 
@@ -453,7 +494,7 @@ export class StatsView implements Component {
 		const cells =
 			ranged.length === 0
 				? []
-				: this.statCells(overview(ranged, this.o.sessions, this.range, this.today, daily.keys()));
+				: this.statCells(overview(ranged, this.o.sessions, this.range, this.today, daily.keys()), this.valued(ranged));
 		const heat = (area: number) =>
 			heatmap(daily, this.today, area, (color, text) =>
 				color === "heat" ? this.paint("accent", text) : this.paint(color === "empty" ? "dim" : "muted", text),
@@ -623,7 +664,14 @@ export class StatsView implements Component {
 		const list = this.listRows(totals, contentWidth(width), colors, by);
 		const listLines = list.reduce((n, row) => n + row.lines.length, 0);
 		const chart = this.chart(ranged, width, chartHeight(Math.max(Math.floor(room / 2), room - listLines) - 7));
-		const head = [...chart.lines, ""];
+		const head = [
+			...chart.lines,
+			"",
+			...this.valueLines(ranged, true).flatMap((line) =>
+				wrapTextWithAnsi(this.paint("muted", line), contentWidth(width)),
+			),
+			"",
+		];
 		return {
 			lines: [...head, ...list.flatMap((row) => row.lines)],
 			owners: [...head.map(() => []), ...list.flatMap((row) => row.lines.map(() => row.models))],
@@ -690,7 +738,7 @@ export class StatsView implements Component {
 			"Out",
 			"Cache read",
 			"Cache write",
-			"Cost (notional)",
+			"Recorded cost",
 		];
 		const nameWidth = Math.max(
 			...totals.map((m) => visibleWidth(sanitize(m.model)) + 4),
@@ -730,9 +778,7 @@ export class StatsView implements Component {
 			this.paint("muted", `  In: ${formatTokens(m.input)} · Out: ${formatTokens(m.output)}`),
 			this.paint(
 				"muted",
-				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${
-					m.unpriced > 0 ? costLabel(m.cost, m.unpriced, m.calls) : `${costLabel(m.cost, 0, m.calls)} notional`
-				}`,
+				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${m.unpriced > 0 ? costLabel(m.cost, m.unpriced, m.calls) : `${costLabel(m.cost, 0, m.calls)} recorded`}`,
 			),
 		];
 		for (const { provider, models, sum } of providers) {
@@ -786,11 +832,22 @@ function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], 
 	];
 }
 
+/** Per-model current estimate cell; a partial sum says `subset`. */
+function estimateLabel(calls: readonly Call[], valueCall: ValueCall): string {
+	const price = valuation(calls, valueCall);
+	return price.cost === null ? "unknown" : `${money(price.cost)}${price.unpricedEvents ? " subset" : ""}`;
+}
+
 /**
  * Plain-text per-model table for print/json/rpc modes, all time, then the harness split and quota readings.
  * Quota stands on its own: readings with no usage still print.
  */
-export function summary(calls: readonly Call[], quota: readonly QuotaObservation[] = [], now = Date.now()): string {
+export function summary(
+	calls: readonly Call[],
+	quota: readonly QuotaObservation[] = [],
+	now = Date.now(),
+	valueCall?: ValueCall,
+): string {
 	const totals = modelTotals(calls);
 	const quotas = quotaLines(calls, quota, now);
 	if (totals.length === 0) return ["/stats: no usage recorded yet", ...quotas].join("\n");
@@ -805,9 +862,17 @@ export function summary(calls: readonly Call[], quota: readonly QuotaObservation
 		"out",
 		"cache read",
 		"cache write",
-		"cost",
+		"recorded cost",
 		"%",
+		...(valueCall ? ["current estimate"] : []),
 	];
+	// Every model in `totals` came from `calls`, so each has a group.
+	const byModel = new Map<string, Call[]>();
+	for (const c of valueCall ? calls : []) {
+		const group = byModel.get(modelName(c));
+		if (group) group.push(c);
+		else byModel.set(modelName(c), [c]);
+	}
 	const body = totals.map((m) => [
 		sanitize(m.provider),
 		sanitize(m.model),
@@ -818,6 +883,7 @@ export function summary(calls: readonly Call[], quota: readonly QuotaObservation
 		formatTokens(m.cacheWrite),
 		costLabel(m.cost, m.unpriced, m.calls),
 		percent(tokensOf(m), grand),
+		...(valueCall ? [estimateLabel(byModel.get(m.name) as Call[], valueCall)] : []),
 	]);
 	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => nth(r, c).length)));
 	const textual = split ? 3 : 2;
@@ -837,6 +903,6 @@ export function summary(calls: readonly Call[], quota: readonly QuotaObservation
 			lines.push(`  ${h}: ${formatTokens(sum)} (${percent(sum, grand)}), ${costLabel(cost, unpriced, mine.length)}`);
 		}
 	}
-	lines.push(...quotas);
+	lines.push(...quotas, ...(valueCall ? valuationLines(calls, valueCall) : []));
 	return lines.join("\n");
 }

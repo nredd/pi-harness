@@ -124,6 +124,8 @@ it(
 			expect(plot.length, rows.join("\n")).toBeGreaterThanOrEqual(6);
 			expect(danglingPorts(plot.map((row) => row.slice(AXIS_COLUMN + 1))), tab).toEqual([]);
 			if (tab === "Overview") {
+				expect(rows.join("\n")).toContain("Current-rate value");
+				expect(rows.join("\n")).toContain("Pricing coverage");
 				expect(plot).toHaveLength(16);
 				const caption = rows.findIndex((row) => row.includes("total: peak"));
 				expect(caption).toBeGreaterThan(-1);
@@ -274,7 +276,7 @@ it.each(WIDTHS)(
 		expect(shown).toContain("h harness");
 		expect(shown).toContain("by harness");
 		// 8 tokens in the numbers are unpriced Claude/Codex: the total says so instead of showing $0
-		expect(shown).toMatch(/Notional cost +\$[\d.k]+ \+ \d+ unpriced/);
+		expect(shown).toMatch(/Recorded cost +\$[\d.k]+ \+ \d+ unpriced/);
 		// quota: live window with reading age, expired window as reset, Claude has no local reading
 		expect(shown).toContain("Quota");
 		expect(shown).toMatch(/openai-codex\/codex 7d/);

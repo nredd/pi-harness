@@ -44,9 +44,20 @@ and memory labels state their measurement basis) are in
 
 ## Install and config
 
+After `0.12.0` is published, install the release with:
+
 ```sh
-pi install npm:@nredd/pi-session-kit
+pi install npm:@nredd/pi-session-kit@0.12.0
 ```
+
+This release exports compact v3 snapshots and still imports v1/v2. Update portable exporter
+pins only after publication, using the published tarball's SHA-256; stack promotion and
+exporter deployment are separate from this release preparation.
+
+`0.12.0` adds the host-supplied `@earendil-works/pi-ai` peer. Current-rate estimates need
+its `estimateTokenCost` export (core `v1.3.0-nredd.12`); older hosts without it retain
+recorded costs and show unknown estimates. This remains a pre-1.0 minor release, not a
+requirement to upgrade the host for existing tools.
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 
@@ -165,14 +176,14 @@ not installed, last event, unreadable-line counts locally; last clean read and `
 machines) and remote exported-at UTC instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
 Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
 not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
-Print/JSON output includes the same provenance. Details: [here](#offline-stats-and-portable-snapshots).
+Print/JSON output includes the same provenance. Recorded costs stay unchanged; a separate offline current-rate API-equivalent estimate shows priced/unpriced coverage, never presenting a partial sum as complete. Details: [here](#offline-stats-and-portable-snapshots).
 
 Pinned header: tabs and the coverage note, then the date ranges, the harness and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
-total tokens, sessions, longest session, active days, streaks, cache tokens, notional cost) beside
+total tokens, sessions, longest session, active days, streaks, cache tokens, recorded cost) beside
 it from about 105 columns and under it below that, then the token chart. Models: the chart, then every
 model grouped under its provider. From about 100 columns that is a table (tokens, share, in, out, cache
-read, cache write, notional cost; a subtotal line per provider), else three-line cards. Tab switches
+read, cache write, recorded cost; a subtotal line per provider), else three-line cards. Tab switches
 tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `h`/`H` cycle the harness (All, then each of
 pi, claude, codex, opencode that has data; hidden when only one does), `m`/`M` cycle the filter (All,
 each provider, each `provider/model`; it composes with the harness and falls back to All where that
@@ -811,6 +822,26 @@ the published snapshots. To drop a harness on purpose, export without it using
 - Cost is `null` for Claude and Codex (snapshot v2); OpenCode's recorded cost is kept, `null` when
   absent. The harness cache is version 4: older caches (cost 0, quota without `account`) are dropped and
   re-parsed.
+
+Current-rate API-equivalent value:
+
+- `Recorded cost` is the saved observation: never overwritten, never a current-rate fallback, not
+  subscription spend. Transcripts, snapshots, event IDs, dedup and deleted-file history are unchanged.
+- `/stats` also estimates each retained physical event with `estimateTokenCost` from the host's
+  `@earendil-works/pi-ai`, over already-loaded models only (no catalogue refresh, auth or network).
+  Context tiers apply per event before summing.
+- Overview and Models show the range/filter estimate and priced/unpriced event and token coverage;
+  print mode adds a per-model column. Machines adds source, checked date, units, conditions and
+  unpriced reasons. A partial sum reads `priced subset only`; no priced events reads `unknown`, never
+  $0. Verified free events price at zero.
+- Lookups are exact provider/model identities with assessed rates; aliases are never guessed. A host
+  without the estimator, unavailable models, non-token charges and unassessed rates stay unpriced.
+- It is list-price value, not request-date billing or an invoice. Bedrock uses published Standard,
+  global cross-region, US East (N. Virginia) USD per million tokens as a baseline, not actual routing.
+- Snapshots do not keep cache-write lifetime, service mode, region or provenance, so a write with
+  unknown TTL stays unpriced. Classifier/image calls reported inside tool results are not counted.
+- The exporter/importer carries recorded values only; no snapshot migration.
+- `tests/stats/pricing-core.test.ts` runs in the normal suite against the real estimator.
 
 Harness API:
 
