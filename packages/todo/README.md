@@ -920,4 +920,5 @@ See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/re
 
 The #932 migration preserves 24 historical bullets: 6 exact bullets move to fragments
 and 18 remain in `CHANGELOG.md`. The two `586.fixed` bullets share one issue/category and remain; other retained bullets lack the required issue link.
+Categories for the formerly ungrouped migrated bullets are assigned by judgement from the change described.
 Historical attribution and released sections are unchanged; no issue IDs are invented.

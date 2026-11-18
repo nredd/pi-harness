@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Show a separately labelled, offline current-rate API-equivalent estimate in `/stats` next to recorded costs, with priced/unpriced coverage; partial sums read `priced subset only` and unknown is never `$0` ([#799](https://github.com/nredd/pi-harness/issues/799))
 
 - Neutralize the complete Unicode `Bidi_Control` set in local scan paths, including ALM, LRM and RLM; preserve C1 replacement and JSON C0 escaping (#960).
 
@@ -21,11 +22,6 @@
 - Run the full session-kit suite through the disposable-home Vitest launcher on Bun; retain report-only enforcement until the remaining stats branch/facade work is admitted (#320)
 
 - Pin published `@nredd/pi-resource-sampler@0.2.1` for `/mon`, removing the known Linux `/proc` iterator PID-exit collection race (#499); the historical #557 WSL incident errno remains unproven
-
-
-
-
-
 
 - Add a `homeDir` option to `createSessionKit`: config, rules, title aliases and stats session/cache defaults derive from it when no `agentDir` is given; `PI_CODING_AGENT_DIR` still wins
 - Remove the `agentDir` re-exports from `src/config.ts` and `src/stats/load.ts`; deep imports now use `src/agent-dir.ts`. The rules `register` takes `{ agentDir, homeDir }` like titles and stats and resolves the user rule directory at use time
