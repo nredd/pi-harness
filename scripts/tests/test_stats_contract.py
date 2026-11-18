@@ -10,6 +10,7 @@ import gzip
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -242,6 +243,40 @@ def test_compact_contract_matches_expanded_cache(tmp_path: Path) -> None:
     (cache_dir / "stats-global.json").write_text(json.dumps({"machines": {MACHINE: machine}}))
     with pytest.raises(pc.ContractError, match="changed compact month events"):
         pc.inspect_stats_cache(cache_dir.parent, manifest, directory)
+
+
+def test_compact_python_contract_matches_real_typescript_pair_order(tmp_path: Path) -> None:
+    """Cross-check names whose serialized-pair order differs from tuple or Unicode-codepoint order.
+
+    Parameters:
+        tmp_path (Path): Isolated synthetic input directory.
+    """
+    snapshot(tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    value = json.loads((tmp_path / manifest["shards"][0]["file"]).read_text())
+    event = value["events"][0] | {"harness": "pi", "entryId": "a" * 24}
+    value |= {
+        "version": 3,
+        "quota": [],
+        "events": [
+            event | {"id": f"{i:064x}", "provider": provider}
+            for i, provider in enumerate(("a", "a b", "\U00010000", "\ue000"))
+        ],
+    }
+    module = (pc.REPO_ROOT / "packages/session-kit/src/stats/snapshot.ts").as_uri()
+    code = (
+        f"import {{encodeShard}} from {json.dumps(module)}; "
+        "import {gunzipSync} from 'node:zlib'; "
+        f"console.log(gunzipSync(encodeShard({json.dumps(value)})).toString());"
+    )
+    node = shutil.which("node")
+    assert node is not None
+    wire = pc.parse_stats_json(
+        pc.StatsCompactShard,
+        subprocess.check_output([node, "--input-type=module", "-e", code], text=True),
+        "compact month shard",
+    )
+    assert wire == pc.compact_stats_shard(pc.StatsShard.model_validate(value))
 
 
 def test_compact_manifest_requires_unique_versioned_files(tmp_path: Path) -> None:

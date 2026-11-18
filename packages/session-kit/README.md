@@ -576,26 +576,46 @@ the full entry hash, or `null`. Export and deduplication refuse collisions betwe
 identities rather than merging them. Cross-version matching uses that same 96-bit prefix plus
 attribution, timestamp and counters; legacy entry hashes remain unchanged on disk.
 `q` contains the quota objects below. Metadata sorts by identity; events sort by timestamp then
-fingerprint. All other identity fields are reconstructed, not repeated per event.
+fingerprint, using UTF-16 code-unit order, never locale collation. The model table sorts by the
+canonical JSON serialization of each `[provider, model]` pair, also in UTF-16 code-unit order.
+The independent Python packed contract uses the same key. All other identity fields are
+reconstructed, not repeated per event.
 
 The canonical compact JSON is compressed with gzip level 9 and zero mtime. Digests and `bytes`
 cover the compressed bytes. Imports reject noncanonical compact JSON, invalid indexes/rows and
-expanded JSON above 128 MiB, in addition to the 128 MiB regular-file bound. They accept equivalent
+expanded JSON above 128 MiB, in addition to the 128 MiB regular-file bound. A machine transaction
+also has a cumulative 128 MiB decompressed-JSON budget: each shard is charged before another is
+accumulated, including when reading a producer's previous generation. They accept equivalent
 gzip streams from other zlib builds without recompression. The expanded cache still uses
 `{version, machineId, month, events, sessions, quota}` and strict validation below; v3 cached machines
 also retain a `wire` array of base64 producer bytes, authenticated against the manifest and checked
 against the expanded projection on every read, so cache validation is compression-version independent;
-v1 shards have no `quota` and use canonical uncompressed `JSON.stringify` bytes.
+v1 shards have no `quota` and use canonical uncompressed `JSON.stringify` bytes. This local viewer
+cache stores both the expanded projection and base64 wire bytes, so it is larger than the published
+gzip files; its separate assembled 128 MiB bound and last-good replacement rule still apply.
 
 Shards are published first, manifest last. After publication the serialized exporter removes
 unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
-machine snapshot and retry next sync. Unchanged files are never rewritten. The active UTC month
-replaces its previous generation; past months are sealed and retain their referenced immutable
-files. Late historical events, session-end extensions and quota observations append small delta
-shards, not whole-month rewrites. A v3 month can therefore have multiple referenced shards.
+machine snapshot and retry next sync. Valid content-addressed files are never rewritten; corrupt
+bytes at an existing filename are repaired through an atomic rename. Cleanup is skipped when
+previous history is unreadable or a harness reports lost history, retaining recoverable copies;
+cleanup failures become warnings, not failed exports or missing export-state bookkeeping.
+
+The active UTC month replaces its previous generation. Past-month files stay immutable for
+append-only late events, session-end extensions and quota observations. A corrected identified
+call (same harness/entry identity, different timestamp/counters) or changed session start/child
+attribution retires the affected months' references and regenerates those months from the clean
+scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
+corrections regenerate both affected months. Old file bytes are not changed, only superseded.
+Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
+
+A v3 month can have multiple referenced delta shards. There is no fixed per-month delta-count
+cap: file count grows with late updates, not with unchanged or whole-month exports. The regression
+covers 40 successive deltas and a repeat export; the total machine expansion budget still applies.
+A separate compaction/archival follow-up must define an explicit maintenance protocol before
+rewriting sealed generations; never drop referenced files just to reduce their count.
 Session metadata repeats only with consistent start/child attribution; aggregation takes the
-maximum end. Quota aggregation selects the freshest observation, not their sum. Sealed event
-prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
+maximum end. Quota aggregation selects the freshest observation, not their sum.
 The transport must publish only manifest-referenced files and prune unreferenced files in the
 producer's own directory, never another machine's directory.
 
@@ -642,11 +662,28 @@ own version. A v1 event loads as `harness: "pi"`. Producers migrate on their nex
 `exportedAt` ordering and atomic last-good imports are unchanged. Update viewers before producers:
 older kits cannot read v3 manifests.
 
-Removing superseded files bounds the published tree, not existing Git history. To reclaim an
-already-bloated data branch, the maintainer must stop scheduled writers, back up the branch,
-validate every manifest and referenced file, then explicitly replace its history with a new root
-containing only those files. Coordinate that owner-run rewrite and fresh checkouts for all writers
-before restarting sync. The exporter and helper never rewrite history or force-push automatically.
+Removing superseded files bounds the published tree, not existing Git history. Owner-run history
+replacement requires all writers stopped and a separate staging clone, never an ordinary sync checkout.
+Here `$EXPORTER` is the verified standalone bundle, `$DATA` is the stopped source checkout, and
+`$BEFORE`/`$AFTER`/`$STAGED` are disposable directories; `$BACKUP` is the explicit backup destination:
+
+- Save an offline backup with `git -C "$DATA" bundle create "$BACKUP" --all` and verify it with
+  `git -C "$DATA" bundle verify "$BACKUP"` before changing history.
+- Run `node "$EXPORTER" import --agent-dir "$BEFORE" --input "$DATA"` into a new disposable
+  viewer directory. Require exit zero, no problems, and the expected machine count; this verifies
+  canonical schemas, every referenced size/digest and cross-shard references.
+- Copy only each `machines/<UUID>/manifest.json` and its exact `shards[].file` references into the
+  staging tree. Check its file inventory equals that union, with no symlinks, extra generations,
+  temporary files or other state. Commit that tree as a signed orphan root in the staging clone.
+- Import the staged tree into another new disposable viewer with
+  `node "$EXPORTER" import --agent-dir "$AFTER" --input "$STAGED"`. Require exit zero and compare
+  the two `pi-session-kit/stats-global.json` documents' `machines` objects for deep equality,
+  excluding only top-level `importedAt`/`problems`. Run `git fsck --full` on the staging clone.
+- Only after those checks may the owner explicitly replace the remote branch history. Verify the
+  remote HEAD equals the approved staging commit; all writers must use fresh clones and re-run
+  the same import/inventory checks before scheduling resumes. Keep the bundle until recovery is proven.
+
+The exporter and helper never rewrite history or force-push automatically.
 
 Session exact keys: `{id, startMs, endMs, child}`. Header IDs hash as `session:<header ID>`;
 unidentified legacy sessions use a local path hash and therefore cannot always be matched across

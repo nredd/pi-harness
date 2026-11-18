@@ -349,6 +349,9 @@ function unpackedId(value: unknown, length = 32): string {
 	return bytes.toString("hex");
 }
 
+/** Locale-independent UTF-16 code-unit ordering, matching Array.sort() on the wire tables. */
+const codeUnits = (a: string, b: string): number => Number(a > b) - Number(a < b);
+
 /** Canonical compact JSON, independent of gzip implementation and compression level. */
 function compactJson(shard: Shard): string {
 	const ids = [...new Set([...shard.sessions.map((s) => s.id), ...shard.events.map((e) => e.sessionId)])].sort();
@@ -363,10 +366,10 @@ function compactJson(shard: Shard): string {
 		s: ids.map(packedId),
 		p: pairs.map((pair) => JSON.parse(pair) as [string, string]),
 		d: [...shard.sessions]
-			.sort((a, b) => a.id.localeCompare(b.id))
+			.sort((a, b) => codeUnits(a.id, b.id))
 			.map((s) => [sessions.get(s.id), s.startMs - epoch, s.endMs - s.startMs, s.child ? 1 : 0]),
 		e: [...shard.events]
-			.sort((a, b) => a.ms - b.ms || a.id.localeCompare(b.id))
+			.sort((a, b) => a.ms - b.ms || codeUnits(a.id, b.id))
 			.map((e) => [
 				sessions.get(e.sessionId),
 				HARNESSES.indexOf(e.harness as Harness),
@@ -395,13 +398,25 @@ export function encodeShard(shard: Shard): Buffer {
 
 /** Decode bounded wire bytes into the existing strict, privacy-only aggregation schema. */
 export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): Shard {
+	return decodeWithinBudget(bytes, manifest, month, MAX_BYTES).shard;
+}
+
+/** Charge decompressed bytes before parsing or retaining another shard in a machine transaction. */
+function decodeWithinBudget(
+	bytes: Buffer,
+	manifest: Manifest,
+	month: string,
+	remaining: number,
+): { shard: Shard; expandedBytes: number } {
+	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	const text = (manifest.version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
+	const expandedBytes = Buffer.byteLength(text);
+	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
 	if (manifest.version !== 3) {
-		const text = bytes.toString("utf8");
 		const shard = validateShard(JSON.parse(text) as unknown, manifest, month);
 		if (JSON.stringify(shard) !== text) throw new Error("Noncanonical shard JSON");
-		return shard;
+		return { shard, expandedBytes };
 	}
-	const text = gunzipSync(bytes, { maxOutputLength: MAX_BYTES }).toString("utf8");
 	const value: unknown = JSON.parse(text);
 	exact(value, ["v", "m", "t", "s", "p", "d", "e", "q"]);
 	if (
@@ -458,7 +473,7 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 		month,
 	);
 	if (compactJson(shard) !== text) throw new Error("Noncanonical compact shard");
-	return shard;
+	return { shard, expandedBytes };
 }
 
 /** Only bounded regular files with manifest-authenticated bytes reach decompression/schema validation. */
@@ -466,13 +481,14 @@ async function readShard(
 	base: string,
 	manifest: Manifest,
 	ref: Manifest["shards"][number],
-): Promise<{ shard: Shard; bytes: Buffer }> {
+	remaining: number,
+): Promise<{ shard: Shard; bytes: Buffer; expandedBytes: number }> {
 	const path = join(base, ref.file);
 	const info = await lstat(path);
 	if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES) throw new Error("Invalid shard size/type");
 	const bytes = await readFile(path);
 	if (digest(bytes) !== ref.sha256) throw new Error("Shard digest mismatch");
-	return { shard: decodeShard(bytes, manifest, ref.month), bytes };
+	return { ...decodeWithinBudget(bytes, manifest, ref.month, remaining), bytes };
 }
 
 export function validateManifest(value: unknown): Manifest {
@@ -704,7 +720,12 @@ async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	}
 	try {
 		const shards: Shard[] = [];
-		for (const ref of manifest.shards) shards.push((await readShard(snapshotDir, manifest, ref)).shard);
+		let remaining = MAX_BYTES;
+		for (const ref of manifest.shards) {
+			const read = await readShard(snapshotDir, manifest, ref, remaining);
+			shards.push(read.shard);
+			remaining -= read.expandedBytes;
+		}
 		validateSnapshot({ manifest, shards });
 		return { manifest, shards };
 	} catch {
@@ -760,6 +781,40 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 		if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
 	out.sessions = [...mergeSessionMetadata(out.sessions).values()];
 	return out;
+}
+
+/** Retire sealed generations only when a physical call or session identity was corrected. */
+function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<string> {
+	const revised = new Set<string>();
+	const entries = new Map<string, { id: string; month: string }[]>();
+	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.entryId]);
+	for (const shard of previous.shards)
+		for (const event of shard.events) {
+			if (event.entryId === null) continue;
+			const key = entryKey(event);
+			const known = entries.get(key) ?? [];
+			known.push({ id: event.id, month: shard.month });
+			entries.set(key, known);
+		}
+	for (const shard of next.shards)
+		for (const event of shard.events) {
+			if (event.entryId === null) continue;
+			for (const prior of entries.get(entryKey(event)) ?? [])
+				if (prior.id !== event.id) {
+					revised.add(prior.month);
+					revised.add(shard.month);
+				}
+		}
+	const sessions = new Map(next.shards.flatMap((s) => s.sessions.map((session) => [session.id, session] as const)));
+	for (const shard of previous.shards)
+		for (const prior of shard.sessions) {
+			const current = sessions.get(prior.id);
+			if (current && (current.startMs !== prior.startMs || current.child !== prior.child)) {
+				revised.add(shard.month);
+				revised.add(monthOf(current.startMs));
+			}
+		}
+	return revised;
 }
 
 /** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
@@ -842,7 +897,10 @@ export async function exportStats(
 		const old = carried(previous, h);
 		// A harness that cannot be read, or that vanished while we hold data for it, keeps its last published
 		// contents: it must not take the pi export down, nor be replaced by an empty or partial scan.
-		const gone = !scan.found && !options.replaceHarnesses && old !== null && old.calls.length + old.quota.length > 0;
+		const gone =
+			!scan.found &&
+			!options.replaceHarnesses &&
+			(old === null ? last.has(h) : old.calls.length + old.quota.length > 0);
 		const failed = scan.problems.some(fatalProblem) || gone;
 		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
 		const problems = [
@@ -875,10 +933,11 @@ export async function exportStats(
 			? previous
 			: null;
 	const current = monthOf(exportedAt);
+	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
 	const publishedShards: Shard[] = [];
 	if (sealed)
 		for (const [i, s] of sealed.shards.entries()) {
-			if (s.month >= current) continue;
+			if (s.month >= current || revised.has(s.month)) continue;
 			snapshot.manifest.shards.push(nth(sealed.manifest.shards, i));
 			publishedShards.push(s);
 		}
@@ -902,7 +961,7 @@ export async function exportStats(
 		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
 		const sha256 = digest(bytes);
 		const file = `${s.month}-${sha256}.json.gz`;
-		// Never rewrite a content-addressed file, including an unchanged active month.
+		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {
 			await writeFile(join(snapshotDir, file), bytes, { flag: "wx", mode: 0o600 });
 		} catch (error) {
@@ -915,18 +974,37 @@ export async function exportStats(
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
-	// Serialized outbox writers only. Readers racing collection reject the incomplete transaction and
-	// retain last-good; the manifest is already durable before any superseded generation disappears.
-	const referenced = new Set(snapshot.manifest.shards.map((ref) => ref.file));
-	for (const entry of await readdir(snapshotDir, { withFileTypes: true })) {
-		if (entry.isFile() && /^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/.test(entry.name) && !referenced.has(entry.name))
-			await unlink(join(snapshotDir, entry.name));
+	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
+	// copies if this export could not read the previous history; never turn post-publication cleanup
+	// failure into a failed export or skip recording the now-published harness set.
+	const warnings: string[] = [];
+	const lost = Object.values(report).some((r) => r.failed === "lost");
+	if (previous === "unreadable" || lost) warnings.push("obsolete shard cleanup skipped: previous history unavailable");
+	else {
+		const referenced = new Set(snapshot.manifest.shards.map((ref) => ref.file));
+		try {
+			for (const entry of await readdir(snapshotDir, { withFileTypes: true })) {
+				if (
+					entry.isFile() &&
+					/^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/.test(entry.name) &&
+					!referenced.has(entry.name)
+				) {
+					try {
+						await unlink(join(snapshotDir, entry.name));
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					}
+				}
+			}
+		} catch {
+			warnings.push("obsolete shard cleanup failed");
+		}
 	}
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
 	// derives the set from the snapshot itself, so a widening is still protected.
-	const warnings = await atomicJson(stateFile(dir), {
+	const stateWarnings = await atomicJson(stateFile(dir), {
 		version: 1,
 		salt: state.salt,
 		harnesses: published,
@@ -935,6 +1013,7 @@ export async function exportStats(
 		() => [],
 		() => ["export state not recorded"],
 	);
+	warnings.push(...stateWarnings);
 	return {
 		machineId: identity.machineId,
 		snapshotDir,
@@ -1043,8 +1122,10 @@ export async function importStats(
 				if (manifest.machineId !== id) throw new Error("Machine identity mismatch");
 				const shards: Shard[] = [];
 				const wire: string[] = [];
+				let remaining = MAX_BYTES;
 				for (const ref of manifest.shards) {
-					const read = await readShard(base, manifest, ref);
+					const read = await readShard(base, manifest, ref, remaining);
+					remaining -= read.expandedBytes;
 					shards.push(read.shard);
 					wire.push(read.bytes.toString("base64"));
 				}

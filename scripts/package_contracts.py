@@ -1315,7 +1315,12 @@ def compact_stats_shard(shard: StatsShard) -> StatsCompactShard:
         StatsCompactShard: Canonical table and row values, independently of the JS encoder.
     """
     ids = sorted({s.id for s in shard.sessions} | {e.sessionId for e in shard.events})
-    pairs = sorted({(e.provider, e.model) for e in shard.events})
+    pairs = sorted(
+        {(e.provider, e.model) for e in shard.events},
+        key=lambda pair: json.dumps(pair, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-16-be", errors="surrogatepass"
+        ),
+    )
     epoch = int(datetime.fromisoformat(f"{shard.month}-01T00:00:00+00:00").timestamp() * 1000)
     harnesses = get_args(StatsHarness)
     return StatsCompactShard(
