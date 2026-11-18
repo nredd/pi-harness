@@ -218,6 +218,7 @@ const RESOLVED: Record<string, unknown> = {
 				"anthropic-block-types.test.ts",
 				"latency.test.ts",
 				"process-lifecycle.test.ts",
+				"request-ledger.test.ts",
 				"render.test.ts",
 				"session-kit-child-scope.test.ts",
 				"stack-resources.test.ts",
