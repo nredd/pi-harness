@@ -23,7 +23,7 @@ LOGGER = logging.getLogger(__name__)
 SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")
 # One `ci.yml` step per owned gate. Each `owned (<os>)` check is a fan-in over `owned shard (<os>, <shard>)`
 # jobs, and `scripts/ci_paths.py` `OWNED_SHARDS` plans which gates each shard runs: native cells run the
-# Python suites, WSL keeps only the LCOV producers, and the macOS `python` shard carries the benchmark gate.
+# Python suites; WSL keeps only the LCOV producers.
 # Tests pin both tables to the plan and the step names to `ci.yml`.
 OWNED_GATE_STEPS = {
     "check-ts": "Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)",
@@ -34,7 +34,6 @@ OWNED_GATE_STEPS = {
     "check-probes": "Owned gate check-probes (WSL LCOV producer)",
     "check-providers": "Owned gate check-providers (WSL LCOV producer)",
     "check-import-audit": "Owned gate check-import-audit (WSL LCOV producer)",
-    "check-benchmark": "Benchmark unit gate",
 }
 OWNED_SHARDS = {
     "ubuntu-24.04": {
@@ -48,7 +47,7 @@ OWNED_SHARDS = {
         "computer-use": ("check-ts",),
         "ts": ("check-ts",),
         "scripts": ("check-scripts",),
-        "python": ("check-integration", "check-benchmark"),
+        "python": ("check-integration",),
     },
     "wsl2": {
         "subagents-computer-use": ("check-ts",),

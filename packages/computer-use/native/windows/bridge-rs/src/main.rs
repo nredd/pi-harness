@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
@@ -14,16 +15,8 @@ use windows_bridge::{
 #[derive(Clone, Debug)]
 struct ElementRecord {
     hwnd: isize,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
     automation_id: String,
-    class_name: String,
     is_secure: bool,
-    can_press: bool,
-    can_set_value: bool,
-    can_scroll: bool,
     runtime_id: Vec<i32>,
 }
 
@@ -57,6 +50,8 @@ struct HelperState {
 
 const MAX_LOOK_RECORDS: usize = 8;
 const REQUEST_WORKERS: usize = 8;
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+static INPUT_CLOSED: AtomicBool = AtomicBool::new(false);
 
 impl Default for HelperState {
     fn default() -> Self {
@@ -113,25 +108,55 @@ thread_local! { static IN_PHYSICAL_TRANSACTION: Cell<bool> = const { Cell::new(f
 fn with_physical_input<T>(
     work: impl FnOnce() -> Result<T, ProtocolError>,
 ) -> Result<T, ProtocolError> {
+    if INPUT_CLOSED.load(Ordering::Acquire) {
+        return Err(cancelled());
+    }
     if IN_PHYSICAL_TRANSACTION.with(Cell::get) {
         return work();
     }
     let _guard = physical_input_lock()
         .lock()
         .map_err(|_| internal("physical input lock poisoned"))?;
+    let _host_lease = windows_bridge::desktop::PhysicalLease::acquire()?;
+    if INPUT_CLOSED.load(Ordering::Acquire) {
+        return Err(cancelled());
+    }
     IN_PHYSICAL_TRANSACTION.with(|flag| flag.set(true));
     let result = work();
     IN_PHYSICAL_TRANSACTION.with(|flag| flag.set(false));
     result
 }
 
+/// Cancel admission and let an active physical operation clean up first.
+/// A stuck provider still forces a bounded stop with the host lease retained.
+fn terminate_without_ack(deadline: Instant) -> ! {
+    INPUT_CLOSED.store(true, Ordering::Release);
+    let _ = wait_for_input_cleanup(physical_input_lock(), deadline);
+    std::process::exit(3);
+}
+
+fn wait_for_input_cleanup(lock: &Mutex<()>, deadline: Instant) -> bool {
+    loop {
+        match lock.try_lock() {
+            Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => return true,
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep(Duration::from_millis(10));
+    }
+}
+
 fn main() {
     #[cfg(windows)]
-    set_dpi_awareness();
+    if !set_dpi_awareness() {
+        eprintln!("Per-monitor-v2 DPI awareness could not be established; refusing helper startup");
+        std::process::exit(2);
+    }
     window::start_root_event_journal();
 
     let stdin = io::stdin();
-    let stdout = io::stdout();
     let (sender, receiver) = mpsc::channel::<Request>();
     let receiver = Arc::new(Mutex::new(receiver));
     let workers = (0..REQUEST_WORKERS)
@@ -143,7 +168,17 @@ fn main() {
                     Err(_) => return,
                 };
                 match request {
-                    Ok(request) => emit_response(&handle_request(&request)),
+                    Ok(request) => {
+                        // EOF cancels queued mutations. Cheap read-only diagnostics
+                        // still drain, preserving one-shot readiness probes.
+                        if INPUT_CLOSED.load(Ordering::Acquire) && !matches!(request.cmd.as_str(), "diagnostics" | "listRoots" | "listWindows") { continue; }
+                        let response = handle_request(&request);
+                        if response.error.as_ref().is_some_and(ProtocolError::outcome_uncertain) {
+                            let _ = writeln!(io::stderr().lock(), "Mutating input outcome uncertain; terminating without acknowledgement or replay");
+                            terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
+                        }
+                        emit_response(&response);
+                    }
                     Err(_) => return,
                 }
             })
@@ -161,10 +196,8 @@ fn main() {
                         ErrorCode::InternalError,
                     ),
                 );
-                if let Ok(json) = serde_json::to_string(&resp) {
-                    let _ = writeln!(stdout.lock(), "{json}");
-                }
-                return;
+                emit_response(&resp);
+                terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
             }
         };
         let trimmed = line.trim().to_owned();
@@ -186,18 +219,43 @@ fn main() {
             break;
         }
     }
+    INPUT_CLOSED.store(true, Ordering::Release);
     drop(sender);
+    let deadline = Instant::now() + SHUTDOWN_GRACE;
+    while workers.iter().any(|worker| !worker.is_finished()) {
+        if Instant::now() >= deadline {
+            // A provider may be stuck in synchronous UIA/PrintWindow work.
+            // Stop the process, never detach it or replay an uncertain action.
+            terminate_without_ack(deadline);
+        }
+        sleep(Duration::from_millis(10));
+    }
     for worker in workers {
         let _ = worker.join();
     }
 }
 
 #[cfg(windows)]
-fn set_dpi_awareness() {
+fn set_dpi_awareness() -> bool {
     use windows::Win32::UI::HiDpi::{
-        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        AreDpiAwarenessContextsEqual, GetThreadDpiAwarenessContext, SetProcessDpiAwarenessContext,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
-    let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    // SAFETY: the constant is a documented DPI context; no pointers are borrowed.
+    if let Err(error) =
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+    {
+        // A manifest may already have established the required context. Verify it below.
+        eprintln!("SetProcessDpiAwarenessContext: {error}; verifying existing thread context");
+    }
+    // SAFETY: both context handles are borrowed values, used only for comparison.
+    unsafe {
+        AreDpiAwarenessContextsEqual(
+            GetThreadDpiAwarenessContext(),
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        )
+        .as_bool()
+    }
 }
 
 fn extract_id(line: &str) -> Option<String> {
@@ -237,6 +295,7 @@ fn diagnostics() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "architectureVersion": 1,
+        "capabilities": ["fail-closed-live-target-v1"],
         "invariants": ["state-scoped-observations", "bounded-observation-history", "multi-root-forest", "progressive-disclosure", "atomic-physical-input", "concurrent-requests", "transactional-batching"],
         "pid": std::process::id(),
         "os": std::env::consts::OS,
@@ -281,10 +340,32 @@ fn handle_focus_window(args: &Value) -> Result<Value, ProtocolError> {
         .ok_or_else(|| invalid("focusWindow requires rootRef"))?;
     let wref = windows_bridge::refs::WindowRef::parse(root_ref)
         .ok_or_else(|| invalid(format!("Invalid root ref '{root_ref}'")))?;
-    let state = helper_state()
-        .lock()
-        .map_err(|_| internal("helper state lock poisoned"))?;
-    window::focus_window(&state.store, &wref)
+    let (store, expected_pid) = {
+        let state = helper_state()
+            .lock()
+            .map_err(|_| internal("helper state lock poisoned"))?;
+        let pid = state
+            .roots
+            .values()
+            .find(|root| root.get("rootRef").and_then(Value::as_str) == Some(root_ref))
+            .and_then(|root| root.get("pid"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| ProtocolError::new("Focus root is stale", ErrorCode::StaleRef))?;
+        (state.store.clone(), pid)
+    };
+    with_physical_input(|| {
+        #[cfg(windows)]
+        windows_bridge::desktop::validated_bounds(
+            store
+                .get_window(&wref)
+                .ok_or_else(|| ProtocolError::new("Focus root is stale", ErrorCode::StaleRef))?
+                .raw(),
+            Some(expected_pid),
+        )?;
+        #[cfg(not(windows))]
+        let _ = expected_pid;
+        window::focus_window(&store, &wref)
+    })
 }
 
 fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
@@ -352,17 +433,47 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         .and_then(Value::as_str)
         .unwrap_or(&identity)
         .to_owned();
+    #[cfg(windows)]
+    let live_frame = windows_bridge::desktop::validated_bounds(
+        root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize,
+        root.get("pid").and_then(Value::as_u64),
+    )?;
     let kind = root.get("kind").and_then(Value::as_str).unwrap_or("window");
     let is_outline_only = kind == "menu" || !include_image;
+    #[cfg(not(windows))]
     let frame = root
         .get("framePoints")
         .cloned()
         .unwrap_or_else(|| json!({"x":0,"y":0,"w":1,"h":1}));
-    let fx = number_at(&frame, "x", 0.0);
-    let fy = number_at(&frame, "y", 0.0);
-    let fw = number_at(&frame, "w", number_at(&frame, "width", 1.0)).max(1.0);
-    let fh = number_at(&frame, "h", number_at(&frame, "height", 1.0)).max(1.0);
+    #[cfg(windows)]
+    let frame =
+        json!({"x":live_frame.x,"y":live_frame.y,"w":live_frame.width,"h":live_frame.height});
+    let mut fx = number_at(&frame, "x", 0.0);
+    let mut fy = number_at(&frame, "y", 0.0);
+    let mut fw = number_at(&frame, "w", number_at(&frame, "width", 1.0)).max(1.0);
+    let mut fh = number_at(&frame, "h", number_at(&frame, "height", 1.0)).max(1.0);
 
+    #[cfg(not(windows))]
+    let mut scale_factor = root
+        .get("scaleFactor")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
+    #[cfg(windows)]
+    let mut scale_factor = {
+        // SAFETY: GetDpiForWindow borrows the discovered HWND; zero is refused below.
+        let dpi = unsafe {
+            windows::Win32::UI::HiDpi::GetDpiForWindow(windows::Win32::Foundation::HWND(
+                root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as *mut _,
+            ))
+        };
+        if dpi == 0 {
+            return Err(ProtocolError::new(
+                "Observed window DPI is unavailable",
+                ErrorCode::TargetNotFound,
+            ));
+        }
+        f64::from(dpi) / 96.0
+    };
     let mut image_payload = None;
     let mut elements = Vec::new();
     let mut image_w = fw;
@@ -372,8 +483,26 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
     if !is_outline_only {
         let wref = windows_bridge::refs::WindowRef::parse(&root_ref)
             .ok_or_else(|| invalid(format!("Invalid root ref '{root_ref}'")))?;
-        let shot = capture::screenshot(&mut store, &wref, scope_ref.is_none(), max_dimension)?;
+        let shot = with_physical_input(|| {
+            #[cfg(windows)]
+            windows_bridge::desktop::validated_bounds(
+                root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize,
+                root.get("pid").and_then(Value::as_u64),
+            )?;
+            capture::screenshot(
+                &mut store,
+                &wref,
+                scope_ref.is_none(),
+                max_dimension,
+                root.get("pid").and_then(Value::as_u64).unwrap_or(0),
+            )
+        })?;
         if let Some(capture) = shot.get("capture") {
+            fx = number_at(capture, "x", fx);
+            fy = number_at(capture, "y", fy);
+            fw = number_at(capture, "sourceWidth", fw);
+            fh = number_at(capture, "sourceHeight", fh);
+            scale_factor = number_at(capture, "scaleFactor", scale_factor);
             image_w = number_at(capture, "width", fw).max(1.0);
             image_h = number_at(capture, "height", fh).max(1.0);
             if let Some(encoded) = capture.get("imageBase64").and_then(Value::as_str) {
@@ -392,9 +521,8 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         {
             if let Some(wref) = windows_bridge::refs::WindowRef::parse(&root_ref) {
                 if let Some(native) = store.get_window(&wref) {
-                    elements = windows_bridge::uia::extract_elements(&mut store, native.raw())
-                        .into_iter()
-                        .collect();
+                    elements = windows_bridge::uia::live_elements(native.raw())
+                        .map_err(stale_ref_from_uia)?;
                 }
             }
         }
@@ -441,7 +569,7 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         image_h,
         fw,
         fh,
-    );
+    )?;
     if let Some(scope_ref) = scope_ref.as_deref() {
         outline = scoped_outline_root(outline, scope_ref);
     }
@@ -480,7 +608,7 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
             "rootRef": root_ref,
             "kind": kind,
             "framePoints": { "x": fx, "y": fy, "w": fw, "h": fh },
-            "scaleFactor": root.get("scaleFactor").and_then(Value::as_f64).unwrap_or(1.0),
+            "scaleFactor": scale_factor,
             "isModal": root.get("isModal").and_then(Value::as_bool).unwrap_or(false),
             "role": root.get("role").and_then(Value::as_str).unwrap_or("Window"),
             "subrole": root.get("subrole").and_then(Value::as_str).unwrap_or("")
@@ -511,11 +639,11 @@ fn outline_from_elements(
     image_h: f64,
     fw: f64,
     fh: f64,
-) -> (Value, HashMap<String, ElementRecord>) {
+) -> Result<(Value, HashMap<String, ElementRecord>), ProtocolError> {
     let mut records = HashMap::new();
     let sx = image_w / fw.max(1.0);
     let sy = image_h / fh.max(1.0);
-    let nodes = elements.iter().map(|raw| {
+    let nodes = elements.iter().map(|raw| -> Result<(String, String, Value), ProtocolError> {
         let bounds = raw.get("bounds").unwrap_or(&Value::Null);
         let screen_x = number_at(bounds, "x", 0.0);
         let screen_y = number_at(bounds, "y", 0.0);
@@ -529,13 +657,8 @@ fn outline_from_elements(
         let reference = if native_reference.is_empty() { String::new() } else { format!("win:{look_id}:{native_reference}") };
         let role = raw.get("role").and_then(Value::as_str).unwrap_or("unknown").to_owned();
         let automation_id = raw.get("automationId").and_then(Value::as_str).unwrap_or("").to_owned();
-        let class_name = format!(
-            "{} {}",
-            raw.get("className").and_then(Value::as_str).unwrap_or(""),
-            root.get("subrole").and_then(Value::as_str).unwrap_or("")
-        );
-        let runtime_id: Vec<i32> = raw.get("runtimeId").and_then(Value::as_array).map(|items| items.iter().filter_map(|item| item.as_i64().map(|n| n as i32)).collect()).unwrap_or_default();
-        let parent_runtime_id: Vec<i32> = raw.get("parentRuntimeId").and_then(Value::as_array).map(|items| items.iter().filter_map(|item| item.as_i64().map(|n| n as i32)).collect()).unwrap_or_default();
+        let runtime_id = parse_runtime_id(raw, "runtimeId", false)?;
+        let parent_runtime_id = parse_runtime_id(raw, "parentRuntimeId", true)?;
         let is_secure = raw.get("isPassword").and_then(Value::as_bool).unwrap_or(false);
         let displayed_value = if is_secure { "" } else { raw.get("value").and_then(Value::as_str).unwrap_or("") };
         let text = if displayed_value.is_empty() { raw.get("label").and_then(Value::as_str).unwrap_or("") } else { displayed_value }.to_owned();
@@ -544,7 +667,7 @@ fn outline_from_elements(
         let can_press = caps.get("canPress").or_else(|| caps.get("canInvoke")).and_then(Value::as_bool).unwrap_or(false);
         let can_set_value = caps.get("canSetValue").or_else(|| caps.get("canEditText")).and_then(Value::as_bool).unwrap_or(false);
         let can_scroll = caps.get("canScroll").and_then(Value::as_bool).unwrap_or(false);
-        if !reference.is_empty() { records.insert(reference.clone(), ElementRecord { hwnd, x: screen_x, y: screen_y, w: screen_w, h: screen_h, automation_id: automation_id.clone(), class_name, is_secure, can_press, can_set_value, can_scroll, runtime_id: runtime_id.clone() }); }
+        if !reference.is_empty() { records.insert(reference.clone(), ElementRecord { hwnd, automation_id: automation_id.clone(), is_secure, runtime_id: runtime_id.clone() }); }
         let node = json!({
             "ref": reference,
             "role": role,
@@ -569,10 +692,10 @@ fn outline_from_elements(
             "text": if text.is_empty() { json!([]) } else { json!([{ "string": text, "confidence": 1, "rect": rect }]) },
             "children": []
         });
-        (runtime_key(&runtime_id), runtime_key(&parent_runtime_id), node)
-    }).collect::<Vec<_>>();
+        Ok((runtime_key(&runtime_id), runtime_key(&parent_runtime_id), node))
+    }).collect::<Result<Vec<_>, _>>()?;
     let children = nest_outline_nodes(&nodes);
-    (
+    Ok((
         json!({
             "ref": root_ref,
             "role": root.get("role").and_then(Value::as_str).unwrap_or("Window"),
@@ -598,7 +721,33 @@ fn outline_from_elements(
             "children": children
         }),
         records,
-    )
+    ))
+}
+
+/// Strict UIA identity: every entry must be an i32 and a RuntimeId must be nonempty.
+/// A malformed element stops the look instead of being silently dropped or defaulted.
+fn parse_runtime_id(raw: &Value, key: &str, optional: bool) -> Result<Vec<i32>, ProtocolError> {
+    let malformed = || ProtocolError::new(format!("Malformed UIA {key}"), ErrorCode::InternalError);
+    let Some(value) = raw.get(key).filter(|value| !value.is_null()) else {
+        return if optional {
+            Ok(Vec::new())
+        } else {
+            Err(malformed())
+        };
+    };
+    let items = value.as_array().ok_or_else(malformed)?;
+    let ids = items
+        .iter()
+        .map(|item| {
+            item.as_i64()
+                .and_then(|n| i32::try_from(n).ok())
+                .ok_or_else(malformed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.is_empty() && !optional {
+        return Err(malformed());
+    }
+    Ok(ids)
 }
 
 fn runtime_key(runtime_id: &[i32]) -> String {
@@ -716,8 +865,16 @@ fn scoped_outline_root(mut outline: Value, scope_ref: &str) -> Value {
     scoped
 }
 
+/// Keep semantic and physical delivery in the same admission transaction.
+fn deliver_act<T>(work: impl FnOnce() -> Result<T, ProtocolError>) -> Result<T, ProtocolError> {
+    with_physical_input(work)
+}
+
 fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
-    let parsed = input::parse_act_request(args)?;
+    if INPUT_CLOSED.load(Ordering::Acquire) {
+        return Err(cancelled());
+    }
+    let mut parsed = input::parse_act_request(args)?;
     let record = {
         let state = helper_state()
             .lock()
@@ -729,6 +886,12 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
             )
         })?
     };
+    if parsed.pid.is_some_and(|pid| pid != record.pid) {
+        return Err(invalid("act pid does not own the observed root"));
+    }
+    parsed.pid = Some(record.pid);
+    #[cfg(windows)]
+    windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
     let target_pid = parsed
         .pid
         .or((record.pid != 0).then_some(record.pid))
@@ -744,48 +907,62 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
         Some(snapshot_roots(target_pid)?)
     };
 
-    let mut response = match &parsed.target {
-        input::ActTarget::Ref(reference) => act_on_ref(args, &parsed, &record, reference)?,
-        input::ActTarget::Point { x, y } => {
-            if !record.has_image {
-                return Err(ProtocolError::new(
-                    "Coordinate targeting is unavailable for this outline-only root",
-                    ErrorCode::CoordinateUnavailableForRoot,
-                ));
-            }
-            let mut executable = args.clone();
-            executable["resolvedPoint"] = json!(screen_point(&record, *x, *y));
-            if parsed.action == "drag" {
-                if let Some(path) = parsed.params.get("path").and_then(Value::as_array) {
-                    executable["resolvedPath"] = Value::Array(
-                        path.iter()
-                            .filter_map(|point| {
-                                Some(json!(screen_point(
-                                    &record,
-                                    point.get("x")?.as_f64()?,
-                                    point.get("y")?.as_f64()?
-                                )))
-                            })
-                            .collect(),
-                    );
+    let mut response = deliver_act(|| {
+        Ok(match &parsed.target {
+            input::ActTarget::Ref(reference) => act_on_ref(args, &parsed, &record, reference)?,
+            input::ActTarget::Point { x, y } => {
+                input::refuse_keyboard_at_point(&parsed)?;
+                if !record.has_image {
+                    return Err(ProtocolError::new(
+                        "Coordinate targeting is unavailable for this outline-only root",
+                        ErrorCode::CoordinateUnavailableForRoot,
+                    ));
                 }
+                with_physical_input(|| {
+                    let current =
+                        windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
+                    if (current.x, current.y, current.width, current.height)
+                        != (
+                            record.frame_x,
+                            record.frame_y,
+                            record.frame_w,
+                            record.frame_h,
+                        )
+                    {
+                        return Err(ProtocolError::new(
+                            "Window moved since observation; observe again",
+                            ErrorCode::StaleLook,
+                        ));
+                    }
+                    let start =
+                        project_vertex(current, (record.image_w, record.image_h), *x, *y, false)?;
+                    let (executable, points) = resolved_executable(
+                        &parsed,
+                        current,
+                        (record.image_w, record.image_h),
+                        start,
+                        false,
+                    )?;
+                    // Act never restores/raises. Every vertex is admitted before mutation.
+                    windows_bridge::guard::deliver_path(
+                        current,
+                        None,
+                        &points,
+                        |x, y| {
+                            window::ensure_point_owned(record.hwnd, &json!({"x":x,"y":y}))?;
+                            Ok(true)
+                        },
+                        || input::act(&executable),
+                    )
+                })?
             }
-            with_physical_input(|| {
-                let preserve_focus = parsed
-                    .params
-                    .get("preserveFocus")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if !preserve_focus {
-                    window::ensure_foreground(record.hwnd)?;
-                }
-                input::act(&executable)
-            })?
-        }
-    };
+        })
+    })?;
 
     if let Some(before) = before {
-        let (after, source, events) = await_delta_snapshot(target_pid, &before, event_cursor)?;
+        let (after, source, events) = windows_bridge::guard::observe_after_delivery(|| {
+            await_delta_snapshot(target_pid, &before, event_cursor)
+        })?;
         response = input::response_with_delta(
             response,
             source,
@@ -818,26 +995,33 @@ fn handle_act_batch(args: &Value) -> Result<Value, ProtocolError> {
     }
     let before = snapshot_roots(target_pid)?;
     let event_cursor = window::root_event_cursor();
-    let record = {
-        let state = helper_state()
-            .lock()
-            .map_err(|_| internal("helper state lock poisoned"))?;
-        state.looks.get(&first.look_id).cloned().ok_or_else(|| {
-            ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
-        })?
-    };
-    let requires_physical = actions
-        .iter()
-        .any(|action| action_may_use_physical_input(action, &record));
+    if !helper_state()
+        .lock()
+        .map_err(|_| internal("helper state lock poisoned"))?
+        .looks
+        .contains_key(&first.look_id)
+    {
+        return Err(ProtocolError::new(
+            "Owning look is no longer available",
+            ErrorCode::StaleLook,
+        ));
+    }
+    let requires_physical = actions.iter().any(action_may_use_physical_input);
     let execute = || -> Result<(Vec<Value>, Option<usize>), ProtocolError> {
         let mut steps = Vec::new();
         let mut stopped_at = None;
         for (index, action) in actions.iter().enumerate() {
+            if INPUT_CLOSED.load(Ordering::Acquire) {
+                return Err(cancelled());
+            }
             let mut deferred = action.clone();
             deferred["deferRootDelta"] = json!(true);
             let step = match handle_act(&deferred) {
                 Ok(step) => step,
                 Err(error) => {
+                    if error.outcome_uncertain() {
+                        return Err(error);
+                    }
                     steps.push(json!({ "outcome": "didnt", "error": { "code": error.code.to_string(), "message": error.message } }));
                     stopped_at = Some(index);
                     break;
@@ -853,13 +1037,7 @@ fn handle_act_batch(args: &Value) -> Result<Value, ProtocolError> {
         Ok((steps, stopped_at))
     };
     let executed = if requires_physical {
-        let _physical_guard = physical_input_lock()
-            .lock()
-            .map_err(|_| internal("physical input lock poisoned"))?;
-        IN_PHYSICAL_TRANSACTION.with(|flag| flag.set(true));
-        let result = execute();
-        IN_PHYSICAL_TRANSACTION.with(|flag| flag.set(false));
-        result
+        with_physical_input(execute)
     } else {
         execute()
     };
@@ -881,7 +1059,9 @@ fn handle_act_batch(args: &Value) -> Result<Value, ProtocolError> {
     if let Some(index) = stopped_at {
         response["stoppedAt"] = json!(index);
     }
-    let (after, source, events) = await_delta_snapshot(target_pid, &before, event_cursor)?;
+    let (after, source, events) = windows_bridge::guard::observe_after_delivery(|| {
+        await_delta_snapshot(target_pid, &before, event_cursor)
+    })?;
     response = input::response_with_delta(
         response,
         source,
@@ -890,25 +1070,10 @@ fn handle_act_batch(args: &Value) -> Result<Value, ProtocolError> {
     Ok(response)
 }
 
-fn action_may_use_physical_input(action: &Value, record: &LookRecord) -> bool {
-    let Ok(parsed) = input::parse_act_request(action) else {
-        return false;
-    };
-    if parsed.policy != "foreground" {
-        return false;
-    }
-    let input::ActTarget::Ref(reference) = &parsed.target else {
-        return true;
-    };
-    let Some(element) = record.elements.get(reference) else {
-        return false;
-    };
-    match parsed.action.as_str() {
-        "press" | "click" => is_web_backed(element) || !element.can_press,
-        "setText" => is_web_backed(element) || !element.can_set_value,
-        "scroll" => !element.can_scroll,
-        _ => true,
-    }
+fn action_may_use_physical_input(action: &Value) -> bool {
+    // Advertised patterns can disappear after observation. Reserve the whole
+    // foreground batch before any live probe can choose physical fallback.
+    input::parse_act_request(action).is_ok_and(|request| request.policy == "foreground")
 }
 
 fn act_on_ref(
@@ -922,20 +1087,16 @@ fn act_on_ref(
         .get(reference)
         .cloned()
         .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))?;
-    if parsed.policy != "ax_only"
-        && is_web_backed(&element)
-        && matches!(parsed.action.as_str(), "press" | "click" | "setText")
-    {
-        return coordinate_fallback(args, parsed, &element);
-    }
+    #[cfg(windows)]
+    windows_bridge::desktop::validated_bounds(element.hwnd, Some(record.pid))?;
+    // Even semantic mutation must start from the exact live identity/geometry.
+    live_ref_target(&element, Some(record.pid))?;
     match parsed.action.as_str() {
         "press" | "click" => match windows_bridge::uia::press(
             element.hwnd,
             &element.runtime_id,
             &element.automation_id,
-        )
-        .map_err(stale_ref_from_uia)?
-        {
+        )? {
             windows_bridge::uia::PressResult::Invoked => Ok(
                 json!({ "outcome": "worked", "performed": { "grounding": "description", "delivery": "ax" } }),
             ),
@@ -966,27 +1127,11 @@ fn act_on_ref(
                 &element.runtime_id,
                 &element.automation_id,
                 text,
-            )
-            .map_err(stale_ref_from_uia)?
-            {
-                windows_bridge::uia::SetTextResult::Set { value } => {
-                    if value != text && parsed.policy != "foreground" {
-                        return Err(ProtocolError::new(
-                            "The background UIA value write was accepted but did not take effect",
-                            ErrorCode::ForegroundRequired,
-                        ));
-                    }
-                    Ok(
-                        json!({ "outcome": if value == text { "worked" } else { "didnt" }, "performed": { "grounding": "description", "delivery": "ax" }, "evidence": { "value": value } }),
-                    )
-                }
+            )? {
+                windows_bridge::uia::SetTextResult::Set { value } => Ok(
+                    windows_bridge::guard::written_text_response(text, value.as_deref()),
+                ),
                 windows_bridge::uia::SetTextResult::NoPattern => {
-                    input::policy_allows_raw_input(parsed)?;
-                    let _ = windows_bridge::uia::focus(
-                        element.hwnd,
-                        &element.runtime_id,
-                        &element.automation_id,
-                    );
                     coordinate_fallback(args, parsed, &element)
                 }
             }
@@ -1008,9 +1153,7 @@ fn act_on_ref(
                 &element.automation_id,
                 sx,
                 sy,
-            )
-            .map_err(stale_ref_from_uia)?
-            {
+            )? {
                 windows_bridge::uia::ScrollResult::Scrolled => Ok(
                     json!({ "outcome": "unknown", "performed": { "grounding": "description", "delivery": "ax" } }),
                 ),
@@ -1024,71 +1167,168 @@ fn act_on_ref(
 }
 
 fn coordinate_fallback(
-    args: &Value,
+    _args: &Value,
     parsed: &input::ParsedActRequest,
     element: &ElementRecord,
 ) -> Result<Value, ProtocolError> {
     input::policy_allows_raw_input(parsed)?;
     with_physical_input(|| {
-        window::ensure_foreground(element.hwnd)?;
-        let snapshot = windows_bridge::uia::snapshot(
-            element.hwnd,
-            &element.runtime_id,
-            &element.automation_id,
+        let (window, target) = live_ref_target(element, parsed.pid)?;
+        let start = (
+            (target.bounds.x + target.bounds.width / 2.0).round(),
+            (target.bounds.y + target.bounds.height / 2.0).round(),
+        );
+        let (mut executable, points) =
+            resolved_executable(parsed, target.bounds, (1.0, 1.0), start, true)?;
+        let validate = || -> Result<(), ProtocolError> {
+            let (window, target) = live_ref_target(element, parsed.pid)?;
+            windows_bridge::guard::validate_path(window, Some(target.bounds), &points, |x, y| {
+                window::ensure_point_owned(element.hwnd, &json!({"x":x,"y":y}))?;
+                windows_bridge::uia::occlusion_ok(
+                    element.hwnd,
+                    &element.runtime_id,
+                    &element.automation_id,
+                    x,
+                    y,
+                )
+            })
+        };
+        windows_bridge::guard::deliver_path(
+            window,
+            Some(target.bounds),
+            &points,
+            |x, y| {
+                window::ensure_point_owned(element.hwnd, &json!({"x":x,"y":y}))?;
+                windows_bridge::uia::occlusion_ok(
+                    element.hwnd,
+                    &element.runtime_id,
+                    &element.automation_id,
+                    x,
+                    y,
+                )
+            },
+            || {
+                validate()?; // Re-resolve immediately before any mutation.
+                if matches!(parsed.action.as_str(), "setText" | "typeText" | "keypress") {
+                    windows_bridge::uia::focus_for_input(
+                        element.hwnd,
+                        &element.runtime_id,
+                        &element.automation_id,
+                        parsed.action != "keypress",
+                    )?;
+                    executable["resolvedPoint"] = Value::Null;
+                    return windows_bridge::guard::observe_after_delivery(|| {
+                        validate()?; // Focus may have changed layout or ownership.
+                        input::act(&executable)
+                    });
+                }
+                input::act(&executable)
+            },
         )
-        .map_err(stale_ref_from_uia)
-        .unwrap_or(windows_bridge::uia::ElementSnapshot {
-            rect: (element.x, element.y, element.w, element.h),
-            runtime_id: element.runtime_id.clone(),
-        });
-        let x = snapshot.rect.0 + snapshot.rect.2 / 2.0;
-        let y = snapshot.rect.1 + snapshot.rect.3 / 2.0;
-        let mut occlusion_unknown = false;
-        let mut clear = false;
-        for attempt in 0..3 {
-            match windows_bridge::uia::occlusion_ok(
-                element.hwnd,
-                &snapshot.runtime_id,
-                &element.automation_id,
-                x,
-                y,
-            ) {
-                Ok(true) => {
-                    clear = true;
-                    break;
-                }
-                Ok(false) if attempt < 2 => sleep(Duration::from_millis(20)),
-                Ok(false) => break,
-                Err(_) => {
-                    occlusion_unknown = true;
-                    clear = true;
-                    break;
-                }
-            }
-        }
-        if !clear {
-            return Err(ProtocolError::new(
-                "Target is occluded",
-                ErrorCode::OccludedTarget,
-            ));
-        }
-        let mut executable = args.clone();
-        executable["resolvedPoint"] = json!({ "x": x, "y": y });
-        let mut response = input::act(&executable)?;
-        if occlusion_unknown {
-            response["outcome"] = json!("unknown");
-            response["evidence"]["preflight"] = json!("unknown");
-        }
-        Ok(response)
     })
 }
 
-fn is_web_backed(element: &ElementRecord) -> bool {
-    let class = element.class_name.to_ascii_lowercase();
-    class.contains("chrome")
-        || class.contains("chromium")
-        || class.contains("webview")
-        || class.contains("electron")
+fn live_ref_target(
+    element: &ElementRecord,
+    pid: Option<u64>,
+) -> Result<
+    (
+        windows_bridge::guard::Bounds,
+        windows_bridge::guard::LiveTarget,
+    ),
+    ProtocolError,
+> {
+    let window = windows_bridge::desktop::validated_bounds(element.hwnd, pid)?;
+    let snapshot =
+        windows_bridge::uia::snapshot(element.hwnd, &element.runtime_id, &element.automation_id)
+            .map_err(stale_ref_from_uia)?;
+    let target = windows_bridge::guard::LiveTarget {
+        runtime_id: snapshot.runtime_id,
+        bounds: windows_bridge::guard::Bounds {
+            x: snapshot.rect.0,
+            y: snapshot.rect.1,
+            width: snapshot.rect.2,
+            height: snapshot.rect.3,
+        },
+    };
+    windows_bridge::guard::validate_live_target(&element.runtime_id, window, &target)?;
+    Ok((window, target))
+}
+
+fn project_vertex(
+    bounds: windows_bridge::guard::Bounds,
+    units: (f64, f64),
+    x: f64,
+    y: f64,
+    normalized: bool,
+) -> Result<(f64, f64), ProtocolError> {
+    if !bounds.valid()
+        || !x.is_finite()
+        || !y.is_finite()
+        || units.0 <= 0.0
+        || units.1 <= 0.0
+        || x < 0.0
+        || y < 0.0
+        || (if normalized {
+            x > units.0 || y > units.1
+        } else {
+            x >= units.0 || y >= units.1
+        })
+    {
+        return Err(invalid("Input vertex is outside its coordinate space"));
+    }
+    let width = if normalized {
+        bounds.width - 1.0
+    } else {
+        bounds.width
+    };
+    let height = if normalized {
+        bounds.height - 1.0
+    } else {
+        bounds.height
+    };
+    let point = (
+        (bounds.x + width * x / units.0).round(),
+        (bounds.y + height * y / units.1).round(),
+    );
+    if !bounds.contains(point.0, point.1) {
+        return Err(invalid("Rounded input vertex is outside its target"));
+    }
+    Ok(point)
+}
+
+fn resolved_executable(
+    parsed: &input::ParsedActRequest,
+    bounds: windows_bridge::guard::Bounds,
+    units: (f64, f64),
+    start: (f64, f64),
+    normalized: bool,
+) -> Result<(Value, Vec<(f64, f64)>), ProtocolError> {
+    let mut executable = input::executable_request(parsed);
+    let mut points = vec![start];
+    executable["resolvedPoint"] = json!({"x":start.0,"y":start.1});
+    if parsed.action == "drag" {
+        let path = parsed
+            .params
+            .get("path")
+            .and_then(Value::as_array)
+            .filter(|path| !path.is_empty() && path.len() <= 1024)
+            .ok_or_else(|| invalid("drag requires 1...1024 path vertices"))?;
+        for point in path {
+            let x = point
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("Invalid drag x"))?;
+            let y = point
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("Invalid drag y"))?;
+            points.push(project_vertex(bounds, units, x, y, normalized)?);
+        }
+        executable["resolvedPath"] =
+            Value::Array(points.iter().map(|&(x, y)| json!({"x":x,"y":y})).collect());
+    }
+    Ok((executable, points))
 }
 
 fn stale_ref_from_uia(message: String) -> ProtocolError {
@@ -1097,13 +1337,6 @@ fn stale_ref_from_uia(message: String) -> ProtocolError {
     } else {
         ProtocolError::new(message, ErrorCode::InternalError)
     }
-}
-
-fn screen_point(record: &LookRecord, x: f64, y: f64) -> Value {
-    json!({
-        "x": record.frame_x + record.frame_w * (x / record.image_w.max(1.0)).clamp(0.0, 1.0),
-        "y": record.frame_y + record.frame_h * (y / record.image_h.max(1.0)).clamp(0.0, 1.0)
-    })
 }
 
 fn snapshot_roots(pid: u64) -> Result<RootSnapshot, ProtocolError> {
@@ -1434,13 +1667,20 @@ fn handle_open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_lowercase();
+    if app_name.trim().is_empty() {
+        return Err(invalid(
+            "openBrowserLocation requires an explicit browser appName",
+        ));
+    }
     let roots = handle_list_roots(&json!({}))?;
     let root = roots_array(&roots).into_iter().find(|root| {
-        root.get("appName")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_lowercase()
-            .contains(&app_name)
+        root.get("isBrowser").and_then(Value::as_bool) == Some(true)
+            && root
+                .get("appName")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&app_name)
     });
     if let Some(root) = root {
         let hwnd = root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize;
@@ -1449,7 +1689,12 @@ fn handle_open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("openBrowserLocation requires url"))?;
         with_physical_input(|| {
-            window::ensure_foreground(hwnd)?;
+            #[cfg(windows)]
+            windows_bridge::desktop::validated_bounds(
+                hwnd,
+                root.get("pid").and_then(Value::as_u64),
+            )?;
+            window::request_foreground(hwnd)?;
             input::open_browser_location(url)
         })?;
         Ok(json!({ "opened": true }))
@@ -1495,15 +1740,152 @@ fn now_seconds() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// A broken response pipe is terminal, never evidence of successful delivery.
 fn emit_response(response: &Response) {
-    let json = serde_json::to_string(response).expect("Response serialization should not fail");
-    let mut out = io::stdout().lock();
-    let _ = writeln!(out, "{json}");
+    let Ok(json) = serde_json::to_string(response) else {
+        let _ = writeln!(
+            io::stderr().lock(),
+            "Response serialization failed; stopping helper"
+        );
+        terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
+    };
+    if writeln!(io::stdout().lock(), "{json}").is_err() {
+        let _ = writeln!(
+            io::stderr().lock(),
+            "Output stream failed; stopping helper without replay"
+        );
+        terminate_without_ack(Instant::now() + SHUTDOWN_GRACE);
+    }
+}
+
+/// Preserve uncertainty when a disconnected owner leaves admitted work behind.
+fn cancelled() -> ProtocolError {
+    ProtocolError::uncertain(
+        "Input stream closed; stopping without replay",
+        ErrorCode::CaptureFailed,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Tests changing terminal admission must not race tests entering delivery.
+    static ADMISSION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn semantic_delivery_holds_the_same_lease_as_checked_keyboard_input() {
+        let _admission = ADMISSION_TEST_LOCK.lock().unwrap();
+        let result = deliver_act(|| {
+            assert!(IN_PHYSICAL_TRANSACTION.with(Cell::get));
+            assert!(physical_input_lock().try_lock().is_err());
+            Ok(17)
+        });
+        assert_eq!(result.unwrap(), 17);
+    }
+
+    #[test]
+    fn malformed_runtime_ids_stop_the_look() {
+        let ok = json!({"runtimeId":[42,1]});
+        assert_eq!(
+            parse_runtime_id(&ok, "runtimeId", false).unwrap(),
+            vec![42, 1]
+        );
+        assert!(parse_runtime_id(&ok, "parentRuntimeId", true)
+            .unwrap()
+            .is_empty());
+        for bad in [
+            json!({}),
+            json!({"runtimeId":[]}),
+            json!({"runtimeId":[1,"x"]}),
+            json!({"runtimeId":[1.5]}),
+            json!({"runtimeId":[4294967296i64]}),
+            json!({"runtimeId":"1"}),
+        ] {
+            assert!(parse_runtime_id(&bad, "runtimeId", false).is_err(), "{bad}");
+        }
+        assert!(parse_runtime_id(
+            &json!({"parentRuntimeId":[1,null]}),
+            "parentRuntimeId",
+            true
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn keyboard_actions_at_a_point_are_refused() {
+        for action in ["typeText", "keypress", "setText"] {
+            let parsed = input::parse_act_request(&json!({"lookId":"l","action":action,"policy":"foreground","target":{"x":1,"y":2},"params":{"text":"t","keys":["a"]}})).unwrap();
+            let error = input::refuse_keyboard_at_point(&parsed).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CoordinateBlocked);
+            assert!(!error.outcome_uncertain());
+        }
+        let click = input::parse_act_request(&json!({"lookId":"l","action":"click","policy":"foreground","target":{"x":1,"y":2},"params":{}})).unwrap();
+        assert!(input::refuse_keyboard_at_point(&click).is_ok());
+        let by_ref = input::parse_act_request(&json!({"lookId":"l","action":"typeText","policy":"foreground","target":{"ref":"r"},"params":{"text":"t"}})).unwrap();
+        assert!(input::refuse_keyboard_at_point(&by_ref).is_ok());
+    }
+
+    #[test]
+    fn malformed_params_refuse_before_any_field_can_be_cleared_or_clicked() {
+        for (action, params) in [
+            ("setText", json!({})),
+            ("typeText", json!({"text":null})),
+            ("click", json!({"button":"unexpected"})),
+            ("keypress", json!({"keys":["ctrl",42]})),
+        ] {
+            assert!(input::parse_act_request(&json!({"lookId":"look","action":action,"policy":"foreground","target":{"ref":"ref"},"params":params})).is_err());
+        }
+        assert!(input::parse_act_request(&json!({"lookId":"look","action":"setText","target":{"ref":"ref"},"params":{"text":""}})).is_ok(),"explicit empty value remains supported");
+    }
+
+    #[test]
+    fn attacker_resolution_is_discarded_and_ref_drag_is_built_from_live_bounds() {
+        let args = json!({"lookId":"look","action":"drag","policy":"foreground","target":{"ref":"ref"},
+            "resolvedPoint":{"x":99999,"y":99999},"resolvedPath":[{"x":99999,"y":99999}],"resolvedUnknown":true,
+            "params":{"path":[{"x":0.0,"y":1.0},{"x":1.0,"y":0.0}],"resolvedNested":{"resolvedOther":true}}});
+        let parsed = input::parse_act_request(&args).unwrap();
+        let bounds = windows_bridge::guard::Bounds {
+            x: -100.0,
+            y: 20.0,
+            width: 50.0,
+            height: 40.0,
+        };
+        let (executable, points) =
+            resolved_executable(&parsed, bounds, (1.0, 1.0), (-75.0, 40.0), true).unwrap();
+        assert_eq!(points, vec![(-75.0, 40.0), (-100.0, 59.0), (-51.0, 20.0)]);
+        assert!(executable.get("resolvedUnknown").is_none());
+        assert!(executable["params"].get("resolvedNested").is_none());
+        assert_eq!(executable["resolvedPath"][0], json!({"x":-75.0,"y":40.0}));
+        assert!(project_vertex(bounds, (100.0, 100.0), 101.0, 0.0, false).is_err());
+        assert!(project_vertex(bounds, (100.0, 100.0), f64::NAN, 0.0, false).is_err());
+    }
+
+    #[test]
+    fn terminal_cleanup_waits_for_current_owner_and_bounds_stuck_input() {
+        let lock = Mutex::new(());
+        let active = lock.lock().unwrap();
+        assert!(!wait_for_input_cleanup(&lock, Instant::now()));
+        drop(active);
+        assert!(wait_for_input_cleanup(
+            &lock,
+            Instant::now() + SHUTDOWN_GRACE
+        ));
+    }
+
+    #[test]
+    fn terminal_admission_cannot_start_another_physical_operation() {
+        let _admission = ADMISSION_TEST_LOCK.lock().unwrap();
+        INPUT_CLOSED.store(true, Ordering::Release);
+        let ran = Cell::new(false);
+        let result = with_physical_input(|| {
+            ran.set(true);
+            Ok(())
+        });
+        INPUT_CLOSED.store(false, Ordering::Release);
+        assert!(!ran.get());
+        assert!(result.unwrap_err().outcome_uncertain());
+    }
 
     fn root(id: i64, pid: u64, title: &str, focused: bool) -> Value {
         json!({ "windowId": id, "kind": "window", "title": title, "pid": pid, "rootRef": format!("@w{id}"), "isFocused": focused })
@@ -1591,6 +1973,22 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_bind_guarded_helper_capability_without_dto_version_change() {
+        let value = diagnostics();
+        assert_eq!(value["protocolVersion"], 4);
+        assert_eq!(value["architectureVersion"], 1);
+        assert_eq!(value["capabilities"], json!(["fail-closed-live-target-v1"]));
+    }
+
+    #[test]
+    fn browser_location_refuses_an_unspecified_app_before_discovery_or_input() {
+        let error =
+            handle_open_browser_location(&json!({"url":"https://example.invalid/"})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(!error.outcome_uncertain());
+    }
+
+    #[test]
     fn action_batch_rejects_empty_transactions() {
         let error = handle_act_batch(&json!({ "actions": [] })).expect_err("empty batch must fail");
         assert_eq!(error.code, ErrorCode::InvalidRequest);
@@ -1611,17 +2009,9 @@ mod tests {
                 "same-ref".to_owned(),
                 ElementRecord {
                     hwnd: 1,
-                    x,
-                    y: 0.0,
-                    w: 1.0,
-                    h: 1.0,
                     automation_id: String::new(),
-                    class_name: String::new(),
                     is_secure: false,
-                    can_press: true,
-                    can_set_value: true,
-                    can_scroll: true,
-                    runtime_id: vec![],
+                    runtime_id: vec![x as i32],
                 },
             )]),
         }
@@ -1632,8 +2022,20 @@ mod tests {
         let mut state = HelperState::default();
         state.insert_look("look-a".to_owned(), look_with_element(1.0));
         state.insert_look("look-b".to_owned(), look_with_element(2.0));
-        assert_eq!(state.element_for_look("look-a", "same-ref").unwrap().x, 1.0);
-        assert_eq!(state.element_for_look("look-b", "same-ref").unwrap().x, 2.0);
+        assert_eq!(
+            state
+                .element_for_look("look-a", "same-ref")
+                .unwrap()
+                .runtime_id,
+            vec![1]
+        );
+        assert_eq!(
+            state
+                .element_for_look("look-b", "same-ref")
+                .unwrap()
+                .runtime_id,
+            vec![2]
+        );
         for index in 0..MAX_LOOK_RECORDS {
             state.insert_look(format!("new-{index}"), look_with_element(index as f64));
         }
@@ -1678,18 +2080,21 @@ mod tests {
     }
 
     #[test]
-    fn batch_locking_is_capability_driven() {
-        let mut record = look_with_element(1.0);
+    fn observed_patterns_cannot_skip_a_foreground_batch_lease() {
+        let request = json!({"lookId":"look","action":"press","policy":"foreground","target":{"ref":"same-ref"},"params":{}});
+        assert!(action_may_use_physical_input(&request), "a live pattern can disappear after observation; reserve the whole foreground batch before that decision");
+    }
+
+    #[test]
+    fn batch_locking_reserves_every_foreground_policy() {
         let native_press = json!({"lookId":"look","action":"press","policy":"default","target":{"ref":"same-ref"},"params":{}});
-        assert!(!action_may_use_physical_input(&native_press, &record));
-        record.elements.get_mut("same-ref").unwrap().class_name = "Chrome_WidgetWin_1".to_owned();
-        assert!(!action_may_use_physical_input(&native_press, &record));
+        assert!(!action_may_use_physical_input(&native_press));
         let foreground_press = json!({"lookId":"look","action":"press","policy":"foreground","target":{"ref":"same-ref"},"params":{}});
-        assert!(action_may_use_physical_input(&foreground_press, &record));
+        assert!(action_may_use_physical_input(&foreground_press));
         let ax_only = json!({"lookId":"look","action":"press","policy":"ax_only","target":{"ref":"same-ref"},"params":{}});
-        assert!(!action_may_use_physical_input(&ax_only, &record));
+        assert!(!action_may_use_physical_input(&ax_only));
         let coordinates = json!({"lookId":"look","action":"click","policy":"foreground","target":{"x":1,"y":2},"params":{}});
-        assert!(action_may_use_physical_input(&coordinates, &record));
+        assert!(action_may_use_physical_input(&coordinates));
     }
 
     #[test]

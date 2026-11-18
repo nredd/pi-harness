@@ -3,14 +3,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import {
 	createTestUiContext,
 	fauxAssistantMessage,
 	type fauxToolCall,
 	getMessageText,
-} from "@earendil-works/pi-coding-agent/testing";
-import { toolCall } from "@nredd/pi-test-lib/faux";
-import type { Harness } from "@nredd/pi-test-lib/harness";
+} from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 

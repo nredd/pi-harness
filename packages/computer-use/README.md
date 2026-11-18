@@ -28,6 +28,130 @@ without waiting for the command deadline. Cancellation clears the local pending 
 listener; late replies are ignored. It does not stop native work already sent or kill the helper.
 Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
+## Windows native helper safety
+
+The native source is `native/windows/bridge-rs/`. This source change is a sibling of the
+opt-in WSL transport (#981), not a second transport. It does not enable WSL interop,
+install a helper, change accessibility settings or grant privileges. #673 remains release-gating.
+
+- Protocol `4` and architecture `1` remain compatible. Diagnostics advertise
+  `capabilities: ["fail-closed-live-target-v1"]`. The coordinated WSL client must require this
+  capability before accepting a helper; an owner-pinned SHA alone does not make an older executable safe.
+  The literal is a STATIC claim in `diagnostics()`, not derived at runtime from the routes. It is guarded
+  by the production-seam tests in `tests/guard_tests.rs` (live identity, every vertex, hit ancestry,
+  focus/read-back uncertainty, capture transition) and `src/main.rs` unit tests (reserved-field stripping,
+  keyboard-at-point refusal, strict RuntimeIds), plus the actual-helper fixture. Removing a guard
+  without removing the literal is a review error, not something the helper detects.
+- Ref fallback resolves the observed RuntimeId again, reads current bounds and checks the selected
+  window/session/desktop, token integrity and hit-tested ownership before input. Missing, disabled,
+  offscreen, occluded, reused or inaccessible elements refuse. No error falls back to screenshot
+  coordinates, and no uncertain mutating result is replayed. A reused AutomationId cannot revive a ref.
+  A failed pattern-availability query is an error, not an absent pattern or permission to fall back.
+  Read-only value patterns refuse before writing. Keyboard text/keys (`typeText`, `keypress`, `setText`) aimed at an x/y point are refused with `coordinate_blocked`
+  (nothing would focus the checked point); target a ref instead. Ref keyboard fallback verifies live keyboard focus;
+  text fallback additionally requires an edit
+  control. It does not click again after that verification or type into the previously focused field.
+- Every input executable is rebuilt from public request fields. Caller `resolved*` fields are
+  discarded, including nested params. Text writes require an explicit string (empty is supported
+  only when explicit); invalid button names, mixed/non-string key arrays and nonnumeric scroll
+  deltas refuse during parsing before any mutation. Every actual rounded drag vertex (start, waypoints, end) is
+  checked before the first mutation for live containment and hit-tested ownership. Coordinate paths
+  use observed image pixels, reject stale window geometry and never clamp out-of-range vertices.
+  Ref drag paths use `params.path` fractions in `[0,1]` of the current live control, starting at its
+  current center, and remain entirely within that control and its owning window. Paths contain at
+  most 1024 requested vertices. Scroll/click/move paths use the same read-only ownership boundary.
+  Hit/ancestor RuntimeId or parent-provider errors propagate; only a genuine null tree end is absence.
+- Discovery registers a temporary UIA event listener on the selected subtree and walks raw-view
+  children, at most 200 nodes/64 levels with a 1.5-second traversal budget and 500-ms UIA provider
+  connection/transaction limits. The listener is removed on scope exit. UIA can exceed a traversal
+  budget inside an outstanding provider call; the transport's terminal timeout remains necessary.
+  Rich apps that ignore scoped assistive-client discovery still need owner-enabled accessibility.
+  The helper NEVER sets the global `SPI_SETSCREENREADER` flag; scoped discovery does not guarantee rich-app labels.
+- Startup requires per-monitor-v2 DPI awareness. Geometry stays in physical pixels, including negative
+  origins. Restore uses `SW_RESTORE`, never a taskbar toggle. Explicit focus/capture may try one paired
+  Alt hint and `BringWindowToTop` under the physical-input lease. Ref action preflight never sends
+  that hint. `act` never restores or foregrounds a window: use explicit `focusWindow`, then a fresh
+  observation when needed. Stale identity/geometry or occlusion refusal changes neither input nor
+  foreground/minimized state. UIA control focus happens only after full read-only admission;
+  mutating-call or focus read-back failure terminates without acknowledgement, as does any failed
+  revalidation after successful focus. A successful `SetValue` with different read-back returns
+  `didnt` and the observed `evidence.value`, including provider normalization or truncation; it is not
+  terminal uncertainty. Password targets are identified before writing and never read back: their
+  successful writes return `unknown` without value evidence. A failed write/read-back API remains uncertain.
+  A capture failure is uncertain (terminal, no ack) only after a real restore/focus
+  transition; a failed read-only render of an already-front window is a plain `capture_failed`. Only a
+  (near-)black render is treated as a failed compositor copy: a uniform light window is valid. A window that
+  looks identical active and inactive is accepted after two matching renders at the 1.5 s deadline with a
+  `capture_unchanged_after_transition` warning. Malformed or empty UIA RuntimeIds stop the look.
+  Window images use selected-window `PrintWindow` rendering, not an occluder's screen pixels. Capture
+  requires two matching completed renders, plus changed frame or rectangle evidence after activation
+  or restoration, within 1.5 seconds. Missing freshness, moving windows, blank/failed renders and captures
+  over 16 million pixels refuse explicitly. A static/background window whose freshness cannot be proved
+  may refuse rather than return an old frame.
+- Participating native helper processes share a session-local kernel mutex for every single `act`
+  delivery, including semantic UIA delivery, plus restore/focus/capture and complete foreground batches.
+  Single-action live ref admission and delivery run under the same lease as checked keyboard input. A foreground batch reserves input
+  before live pattern probing, even if its observation advertised usable patterns. Kernel acquisition
+  waits at most five seconds.
+  Kernel abandonment refuses the waiting action; it never retries the crashed action. The Windows
+  kernel integration test uses the separate `abandon-input-lease` fixture binary, not an
+  environment-controlled test branch. Cargo supplies its executable path to integration tests,
+  including `--all-targets`; it is not a helper delivery target. Windows releases
+  thread ownership on death, but this is NOT a persistent uncertain-delivery fence. The WSL transport's
+  retained host-volume lease remains authoritative after cancellation/timeout/helper failure; recovery
+  requires the owner's documented review, never automatic lease stealing. No guarantee is made against
+  a human, a nonparticipating program or hostile same-user code injecting input.
+  Ordinary delivery failures attempt key/button release once. A possibly partial physical-input
+  failure, an uncertain UIA mutating-call/read-back failure, or a failed post-delivery delta read terminates the helper without
+  acknowledging the request, stops the batch and leaves the
+  WSL transport's uncertainty fence intact. It never replays the failed operation. Lost stdout is
+  terminal. Every terminal failure cancels admission and allows an active physical operation up to
+  two seconds to release keys/buttons before forcing exit; a stuck provider can still leave input
+  state uncertain, so the host lease stays fenced. A mismatched `SetValue` read-back is definite `didnt`
+  evidence, not a claim that the control stayed unchanged and never permission to replay the write.
+  Stdin EOF cancels queued mutations and stops the helper after at most a two-second
+  shutdown grace instead of joining a stuck provider indefinitely. An already admitted action may
+  have run, and a forced stop can leave key/button state uncertain. The owner must verify the stopped
+  process and input/app state before clearing the retained WSL lease.
+
+Coordinate acts with `preserveFocus` require the target to already be foreground; the option never authorizes input into a background window.
+
+Native `openBrowserLocation` requires an explicit nonempty `appName` matching a discovered browser root; it never types a URL into the first unrelated window.
+
+Build and execute on an authorized Windows checkout, not inside an interop-disabled CI guest:
+
+```sh
+rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+cargo +1.97.1 build --locked --release --bin windows-bridge --manifest-path native/windows/bridge-rs/Cargo.toml
+cargo +1.97.1 test --locked --all-targets --manifest-path native/windows/bridge-rs/Cargo.toml -- --test-threads=1
+cargo +1.97.1 run --locked --release --manifest-path native/windows/bridge-rs/Cargo.toml --example disposable_windows_fixture
+```
+
+Native crate tests exercise real kernel input serialization and process-abandonment refusal without
+an interactive desktop. The example opens ONLY its own disposable Win32 windows. It exercises scoped
+assistive-client-dependent labels, pattern probing, current bounds after layout shifts, one actual
+non-invokable click through the actual sibling helper executable's NDJSON `look`/`act` route, removed-ref refusal through that same process, restore, selected-window PNG capture/read-back and refused invalid/PID identities.
+It prints the actual observed DPI.
+It does not exercise owner apps, credentials, browser debug servers, PowerShell runtime control or WSL
+interop. Session 0 or denied `OpenInputDesktop` returns `NATIVE_FIXTURE_UNSUPPORTED` (exit `3`), not
+an assertion pass. CI records that exact GUI case as `NOT_RUN_HEADLESS`, separately from native
+link/unit proof. Unexpected API failures and fixture assertions still fail the job. Mixed-DPI
+and negative-monitor execution remain explicit `NOT RUN` unless an authorized multi-monitor target
+runs those cases; portable negative-coordinate tests do not substitute for that execution.
+
+The `windows-helper` job in `.github/workflows/native-helper.yml` links an actual MSVC x64 executable and runs these native
+checks on disposable Windows infrastructure. Its `windows-helper-native-<SHA>` artifact contains
+`windows-bridge.exe`, `SHA256SUMS`, source/target metadata, compiler log and explicit fixture status/log after a successful build. Failed builds preserve available logs and record `NOT_BUILT`/`NOT_REACHED`, never a usable delivery claim. Download the exact
+reviewed commit's artifact, verify `SHA256SUMS` independently and inspect the native log before manually
+placing the executable at the owner-controlled path described by #981. This is build delivery, NOT
+publication, release acceptance or activation. The unchanged macOS `build` job is separate; its passing result is not Windows link/run proof. Existing Windows LLVM coverage production is unchanged; absent native branch
+and statement counters remain unmeasured.
+
+Local Rust tests and Windows-target type checks are NOT Windows link/run proof. The full #673 matrix
+still needs an authorized interactive Windows/WSL2 owner: rich-app labels, non-invokable control input,
+image read-back, minimized/focus/layout changes, mixed DPI/negative origins, desktop/session/permission
+refusals, two actual Pi sessions and retained-lease recovery. No owner target or CI interop is activated.
+
 ## Tools
 
 State-consuming desktop tools require an observation; missing or blank `stateId` fails with
@@ -81,7 +205,10 @@ starts, restarts and stops its own helper instance on the test home's socket, ne
 `test/macos-helper-live.test.mjs` and the TCC-granted smoke are owner-only and NOT RUN in CI.
 
 `npm run coverage:rust` needs Rust `1.97.1` with `llvm-tools-preview` and `cargo-llvm-cov` `0.9.1`, with
-that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot):
+that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot). The producer hashes
+`Cargo.toml`, `Cargo.lock` and every file recursively under `src/` and `tests/`, including nested
+fixture sources. Directory entries are not file inputs; linked/special inputs fail explicitly rather
+than escape the crate or disappear from metadata. This inventory does not select or exclude LLVM regions:
 
 ```sh
 rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
@@ -2608,7 +2735,7 @@ The helper declares per-monitor-v2 DPI awareness at startup and reports `scaleFa
 Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted actions resolve a live `IUIAutomationElement` first:
 
 - `press`/`click`: `InvokePattern`, then `TogglePattern`, then `SelectionItemPattern`, then `ExpandCollapsePattern`, then LegacyIAccessible default action; successful pattern grounding reports `grounding: "description"`, `delivery: "ax"`. Coordinate fallback is blocked by `ax_only` and preflights occlusion with `ElementFromPoint`.
-- `setText`: `ValuePattern.SetValue`, then `CurrentValue` read-back. `evidence.value` is the value actually read.
+- `setText`: `ValuePattern.SetValue`, then `CurrentValue` read-back for nonpassword targets. Exact read-back is `worked`; a different value is `didnt` with the observed `evidence.value`, not a claim that nothing changed. Password writes return `unknown` without read-back or value evidence. A failed mutating/read-back API is uncertain and never replayed.
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 

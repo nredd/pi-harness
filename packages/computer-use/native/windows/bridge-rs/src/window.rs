@@ -505,19 +505,40 @@ pub fn focus_window(
             )
         })?;
         let hwnd = HWND(native.raw() as *mut _);
+        // SAFETY: GetForegroundWindow returns a borrowed handle used only for comparison.
         let already_focused = unsafe { GetForegroundWindow() == hwnd };
-        let focused = already_focused || unsafe { SetForegroundWindow(hwnd).as_bool() };
-        Ok(json!({ "focused": focused, "alreadyFocused": already_focused }))
+        request_foreground(native.raw())?;
+        Ok(json!({ "focused": true, "alreadyFocused": already_focused }))
     }
 }
 
-/// Bring an HWND to the foreground and confirm ownership before physical input.
-/// Windows can reject SetForegroundWindow, so success is based on observation,
-/// not the API's advisory return value.
+/// Read-only foreground admission. Only explicit focus/capture may raise/restore.
 pub fn ensure_foreground(hwnd: isize) -> Result<(), ProtocolError> {
+    crate::desktop::validated_bounds(hwnd, None)?;
+    #[cfg(windows)]
+    {
+        // SAFETY: borrowed validated HWND; this only observes current focus.
+        if unsafe { GetForegroundWindow() } == HWND(hwnd as *mut _) {
+            return Ok(());
+        }
+    }
+    Err(ProtocolError::new(
+        "Explicit focus and fresh observation required",
+        ErrorCode::ForegroundRequired,
+    ))
+}
+
+/// Explicit focus/capture transition, including one paired Alt hint if needed.
+/// The caller must hold the shared physical-input lease. Action preflight uses
+/// `ensure_foreground` instead, so stale/occluded refs never send an Alt hint.
+pub fn request_foreground(hwnd: isize) -> Result<(), ProtocolError> {
+    foreground_impl(hwnd, true)
+}
+
+fn foreground_impl(hwnd: isize, allow_input_hint: bool) -> Result<(), ProtocolError> {
     #[cfg(not(windows))]
     {
-        let _ = hwnd;
+        let _ = (hwnd, allow_input_hint);
         Err(ProtocolError::new(
             "Window focus is only supported on Windows",
             ErrorCode::UnsupportedPlatform,
@@ -525,23 +546,108 @@ pub fn ensure_foreground(hwnd: isize) -> Result<(), ProtocolError> {
     }
     #[cfg(windows)]
     {
+        crate::desktop::validated_bounds(hwnd, None)?;
         let target = HWND(hwnd as *mut _);
+        // SW_RESTORE is idempotent, unlike taskbar toggles or SW_SHOW.
+        // SAFETY: IsIconic borrows the validated HWND and retains no pointers.
+        if unsafe { windows::Win32::UI::WindowsAndMessaging::IsIconic(target).as_bool() } {
+            // SAFETY: target is a validated borrowed HWND; SW_RESTORE is a documented command.
+            let _ = unsafe {
+                windows::Win32::UI::WindowsAndMessaging::ShowWindow(
+                    target,
+                    windows::Win32::UI::WindowsAndMessaging::SW_RESTORE,
+                )
+            };
+        }
+        // SAFETY: foreground queries return borrowed handles used only for comparison.
+        if unsafe { GetForegroundWindow() != target } {
+            // SAFETY: SetForegroundWindow borrows the validated HWND; success is verified below.
+            let _ = unsafe { SetForegroundWindow(target) };
+            // SAFETY: no pointers are retained by this foreground query.
+            if allow_input_hint && unsafe { GetForegroundWindow() != target } {
+                // Windows documents Alt as releasing the foreground lock.
+                // The complete explicit transition remains under the caller's
+                // shared physical-input lease, including paired key cleanup.
+                crate::input::foreground_hint()?;
+                // SAFETY: target remains a borrowed HWND; the API reports a vanished/refused target.
+                unsafe { windows::Win32::UI::WindowsAndMessaging::BringWindowToTop(target) }
+                    .map_err(|_| {
+                        ProtocolError::uncertain(
+                            "Windows refused to raise the target after a focus attempt",
+                            ErrorCode::TargetNotFound,
+                        )
+                    })?;
+            }
+        }
         for _ in 0..4 {
+            // SAFETY: the foreground handle is borrowed and only compared.
             if unsafe { GetForegroundWindow() == target } {
                 return Ok(());
             }
+            // SAFETY: the API borrows target; a vanished HWND is refused by the final query.
             let _ = unsafe { SetForegroundWindow(target) };
             thread::sleep(Duration::from_millis(20));
         }
+        // SAFETY: final foreground verification retains no handles or pointers.
         if unsafe { GetForegroundWindow() == target } {
             Ok(())
         } else {
-            Err(ProtocolError::new(
-                "Windows refused to foreground the target; physical input was not sent",
+            Err(ProtocolError::uncertain(
+                "Windows foreground transition could not be verified",
                 ErrorCode::TargetNotFound,
             ))
         }
     }
+}
+
+/// Refuse physical screen points not owned by the selected foreground window.
+#[cfg(windows)]
+pub fn ensure_point_owned(hwnd: isize, point: &Value) -> Result<(), ProtocolError> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT};
+    let refused = || {
+        ProtocolError::new(
+            "Screen point ownership could not be verified",
+            ErrorCode::OccludedTarget,
+        )
+    };
+    let x = point.get("x").and_then(Value::as_f64).ok_or_else(refused)?;
+    let y = point.get("y").and_then(Value::as_f64).ok_or_else(refused)?;
+    if !x.is_finite()
+        || !y.is_finite()
+        || x < f64::from(i32::MIN)
+        || x > f64::from(i32::MAX)
+        || y < f64::from(i32::MIN)
+        || y > f64::from(i32::MAX)
+    {
+        return Err(refused());
+    }
+    let target = HWND(hwnd as *mut _);
+    // SAFETY: WindowFromPoint and GetAncestor accept borrowed handles/points.
+    let owned = unsafe {
+        GetForegroundWindow() == target
+            && GetAncestor(
+                WindowFromPoint(POINT {
+                    x: x.round() as i32,
+                    y: y.round() as i32,
+                }),
+                GA_ROOT,
+            ) == target
+    };
+    if owned {
+        Ok(())
+    } else {
+        Err(refused())
+    }
+}
+
+/// Non-Windows builds cannot admit physical ownership.
+#[cfg(not(windows))]
+pub fn ensure_point_owned(_hwnd: isize, _point: &Value) -> Result<(), ProtocolError> {
+    Err(ProtocolError::new(
+        "Physical ownership requires Windows",
+        ErrorCode::UnsupportedPlatform,
+    ))
 }
 
 // ---------------------------------------------------------------------------

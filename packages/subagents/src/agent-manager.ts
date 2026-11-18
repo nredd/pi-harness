@@ -25,6 +25,7 @@ import { accessSync, constants, opendirSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AgentRoster } from "./agent-roster.ts";
 import { type AssistantMessageInfo, resumeAgent, runAgent, type ToolActivity } from "./agent-runner.ts";
 import { getAgentConfig } from "./agent-types.ts";
 import { type Clock, realClock, type TimerHandle } from "./clock.ts";
@@ -698,6 +699,8 @@ function guardObserver<A extends unknown[]>(
 
 export class AgentManager {
 	private agents = new Map<string, AgentRecord>();
+	/** Root-scoped metadata only; independent from result consumption and delivery. */
+	readonly roster = new AgentRoster(() => this.listAgents());
 	private cleanupInterval: TimerHandle;
 	/** `CONSUMED_RECORD_TTL_MS` unless `PI_SUBAGENTS_CONSUMED_TTL_MIN` overrides it. */
 	private readonly consumedTtlMs = retentionMs("PI_SUBAGENTS_CONSUMED_TTL_MIN", CONSUMED_RECORD_TTL_MS);
@@ -954,6 +957,13 @@ export class AgentManager {
 			workflowId: options.workflowId,
 			maxSubagentDepth: options.maxSubagentDepth,
 			rootSessionId: options.rootSessionId,
+			// Roster membership only; `rootSessionId` keeps its transcript-directory meaning.
+			// A nested child takes its root ONLY from its parent record (fail closed when unknown).
+			rosterRootId:
+				options.parentAgentId !== undefined
+					? this.agents.get(options.parentAgentId)?.rosterRootId
+					: ctx.sessionManager?.getSessionId?.(),
+			runId: randomUUID(),
 		};
 		this.decidePlanGate(record, () => queryPlanPolicy(pi.events));
 		record.planQuery = () => queryPlanPolicy(pi.events, "restrict");
@@ -1796,6 +1806,7 @@ export class AgentManager {
 			// before anything mutates the record, so a refusal leaves it untouched.
 			const pool: Pool | undefined = occupiesPoolSlot({ ...record, isBackground: true }) ? "background" : undefined;
 			const lease = this.admit(record, pool);
+			record.runId = randomUUID();
 
 			record.isBackground = true;
 			record.resultConsumed = false;
@@ -1854,6 +1865,7 @@ export class AgentManager {
 		// its limit; the caller's signal (or `/agents` stop) releases the wait.
 		// No pool: the foreground pool does not cover resumes (see the README).
 		const lease = this.admit(record, undefined);
+		record.runId = randomUUID();
 		record.ranThisRun = false;
 		record.noticeDelivered = undefined;
 		record.status = lease === undefined ? "queued" : "running";
