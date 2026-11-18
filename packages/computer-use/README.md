@@ -2704,7 +2704,7 @@ The helper declares per-monitor-v2 DPI awareness at startup and reports `scaleFa
 Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted actions resolve a live `IUIAutomationElement` first:
 
 - `press`/`click`: `InvokePattern`, then `TogglePattern`, then `SelectionItemPattern`, then `ExpandCollapsePattern`, then LegacyIAccessible default action; successful pattern grounding reports `grounding: "description"`, `delivery: "ax"`. Coordinate fallback is blocked by `ax_only` and preflights occlusion with `ElementFromPoint`.
-- `setText`: `ValuePattern.SetValue`, then `CurrentValue` read-back. `evidence.value` is the value actually read.
+- `setText`: `ValuePattern.SetValue`, then `CurrentValue` read-back for nonpassword targets. Exact read-back is `worked`; a different value is `didnt` with the observed `evidence.value`, not a claim that nothing changed. Password writes return `unknown` without read-back or value evidence. A failed mutating/read-back API is uncertain and never replayed.
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
