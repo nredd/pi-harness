@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { opaqueId } from "../../src/stats/load.ts";
 import {
 	atomicJson,
+	decodeShard,
 	exportStats,
 	importStats,
 	type MachineSnapshot,
@@ -57,13 +58,17 @@ function seed(inputs: number[]): void {
 
 /** Publish altered canonical bytes with the matching digest, so schema validation is the rejecting boundary. */
 function publishShard(snapshotDir: string, manifest: Manifest, shard: Shard): void {
-	const text = JSON.stringify(shard);
+	const text = JSON.stringify({ ...shard, version: 2 });
 	const sha256 = opaqueId(text);
 	const file = `${shard.month}-${sha256}.json`;
 	writeFileSync(join(snapshotDir, file), text);
 	writeFileSync(
 		join(snapshotDir, "manifest.json"),
-		JSON.stringify({ ...manifest, shards: [{ month: shard.month, file, sha256, bytes: Buffer.byteLength(text) }] }),
+		JSON.stringify({
+			...manifest,
+			version: 2,
+			shards: [{ month: shard.month, file, sha256, bytes: Buffer.byteLength(text) }],
+		}),
 	);
 }
 
@@ -76,7 +81,7 @@ describe("snapshot bounded publication and session schemas", () => {
 		const manifest = JSON.parse(readFileSync(join(exported.snapshotDir, "manifest.json"), "utf8")) as Manifest;
 		const reference = manifest.shards[0];
 		if (!reference) throw new Error("Expected one shard");
-		const good = JSON.parse(readFileSync(join(exported.snapshotDir, reference.file), "utf8")) as Shard;
+		const good = decodeShard(readFileSync(join(exported.snapshotDir, reference.file)), manifest, reference.month);
 		const session = good.sessions[0];
 		if (!session) throw new Error("Expected session metadata in the event month");
 		expect(() => validateShard(good, manifest, good.month)).not.toThrow();
@@ -116,7 +121,7 @@ describe("snapshot bounded publication and session schemas", () => {
 			// Inject only the final document's byte accounting, not policy or serialization. This exercises
 			// the real import/validation/atomic-write path at the 128 MiB edge without allocating 128 MiB.
 			const measurement = vi.spyOn(Buffer, "byteLength").mockImplementation((value, encoding) => {
-				if (typeof value === "string" && value.startsWith('{"version":2,"importedAt":')) {
+				if (typeof value === "string" && value.startsWith('{"version":3,"importedAt":')) {
 					measured.push(value);
 					return measuredBytes;
 				}
@@ -161,7 +166,13 @@ describe("snapshot transaction and publication failures", () => {
 		const reference = manifest.shards[0];
 		if (!reference) throw new Error("Expected one shard");
 		const shardPath = join(exported.snapshotDir, reference.file);
-		return { exported, manifest, reference, shardPath, shard: JSON.parse(readFileSync(shardPath, "utf8")) as Shard };
+		return {
+			exported,
+			manifest,
+			reference,
+			shardPath,
+			shard: decodeShard(readFileSync(shardPath), manifest, reference.month),
+		};
 	}
 	const incomplete = (id: string) => ({ imported: 0, problems: [`Incomplete snapshot ${id}`] });
 
@@ -175,21 +186,25 @@ describe("snapshot transaction and publication failures", () => {
 
 	it("rejects a shard whose bytes changed but whose size did not", async () => {
 		const { exported, shardPath } = await published();
-		const text = readFileSync(shardPath, "utf8");
-		expect(text).toContain('"input":7');
-		writeFileSync(shardPath, text.replace('"input":7', '"input":8'));
+		const bytes = readFileSync(shardPath);
+		bytes[bytes.length - 1] = (bytes[bytes.length - 1] ?? 0) ^ 1;
+		writeFileSync(shardPath, bytes);
 		expect(await importStats(viewer, repo)).toMatchObject(incomplete(exported.machineId));
 	});
 
 	it("rejects a digest-matching shard that is not in canonical JSON form", async () => {
 		const { exported, manifest, shard } = await published();
-		const text = JSON.stringify(shard, null, 1);
+		const text = JSON.stringify({ ...shard, version: 2 }, null, 1);
 		const sha256 = opaqueId(text);
 		const file = `${shard.month}-${sha256}.json`;
 		writeFileSync(join(exported.snapshotDir, file), text);
 		writeFileSync(
 			join(exported.snapshotDir, "manifest.json"),
-			JSON.stringify({ ...manifest, shards: [{ month: shard.month, file, sha256, bytes: Buffer.byteLength(text) }] }),
+			JSON.stringify({
+				...manifest,
+				version: 2,
+				shards: [{ month: shard.month, file, sha256, bytes: Buffer.byteLength(text) }],
+			}),
 		);
 		expect(await importStats(viewer, repo)).toMatchObject(incomplete(exported.machineId));
 	});
@@ -210,7 +225,9 @@ describe("snapshot transaction and publication failures", () => {
 		const snapshot = (shards: Shard[]): MachineSnapshot => ({ manifest, shards });
 		expect(() => validateSnapshot(snapshot([shard]))).not.toThrow();
 		const sessionOnly = { ...shard, events: [] };
-		expect(() => validateSnapshot(snapshot([sessionOnly, sessionOnly]))).toThrow("Duplicate session metadata");
+		expect(() =>
+			validateSnapshot({ manifest: { ...manifest, version: 2 }, shards: [sessionOnly, sessionOnly] }),
+		).toThrow("Duplicate session metadata");
 		const eventOnly = { ...shard, sessions: [] };
 		expect(() => validateSnapshot(snapshot([shard, eventOnly]))).toThrow("Duplicate event identity");
 		expect(() => validateSnapshot(snapshot([eventOnly]))).toThrow("Missing session metadata");

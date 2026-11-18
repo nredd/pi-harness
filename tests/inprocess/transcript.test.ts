@@ -8,12 +8,15 @@ import {
 	createLsTool,
 	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { deferred, GoalStack, nextEvent, outcomes, tool } from "./goal-support.ts";
 import { loadFork } from "./support.ts";
+
+/** The terminal host retains its fork-specific credential store. */
+type Harness = InteractiveHarness["harness"];
 
 let stack: GoalStack;
 let host: InteractiveHarness;

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { createCodingTools, createReadOnlyTools, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { modelLeaks, modelValues, TIER_REF } from "@nredd/pi-test-lib/model-guard";
 import Schema from "typebox/schema";
 import { test } from "vitest";
@@ -153,6 +153,73 @@ test("agent extension selectors use short names, never the scoped form", () => {
 		for (const name of list(frontmatter.exclude_extensions ?? [])) assert.match(name, SHORT_NAME);
 		assert.ok(!readText(`agents/${agent}.md`).includes("ext:@"), `${agent}: scoped selector`);
 	}
+});
+
+/** Public tool names granted by the installed dev-tools dependency, not arbitrary selector strings. */
+const DEV_TOOLS = new Set([
+	"git_diff",
+	"git_show",
+	"git_log",
+	"git_status",
+	"py_test",
+	"cargo_test",
+	"git_commit",
+	"git_worktree_remove",
+	"git_worktree_prune",
+]);
+const BUILTINS = new Set([...createCodingTools("."), ...createReadOnlyTools(".")].map((tool) => tool.name));
+const validTool = (tool: string): boolean => {
+	if (BUILTINS.has(tool) || DEV_TOOLS.has(tool)) return true;
+	const selector = SELECTOR.exec(tool);
+	if (!selector) return false;
+	if (selector[1] === "pi-web-access") {
+		return (
+			tool === "ext:pi-web-access" ||
+			["web_search", "fetch_content", "get_search_content", "source_check"].includes(tool.split("/")[1] ?? "")
+		);
+	}
+	return selector[1] === "pi-dev-tools" && DEV_TOOLS.has(tool.split("/")[1] ?? "");
+};
+
+test("every agent tool list names real builtins or supported extension tools", () => {
+	for (const agent of AGENTS) {
+		const { frontmatter } = frontmatterOf(`agents/${agent}.md`);
+		for (const field of ["tools", "disallowed_tools"]) {
+			const tools = list(frontmatter[field] ?? []);
+			assert.equal(new Set(tools).size, tools.length, `${agent}: duplicate ${field}`);
+			if (field === "tools" && tools.length === 1 && tools[0] === "all") continue;
+			for (const tool of tools) assert.ok(validTool(tool), `${agent}: unknown ${field} '${tool}'`);
+		}
+	}
+	for (const bad of ["reed", "all, read", "ext:@nredd/pi-dev-tools/git_diff", "ext:pi-dev-tools/typo", "ext:unknown"]) {
+		assert.equal(validTool(bad), false, bad);
+	}
+});
+
+test("architect preloads the vocabulary with read-only and web tool grants", () => {
+	const { frontmatter } = frontmatterOf("agents/architect.md");
+	assert.deepEqual(list(frontmatter.skills), ["codebase-design"]);
+	assert.deepEqual(list(frontmatter.extensions), ["pi-dev-tools", "pi-web-access"]);
+	assert.equal(frontmatter.prompt_mode, "replace");
+	assert.ok(!("allowed_subagents" in frontmatter));
+	assert.deepEqual(list(frontmatter.tools), [
+		"read",
+		"grep",
+		"find",
+		"ext:pi-dev-tools/git_log",
+		"ext:pi-dev-tools/git_diff",
+		"ext:pi-dev-tools/git_show",
+		"ext:pi-dev-tools/git_status",
+		"ext:pi-web-access/web_search",
+		"ext:pi-web-access/fetch_content",
+		"ext:pi-web-access/get_search_content",
+		"ext:pi-web-access/source_check",
+	]);
+});
+
+test("general-purpose delegates only to code-reviewer leaves", () => {
+	const { frontmatter } = frontmatterOf("agents/general-purpose.md");
+	assert.deepEqual(list(frontmatter.allowed_subagents), ["code-reviewer"]);
 });
 
 test("no preset agent pins thinking, so callers and pi defaults decide", () => {

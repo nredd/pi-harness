@@ -22,6 +22,7 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { LIST_AGENTS } from "./agent-roster.ts";
 import {
 	BUILTIN_TOOL_NAMES,
 	getAgentConfig,
@@ -50,6 +51,7 @@ import {
 import { type PlanGate, planGateReason } from "./plan-mode-children.ts";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.ts";
 import { createHomeResourceLoader } from "./resource-loader.ts";
+import { createRosterTools } from "./roster-tools.ts";
 import { preloadSkills } from "./skill-loader.ts";
 import { isStaleCtxError } from "./stale-ctx.ts";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.ts";
@@ -69,6 +71,7 @@ export const SUBAGENT_TOOL_NAMES = {
 	GET_RESULT: "get_subagent_result",
 	STEER: "steer_subagent",
 	STOP: "stop_subagent",
+	LIST: LIST_AGENTS,
 } as const;
 
 /**
@@ -1227,7 +1230,7 @@ export async function runAgent(
 	// this produced a silently broken agent (#75) — pi-mono accepted the bogus name
 	// into the allowlist, then dropped it at registration with no signal back.
 	if (agentConfig?.builtinToolNames?.length) {
-		const knownBuiltins = new Set(BUILTIN_TOOL_NAMES);
+		const knownBuiltins = new Set([...BUILTIN_TOOL_NAMES, LIST_AGENTS]);
 		for (const name of agentConfig.builtinToolNames) {
 			if (!knownBuiltins.has(name)) {
 				options.onToolActivity?.({
@@ -1301,8 +1304,17 @@ export async function runAgent(
 	// set `allowed_subagents` and a nestedRuntime was provided — and never when
 	// isolated. Their names collide with EXCLUDED_TOOL_NAMES by design, so the
 	// scoping below re-admits them explicitly (registry deny + active-set narrow).
-	const nestedTools =
-		agentConfig?.allowedSubagents && nestedRuntime && nestingPossible
+	const rosterTools = createRosterTools({
+		config: agentConfig,
+		isolated,
+		runtime: options.nestedRuntime,
+		homeDir: options.homeDir,
+		configCwd,
+		projectTrusted,
+	});
+	const nestedTools = [
+		...rosterTools,
+		...(agentConfig?.allowedSubagents && nestedRuntime && nestingPossible
 			? createNestedSubagentTools({
 					manager: nestedRuntime.manager,
 					pi: options.pi,
@@ -1314,7 +1326,8 @@ export async function runAgent(
 					configCwd,
 					projectTrusted,
 				})
-			: [];
+			: []),
+	];
 	const nestedToolNames = new Set(nestedTools.map((tool) => tool.name));
 
 	// The `agent({ schema })` contract: this child reports its answer by calling
@@ -1519,9 +1532,11 @@ export async function runAgent(
 	// Plan mode (#437): outermost, so a call Plan refuses reaches no other hook.
 	// Read per call, because the manager decides the gate per run (spawn, resume).
 	const planGate = options.planGate;
+	// Discovery is never exempt from Plan, even though it is read-only and re-admitted.
+	const planExemptToolNames = new Set([...readmitToolNames].filter((name) => name !== LIST_AGENTS));
 	if (planGate) {
 		const planReason = (toolName: string, input: unknown, cwd: string) =>
-			planGateReason(planGate, { toolName, input, cwd }, () => session.getAllTools(), readmitToolNames);
+			planGateReason(planGate, { toolName, input, cwd }, () => session.getAllTools(), planExemptToolNames);
 		nestedCallGate.planReason = planReason;
 		const priorBeforeToolCall = session.agent.beforeToolCall;
 		session.agent.beforeToolCall = async (context, signal) => {

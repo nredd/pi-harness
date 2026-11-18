@@ -35,6 +35,21 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Return native Windows text mismatch evidence as `didnt`, skip password value read-back, and serialize single semantic actions with checked physical input. Replace the kernel-abandonment test's environment toggle with a separate crash fixture (#983).
+
+- Native Windows capture is uncertain only after a real transition, accepts uniform light windows and identical active/inactive frames, refuses keyboard input aimed at coordinates, and stops on malformed UIA RuntimeIds (#983).
+
+- Hash nested Rust fixture sources recursively instead of reading `tests/fixtures` as a file in native coverage; retain all locked/source inputs without changing coverage selection (#983).
+
+- Reject malformed native Windows text, button, key and scroll params before mutation; prove caller-resolved path isolation through the real helper with a valid owned drag (#983).
+
+- Rebuild native Windows input without caller `resolved*` fields, admit every drag vertex against current ownership, and forbid implicit action restore/foreground. Preserve UIA focus uncertainty and propagate all hit/ancestor identity failures (#983).
+
+- Preserve native Windows uncertainty after post-delivery observation or value-read-back mismatch, and let active physical input clean up before bounded terminal exit. Exercise actual helper NDJSON in the disposable GUI fixture; require explicit browser `appName` and document `preserveFocus` foreground refusal (#983).
+- Retain available native Windows failed-build diagnostics without masking the original error (#983).
+
+- Refuse Windows ref-coordinate input when current UIA identity, bounds, hit testing or desktop/session permissions cannot be verified. Never substitute cached coordinates or reused AutomationIds. Add scoped discovery, bounded fresh selected-window capture, idempotent restore and a cross-process physical-input mutex; advertise guarded-helper capability without changing protocol `4`. Add disposable native Windows fixture/build artifacts, with real WSL and multi-monitor acceptance still outstanding (#983, refs #673).
+
 - Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).
 
 - Windows helper commands now reject promptly with `Operation aborted.` for post-write cancellation, clear the pending request, timer and listener on every completion/write-error path, and ignore late replies. This cancels the local wait, not native work already sent (nredd/pi-harness#750).

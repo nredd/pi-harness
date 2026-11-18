@@ -59,7 +59,7 @@ test("host packages are peers (*) and exact-pinned devDependencies; none are bun
 	for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"])
 		assert.match(pkg.devDependencies[name] ?? "", HOST_RELEASE_TARBALL, name);
 	for (const [name, range] of Object.entries(pkg.devDependencies))
-		if (!name.startsWith("@earendil-works/pi-")) assert.match(range, /^\d+\.\d+\.\d+$/, name);
+		if (!name.startsWith("@earendil-works/pi-")) assert.match(range, /^\d+\.\d+\.\d+(?:-nredd\.\d+)?$/, name);
 });
 
 test("privacy email scan distinguishes addresses from exact npm pins", () => {
@@ -131,7 +131,7 @@ test("README states public publication and keeps the pending work explicit", () 
 		"No `role:` references are introduced",
 		"**Pending.**",
 		"**pending** too",
-		"Retirement of the old global copies is **not done here",
+		'"packageAgents": ["pi-preset"]',
 		"Pending, not claimed",
 		"1.3.0",
 	]) {

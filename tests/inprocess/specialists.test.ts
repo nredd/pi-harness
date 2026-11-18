@@ -21,7 +21,7 @@ import { isolateResearchPackages, isolateStackHome, loadThirdParty } from "./sup
 
 const SURFACES: Record<string, { required: string[]; forbidden: string[] }> = {
 	"code-reviewer": { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
-	architect: { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
+	architect: { required: [...READS, ...GIT_READS, ...WEB], forbidden: MUTATIONS },
 	critic: { required: [...READS, ...GIT_READS, "py_test", "cargo_test"], forbidden: [...MUTATIONS, ...WEB] },
 	"principal-investigator": {
 		required: [...READS, ...GIT_READS, ...WEB, "py_test", "cargo_test"],
