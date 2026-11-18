@@ -118,8 +118,12 @@ describe("matching-core pricing contract", () => {
 		expect(identity.machineId).not.toBe(published.machineId);
 		expect(loaded.coverage.remoteMachines).toBe(1);
 		expect(loaded.calls).toHaveLength(3);
-		expect(loaded.calls.filter((c) => c.entryId === opaqueId("entry:copied-entry"))).toHaveLength(1);
-		expect(loaded.calls.find((c) => c.entryId === opaqueId("entry:remote-only"))).toMatchObject({
+		expect(
+			loaded.calls.filter((c) => c.entryId?.slice(0, 24) === opaqueId("entry:copied-entry").slice(0, 24)),
+		).toHaveLength(1);
+		expect(
+			loaded.calls.find((c) => c.entryId?.slice(0, 24) === opaqueId("entry:remote-only").slice(0, 24)),
+		).toMatchObject({
 			input: 1000000,
 			output: 1000000,
 			cacheWrite: 0,

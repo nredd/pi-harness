@@ -18,6 +18,7 @@ import { cachePath, dedupCalls, flatten, loadUsage, opaqueId, parseSession } fro
 import {
 	atomicJson,
 	coverageLabel,
+	decodeShard,
 	exportStats,
 	importStats,
 	loadCombined,
@@ -166,7 +167,8 @@ it("copies/forks across machines count once, while fresh local calls and childre
 	const own = await exportStats(viewer, repo);
 	const ownManifest = JSON.parse(readFileSync(join(own.snapshotDir, "manifest.json"), "utf8"));
 	const sessions = ownManifest.shards.flatMap(
-		(s: { file: string }) => JSON.parse(readFileSync(join(own.snapshotDir, s.file), "utf8")).sessions,
+		(s: { file: string; month: string }) =>
+			decodeShard(readFileSync(join(own.snapshotDir, s.file)), ownManifest, s.month).sessions,
 	);
 	expect(sessions.filter((s: { child: boolean }) => s.child)).toHaveLength(1);
 	expect((await importStats(viewer, repo)).problems).toEqual([]);
@@ -238,7 +240,7 @@ it("validates schemas with strict keys, digest, counters, month, IDs and travers
 	const exported = await exportStats(a, repo);
 	const manifest = JSON.parse(readFileSync(join(exported.snapshotDir, "manifest.json"), "utf8"));
 	const ref = manifest.shards.find((s: { month: string }) => s.month === "2026-10");
-	const shard = JSON.parse(readFileSync(join(exported.snapshotDir, ref.file), "utf8"));
+	const shard = decodeShard(readFileSync(join(exported.snapshotDir, ref.file)), manifest, ref.month);
 	for (const malformed of [
 		{ ...manifest, version: 99 },
 		{ ...manifest, path: "secret" },
@@ -499,7 +501,9 @@ describe("actual portable bundled CLI", () => {
 		let m = JSON.parse(readFileSync(join(snapshot, "manifest.json"), "utf8"));
 		expect(
 			m.shards
-				.flatMap((s: { file: string }) => JSON.parse(readFileSync(join(snapshot, s.file), "utf8")).events)
+				.flatMap(
+					(s: { file: string; month: string }) => decodeShard(readFileSync(join(snapshot, s.file)), m, s.month).events,
+				)
 				.map((e: { input: number }) => e.input),
 		).toEqual([7]);
 		const explicit = run(
@@ -514,9 +518,11 @@ describe("actual portable bundled CLI", () => {
 		m = JSON.parse(readFileSync(join(snapshot, "manifest.json"), "utf8"));
 		expect(
 			m.shards
-				.flatMap((s: { file: string }) => JSON.parse(readFileSync(join(snapshot, s.file), "utf8")).events)
+				.flatMap(
+					(s: { file: string; month: string }) => decodeShard(readFileSync(join(snapshot, s.file)), m, s.month).events,
+				)
 				.map((e: { input: number }) => e.input),
-		).toEqual([99, 7]);
+		).toEqual([7, 99]);
 	});
 	it("returns nonzero on partial import, preserving valid old data with JSON stdout", () => {
 		seed(a);

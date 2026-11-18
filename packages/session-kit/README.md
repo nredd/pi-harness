@@ -531,7 +531,14 @@ Installation state, never synced:
   cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
   child markers apply only to the matching session ID, surviving user-visible renames.
 - `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex) and the harness set
-  the last successful export published (`null` until one is recorded). `failures` holds the consecutive failed exports per harness.
+  the last successful export published (`null` until one is recorded). `failures` holds consecutive failed exports per harness.
+  `historyHarnesses` records which harnesses published events or quota, not merely enrolled empty tools.
+  Recovery metadata is persisted before publishing over unreadable history: `recoveryFiles` freezes
+  the filenames present at that failure, while `lostHarnesses` records only unavailable history.
+  `recoveryPending` keeps the recovery warning visible; it does NOT disable normal pruning.
+  Old boolean-only recovery state captures its protected files once on upgrade; unknown old data
+  coverage does not invent lost harnesses. Explicit `--replace-harnesses` publication clears recovery
+  metadata. Failure to persist the protected set aborts before replacing the manifest.
   The salt keys the quota
   account discriminators below and never appears in a snapshot; like `machine.json`, it is created
   exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
@@ -544,44 +551,103 @@ Installation state, never synced:
   bytes. Tests inject final-document byte accounting at the exact limit and one byte over, while
   retaining real import validation and atomic publication.
 
-Snapshot version 2 (version 1 is still imported, see Compatibility):
+Snapshot version 3 (versions 1 and 2 are still imported, see Compatibility):
 
 ```
 machines/<UUID>/manifest.json
-machines/<UUID>/<YYYY-MM>-<sha256>.json
+machines/<UUID>/<YYYY-MM>-<sha256>.json.gz
 ```
 
 Manifest exact keys:
 
-- `version`: `2` (`1` for legacy exports).
+- `version`: `3` (`1`/`2` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
 - `exportedAt`: positive UTC Unix milliseconds.
-- `lastGoodAt` (v2 only): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
+- `lastGoodAt` (v2+): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
   for a snapshot with none), never later than `exportedAt` even if the previous snapshot's clock ran
   ahead; absent when that is unknown.
-- `shards`: unique month references, each exactly `{month, file, sha256, bytes}`. `file` MUST
-  equal `<month>-<sha256>.json`. No absolute paths, traversal or arbitrary filenames.
+- `shards`: unique file references, each exactly `{month, file, sha256, bytes}`. `file` MUST
+  equal `<month>-<sha256>.json.gz` (v1/v2: `.json`). No absolute paths, traversal or arbitrary filenames.
 
-Shard exact keys: `{version, machineId, month, events, sessions, quota}`; v1 shards have no `quota`. All shard JSON is canonical
-`JSON.stringify` output (no indentation/newline), bounded to 128 MiB per file. Manifest hashes
-cover exact UTF-8 shard bytes. Immutable content-addressed shards are published first, manifest
-last; unreferenced old shard generations are deliberately retained and ignored. No cleanup races
-with readers. Each manifest references exactly one shard per month.
+v3 wire keys: `{v, m, t, s, p, d, e, q}`. `v` is `3`; `m`/`t` are machine/month. `s` is a sorted
+session identity table (32-byte hashes in canonical base64); `p` is a sorted table of
+`[provider, model]` pairs. Metadata rows in `d` are `[sessionIndex, startOffset, duration, child]`,
+where `child` is `0` or `1`. Event rows in `e` are
+`[sessionIndex, harnessIndex, entryId, offset, modelIndex, input, output, cacheRead, cacheWrite, cost]`.
+Offsets are milliseconds from the UTC month start; `harnessIndex` indexes
+`["pi", "claude", "codex", "opencode"]`. `entryId` is canonical base64 of the first 12 bytes of
+the full entry hash, or `null`. Export and deduplication refuse collisions between known full
+identities rather than merging them. Cross-version matching uses that same 96-bit prefix plus
+attribution, timestamp and counters; legacy entry hashes remain unchanged on disk.
+`q` contains the quota objects below. Metadata sorts by identity; events sort by timestamp then
+fingerprint, using UTF-16 code-unit order, never locale collation. The model table sorts by the
+canonical JSON serialization of each `[provider, model]` pair, also in UTF-16 code-unit order.
+The independent Python packed contract uses the same key. All other identity fields are
+reconstructed, not repeated per event.
+
+The canonical compact JSON is compressed with gzip level 9 and zero mtime. Digests and `bytes`
+cover the compressed bytes. Imports reject noncanonical compact JSON, invalid indexes/rows and
+expanded JSON above 128 MiB, in addition to the 128 MiB regular-file bound. A machine transaction
+also has a cumulative 128 MiB decompressed-JSON budget: each shard is charged before another is
+accumulated, including when reading a producer's previous generation. They accept equivalent
+gzip streams from other zlib builds without recompression. The expanded cache still uses
+`{version, machineId, month, events, sessions, quota}` and strict validation below; v3 cached machines
+also retain a `wire` array of base64 producer bytes, authenticated against the manifest and checked
+against the expanded projection on every read, so cache validation is compression-version independent;
+v1 shards have no `quota` and use canonical uncompressed `JSON.stringify` bytes. This local viewer
+cache stores both the expanded projection and base64 wire bytes, so it is larger than the published
+gzip files; its separate assembled 128 MiB bound and last-good replacement rule still apply.
+
+Shards are published first, manifest last. After publication the serialized exporter removes
+unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
+machine snapshot and retry next sync. Valid content-addressed files are never rewritten; corrupt
+bytes at an existing filename are repaired through an atomic rename. A read failure freezes the
+then-present recovery filenames before publication. Only that set is protected: later superseded
+active-month generations still prune normally, even while recovery remains pending. A genuinely
+new read failure can extend the protected set; ordinary exports cannot. Recovery copies therefore
+survive repeated exports without reintroducing full-month accumulation after one transient failure.
+Only recorded lost harnesses stay lost; an enrolled tool that never had data remains non-failed
+and fresh. Recover or back up the frozen files before accepting replacement with
+`--replace-harnesses`. Cleanup continues per file with safe errno counts; post-publication errors
+warn without skipping export-state bookkeeping.
+
+The active UTC month replaces its previous generation. Past-month files stay immutable for
+append-only late events, session-end extensions and quota observations. A corrected identified
+call (same harness/session/entry identity, different timestamp/counters) or changed session start/child
+attribution retires the affected months' references and regenerates those months from the clean
+scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
+corrections regenerate both affected months. Entry identities shared by distinct sessions are not
+revisions of one another. Legacy events without an `entryId` retain tuple matching: corrected
+counters or timestamps cannot be identified and can append beside the old row in a sealed month.
+This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
+Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
+
+A v3 month can have multiple referenced delta shards. There is no fixed per-month delta-count
+cap: file count grows with late updates, not with unchanged or whole-month exports. The regression
+covers 40 successive deltas and a repeat export; the total machine expansion budget still applies.
+A separate compaction/archival follow-up must define an explicit maintenance protocol before
+rewriting sealed generations; never drop referenced files just to reduce their count.
+Session metadata repeats only with consistent start/child attribution; aggregation takes the
+maximum end. Quota aggregation selects the freshest observation, not their sum.
+The transport must publish only manifest-referenced files and prune unreferenced files in the
+producer's own directory, never another machine's directory. This PR only fixes the exporter/outbox:
+the published tree and the 60-second `git add` budget still require the separate sync-helper pruning
+follow-up. Issue #1033 remains partly open until that lands.
 
 Event exact keys:
 
 - `id`: SHA-256 event fingerprint.
-- `harness`: `pi`, `claude`, `codex` or `opencode` (v2 only).
-- `entryId`: SHA-256 of `entry:<preserved assistant entry ID>`, or `null` for legacy records.
+- `harness`: `pi`, `claude`, `codex` or `opencode` (v2+).
+- `entryId`: SHA-256 of `entry:<preserved assistant entry ID>` (v3: first 24 hex characters), or `null` for legacy records.
 - `sessionId`: opaque session ID.
 - `ms`: original positive UTC Unix milliseconds, in the shard's UTC month.
 - `provider`, `model`: raw physical attribution, each nonempty and at most 1024 characters.
 - `input`, `output`, `cacheRead`, `cacheWrite`: nonnegative safe integers, not all zero.
 - `cost`: finite nonnegative recorded notional cost, or `null` when the harness records none
-  (Claude, Codex; v2 only). `null` is not 0: totals treat it as 0, but it is not a recorded price.
+  (Claude, Codex; v2+). `null` is not 0: totals treat it as 0, but it is not a recorded price.
 
 The identified fingerprint is SHA-256 of the JSON array
 `[harness, entryId, ms, provider, model, input, output, cacheRead, cacheWrite]` (v1 had no
@@ -592,7 +658,7 @@ fingerprinting and matching use `[provider, model, ms, input, output, cacheRead,
 intentionally without cost to preserve the old tuple rule; identified counterparts supersede
 legacy duplicates.
 
-Quota observation exact keys (v2; stored in the UTC month of `observedAt`):
+Quota observation exact keys (v2+; stored in the UTC month of `observedAt`):
 `{harness, provider, limitId, window, usedPercent, resetAt, durationMs, observedAt, planType, account}`.
 `harness` is the observer, `provider` the router provider name (Codex: `openai-codex`), `window`
 `5h`, `7d` or `<seconds>s`, times are epoch ms, `planType` is a string or `null`. No account email,
@@ -609,10 +675,28 @@ readings are never summed. An expired reading is kept only when nothing live exi
 as `reset, no newer reading`; it never beats a live one however fresh its clock. `loadCombined`
 returns the merged `quota`, evaluated at its `now` argument.
 
-Compatibility: import accepts v1 and v2 machines side by side, in one global cache (still
-validated with each manifest's own version). A v1 event loads as `harness: "pi"`. v1 shards are
-never rewritten; a machine moves to v2 on its next export, and the viewer's `exportedAt` ordering
-applies as before. Older kits cannot read v2 manifests, so update viewers before producers.
+Compatibility: import accepts v1, v2 and v3 machines side by side, validated with each manifest's
+own version. A v1 event loads as `harness: "pi"`. Producers migrate on their next export;
+`exportedAt` ordering and atomic last-good imports are unchanged. Update viewers before producers:
+older kits cannot read v3 manifests.
+
+An encoding-only sample from one installation's three months measured 58,607,359 bytes for the
+same events re-encoded as one v2 generation versus 5,091,659 v3 gzip bytes (11.51x). It is not a
+bloated-tree or Git-history comparison. The complete read-only measurement script and captured
+aggregate output are [here](https://github.com/nredd/pi-harness/pull/1036#issuecomment-6977251237).
+
+Removing superseded files bounds the published tree, not Git history. Owner-run history replacement:
+- Stop every writer; create and verify an offline bundle (`git bundle create "$BACKUP" --all`,
+  `git bundle verify "$BACKUP"`).
+- In a separate staging clone, make a signed orphan root containing exactly each machine's manifest
+  and its referenced shards, with no symlinks or extra generations.
+- Import old and staged trees into disposable viewers with the verified standalone exporter.
+  Require no problems, the expected machine count and deep equality of their cached `machines`
+  objects; top-level import timestamps may differ. Run `git fsck --full` on staging.
+- The owner alone approves replacement of remote history. Verify its HEAD equals the approved root;
+  fresh-clone and repeat validation for every writer before scheduling resumes. Keep the backup.
+
+Neither the exporter nor the sync helper automates history replacement or force-pushing.
 
 Session exact keys: `{id, startMs, endMs, child}`. Header IDs hash as `session:<header ID>`;
 unidentified legacy sessions use a local path hash and therefore cannot always be matched across
@@ -699,7 +783,7 @@ the published snapshots. To drop a harness on purpose, export without it using
   Missing, unreadable, malformed, non-file or over-64-KiB captures silently contribute no quota;
   invalid/absent windows are unknown, not zero. They never fail a transcript scan or replace its
   history. Partial captures do not retain a previous sibling; expired readings follow the reset
-  display policy above, not old usage as current. Snapshot v2 and v1 import compatibility stay unchanged.
+  display policy above, not old usage as current. Snapshot v1/v2/v3 import compatibility follows the migration rules above.
   Source reader integration is #963; capture producer nredd/dotfiles#144 is merged. The reader must
   still be published and the producer configured before an installed exporter/viewer can consume
   captures. Merging capture alone never enabled this reader. This change does not publish, activate

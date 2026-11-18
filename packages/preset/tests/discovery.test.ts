@@ -14,6 +14,12 @@ import {
 	SettingsManager,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
+import { loadCustomAgents } from "@nredd/pi-subagents/src/custom-agents.ts";
+import {
+	packageAgentDirs,
+	resetPackageState,
+	setPackageAgentsGate,
+} from "@nredd/pi-subagents/src/package-resources.ts";
 import { test } from "vitest";
 import { manifest, pkgRoot } from "./fixtures/package.ts";
 
@@ -87,6 +93,7 @@ async function withSandbox<T>(fn: (box: Sandbox) => Promise<T>): Promise<T> {
 		const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 		return await fn({ root, home, agentDir, cwd, settingsManager });
 	} finally {
+		resetPackageState();
 		for (const [key, value] of saved) {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
@@ -190,6 +197,11 @@ test("packed package resources load through Pi after an isolated npm install", (
 			SKILLS,
 		);
 		assert.ok(loader.getSkills().skills.every((entry) => entry.filePath.startsWith(`${installed}/`)));
+		setPackageAgentsGate(["pi-preset"]);
+		const agents = loadCustomAgents(box.cwd, true, { homeDir: box.home });
+		assert.equal(agents.size, 8);
+		assert.ok([...agents.values()].every((agent) => agent.source === "package"));
+		assert.deepEqual(packageAgentDirs(box.cwd, { homeDir: box.home }), [join(installed, "agents")]);
 	}));
 
 test("footer-only source filters load the extension without skills, prompts or themes", () =>
@@ -255,6 +267,46 @@ test("package manager resolves the same resources and a package install root", (
 				.sort(),
 			THEMES.map((t) => `${t}.json`),
 		);
+	}));
+
+test("package agents load with the shared skills, independently of Pi's source filters", () =>
+	withSandbox(async (box) => {
+		for (const entry of [
+			pkgRoot,
+			{ source: pkgRoot, extensions: [], skills: ["skills/**"], themes: [], prompts: [] },
+		]) {
+			box.settingsManager.setPackages([entry]);
+			setPackageAgentsGate(["pi-preset"]);
+			assert.deepEqual(packageAgentDirs(box.cwd, { homeDir: box.home }), [join(pkgRoot, "agents")]);
+			const agents = loadCustomAgents(box.cwd, true, { homeDir: box.home });
+			assert.deepEqual([...agents.keys()].sort(), [
+				"architect",
+				"code-reviewer",
+				"critic",
+				"debugger",
+				"general-purpose",
+				"principal-investigator",
+				"researcher",
+				"verifier",
+			]);
+			assert.ok([...agents.values()].every((agent) => agent.source === "package"));
+			assert.deepEqual(
+				(await load(box))
+					.getSkills()
+					.skills.map((skill) => skill.name)
+					.sort(),
+				SKILLS,
+			);
+			setPackageAgentsGate(false);
+			assert.equal(loadCustomAgents(box.cwd, true, { homeDir: box.home }).size, 0);
+			assert.deepEqual(
+				(await load(box))
+					.getSkills()
+					.skills.map((skill) => skill.name)
+					.sort(),
+				SKILLS,
+			);
+		}
 	}));
 
 test("declared subagent agents resolve inside the package and parse with Pi's frontmatter reader", () => {
