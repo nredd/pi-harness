@@ -27,6 +27,10 @@ put the why in the commit.
 - `tests/integration/`: the remaining former `integration/` Python harness, scenarios, probes,
   providers, goldens, historical baselines and all retained unit tests. See [here](tests/integration/README.md)
 - `scripts/`: CI classification, coverage accounting, package contracts and release tooling
+  - `coverage_report.py`: local-only Markdown/SVG renderer for trusted plans and downloaded evidence.
+    Malformed artifacts (including corrupt LZMA streams) degrade only their host; filesystem failures
+    expose only error types and basenames. File totals validate in one pass. Explicit partial-row
+    warnings remain essential state under the 60,000-character cap. No publishing or CI changes.
 - `coverage/policy.json`: enforced coverage policy
 - `releases/`: generated release manifests
 
