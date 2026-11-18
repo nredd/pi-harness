@@ -256,7 +256,8 @@ const RESOLVED: Record<string, unknown> = {
 	},
 	"packages/computer-use/vitest.config.ts": {
 		test: {
-			dir: "test",
+			// Legacy `test/*.test.mjs` plus the standard `tests/*.test.ts` (#674 moved its tests under #860's layout).
+			include: ["test/**/*.test.mjs", "tests/**/*.test.ts"],
 			pool: "forks",
 			maxWorkers: 1,
 			fileParallelism: false,
