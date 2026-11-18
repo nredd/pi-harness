@@ -50,7 +50,15 @@ import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEE
 import { type Call, HARNESSES, type Harness, type Session } from "./load.ts";
 import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
-import { briefValueLines, type ValueCall, valuation, valuationLines } from "./pricing.ts";
+import {
+	briefValueLines,
+	type Valuation,
+	type ValueCall,
+	valuation,
+	valuationLines,
+	valuationText,
+	valueCells,
+} from "./pricing.ts";
 import { claudeHasNoReading, gauge, NO_LOCAL_READING, quotaRows, usedLabel } from "./quota.ts";
 import { timeAxis } from "./ticks.ts";
 
@@ -122,8 +130,8 @@ export class StatsView implements Component {
 	private harnessIndex = 0;
 	private scroll = 0;
 	private readonly palettes = new Map<number, Color[]>();
-	/** Full valuation text per (harness, filter, range): `calls` never change, so render never re-runs the estimator. */
-	private readonly valueCache = new Map<string, string[]>();
+	/** Valuation per (harness, filter, range): `calls` never change, so render never re-runs the estimator. */
+	private readonly valueCache = new Map<string, Valuation>();
 	private readonly counted: Call[];
 	/** `all`, then every harness with data; just `all` when one harness is all there is to choose. */
 	private readonly harnesses: HarnessFilter[];
@@ -348,17 +356,24 @@ export class StatsView implements Component {
 		return hint ? `${this.paint("muted", hint)}  ${keys}` : keys;
 	}
 
-	/** Brief or full valuation text for the current scope; see `valueCache` for why render never re-runs the estimator. */
-	private valueLines(ranged: readonly Call[], brief: boolean): string[] {
+	/** Valuation for the current scope; see `valueCache` for why render never re-runs the estimator. */
+	private valued(ranged: readonly Call[]): Valuation | undefined {
 		const value = this.o.valueCall;
-		if (!value) return [];
+		if (!value) return undefined;
 		const key = `${this.harness}|${JSON.stringify(this.filter)}|${this.range}`;
-		let lines = this.valueCache.get(key);
-		if (!lines) {
-			lines = valuationLines(ranged, value);
-			this.valueCache.set(key, lines);
+		let out = this.valueCache.get(key);
+		if (!out) {
+			out = valuation(ranged, value);
+			this.valueCache.set(key, out);
 		}
-		return brief ? briefValueLines(lines) : lines;
+		return out;
+	}
+
+	/** Brief or full valuation text, empty without an estimator. */
+	private valueLines(ranged: readonly Call[], brief: boolean): string[] {
+		const out = this.valued(ranged);
+		if (!out) return [];
+		return brief ? briefValueLines(valuationText(out)) : valuationText(out);
 	}
 
 	private scoped(): { all: Call[]; ranged: Call[] } {
@@ -372,7 +387,7 @@ export class StatsView implements Component {
 	 * Headline numbers as `label  value` cells, in reading order: favorite model and total tokens,
 	 * sessions and longest session, and so on.
 	 */
-	private statCells(ov: Overview): { label: string; value: string }[] {
+	private statCells(ov: Overview, valued?: Valuation): { label: string; value: string }[] {
 		const t = this.o.theme;
 		const v = (s: string) => this.paint("accent", s);
 		// Only called for a non-empty range, so the overview has a favorite model and a most active day.
@@ -391,6 +406,12 @@ export class StatsView implements Component {
 				value: `${v(formatTokens(ov.cacheRead))} read · ${v(formatTokens(ov.cacheWrite))} write`,
 			},
 			{ label: "Recorded cost", value: v(costLabel(ov.cost, ov.unpriced, ov.calls)) },
+			...(valued
+				? [
+						{ label: "Current-rate value", value: v(valueCells(valued).estimate) },
+						{ label: "Pricing coverage", value: v(valueCells(valued).coverage) },
+					]
+				: []),
 		];
 	}
 
@@ -473,7 +494,7 @@ export class StatsView implements Component {
 		const cells =
 			ranged.length === 0
 				? []
-				: this.statCells(overview(ranged, this.o.sessions, this.range, this.today, daily.keys()));
+				: this.statCells(overview(ranged, this.o.sessions, this.range, this.today, daily.keys()), this.valued(ranged));
 		const heat = (area: number) =>
 			heatmap(daily, this.today, area, (color, text) =>
 				color === "heat" ? this.paint("accent", text) : this.paint(color === "empty" ? "dim" : "muted", text),
@@ -497,8 +518,6 @@ export class StatsView implements Component {
 			out.push("", this.paint("muted", "No usage in this range."));
 			return out;
 		}
-		const value = this.valueLines(ranged, true);
-		if (value.length > 0) out.push("", ...value.flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), inner)));
 		// Grow the chart into whatever the pane has left, in whole tick steps.
 		const smallest = this.chart(ranged, width, TICKS).lines;
 		const height = chartHeight(room - out.length - 1 - smallest.length + TICKS);
@@ -759,7 +778,7 @@ export class StatsView implements Component {
 			this.paint("muted", `  In: ${formatTokens(m.input)} · Out: ${formatTokens(m.output)}`),
 			this.paint(
 				"muted",
-				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${costLabel(m.cost, m.unpriced, m.calls)} recorded`,
+				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${m.unpriced > 0 ? costLabel(m.cost, m.unpriced, m.calls) : `${costLabel(m.cost, 0, m.calls)} recorded`}`,
 			),
 		];
 		for (const { provider, models, sum } of providers) {
@@ -847,6 +866,7 @@ export function summary(
 		"%",
 		...(valueCall ? ["current estimate"] : []),
 	];
+	// Every model in `totals` came from `calls`, so each has a group.
 	const byModel = new Map<string, Call[]>();
 	for (const c of valueCall ? calls : []) {
 		const group = byModel.get(modelName(c));
@@ -863,7 +883,7 @@ export function summary(
 		formatTokens(m.cacheWrite),
 		costLabel(m.cost, m.unpriced, m.calls),
 		percent(tokensOf(m), grand),
-		...(valueCall ? [estimateLabel(byModel.get(m.name) ?? [], valueCall)] : []),
+		...(valueCall ? [estimateLabel(byModel.get(m.name) as Call[], valueCall)] : []),
 	]);
 	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => nth(r, c).length)));
 	const textual = split ? 3 : 2;

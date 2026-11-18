@@ -96,7 +96,11 @@ const MAX_DETAIL = 5;
 
 /** Labels are deliberately separate from recorded cost and subscription cash charges. Every line is sanitized: basis and reasons come from loaded model metadata such as a custom `models.json`. */
 export function valuationLines(calls: readonly Call[], value: ValueCall): string[] {
-	const out = valuation(calls, value);
+	return valuationText(valuation(calls, value));
+}
+
+/** Text lines for an already computed valuation. */
+export function valuationText(out: Valuation): string[] {
 	return [
 		`Current-rate API-equivalent estimate: ${out.cost === null ? "unknown" : money(out.cost)}${out.unpricedEvents ? " (priced subset only)" : ""}`,
 		`Pricing coverage: ${out.pricedEvents} priced / ${out.unpricedEvents} unpriced events; ${out.pricedTokens} priced / ${out.unpricedTokens} unpriced tokens`,
@@ -121,4 +125,12 @@ export function valuationLines(calls: readonly Call[], value: ValueCall): string
 /** The Overview and Models tabs show only the estimate and coverage, then point at Machines. */
 export function briefValueLines(lines: readonly string[]): string[] {
 	return [...lines.slice(0, SUMMARY_LINES), "Pricing details: Machines tab."];
+}
+
+/** Compact estimate and coverage for a stat cell; a partial sum says `subset`, never a bare total. */
+export function valueCells(out: Valuation): { estimate: string; coverage: string } {
+	return {
+		estimate: out.cost === null ? "unknown" : `${money(out.cost)}${out.unpricedEvents ? " subset" : ""}`,
+		coverage: `${out.pricedEvents} of ${out.pricedEvents + out.unpricedEvents} events priced`,
+	};
 }

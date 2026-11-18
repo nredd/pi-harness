@@ -128,7 +128,8 @@ describe("offline current-rate valuation", () => {
 				const lines = view.render(width);
 				expect(lines).toHaveLength(100);
 				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
-				if (width === 320) expect(lines.join("\n")).toContain("$2.00 (priced subset only)");
+				if (width === 320)
+					expect(lines.join("\n")).toContain(tab === "Overview" ? "$2.00 subset" : "$2.00 (priced subset only)");
 			}
 			view.handleInput("\t");
 		}

@@ -509,6 +509,7 @@ CONTRACTS = (
             "src/stats/load.ts",
             "src/stats/nth.ts",
             "src/stats/palette.ts",
+            "src/stats/pricing.ts",
             "src/stats/quota.ts",
             "src/stats/snapshot.ts",
             "src/stats/ticks.ts",
