@@ -362,8 +362,21 @@ export function legacyKey(c: Call): string {
 	return JSON.stringify([c.harness, c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
 }
 
+/** Refuse a truncated-identity collision instead of silently publishing or deduplicating distinct calls. */
+export function checkEntryIds(candidates: readonly Call[]): void {
+	const full = new Map<string, string>();
+	for (const c of candidates) {
+		if (!c.entryId || c.entryId.length <= 24) continue;
+		const key = c.entryId.slice(0, 24);
+		const prior = full.get(key);
+		if (prior && prior !== c.entryId) throw new Error("Compact entry identity collision");
+		full.set(key, c.entryId);
+	}
+}
+
 /** Prefer identified records over their legacy copies, but retain distinct preserved IDs. */
 export function dedupCalls(candidates: readonly Call[]): Call[] {
+	checkEntryIds(candidates);
 	const identified = new Set(candidates.filter((c) => c.entryId).map(legacyKey));
 	const seen = new Set<string>();
 	return [...candidates]
@@ -371,7 +384,7 @@ export function dedupCalls(candidates: readonly Call[]): Call[] {
 		.filter((c) => {
 			const legacy = legacyKey(c);
 			if (!c.entryId && identified.has(legacy)) return false;
-			const key = c.entryId ? JSON.stringify([c.entryId, legacy]) : legacy;
+			const key = c.entryId ? JSON.stringify([c.entryId.slice(0, 24), legacy]) : legacy;
 			if (seen.has(key)) return false;
 			seen.add(key);
 			return true;

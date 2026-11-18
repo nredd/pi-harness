@@ -24,11 +24,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-	createTestUiContext,
-	type FauxProviderRegistration,
-	fauxAssistantMessage,
-} from "@earendil-works/pi-coding-agent/testing";
+import { createTestUiContext, type FauxProviderRegistration, fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile } from "../../packages/subscription-router/src/config.ts";
 import { loadConfig } from "../../packages/subscription-router/src/config.ts";
@@ -362,8 +358,10 @@ describe("router/default startup, quota dispatch and resume", () => {
 
 		it("loads the real router package through the packages setting", async () => {
 			const s = await launch({ router: "package" });
-			// Asserts the loaded extension, not the selection: selecting `router/default` through the real
-			// package path flaked ~1 in 4 full-file runs (#911).
+			// `router/default` is selected, with no fallback message, when the router loads through `packages`
+			// (core nredd/pi#101/#102, v1.3.0-nredd.12; deterministic guard: `virtual-models.test.ts` there).
+			expect(s.selected()).toBe(VIRTUAL);
+			expect(s.modelFallbackMessage).toBeUndefined();
 			expect(s.extensionPaths.map((path) => path.replaceAll("\\", "/"))).toEqual([
 				expect.stringMatching(/packages\/subscription-router\/src\/index\.ts$/),
 			]);

@@ -26,8 +26,11 @@ put the why in the commit.
   layout and Node/Bun invocation, real extension factories on core's session harness
 - `tests/integration/`: the remaining former `integration/` Python harness, scenarios, probes,
   providers, goldens, historical baselines and all retained unit tests. See [here](tests/integration/README.md)
-- `tests/benchmarks/`: the former `benchmarks/` tree, including its independent uv project
 - `scripts/`: CI classification, coverage accounting, package contracts and release tooling
+  - `coverage_report.py`: local-only Markdown/SVG renderer for trusted plans and downloaded evidence.
+    Malformed artifacts (including corrupt LZMA streams) degrade only their host; filesystem failures
+    expose only error types and basenames. File totals validate in one pass. Explicit partial-row
+    warnings remain essential state under the 60,000-character cap. No publishing or CI changes.
 - `coverage/policy.json`: enforced coverage policy
 - `releases/`: generated release manifests
 
@@ -37,8 +40,8 @@ Node `26.12.0` (`.node-version`), npm `11.20.0` (`packageManager`), Python `3.13
 (`.python-version`) under `uv`, Bun `1.4.4` (`.bun-version`), Git, `tmux`, macOS or Linux.
 
 ```sh
-make install                 # install-owned (verify core overrides, npm ci --ignore-scripts, uv sync --locked) + install-benchmark
-make check                   # owned-code gate: check-commits check-ts check-scripts check-integration check-benchmark
+make install                 # install-owned (verify core overrides, npm ci --ignore-scripts, uv sync --locked)
+make check                   # owned-code gate: check-commits check-ts check-scripts check-integration
 make check-package-contracts # packed tarballs through exact stock Pi; not part of `make check`
 make help                    # every target
 ```
@@ -88,7 +91,6 @@ make help                    # every target
   `maxWorkers: 1` (`computer-use`, `resource-sampler`, `subagents` runtime-build), pinned in `scripts/coverage-configs.test.ts` (#934).
   CI never sets `VITEST_MAX_WORKERS`; locally the `heavy` wrapper sets 2, so these packages now run serially and `computer-use` takes about twice as long locally; CI timings are unchanged.
   A suite that shares state beyond serial files (HOME, ports, global tools) isolates it per file; it does not lean on serialization
-- `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
   Stock Pi compatibility is `make check-package-contracts`' job.
   `scripts/package_contracts.py` is the sole tarball-membership authority: every package has exact
@@ -111,7 +113,7 @@ make help                    # every target
 ## CI and release
 
 - What runs, what is NOT RUN, sharding, coverage and stack diagnostics: comments in [CI](.github/workflows/ci.yml).
-  macOS runs `check-scripts` in its own shard, separate from `check-integration` and `check-benchmark`,
+  macOS runs `check-scripts` in its own shard, separate from `check-integration`,
   within the unchanged 30-minute budgets. Both full release/harness coverage passes and all Node/Bun
   producers remain mandatory; the required `owned` check fans in their independent artifacts.
   The admitted `probes/bun` and `import-audit/bun` signals keep their independent zero-miss
@@ -230,7 +232,11 @@ The twelve jobs are the configured required checks of ruleset `main required che
   release, then a parent PR that moves the Gitlink, root `overrides`, `release/stacks/personal.json`
   and the lockfiles together
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
-  `make check-core-compaction` runs the assembled child-compaction probes. Its non-rewriting
+  the ordinary `tests/integration/scenarios/candidate/test_core_compaction.py` pytest scenario runs the
+  assembled direct/routed child probes after authenticated root installation and `make build`.
+  It requires the built candidate core, fails rather than skips when missing, and owns its private
+  HOME/auth/tmp and offline environment through `harness.sandbox`. `make check-integration`
+  covers probe Biome/types through the normal `check-probes` path. The fork gate's non-rewriting
   check mirrors the entire selected core script, including worktree readiness and binary-release
   type checks; only Biome's `--write` is removed
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with
@@ -290,7 +296,7 @@ the verifier that matches its candidate: `publish.yml` runs from the tag's commi
 change (e.g. the #660 macOS split) therefore verifies under its own commit's gate, not current
 `main`'s; do not promote such a candidate from a later `main` without re-freezing it.
 
-The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps, and the macOS `python` shard its `Benchmark unit gate` (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
+The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
 uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
@@ -445,6 +451,11 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 
 ### Pools
 
+CI plans cells across these pools and hosted runners by effective capacity, and a cron rescue moves cells
+queued too long on a pool back to hosted. Policy, bounds and residuals live in the `Self-hosted routing policy` comment
+in [`ci.yml`](.github/workflows/ci.yml) and the header of [`runner-rescue.yml`](.github/workflows/runner-rescue.yml);
+there is no hard queue-time guarantee.
+
 | Label | Host | Isolation |
 | --- | --- | --- |
 | `pi-linux` | Linux VM host | One linked-clone VM per job, destroyed after the job. Per-VM PVE firewall drops every private net, so no LAN, no tailnet. 8 vCPU, 10 GiB, 50 min cap |
@@ -492,7 +503,7 @@ The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` wi
 
 ### Remaining
 
-- `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
+- `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; the rescue moves an idle-queued cell to hosted after five minutes on a stale pool, but not while a sibling job of the run is already running (it never cancels a started job)
 - Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](.github/workflows/ci.yml)
 - `pi-wsl2` acceptance before `PI_WSL2_HEARTBEAT` is set: three consecutive green real jobs and a clean smoke on the laptop, then replace the estimated `CELL_SECONDS` entries for the `wsl2` cells with measured ones. Until the variable exists the pool reads as down and every `wsl2` cell stays hosted. Pooled cells keep reporting as `owned (wsl2)` and `contracts (wsl2)`, and the pool's own job is `smoke (pi-wsl2)`; no new required check name is added
 - Alerting: the daemon only logs to journald; nothing pages when it is down

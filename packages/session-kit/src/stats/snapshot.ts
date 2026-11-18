@@ -1,7 +1,8 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
 import { mergeQuota, type QuotaObservation } from "./harness/common.ts";
 import {
@@ -15,6 +16,7 @@ import type { LoadSqlite } from "./harness/opencode.ts";
 import {
 	type Call,
 	cachePath,
+	checkEntryIds,
 	dedupCalls,
 	HARNESSES,
 	type Harness,
@@ -27,13 +29,14 @@ import {
 } from "./load.ts";
 import { nth } from "./nth.ts";
 
-/** v2 adds `harness` on events, a null `cost` and quota observations. v1 is still imported (as pi). */
-export const SNAPSHOT_VERSION = 2;
-const VERSIONS: readonly number[] = [1, 2];
+/** v3 stores compact deterministic gzip; expanded v1/v2 remain readable. */
+export const SNAPSHOT_VERSION = 3;
+const VERSIONS: readonly number[] = [1, 2, 3];
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_BYTES = 128 * 1024 * 1024;
+const SHARD_FILE = /^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/;
 export interface Identity {
 	machineId: string;
 	label: string;
@@ -84,6 +87,8 @@ export interface Manifest extends Identity {
 export interface MachineSnapshot {
 	manifest: Manifest;
 	shards: Shard[];
+	/** v3 imported cache only: authenticated producer bytes, independent of the viewer's zlib build. */
+	wire?: string[];
 }
 export interface GlobalCache {
 	version: number;
@@ -141,10 +146,15 @@ export interface CombinedOptions {
 
 /** Atomic replacement, also safe against concurrent writers' temporary-file collisions. */
 export async function atomicJson(path: string, value: unknown): Promise<void> {
+	await atomicContents(path, JSON.stringify(value));
+}
+
+/** Publish complete JSON or gzip bytes through one same-directory atomic rename. */
+async function atomicContents(path: string, contents: string | Uint8Array): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 	const tmp = `${path}.${randomUUID()}.tmp`;
 	try {
-		await writeFile(tmp, JSON.stringify(value), { mode: 0o600 });
+		await writeFile(tmp, contents, { mode: 0o600 });
 		await rename(tmp, path);
 	} catch (error) {
 		// Cleanup is best effort; preserve the actual publication failure for diagnostics.
@@ -212,22 +222,38 @@ export interface ExportState {
 	harnesses: Harness[] | null;
 	/** Consecutive exports whose scan of a harness failed and carried its old data; absent means 0. */
 	failures: Partial<Record<Harness, number>>;
+	/** Recovery is unresolved, but only the frozen recoveryFiles set is protected from pruning. */
+	recoveryPending: boolean;
+	/** Files frozen at a read failure; null denotes an older state that has not captured its set yet. */
+	recoveryFiles: string[] | null;
+	/** Only these harnesses had unavailable history; empty enrolled harnesses are not lost. */
+	lostHarnesses: Harness[];
+	/** Harnesses with published events/quota; null for legacy states without this knowledge. */
+	historyHarnesses: Harness[] | null;
 }
+const harnessList = (value: unknown): value is Harness[] =>
+	Array.isArray(value) && value.every((h) => HARNESSES.includes(h as Harness)) && new Set(value).size === value.length;
+const shardFileList = (value: unknown): value is string[] =>
+	Array.isArray(value) &&
+	value.every((file) => typeof file === "string" && SHARD_FILE.test(file)) &&
+	new Set(value).size === value.length;
 const stateFile = (dir: string): string => join(dir, "pi-session-kit", "export-state.json");
 function validateState(value: unknown): ExportState {
-	exact(value, ["version", "salt", "harnesses", "failures"]);
+	const optional = ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"].filter(
+		(key) => record(value) && Object.hasOwn(value, key),
+	);
+	exact(value, ["version", "salt", "harnesses", "failures", ...optional]);
 	const harnesses = value.harnesses;
 	const failures = value.failures;
 	if (
 		value.version !== 1 ||
+		("recoveryPending" in value && typeof value.recoveryPending !== "boolean") ||
+		("recoveryFiles" in value && value.recoveryFiles !== null && !shardFileList(value.recoveryFiles)) ||
+		("lostHarnesses" in value && !harnessList(value.lostHarnesses)) ||
+		("historyHarnesses" in value && value.historyHarnesses !== null && !harnessList(value.historyHarnesses)) ||
 		typeof value.salt !== "string" ||
 		!/^[a-f0-9]{32}$/.test(value.salt) ||
-		!(
-			harnesses === null ||
-			(Array.isArray(harnesses) &&
-				harnesses.every((h) => HARNESSES.includes(h as Harness)) &&
-				new Set(harnesses).size === harnesses.length)
-		) ||
+		!(harnesses === null || harnessList(harnesses)) ||
 		!record(failures) ||
 		!Object.entries(failures).every(([h, n]) => HARNESSES.includes(h as Harness) && count(n) && n > 0)
 	)
@@ -236,13 +262,26 @@ function validateState(value: unknown): ExportState {
 		salt: value.salt,
 		harnesses: harnesses as Harness[] | null,
 		failures: failures as ExportState["failures"],
+		recoveryPending: value.recoveryPending === true,
+		recoveryFiles: (value.recoveryFiles as string[] | null | undefined) ?? null,
+		lostHarnesses: (value.lostHarnesses as Harness[] | undefined) ?? [],
+		historyHarnesses: (value.historyHarnesses as Harness[] | null | undefined) ?? null,
 	};
 }
 /** Created on first use with a fresh salt and no recorded set. */
 async function exportState(dir: string): Promise<ExportState> {
 	return installationFile(
 		stateFile(dir),
-		() => ({ version: 1, salt: randomBytes(16).toString("hex"), harnesses: null, failures: {} }),
+		() => ({
+			version: 1,
+			salt: randomBytes(16).toString("hex"),
+			harnesses: null,
+			failures: {},
+			recoveryPending: false,
+			recoveryFiles: [],
+			lostHarnesses: [],
+			historyHarnesses: [],
+		}),
 		validateState,
 	);
 }
@@ -270,6 +309,7 @@ export function makeSnapshot(
 	quota: readonly QuotaObservation[] = [],
 	lastGoodAt: Manifest["lastGoodAt"] = {},
 ): MachineSnapshot {
+	checkEntryIds(loaded.calls);
 	const shards = new Map<string, Shard>();
 	const shard = (month: string): Shard => {
 		let s = shards.get(month);
@@ -283,7 +323,7 @@ export function makeSnapshot(
 	for (const c of loaded.calls) {
 		const e = {
 			harness: c.harness,
-			entryId: c.entryId ?? null,
+			entryId: c.entryId?.slice(0, 24) ?? null,
 			sessionId: sessionId(c.session),
 			ms: c.ms,
 			provider: c.provider,
@@ -329,6 +369,158 @@ export function makeSnapshot(
 	};
 }
 
+/** Hash the actual published bytes, including the gzip header. */
+const digest = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+const packedId = (id: string): string => Buffer.from(id, "hex").toString("base64");
+function unpackedId(value: unknown, length = 32): string {
+	if (typeof value !== "string") throw new Error("Invalid compact identity");
+	const bytes = Buffer.from(value, "base64");
+	if (bytes.length !== length || bytes.toString("base64") !== value) throw new Error("Invalid compact identity");
+	return bytes.toString("hex");
+}
+
+/** Locale-independent UTF-16 code-unit ordering, matching Array.sort() on the wire tables. */
+const codeUnits = (a: string, b: string): number => Number(a > b) - Number(a < b);
+
+/** Canonical compact JSON, independent of gzip implementation and compression level. */
+function compactJson(shard: Shard): string {
+	const ids = [...new Set([...shard.sessions.map((s) => s.id), ...shard.events.map((e) => e.sessionId)])].sort();
+	const pairs = [...new Set(shard.events.map((e) => JSON.stringify([e.provider, e.model])))].sort();
+	const sessions = new Map(ids.map((id, i) => [id, i]));
+	const models = new Map(pairs.map((pair, i) => [pair, i]));
+	const epoch = Date.parse(`${shard.month}-01T00:00:00Z`);
+	const compact = {
+		v: 3,
+		m: shard.machineId,
+		t: shard.month,
+		s: ids.map(packedId),
+		p: pairs.map((pair) => JSON.parse(pair) as [string, string]),
+		d: [...shard.sessions]
+			.sort((a, b) => codeUnits(a.id, b.id))
+			.map((s) => [sessions.get(s.id), s.startMs - epoch, s.endMs - s.startMs, s.child ? 1 : 0]),
+		e: [...shard.events]
+			.sort((a, b) => a.ms - b.ms || codeUnits(a.id, b.id))
+			.map((e) => [
+				sessions.get(e.sessionId),
+				HARNESSES.indexOf(e.harness as Harness),
+				e.entryId === null ? null : packedId(e.entryId),
+				e.ms - epoch,
+				models.get(JSON.stringify([e.provider, e.model])),
+				e.input,
+				e.output,
+				e.cacheRead,
+				e.cacheWrite,
+				e.cost,
+			]),
+		q: shard.quota,
+	};
+	const text = JSON.stringify(compact);
+	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+	return text;
+}
+
+/** Canonical v3 wire encoding. Collision-checked 96-bit entry identities deduplicate across versions. */
+export function encodeShard(shard: Shard): Buffer {
+	if (shard.version !== 3) return Buffer.from(JSON.stringify(shard));
+	// zlib emits a zero mtime; canonical JSON and a fixed compression level make producer bytes stable.
+	return gzipSync(compactJson(shard), { level: 9 });
+}
+
+/** Decode bounded wire bytes into the existing strict, privacy-only aggregation schema. */
+export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): Shard {
+	return decodeWithinBudget(bytes, manifest, month, MAX_BYTES).shard;
+}
+
+/** Charge decompressed bytes before parsing or retaining another shard in a machine transaction. */
+function decodeWithinBudget(
+	bytes: Buffer,
+	manifest: Manifest,
+	month: string,
+	remaining: number,
+): { shard: Shard; expandedBytes: number } {
+	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	const text = (manifest.version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
+	const expandedBytes = Buffer.byteLength(text);
+	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	if (manifest.version !== 3) {
+		const shard = validateShard(JSON.parse(text) as unknown, manifest, month);
+		if (JSON.stringify(shard) !== text) throw new Error("Noncanonical shard JSON");
+		return { shard, expandedBytes };
+	}
+	const value: unknown = JSON.parse(text);
+	exact(value, ["v", "m", "t", "s", "p", "d", "e", "q"]);
+	if (
+		value.v !== 3 ||
+		value.m !== manifest.machineId ||
+		value.t !== month ||
+		!Array.isArray(value.s) ||
+		!Array.isArray(value.p) ||
+		!Array.isArray(value.d) ||
+		!Array.isArray(value.e)
+	)
+		throw new Error("Invalid compact shard");
+	const ids = value.s.map((id: unknown) => unpackedId(id));
+	const pairs = value.p.map((pair: unknown) => {
+		if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(name)) throw new Error("Invalid model table");
+		return pair as [string, string];
+	});
+	const index = <T>(table: readonly T[], at: unknown): T => {
+		if (!count(at) || at >= table.length) throw new Error("Invalid compact index");
+		return nth(table, at);
+	};
+	const row = (value: unknown, length: number): unknown[] => {
+		if (!Array.isArray(value) || value.length !== length) throw new Error("Invalid compact row");
+		return value;
+	};
+	const epoch = Date.parse(`${month}-01T00:00:00Z`);
+	const sessions = value.d.map((data: unknown) => {
+		const r = row(data, 4);
+		if (!count(r[1]) || !count(r[2]) || (r[3] !== 0 && r[3] !== 1)) throw new Error("Invalid compact session");
+		return { id: index(ids, r[0]), startMs: epoch + r[1], endMs: epoch + r[1] + r[2], child: r[3] === 1 };
+	});
+	const events = value.e.map((data: unknown) => {
+		const r = row(data, 10);
+		if (!count(r[3])) throw new Error("Invalid compact timestamp");
+		const [provider, model] = index(pairs, r[4]);
+		const e = {
+			harness: index(HARNESSES, r[1]),
+			entryId: r[2] === null ? null : unpackedId(r[2], 12),
+			sessionId: index(ids, r[0]),
+			ms: epoch + r[3],
+			provider,
+			model,
+			input: r[5],
+			output: r[6],
+			cacheRead: r[7],
+			cacheWrite: r[8],
+			cost: r[9],
+		};
+		return { id: eventId(e as Omit<SnapshotEvent, "id">), ...e };
+	});
+	const shard = validateShard(
+		{ version: 3, machineId: value.m, month: value.t, events, sessions, quota: value.q },
+		manifest,
+		month,
+	);
+	if (compactJson(shard) !== text) throw new Error("Noncanonical compact shard");
+	return { shard, expandedBytes };
+}
+
+/** Only bounded regular files with manifest-authenticated bytes reach decompression/schema validation. */
+async function readShard(
+	base: string,
+	manifest: Manifest,
+	ref: Manifest["shards"][number],
+	remaining: number,
+): Promise<{ shard: Shard; bytes: Buffer; expandedBytes: number }> {
+	const path = join(base, ref.file);
+	const info = await lstat(path);
+	if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES) throw new Error("Invalid shard size/type");
+	const bytes = await readFile(path);
+	if (digest(bytes) !== ref.sha256) throw new Error("Shard digest mismatch");
+	return { ...decodeWithinBudget(bytes, manifest, ref.month, remaining), bytes };
+}
+
 export function validateManifest(value: unknown): Manifest {
 	const v2 = !(record(value) && value.version === 1);
 	exact(value, ["version", "machineId", "label", "exportedAt", ...(v2 ? ["lastGoodAt"] : []), "shards"]);
@@ -352,19 +544,22 @@ export function validateManifest(value: unknown): Manifest {
 			throw new Error("Invalid harness freshness");
 	}
 	const months = new Set<string>();
+	const files = new Set<string>();
 	for (const ref of value.shards) {
 		exact(ref, ["month", "file", "sha256", "bytes"]);
 		if (
 			typeof ref.month !== "string" ||
 			!MONTH.test(ref.month) ||
-			months.has(ref.month) ||
+			((value.version as number) < 3 && months.has(ref.month)) ||
 			!hash(ref.sha256) ||
-			ref.file !== `${ref.month}-${ref.sha256}.json` ||
+			ref.file !== `${ref.month}-${ref.sha256}.json${value.version === 3 ? ".gz" : ""}` ||
+			files.has(ref.file as string) ||
 			!count(ref.bytes) ||
 			ref.bytes > MAX_BYTES
 		)
 			throw new Error("Invalid shard reference");
 		months.add(ref.month);
+		files.add(ref.file as string);
 	}
 	return value as unknown as Manifest;
 }
@@ -430,7 +625,10 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			!hash(e.id) ||
 			(v2 && !HARNESSES.includes(e.harness as Harness)) ||
 			seenEvents.has(e.id) ||
-			!(e.entryId === null || hash(e.entryId)) ||
+			!(
+				e.entryId === null ||
+				(manifest.version === 3 ? typeof e.entryId === "string" && /^[a-f0-9]{24}$/.test(e.entryId) : hash(e.entryId))
+			) ||
 			!hash(e.sessionId) ||
 			!positive(e.ms) ||
 			monthOf(e.ms) !== month ||
@@ -460,26 +658,38 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			throw new Error("Invalid snapshot session");
 		seenSessions.add(s.id);
 	}
-	if (v2) for (const q of value.quota as unknown[]) validateQuota(q, month);
+	if (v2) {
+		const seen = new Set<string>();
+		for (const q of value.quota as SnapshotQuota[]) {
+			validateQuota(q, month);
+			if (seen.has(quotaKey(q))) throw new Error("Duplicate quota window");
+			seen.add(quotaKey(q));
+		}
+	}
 	return value as unknown as Shard;
 }
 
 /** Cross-shard session references and identifiers are validated as one machine transaction. */
 export function validateSnapshot(snapshot: MachineSnapshot): void {
-	const metadata = new Set<string>();
+	const metadata = new Map<string, SnapshotSession>();
 	const events = new Set<string>();
 	const quota = new Set<string>();
 	for (const s of snapshot.shards) {
 		for (const session of s.sessions) {
-			if (metadata.has(session.id)) throw new Error("Duplicate session metadata");
-			metadata.add(session.id);
+			const prior = metadata.get(session.id);
+			if (
+				prior &&
+				(snapshot.manifest.version < 3 || prior.startMs !== session.startMs || prior.child !== session.child)
+			)
+				throw new Error("Duplicate session metadata");
+			metadata.set(session.id, session);
 		}
 		for (const e of s.events) {
 			if (events.has(e.id)) throw new Error("Duplicate event identity");
 			events.add(e.id);
 		}
 		for (const q of s.quota ?? []) {
-			if (quota.has(quotaKey(q))) throw new Error("Duplicate quota window");
+			if (snapshot.manifest.version < 3 && quota.has(quotaKey(q))) throw new Error("Duplicate quota window");
 			quota.add(quotaKey(q));
 		}
 	}
@@ -540,10 +750,11 @@ async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	}
 	try {
 		const shards: Shard[] = [];
+		let remaining = MAX_BYTES;
 		for (const ref of manifest.shards) {
-			const text = await readFile(join(snapshotDir, ref.file), "utf8");
-			if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
-			shards.push(validateShard(JSON.parse(text) as unknown, manifest, ref.month));
+			const read = await readShard(snapshotDir, manifest, ref, remaining);
+			shards.push(read.shard);
+			remaining -= read.expandedBytes;
 		}
 		validateSnapshot({ manifest, shards });
 		return { manifest, shards };
@@ -598,7 +809,73 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 	}
 	for (const s of sessions)
 		if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
+	out.sessions = [...mergeSessionMetadata(out.sessions).values()];
 	return out;
+}
+
+/** Retire sealed generations only when a physical call or session identity was corrected. */
+function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<string> {
+	const revised = new Set<string>();
+	const entries = new Map<string, { id: string; month: string }[]>();
+	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.entryId]);
+	for (const shard of previous.shards)
+		for (const event of shard.events) {
+			if (event.entryId === null) continue;
+			const key = entryKey(event);
+			const known = entries.get(key) ?? [];
+			known.push({ id: event.id, month: shard.month });
+			entries.set(key, known);
+		}
+	for (const shard of next.shards)
+		for (const event of shard.events) {
+			if (event.entryId === null) continue;
+			for (const prior of entries.get(entryKey(event)) ?? [])
+				if (prior.id !== event.id) {
+					revised.add(prior.month);
+					revised.add(shard.month);
+				}
+		}
+	const sessions = new Map(next.shards.flatMap((s) => s.sessions.map((session) => [session.id, session] as const)));
+	for (const shard of previous.shards)
+		for (const prior of shard.sessions) {
+			const current = sessions.get(prior.id);
+			if (current && (current.startMs !== prior.startMs || current.child !== prior.child)) {
+				revised.add(shard.month);
+				revised.add(monthOf(current.startMs));
+			}
+		}
+	return revised;
+}
+
+/** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
+async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
+	const cleanupErrors = new Map<string, number>();
+	const recordCleanupError = (error: unknown): void => {
+		const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
+		const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
+		cleanupErrors.set(code, (cleanupErrors.get(code) ?? 0) + 1);
+	};
+	const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
+		recordCleanupError(error);
+		return [];
+	});
+	for (const entry of entries) {
+		if (entry.isFile() && SHARD_FILE.test(entry.name) && !keep.has(entry.name)) {
+			try {
+				await unlink(join(snapshotDir, entry.name));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") recordCleanupError(error);
+			}
+		}
+	}
+	return cleanupErrors.size
+		? [
+				`obsolete shard cleanup failed: ${[...cleanupErrors]
+					.sort(([a], [b]) => codeUnits(a, b))
+					.map(([code, count]) => `${code}=${count}`)
+					.join(", ")}`,
+			]
+		: [];
 }
 
 /** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
@@ -681,24 +958,33 @@ export async function exportStats(
 		const old = carried(previous, h);
 		// A harness that cannot be read, or that vanished while we hold data for it, keeps its last published
 		// contents: it must not take the pi export down, nor be replaced by an empty or partial scan.
-		const gone = !scan.found && !options.replaceHarnesses && old !== null && old.calls.length + old.quota.length > 0;
+		const gone =
+			!scan.found &&
+			!options.replaceHarnesses &&
+			(old === null
+				? (state.historyHarnesses?.includes(h) ?? false)
+				: old.calls.length + old.quota.length > 0 || state.lostHarnesses.includes(h));
+		const missingHistory =
+			old === null || (state.lostHarnesses.includes(h) && old.calls.length === 0 && old.quota.length === 0);
 		const failed = scan.problems.some(fatalProblem) || gone;
 		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
 		const problems = [
 			...scan.problems,
 			...(gone ? [`${h}: not found, but data was published before`] : []),
-			...(failed && old === null ? [`${h}: last published contents unreadable`] : []),
+			...(failed && missingHistory ? [`${h}: last published contents unreadable`] : []),
 		];
 		if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
 		// Carried data is as fresh as it was: the previous snapshot's own mark, else when it was published.
 		const was = previous !== null && previous !== "unreadable" ? previous.manifest : undefined;
-		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? was?.exportedAt) : exportedAt;
+		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? (missingHistory ? undefined : was?.exportedAt)) : exportedAt;
 		// Never after the export itself: a carried mark from a snapshot written under a faster clock must stay valid.
 		if (lastGood !== undefined) lastGoodAt[h] = Math.min(lastGood, exportedAt);
 		report[h] = {
 			found: scan.found,
 			problems,
-			...(failed ? { failed: old ? ("kept" as const) : ("lost" as const), consecutiveFailures: failures[h] } : {}),
+			...(failed
+				? { failed: missingHistory ? ("lost" as const) : ("kept" as const), consecutiveFailures: failures[h] }
+				: {}),
 		};
 		calls.push(...use.calls);
 		sessionMetadata.push(...use.sessions);
@@ -706,29 +992,106 @@ export async function exportStats(
 	}
 	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
 	validateSnapshot(snapshot);
+	const reportedLost = EXTERNAL_HARNESSES.filter((h) => report[h]?.failed === "lost");
+	const lostHarnesses = options.replaceHarnesses
+		? []
+		: HARNESSES.filter((h) => state.lostHarnesses.includes(h) || reportedLost.some((lost) => lost === h));
+	const recoveryPending =
+		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
+	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));
+	const captureRecovery = recoveryPending && (previous === "unreadable" || state.recoveryFiles === null);
 	await mkdir(snapshotDir, { recursive: true });
-	for (const s of snapshot.shards) {
-		const text = JSON.stringify(s);
-		const sha256 = opaqueId(text);
-		const file = `${s.month}-${sha256}.json`;
-		validateShard(s, snapshot.manifest, s.month);
-		await atomicJson(join(snapshotDir, file), s);
-		snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: Buffer.byteLength(text) });
+	if (captureRecovery) {
+		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
+			if (entry.isFile() && SHARD_FILE.test(entry.name)) protectedFiles.add(entry.name);
 	}
+	const recoveryFiles = [...protectedFiles].sort();
+	// Freeze recovery scope BEFORE replacing unreadable history. Ordinary exports never add newly
+	// superseded files to this set, so subsequent active generations still prune automatically.
+	if (recoveryPending && (captureRecovery || !state.recoveryPending))
+		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending, recoveryFiles, lostHarnesses });
+	// Uncorrected past months stay sealed: append only newly discovered events/metadata.
+	// An explicit harness replacement starts a new generation rather than retaining dropped history.
+	const sealed =
+		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
+			? previous
+			: null;
+	const current = monthOf(exportedAt);
+	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
+	const publishedShards: Shard[] = [];
+	if (sealed)
+		for (const [i, previousShard] of sealed.shards.entries()) {
+			if (previousShard.month >= current || revised.has(previousShard.month)) continue;
+			snapshot.manifest.shards.push(nth(sealed.manifest.shards, i));
+			publishedShards.push(previousShard);
+		}
+	for (const full of snapshot.shards) {
+		const old = publishedShards.filter((previousShard) => previousShard.month === full.month);
+		const events = new Set(old.flatMap((previousShard) => previousShard.events.map((event) => event.id)));
+		const sessions = new Map(
+			old.flatMap((previousShard) => previousShard.sessions.map((session) => [session.id, session] as const)),
+		);
+		const quotas = new Set(
+			old.flatMap((previousShard) => (previousShard.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))),
+		);
+		const delta: Shard = {
+			...full,
+			events: full.events.filter((event) => !events.has(event.id)),
+			sessions: full.sessions.filter((session) => {
+				const prior = sessions.get(session.id);
+				return !prior || session.endMs > prior.endMs;
+			}),
+			quota: (full.quota as SnapshotQuota[]).filter((q) => !quotas.has(JSON.stringify(q))),
+		};
+		if (!delta.events.length && !delta.sessions.length && !(delta.quota as SnapshotQuota[]).length) continue;
+		validateShard(delta, snapshot.manifest, delta.month);
+		const bytes = encodeShard(delta);
+		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+		const sha256 = digest(bytes);
+		const file = `${delta.month}-${sha256}.json.gz`;
+		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
+		try {
+			await writeFile(join(snapshotDir, file), bytes, { flag: "wx", mode: 0o600 });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			if (!(await readFile(join(snapshotDir, file))).equals(bytes))
+				await atomicContents(join(snapshotDir, file), bytes);
+		}
+		snapshot.manifest.shards.push({ month: delta.month, file, sha256, bytes: bytes.length });
+		publishedShards.push(delta);
+	}
+	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
+	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
+	// copies if this export could not read the previous history; never turn post-publication cleanup
+	// failure into a failed export or skip recording the now-published harness set.
+	const warnings = recoveryPending ? ["recovery files retained: explicit replacement required"] : [];
+	const keep = new Set([...snapshot.manifest.shards.map((ref) => ref.file), ...recoveryFiles]);
+	warnings.push(...(await pruneOutbox(snapshotDir, keep)));
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
 	// derives the set from the snapshot itself, so a widening is still protected.
-	const warnings = await atomicJson(stateFile(dir), {
+	const stateWarnings = await atomicJson(stateFile(dir), {
 		version: 1,
 		salt: state.salt,
 		harnesses: published,
 		failures,
+		recoveryPending,
+		recoveryFiles,
+		lostHarnesses,
+		historyHarnesses: HARNESSES.filter((h) =>
+			publishedShards.some(
+				(shard) =>
+					shard.events.some((event) => event.harness === h) ||
+					(shard.quota as SnapshotQuota[]).some((q) => q.harness === h),
+			),
+		),
 	}).then(
 		() => [],
 		() => ["export state not recorded"],
 	);
+	warnings.push(...stateWarnings);
 	return {
 		machineId: identity.machineId,
 		snapshotDir,
@@ -758,15 +1121,31 @@ export async function readGlobal(dir: string): Promise<GlobalCache> {
 		)
 			throw new Error("Invalid global cache");
 		for (const [id, machine] of Object.entries(v.machines)) {
-			exact(machine, ["manifest", "shards"]);
+			exact(
+				machine,
+				record(machine) && record(machine.manifest) && machine.manifest.version === 3
+					? ["manifest", "shards", "wire"]
+					: ["manifest", "shards"],
+			);
 			const m = validateManifest(machine.manifest);
 			if (m.machineId !== id || !Array.isArray(machine.shards) || machine.shards.length !== m.shards.length)
 				throw new Error("Invalid cached machine");
+			const wire = machine.wire;
+			if (m.version === 3 && (!Array.isArray(wire) || wire.length !== m.shards.length))
+				throw new Error("Invalid cached wire bytes");
 			for (const [i, s] of machine.shards.entries()) {
 				// The length check above pairs every cached shard with its manifest reference.
 				const ref = nth(m.shards, i);
 				validateShard(s, m, ref.month);
-				if (opaqueId(JSON.stringify(s)) !== ref.sha256) throw new Error("Cached shard digest mismatch");
+				if (m.version === 3) {
+					const encoded: unknown = (wire as unknown[])[i];
+					if (typeof encoded !== "string") throw new Error("Invalid cached wire bytes");
+					const bytes = Buffer.from(encoded, "base64");
+					if (bytes.toString("base64") !== encoded || bytes.length !== ref.bytes || digest(bytes) !== ref.sha256)
+						throw new Error("Cached shard digest mismatch");
+					if (JSON.stringify(decodeShard(bytes, m, ref.month)) !== JSON.stringify(s))
+						throw new Error("Cached shard projection mismatch");
+				} else if (digest(encodeShard(s as Shard)) !== ref.sha256) throw new Error("Cached shard digest mismatch");
 			}
 			validateSnapshot(machine as unknown as MachineSnapshot);
 		}
@@ -820,21 +1199,18 @@ export async function importStats(
 				const manifest = validateManifest(await jsonFile(join(base, "manifest.json")));
 				if (manifest.machineId !== id) throw new Error("Machine identity mismatch");
 				const shards: Shard[] = [];
+				const wire: string[] = [];
+				let remaining = MAX_BYTES;
 				for (const ref of manifest.shards) {
-					const path = join(base, ref.file);
-					const info = await lstat(path);
-					if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES)
-						throw new Error("Invalid shard size/type");
-					const text = await readFile(path, "utf8");
-					if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
-					const s = validateShard(JSON.parse(text) as unknown, manifest, ref.month);
-					if (JSON.stringify(s) !== text) throw new Error("Noncanonical shard JSON");
-					shards.push(s);
+					const read = await readShard(base, manifest, ref, remaining);
+					remaining -= read.expandedBytes;
+					shards.push(read.shard);
+					wire.push(read.bytes.toString("base64"));
 				}
 				validateSnapshot({ manifest, shards });
 				const prior = machines[id];
 				if (prior && manifest.exportedAt < prior.manifest.exportedAt) throw new Error("Older machine snapshot");
-				machines[id] = { manifest, shards };
+				machines[id] = { manifest, shards, ...(manifest.version === 3 ? { wire } : {}) };
 				imported++;
 			} catch {
 				problems.push(`Incomplete snapshot ${id}`);
