@@ -229,69 +229,6 @@ def test_cli_admits_capacity_at_the_real_plan_boundary(
     )
 
 
-def test_hosted_queue_rescue_at_the_run_selection_boundary() -> None:
-    """A pending fan-in is safe, but a running sibling or a queued destination blocks rescue."""
-    run = {
-        "id": 1,
-        "event": "pull_request",
-        "run_attempt": 1,
-        "created_at": "2027-01-15T07:00:00Z",
-        "head_repository": {"full_name": REPO},
-    }
-    queued = {
-        "status": "queued",
-        "labels": ["xcode-27"],
-        "name": "owned shard (macos-14, ts)",
-        "created_at": "2027-01-15T07:00:00Z",
-    }
-    pending = {"status": "waiting", "labels": [], "name": "owned (macos-14)"}
-    beats = {"pi-macos": f"{NOW}:5"}
-    jobs = {1: [queued, pending]}
-    assert runner_rescue.stranded_runs([run], jobs, beats, NOW, REPO) == [1]
-    assert runner_rescue.stranded_runs([run], jobs, {}, NOW, REPO) == []
-    assert runner_rescue.stranded_runs([run | {"run_attempt": 3}], jobs, beats, NOW, REPO) == []
-    assert (
-        runner_rescue.stranded_runs(
-            [run | {"head_repository": {"full_name": "fork/project"}}], jobs, beats, NOW, REPO
-        )
-        == []
-    )
-    assert (
-        runner_rescue.stranded_runs(
-            [run], {1: [queued, pending | {"status": "in_progress"}]}, beats, NOW, REPO
-        )
-        == []
-    )
-    assert (
-        runner_rescue.stranded_runs([run], jobs | {2: [queued | {"labels": ["pi-macos"]}]}, beats, NOW, REPO)
-        == []
-    )
-
-
-def test_bilateral_rescue_requires_room_and_a_supported_cell() -> None:
-    """Hosted queue moves only to a proven idle pool; a busy destination blocks takeover."""
-    queued = {
-        "status": "queued",
-        "labels": ["xcode-27"],
-        "name": "owned shard (macos-14, ts)",
-        "created_at": "2027-01-15T07:00:00Z",
-    }
-    beats = {"pi-macos": f"{NOW}:5"}
-    assert runner_rescue.job_is_stranded(queued, beats, NOW)
-    assert not runner_rescue.job_is_stranded(queued | {"status": "in_progress"}, beats, NOW)
-    assert not runner_rescue.job_is_stranded(queued, beats, NOW, pool_busy={"pi-macos"})
-    assert not runner_rescue.job_is_stranded(queued, {"pi-macos": f"{NOW}:0"}, NOW)
-    assert not runner_rescue.job_is_stranded(queued, {}, NOW)
-    assert not runner_rescue.job_is_stranded(queued | {"name": "unlisted"}, beats, NOW)
-    assert not runner_rescue.job_is_stranded(queued | {"name": "owned shard (macos-14, scripts)"}, beats, NOW)
-    assert not runner_rescue.job_is_stranded(queued | {"labels": ["ubuntu-24.04"]}, beats, NOW)
-    assert not runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, beats, NOW, {"xcode-27"})
-    # A dead pool is rescued even while the hosted queue is deep.
-    assert runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, {}, NOW, {"xcode-27"})
-    assert runner_pools.cell_pool("contracts (macos-14)") == "pi-macos"
-    assert runner_pools.cell_pool("stack (macos-14, local)") == "pi-macos"
-
-
 REAL_QUEUED = {
     # Real API shape: a queued job reports started_at == created_at, runner_id 0 and no runner name.
     "status": "queued",
@@ -333,29 +270,6 @@ def hosted_cell(name: str = "owned shard (macos-14, ts)") -> dict[str, Any]:
     return REAL_QUEUED | {"labels": ["xcode-27"], "name": name}
 
 
-def test_one_free_slot_takes_one_run_per_tick() -> None:
-    """Three runs queued hosted must not all be restarted toward one free pool slot."""
-    runs = [RUN | {"id": i, "created_at": f"2027-01-15T07:0{i}:00Z"} for i in (1, 2, 3)]
-    jobs = {i: [hosted_cell()] for i in (1, 2, 3)}
-    assert runner_rescue.stranded_runs(runs, jobs, {"pi-macos": f"{NOW}:5"}, NOW, REPO) == [1]
-
-
-def test_a_run_still_classifying_blocks_a_move_into_a_pool() -> None:
-    """A rerun in classify is about to use the pool slot."""
-    runs = [RUN, RUN | {"id": 2}]
-    classifying = {"status": "in_progress", "labels": [], "name": "classify changed paths"}
-    jobs = {1: [hosted_cell()], 2: [classifying]}
-    assert runner_rescue.stranded_runs(runs, jobs, {"pi-macos": f"{NOW}:5"}, NOW, REPO) == []
-
-
-def test_pooled_jobs_of_non_candidate_runs_still_block_a_move() -> None:
-    """A third-attempt run is never rescued but its pooled job still occupies the pool."""
-    busy = RUN | {"id": 2, "run_attempt": runner_rescue.MAX_ATTEMPT}
-    other = REAL_QUEUED | {"status": "in_progress", "runner_id": 3, "runner_name": "pi-macos-1"}
-    jobs = {1: [hosted_cell()], 2: [other]}
-    assert runner_rescue.stranded_runs([RUN, busy], jobs, {"pi-macos": f"{NOW}:5"}, NOW, REPO) == []
-
-
 def test_a_newer_run_that_finished_classify_reserves_before_an_older_rerun() -> None:
     """Reserve by classify completion, not run id order."""
     runs, jobs = census(2)
@@ -393,15 +307,6 @@ def test_a_classifying_run_reserves_only_the_pools_its_cells_target() -> None:
     assert got == {"pi-linux": 1, "pi-macos": 0}
 
 
-def test_restart_for_one_cell_must_fit_the_runs_other_cells() -> None:
-    """Five queued hosted macOS cells and one free slot: a restart would re-queue four hosted, so no."""
-    names = [f"owned shard (macos-14, {v})" for v in ("subagents", "computer-use", "ts", "python")]
-    cells = [hosted_cell(n) for n in [*names, "contracts (macos-14)"]]
-    beats = {"pi-macos": f"{NOW}:5"}
-    assert runner_rescue.stranded_runs([RUN], {1: cells}, beats, NOW, REPO) == []
-    assert runner_rescue.stranded_runs([RUN], {1: cells[:1]}, beats, NOW, REPO) == [1]
-
-
 def test_own_hosted_siblings_do_not_block_a_live_pool_rescue() -> None:
     """A cell queued 15 minutes on a fresh pool moves to hosted although its run has hosted siblings."""
     stuck = REAL_QUEUED | {"created_at": "2027-01-15T07:00:00Z"}
@@ -417,32 +322,6 @@ def test_a_dead_pool_cell_is_rescued_while_another_run_classifies() -> None:
     classifying = {"status": "in_progress", "labels": [], "name": "classify changed paths"}
     runs = [RUN, RUN | {"id": 2}]
     assert runner_rescue.stranded_runs(runs, {1: [REAL_QUEUED], 2: [classifying]}, {}, NOW, REPO) == [1]
-
-
-def test_an_unlisted_hosted_cell_never_fits_a_pool() -> None:
-    """Only listed, long enough cells may move into a pool."""
-    cell = hosted_cell("owned shard (macos-14, scripts)")
-    assert not runner_rescue.fits_pool(cell, [cell], {"pi-macos": 1}, {})
-
-
-def test_a_finished_poolable_cell_counts_against_the_pool_share() -> None:
-    """A rerun re-plans every cell: a finished `subagents` would take the one slot ahead of a queued `ts`."""
-    done = REAL_QUEUED | {
-        "status": "completed",
-        "labels": ["xcode-27"],
-        "name": "owned shard (macos-14, subagents)",
-    }
-    beats = {"pi-macos": f"{NOW}:5"}
-    assert runner_rescue.stranded_runs([RUN], {1: [done, hosted_cell()]}, beats, NOW, REPO) == []
-
-
-def test_a_rerun_never_moves_a_hosted_cell_into_a_pool() -> None:
-    """After a restart the run stays where it was planned: no ping-pong back to the stranding pool."""
-    beats = {"pi-macos": f"{NOW}:5"}
-    assert runner_rescue.stranded_runs([RUN], {1: [hosted_cell()]}, beats, NOW, REPO) == [1]
-    rerun = RUN | {"run_attempt": 2}
-    assert runner_rescue.stranded_runs([rerun], {1: [hosted_cell()]}, beats, NOW, REPO) == []
-    assert runner_rescue.stranded_runs([rerun], {1: [REAL_QUEUED]}, {}, NOW, REPO) == [1]
 
 
 def test_every_earlier_attempts_pools_are_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -485,3 +364,58 @@ def test_a_changed_pre_cancel_snapshot_reads_only_the_picked_run(monkeypatch: py
     assert runner_rescue.main(["--repo", REPO]) == 0
     assert sum("/runs/2/jobs" in call for call in seen) == 1  # the census only, not the recheck
     assert sum("/runs/1/jobs" in call for call in seen) == 2  # census plus the picked run's recheck
+
+
+def test_a_hosted_queue_is_never_moved_into_a_pool() -> None:
+    """Hosted->pool rescue is intentionally not implemented: planning at classify balances the pools."""
+    beats = {"pi-macos": f"{NOW}:5"}
+    assert not runner_rescue.job_is_stranded(hosted_cell(), beats, NOW)
+    assert runner_rescue.stranded_runs([RUN], {1: [hosted_cell()]}, beats, NOW, REPO) == []
+
+
+def test_only_unstarted_queued_pool_cells_are_moved() -> None:
+    """Pool cells move to hosted: a dead pool after 5 minutes, a live one only while hosted looks free."""
+    assert runner_rescue.job_is_stranded(REAL_QUEUED, {}, NOW)
+    assert not runner_rescue.job_is_stranded(REAL_QUEUED | {"status": "in_progress"}, {}, NOW)
+    assert not runner_rescue.job_is_stranded(REAL_QUEUED | {"labels": ["ubuntu-24.04"]}, {}, NOW)
+    live = {"pi-macos": f"{NOW}:5"}
+    assert runner_rescue.job_is_stranded(REAL_QUEUED, live, NOW)
+    assert not runner_rescue.job_is_stranded(REAL_QUEUED, live, NOW, {"xcode-27"})
+    assert runner_rescue.job_is_stranded(REAL_QUEUED, {}, NOW, {"xcode-27"})
+    assert runner_pools.cell_pool("contracts (macos-14)") == "pi-macos"
+    assert runner_pools.cell_pool("stack (macos-14, local)") == "pi-macos"
+
+
+def test_an_unreadable_run_does_not_stop_the_dead_pool_rescue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One failing jobs read (or a rate limit) drops that run only; the stranded one is still restarted."""
+    runs = [RUN, RUN | {"id": 2, "created_at": "2027-01-15T07:30:00Z"}]
+    restarted: list[int] = []
+
+    def fake(*args: str, method: str = "GET") -> Any:
+        """Answer one API call, failing run 2's jobs."""
+        if "runs?" in args[0]:
+            return {"workflow_runs": runs if "status=queued" in args[0] else []}
+        if "/runs/2/jobs" in args[0]:
+            raise subprocess.CalledProcessError(1, "gh", stderr="HTTP 403 rate limit")
+        if args[0].endswith("/runs/1"):
+            return runs[0]
+        return {"jobs": [REAL_QUEUED]}
+
+    monkeypatch.setattr(runner_rescue, "gh_api", fake)
+    monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
+    monkeypatch.setattr(runner_rescue, "restart", lambda _repo, run_id: restarted.append(run_id))
+    assert runner_rescue.main(["--repo", REPO]) == 0
+    assert restarted == [1]
+
+
+def test_a_linux_heavy_burst_cannot_oversubscribe_the_two_slot_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two listed Linux cells per run: a classifier with no cells yet reserves the pool's whole room."""
+    table = {("owned", "ubuntu-24.04", "ts"): 430, ("stack", "ubuntu-24.04", "personal"): 940}
+    monkeypatch.setattr(runner_pools, "CELL_SECONDS", table)
+    runs, jobs = census(9)
+    capacity = runner_pools.pool_capacity({"pi-linux": f"{NOW - 30}:2"}, NOW, trusted=True)
+    placed = 0
+    for run in runs:
+        admitted = runner_pools.admit_capacity(capacity, runs[: run["id"]], jobs, run["id"], REPO)
+        placed += len(runner_pools.assign_cells(list(table), admitted))
+    assert placed == runner_pools.POOLS["pi-linux"].slots

@@ -277,12 +277,10 @@ def admit_capacity(
         repo (str): The repository; fork runs never reserve capacity.
 
     Returns:
-        dict[str, int]: Per pool, the heartbeat capacity minus the pool's observed unfinished jobs and one
-            reserved slot per other run that is still classifying or has finished `classify` without cells
-            (in the pools its unlabeled cells target, else every pool), held to the pool's `run_cap`.
-            A snapshot missing a run fails closed to `{}`. Residual: a reserving run can materialise more
-            cells than one slot (`pi-linux` has two), so a burst can briefly exceed the reservation; API
-            visibility is not an atomic lease.
+        dict[str, int]: Per pool, the heartbeat capacity minus the pool's observed unfinished jobs and, for
+            each other run still classifying or finished with `classify` but without cells, the pool's whole
+            run-placeable room, in the pools its unlabeled cells target (else every pool). A snapshot
+            missing a run fails closed to `{}`. API visibility is not an atomic lease.
     """
     if run_id not in {run["id"] for run in runs} or any(run["id"] not in jobs_by_run for run in runs):
         return {}
@@ -311,8 +309,10 @@ def admit_capacity(
         named = {p for job in unfinished if not job.get("labels") and (p := cell_pool(job.get("name", "")))}
         targeted = named or set(used)
         for pool, occupied_slots in used.items():
+            # A run with no cells yet may materialise the pool's whole run-placeable room.
+            reserve = _cap(POOLS[pool].slots, POOLS[pool].run_cap)
             occupied = sum(POOLS[pool].label in job.get("labels", ()) for job in unfinished)
-            reserved = int(planning and pool in targeted and (run["id"] < run_id or classified))
+            reserved = reserve if planning and pool in targeted and (run["id"] < run_id or classified) else 0
             used[pool] = occupied_slots + max(occupied, reserved)
     # Reported free already subtracts older running jobs. Take the minimum of independently observed
     # headroom and the heartbeat, rather than subtracting those jobs from the free count twice.

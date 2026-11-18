@@ -13,13 +13,13 @@ concurrency:
 permissions:
   contents: read
 
-# Policy: Bilateral queue rescue and retry bounds
-# - Dead/draining pool queues: five minutes. Live pool and supported hosted queues: ten minutes.
-# - Move only toward observed room: no queued hosted peers, or fresh positive pool capacity.
-# - Never rescue forks or a run with an observed running sibling/started queued job; recheck before
-#   whole-run cancellation. GitHub has no atomic cancel-if-queued, so a start after the read is residual.
-# - First attempts only move hosted cells into a pool; retries never do, and `classify` excludes every
-#   earlier attempt's pools. At most three runs per tick and three attempts per run.
+# Policy: Pool-cell rescue and retry bounds
+# - Moves POOL cells to hosted only: dead/draining pool after five minutes; live pool after ten, and only
+#   while no other run queues hosted jobs of that OS. Hosted -> pool rescue is intentionally NOT implemented
+#   (planning at classify time is the balancing mechanism); follow-up.
+# - Never rescues forks or a run with a started job; skips a run whose jobs cannot be read; rechecks the
+#   picked run before whole-run cancellation. GitHub has no atomic cancel-if-queued: a start after the read is residual.
+# - Retries exclude every earlier attempt's pools. At most three runs per tick and three attempts per run.
 # - Cron delay and running siblings can extend the threshold; this is not an atomic job race.
 
 jobs:

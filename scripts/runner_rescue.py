@@ -31,9 +31,7 @@ from typing import Any
 from runner_pools import (
     GH,
     POOLS,
-    cell_pool,
     parse_heartbeats,
-    pool_capacity,
     pool_is_up,
 )
 
@@ -102,25 +100,9 @@ def stranded_runs(
 
     Returns:
         list[int]: Oldest eligible runs, capped at `MAX_RUNS_PER_TICK`. Every unfinished job must be
-            unstarted, with at least one overdue cell and observed destination room.
+            unstarted, with at least one overdue pool cell. Never a hosted->pool move.
             Full job pages are refused because an unseen sibling could be running.
     """
-    pool_busy = {
-        label
-        for jobs in jobs_by_run.values()
-        for job in jobs
-        if job["status"] != "completed"
-        for label in job["labels"]
-        if label in POOLS
-    }
-    # A rerun still in classify is about to take pool capacity, so no cell moves into a pool meanwhile.
-    classifying = any(
-        job.get("name") == "classify changed paths" and job["status"] != "completed"
-        for jobs in jobs_by_run.values()
-        for job in jobs
-    )
-    capacity = {} if classifying else pool_capacity(heartbeats, now, trusted=True)
-    moved: dict[str, int] = {}
     picked: list[int] = []
     for run in sorted(runs, key=lambda r: r["created_at"]):
         if not is_candidate(run, repo):
@@ -148,56 +130,9 @@ def stranded_runs(
             for label in job["labels"]
             if label in HOSTED_POOLS
         }
-        # A rerun keeps its plan: a retry never moves a hosted cell into a pool (no ping-pong).
-        run_capacity = capacity if run.get("run_attempt", 1) == 1 else {}
-        justified = [
-            job
-            for job in unfinished
-            if job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy)
-            and fits_pool(job, jobs, run_capacity, moved)
-        ]
-        if not justified:
-            continue
-        # Each restart re-plans toward the pools its hosted cells would move to: one per free slot.
-        for pool in {p for job in justified if not is_pooled(job) and (p := cell_pool(job.get("name", "")))}:
-            moved[pool] = moved.get(pool, 0) + 1
-        picked.append(run["id"])
+        if any(job_is_stranded(job, heartbeats, now, hosted_busy) for job in unfinished):
+            picked.append(run["id"])
     return picked[:MAX_RUNS_PER_TICK]
-
-
-def is_pooled(job: Mapping[str, Any]) -> bool:
-    """Return whether a job is queued on a self-hosted pool label."""
-    return any(label in POOL_LABELS for label in job["labels"])
-
-
-def fits_pool(
-    job: Mapping[str, Any],
-    jobs: Sequence[Mapping[str, Any]],
-    capacity: Mapping[str, int],
-    moved: Mapping[str, int],
-) -> bool:
-    """Return whether a cancel-and-rerun may move this hosted cell into a pool.
-
-    A restart re-plans every unfinished cell of the run, and finished jobs are thrown away. Moving one cell
-    while the pool's admitted share cannot hold the run's other poolable cells just re-queues them hosted
-    behind everyone, so the run can finish later. Pooled jobs (dead or live pool takeover) always fit.
-
-    Parameters:
-        job (Mapping[str, Any]): The overdue job.
-        jobs (Sequence[Mapping[str, Any]]): Every job of its run, finished ones too: the rerun re-plans all.
-        capacity (Mapping[str, int]): Fresh pool capacity, empty while a run classifies.
-        moved (Mapping[str, int]): Restarts already admitted toward each pool this tick.
-
-    Returns:
-        bool: True for a pooled job, or when every poolable hosted cell of the run fits the pool's room.
-    """
-    if is_pooled(job):
-        return True
-    pool = cell_pool(job.get("name", ""))
-    if pool is None:
-        return False
-    cells = sum(cell_pool(other.get("name", "")) == pool and not is_pooled(other) for other in jobs)
-    return cells <= capacity.get(pool, 0) - moved.get(pool, 0)
 
 
 def job_started(job: Mapping[str, Any]) -> bool:
@@ -220,40 +155,32 @@ def job_is_stranded(
     heartbeats: Mapping[str, str],
     now: float,
     hosted_busy: set[str] | None = None,
-    pool_busy: set[str] | None = None,
 ) -> bool:
     """Return whether a queued pool job has exceeded its takeover window.
+
+    Only queued POOL cells are ever moved (to hosted). A hosted queue is never moved into a pool:
+    planning at classify time is the balancing mechanism.
 
     Parameters:
         job (Mapping[str, Any]): API job object.
         heartbeats (Mapping[str, str]): Pool heartbeat values.
         now (float): Current epoch seconds.
-        hosted_busy (set[str] | None): Hosted labels with observed queued peers.
-        pool_busy (set[str] | None): Pools with observed unfinished jobs.
+        hosted_busy (set[str] | None): Hosted labels with queued jobs in OTHER runs.
 
     Returns:
-        bool: False for any started job, or a queued job outside the pool takeover policy.
+        bool: True for an unstarted queued pool job past five minutes on a dead or draining pool, or past
+            ten minutes on a live pool while no other run queues hosted jobs of that OS.
     """
     if job["status"] != "queued" or job_started(job):
         return False
     waited = now - parse_time(job["created_at"])
+    busy = hosted_busy or set()
     pools = {POOL_LABELS[label] for label in job["labels"] if label in POOL_LABELS}
-    if pools:
-        # A dead or draining pool starts nothing: always rescue. A live pool only yields to hosted room.
-        return any(
-            waited > MIN_QUEUED_S
-            if not pool_is_up(heartbeats.get(pool, ""), now)
-            else waited > LIVE_QUEUED_S
-            and not any(HOSTED_POOLS.get(label) == pool for label in hosted_busy or ())
-            for pool in pools
-        )
-    pool = cell_pool(job.get("name", ""))
-    return (
-        waited > LIVE_QUEUED_S
-        and pool is not None
-        and pool not in (pool_busy or ())
-        and pool in {HOSTED_POOLS.get(label) for label in job["labels"]}
-        and pool_capacity(heartbeats, now, trusted=True).get(pool, 0) > 0
+    return any(
+        waited > MIN_QUEUED_S
+        if not pool_is_up(heartbeats.get(pool, ""), now)
+        else waited > LIVE_QUEUED_S and not any(HOSTED_POOLS.get(label) == pool for label in busy)
+        for pool in pools
     )
 
 
@@ -373,15 +300,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # Every unfinished run, candidate or not: its pooled jobs occupy the pools either way.
         runs = unfinished_runs(args.repo)
-        jobs_by_run = {
-            run["id"]: gh_api(
-                f"repos/{args.repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page={PAGE_SIZE}"
-            )["jobs"]
-            for run in runs
-        }
     except subprocess.CalledProcessError as e:
         LOGGER.error(f"Failed to read runs from the API: {e.stderr}")
         return 1
+    jobs_by_run: dict[int, list[dict[str, Any]]] = {}
+    for run in runs:
+        try:
+            jobs_by_run[run["id"]] = gh_api(
+                f"repos/{args.repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page={PAGE_SIZE}"
+            )["jobs"]
+        except subprocess.CalledProcessError as e:
+            # One unreadable run (or a rate limit) must not stop the dead-pool rescue of the others.
+            LOGGER.warning(f"Skipping run '{run['id']}': its jobs could not be read: {e.stderr}")
     picked = stranded_runs(runs, jobs_by_run, heartbeats, time.time(), args.repo)
     LOGGER.info(f"Stranded runs: {picked}")
     failed = False
