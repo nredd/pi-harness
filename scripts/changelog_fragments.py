@@ -225,17 +225,16 @@ def run(root: Path, *, fold: bool, package: str = PACKAGE) -> None:
     """
     changelog = safe_path(root, f"{package}/CHANGELOG.md")
     lock = safe_path(root, f"{package}/.changelog-fold.lock")
+    legacy = package != PACKAGE
     # Checks never create a lock or write anything.
     if not fold:
-        folded_text(
-            changelog.read_bytes().decode("utf-8"), read_fragments(root, package), legacy=package != PACKAGE
-        )
+        folded_text(changelog.read_bytes().decode("utf-8"), read_fragments(root, package), legacy=legacy)
         return
     lock.mkdir()
     try:
         fragments = read_fragments(root, package)
         original = changelog.read_bytes().decode("utf-8")
-        replacement = folded_text(original, fragments, legacy=package != PACKAGE)
+        replacement = folded_text(original, fragments, legacy=legacy)
         if replacement != original:
             with tempfile.NamedTemporaryFile(dir=changelog.parent, prefix=".changelog-", delete=False) as out:
                 temporary = Path(out.name)
@@ -269,13 +268,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         root = args.repo.absolute()
-        packages = PACKAGES
         # Preflight the entire enrolled checkout before mutating any package. Each fold rechecks
         # its own inputs under its own lock; this is not a whole-checkout transaction.
-        for package in packages:
+        for package in PACKAGES:
             run(root, fold=False, package=package)
         if args.fold:
-            for package in packages:
+            for package in PACKAGES:
                 run(root, fold=True, package=package)
     except (OSError, ValueError) as error:
         LOGGER.error(f"Cannot process changelog fragments: {error}")

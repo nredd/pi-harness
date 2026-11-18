@@ -474,6 +474,9 @@ def test_cli_refuses_missing_enrolled_package(repo: Path, fold: bool) -> None:
     Parameters:
         repo (Path): Disposable enrolled tree.
         fold (bool): Check or fold invocation.
+
+    Returns:
+        None: Missing input fails preflight without changing earlier packages.
     """
     shutil.rmtree(repo / "packages/resource-sampler")
     args = ["--repo", str(repo), *(["--fold"] if fold else [])]

@@ -174,6 +174,6 @@ its matching issue link. From the repository root, `make check-changelog-fragmen
 all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
 See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
 
-The #932 migration preserves 1 historical bullets: 0 exact bullets move to fragments
-and 1 remain in `CHANGELOG.md`. The legacy `#878` attribution is not the required matching Markdown issue link.
+The #932 migration preserves 1 historical bullet: 0 exact bullets move to fragments
+and 1 remains in `CHANGELOG.md`. The legacy `#878` attribution is not the required matching Markdown issue link.
 Historical attribution and released sections are unchanged; no issue IDs are invented.
