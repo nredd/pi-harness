@@ -133,9 +133,13 @@ assistive-client-dependent labels, pattern probing, current bounds after layout 
 non-invokable click through the actual sibling helper executable's NDJSON `look`/`act` route, removed-ref refusal through that same process, restore, selected-window PNG capture/read-back and refused invalid/PID identities.
 It prints the actual observed DPI.
 It does not exercise owner apps, credentials, browser debug servers, PowerShell runtime control or WSL
-interop. Session 0 or denied `OpenInputDesktop` returns `NATIVE_FIXTURE_UNSUPPORTED` (exit `3`), not
-an assertion pass. CI records that exact GUI case as `NOT_RUN_HEADLESS`, separately from native
-link/unit proof. Unexpected API failures and fixture assertions still fail the job. Mixed-DPI
+interop. Session 0 or failed `OpenInputDesktop` returns `NATIVE_FIXTURE_FAILED` (exit `1`)
+and fails the CI job; an interactive desktop is required, never an environment-conditioned skip.
+Non-Windows execution of the GUI example also fails. The kernel-abandonment binary has a Windows-only
+body and is run only by the Windows desktop test; its empty non-Windows entry point exists solely
+for `cargo build --all-targets`, not as passing test evidence. Unexpected API failures and fixture
+assertions also fail the job. Fixture artifact status is `PASS`, `FAILED` or `NOT_REACHED`; a fixture
+build failure is `FAILED`. Mixed-DPI
 and negative-monitor execution remain explicit `NOT RUN` unless an authorized multi-monitor target
 runs those cases; portable negative-coordinate tests do not substitute for that execution.
 
