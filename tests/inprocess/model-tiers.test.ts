@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ExtensionAPI, type ExtensionFactory, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { createTestUiContext, fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_AGENTS } from "../../packages/subagents/src/default-agents.ts";
 import { explainModel } from "../../packages/subagents/src/model-explanation.ts";

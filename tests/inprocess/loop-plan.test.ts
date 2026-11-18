@@ -1,5 +1,5 @@
 /** Loop scheduling yields to the actual Plan-mode branch state, not a stub flag. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { GoalStack, spoken, tick } from "./goal-support.ts";
 import { loadFork } from "./support.ts";

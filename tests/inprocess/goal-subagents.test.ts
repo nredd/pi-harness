@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCurrentTools } from "@earendil-works/pi-ai/compat";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { SubagentTracker } from "../../packages/session-kit/src/goal/subagents.ts";

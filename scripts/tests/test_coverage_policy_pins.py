@@ -613,7 +613,6 @@ INERT_BY_DECISION = {
     ".github/workflows/runner-smoke.yml",
     ".github/workflows/wsl-watchdog.yml",
     "Makefile",
-    "tests/benchmarks/comparison/Makefile",
     "tests/integration/Makefile",
     "packages/computer-use/Makefile",
 }
