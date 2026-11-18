@@ -158,8 +158,8 @@ it("handles legacy identity, scalar costs, missing metadata, invalid metadata, a
 		call("missing-cost", {}),
 	]);
 	await file("legacy.jsonl", [
-		"null",
 		{ type: "session", parentSession: parent },
+		"null",
 		info("Explore#87654321"),
 		{ type: "session_info", name: "ignored" },
 		{ type: "custom", customType: "subagents:record", data: { id: "87654321", sessionFile: child } },
@@ -223,4 +223,39 @@ it("does not throw when a deduplicated call has no bound price", async () => {
 	const report = await reportSubagents(root);
 	expect(report).toMatchObject({ complete: false, priceFallbacks: 2 });
 	expect(report.totals).toMatchObject({ calls: 2, recordedCost: 0, unpricedCalls: 2 });
+});
+
+it("counts price fallbacks only for calls that reach the totals", async () => {
+	const parent = await file("parent.jsonl", [header("p")]);
+	const child = [header("c", parent), info("Explore#12345678"), call("one", { total: 1 })];
+	await file("a-copy.jsonl", child);
+	await file("b-copy.jsonl", child);
+	await file("top.jsonl", [header("top"), call("top-call", { total: 4 })]);
+	const clone = (calls: load.CallTuple[]) => calls.map((c) => [...c] as load.CallTuple);
+	// Both copies lose their price binding, the top-level file is not a child: one counted call.
+	const unbound = await withMutatedCalls(clone);
+	expect(unbound).toMatchObject({ complete: false, priceFallbacks: 1, totals: { calls: 1, unpricedCalls: 1 } });
+	vi.restoreAllMocks();
+	// Only the first-scanned copy is unbound: the bound copy supersedes it and nothing falls back.
+	let scanned = 0;
+	const supersede = await withMutatedCalls((calls) => (scanned++ === 1 ? clone(calls) : calls));
+	expect(supersede).toMatchObject({ priceFallbacks: 0, totals: { calls: 1, recordedCost: 1, pricedCalls: 1 } });
+	expect(supersede.diagnostics.map((d) => d.reason)).toEqual(["price-fallback"]);
+});
+
+it("ignores session records /stats ignores, so a mid-file session and late header never make a child", async () => {
+	const parent = await file("parent.jsonl", [header("p")]);
+	const lines = [
+		{ type: "label", timestamp },
+		{ type: "session", id: "late", parentSession: parent, timestamp },
+		info("Explore#12345678"),
+		call("odd", { total: 1 }),
+	];
+	await file("odd.jsonl", lines);
+	const stats = load.parseSession(lines.map((l) => JSON.stringify(l)).join("\n"));
+	expect(stats.child).toBe(false);
+	expect(stats.sessionId).toBeUndefined();
+	const report = await reportSubagents(root);
+	expect(report.groups).toEqual([]);
+	expect(report.totals.calls).toBe(0);
 });

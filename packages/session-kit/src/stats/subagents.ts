@@ -81,9 +81,13 @@ interface Metadata {
 	startMs: number;
 }
 
+/** Whether a parsed JSON value is a plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 /** Treat arbitrary JSON values as objects only after checking their shape. */
 function object(value: unknown): Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+	return isRecord(value) ? value : {};
 }
 /** Only finite nonnegative numbers can contribute to accounting. */
 function amount(value: unknown): number {
@@ -151,7 +155,8 @@ interface Scan {
 	paths: Set<string>;
 	diagnostics: ScanDiagnostic[];
 	errors: number;
-	priceFallbacks: number;
+	/** Dedup identities whose only parsed copy had no bound price. */
+	unbound: Set<string>;
 }
 interface Timeline extends Attribution {
 	ms: number;
@@ -224,24 +229,23 @@ async function scanFile(scan: Scan, path: string): Promise<void> {
 		await feedFile(path, {
 			accept(line) {
 				lineNumber++;
+				// Every line goes through the shared parser, so its fast path and counters match `/stats`.
+				parser.accept(line);
 				let entry: Record<string, unknown> | undefined;
 				try {
 					const parsed: unknown = JSON.parse(line);
-					if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed))
-						entry = parsed as Record<string, unknown>;
+					if (isRecord(parsed)) entry = parsed;
 				} catch {
 					// Falls through to the damaged-line handling below.
 				}
 				if (entry === undefined) {
-					// Let the shared parser count it too; blank and NUL crash padding are not damage.
-					parser.accept(line);
+					// Blank and NUL crash padding are not damage.
 					if (line && !NUL_LINE.test(line)) {
 						badLines++;
 						diagnose(scan, { path, line: lineNumber, reason: "invalid-record" });
 					}
 					return;
 				}
-				parser.acceptEntry(entry);
 				parent = collect(scan, path, entry) || parent;
 				if (entry.type === "session_info" && !name && typeof entry.name === "string") name = entry.name;
 			},
@@ -264,15 +268,18 @@ async function scanFile(scan: Scan, path: string): Promise<void> {
 	});
 	for (const [index, tuple] of parsed.calls.entries()) {
 		const own = flatten({
-			[path]: { ...parsed, calls: [tuple], entryIds: [nth(parsed.entryIds as (string | null)[], index)] },
+			[path]: { ...parsed, calls: [tuple], entryIds: [parsed.entryIds?.[index] ?? null] },
 		});
 		const bound = recorded.get(tuple);
-		if (bound === undefined) {
-			scan.priceFallbacks++;
-			diagnose(scan, { path, line: 0, reason: "price-fallback" });
-		}
 		const id = identity(nth(own.calls, 0));
-		if (!scan.prices.has(id)) scan.prices.set(id, bound ?? UNPRICED);
+		if (bound === undefined) {
+			diagnose(scan, { path, line: 0, reason: "price-fallback" });
+			// Only reported if this call reaches the totals; a bound copy elsewhere supersedes it.
+			if (!scan.prices.has(id)) {
+				scan.prices.set(id, UNPRICED);
+				scan.unbound.add(id);
+			}
+		} else if (!scan.prices.has(id) || scan.unbound.delete(id)) scan.prices.set(id, bound);
 	}
 }
 
@@ -289,7 +296,7 @@ async function scan(root: string): Promise<Scan> {
 		paths: new Set(),
 		diagnostics: [],
 		errors: 0,
-		priceFallbacks: 0,
+		unbound: new Set(),
 	};
 	const listed = await listJsonl(resolve(root), (d) => diagnose(out, d));
 	out.errors = listed.errors;
@@ -349,7 +356,7 @@ function aggregate(scanned: Scan, attributed: Attributed): SubagentReport {
 	const loaded = flatten(scanned.files);
 	const groups = new Map<string, { group: AgentGroup; sessions: Set<string> }>();
 	const totals = zero();
-	let priceFallbacks = scanned.priceFallbacks;
+	let priceFallbacks = 0;
 	for (const call of loaded.calls) {
 		const timeline = attributed.timelines.get(call.session);
 		if (!timeline) continue;
@@ -363,9 +370,10 @@ function aggregate(scanned: Scan, attributed: Attributed): SubagentReport {
 			sessions: new Set<string>(),
 		};
 		groups.set(key, entry);
-		let cost = scanned.prices.get(identity(call));
-		if (cost === undefined) {
-			// Never throw or guess: an unbound call is unpriced and counted.
+		const id = identity(call);
+		let cost = scanned.prices.get(id);
+		if (cost === undefined || scanned.unbound.has(id)) {
+			// Never throw or guess: an unbound call is unpriced and counted, but only once it is in the totals.
 			priceFallbacks++;
 			cost = UNPRICED;
 		}
