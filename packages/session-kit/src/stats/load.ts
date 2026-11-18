@@ -173,11 +173,6 @@ export class SessionParser {
 			this.badLine();
 			return;
 		}
-		this.acceptEntry(entry);
-	}
-
-	/** Handle one already-parsed JSON object entry (callers that parse lines themselves skip a second parse). */
-	acceptEntry(entry: Record<string, unknown>): void {
 		const ts = timeOf(entry.timestamp);
 		this.seen(ts);
 		if (entry.type === "session") {

@@ -69,7 +69,8 @@ export interface ScanDiagnostic {
 		| "read-file"
 		| "write-cache"
 		| "cached-invalid-record"
-		| "price-fallback";
+		| "price-fallback"
+		| "unmatched-session";
 }
 
 /**

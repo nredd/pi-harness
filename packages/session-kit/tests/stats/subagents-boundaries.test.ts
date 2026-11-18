@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -7,28 +7,10 @@ import * as load from "../../src/stats/load.ts";
 import { nth } from "../../src/stats/nth.ts";
 import { reportSubagents } from "../../src/stats/subagents.ts";
 
+import { call, header, info, timestamp, writeSession } from "../fixtures/subagent-report.ts";
+
 let root: string;
-const timestamp = "2026-01-01T00:00:00.000Z";
-const header = (id: string, parentSession?: string) => ({ type: "session", id, parentSession, timestamp });
-const info = (name: string) => ({ type: "session_info", name, timestamp });
-const call = (id: string, cost: unknown = { total: 2 }, extra = {}) => ({
-	type: "message",
-	id,
-	timestamp,
-	message: {
-		role: "assistant",
-		provider: "example",
-		model: "model-a",
-		timestamp,
-		usage: { input: 10, output: 3, cacheRead: 7, cacheWrite: 4, cost },
-		...extra,
-	},
-});
-async function file(name: string, entries: unknown[]): Promise<string> {
-	const path = join(root, name);
-	await writeFile(path, entries.map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry))).join("\n"));
-	return path;
-}
+const file = (name: string, entries: unknown[]) => writeSession(root, name, entries);
 beforeEach(async () => {
 	root = await mkdtemp(join(tmpdir(), "agent-report-boundaries-"));
 });
@@ -100,15 +82,41 @@ it("bounds diagnostics and groups, and counts all hidden rows in totals", async 
 	expect(report.groups[0]?.agentType).not.toContain("\u0001");
 });
 
-it("reports genuine permission failures and read races nonfatally", async () => {
-	const locked = join(root, "locked");
-	await mkdir(locked);
-	await chmod(locked, 0);
-	try {
-		expect(await reportSubagents(root)).toMatchObject({ errors: 1, complete: false });
-	} finally {
-		await chmod(locked, 0o700);
+it("bounds diagnostic paths and refuses ambiguous relocated session references", async () => {
+	const parent = `/old/${"p".repeat(150)}.jsonl`;
+	for (const dir of ["one", "two"]) {
+		await mkdir(join(root, dir));
+		await file(`${dir}/${"p".repeat(150)}.jsonl`, [header(dir)]);
 	}
+	await file("child.jsonl", [header("c", parent), info("Explore#12345678"), call("one")]);
+	const report = await reportSubagents(root);
+	expect(report).toMatchObject({ complete: false, errors: 1, diagnostics: [{ reason: "unmatched-session" }] });
+	expect(report.diagnostics[0]?.path.length).toBeLessThanOrEqual(120);
+});
+
+it("resolves identical copies of a relocated parent and diagnoses missing parents", async () => {
+	for (const dir of ["one", "two"]) {
+		await mkdir(join(root, dir));
+		await file(`${dir}/parent.jsonl`, [header("p")]);
+	}
+	await file("child.jsonl", [header("c", "/old/parent.jsonl"), info("Explore#12345678"), call("one")]);
+	expect(await reportSubagents(root)).toMatchObject({ complete: true, errors: 0, totals: { calls: 1 } });
+	await file("missing.jsonl", [header("m", "/old/absent-parent.jsonl"), info("Explore#87654321"), call("two")]);
+	expect(await reportSubagents(root)).toMatchObject({
+		complete: false,
+		errors: 1,
+		diagnostics: [{ reason: "unmatched-session", path: "/old/absent-parent.jsonl" }],
+	});
+});
+
+it("reports real directory read failures and read races nonfatally", async () => {
+	// ENOTDIR exercises the same readdir rejection as EACCES, including when tests run as root.
+	const notDirectory = await file("not-directory", []);
+	expect(await reportSubagents(notDirectory)).toMatchObject({
+		errors: 1,
+		complete: false,
+		diagnostics: [{ reason: "read-directory" }],
+	});
 	await file("race.jsonl", [header("race")]);
 	vi.spyOn(jsonl, "feedFile").mockRejectedValueOnce(new Error("read failed"));
 	expect(await reportSubagents(root)).toMatchObject({
@@ -116,6 +124,18 @@ it("reports genuine permission failures and read races nonfatally", async () => 
 		complete: false,
 		diagnostics: [{ reason: "read-file" }],
 	});
+});
+
+it("counts distinct structural and semantic damaged lines once each", async () => {
+	await file("damaged.jsonl", [
+		header("damaged"),
+		call("negative", {}, { usage: { input: -1 } }),
+		'{"type":"custom","data":broken}',
+		'{"message":{"role":"assistant"},broken}',
+	]);
+	const report = await reportSubagents(root);
+	expect(report).toMatchObject({ badLines: 3, complete: false });
+	expect(report.diagnostics.map((d) => d.line)).toEqual([2, 3, 4]);
 });
 
 it("handles legacy identity, scalar costs, missing metadata, invalid metadata, and zero-price coverage", async () => {

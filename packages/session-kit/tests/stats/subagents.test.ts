@@ -1,32 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../../src/stats/cli.ts";
 import { reportSubagents } from "../../src/stats/subagents.ts";
 
+import { call, header, info, timestamp, writeSession } from "../fixtures/subagent-report.ts";
+
 let root: string;
-const timestamp = "2026-01-01T00:00:00.000Z";
-const header = (id: string, parentSession?: string) => ({ type: "session", id, parentSession, timestamp });
-const info = (name: string) => ({ type: "session_info", name, timestamp });
-const call = (id: string, cost: unknown = { total: 2 }, extra = {}) => ({
-	type: "message",
-	id,
-	timestamp,
-	message: {
-		role: "assistant",
-		provider: "example",
-		model: "model-a",
-		timestamp,
-		usage: { input: 10, output: 3, cacheRead: 7, cacheWrite: 4, cost },
-		...extra,
-	},
-});
-async function file(name: string, entries: unknown[]): Promise<string> {
-	const path = join(root, name);
-	await writeFile(path, entries.map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry))).join("\n"));
-	return path;
-}
+const file = (name: string, entries: unknown[]) => writeSession(root, name, entries);
 beforeEach(async () => {
 	root = await mkdtemp(join(tmpdir(), "agent-report-"));
 });
@@ -108,75 +90,89 @@ it("reports unknown types, missing/deleted children, malformed/truncated files a
 	expect(result.diagnostics.map((d) => d.path)).toEqual([child, child, child]);
 });
 
-it("uses persisted records for renamed children and workflow progress; identifies explicit review axes and repeat targets", async () => {
-	const parent = join(root, "parent.jsonl");
-	const sha = "a".repeat(40);
-	const tool = (id: string, prompt: string, type = "code-reviewer") => ({
-		type: "message",
-		timestamp,
-		message: {
-			role: "assistant",
-			content: [{ type: "toolCall", name: "Agent", id, arguments: { subagent_type: type, prompt } }],
-		},
-	});
-	const result = (id: string, agentId: string, details = true) => ({
-		type: "message",
-		message: {
-			role: "toolResult",
-			toolName: "Agent",
-			toolCallId: id,
-			details: details ? { agentId } : {},
-			content: [{ text: `Agent ID: ${agentId}` }],
-		},
-	});
-	await file("parent.jsonl", [
-		header("p"),
-		tool("t1", `Axis: Standards ${sha}`),
-		result("t1", "11111111"),
-		tool("t2", `Axis: Spec ${sha}`),
-		result("t2", "22222222", false),
-		tool("t3", `Axis: Standards ${sha}`),
-		result("t3", "33333333"),
-		{
-			type: "custom",
-			customType: "subagents:workflow",
-			data: { name: "audit", progress: [{ recordId: "22222222", type: "workflow_agent" }] },
-		},
-		{
-			type: "custom",
-			customType: "subagents:record",
-			data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
-		},
-	]);
-	for (const [name, id] of [
-		["a", "11111111"],
-		["b", "22222222"],
-		["c", "33333333"],
-	])
-		await file(`${name}.jsonl`, [header(name ?? "", parent), info(`code-reviewer#${id}`), call(name ?? "")]);
-	await file("d.jsonl", [header("d", parent), info("renamed"), call("critic")]);
-	// A /fork copies the dispatch and result entries under its own path; no child is missing.
-	await file("fork.jsonl", [
-		header("fork", parent),
-		tool("t1", `Axis: Standards ${sha}`),
-		result("t1", "11111111"),
-		{
-			type: "custom",
-			customType: "subagents:record",
-			data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
-		},
-	]);
-	const report = await reportSubagents(root);
-	expect(report.groups.map((g) => [g.traffic, g.workflow, g.calls])).toEqual([
-		["review-spec", "audit", 1],
-		["retry-repeat", "unknown", 1],
-		["review-standards", "unknown", 1],
-		["review-critic", "unknown", 1],
-	]);
-	expect(report).toMatchObject({ complete: true, unmatchedSessions: 0, missingSessions: 0 });
-});
+it.each(["original", "relocated", "symlinked"])(
+	"preserves recorded types, workflow and review lanes under a %s root",
+	async (location) => {
+		const parent = join(root, "parent.jsonl");
+		const sha = "a".repeat(40);
+		const tool = (id: string, prompt: string, type = "code-reviewer") => ({
+			type: "message",
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", name: "Agent", id, arguments: { subagent_type: type, prompt } }],
+			},
+		});
+		const result = (id: string, agentId: string, details = true) => ({
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolName: "Agent",
+				toolCallId: id,
+				details: details ? { agentId } : {},
+				content: [{ text: `Agent ID: ${agentId}` }],
+			},
+		});
+		await file("parent.jsonl", [
+			header("p"),
+			tool("t1", `Axis: Standards ${sha}`),
+			result("t1", "11111111"),
+			tool("t2", `Axis: Spec ${sha}`),
+			result("t2", "22222222", false),
+			tool("t3", `Axis: Standards ${sha}`),
+			result("t3", "33333333"),
+			{
+				type: "custom",
+				customType: "subagents:workflow",
+				data: { name: "audit", progress: [{ recordId: "22222222", type: "workflow_agent" }] },
+			},
+			{
+				type: "custom",
+				customType: "subagents:record",
+				data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
+			},
+		]);
+		for (const [name, id] of [
+			["a", "11111111"],
+			["b", "22222222"],
+			["c", "33333333"],
+		])
+			await file(`${name}.jsonl`, [header(name ?? "", parent), info(`code-reviewer#${id}`), call(name ?? "")]);
+		await file("d.jsonl", [header("d", parent), info("renamed"), call("critic")]);
+		// A /fork copies the dispatch and result entries under its own path; no child is missing.
+		await file("fork.jsonl", [
+			header("fork", parent),
+			tool("t1", `Axis: Standards ${sha}`),
+			result("t1", "11111111"),
+			{
+				type: "custom",
+				customType: "subagents:record",
+				data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
+			},
+		]);
+		if (location === "relocated") {
+			await rename(root, `${root}-moved`);
+			root = `${root}-moved`;
+		}
+		const alias = `${root}-link`;
+		if (location === "symlinked") await symlink(root, alias, "dir");
+		let report: Awaited<ReturnType<typeof reportSubagents>>;
+		try {
+			report = await reportSubagents(location === "symlinked" ? alias : root);
+		} finally {
+			await rm(alias, { force: true });
+		}
+		expect(report.groups.map((g) => [g.traffic, g.workflow, g.calls])).toEqual([
+			["review-spec", "audit", 1],
+			["retry-repeat", "unknown", 1],
+			["review-standards", "unknown", 1],
+			["review-critic", "unknown", 1],
+		]);
+		expect(report).toMatchObject({ complete: true, unmatchedSessions: 0, missingSessions: 0 });
+	},
+);
 
-it("reports unreadable directory errors without throwing, and missing roots as empty", async () => {
+it("reports unreadable directories and missing roots as incomplete", async () => {
 	const notDirectory = await file("not-a-dir", []);
 	expect(await reportSubagents(notDirectory)).toMatchObject({
 		errors: 1,
@@ -245,6 +241,8 @@ it("names an unsupported subagents flag in a clear usage error", async () => {
 	try {
 		process.argv = ["node", "stats", "subagents", "--output", join(root, "out")];
 		await expect(main()).rejects.toThrow("flag '--output' is not valid for subagents");
+		process.argv = ["node", "stats", "subagents", "--bogus", "x"];
+		await expect(main()).rejects.toThrow("flag '--bogus' is not valid for subagents");
 		process.argv = ["node", "stats", "subagents", "--replace-harnesses"];
 		await expect(main()).rejects.toThrow("flag '--replace-harnesses' is not valid for subagents");
 	} finally {

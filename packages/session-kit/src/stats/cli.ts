@@ -43,6 +43,8 @@ export async function main(): Promise<void> {
 	for (let i = 0; i < args.length; i++) {
 		const flag = args[i];
 		if (!flag || options.has(flag)) throw new Error(USAGE);
+		if (command === "subagents" && !SUBAGENTS_FLAGS.includes(flag))
+			throw new Error(`usage: flag '${flag}' is not valid for subagents; valid flags: ${SUBAGENTS_FLAGS.join(", ")}`);
 		if (SWITCHES.includes(flag)) {
 			options.set(flag, "");
 			continue;
@@ -55,11 +57,6 @@ export async function main(): Promise<void> {
 	const output = options.get("--output");
 	const input = options.get("--input");
 	if (command === "subagents") {
-		const invalid = [...options.keys()].find((flag) => !SUBAGENTS_FLAGS.includes(flag));
-		if (invalid !== undefined)
-			throw new Error(
-				`usage: flag '${invalid}' is not valid for subagents; valid flags: ${SUBAGENTS_FLAGS.join(", ")}`,
-			);
 		const result = await reportSubagents(resolve(options.get("--sessions-dir") ?? sessionsDir(dir)));
 		console.log(JSON.stringify(result));
 	} else if (command === "export" && output !== undefined && input === undefined) {

@@ -1,6 +1,6 @@
 /** Local-only subagent accounting. Reuses stats parsing/dedup, never writes its cache or exports transcripts. */
 import { stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { feedFile, listJsonl, type ScanDiagnostic, timeOf } from "./jsonl.ts";
 import { type Call, type CallTuple, type FileStats, flatten, legacyKey, opaqueId, SessionParser } from "./load.ts";
 import { nth } from "./nth.ts";
@@ -70,7 +70,9 @@ export interface SubagentReport {
 interface Dispatch {
 	ms: number;
 	type: string;
-	prompt: string;
+	standards: boolean;
+	spec: boolean;
+	target: string | undefined;
 	resume: boolean;
 }
 interface Metadata {
@@ -170,7 +172,7 @@ interface Attributed {
 
 /** Record a bounded local diagnostic. */
 function diagnose(scan: Scan, diagnostic: ScanDiagnostic): void {
-	if (scan.diagnostics.length < MAX_DIAGNOSTICS) scan.diagnostics.push(diagnostic);
+	if (scan.diagnostics.length < MAX_DIAGNOSTICS) scan.diagnostics.push({ ...diagnostic, path: label(diagnostic.path) });
 }
 
 /** Collect join metadata from one already-parsed entry of the file at `path`. */
@@ -202,10 +204,13 @@ function collect(scan: Scan, path: string, entry: Record<string, unknown>): stri
 			const tool = object(item);
 			if (tool.type !== "toolCall" || tool.name !== "Agent" || typeof tool.id !== "string") continue;
 			const args = object(tool.arguments);
+			const prompt = typeof args.prompt === "string" ? args.prompt : "";
 			scan.dispatches.set(`${path}\0${tool.id}`, {
 				ms: timeOf(entry.timestamp),
 				type: label(args.subagent_type),
-				prompt: typeof args.prompt === "string" ? args.prompt : "",
+				standards: AXIS_STANDARDS.test(prompt),
+				spec: AXIS_SPEC.test(prompt),
+				target: prompt.match(FULL_SHA)?.at(-1),
 				resume: typeof args.resume === "string",
 			});
 		}
@@ -218,13 +223,18 @@ function collect(scan: Scan, path: string, entry: Record<string, unknown>): stri
 	return parent;
 }
 
-/** Scan one session file, parsing each line once and binding every price to its exact parsed call. */
+/** Scan usage with the shared parser, validate full metadata, and bind every price to its exact parsed call. */
 async function scanFile(scan: Scan, path: string): Promise<void> {
 	const recorded = new Map<CallTuple, Price>();
-	const parser = new SessionParser(0, 0, undefined, (tuple, cost) => recorded.set(tuple, price(cost)));
+	const badLines = new Set<number>();
+	const damaged = (line: number): void => {
+		if (badLines.has(line)) return;
+		badLines.add(line);
+		diagnose(scan, { path, line, reason: "invalid-record" });
+	};
+	const parser = new SessionParser(0, 0, damaged, (tuple, cost) => recorded.set(tuple, price(cost)));
 	let parent = "";
 	let name = "";
-	let badLines = 0;
 	let lineNumber = 0;
 	try {
 		await feedFile(path, {
@@ -241,10 +251,7 @@ async function scanFile(scan: Scan, path: string): Promise<void> {
 				}
 				if (entry === undefined) {
 					// Blank and NUL crash padding are not damage.
-					if (line && !NUL_LINE.test(line)) {
-						badLines++;
-						diagnose(scan, { path, line: lineNumber, reason: "invalid-record" });
-					}
+					if (line && !NUL_LINE.test(line)) damaged(lineNumber);
 					return;
 				}
 				parent = collect(scan, path, entry) || parent;
@@ -257,7 +264,7 @@ async function scanFile(scan: Scan, path: string): Promise<void> {
 	}
 	const parsed = parser.finish();
 	// Full JSON validation catches damaged non-usage entries the fast stats parser deliberately skips.
-	parsed.badLines = Math.max(parsed.badLines, badLines);
+	parsed.badLines = badLines.size;
 	scan.files[path] = parsed;
 	scan.metadata.push({
 		path,
@@ -311,7 +318,30 @@ async function scan(root: string): Promise<Scan> {
 	out.errors = listed.errors;
 	out.paths = new Set(listed.paths);
 	for (const path of listed.paths) await scanFile(out, path);
+	relocateReferences(out);
 	return out;
+}
+
+/** Resolve copied/aliased roots by stable session filenames, never guess between different sessions. */
+function relocateReferences(scan: Scan): void {
+	const byName = new Map<string, Metadata[]>();
+	for (const meta of scan.metadata) {
+		const name = basename(meta.path);
+		byName.set(name, [...(byName.get(name) ?? []), meta]);
+	}
+	const locate = (path: string, required: boolean): string => {
+		if (!path || scan.paths.has(path)) return path;
+		const candidates = byName.get(basename(path)) ?? [];
+		if (candidates.length > 0 && new Set(candidates.map((meta) => meta.session)).size === 1)
+			return nth(candidates, 0).path;
+		if (required || candidates.length > 0) {
+			scan.errors++;
+			diagnose(scan, { path, line: 0, reason: "unmatched-session" });
+		}
+		return path;
+	};
+	for (const meta of scan.metadata) meta.parent = locate(meta.parent, meta.child);
+	for (const record of scan.records) record.path = locate(record.path, false);
 }
 
 /** Phase 2: attribute each child session to an agent type, workflow and traffic lane (heuristic labels). */
@@ -345,9 +375,9 @@ function attribute(scanned: Scan): Attributed {
 		const timeline: Timeline[] = [{ ...base, ms: 0 }];
 		for (const dispatch of dispatches.sort((a, b) => a.ms - b.ms)) {
 			let traffic = base.traffic;
-			if (type === AGENT_REVIEWER && AXIS_STANDARDS.test(dispatch.prompt)) traffic = "review-standards";
-			if (type === AGENT_REVIEWER && AXIS_SPEC.test(dispatch.prompt)) traffic = "review-spec";
-			const target = dispatch.prompt.match(FULL_SHA)?.at(-1);
+			if (type === AGENT_REVIEWER && dispatch.standards) traffic = "review-standards";
+			if (type === AGENT_REVIEWER && dispatch.spec) traffic = "review-spec";
+			const target = dispatch.target;
 			const review = JSON.stringify([meta.parent, type, traffic, target]);
 			if (dispatch.resume || (target && traffic.startsWith("review-") && reviewSeen.has(review)))
 				traffic = "retry-repeat";

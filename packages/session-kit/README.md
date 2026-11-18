@@ -163,49 +163,36 @@ The portable stats CLI also reports existing local pi child-session history:
 node dist/pi-stats-export.mjs subagents --sessions-dir ./session-history > ./subagent-usage.json
 ```
 
-Omit `--sessions-dir` to use `PI_CODING_AGENT_SESSION_DIR`, else the selected `--agent-dir`'s `sessions/`, exactly like `/stats` and export. A missing or unreadable root is reported (`errors`, a `read-directory` diagnostic, `complete: false`), never an empty complete report. This mode
-only reads original session files. It never writes the stats cache, imports remote snapshots,
-changes configuration, or uploads anything. Output may contain local model labels and diagnostic
-paths; keep the report private. Export/import behavior and the `/stats` pane are unchanged.
+Only `--agent-dir` and `--sessions-dir` are accepted; other flags are rejected by name.
+The default root is `PI_CODING_AGENT_SESSION_DIR`, else `<agentDir>/sessions`, like `/stats`.
+This reads originals only, never writes a cache or uploads data. Keep output private: it contains
+local model labels and diagnostic paths. Export/import and `/stats` behavior are unchanged.
 
-`groups` are ordered by agent type, physical provider/model, recorded workflow and traffic class.
-Each has assistant API `calls`, `input`, `output`, `cacheRead`, `cacheWrite`, `recordedCost`,
-`pricedCalls`, `unpricedCalls`, `costComplete` and `unmatchedSessions`. These are API call counts,
-not spawn counts or cost shares. `recordedCost` is the recorded notional priced subtotal, not an
-invoice; `costComplete: false` means it MUST NOT be presented as a complete cost. Missing costs
-are unpriced, while recorded zero prices remain priced. Marked aggregate usage preserves core's
-`pricedCalls`/`unpricedCalls` semantics. `totals` includes every group, including omitted rows.
+`groups` sort by agent type, physical provider/model, workflow and traffic. Each reports assistant
+API `calls`, `input`, `output`, `cacheRead`, `cacheWrite`, `recordedCost`, `pricedCalls`,
+`unpricedCalls`, `costComplete` and `unmatchedSessions`. Counts are not spawn counts or cost shares.
+Recorded cost is a notional priced subtotal, not an invoice; missing prices are unpriced, not free.
+Recorded zero prices remain priced, and aggregate costs preserve core's pricing-coverage semantics.
+The shared `/stats` parser dedupes copied/forked usage; parent Agent reports are not charged again.
 
-The report reuses `/stats`' physical usage parser and copied/forked-event deduplication. Parent
-Agent usage reports are never charged again. Original child names, `subagents:record` metadata,
-Agent tool arguments/result IDs and persisted native workflow progress supply attribution.
-Missing/deleted referenced children contribute to `missingSessions` and `unmatchedSessions`,
-not invented tokens or dollars. Children with no identifiable type appear as `unknown` and
-contribute to unmatched counts. Historical custom names may differ from the configured agent type;
-unrecorded workflow membership stays `unknown`. Usage-only remote snapshots cannot recover this
-metadata and are deliberately excluded.
+Attribution uses child names, `subagents:record`, Agent dispatch/result IDs and stable filenames
+across relocated/symlinked roots. Ambiguous or missing parent joins produce `unmatched-session`
+diagnostics and `complete: false`. Workflow grouping requires persisted native `subagents:workflow`
+progress with record IDs, so most history shows workflow `unknown`. Missing types stay `unknown`;
+missing/deleted children add to `missingSessions`/`unmatchedSessions`, never invented usage.
 
-Review lane and `retry-repeat` are INFERRED heuristic labels, not recorded facts: pi records no
-review lane or retry reason. The agent names (`code-reviewer`, `critic`), the `Axis:` prompt headers
-and the last full 40-hex SHA in a prompt are conventions the report matches, and a prompt that
-deviates is classified `review-unknown` or `other`. Each price is bound to its exact parsed call; a
-call whose price cannot be bound is counted unpriced in `priceFallbacks` (diagnostic reason
-`price-fallback`), never guessed or shown as free. `subagents` rejects any flag other than
-`--agent-dir` and `--sessions-dir`, naming the offender.
+Review labels are INFERRED, not compliance evidence: `review-standards`/`review-spec` require
+`Axis:` prompt headers; `review-critic` uses the agent type. `retry-repeat` means a resume or
+same-parent/type/axis/last-full-SHA repeat, and can label a legitimate same-HEAD re-review.
+Other review history stays `review-unknown`. Unpersisted provider retries cannot be measured.
+Nothing here recommends weakening either review axis or the independent critic.
 
-Review traffic is kept separate: `review-standards` and `review-spec` require explicit `Axis:`
-prompt evidence; `review-critic` identifies critic sessions. These describe the mandated review
-lanes, not proof of policy compliance. `retry-repeat` contains resumed runs and another review of
-the same explicit full-HEAD target/axis within a parent session. A changed HEAD is a fresh review;
-other review history stays `review-unknown`. Historical prompts without joinable result IDs cannot
-be classified reliably. Provider retries that never persisted usage are not measurable. Nothing
-in this report recommends weakening either required review axis or the independent critic.
-
-At most 200 groups and 20 diagnostics are returned; `omittedGroups` makes truncation explicit.
-Labels are terminal-safe and bounded. `errors`, `badLines`, unmatched sessions and unpriced calls
-make `complete` false. Unreadable directories/files and malformed/truncated lines are reported,
-not fatal; totals from a damaged scan are partial. Concurrently growing files are not an atomic
-snapshot. There is no cache fallback for deleted originals.
+Output is bounded to 200 groups and 20 diagnostics, with bounded terminal-safe labels and paths.
+`totals` includes omitted groups; `omittedGroups` reports truncation. Errors, bad lines, unmatched
+sessions, unpriced calls and `priceFallbacks` make `complete` false. Unbound prices are unpriced
+with `price-fallback` diagnostics. Missing/unreadable roots and damaged files are reported, not
+fatal. Totals can be partial; growing files are not an atomic snapshot, and deleted originals
+have no cache fallback.
 
 ## Stats
 
