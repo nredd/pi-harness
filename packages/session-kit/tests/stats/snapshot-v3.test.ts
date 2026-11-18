@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { writeFile as asyncWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -362,4 +362,109 @@ it("does not publish a manifest on write failure or oversized compressed bytes",
 		vi.mocked(gzipSync).mockRestore();
 	}
 	expect(readFileSync(manifestPath)).toEqual(before);
+});
+
+it("accepts independently compressed canonical JSON and authenticates cached producer bytes", async () => {
+	const root = mkdtempSync(join(tmpdir(), "stats-v3-gzip-"));
+	roots.push(root);
+	const agent = join(root, "agent");
+	const out = join(root, "out");
+	const viewer = join(root, "viewer");
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: ms,
+		lines: [assistantLine({ ms, provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out);
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
+	const ref = manifest.shards[0];
+	if (!ref) throw new Error("Missing reference");
+	const original = readFileSync(join(first.snapshotDir, ref.file));
+	const independent = gzipSync(gunzipSync(original), { level: 0 });
+	independent[4] = 1; // A different gzip header and deflate implementation must not affect canonical JSON.
+	const sha256 = createHash("sha256").update(independent).digest("hex");
+	const file = `${ref.month}-${sha256}.json.gz`;
+	const next = { ...manifest, shards: [{ ...ref, file, sha256, bytes: independent.length }] };
+	writeFileSync(join(first.snapshotDir, file), independent);
+	writeFileSync(manifestPath, JSON.stringify(next));
+	expect(decodeShard(independent, next, ref.month)).toEqual(decodeShard(original, manifest, ref.month));
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const cached = await readGlobal(viewer);
+	expect(cached.problems).toEqual([]);
+	expect(cached.machines[first.machineId]?.wire).toEqual([independent.toString("base64")]);
+	const cachePath = join(viewer, "pi-session-kit", "stats-global.json");
+	const doc = JSON.parse(readFileSync(cachePath, "utf8"));
+	const mutations: ((v: typeof doc) => void)[] = [
+		(v) => {
+			v.machines[first.machineId] = null;
+		},
+		(v) => {
+			v.machines[first.machineId].manifest = null;
+		},
+		(v) => {
+			delete v.machines[first.machineId].wire;
+		},
+		(v) => {
+			v.machines[first.machineId].wire = null;
+		},
+		(v) => {
+			v.machines[first.machineId].wire = [];
+		},
+		(v) => {
+			v.machines[first.machineId].wire = [7];
+		},
+		(v) => {
+			v.machines[first.machineId].wire[0] += "\\n";
+		},
+		(v) => {
+			v.machines[first.machineId].manifest.shards[0].bytes++;
+		},
+		(v) => {
+			const changed = Buffer.from(independent);
+			changed[changed.length - 1] = 1;
+			v.machines[first.machineId].wire[0] = changed.toString("base64");
+		},
+	];
+	for (const mutate of mutations) {
+		const changed = structuredClone(doc);
+		mutate(changed);
+		writeFileSync(cachePath, JSON.stringify(changed));
+		expect((await readGlobal(viewer)).problems).toEqual(["Unreadable global cache"]);
+	}
+});
+
+it("authenticates legacy cached shard bytes without requiring a v3 wire array", async () => {
+	const root = mkdtempSync(join(tmpdir(), "stats-v2-cache-"));
+	roots.push(root);
+	const { snapshot, shard } = fixture();
+	const legacy = {
+		...shard,
+		version: 2,
+		events: shard.events.map((event) => {
+			const e = { ...event, entryId: event.entryId?.padEnd(64, "0") ?? null };
+			return { ...e, id: eventId(e, 2) };
+		}),
+	};
+	const text = JSON.stringify(legacy);
+	const sha256 = opaqueId(text);
+	const manifest = {
+		...snapshot.manifest,
+		version: 2,
+		shards: [{ month: shard.month, file: `${shard.month}-${sha256}.json`, sha256, bytes: Buffer.byteLength(text) }],
+	};
+	const doc = {
+		version: 2,
+		importedAt: ms,
+		machines: { [identity.machineId]: { manifest, shards: [legacy] } },
+		problems: [],
+	};
+	const path = join(root, "pi-session-kit", "stats-global.json");
+	mkdirSync(join(root, "pi-session-kit"));
+	writeFileSync(path, JSON.stringify(doc));
+	expect((await readGlobal(root)).problems).toEqual([]);
+	const session = legacy.sessions[0];
+	if (!session) throw new Error("Missing session");
+	session.endMs++;
+	writeFileSync(path, JSON.stringify(doc));
+	expect((await readGlobal(root)).problems).toEqual(["Unreadable global cache"]);
 });

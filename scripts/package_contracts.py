@@ -55,7 +55,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, Self, TypedDict
+from typing import Annotated, Any, Literal, Self, TypedDict, get_args
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -1135,10 +1135,10 @@ class StatsShardRef(BaseModel):
             Self: The validated model.
 
         Raises:
-            ValueError: If `file` is not `<month>-<sha256>.json`.
+            ValueError: If `file` is neither `<month>-<sha256>.json` nor its `.gz` variant.
         """
         if self.file not in (f"{self.month}-{self.sha256}.json", f"{self.month}-{self.sha256}.json.gz"):
-            raise ValueError(f"shard file '{self.file}' is not '{self.month}-{self.sha256}.json'")
+            raise ValueError(f"shard file '{self.file}' is not a content-addressed JSON or gzip name")
         return self
 
 
@@ -1162,14 +1162,14 @@ class StatsManifest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _months_are_unique(self) -> Self:
-        """Require exactly one shard per month.
+    def _references_match_version(self) -> Self:
+        """Require unique files, versioned extensions and unique legacy months.
 
         Returns:
             Self: The validated model.
 
         Raises:
-            ValueError: If a month appears twice.
+            ValueError: If files repeat, legacy months repeat, or extensions disagree with the version.
         """
         months = [ref.month for ref in self.shards]
         if self.version < 3 and len(set(months)) != len(months):
@@ -1317,7 +1317,7 @@ def compact_stats_shard(shard: StatsShard) -> StatsCompactShard:
     ids = sorted({s.id for s in shard.sessions} | {e.sessionId for e in shard.events})
     pairs = sorted({(e.provider, e.model) for e in shard.events})
     epoch = int(datetime.fromisoformat(f"{shard.month}-01T00:00:00+00:00").timestamp() * 1000)
-    harnesses = ("pi", "claude", "codex", "opencode")
+    harnesses = get_args(StatsHarness)
     return StatsCompactShard(
         v=3,
         m=shard.machineId,

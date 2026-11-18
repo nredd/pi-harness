@@ -86,6 +86,8 @@ export interface Manifest extends Identity {
 export interface MachineSnapshot {
 	manifest: Manifest;
 	shards: Shard[];
+	/** v3 imported cache only: authenticated producer bytes, independent of the viewer's zlib build. */
+	wire?: string[];
 }
 export interface GlobalCache {
 	version: number;
@@ -347,9 +349,8 @@ function unpackedId(value: unknown, length = 32): string {
 	return bytes.toString("hex");
 }
 
-/** Canonical v3 wire encoding. Collision-checked 96-bit entry identities deduplicate across versions. */
-export function encodeShard(shard: Shard): Buffer {
-	if (shard.version !== 3) return Buffer.from(JSON.stringify(shard));
+/** Canonical compact JSON, independent of gzip implementation and compression level. */
+function compactJson(shard: Shard): string {
 	const ids = [...new Set([...shard.sessions.map((s) => s.id), ...shard.events.map((e) => e.sessionId)])].sort();
 	const pairs = [...new Set(shard.events.map((e) => JSON.stringify([e.provider, e.model])))].sort();
 	const sessions = new Map(ids.map((id, i) => [id, i]));
@@ -380,10 +381,16 @@ export function encodeShard(shard: Shard): Buffer {
 			]),
 		q: shard.quota,
 	};
-	// zlib emits a zero mtime. The fixed level and canonical field/table/row ordering make repeated bytes stable.
 	const text = JSON.stringify(compact);
 	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-	return gzipSync(text, { level: 9 });
+	return text;
+}
+
+/** Canonical v3 wire encoding. Collision-checked 96-bit entry identities deduplicate across versions. */
+export function encodeShard(shard: Shard): Buffer {
+	if (shard.version !== 3) return Buffer.from(JSON.stringify(shard));
+	// zlib emits a zero mtime; canonical JSON and a fixed compression level make producer bytes stable.
+	return gzipSync(compactJson(shard), { level: 9 });
 }
 
 /** Decode bounded wire bytes into the existing strict, privacy-only aggregation schema. */
@@ -394,7 +401,8 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 		if (JSON.stringify(shard) !== text) throw new Error("Noncanonical shard JSON");
 		return shard;
 	}
-	const value: unknown = JSON.parse(gunzipSync(bytes, { maxOutputLength: MAX_BYTES }).toString("utf8"));
+	const text = gunzipSync(bytes, { maxOutputLength: MAX_BYTES }).toString("utf8");
+	const value: unknown = JSON.parse(text);
 	exact(value, ["v", "m", "t", "s", "p", "d", "e", "q"]);
 	if (
 		value.v !== 3 ||
@@ -449,18 +457,22 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 		manifest,
 		month,
 	);
-	if (!encodeShard(shard).equals(bytes)) throw new Error("Noncanonical compact shard");
+	if (compactJson(shard) !== text) throw new Error("Noncanonical compact shard");
 	return shard;
 }
 
 /** Only bounded regular files with manifest-authenticated bytes reach decompression/schema validation. */
-async function readShard(base: string, manifest: Manifest, ref: Manifest["shards"][number]): Promise<Shard> {
+async function readShard(
+	base: string,
+	manifest: Manifest,
+	ref: Manifest["shards"][number],
+): Promise<{ shard: Shard; bytes: Buffer }> {
 	const path = join(base, ref.file);
 	const info = await lstat(path);
 	if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES) throw new Error("Invalid shard size/type");
 	const bytes = await readFile(path);
 	if (digest(bytes) !== ref.sha256) throw new Error("Shard digest mismatch");
-	return decodeShard(bytes, manifest, ref.month);
+	return { shard: decodeShard(bytes, manifest, ref.month), bytes };
 }
 
 export function validateManifest(value: unknown): Manifest {
@@ -692,7 +704,7 @@ async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	}
 	try {
 		const shards: Shard[] = [];
-		for (const ref of manifest.shards) shards.push(await readShard(snapshotDir, manifest, ref));
+		for (const ref of manifest.shards) shards.push((await readShard(snapshotDir, manifest, ref)).shard);
 		validateSnapshot({ manifest, shards });
 		return { manifest, shards };
 	} catch {
@@ -746,6 +758,7 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 	}
 	for (const s of sessions)
 		if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
+	out.sessions = [...mergeSessionMetadata(out.sessions).values()];
 	return out;
 }
 
@@ -951,15 +964,31 @@ export async function readGlobal(dir: string): Promise<GlobalCache> {
 		)
 			throw new Error("Invalid global cache");
 		for (const [id, machine] of Object.entries(v.machines)) {
-			exact(machine, ["manifest", "shards"]);
+			exact(
+				machine,
+				record(machine) && record(machine.manifest) && machine.manifest.version === 3
+					? ["manifest", "shards", "wire"]
+					: ["manifest", "shards"],
+			);
 			const m = validateManifest(machine.manifest);
 			if (m.machineId !== id || !Array.isArray(machine.shards) || machine.shards.length !== m.shards.length)
 				throw new Error("Invalid cached machine");
+			const wire = machine.wire;
+			if (m.version === 3 && (!Array.isArray(wire) || wire.length !== m.shards.length))
+				throw new Error("Invalid cached wire bytes");
 			for (const [i, s] of machine.shards.entries()) {
 				// The length check above pairs every cached shard with its manifest reference.
 				const ref = nth(m.shards, i);
 				validateShard(s, m, ref.month);
-				if (digest(encodeShard(s as Shard)) !== ref.sha256) throw new Error("Cached shard digest mismatch");
+				if (m.version === 3) {
+					const encoded: unknown = (wire as unknown[])[i];
+					if (typeof encoded !== "string") throw new Error("Invalid cached wire bytes");
+					const bytes = Buffer.from(encoded, "base64");
+					if (bytes.toString("base64") !== encoded || bytes.length !== ref.bytes || digest(bytes) !== ref.sha256)
+						throw new Error("Cached shard digest mismatch");
+					if (JSON.stringify(decodeShard(bytes, m, ref.month)) !== JSON.stringify(s))
+						throw new Error("Cached shard projection mismatch");
+				} else if (digest(encodeShard(s as Shard)) !== ref.sha256) throw new Error("Cached shard digest mismatch");
 			}
 			validateSnapshot(machine as unknown as MachineSnapshot);
 		}
@@ -1013,13 +1042,16 @@ export async function importStats(
 				const manifest = validateManifest(await jsonFile(join(base, "manifest.json")));
 				if (manifest.machineId !== id) throw new Error("Machine identity mismatch");
 				const shards: Shard[] = [];
+				const wire: string[] = [];
 				for (const ref of manifest.shards) {
-					shards.push(await readShard(base, manifest, ref));
+					const read = await readShard(base, manifest, ref);
+					shards.push(read.shard);
+					wire.push(read.bytes.toString("base64"));
 				}
 				validateSnapshot({ manifest, shards });
 				const prior = machines[id];
 				if (prior && manifest.exportedAt < prior.manifest.exportedAt) throw new Error("Older machine snapshot");
-				machines[id] = { manifest, shards };
+				machines[id] = { manifest, shards, ...(manifest.version === 3 ? { wire } : {}) };
 				imported++;
 			} catch {
 				problems.push(`Incomplete snapshot ${id}`);

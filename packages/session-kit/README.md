@@ -544,7 +544,7 @@ Installation state, never synced:
   bytes. Tests inject final-document byte accounting at the exact limit and one byte over, while
   retaining real import validation and atomic publication.
 
-Snapshot version 2 (version 1 is still imported, see Compatibility):
+Snapshot version 3 (versions 1 and 2 are still imported, see Compatibility):
 
 ```
 machines/<UUID>/manifest.json
@@ -579,9 +579,12 @@ attribution, timestamp and counters; legacy entry hashes remain unchanged on dis
 fingerprint. All other identity fields are reconstructed, not repeated per event.
 
 The canonical compact JSON is compressed with gzip level 9 and zero mtime. Digests and `bytes`
-cover the compressed bytes. Imports reject noncanonical encodings, invalid indexes/rows and
-expanded JSON above 128 MiB, in addition to the 128 MiB regular-file bound. The expanded cache
-still uses `{version, machineId, month, events, sessions, quota}` and strict validation below;
+cover the compressed bytes. Imports reject noncanonical compact JSON, invalid indexes/rows and
+expanded JSON above 128 MiB, in addition to the 128 MiB regular-file bound. They accept equivalent
+gzip streams from other zlib builds without recompression. The expanded cache still uses
+`{version, machineId, month, events, sessions, quota}` and strict validation below; v3 cached machines
+also retain a `wire` array of base64 producer bytes, authenticated against the manifest and checked
+against the expanded projection on every read, so cache validation is compression-version independent;
 v1 shards have no `quota` and use canonical uncompressed `JSON.stringify` bytes.
 
 Shards are published first, manifest last. After publication the serialized exporter removes
@@ -730,7 +733,7 @@ the published snapshots. To drop a harness on purpose, export without it using
   Missing, unreadable, malformed, non-file or over-64-KiB captures silently contribute no quota;
   invalid/absent windows are unknown, not zero. They never fail a transcript scan or replace its
   history. Partial captures do not retain a previous sibling; expired readings follow the reset
-  display policy above, not old usage as current. Snapshot v2 and v1 import compatibility stay unchanged.
+  display policy above, not old usage as current. Snapshot v1/v2/v3 import compatibility follows the migration rules above.
   Source reader integration is #963; capture producer nredd/dotfiles#144 is merged. The reader must
   still be published and the producer configured before an installed exporter/viewer can consume
   captures. Merging capture alone never enabled this reader. This change does not publish, activate
