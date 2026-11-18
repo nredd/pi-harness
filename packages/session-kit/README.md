@@ -163,7 +163,7 @@ The portable stats CLI also reports existing local pi child-session history:
 node dist/pi-stats-export.mjs subagents --sessions-dir ./session-history > ./subagent-usage.json
 ```
 
-Omit `--sessions-dir` to use the selected `--agent-dir`'s `sessions/` directory. This mode
+Omit `--sessions-dir` to use `PI_CODING_AGENT_SESSION_DIR`, else the selected `--agent-dir`'s `sessions/`, exactly like `/stats` and export. A missing or unreadable root is reported (`errors`, a `read-directory` diagnostic, `complete: false`), never an empty complete report. This mode
 only reads original session files. It never writes the stats cache, imports remote snapshots,
 changes configuration, or uploads anything. Output may contain local model labels and diagnostic
 paths; keep the report private. Export/import behavior and the `/stats` pane are unchanged.

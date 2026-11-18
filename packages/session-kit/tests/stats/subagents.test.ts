@@ -155,6 +155,17 @@ it("uses persisted records for renamed children and workflow progress; identifie
 	])
 		await file(`${name}.jsonl`, [header(name ?? "", parent), info(`code-reviewer#${id}`), call(name ?? "")]);
 	await file("d.jsonl", [header("d", parent), info("renamed"), call("critic")]);
+	// A /fork copies the dispatch and result entries under its own path; no child is missing.
+	await file("fork.jsonl", [
+		header("fork", parent),
+		tool("t1", `Axis: Standards ${sha}`),
+		result("t1", "11111111"),
+		{
+			type: "custom",
+			customType: "subagents:record",
+			data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
+		},
+	]);
 	const report = await reportSubagents(root);
 	expect(report.groups.map((g) => [g.traffic, g.workflow, g.calls])).toEqual([
 		["review-spec", "audit", 1],
@@ -173,7 +184,13 @@ it("reports unreadable directory errors without throwing, and missing roots as e
 		groups: [],
 		diagnostics: [{ path: notDirectory, reason: "read-directory", line: 0 }],
 	});
-	expect(await reportSubagents(join(root, "absent"))).toMatchObject({ errors: 0, complete: true, groups: [] });
+	const absent = join(root, "absent");
+	expect(await reportSubagents(absent)).toMatchObject({
+		errors: 1,
+		complete: false,
+		groups: [],
+		diagnostics: [{ path: absent, reason: "read-directory", line: 0 }],
+	});
 });
 
 it("adds a local-only portable CLI mode and refuses export/input flags", async () => {
@@ -181,6 +198,7 @@ it("adds a local-only portable CLI mode and refuses export/input flags", async (
 	const log = vi.spyOn(console, "log").mockImplementation(() => {});
 	try {
 		await mkdir(join(root, "sessions"));
+		delete process.env.PI_CODING_AGENT_SESSION_DIR;
 		process.argv = ["node", "stats", "subagents", "--agent-dir", root];
 		await main();
 		expect(JSON.parse(log.mock.calls[0]?.[0] as string)).toMatchObject({ groups: [], complete: true });
@@ -190,6 +208,35 @@ it("adds a local-only portable CLI mode and refuses export/input flags", async (
 		await expect(main()).rejects.toThrow("usage:");
 	} finally {
 		process.argv = argv;
+	}
+});
+
+it("defaults to PI_CODING_AGENT_SESSION_DIR like /stats and export", async () => {
+	const argv = process.argv;
+	const env = process.env.PI_CODING_AGENT_SESSION_DIR;
+	const log = vi.spyOn(console, "log").mockImplementation(() => {});
+	try {
+		const sessions = join(root, "elsewhere");
+		await mkdir(sessions);
+		await writeFile(
+			join(sessions, "child.jsonl"),
+			[header("c", join(root, "parent.jsonl")), info("Explore#12345678"), call("x")]
+				.map((e) => JSON.stringify(e))
+				.join("\n"),
+		);
+		process.env.PI_CODING_AGENT_SESSION_DIR = sessions;
+		process.argv = ["node", "stats", "subagents", "--agent-dir", join(root, "agent")];
+		await main();
+		const report = JSON.parse(log.mock.calls[0]?.[0] as string);
+		expect(report.groups).toHaveLength(1);
+		expect(report.groups[0]).toMatchObject({ agentType: "Explore", calls: 1 });
+		delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		await main();
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ complete: false, errors: 1, groups: [] });
+	} finally {
+		process.argv = argv;
+		if (env === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		else process.env.PI_CODING_AGENT_SESSION_DIR = env;
 	}
 });
 

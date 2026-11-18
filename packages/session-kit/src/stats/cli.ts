@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
-import { HARNESSES, type Harness } from "./load.ts";
+import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
 import { exportStats, importStats } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
@@ -60,7 +60,7 @@ export async function main(): Promise<void> {
 			throw new Error(
 				`usage: flag '${invalid}' is not valid for subagents; valid flags: ${SUBAGENTS_FLAGS.join(", ")}`,
 			);
-		const result = await reportSubagents(resolve(options.get("--sessions-dir") ?? resolve(dir, "sessions")));
+		const result = await reportSubagents(resolve(options.get("--sessions-dir") ?? sessionsDir(dir)));
 		console.log(JSON.stringify(result));
 	} else if (command === "export" && output !== undefined && input === undefined) {
 		const path = (flag: string): string | undefined => {

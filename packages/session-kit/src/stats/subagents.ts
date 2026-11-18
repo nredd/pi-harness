@@ -1,4 +1,5 @@
 /** Local-only subagent accounting. Reuses stats parsing/dedup, never writes its cache or exports transcripts. */
+import { stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { feedFile, listJsonl, type ScanDiagnostic, timeOf } from "./jsonl.ts";
 import { type Call, type CallTuple, type FileStats, flatten, legacyKey, opaqueId, SessionParser } from "./load.ts";
@@ -298,6 +299,14 @@ async function scan(root: string): Promise<Scan> {
 		errors: 0,
 		unbound: new Set(),
 	};
+	// A missing root is a reported condition here, never a silent empty (complete) report.
+	try {
+		await stat(resolve(root));
+	} catch {
+		out.errors = 1;
+		diagnose(out, { path: resolve(root), line: 0, reason: "read-directory" });
+		return out;
+	}
 	const listed = await listJsonl(resolve(root), (d) => diagnose(out, d));
 	out.errors = listed.errors;
 	out.paths = new Set(listed.paths);
@@ -383,14 +392,14 @@ function aggregate(scanned: Scan, attributed: Attributed): SubagentReport {
 		entry.group.unmatchedSessions = entry.sessions.size;
 		entry.group.costComplete &&= cost.unpricedCalls === 0;
 	}
+	// Forks copy records and results under their own path, so match on the agent id alone: a reference is
+	// missing only when no child session anywhere carries that id.
+	const matchedIds = new Set([...attributed.matchedRecords].map((key) => key.slice(key.indexOf("\0") + 1)));
 	const referenced = [...scanned.records, ...scanned.results.map((row) => ({ ...row, path: "" }))];
 	const missing = new Set(
 		referenced
-			.filter(
-				(r) =>
-					!attributed.matchedRecords.has(`${r.parent}\0${r.id.slice(0, 8)}`) && (!r.path || !scanned.paths.has(r.path)),
-			)
-			.map((r) => `${r.parent}\0${r.id.slice(0, 8)}`),
+			.filter((r) => !matchedIds.has(r.id.slice(0, 8)) && (!r.path || !scanned.paths.has(r.path)))
+			.map((r) => r.id.slice(0, 8)),
 	);
 	// Map keys are unique, so the comparator never receives equal values.
 	const ordered = [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, { group }]) => group);

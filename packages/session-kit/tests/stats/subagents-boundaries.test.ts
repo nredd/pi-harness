@@ -236,11 +236,16 @@ it("counts price fallbacks only for calls that reach the totals", async () => {
 	const unbound = await withMutatedCalls(clone);
 	expect(unbound).toMatchObject({ complete: false, priceFallbacks: 1, totals: { calls: 1, unpricedCalls: 1 } });
 	vi.restoreAllMocks();
-	// Only the first-scanned copy is unbound: the bound copy supersedes it and nothing falls back.
+	// Paths sort, so `a-copy` scans first. Unbound first: the later bound copy supersedes it.
 	let scanned = 0;
-	const supersede = await withMutatedCalls((calls) => (scanned++ === 1 ? clone(calls) : calls));
+	const supersede = await withMutatedCalls((calls) => (scanned++ === 0 ? clone(calls) : calls));
 	expect(supersede).toMatchObject({ priceFallbacks: 0, totals: { calls: 1, recordedCost: 1, pricedCalls: 1 } });
 	expect(supersede.diagnostics.map((d) => d.reason)).toEqual(["price-fallback"]);
+	vi.restoreAllMocks();
+	// Bound first: the later unbound copy never replaces it.
+	scanned = 0;
+	const kept = await withMutatedCalls((calls) => (scanned++ === 1 ? clone(calls) : calls));
+	expect(kept).toMatchObject({ priceFallbacks: 0, totals: { calls: 1, recordedCost: 1, pricedCalls: 1 } });
 });
 
 it("ignores session records /stats ignores, so a mid-file session and late header never make a child", async () => {
@@ -258,4 +263,15 @@ it("ignores session records /stats ignores, so a mid-file session and late heade
 	const report = await reportSubagents(root);
 	expect(report.groups).toEqual([]);
 	expect(report.totals.calls).toBe(0);
+});
+
+it("still counts a result whose agent id matches no child, even when a fork copies it", async () => {
+	const parent = await file("parent.jsonl", [header("p")]);
+	const lost = {
+		type: "message",
+		message: { role: "toolResult", toolName: "Agent", toolCallId: "t", details: { agentId: "deadbeef" } },
+	};
+	await file("fork.jsonl", [header("f", parent), lost]);
+	await file("fork2.jsonl", [header("f2", parent), lost]);
+	expect(await reportSubagents(root)).toMatchObject({ missingSessions: 1, unmatchedSessions: 1, complete: false });
 });
