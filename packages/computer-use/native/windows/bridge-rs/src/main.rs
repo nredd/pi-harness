@@ -1770,8 +1770,12 @@ fn cancelled() -> ProtocolError {
 mod tests {
     use super::*;
 
+    // Tests changing terminal admission must not race tests entering delivery.
+    static ADMISSION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn semantic_delivery_holds_the_same_lease_as_checked_keyboard_input() {
+        let _admission = ADMISSION_TEST_LOCK.lock().unwrap();
         let result = deliver_act(|| {
             assert!(IN_PHYSICAL_TRANSACTION.with(Cell::get));
             assert!(physical_input_lock().try_lock().is_err());
@@ -1871,6 +1875,7 @@ mod tests {
 
     #[test]
     fn terminal_admission_cannot_start_another_physical_operation() {
+        let _admission = ADMISSION_TEST_LOCK.lock().unwrap();
         INPUT_CLOSED.store(true, Ordering::Release);
         let ran = Cell::new(false);
         let result = with_physical_input(|| {

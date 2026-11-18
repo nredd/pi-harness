@@ -94,8 +94,9 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   before live pattern probing, even if its observation advertised usable patterns. Kernel acquisition
   waits at most five seconds.
   Kernel abandonment refuses the waiting action; it never retries the crashed action. The Windows
-  kernel integration test uses the separate `abandon_input_lease` example crash process, not an
-  environment-controlled test branch. Cargo's normal `cargo test` builds this fixture before tests run. Windows releases
+  kernel integration test uses the separate `abandon-input-lease` fixture binary, not an
+  environment-controlled test branch. Cargo supplies its executable path to integration tests,
+  including `--all-targets`; it is not a helper delivery target. Windows releases
   thread ownership on death, but this is NOT a persistent uncertain-delivery fence. The WSL transport's
   retained host-volume lease remains authoritative after cancellation/timeout/helper failure; recovery
   requires the owner's documented review, never automatic lease stealing. No guarantee is made against
@@ -106,8 +107,9 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   WSL transport's uncertainty fence intact. It never replays the failed operation. Lost stdout is
   terminal. Every terminal failure cancels admission and allows an active physical operation up to
   two seconds to release keys/buttons before forcing exit; a stuck provider can still leave input
-  state uncertain, so the host lease stays fenced. A mismatched `SetValue` read-back is uncertain
-  under every policy, never an invitation to retry in the foreground. Stdin EOF cancels queued mutations and stops the helper after at most a two-second
+  state uncertain, so the host lease stays fenced. A mismatched `SetValue` read-back is definite `didnt`
+  evidence, not a claim that the control stayed unchanged and never permission to replay the write.
+  Stdin EOF cancels queued mutations and stops the helper after at most a two-second
   shutdown grace instead of joining a stuck provider indefinitely. An already admitted action may
   have run, and a forced stop can leave key/button state uncertain. The owner must verify the stopped
   process and input/app state before clearing the retained WSL lease.

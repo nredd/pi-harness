@@ -1,5 +1,6 @@
 //! Disposable crash fixture for the real Windows kernel input lease.
-//! Cargo test builds examples before running the desktop integration tests.
+//! Cargo builds this separate binary before desktop integration tests; the test
+//! receives its path through Cargo's compile-time executable constant.
 
 fn main() {
     #[cfg(windows)]

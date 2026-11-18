@@ -44,6 +44,7 @@ fn windows_kernel_input_lease() {
     contender.join().expect("queued lease acquired");
 
     // A waiting helper's open handle preserves observable abandonment.
+    // SAFETY: the named mutex handle is owned here and closed after the crash check.
     let anchor = unsafe {
         windows::Win32::System::Threading::CreateMutexW(
             None,
@@ -52,17 +53,9 @@ fn windows_kernel_input_lease() {
         )
     }
     .expect("open waiting-session anchor");
-    let test_exe = std::env::current_exe().expect("test executable");
-    let fixture = test_exe
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("Cargo target profile directory")
-        .join("examples")
-        .join(format!(
-            "abandon_input_lease{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-    let status = std::process::Command::new(fixture)
+    // Cargo builds this separate binary for integration tests, including --all-targets.
+    // This compile-time executable path is not a runtime test gate.
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_abandon-input-lease"))
         .status()
         .expect("spawn disposable crash fixture");
     assert!(status.success());
@@ -71,5 +64,6 @@ fn windows_kernel_input_lease() {
         "abandonment refuses rather than replaying unknown input"
     );
     drop(PhysicalLease::acquire().expect("explicit subsequent request can acquire clean lease"));
+    // SAFETY: anchor is an owned open mutex handle, closed exactly once here.
     unsafe { windows::Win32::Foundation::CloseHandle(anchor) }.expect("close fixture anchor");
 }

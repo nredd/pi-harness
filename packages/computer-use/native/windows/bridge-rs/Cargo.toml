@@ -2,6 +2,7 @@
 name = "windows-bridge"
 version = "0.1.0"
 edition = "2021"
+default-run = "windows-bridge"
 description = "Protocol skeleton for the pi-computer-use Windows helper"
 
 [dependencies]
@@ -35,8 +36,8 @@ windows = { version = "0.58", features = [
 name = "windows_bridge"
 path = "src/lib.rs"
 
-[[example]]
-name = "abandon_input_lease"
+[[bin]]
+name = "abandon-input-lease"
 path = "tests/fixtures/abandon_input_lease.rs"
 
 [[example]]
