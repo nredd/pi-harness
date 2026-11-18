@@ -151,10 +151,10 @@ fn screenshot_impl(
     let mut warnings: Vec<String> = Vec::new();
 
     // 2. Check for minimized state.
-    // SAFETY: borrowed HWND with an initialized output; a vanished window is reported as an error by the API.
+    // SAFETY: IsIconic only queries this borrowed HWND and retains no pointers.
     let is_minimized = unsafe { IsIconic(hwnd).as_bool() };
     let requires_transition = is_minimized
-        // SAFETY: borrowed HWND with an initialized output; a vanished window is reported as an error by the API.
+        // SAFETY: GetForegroundWindow returns a borrowed handle used only for comparison.
         || unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() != hwnd };
     let mut before_rect = RECT::default();
     // SAFETY: borrowed HWND with an initialized output; a vanished window is reported as an error by the API.
@@ -170,7 +170,7 @@ fn screenshot_impl(
     let baseline = if requires_transition && !is_minimized {
         // A failed pre-transition render is not evidence of a changed frame.
         Some(fingerprint(
-            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
+            // SAFETY: validated borrowed HWND and queried extent; the callee owns and releases its GDI resources.
             &unsafe {
                 gdi_capture_to_base64(hwnd, baseline_rect.2, baseline_rect.3, max_dimension)
             }?
@@ -191,7 +191,7 @@ fn screenshot_impl(
         }
 
         // 3. Get the window rect so we know capture dimensions.
-        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
+        // SAFETY: GetWindowRect borrows HWND and writes only to the initialized local RECT; failure is propagated.
         let (x, y, width, height) = unsafe {
             let mut rect = RECT::default();
             if GetWindowRect(hwnd, &mut rect).is_err() {
@@ -212,10 +212,7 @@ fn screenshot_impl(
             ));
         }
 
-        // 4. GDI capture (unsafe FFI block).
-        // SAFETY: All GDI objects are created and destroyed within this
-        // function.  Object lifetimes follow the Acquire → Use → Release
-        // pattern with proper cleanup on every error path.
+        // 4. Revalidate around each render; gdi_capture_to_base64 owns GDI cleanup.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
         let (png_base64, output_width, output_height) = loop {
             crate::desktop::validated_bounds(native.raw(), Some(expected_pid))?;

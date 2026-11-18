@@ -27,11 +27,6 @@ fn windows_kernel_input_lease() {
     use std::sync::mpsc;
     use windows::core::w;
     use windows_bridge::desktop::PhysicalLease;
-    if std::env::var_os("PI_NATIVE_MUTEX_ABANDON").is_some() {
-        let _lease = PhysicalLease::acquire().expect("child owns kernel lease");
-        // Exit without Rust destructors: the kernel, not a fake, abandons ownership.
-        std::process::exit(0);
-    }
     let lease = PhysicalLease::acquire().expect("first session");
     let (started, waiting) = mpsc::channel();
     let contender = std::thread::spawn(move || {
@@ -57,9 +52,17 @@ fn windows_kernel_input_lease() {
         )
     }
     .expect("open waiting-session anchor");
-    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "windows_kernel_input_lease", "--nocapture"])
-        .env("PI_NATIVE_MUTEX_ABANDON", "1")
+    let test_exe = std::env::current_exe().expect("test executable");
+    let fixture = test_exe
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("Cargo target profile directory")
+        .join("examples")
+        .join(format!(
+            "abandon_input_lease{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+    let status = std::process::Command::new(fixture)
         .status()
         .expect("spawn disposable crash fixture");
     assert!(status.success());

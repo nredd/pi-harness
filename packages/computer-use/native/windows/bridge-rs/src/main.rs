@@ -241,7 +241,14 @@ fn set_dpi_awareness() -> bool {
         AreDpiAwarenessContextsEqual, GetThreadDpiAwarenessContext, SetProcessDpiAwarenessContext,
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
-    let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    // SAFETY: the constant is a documented DPI context; no pointers are borrowed.
+    if let Err(error) =
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+    {
+        // A manifest may already have established the required context. Verify it below.
+        eprintln!("SetProcessDpiAwarenessContext: {error}; verifying existing thread context");
+    }
+    // SAFETY: both context handles are borrowed values, used only for comparison.
     unsafe {
         AreDpiAwarenessContextsEqual(
             GetThreadDpiAwarenessContext(),
@@ -453,6 +460,7 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         .unwrap_or(1.0);
     #[cfg(windows)]
     let mut scale_factor = {
+        // SAFETY: GetDpiForWindow borrows the discovered HWND; zero is refused below.
         let dpi = unsafe {
             windows::Win32::UI::HiDpi::GetDpiForWindow(windows::Win32::Foundation::HWND(
                 root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as *mut _,
@@ -857,6 +865,11 @@ fn scoped_outline_root(mut outline: Value, scope_ref: &str) -> Value {
     scoped
 }
 
+/// Keep semantic and physical delivery in the same admission transaction.
+fn deliver_act<T>(work: impl FnOnce() -> Result<T, ProtocolError>) -> Result<T, ProtocolError> {
+    with_physical_input(work)
+}
+
 fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
     if INPUT_CLOSED.load(Ordering::Acquire) {
         return Err(cancelled());
@@ -894,55 +907,57 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
         Some(snapshot_roots(target_pid)?)
     };
 
-    let mut response = match &parsed.target {
-        input::ActTarget::Ref(reference) => act_on_ref(args, &parsed, &record, reference)?,
-        input::ActTarget::Point { x, y } => {
-            input::refuse_keyboard_at_point(&parsed)?;
-            if !record.has_image {
-                return Err(ProtocolError::new(
-                    "Coordinate targeting is unavailable for this outline-only root",
-                    ErrorCode::CoordinateUnavailableForRoot,
-                ));
-            }
-            with_physical_input(|| {
-                let current =
-                    windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
-                if (current.x, current.y, current.width, current.height)
-                    != (
-                        record.frame_x,
-                        record.frame_y,
-                        record.frame_w,
-                        record.frame_h,
-                    )
-                {
+    let mut response = deliver_act(|| {
+        Ok(match &parsed.target {
+            input::ActTarget::Ref(reference) => act_on_ref(args, &parsed, &record, reference)?,
+            input::ActTarget::Point { x, y } => {
+                input::refuse_keyboard_at_point(&parsed)?;
+                if !record.has_image {
                     return Err(ProtocolError::new(
-                        "Window moved since observation; observe again",
-                        ErrorCode::StaleLook,
+                        "Coordinate targeting is unavailable for this outline-only root",
+                        ErrorCode::CoordinateUnavailableForRoot,
                     ));
                 }
-                let start =
-                    project_vertex(current, (record.image_w, record.image_h), *x, *y, false)?;
-                let (executable, points) = resolved_executable(
-                    &parsed,
-                    current,
-                    (record.image_w, record.image_h),
-                    start,
-                    false,
-                )?;
-                // Act never restores/raises. Every vertex is admitted before mutation.
-                windows_bridge::guard::deliver_path(
-                    current,
-                    None,
-                    &points,
-                    |x, y| {
-                        window::ensure_point_owned(record.hwnd, &json!({"x":x,"y":y}))?;
-                        Ok(true)
-                    },
-                    || input::act(&executable),
-                )
-            })?
-        }
-    };
+                with_physical_input(|| {
+                    let current =
+                        windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
+                    if (current.x, current.y, current.width, current.height)
+                        != (
+                            record.frame_x,
+                            record.frame_y,
+                            record.frame_w,
+                            record.frame_h,
+                        )
+                    {
+                        return Err(ProtocolError::new(
+                            "Window moved since observation; observe again",
+                            ErrorCode::StaleLook,
+                        ));
+                    }
+                    let start =
+                        project_vertex(current, (record.image_w, record.image_h), *x, *y, false)?;
+                    let (executable, points) = resolved_executable(
+                        &parsed,
+                        current,
+                        (record.image_w, record.image_h),
+                        start,
+                        false,
+                    )?;
+                    // Act never restores/raises. Every vertex is admitted before mutation.
+                    windows_bridge::guard::deliver_path(
+                        current,
+                        None,
+                        &points,
+                        |x, y| {
+                            window::ensure_point_owned(record.hwnd, &json!({"x":x,"y":y}))?;
+                            Ok(true)
+                        },
+                        || input::act(&executable),
+                    )
+                })?
+            }
+        })
+    })?;
 
     if let Some(before) = before {
         let (after, source, events) = windows_bridge::guard::observe_after_delivery(|| {
@@ -1113,12 +1128,9 @@ fn act_on_ref(
                 &element.automation_id,
                 text,
             )? {
-                windows_bridge::uia::SetTextResult::Set { value } => {
-                    windows_bridge::guard::verify_written_text(text, &value)?;
-                    Ok(
-                        json!({ "outcome": if value == text { "worked" } else { "didnt" }, "performed": { "grounding": "description", "delivery": "ax" }, "evidence": { "value": value } }),
-                    )
-                }
+                windows_bridge::uia::SetTextResult::Set { value } => Ok(
+                    windows_bridge::guard::written_text_response(text, value.as_deref()),
+                ),
                 windows_bridge::uia::SetTextResult::NoPattern => {
                     coordinate_fallback(args, parsed, &element)
                 }
@@ -1757,6 +1769,16 @@ fn cancelled() -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn semantic_delivery_holds_the_same_lease_as_checked_keyboard_input() {
+        let result = deliver_act(|| {
+            assert!(IN_PHYSICAL_TRANSACTION.with(Cell::get));
+            assert!(physical_input_lock().try_lock().is_err());
+            Ok(17)
+        });
+        assert_eq!(result.unwrap(), 17);
+    }
 
     #[test]
     fn malformed_runtime_ids_stop_the_look() {

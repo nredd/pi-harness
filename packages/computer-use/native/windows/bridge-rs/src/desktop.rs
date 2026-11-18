@@ -99,7 +99,9 @@ mod native {
         )
     }
 
-    // Borrowed desktop/window-station handles are never closed here.
+    // SAFETY: callers supply a live desktop/window-station handle; the query writes
+    // at most 512 bytes into the 256-unit u16 array and retains no pointers.
+    // Borrowed handles are never closed here.
     unsafe fn object_name(handle: HANDLE) -> Result<Vec<u16>, ProtocolError> {
         let mut name = [0u16; 256];
         let mut needed = 0;
@@ -119,6 +121,10 @@ mod native {
     }
 
     /// Read a token's mandatory integrity RID without changing its privileges.
+    // SAFETY: caller supplies a live process handle. Token storage is aligned and
+    // bounded by GetTokenInformation; SID pointers remain in that storage, with
+    // validity and nonzero subauthority count checked before dereferencing.
+    // The owned token handle closes even when its information query fails.
     unsafe fn integrity(process: HANDLE) -> Result<u32, ProtocolError> {
         let mut token = HANDLE::default();
         OpenProcessToken(process, TOKEN_QUERY, &mut token).map_err(|_| refused())?;

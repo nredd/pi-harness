@@ -36,5 +36,9 @@ name = "windows_bridge"
 path = "src/lib.rs"
 
 [[example]]
+name = "abandon_input_lease"
+path = "tests/fixtures/abandon_input_lease.rs"
+
+[[example]]
 name = "disposable_windows_fixture"
 path = "tests/fixtures/disposable_windows_fixture.rs"

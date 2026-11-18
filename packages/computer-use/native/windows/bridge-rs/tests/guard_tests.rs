@@ -71,11 +71,37 @@ fn capture_failure_is_uncertain_only_after_a_real_transition() {
 }
 
 #[test]
-fn partial_text_readback_cannot_be_acknowledged_as_refusal() {
-    let error =
-        windows_bridge::guard::verify_written_text("complete text", "complete").unwrap_err();
+fn partial_text_readback_is_definite_evidence_not_uncertainty() {
+    for (expected, actual) in [
+        ("complete text", "complete"),
+        ("a\nb", "a\r\nb"),
+        ("123", "1.23"),
+    ] {
+        let response = windows_bridge::guard::written_text_response(expected, Some(actual));
+        assert_eq!(response["outcome"], "didnt");
+        assert_eq!(response["evidence"]["value"], actual);
+    }
+    assert_eq!(
+        windows_bridge::guard::written_text_response("same", Some("same"))["outcome"],
+        "worked"
+    );
+}
+
+#[test]
+fn password_write_does_not_attempt_readback_or_expose_value() {
+    let value =
+        windows_bridge::guard::read_written_text(true, || panic!("password read-back forbidden"))
+            .unwrap();
+    assert!(value.is_none());
+    let response = windows_bridge::guard::written_text_response("private", value.as_deref());
+    assert_eq!(response["outcome"], "unknown");
+    assert!(response.get("evidence").is_none());
+}
+
+#[test]
+fn ordinary_write_readback_api_failure_remains_uncertain() {
+    let error = windows_bridge::guard::read_written_text(false, || Err(unavailable())).unwrap_err();
     assert!(error.outcome_uncertain());
-    assert!(windows_bridge::guard::verify_written_text("complete text", "complete text").is_ok());
 }
 
 #[test]

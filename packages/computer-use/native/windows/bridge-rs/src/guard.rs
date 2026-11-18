@@ -31,15 +31,28 @@ pub fn observe_capture<T>(
     }
 }
 
-/// A delivered value write must not invite replay when read-back differs.
-pub fn verify_written_text(expected: &str, actual: &str) -> Result<(), ProtocolError> {
-    if expected != actual {
-        return Err(ProtocolError::uncertain(
-            "Delivered UIA value write did not read back exactly; refusing replay",
-            ErrorCode::InternalError,
-        ));
+/// Report observed value evidence without replaying or hiding a definite mismatch.
+/// Password writes have no readable evidence and therefore remain unknown.
+pub fn written_text_response(expected: &str, actual: Option<&str>) -> serde_json::Value {
+    let mut response = serde_json::json!({
+        "outcome": actual.map_or("unknown", |value| if value == expected { "worked" } else { "didnt" }),
+        "performed": { "grounding": "description", "delivery": "ax" }
+    });
+    if let Some(value) = actual {
+        response["evidence"] = serde_json::json!({ "value": value });
     }
-    Ok(())
+    response
+}
+
+/// Observe a value after SetValue; the password property is queried before delivery.
+pub fn read_written_text(
+    password: bool,
+    read: impl FnOnce() -> Result<String, ProtocolError>,
+) -> Result<Option<String>, ProtocolError> {
+    if password {
+        return Ok(None);
+    }
+    observe_after_delivery(read).map(Some)
 }
 
 /// Physical screen bounds in the helper's per-monitor-aware coordinate space.

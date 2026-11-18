@@ -35,6 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Return native Windows text mismatch evidence as `didnt`, skip password value read-back, and serialize single semantic actions with checked physical input. Replace the kernel-abandonment test's environment toggle with a separate crash fixture (#983).
+
 - Native Windows capture is uncertain only after a real transition, accepts uniform light windows and identical active/inactive frames, refuses keyboard input aimed at coordinates, and stops on malformed UIA RuntimeIds (#983).
 
 - Hash nested Rust fixture sources recursively instead of reading `tests/fixtures` as a file in native coverage; retain all locked/source inputs without changing coverage selection (#983).

@@ -449,7 +449,7 @@ mod native {
         // SAFETY: array is nonnull, owned, and bounded before reading elements.
         let lower = unsafe { SafeArrayGetLBound(array, 1) }
             .map_err(|error| format!("RuntimeId lower bound: {error}"))?;
-        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
+        // SAFETY: RuntimeArray owns this nonnull SAFEARRAY until after all bound/element queries.
         let upper = unsafe { SafeArrayGetUBound(array, 1) }
             .map_err(|error| format!("RuntimeId upper bound: {error}"))?;
         let count = upper
@@ -641,7 +641,7 @@ mod native {
     }
 
     pub enum SetTextResult {
-        Set { value: String },
+        Set { value: Option<String> },
         NoPattern,
     }
 
@@ -858,6 +858,7 @@ mod native {
             UIA_ValuePatternId,
             UIA_IsValuePatternAvailablePropertyId,
         )? {
+            // SAFETY: pattern is an owned live COM interface on this initialized thread.
             if unsafe { pattern.CurrentIsReadOnly() }
                 .map_err(|error| before_delivery(format!("CurrentIsReadOnly: {error}")))?
                 .as_bool()
@@ -867,18 +868,23 @@ mod native {
                     ErrorCode::CoordinateBlocked,
                 ));
             }
+            // SAFETY: element is a live owned COM interface on this initialized thread.
+            let password = unsafe { element.CurrentIsPassword() }
+                .map_err(|error| before_delivery(format!("CurrentIsPassword: {error}")))?
+                .as_bool();
             let value = BSTR::from(text);
+            // SAFETY: pattern is owned and value remains live throughout SetValue.
             unsafe {
                 pattern
                     .SetValue(&value)
                     .map_err(|e| after_delivery("SetValue", e))?;
             }
-            let value = unsafe {
-                pattern
-                    .CurrentValue()
-                    .map_err(|e| after_delivery("SetValue read-back", e))?
-                    .to_string()
-            };
+            let value = crate::guard::read_written_text(password, || {
+                // SAFETY: pattern remains owned on this COM-initialized thread.
+                unsafe { pattern.CurrentValue() }
+                    .map(|value| value.to_string())
+                    .map_err(|e| after_delivery("SetValue read-back", e))
+            })?;
             return Ok(SetTextResult::Set { value });
         }
         Ok(SetTextResult::NoPattern)
@@ -1140,7 +1146,7 @@ pub enum PressResult {
 }
 #[cfg(not(windows))]
 pub enum SetTextResult {
-    Set { value: String },
+    Set { value: Option<String> },
     NoPattern,
 }
 #[cfg(not(windows))]

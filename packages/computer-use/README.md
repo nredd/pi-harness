@@ -74,7 +74,10 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   observation when needed. Stale identity/geometry or occlusion refusal changes neither input nor
   foreground/minimized state. UIA control focus happens only after full read-only admission;
   mutating-call or focus read-back failure terminates without acknowledgement, as does any failed
-  revalidation after successful focus.
+  revalidation after successful focus. A successful `SetValue` with different read-back returns
+  `didnt` and the observed `evidence.value`, including provider normalization or truncation; it is not
+  terminal uncertainty. Password targets are identified before writing and never read back: their
+  successful writes return `unknown` without value evidence. A failed write/read-back API remains uncertain.
   A capture failure is uncertain (terminal, no ack) only after a real restore/focus
   transition; a failed read-only render of an already-front window is a plain `capture_failed`. Only a
   (near-)black render is treated as a failed compositor copy: a uniform light window is valid. A window that
@@ -85,11 +88,14 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   or restoration, within 1.5 seconds. Missing freshness, moving windows, blank/failed renders and captures
   over 16 million pixels refuse explicitly. A static/background window whose freshness cannot be proved
   may refuse rather than return an old frame.
-- Participating native helper processes share a session-local kernel mutex for physical input,
-  including restore/focus/capture and complete foreground batches. A foreground batch reserves input
+- Participating native helper processes share a session-local kernel mutex for every single `act`
+  delivery, including semantic UIA delivery, plus restore/focus/capture and complete foreground batches.
+  Single-action live ref admission and delivery run under the same lease as checked keyboard input. A foreground batch reserves input
   before live pattern probing, even if its observation advertised usable patterns. Kernel acquisition
   waits at most five seconds.
-  Kernel abandonment refuses the waiting action; it never retries the crashed action. Windows releases
+  Kernel abandonment refuses the waiting action; it never retries the crashed action. The Windows
+  kernel integration test uses the separate `abandon_input_lease` example crash process, not an
+  environment-controlled test branch. Cargo's normal `cargo test` builds this fixture before tests run. Windows releases
   thread ownership on death, but this is NOT a persistent uncertain-delivery fence. The WSL transport's
   retained host-volume lease remains authoritative after cancellation/timeout/helper failure; recovery
   requires the owner's documented review, never automatic lease stealing. No guarantee is made against

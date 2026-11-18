@@ -505,6 +505,7 @@ pub fn focus_window(
             )
         })?;
         let hwnd = HWND(native.raw() as *mut _);
+        // SAFETY: GetForegroundWindow returns a borrowed handle used only for comparison.
         let already_focused = unsafe { GetForegroundWindow() == hwnd };
         request_foreground(native.raw())?;
         Ok(json!({ "focused": true, "alreadyFocused": already_focused }))
@@ -548,7 +549,9 @@ fn foreground_impl(hwnd: isize, allow_input_hint: bool) -> Result<(), ProtocolEr
         crate::desktop::validated_bounds(hwnd, None)?;
         let target = HWND(hwnd as *mut _);
         // SW_RESTORE is idempotent, unlike taskbar toggles or SW_SHOW.
+        // SAFETY: IsIconic borrows the validated HWND and retains no pointers.
         if unsafe { windows::Win32::UI::WindowsAndMessaging::IsIconic(target).as_bool() } {
+            // SAFETY: target is a validated borrowed HWND; SW_RESTORE is a documented command.
             let _ = unsafe {
                 windows::Win32::UI::WindowsAndMessaging::ShowWindow(
                     target,
@@ -556,13 +559,17 @@ fn foreground_impl(hwnd: isize, allow_input_hint: bool) -> Result<(), ProtocolEr
                 )
             };
         }
+        // SAFETY: foreground queries return borrowed handles used only for comparison.
         if unsafe { GetForegroundWindow() != target } {
+            // SAFETY: SetForegroundWindow borrows the validated HWND; success is verified below.
             let _ = unsafe { SetForegroundWindow(target) };
+            // SAFETY: no pointers are retained by this foreground query.
             if allow_input_hint && unsafe { GetForegroundWindow() != target } {
                 // Windows documents Alt as releasing the foreground lock.
                 // The complete explicit transition remains under the caller's
                 // shared physical-input lease, including paired key cleanup.
                 crate::input::foreground_hint()?;
+                // SAFETY: target remains a borrowed HWND; the API reports a vanished/refused target.
                 unsafe { windows::Win32::UI::WindowsAndMessaging::BringWindowToTop(target) }
                     .map_err(|_| {
                         ProtocolError::uncertain(
@@ -573,12 +580,15 @@ fn foreground_impl(hwnd: isize, allow_input_hint: bool) -> Result<(), ProtocolEr
             }
         }
         for _ in 0..4 {
+            // SAFETY: the foreground handle is borrowed and only compared.
             if unsafe { GetForegroundWindow() == target } {
                 return Ok(());
             }
+            // SAFETY: the API borrows target; a vanished HWND is refused by the final query.
             let _ = unsafe { SetForegroundWindow(target) };
             thread::sleep(Duration::from_millis(20));
         }
+        // SAFETY: final foreground verification retains no handles or pointers.
         if unsafe { GetForegroundWindow() == target } {
             Ok(())
         } else {
