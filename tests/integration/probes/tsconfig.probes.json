@@ -13,6 +13,7 @@
   },
   "files": [
     "anthropic-block-types.test.ts",
+    "compaction-children.test.ts",
     "latency.test.ts",
     "latency.ts",
     "process-lifecycle.test.ts",

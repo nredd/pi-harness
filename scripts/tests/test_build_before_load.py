@@ -6,8 +6,6 @@ import json
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -33,14 +31,9 @@ def test_inprocess_test_script_builds_every_package_first() -> None:
     assert "npm run test" in scripts["check"]
 
 
-@pytest.mark.parametrize("target", ["check-core-compaction", "check-scripts"])
-def test_root_targets_build_before_loading_dist(target: str) -> None:
-    """Root targets that load or pack `dist/` run `$(MAKE) build` before anything else.
-
-    Parameters:
-        target (str): Root Makefile target.
-    """
-    assert _recipe(ROOT / "Makefile", target).splitlines()[0].strip() == "$(MAKE) build"
+def test_scripts_build_before_loading_dist() -> None:
+    """The scripts gate packs `dist/`, so it builds before anything else."""
+    assert _recipe(ROOT / "Makefile", "check-scripts").splitlines()[0].strip() == "$(MAKE) build"
 
 
 def test_local_stack_runner_builds_first() -> None:

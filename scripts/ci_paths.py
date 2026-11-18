@@ -132,8 +132,7 @@ class Shard:
 # Shard units and timings are in #350 and .github/workflows/ci.yml. Native cells run every Python gate;
 # WSL keeps only the LCOV producers (Ubuntu runs the Python unit suites). macOS mirrors Ubuntu's four
 # shards to keep the TypeScript work inside the job budget. WSL stays at two: each Windows job pays
-# ~3.5 min of guest setup, and two shards already finish inside the macOS critical path. `check-benchmark`
-# marks the shard that carries the macOS benchmark steps.
+# ~3.5 min of guest setup, and two shards already finish inside the macOS critical path.
 OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
     "ubuntu-24.04": (
         Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
@@ -148,7 +147,7 @@ OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
         # CI 44008954118: scripts took 19m01s before two full coverage suites and the JS producers.
         # Give scripts its own unchanged 30-minute job budget; keep the integration recipe intact.
         Shard("scripts", ("check-scripts",)),
-        Shard("python", ("check-integration", "check-benchmark")),
+        Shard("python", ("check-integration",)),
     ),
     "wsl2": (
         Shard("subagents-computer-use", (CHECK_TS,), ("packages/computer-use", "packages/subagents")),
@@ -202,17 +201,10 @@ STACK_NOT_RUN = {
 # period.
 JS_WHITESPACE = "\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 SUBJECT_PATTERN = re.compile(rf"(?:[a-z][a-z0-9-]*: )?[A-Z][^\n]*[^.{JS_WHITESPACE}]")
-# What `check-benchmark` and its macOS step read: the Makefile recipes, `UV_PYTHON` from `.python-version`,
-# the Node that installs the pinned Codex, the workflow and tool setup that pin and run them, and this
-# classifier, so a broken predicate cannot switch the gate off on the PR that breaks it.
-BENCHMARK_INPUT_FILES = frozenset(
-    {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml", "scripts/ci_paths.py"}
-)
-BENCHMARK_INPUT_PREFIXES = ("tests/benchmarks/comparison/", ".github/actions/setup-ci-tools/")
 # Gates a pull request skips when it changes none of their `INPUT_CLASSES` inputs. Every push runs them, which
 # still catches runner and image drift. The shard steps and the fan-in's coverage accounting both read the
 # plan's `skipped_gates`, so a skipped producer's signal reports NOT RUN instead of a missing report.
-PATH_GATED_GATES = {"check-benchmark": "benchmark_inputs"}
+PATH_GATED_GATES: dict[str, str] = {}
 FULL_RELEASE_CANDIDATE = "Full frozen release candidate"
 
 
@@ -486,24 +478,11 @@ def is_stack_input(path: str) -> bool:
     return path in STACK_INPUT_FILES or path.startswith(STACK_INPUT_PREFIXES)
 
 
-def is_benchmark_input(path: str) -> bool:
-    """Return whether one changed path reaches the `tests/benchmarks/comparison` unit gate.
-
-    Parameters:
-        path (str): Git-relative path with POSIX separators.
-
-    Returns:
-        bool: Whether a PR changing the path must run `check-benchmark` for real.
-    """
-    return path in BENCHMARK_INPUT_FILES or path.startswith(BENCHMARK_INPUT_PREFIXES)
-
-
 # One entry per class of paths that wakes optional work; `ChangeClassification.inputs` and the published
 # outputs follow this mapping.
 INPUT_CLASSES: dict[str, Callable[[str], bool]] = {
     "wsl_inputs": is_wsl_input,
     "stack_inputs": is_stack_input,
-    "benchmark_inputs": is_benchmark_input,
 }
 
 

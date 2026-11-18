@@ -10,10 +10,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isExpired, mergeQuota, type QuotaObservation } from "../../src/stats/harness/common.ts";
 import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
+	decodeShard,
 	eventId,
 	exportStats,
 	importStats,
@@ -31,7 +32,7 @@ import {
 	validateSnapshot,
 } from "../../src/stats/snapshot.ts";
 import { assistantLine, at, call, sessionFile } from "../fixtures/stats/fixtures.ts";
-import { CANARY } from "../fixtures/stats/harness/fixtures.ts";
+import { CANARY, claudeRow } from "../fixtures/stats/harness/fixtures.ts";
 import { bumpOpenCode, CODEX_RESET_S, seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
 const OLD_MACHINE = "11111111-1111-4111-8111-111111111111";
@@ -160,7 +161,7 @@ describe("snapshot v2 schema", () => {
 		);
 		expect(validateShard(ok, manifest2, "2026-10")).toBe(ok);
 		expect(() => validateManifest(manifest2)).not.toThrow();
-		expect(() => validateManifest({ ...manifest2, version: 3 })).toThrow();
+		expect(() => validateManifest({ ...manifest2, version: 99 })).toThrow();
 	});
 
 	it("rejects bad v2 events and quota", () => {
@@ -336,7 +337,7 @@ describe("mixed-version machines", () => {
 		expect(combined.sessions).toHaveLength(1);
 	});
 
-	it("keeps a v1 global cache readable and rewrites it as v2", async () => {
+	it("keeps a v1 global cache readable and rewrites it as v3", async () => {
 		publish(OLD_MACHINE, 1, [v1Event("a")]);
 		await importStats(viewer, repo);
 		const path = join(viewer, "pi-session-kit", "stats-global.json");
@@ -344,7 +345,7 @@ describe("mixed-version machines", () => {
 		writeFileSync(path, JSON.stringify({ ...doc, version: 1 }));
 		expect(Object.keys((await readGlobal(viewer)).machines)).toEqual([OLD_MACHINE]);
 		await importStats(viewer, repo);
-		expect(JSON.parse(readFileSync(path, "utf8")).version).toBe(2);
+		expect(JSON.parse(readFileSync(path, "utf8")).version).toBe(3);
 	});
 
 	it("sums null cost as zero in model totals", async () => {
@@ -379,8 +380,31 @@ describe("exportStats with harnesses", () => {
 	/** All published shard contents of one machine. */
 	function published(snapshotDir: string): Shard[] {
 		const manifest = JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
-		return manifest.shards.map((s) => JSON.parse(readFileSync(join(snapshotDir, s.file), "utf8")) as Shard);
+		return manifest.shards.map((s) => decodeShard(readFileSync(join(snapshotDir, s.file)), manifest, s.month));
 	}
+
+	it("carries a failed harness after sealed-month deltas without duplicating session metadata", async () => {
+		const clock = vi.spyOn(Date, "now").mockReturnValue(at("2026-11-02"));
+		try {
+			const roots = seedHarnessHome(home);
+			const options = { harnesses: ["claude"] as const, roots, env: env(), home };
+			const first = await exportStats(agent, repo, undefined, options);
+			const path = Object.keys(files(roots.claude)).find((p) => p.endsWith(".jsonl"));
+			if (!path) throw new Error("Missing Claude fixture");
+			writeFileSync(
+				path,
+				`${readFileSync(path, "utf8")}\n${JSON.stringify(claudeRow({ id: "msg_2", requestId: "req_2", ts: "2026-10-02T12:00:00.000Z" }))}\n`,
+			);
+			await exportStats(agent, repo, undefined, options);
+			expect(published(first.snapshotDir).filter((s) => s.sessions.length > 0)).toHaveLength(2);
+			rmSync(roots.claude, { recursive: true, force: true });
+			expect((await exportStats(agent, repo, undefined, options)).harnesses?.claude?.failed).toBe("kept");
+			expect(await importStats(viewer, repo)).toMatchObject({ imported: 1, problems: [] });
+			expect((await loadCombined(viewer)).calls).toHaveLength(2);
+		} finally {
+			clock.mockRestore();
+		}
+	});
 
 	it("exports Claude, Codex and OpenCode alongside pi with null cost and Codex quota", async () => {
 		seedPi();
@@ -537,6 +561,10 @@ describe("exportStats with harnesses", () => {
 				salt: expect.stringMatching(/^[a-f0-9]{32}$/),
 				harnesses: ["pi", "codex"],
 				failures: {},
+				recoveryPending: false,
+				recoveryFiles: [],
+				lostHarnesses: [],
+				historyHarnesses: ["pi", "codex"],
 			});
 			// the salt never reaches the published snapshot
 			const out = Object.values(files(repo))
