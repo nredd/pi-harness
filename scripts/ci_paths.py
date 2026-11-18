@@ -913,7 +913,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--pool-run-id", type=int, default=0, help="Read cross-run admission for this CI run")
     parser.add_argument("--pool-repository", default="", help="Repository for read-only admission census")
-    parser.add_argument("--pool-attempt", type=int, default=1)
+    parser.add_argument(
+        "--pool-attempt", type=int, default=1, help="Run attempt; excludes the previous attempt's pools"
+    )
     args = parser.parse_args(argv)
     if not args.full and not (args.base and args.head):
         parser.error("--base and --head are required unless --full is given")

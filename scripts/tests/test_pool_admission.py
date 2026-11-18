@@ -25,7 +25,14 @@ NOW = 1_800_000_000
 
 
 def census(count: int) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
-    """Build API-shaped snapshots of a same-heartbeat classification burst."""
+    """Build API-shaped snapshots of a same-heartbeat classification burst.
+
+    Parameters:
+        count (int): Number of runs, each still in its `classify` job.
+
+    Returns:
+        tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]: Runs and their jobs by run id.
+    """
     runs = [{"id": i, "head_repository": {"full_name": REPO}} for i in range(1, count + 1)]
     jobs = {
         i: [{"name": "classify changed paths", "status": "in_progress", "labels": []}]
@@ -90,7 +97,16 @@ def test_admission_accounts_for_jobs_and_unmaterialized_older_runs() -> None:
 def fake_api(
     monkeypatch: pytest.MonkeyPatch, *, full: str = "", previous: list[dict[str, Any]] | None = None
 ) -> list[str]:
-    """Install a bounded API transcript, including duplicate status-page entries."""
+    """Install a bounded API transcript.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Patches `runner_pools.gh_read`.
+        full (str): Page kind (`runs`, `jobs`, `previous`) that reports a full page.
+        previous (list[dict[str, Any]] | None): Jobs of the previous attempt.
+
+    Returns:
+        list[str]: Paths read, in order.
+    """
     runs, jobs = census(1)
     calls: list[str] = []
 
@@ -267,5 +283,7 @@ def test_bilateral_rescue_requires_room_and_a_supported_cell() -> None:
     assert not runner_rescue.job_is_stranded(queued | {"name": "owned shard (macos-14, scripts)"}, beats, NOW)
     assert not runner_rescue.job_is_stranded(queued | {"labels": ["ubuntu-24.04"]}, beats, NOW)
     assert not runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, beats, NOW, {"xcode-27"})
+    # A dead pool is rescued even while the hosted queue is deep.
+    assert runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, {}, NOW, {"xcode-27"})
     assert runner_rescue.eligible_pool(queued | {"name": "contracts (macos-14)"}) == "pi-macos"
     assert runner_rescue.eligible_pool(queued | {"name": "stack (macos-14, local)"}) == "pi-macos"

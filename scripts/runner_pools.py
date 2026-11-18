@@ -50,9 +50,8 @@ class Pool:
         label (str): Custom runner label, also the `runs-on` value of its cells.
         variable (str): Repo variable its host writes the heartbeat to.
         slots (int): Conservative working-slot ceiling, not the configured account count.
-        queue_depth (int): Cells beyond its free slots a run may still queue on the pool. Zero keeps a
-            pool strict; a positive depth pays off where the hosted runner of that OS queues for longer
-            than a slot takes to free up (macOS), and is bounded by the backlog the pool reports.
+        queue_depth (int): Cells beyond its free slots a run may queue on the pool. Zero (every pool today)
+            keeps it strict: a busy pool overflows to hosted immediately.
         run_cap (int): Most cells one run may take, 0 for no cap. The rest of the run's heavy cells stay on
             the hosted runner, so both pools work on the same run.
     """
@@ -260,7 +259,8 @@ def admit_capacity(
         repo (str): The repository; fork runs never reserve capacity.
 
     Returns:
-        dict[str, int]: At most one slot per pool. Observed unfinished pooled jobs consume slots;
+        dict[str, int]: Slots per pool, held to its `run_cap` (one for macOS).
+            Observed unfinished pooled jobs consume slots;
             older runs still classifying reserve one each even before their cells are materialized.
             Missing snapshots fail closed. API visibility is not an atomic reservation service.
     """
@@ -290,7 +290,10 @@ def admit_capacity(
             used[pool] = occupied_slots + max(occupied, reserved)
     # Reported free already subtracts older running jobs. Take the minimum of independently observed
     # headroom and the heartbeat, rather than subtracting those jobs from the free count twice.
-    return {pool: min(1, slots, max(0, POOLS[pool].slots - used[pool])) for pool, slots in capacity.items()}
+    return {
+        pool: _cap(min(slots, max(0, POOLS[pool].slots - used[pool])), POOLS[pool].run_cap)
+        for pool, slots in capacity.items()
+    }
 
 
 def gh_read(path: str) -> Any:

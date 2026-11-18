@@ -188,8 +188,11 @@ def job_is_stranded(
     waited = now - parse_time(job["created_at"])
     pools = {POOL_LABELS[label] for label in job["labels"] if label in POOL_LABELS}
     if pools:
+        # A dead or draining pool starts nothing: always rescue. A live pool only yields to hosted room.
         return any(
-            waited > (MIN_QUEUED_S if not pool_is_up(heartbeats.get(pool, ""), now) else LIVE_QUEUED_S)
+            waited > MIN_QUEUED_S
+            if not pool_is_up(heartbeats.get(pool, ""), now)
+            else waited > LIVE_QUEUED_S
             and not any(HOSTED_POOLS.get(label) == pool for label in hosted_busy or ())
             for pool in pools
         )

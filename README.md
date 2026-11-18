@@ -451,7 +451,7 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 
 `classify` shares fresh capacity across unfinished CI runs instead of letting every run spend the same
 heartbeat. Legacy macOS beats advertise configured slots, not working accounts: admission caps them
-at one usable account, with zero queue allowance and at most one cell per run/pool. Earlier classifiers
+at one usable account, with zero queue allowance (macOS takes at most one cell per run). Earlier classifiers
 reserve capacity until their cells appear; observed pooled jobs consume it. `CELL_SECONDS` gives the
 longest eligible cell the early self-hosted start; overflow goes hosted immediately. Forks and
 `PI_POOLS_DISABLED` remain hosted. Missing/incomplete API evidence also falls back hosted.

@@ -118,7 +118,7 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
         ("0", None),
     ],
 )
-def test_a_busy_macos_pool_queues_a_bounded_run_share(beat: str, capacity: int | None) -> None:
+def test_macos_capacity_is_one_working_slot_without_a_queue(beat: str, capacity: int | None) -> None:
     """Only measured free capacity is admitted; no speculative macOS queue."""
     got = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
     assert got.get("pi-macos") == capacity
