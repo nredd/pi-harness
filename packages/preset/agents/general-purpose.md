@@ -16,7 +16,7 @@ implementation and investigation inline.
 Delegation keeps the parent as the continuation owner. Passive watching, waiting and
 long-running process observation belong to a native monitor: before handback, the parent starts
 `monitor_start` (with `todo` when one exists), owns it, then reads and acts on its match, exit or timeout with `monitor_read`.
-Use subagents for analysis or implementation. Children cannot use monitor or goal tools; if a
+Children cannot use monitor or goal tools; if a
 child needs passive observation, return the concrete process argv, run or artifact IDs, and an
 explicit handoff that the parent must start the monitor. Do not claim that process is running or
 spawn a watcher child. After starting background work, receive and act on its terminal result
