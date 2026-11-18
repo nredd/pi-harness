@@ -366,7 +366,11 @@ def test_a_newer_run_that_finished_classify_reserves_before_an_older_rerun() -> 
 
 
 def test_burst_over_both_pools_never_exceeds_either_capacity() -> None:
-    """Nine runs read linux free=2 and macOS free=5: both pools are used, neither is oversubscribed."""
+    """Replay nine runs reading linux free=2 and macOS free=5: both pools used, neither oversubscribed.
+
+    A replay of progressively visible snapshots, not a feedback simulation: placed cells do not re-enter the
+    census, and Linux has one listed cell per run, so its bound is the slot count.
+    """
     runs, jobs = census(9)
     beats = {"pi-linux": f"{NOW - 30}:2", "pi-macos": f"{NOW - 30}:5"}
     capacity = runner_pools.pool_capacity(beats, NOW, trusted=True)
@@ -419,3 +423,65 @@ def test_an_unlisted_hosted_cell_never_fits_a_pool() -> None:
     """Only listed, long enough cells may move into a pool."""
     cell = hosted_cell("owned shard (macos-14, scripts)")
     assert not runner_rescue.fits_pool(cell, [cell], {"pi-macos": 1}, {})
+
+
+def test_a_finished_poolable_cell_counts_against_the_pool_share() -> None:
+    """A rerun re-plans every cell: a finished `subagents` would take the one slot ahead of a queued `ts`."""
+    done = REAL_QUEUED | {
+        "status": "completed",
+        "labels": ["xcode-27"],
+        "name": "owned shard (macos-14, subagents)",
+    }
+    beats = {"pi-macos": f"{NOW}:5"}
+    assert runner_rescue.stranded_runs([RUN], {1: [done, hosted_cell()]}, beats, NOW, REPO) == []
+
+
+def test_a_rerun_never_moves_a_hosted_cell_into_a_pool() -> None:
+    """After a restart the run stays where it was planned: no ping-pong back to the stranding pool."""
+    beats = {"pi-macos": f"{NOW}:5"}
+    assert runner_rescue.stranded_runs([RUN], {1: [hosted_cell()]}, beats, NOW, REPO) == [1]
+    rerun = RUN | {"run_attempt": 2}
+    assert runner_rescue.stranded_runs([rerun], {1: [hosted_cell()]}, beats, NOW, REPO) == []
+    assert runner_rescue.stranded_runs([rerun], {1: [REAL_QUEUED]}, {}, NOW, REPO) == [1]
+
+
+def test_every_earlier_attempts_pools_are_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attempt 1 stranded on `pi-macos`, attempt 2 ran hosted: attempt 3 must still avoid `pi-macos`."""
+    attempts = {1: [{"labels": ["pi-macos"]}], 2: [{"labels": ["xcode-27"]}]}
+    runs, jobs = census(1)
+
+    def read(path: str) -> dict[str, Any]:
+        if "/attempts/" in path:
+            number = int(path.split("/attempts/")[1].split("/", maxsplit=1)[0])
+            return {"total_count": 1, "jobs": attempts[number]}
+        if "/jobs?" in path:
+            return {"total_count": 1, "jobs": jobs[1]}
+        return {"total_count": 1, "workflow_runs": runs}
+
+    monkeypatch.setattr(runner_pools, "gh_read", read)
+    assert runner_pools.live_capacity({"pi-macos": 1, "pi-linux": 1}, REPO, 1, 3) == {
+        "pi-macos": 0,
+        "pi-linux": 1,
+    }
+
+
+def test_a_changed_pre_cancel_snapshot_reads_only_the_picked_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recheck swaps in the picked run's fresh jobs and keeps the tick's snapshot of the rest."""
+    seen: list[str] = []
+    runs = [RUN, RUN | {"id": 2, "run_attempt": runner_rescue.MAX_ATTEMPT}]
+
+    def fake(*args: str, method: str = "GET") -> Any:
+        """Answer one API call."""
+        seen.append(args[0])
+        if "runs?" in args[0]:
+            return {"workflow_runs": runs if "status=queued" in args[0] else []}
+        if args[0].endswith("/runs/1") or args[0].endswith("/runs/2"):
+            return runs[int(args[0][-1]) - 1]
+        return {"jobs": [REAL_QUEUED]}
+
+    monkeypatch.setattr(runner_rescue, "gh_api", fake)
+    monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
+    monkeypatch.setattr(runner_rescue, "restart", lambda *_: None)
+    assert runner_rescue.main(["--repo", REPO]) == 0
+    assert sum("/runs/2/jobs" in call for call in seen) == 1  # the census only, not the recheck
+    assert sum("/runs/1/jobs" in call for call in seen) == 2  # census plus the picked run's recheck

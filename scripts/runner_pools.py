@@ -277,11 +277,12 @@ def admit_capacity(
         repo (str): The repository; fork runs never reserve capacity.
 
     Returns:
-        dict[str, int]: Slots per pool, held to its `run_cap` (one for macOS).
-            Observed unfinished pooled jobs consume slots;
-            older runs still classifying, and any run that finished classify,
-            reserve one each until their cells appear.
-            Missing snapshots fail closed. API visibility is not an atomic reservation service.
+        dict[str, int]: Per pool, the heartbeat capacity minus the pool's observed unfinished jobs and one
+            reserved slot per other run that is still classifying or has finished `classify` without cells
+            (in the pools its unlabeled cells target, else every pool), held to the pool's `run_cap`.
+            A snapshot missing a run fails closed to `{}`. Residual: a reserving run can materialise more
+            cells than one slot (`pi-linux` has two), so a burst can briefly exceed the reservation; API
+            visibility is not an atomic lease.
     """
     if run_id not in {run["id"] for run in runs} or any(run["id"] not in jobs_by_run for run in runs):
         return {}
@@ -324,6 +325,9 @@ def admit_capacity(
 def gh_read(path: str) -> Any:
     """Read one GitHub API page; failures propagate to admission's hosted fallback.
 
+    `gh` stderr is merged into the output, so a warning or error text is not JSON: it raises `ValueError`
+    and admission fails closed to hosted instead of parsing a partial page.
+
     Parameters:
         path (str): Repository-scoped REST path.
 
@@ -348,7 +352,7 @@ def live_capacity(capacity: Mapping[str, int], repo: str, run_id: int, attempt: 
         capacity (Mapping[str, int]): Heartbeat capacity.
         repo (str): GitHub repository.
         run_id (int): Classifying run.
-        attempt (int): Current attempt; pools that stranded the previous attempt are excluded.
+        attempt (int): Current attempt; pools used by any earlier attempt are excluded.
 
     Returns:
         dict[str, int]: Admitted capacity, empty on incomplete or unavailable API evidence.
@@ -365,7 +369,7 @@ def live_capacity(capacity: Mapping[str, int], repo: str, run_id: int, attempt: 
             if page["total_count"] >= PAGE_SIZE:
                 return {}
             runs |= {run["id"]: run for run in page["workflow_runs"]}
-        jobs = {}
+        jobs: dict[int, list[dict[str, Any]]] = {}
         for ident in runs:
             if time.monotonic() > deadline:
                 raise TimeoutError("Pool job census exceeded its admission deadline")
@@ -374,13 +378,11 @@ def live_capacity(capacity: Mapping[str, int], repo: str, run_id: int, attempt: 
                 return {}
             jobs[ident] = page["jobs"]
         available = dict(capacity)
-        if attempt > 1:
-            page = gh_read(
-                f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt - 1}/jobs?per_page={PAGE_SIZE}"
-            )
+        for earlier in range(1, attempt):
+            page = gh_read(f"repos/{repo}/actions/runs/{run_id}/attempts/{earlier}/jobs?per_page={PAGE_SIZE}")
             if page["total_count"] >= PAGE_SIZE:
                 return {}
-            # Never send a rescued run back to the same pool, even if its heartbeat still looks idle.
+            # Never send a rescued run back to a pool that stranded ANY earlier attempt.
             for pool in available:
                 if any(POOLS[pool].label in job["labels"] for job in page["jobs"]):
                     available[pool] = 0

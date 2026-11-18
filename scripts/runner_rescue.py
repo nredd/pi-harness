@@ -148,11 +148,13 @@ def stranded_runs(
             for label in job["labels"]
             if label in HOSTED_POOLS
         }
+        # A rerun keeps its plan: a retry never moves a hosted cell into a pool (no ping-pong).
+        run_capacity = capacity if run.get("run_attempt", 1) == 1 else {}
         justified = [
             job
             for job in unfinished
             if job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy)
-            and fits_pool(job, unfinished, capacity, moved)
+            and fits_pool(job, jobs, run_capacity, moved)
         ]
         if not justified:
             continue
@@ -170,7 +172,7 @@ def is_pooled(job: Mapping[str, Any]) -> bool:
 
 def fits_pool(
     job: Mapping[str, Any],
-    unfinished: Sequence[Mapping[str, Any]],
+    jobs: Sequence[Mapping[str, Any]],
     capacity: Mapping[str, int],
     moved: Mapping[str, int],
 ) -> bool:
@@ -182,7 +184,7 @@ def fits_pool(
 
     Parameters:
         job (Mapping[str, Any]): The overdue job.
-        unfinished (Sequence[Mapping[str, Any]]): Every unfinished job of its run.
+        jobs (Sequence[Mapping[str, Any]]): Every job of its run, finished ones too: the rerun re-plans all.
         capacity (Mapping[str, int]): Fresh pool capacity, empty while a run classifies.
         moved (Mapping[str, int]): Restarts already admitted toward each pool this tick.
 
@@ -194,7 +196,7 @@ def fits_pool(
     pool = cell_pool(job.get("name", ""))
     if pool is None:
         return False
-    cells = sum(cell_pool(other.get("name", "")) == pool and not is_pooled(other) for other in unfinished)
+    cells = sum(cell_pool(other.get("name", "")) == pool and not is_pooled(other) for other in jobs)
     return cells <= capacity.get(pool, 0) - moved.get(pool, 0)
 
 
@@ -387,12 +389,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             # Re-read both attempt and jobs immediately before cancellation, not the tick's old snapshot.
             current = gh_api(f"repos/{args.repo}/actions/runs/{run_id}")
-            fresh_jobs = {
-                ident: gh_api(
-                    f"repos/{args.repo}/actions/runs/{ident}/jobs?filter=latest&per_page={PAGE_SIZE}"
-                )["jobs"]
-                for ident in jobs_by_run
-            }
+            fresh = gh_api(
+                f"repos/{args.repo}/actions/runs/{run_id}/jobs?filter=latest&per_page={PAGE_SIZE}"
+            )["jobs"]
+            fresh_jobs = {**jobs_by_run, run_id: fresh}
             if not stranded_runs([current], fresh_jobs, heartbeats, time.time(), args.repo):
                 LOGGER.info(f"Leaving run '{run_id}': no longer safe to restart")
                 continue

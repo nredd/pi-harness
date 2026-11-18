@@ -18,8 +18,9 @@ permissions:
 # - Move only toward observed room: no queued hosted peers, or fresh positive pool capacity.
 # - Never rescue forks or a run with an observed running sibling/started queued job; recheck before
 #   whole-run cancellation. GitHub has no atomic cancel-if-queued, so a start after the read is residual.
-# - At most three runs per tick and three attempts per run. Retries exclude the previous attempt's
-#   pools. Cron delay and running siblings can extend the threshold; this is not an atomic job race.
+# - First attempts only move hosted cells into a pool; retries never do, and `classify` excludes every
+#   earlier attempt's pools. At most three runs per tick and three attempts per run.
+# - Cron delay and running siblings can extend the threshold; this is not an atomic job race.
 
 jobs:
   rescue:
