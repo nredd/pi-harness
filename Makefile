@@ -34,21 +34,6 @@ check-native-lint:  ## Statically lint tracked shell/workflow/PowerShell sources
 build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first
 	env -u GH_TOKEN npm run build
 
-.PHONY: check-core-compaction
-check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
-	$(MAKE) build
-	node_modules/.bin/biome check tests/integration/core-source
-	node_modules/.bin/tsc -p tests/integration/core-source/tsconfig.json
-	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
-	mkdir -p "$$sandbox/home" "$$sandbox/tmp"; \
-	env -i PATH="$$PATH" HOME="$$sandbox/home" USERPROFILE="$$sandbox/home" \
-	  XDG_CONFIG_HOME="$$sandbox/home/.config" XDG_CACHE_HOME="$$sandbox/home/.cache" \
-	  TMPDIR="$$sandbox/tmp" TMP="$$sandbox/tmp" TEMP="$$sandbox/tmp" \
-	  PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 JITI_FS_CACHE=false AWS_EC2_METADATA_DISABLED=true \
-	  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-	  node --import ./forks/pi/packages/coding-agent/src/experimental/source-resolver.ts \
-	  --test --test-concurrency=1 --test-timeout=120000 tests/integration/core-source/compaction-children.test.ts
-
 check: check-commits check-ts check-scripts check-integration  ## Owned-code gates only (NOT forks, NOT the full stack)
 	$(MAKE) check-coverage
 
