@@ -38,6 +38,7 @@ from coverage_accounting import (
     account,
     audit_inventory,
     check_inventory_ratchet,
+    check_ratchet,
     git_read,
     inventory,
     inventory_scopes,
@@ -45,6 +46,110 @@ from coverage_accounting import (
     is_test_path,
     repository_files,
 )
+
+
+@pytest.mark.parametrize("remaining", [None, "README.md", "src/index.ts", "new.ts"])
+def test_removed_measured_package_requires_its_entire_tree_deleted(
+    tmp_path: Path, remaining: str | None
+) -> None:
+    """Allow real tree deletion, never policy-only removal or retained non-source files.
+
+    Parameters:
+        tmp_path (Path): Disposable committed repository.
+        remaining (str | None): A tracked or untracked survivor, or no surviving tree.
+    Returns:
+        None: Both ratchets accept only genuine deletion and the CLI preserves the inventory audit.
+    Raises:
+        AssertionError: A survivor escapes a ratchet or a genuine deletion is rejected.
+    """
+    setup_report(tmp_path)
+    base = policy()
+    commit_base(tmp_path, base)
+    shutil.rmtree(tmp_path / "packages/example")
+    current = base.model_copy(deep=True)
+    current.packages.clear()
+    if remaining is not None:
+        survivor = tmp_path / "packages/example" / remaining
+        survivor.parent.mkdir(parents=True)
+        survivor.write_text("retained\n")
+        with pytest.raises(ValueError, match="Removed package"):
+            check_ratchet(current, base, root=tmp_path)
+        with pytest.raises(ValueError, match="Inventory ratchet"):
+            check_inventory_ratchet(tmp_path, current, base, "HEAD")
+        return
+    sibling = tmp_path / "packages/example-other/src/index.ts"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("independent\n")
+    check_ratchet(current, base, root=tmp_path)
+    check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    (tmp_path / "coverage/policy.json").write_text(current.model_dump_json())
+    # Forbid platform-dependent identity guessing even on developer machines.
+    git_read(tmp_path, ["config", "user.useConfigOnly", "true"])
+    git_read(tmp_path, ["add", "-A"])
+    git_read(
+        tmp_path,
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-qm",
+            "Retire the fixture package",
+        ],
+    )
+    command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--base", "HEAD~1"]
+    rejected = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert rejected.returncode == 1
+    assert "Executable source missing from policy" in rejected.stderr
+    sibling.unlink()
+    accepted = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert accepted.returncode == 0, accepted.stderr
+
+
+@pytest.mark.parametrize("relative", ["src/index.ts", "src/renamed.ts"])
+def test_relocated_measured_source_cannot_escape_either_ratchet(tmp_path: Path, relative: str) -> None:
+    """Reject a renamed package with loosened floors even when its former tree is gone.
+
+    Parameters:
+        tmp_path (Path): Disposable committed repository.
+        relative (str): Original relative path or renamed destination preserving its content.
+    Returns:
+        None: Reappearing source paths or content cannot retire a renamed package.
+    Raises:
+        AssertionError: A moved source escapes either existing ratchet.
+    """
+    setup_report(tmp_path)
+    base = policy()
+    commit_base(tmp_path, base)
+    source = tmp_path / "packages/example/src/index.ts"
+    content = source.read_text()
+    shutil.rmtree(tmp_path / "packages/example")
+    current = base.model_copy(deep=True)
+    moved = current.packages.pop("example")
+    moved.root = "packages/example2"
+    moved.owned = ["src/*.ts"]
+    moved.signals["primary"].files = [relative]
+    moved.signals["primary"].max_uncovered[sys.platform].lines = 10
+    current.packages["example2"] = moved
+    destination = tmp_path / moved.root / relative
+    destination.parent.mkdir(parents=True)
+    destination.write_text(content)
+    with pytest.raises(ValueError, match="Removed package"):
+        check_ratchet(current, base, root=tmp_path)
+    with pytest.raises(ValueError, match="Inventory ratchet"):
+        check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    if relative == "src/index.ts":
+        # Same relative path must block retirement even if its contents also change.
+        destination.write_text(content + "// modified after moving\n")
+        with pytest.raises(ValueError, match="Removed package"):
+            check_ratchet(current, base, root=tmp_path)
+        with pytest.raises(ValueError, match="Inventory ratchet"):
+            check_inventory_ratchet(tmp_path, current, base, "HEAD")
 
 
 @pytest.mark.parametrize("reason", ["", "   "])

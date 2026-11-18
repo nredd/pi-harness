@@ -10,6 +10,10 @@ Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
 
 Both axes run as **parallel `code-reviewer` sub-agents** (read-only, fixed output template; defined by the `code-reviewer` agent) so they don't pollute each other's context, then this skill aggregates their findings.
 
+Model ownership stays in the deployment's `subagents.json`: `agentModels["code-reviewer"]`
+selects the binding and `modelTiers` resolves a tier to a chain or router profile. That profile
+owns physical candidates and quota policy. This skill supplies no model override or candidate list.
+
 The issue tracker should have been provided to you. If `docs/agents/issue-tracker.md` is missing, tell the user to run `/setup-matt-pocock-skills`.
 
 ## Process

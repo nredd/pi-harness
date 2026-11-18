@@ -31,6 +31,10 @@ def repo(tmp_path: Path) -> Path:
     Returns:
         Path: Populated repository root.
     """
+    for enrolled in changelog_fragments.PACKAGES:
+        directory = tmp_path / enrolled
+        directory.mkdir(parents=True)
+        (directory / "CHANGELOG.md").write_text(CHANGELOG)
     package = tmp_path / "packages/subagents"
     changes = package / "changes"
     changes.mkdir(parents=True)
@@ -208,6 +212,10 @@ def test_nonregular_duplicate_and_invalid_utf8_fragments(repo: Path) -> None:
         "## [Unreleased]\n## [Unreleased]\n",
         "## [Unreleased]\n### Unknown\n",
         "## [Unreleased]\n### fixed\n",
+        "## [Unreleased]\n- Orphan.\n",
+        "## [Unreleased]\nBad data\n",
+        "## [Unreleased]\n### Fixed\n- Wrapped.\n  Continuation.\n",
+        "## [Unreleased]\n## Notes\n### Fixed\n" + BULLET,
         "## [Unreleased]\n### Fixed\n- Duplicate.\n- Duplicate.\n",
         "## [Unreleased]\n### Fixed\n- Unterminated",
         "## [Unreleased]\n### Added\n" + BULLET,
@@ -407,31 +415,30 @@ def test_real_cli_success_and_failure(repo: Path) -> None:
     assert "Cannot process changelog fragments" in refused.stderr
 
 
-@pytest.mark.parametrize(
-    "package", ["session-kit", "dev-tools", "todo", "preset", "plan-mode", "resource-sampler"]
-)
-def test_additional_packages_preserve_legacy_and_plain_release_headers(tmp_path: Path, package: str) -> None:
+@pytest.mark.parametrize("package", ["session-kit", "dev-tools", "todo", "plan-mode", "resource-sampler"])
+def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Path, package: str) -> None:
     """Fold strict fragments without rewriting uncategorized, wrapped or prose legacy data.
 
     Parameters:
-        tmp_path (Path): Disposable repository root.
+        repo (Path): Disposable enrolled repository root.
         package (str): Newly enrolled package.
 
     Returns:
         None: Literal legacy and released bytes survive validation and repeated folding.
     """
-    directory = tmp_path / "packages" / package
+    directory = repo / "packages" / package
     changes = directory / "changes"
     changes.mkdir(parents=True)
     legacy = (
-        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\nLegacy release history note.\n\n"
+        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\n"
+        "## Notes\n\nLegacy release history note.\n\n"
     )
     released = "## 0.59.2-nredd.3\n\n### Fixed\n\n- Released.\n  Continuation.\n"
     target = directory / "CHANGELOG.md"
     target.write_text(legacy + released)
     fragment = changes / "932.fixed.md"
     fragment.write_text(BULLET)
-    cmd = [sys.executable, str(Path(changelog_fragments.__file__)), "--repo", str(tmp_path)]
+    cmd = [sys.executable, str(Path(changelog_fragments.__file__)), "--repo", str(repo)]
     assert subprocess.run(cmd, capture_output=True, check=False).returncode == 0
     assert target.read_text() == legacy + released
     assert subprocess.run([*cmd, "--fold"], capture_output=True, check=False).returncode == 0
@@ -452,9 +459,24 @@ def test_cli_validates_every_package_before_folding(repo: Path) -> None:
         None: No changelog or fragment is changed by the failed command.
     """
     later = repo / "packages/todo/changes"
-    later.mkdir(parents=True)
+    later.mkdir()
     (later.parent / "CHANGELOG.md").write_text(CHANGELOG)
     (later / "invalid.md").write_text(BULLET)
     assert changelog_fragments.main(["--repo", str(repo), "--fold"]) == 1
     assert (repo / "packages/subagents/CHANGELOG.md").read_text() == CHANGELOG
     assert (repo / "packages/subagents/changes/932.fixed.md").exists()
+
+
+@pytest.mark.parametrize("fold", [False, True])
+def test_cli_refuses_missing_enrolled_package(repo: Path, fold: bool) -> None:
+    """Fail preflight on a missing enrolled directory without consuming earlier fragments.
+
+    Parameters:
+        repo (Path): Disposable enrolled tree.
+        fold (bool): Check or fold invocation.
+    """
+    shutil.rmtree(repo / "packages/resource-sampler")
+    args = ["--repo", str(repo), *(["--fold"] if fold else [])]
+    assert changelog_fragments.main(args) == 1
+    assert (repo / "packages/subagents/CHANGELOG.md").read_text() == CHANGELOG
+    assert (repo / "packages/subagents/changes/932.fixed.md").read_text() == BULLET

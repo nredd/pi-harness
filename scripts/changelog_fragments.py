@@ -23,13 +23,14 @@ PACKAGES = (
     "packages/session-kit",
     "packages/dev-tools",
     "packages/todo",
-    "packages/preset",
     "packages/plan-mode",
     "packages/resource-sampler",
 )
 CATEGORIES = ("added", "changed", "fixed", "refactored", "removed", "deprecated", "security")
 FRAGMENT_NAME = re.compile(r"([1-9][0-9]*)\.(added|changed|fixed|refactored|removed|deprecated|security)\.md")
-RELEASE_HEADER = re.compile(r"^## [^\n]+$", re.MULTILINE)
+RELEASE_HEADER = re.compile(
+    r"^## (?:\[[^\]\n]+\][^\n]*|[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)[ \t]*$", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -127,12 +128,13 @@ def read_fragments(root: Path, package: str = PACKAGE) -> list[Fragment]:
     return sorted(fragments, key=lambda item: (int(item.path.name.split(".")[0]), item.category))
 
 
-def folded_text(text: str, fragments: list[Fragment]) -> str:
+def folded_text(text: str, fragments: list[Fragment], *, legacy: bool = False) -> str:
     """Insert new bullets in category order, preserving released bytes and legacy entries.
 
     Parameters:
         text (str): Original UTF-8 changelog.
         fragments (list[Fragment]): Validated fragments.
+        legacy (bool): Preserve newly enrolled packages' incompatible historical data.
 
     Returns:
         str: Replacement text; exact existing bullets are recognized after an interrupted fold.
@@ -146,7 +148,7 @@ def folded_text(text: str, fragments: list[Fragment]) -> str:
     start = headers[0].end()
     end = headers[1].start() if len(headers) > 1 else len(text)
     lines = text[start:end].splitlines(keepends=True)
-    existing, positions = unreleased_data(lines)
+    existing, positions = unreleased_data(lines, legacy=legacy)
     additions: dict[str, list[str]] = {}
     for fragment in fragments:
         previous = existing.get(fragment.bullet)
@@ -164,11 +166,12 @@ def folded_text(text: str, fragments: list[Fragment]) -> str:
     return text[:start] + "".join(lines) + text[end:]
 
 
-def unreleased_data(lines: list[str]) -> tuple[dict[str, str], dict[str, int]]:
+def unreleased_data(lines: list[str], *, legacy: bool = False) -> tuple[dict[str, str], dict[str, int]]:
     """Validate existing legacy lines and locate category insertion points.
 
     Parameters:
         lines (list[str]): Unreleased lines including original line endings.
+        legacy (bool): Permit incompatible historical data only for newly enrolled packages.
 
     Returns:
         tuple[dict[str, str], dict[str, int]]: Exact bullets' categories and insertion offsets.
@@ -187,16 +190,17 @@ def unreleased_data(lines: list[str]) -> tuple[dict[str, str], dict[str, int]]:
             positions[category] = index + 1
         elif line.startswith("- "):
             end = index + 1
-            while end < len(lines) and lines[end].startswith("  "):
+            while legacy and end < len(lines) and lines[end].startswith("  "):
                 end += 1
             bullet = "".join(lines[index:end])
-            if bullet in existing or not bullet.endswith("\n"):
+            if (not legacy and not category) or bullet in existing or not bullet.endswith("\n"):
                 raise ValueError("Ambiguous Unreleased bullet")
             existing[bullet] = category
             if category:
                 positions[category] = end
-        # Existing uncategorized bullets, wrapped continuations, warnings and prose are legacy
-        # source, not new fragments. Preserve them verbatim without inventing attribution.
+        elif not legacy and line.strip() and not line.startswith("> "):
+            raise ValueError("Malformed Unreleased data")
+        # Newly enrolled packages' incompatible history is source, not new fragment syntax.
     return existing, positions
 
 
@@ -223,13 +227,15 @@ def run(root: Path, *, fold: bool, package: str = PACKAGE) -> None:
     lock = safe_path(root, f"{package}/.changelog-fold.lock")
     # Checks never create a lock or write anything.
     if not fold:
-        folded_text(changelog.read_bytes().decode("utf-8"), read_fragments(root, package))
+        folded_text(
+            changelog.read_bytes().decode("utf-8"), read_fragments(root, package), legacy=package != PACKAGE
+        )
         return
     lock.mkdir()
     try:
         fragments = read_fragments(root, package)
         original = changelog.read_bytes().decode("utf-8")
-        replacement = folded_text(original, fragments)
+        replacement = folded_text(original, fragments, legacy=package != PACKAGE)
         if replacement != original:
             with tempfile.NamedTemporaryFile(dir=changelog.parent, prefix=".changelog-", delete=False) as out:
                 temporary = Path(out.name)
@@ -263,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         root = args.repo.absolute()
-        packages = [package for package in PACKAGES if safe_path(root, package).exists()]
+        packages = PACKAGES
         # Preflight the entire enrolled checkout before mutating any package. Each fold rechecks
         # its own inputs under its own lock; this is not a whole-checkout transaction.
         for package in packages:
