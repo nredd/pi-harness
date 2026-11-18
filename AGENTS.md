@@ -25,6 +25,11 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
   pi/npm scripts and Git subprocesses that preserve PATH). It can invoke gh or read the shim's config
   path and plaintext hosts.yml. Environment scrubbing is NOT credential-capability isolation. This
   remains within the same-repo TRUST assumption and the submitted workflow's read-only token scope.
+- Second credential exception, owner-approved 2026-11-18: the CI `classify` job gets `actions: read`
+  (job-level; `contents` stays read-only) and `GH_TOKEN` for its pool census. The census only issues
+  GET reads of workflow runs and jobs (argv-tested). The token goes to pushes, dispatches and same-repo
+  PRs; fork PRs get none and plan hosted. It is a plain env var visible to the classify step's child
+  processes, within the same-repo TRUST assumption above; no write scope, no secrets.
 - Do not alter the live Pi install, bump pins or run `chezmoi` from this repository.
 
 # Merge and release policy
