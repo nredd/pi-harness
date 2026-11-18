@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, rmSync } from "node:fs";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { constants as fsConstants, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
+import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -298,6 +298,10 @@ interface BrowserObservationDetails {
 	root: { ref: string; kind: "browser_page"; title: string; url: string };
 	renderedOutline: string;
 	detail?: ObserveDetail;
+	/** Heuristic, never an assertion that other pages are authenticated. */
+	warning?: "authentication_required";
+	/** Executable selected for this managed launch, not an attached browser. */
+	executable?: string;
 }
 
 interface EvaluateBrowserDetails {
@@ -439,6 +443,7 @@ export const testing = {
 	sameRootIdentity,
 	performSearchUi,
 	performLaunchBrowser,
+	persistentBrowserProfile: async (configured: string) => (await persistentBrowserProfile(configured)).directory,
 	removeProfileDirsOnExit,
 	managedBrowserNeedsHeadless,
 	managedBrowserArgs,
@@ -479,7 +484,13 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	disconnectCdp();
 
 	// Waits for a `launch_browser` already stopping, creating or spawning a browser, then stops what it produced.
-	await withManagedBrowserLifecycle(releaseManagedBrowser);
+	let browserStopError: unknown;
+	try {
+		await withManagedBrowserLifecycle(releaseManagedBrowser);
+	} catch (error) {
+		// A retained persistent-profile lease must not retain unrelated session state or native handles.
+		browserStopError = error;
+	}
 
 	savedStates.clear();
 	clearStoredOutputs();
@@ -492,6 +503,7 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	runtimeState.helperDiagnostics = undefined;
 	runtimeState.lastPermissionCheckAt = 0;
 	await currentPlatformBackend.shutdown?.();
+	if (browserStopError) throw browserStopError;
 }
 
 function currentRuntimeMode(): ExecutionVariant {
@@ -1649,7 +1661,13 @@ function browserObservationResult(
 		title: browser.title,
 		url: browser.url,
 	};
+	const authenticationRequired =
+		/\b(?:sign[ -]?in|log[ -]?in)\b/i.test(browser.title) ||
+		/\/(?:login|signin|sign-in)(?:[/?#]|$)/i.test(browser.url) ||
+		browser.targets.some((target) => target.role === "textbox" && /\bpassword\b/i.test(target.name));
+	const warning = authenticationRequired ? ("authentication_required" as const) : undefined;
 	const details: BrowserObservationDetails = {
+		warning,
 		tool,
 		kind: "browser_page",
 		stateId: browser.snapshotId,
@@ -1667,7 +1685,7 @@ function browserObservationResult(
 		content: [
 			{
 				type: "text",
-				text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.\n${viewText}`,
+				text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.\n${warning ? "Warning: authentication_required (possible login wall). Ask the user before any sign-in; credentials are not authorized by this observation.\n" : ""}${viewText}`,
 			},
 		],
 		details,
@@ -2967,11 +2985,22 @@ async function waitForCdpPort(port: number, signal?: AbortSignal): Promise<void>
 // Enabled with `NODE_DEBUG=pi-computer-use`; the bridge otherwise never writes to the TUI's stdio.
 const debugLog = debuglog("pi-computer-use");
 
-/**
- * Profile dirs of launched browsers that are not removed yet, with the browser using each one.
- * The `exit` hook empties it on a hard exit that skips session shutdown.
- */
-const liveProfileDirs = new Map<string, ChildProcess>();
+/** Identity retained across asynchronous launch stages; a path string alone cannot establish ownership. */
+interface ValidatedPersistentProfile {
+	directory: string;
+	dev: number;
+	ino: number;
+}
+
+/** Only this exact empty Pi lease may be released, inside the original validated profile. */
+interface PersistentProfileLease {
+	profile: ValidatedPersistentProfile;
+	dev: number;
+	ino: number;
+}
+
+/** Tracked profile ownership. Hard exit kills browsers, deletes temporary data and leaves persistent leases fail-closed. */
+const liveProfileDirs = new Map<string, { browser: ChildProcess; persistent?: PersistentProfileLease }>();
 const profileCleanup = new Map<string, Promise<void>>();
 let profileExitHookInstalled = false;
 
@@ -2980,8 +3009,8 @@ let profileExitHookInstalled = false;
  * @param profileDir Private profile dir passed to the browser as `--user-data-dir`.
  * @param browser The browser process that owns `profileDir`.
  */
-function trackProfileDir(profileDir: string, browser: ChildProcess): void {
-	liveProfileDirs.set(profileDir, browser);
+function trackProfileDir(profileDir: string, browser: ChildProcess, persistent?: PersistentProfileLease): void {
+	liveProfileDirs.set(profileDir, { browser, persistent });
 	if (profileExitHookInstalled) return;
 	profileExitHookInstalled = true;
 	process.once("exit", removeProfileDirsOnExit);
@@ -3006,6 +3035,12 @@ async function removeProfileDir(profileDir: string): Promise<void> {
 
 /** Remove one temporary profile; concurrent close and shutdown callers share this attempt. */
 async function removeProfileDirOnce(profileDir: string): Promise<void> {
+	const owner = liveProfileDirs.get(profileDir);
+	if (owner?.persistent) {
+		// Only called once the browser has closed. Never remove browser-owned lock files.
+		if (releasePersistentProfileLease(owner.persistent)) liveProfileDirs.delete(profileDir);
+		return;
+	}
 	try {
 		await rm(profileDir, { recursive: true, force: true, maxRetries: 3 });
 		liveProfileDirs.delete(profileDir);
@@ -3019,8 +3054,9 @@ async function removeProfileDirOnce(profileDir: string): Promise<void> {
  * every tracked profile dir synchronously.
  */
 function removeProfileDirsOnExit(): void {
-	for (const [profileDir, browser] of liveProfileDirs) {
+	for (const [profileDir, { browser, persistent }] of liveProfileDirs) {
 		if (browser.exitCode === null && browser.signalCode === null) browser.kill("SIGKILL");
+		if (persistent) continue;
 		try {
 			rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 });
 		} catch (error) {
@@ -3057,7 +3093,7 @@ function waitForClose(child: ChildProcess, timeoutMs: number): Promise<boolean> 
  * @returns Its profile dir, or `undefined` once that dir has been removed.
  */
 function profileDirOf(browser: ChildProcess): string | undefined {
-	for (const [profileDir, owner] of liveProfileDirs) if (owner === browser) return profileDir;
+	for (const [profileDir, owner] of liveProfileDirs) if (owner.browser === browser) return profileDir;
 	return undefined;
 }
 
@@ -3077,7 +3113,12 @@ async function stopManagedBrowser(browser: ChildProcess): Promise<void> {
 		);
 		const killed = waitForClose(browser, MANAGED_BROWSER_EXIT_TIMEOUT_MS);
 		browser.kill("SIGKILL");
-		if (!(await killed)) debugLog("managed browser %d still running after SIGKILL", browser.pid);
+		if (!(await killed)) {
+			debugLog("managed browser %d still running after SIGKILL", browser.pid);
+			const profile = profileDirOf(browser);
+			if (profile && liveProfileDirs.get(profile)?.persistent)
+				throw new Error("Managed browser did not stop; its profile remains locked. Stop it before retrying.");
+		}
 	}
 	// The `close` listener usually removed it already; a failed removal is still tracked and retried here.
 	const profileDir = profileDirOf(browser);
@@ -3165,48 +3206,276 @@ function managedBrowserArgs({
 	];
 }
 
+/** Resolve directory metadata only; missing roots retain their lexical path and other failures refuse launch. */
+async function canonicalProfileRoot(root: string): Promise<string> {
+	const absolute = path.resolve(root);
+	try {
+		// Resolve before lexical normalization: `link/..` follows the link's filesystem parent.
+		return await realpath(root);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return absolute;
+		throw error;
+	}
+}
+
+/** Compare directory ancestry by filesystem identity, retaining alias parents and filesystem case semantics. */
+async function profilePathContains(parent: Stats, descendant: string): Promise<boolean> {
+	const absolute = path.isAbsolute(descendant) ? descendant : `${process.cwd()}${path.sep}${descendant}`;
+	for (let entry = absolute; ; entry = path.dirname(entry)) {
+		try {
+			const info = await stat(entry);
+			if (info.dev === parent.dev && info.ino === parent.ino) return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (path.dirname(entry) === entry) return false;
+	}
+}
+
+/** Match metadata identities, not path spellings, across validation and use. */
+function sameProfileIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+	return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** No other unprivileged UID may replace an ancestry component; root and sticky shared parents are trusted. */
+function assertSafeProfileAncestor(info: Stats): void {
+	if ((info.uid !== 0 && info.uid !== process.getuid!()) || ((info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0))
+		throw new Error(
+			"managed_browser_profile has an unsafe ancestor: require current-user/root ownership and no group/world write unless sticky.",
+		);
+}
+
+/** Inspect synchronously so final identity/permissions checks and spawn share one event-loop turn. */
+function inspectPersistentProfile(directory: string): Stats {
+	const info = lstatSync(directory);
+	if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid!() || (info.mode & 0o777) !== 0o700)
+		throw new Error(
+			"managed_browser_profile must be a real directory, not a symlink, owned by the current user with mode 0700.",
+		);
+	for (let parent = path.dirname(directory); ; parent = path.dirname(parent)) {
+		const ancestor = lstatSync(parent);
+		if (ancestor.isSymbolicLink())
+			throw new Error("managed_browser_profile must not contain symlink components; use its canonical path.");
+		assertSafeProfileAncestor(ancestor);
+		if (path.dirname(parent) === parent) break;
+	}
+	return info;
+}
+
+/** Refuse identity or permission changes without ever repairing an unvalidated directory. */
+function assertPersistentProfileIdentity(profile: ValidatedPersistentProfile): void {
+	if (!sameProfileIdentity(inspectPersistentProfile(profile.directory), profile))
+		throw new Error(
+			"managed_browser_profile identity changed during launch; retry only after verifying the dedicated directory.",
+		);
+}
+
+/** Validate the exact lease as well as its parent before releasing or launching through a pathname. */
+function assertPersistentProfileLease(lease: PersistentProfileLease): void {
+	assertPersistentProfileIdentity(lease.profile);
+	const info = lstatSync(path.join(lease.profile.directory, ".pi-computer-use.lock"));
+	if (
+		!info.isDirectory() ||
+		info.uid !== process.getuid!() ||
+		(info.mode & 0o777) !== 0o700 ||
+		!sameProfileIdentity(info, lease)
+	)
+		throw new Error("Persistent managed profile lease changed; refusing to use or remove it.");
+}
+
+/** Never follow a swapped parent or remove another owner's lease. Uncertain ownership stays fail-closed. */
+function releasePersistentProfileLease(lease: PersistentProfileLease): boolean {
+	try {
+		assertPersistentProfileLease(lease);
+		rmdirSync(path.join(lease.profile.directory, ".pi-computer-use.lock"));
+		return true;
+	} catch (error) {
+		debugLog("could not release persistent profile lease: %s", error);
+		return false;
+	}
+}
+
+/** Chromium-family default data directories under HOME and under every configuration root. */
+function browserDefaultProfileRoots(home: string, configurationRoots: readonly string[]): string[] {
+	const channels = ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"];
+	return [
+		path.join(home, "Library/Application Support/Google/Chrome"),
+		path.join(home, "Library/Application Support/Chromium"),
+		path.join(home, "Library/Application Support/Google/Chrome Canary"),
+		path.join(home, "Library/Application Support/Google/Chrome Beta"),
+		path.join(home, "Library/Application Support/Google/Chrome Dev"),
+		path.join(home, "Library/Application Support/net.imput.helium"),
+		path.join(home, ".config/google-chrome"),
+		path.join(home, ".config/chromium"),
+		path.join(home, ".config/google-chrome-beta"),
+		path.join(home, ".config/google-chrome-unstable"),
+		path.join(home, ".config/helium"),
+		...configurationRoots.flatMap((root) => channels.map((name) => path.join(root, name))),
+	];
+}
+
 /**
- * Stop the previous managed browser, then start a new one with a private profile dir and record it.
+ * Validate an operator-created profile without reading any profile contents or changing its permissions.
+ *
+ * Check-then-use design: a pathname does not pin an inode, so the validated `dev`/`ino` is retained and the
+ * full policy is repeated after port allocation and previous-browser shutdown (which yield), and again after
+ * the lease is acquired. Lease check/create/capture and the final profile, lease and Chromium-lock checks run
+ * synchronously immediately before `spawn`, using the verified resolved path. Ancestors must be owned by the
+ * current user or root and not group/world writable unless sticky, so another UID cannot swap them. Cleanup
+ * releases only the lease whose identity was captured inside the unchanged profile; uncertainty leaves it in
+ * place. Same-UID attackers are out of scope, and only POSIX owner/mode bits are read (no extended ACLs).
+ */
+async function persistentBrowserProfile(
+	configured: string,
+	expected?: ValidatedPersistentProfile,
+): Promise<ValidatedPersistentProfile> {
+	if (process.platform === "win32")
+		throw new Error(
+			"Persistent managed profiles require owner-only POSIX permissions; Windows ACL validation is not supported.",
+		);
+	const expanded = configured.startsWith("~/") ? path.join(os.homedir(), configured.slice(2)) : configured;
+	if (!path.isAbsolute(expanded)) throw new Error("managed_browser_profile must be an absolute path or start with ~/.");
+	const directory = path.resolve(expanded);
+	const info = inspectPersistentProfile(directory);
+	if (expected && !sameProfileIdentity(info, expected))
+		throw new Error("managed_browser_profile identity changed during launch; refusing the replacement.");
+	const canonical = await realpath(directory);
+	const home = await realpath(os.homedir());
+	// Resolve directory metadata only, never enumerate or open browser profile contents.
+	const configuredRootPaths = [
+		path.join(home, ".config"),
+		process.env.XDG_CONFIG_HOME,
+		process.env.CHROME_CONFIG_HOME,
+	].filter((root): root is string => Boolean(root));
+	const configuredRoots = await Promise.all(configuredRootPaths.map(canonicalProfileRoot));
+	const defaultPaths = browserDefaultProfileRoots(home, configuredRoots);
+	const defaults = await Promise.all(defaultPaths.map(canonicalProfileRoot));
+	const refusal =
+		"managed_browser_profile must not use a default browser data directory (or its ancestor/descendants).";
+	// HOME may contain a dedicated profile, but HOME itself and its ancestors must never become one.
+	if ((await profilePathContains(info, home)) || (await profilePathContains(info, os.homedir())))
+		throw new Error(refusal);
+	// Keep declared paths as well as resolved targets: a symlinked child must not erase its parent's protection.
+	// Configuration roots are independently protected, even when every recognized child points elsewhere.
+	for (const root of [...configuredRootPaths, ...configuredRoots, ...defaultPaths, ...defaults]) {
+		if (await profilePathContains(info, root)) throw new Error(refusal);
+		let rootInfo: Stats;
+		try {
+			rootInfo = await stat(root);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
+		}
+		if (await profilePathContains(rootInfo, canonical)) throw new Error(refusal);
+	}
+	// Walk metadata only. A checkout's .git may be a directory or a worktree marker file.
+	for (let parent = canonical; ; parent = path.dirname(parent)) {
+		try {
+			await lstat(path.join(parent, ".git"));
+			throw new Error("managed_browser_profile must be outside every Git checkout.");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (path.dirname(parent) === parent) break;
+	}
+	const validated = { directory: canonical, dev: info.dev, ino: info.ino };
+	assertPersistentProfileIdentity(validated);
+	return validated;
+}
+
+/** Refuse browser-owned locks, including dangling symlinks, without removing any of them. */
+function assertNoChromiumProfileLocks(directory: string): void {
+	for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+		try {
+			lstatSync(path.join(directory, name));
+			throw new Error(
+				"Persistent managed profile is in use or has a stale Chromium lock. Close its browser and resolve the lock manually; Pi never removes browser locks.",
+			);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+}
+
+/** Check, create and capture the lease without yielding; fail closed on any post-creation replacement. */
+function lockPersistentBrowserProfile(profile: ValidatedPersistentProfile): PersistentProfileLease {
+	assertPersistentProfileIdentity(profile);
+	assertNoChromiumProfileLocks(profile.directory);
+	try {
+		mkdirSync(path.join(profile.directory, ".pi-computer-use.lock"), { mode: 0o700 });
+	} catch (error) {
+		throw new Error(
+			"Persistent managed profile could not be locked. It may be in use or have a stale .pi-computer-use.lock; after verifying all users of this profile have stopped, remove that empty lease directory manually.",
+			{ cause: error },
+		);
+	}
+	assertPersistentProfileIdentity(profile);
+	const info = lstatSync(path.join(profile.directory, ".pi-computer-use.lock"));
+	return { profile, dev: info.dev, ino: info.ino };
+}
+
+/**
+ * Stop the previous managed browser, acquire its replacement's profile, then spawn and track it.
  * Call only inside `withManagedBrowserLifecycle`.
- * @param browser Configured managed browser, which names the executable and the profile dir.
+ * @param browser Configured managed browser, which names the executable and the temporary profile prefix.
  * @param url First page to open.
- * @returns The spawned browser and its `--remote-debugging-port`, already recorded in `runtimeState`.
- * @throws {Error} If no executable is found, or `mkdtemp` or a synchronous `spawn` fails; a
- * failed spawn attempts to remove the new profile dir first.
+ * @returns The spawned browser, its `--remote-debugging-port` and the executable used.
+ * @throws {Error} If no executable is found, `mkdtemp` or a synchronous `spawn` fails (a temporary profile is
+ * removed first), or a persistent `managed_browser_profile` is refused: native Windows, a missing or unsafe
+ * directory, a default or configuration root, an unsafe ancestor, a Git checkout, an existing Pi lease or Chromium
+ * lock, or a profile or lease that changed identity during launch. Refusals leave the profile untouched.
  */
 async function startManagedBrowser(
 	browser: ComputerUseConfig["managed_browser"],
 	url: string,
-): Promise<{ managedBrowser: ChildProcess; port: number }> {
+): Promise<{ managedBrowser: ChildProcess; port: number; executable: string }> {
 	const executable = await managedBrowserExecutable(browser);
+	const configured = getComputerUseConfig().managed_browser_profile;
+	const persistent = configured ? await persistentBrowserProfile(configured) : undefined;
 	const port = await freeTcpPort();
 	disconnectCdp();
 	await releaseManagedBrowser();
 	// A fixed name in a shared temp dir can be owned or pre-seeded by another account, so each
 	// launch gets a private profile dir that lives exactly as long as its browser process.
-	const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));
+	// Revalidate before creating any lease: allocation and previous-browser shutdown may have yielded.
+	if (persistent) await persistentBrowserProfile(persistent.directory, persistent);
+	let profileDir = persistent?.directory ?? (await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`)));
+	const lease = persistent ? lockPersistentBrowserProfile(persistent) : undefined;
 	let managedBrowser: ChildProcess;
 	try {
+		// Full refusal policy AFTER lease acquisition, followed by synchronous final identity/lock checks.
+		if (lease) {
+			profileDir = (await persistentBrowserProfile(profileDir, lease.profile)).directory;
+			assertPersistentProfileLease(lease);
+			assertNoChromiumProfileLocks(profileDir);
+		}
 		const args = managedBrowserArgs({ remoteDebuggingPort: port, userDataDir: profileDir, url });
 		managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
 	} catch (error) {
-		await removeProfileDir(profileDir);
+		if (lease) releasePersistentProfileLease(lease);
+		else await removeProfileDir(profileDir);
 		throw error;
 	}
 	// `close` also fires after an async spawn failure. Session shutdown waits for it and the exit hook
 	// covers a hard exit, so the profile never outlives the browser.
-	trackProfileDir(profileDir, managedBrowser);
-	managedBrowser.once("close", () => void removeProfileDir(profileDir));
+	trackProfileDir(profileDir, managedBrowser, lease);
+	managedBrowser.once("close", () => {
+		// The hard-exit hook forgets leases but must never turn a persistent profile into temp data.
+		if (lease && liveProfileDirs.get(profileDir)?.browser !== managedBrowser) return;
+		void removeProfileDir(profileDir);
+	});
 	managedBrowser.unref();
 	runtimeState.previousCdpPort = process.env.PI_COMPUTER_USE_CDP_PORT;
 	runtimeState.managedBrowser = managedBrowser;
 	runtimeState.managedBrowserCdpPort = String(port);
 	process.env.PI_COMPUTER_USE_CDP_PORT = String(port);
-	return { managedBrowser, port };
+	return { managedBrowser, port, executable };
 }
 
-// Side effects: stops any previous managed browser (SIGTERM, then SIGKILL) and removes its profile,
-// creates a private profile dir under os.tmpdir() tracked in `liveProfileDirs` until removed,
+// Side effects: stops any previous managed browser (SIGTERM, then SIGKILL) and releases its profile,
+// then either creates a private temporary profile dir under os.tmpdir() (removed with the browser) or,
+// when `managed_browser_profile` is set, validates that dedicated profile and takes Pi's lease on it
+// (the profile itself is never deleted). Either is tracked in `liveProfileDirs` until released,
 // installs the `exit` hook once, starts a Pi-managed browser process, and sets
 // PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery. Waits for any earlier launch or
 // shutdown to finish its lifecycle step first.
@@ -3220,7 +3489,7 @@ async function performLaunchBrowser(
 	const browser = getComputerUseConfig().managed_browser;
 	// Joins the lifecycle chain before the first `await`, so a shutdown called after this launch
 	// always runs after it and stops the browser it starts.
-	const { managedBrowser, port } = await withManagedBrowserLifecycle(async () => {
+	const { managedBrowser, port, executable } = await withManagedBrowserLifecycle(async () => {
 		throwIfAborted(signal);
 		return await startManagedBrowser(browser, requestedUrl ?? "about:blank");
 	});
@@ -3228,9 +3497,14 @@ async function performLaunchBrowser(
 		await waitForCdpPort(port, signal);
 	} catch (error) {
 		// A later launch or a shutdown that already took this browser over has stopped it.
-		await withManagedBrowserLifecycle(async () => {
-			if (runtimeState.managedBrowser === managedBrowser) await releaseManagedBrowser();
-		});
+		try {
+			await withManagedBrowserLifecycle(async () => {
+				if (runtimeState.managedBrowser === managedBrowser) await releaseManagedBrowser();
+			});
+		} catch (stopError) {
+			// waitForCdpPort rejects with an Error; keep that readiness failure primary.
+			Object.assign(error as Error, { cause: stopError });
+		}
 		throw error;
 	}
 	const page = (await listCdpPageContexts())[0];
@@ -3238,7 +3512,10 @@ async function performLaunchBrowser(
 	const resourceKey = `cdp:${page.targetId}`;
 	const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(page.contextId));
 	if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
-	return browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+	const result = browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+	result.details.executable = executable;
+	result.content.push({ type: "text", text: `Managed browser executable: ${JSON.stringify(executable)}.` });
+	return result;
 }
 
 async function performNavigateBrowser(

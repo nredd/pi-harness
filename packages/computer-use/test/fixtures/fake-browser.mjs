@@ -4,6 +4,7 @@
 // Records `{ port, profile }` to `$FAKE_BROWSER_LOG` so a test can find what the bridge chose.
 // `$FAKE_BROWSER_LAUNCHES`, when set, gets one `{ port, profile }` JSON line per launch, for tests
 // that start several browsers at once.
+// `FAKE_BROWSER_TITLE` / `FAKE_BROWSER_URL` set the served page's title and URL.
 // `FAKE_BROWSER_IGNORE_SIGTERM=1` makes it ignore SIGTERM, like a browser that hangs on quit.
 // `FAKE_BROWSER_NO_CDP=1` holds the port with a plain TCP listener that never answers CDP, so a
 // launch waits until it is aborted.
@@ -29,4 +30,4 @@ try {
 	process.exit(1);
 }
 if (process.env.FAKE_BROWSER_NO_CDP === "1") net.createServer((socket) => socket.destroy()).listen(port, "127.0.0.1");
-else await startFakeCdp({ port });
+else await startFakeCdp({ port, title: process.env.FAKE_BROWSER_TITLE, url: process.env.FAKE_BROWSER_URL });
