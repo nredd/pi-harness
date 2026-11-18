@@ -1,5 +1,5 @@
 /** Root-local discovery through the public metadata and tool boundaries. */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -14,7 +14,7 @@ function record(id: string, extra: Partial<AgentRecord> = {}): AgentRecord {
 	return {
 		id,
 		runId: `run-${id}`,
-		rootSessionId: "one",
+		rosterRootId: "one",
 		type: "Explore",
 		description: "investigate",
 		status: "running",
@@ -61,7 +61,7 @@ it("returns only authorized root metadata and preserves every internal outcome",
 				error: "PRIVATE ERROR",
 			}),
 		),
-		record("other", { rootSessionId: "two" }),
+		record("other", { rosterRootId: "two" }),
 		record("denied", { type: "Plan" }),
 		record("legacy", { runId: undefined }),
 	];
@@ -89,7 +89,7 @@ it("returns only authorized root metadata and preserves every internal outcome",
 it("fails closed for absent, unscoped or settled callers and invalid roots", () => {
 	for (const rows of [
 		[],
-		[record("self", { rootSessionId: undefined })],
+		[record("self", { rosterRootId: undefined })],
 		[record("self", { runId: undefined })],
 		[record("self", { status: "completed" })],
 	]) {
@@ -183,4 +183,66 @@ it("resolves effective type grants case-insensitively without accepting child-su
 	}
 	const [tool] = tools({ runtime: { manager: { roster }, parentAgentId: "missing" } });
 	expect(await tool!.execute("call", {}, undefined, undefined, {} as never)).toMatchObject({ isError: true });
+});
+
+it("always lists the caller right after the root row, counted against the caps, with 40 eligible peers", () => {
+	const rows = [...Array.from({ length: 40 }, (_, i) => record(`peer${i}`)), record("self", { type: "viewer" })];
+	const roster = new AgentRoster(() => rows);
+	const result = roster.child("self", new Set(["Explore"]));
+	expect(result.agents.slice(0, 2).map((a) => a.id)).toEqual(["root:one", "self"]);
+	expect(result.agents).toHaveLength(ROSTER_LIMIT);
+	expect(result.truncated).toBe(true);
+	const wide = new AgentRoster(() => [
+		...Array.from({ length: 40 }, (_, i) => record(`p${i}`, { description: "d".repeat(2000), type: "t".repeat(2000) })),
+		record("self", { type: "viewer" }),
+	]);
+	const bounded = wide.child("self", new Set(["t".repeat(2000)]));
+	expect(bounded.agents[1]?.id).toBe("self");
+	expect(Buffer.byteLength(rosterJson(bounded))).toBeLessThanOrEqual(ROSTER_BYTES);
+});
+
+it("truncates display text by code points and never splits a surrogate pair", () => {
+	const roster = new AgentRoster(() => [
+		record("a", { description: `${"a".repeat(159)}\u{1F600}tail` }),
+		record("b", { description: `${"b".repeat(160)}\u{1F600}` }),
+	]);
+	const [, a, b] = roster.parent("one").agents;
+	expect(a?.assignment).toBe(`${"a".repeat(159)}\u{1F600}`);
+	expect(b?.assignment).toBe("b".repeat(160));
+	for (const row of [a, b])
+		expect(JSON.parse(rosterJson(row)).assignment).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+});
+
+it("caps the audit view by bytes, dropping oldest events with a truncated marker", () => {
+	const root = "r".repeat(128);
+	const roster = new AgentRoster(() => []);
+	roster.parent(root);
+	expect(roster.auditView(root)).toMatchObject({ truncated: false, events: [{ sequence: 1 }] });
+	for (let i = 0; i < AUDIT_LIMIT; i++) roster.parent(root);
+	const view = roster.auditView(root);
+	expect(view.truncated).toBe(true);
+	expect(view.events.length).toBeLessThan(AUDIT_LIMIT);
+	expect(view.events.at(-1)?.sequence).toBe(AUDIT_LIMIT + 1);
+	expect(Buffer.byteLength(rosterJson(view))).toBeLessThanOrEqual(ROSTER_BYTES);
+	expect(roster.audit(root)).toHaveLength(AUDIT_LIMIT);
+});
+
+it("resolves grants once per run and does not re-read agent files on later calls", async () => {
+	const dir = join(home, ".pi", "agents");
+	mkdirSync(dir, { recursive: true });
+	const file = join(dir, "custom.md");
+	writeFileSync(file, "---\nname: custom\ndescription: fixture\n---\nbody\n");
+	const roster = new AgentRoster(() => [record("self", { type: "viewer" }), record("peer", { type: "custom" })]);
+	const [tool] = tools({
+		config: { ...config, allowedSubagents: ["custom"] },
+		projectTrusted: true,
+		runtime: { manager: { roster }, parentAgentId: "self" },
+	});
+	const ids = async () =>
+		JSON.parse(
+			((await tool!.execute("call", {}, undefined, undefined, {} as never)).content[0] as { text: string }).text,
+		).agents.map((a: { id: string }) => a.id);
+	expect(await ids()).toEqual(["root:one", "self", "peer"]);
+	rmSync(file);
+	expect(await ids()).toEqual(["root:one", "self", "peer"]);
 });

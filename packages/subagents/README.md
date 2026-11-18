@@ -518,7 +518,7 @@ Discovery still works at the nesting depth cap; it grants no delegation, sibling
 mailbox, wake or resume capability. Existing ownership checks are unchanged.
 
 At most 32 entries and 16 KiB of serialized UTF-8 JSON are returned, with `truncated: true`
-when either cap cuts the roster. Assignments are limited to 160 UTF-16 code units; handles and
+when either cap cuts the roster. Assignments are limited to 160 code points (never splitting a surrogate pair); handles and
 type labels to 64. Control/terminal syntax is removed and markup boundaries JSON-escaped.
 Every display value is **untrusted data**, never instructions or approval. A truncated view is
 not a complete fleet census.
@@ -530,7 +530,7 @@ Hosts without the root-scoped roster API or an active caller/root identity retur
 `Agent roster unavailable` error rather than inspecting a global registry.
 
 The parent uses `/agents roster` for the same bounded metadata, without adding another model
-tool schema. `/agents audit` inspects the retained audit suffix. Both cause no model turn.
+tool schema. `/agents audit` inspects the retained audit suffix as `{events, truncated}`, capped at the same 16 KiB (oldest events dropped, `truncated: true`). Both cause no model turn. The caller's own row is listed right after the root row and counts against the caps. A child resolves its type grants once per run, so agent files edited mid-run apply to the next run.
 Interactive inspection uses notifications; headless inspection appends a visible custom snapshot
 with `triggerTurn: false` (available to a later explicitly requested turn). Existing interactive
 `/agents` menus are unchanged.

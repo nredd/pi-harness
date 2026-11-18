@@ -376,6 +376,11 @@ export interface AgentRecord {
 	 * directory as their ancestors' instead of the child session's own id.
 	 */
 	rootSessionId?: string;
+	/**
+	 * Root session that scopes this agent's roster membership. Inherited from the parent record for nested
+	 * children, otherwise the spawning session's id. Unrelated to `rootSessionId`.
+	 */
+	rosterRootId?: string;
 	/** Opaque identity of the current run, renewed on every accepted resume. */
 	runId?: string;
 }

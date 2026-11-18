@@ -32,7 +32,8 @@ it("reads and audits the parent roster without sending a message or registering 
 	});
 	await handler("audit", context);
 	const audit = JSON.parse(context.ui.notify.mock.calls.at(-1)[0]);
-	expect(audit).toMatchObject([
+	expect(audit.truncated).toBe(false);
+	expect(audit.events).toMatchObject([
 		{ caller: "root:s1", run: "root:s1", kind: "roster.read", sequence: 1, data: { count: 1 } },
 	]);
 	expect(boot.tools.has("list_agents")).toBe(false);

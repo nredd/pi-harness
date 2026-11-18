@@ -30,6 +30,17 @@ export function createRosterTools(options: {
 	)
 		return [];
 	const grants = config.allowedSubagents;
+	// Resolved once per run, on first use: agent files are not re-read from disk on every call.
+	let allowedTypes: Set<string> | undefined;
+	const allowed = (): Set<string> => {
+		if (allowedTypes) return allowedTypes;
+		const registry = buildAgentRegistry(
+			loadCustomAgents(options.configCwd, false, { homeDir: options.homeDir, projectTrusted: options.projectTrusted }),
+		);
+		const granted = grants === "all" ? undefined : new Set(grants.map((name) => resolveTypeIn(registry, name) ?? name));
+		allowedTypes = new Set(getAvailableTypesIn(registry).filter((name) => !granted || granted.has(name)));
+		return allowedTypes;
+	};
 	return [
 		defineTool({
 			name: LIST_AGENTS,
@@ -43,17 +54,8 @@ export function createRosterTools(options: {
 						isError: true,
 						details: {},
 					};
-				const registry = buildAgentRegistry(
-					loadCustomAgents(options.configCwd, false, {
-						homeDir: options.homeDir,
-						projectTrusted: options.projectTrusted,
-					}),
-				);
-				const granted =
-					grants === "all" ? undefined : new Set(grants.map((name) => resolveTypeIn(registry, name) ?? name));
-				const allowed = new Set(getAvailableTypesIn(registry).filter((name) => !granted || granted.has(name)));
 				try {
-					const result = runtime.manager.roster.child(runtime.parentAgentId, allowed);
+					const result = runtime.manager.roster.child(runtime.parentAgentId, allowed());
 					return { content: [{ type: "text" as const, text: rosterJson(result) }], details: {} };
 				} catch (error) {
 					return { content: [{ type: "text" as const, text: String(error) }], isError: true, details: {} };

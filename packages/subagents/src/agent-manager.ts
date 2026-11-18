@@ -956,7 +956,9 @@ export class AgentManager {
 			parentAgentId: options.parentAgentId,
 			workflowId: options.workflowId,
 			maxSubagentDepth: options.maxSubagentDepth,
-			rootSessionId: options.rootSessionId ?? ctx.sessionManager?.getSessionId?.(),
+			rootSessionId: options.rootSessionId,
+			// Roster membership only; `rootSessionId` keeps its transcript-directory meaning.
+			rosterRootId: this.agents.get(options.parentAgentId ?? "")?.rosterRootId ?? ctx.sessionManager?.getSessionId?.(),
 			runId: randomUUID(),
 		};
 		this.decidePlanGate(record, () => queryPlanPolicy(pi.events));

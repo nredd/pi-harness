@@ -44,9 +44,10 @@ async function observeCommands(h: Pick<Harness, "session">) {
 		mode: "print",
 		uiContext: createTestUiContext({ notify: (body) => notices.push(body) }),
 	});
-	return async (command: "roster" | "audit") => {
-		await h.session.prompt(`/agents ${command}`);
-		return JSON.parse(required(notices.at(-1)));
+	return async (command: "roster" | "audit" | "auditView") => {
+		await h.session.prompt(`/agents ${command === "auditView" ? "audit" : command}`);
+		const parsed = JSON.parse(required(notices.at(-1)));
+		return command === "audit" ? parsed.events : parsed;
 	};
 }
 
@@ -59,7 +60,7 @@ it("makes explicit parent inspection visible with no UI and no inference", async
 	expect(JSON.parse(text(snapshot)).agents).toMatchObject([{ type: "orchestrator", handle: "parent" }]);
 	await h.session.prompt("/agents audit");
 	const audit = h.session.messages.filter((m) => m.role === "custom" && m.customType === "subagents-roster").at(-1);
-	expect(JSON.parse(text(audit))).toMatchObject([{ kind: "roster.read", data: { count: 1 } }]);
+	expect(JSON.parse(text(audit)).events).toMatchObject([{ kind: "roster.read", data: { count: 1 } }]);
 	expect(h.getPendingResponseCount()).toBe(1);
 	expect(h.session.messages.some((m) => m.role === "assistant")).toBe(false);
 });
@@ -432,10 +433,11 @@ it("bounds real roster reads and audit retention without audit-triggered model t
 	expect(required(results[0])).not.toContain("\u202e");
 	h.setResponses([answer("UNUSED audit sentinel")]);
 	for (let i = 0; i < 131; i++) await inspect("roster");
-	const audit = (await inspect("audit")) as RootAuditEvent[];
-	expect(audit).toHaveLength(128);
-	expect(audit[0]?.sequence).toBe(5);
-	expect(audit.at(-1)?.sequence).toBe(132);
-	expect(await inspect("audit")).toEqual(audit);
+	// Stored suffix is 128 events; the inspection view is byte-capped with a marker.
+	const view = (await inspect("auditView")) as { events: RootAuditEvent[]; truncated: boolean };
+	expect(view.truncated).toBe(true);
+	expect(view.events.length).toBeLessThan(128);
+	expect(view.events.at(-1)?.sequence).toBe(132);
+	expect(await inspect("auditView")).toEqual(view);
 	expect(h.getPendingResponseCount()).toBe(1);
 });

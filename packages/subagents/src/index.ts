@@ -5631,7 +5631,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
 			if (args.trim() === "roster" || args.trim() === "audit") {
 				try {
 					const root = ctx.sessionManager?.getSessionId?.() ?? "";
-					const data = args.trim() === "roster" ? manager.roster.parent(root) : manager.roster.audit(root);
+					const data = args.trim() === "roster" ? manager.roster.parent(root) : manager.roster.auditView(root);
 					presentRoster(ctx, rosterJson(data), "info");
 				} catch (error) {
 					presentRoster(ctx, String(error), "error");

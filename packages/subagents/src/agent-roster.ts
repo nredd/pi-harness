@@ -37,12 +37,13 @@ export interface RosterEntry {
 
 /** Strip terminal/control syntax and bound each display field before JSON framing. */
 function display(text: string, limit: number): string {
-	return text
+	const cleaned = text
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
 		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, limit);
+		.trim();
+	// Code points, so a surrogate pair is never split.
+	return [...cleaned].slice(0, limit).join("");
 }
 
 /** JSON data framing also escapes markup boundaries; readers must still treat values as untrusted. */
@@ -68,15 +69,26 @@ export class AgentRoster {
 	/** Read as a bound child record. Missing identity or a settled caller fails closed. */
 	child(id: string, allowed: ReadonlySet<string>): { agents: RosterEntry[]; truncated: boolean } {
 		const caller = this.records().find((record) => record.id === id);
-		if (!caller?.rootSessionId || !caller.runId || (caller.status !== "running" && caller.status !== "queued")) {
+		if (!caller?.rosterRootId || !caller.runId || (caller.status !== "running" && caller.status !== "queued")) {
 			throw new Error("Agent roster unavailable: caller has no active root-scoped run identity.");
 		}
-		return this.read(caller.rootSessionId, caller.id, caller.runId, allowed);
+		return this.read(caller.rosterRootId, caller.id, caller.runId, allowed);
 	}
 
 	/** Inspect retained audit metadata without modifying it or emitting an event. */
 	audit(root: string): RootAuditEvent[] {
 		return structuredClone(this.logs.get(root)?.events ?? []);
+	}
+
+	/** Bounded audit view: newest events that fit the roster byte cap, oldest dropped with `truncated: true`. */
+	auditView(root: string): { events: RootAuditEvent[]; truncated: boolean } {
+		const events = this.audit(root);
+		let truncated = false;
+		while (events.length > 0 && Buffer.byteLength(rosterJson({ events, truncated }), "utf8") > ROSTER_BYTES) {
+			events.shift();
+			truncated = true;
+		}
+		return { events, truncated };
 	}
 
 	private read(root: string, caller: string, run: string, allowed: ReadonlySet<string> | undefined) {
@@ -98,9 +110,12 @@ export class AgentRoster {
 			},
 		];
 		let truncated = false;
-		for (const record of this.records()) {
+		// The caller's own row comes first so no cap can drop it.
+		const records = this.records();
+		const ordered = [...records.filter((r) => r.id === caller), ...records.filter((r) => r.id !== caller)];
+		for (const record of ordered) {
 			if (
-				record.rootSessionId !== root ||
+				record.rosterRootId !== root ||
 				!record.runId ||
 				(allowed && record.id !== caller && !allowed.has(record.type))
 			)
@@ -120,7 +135,7 @@ export class AgentRoster {
 						: "finished",
 				assignment: display(record.description, 160),
 			});
-			if (Buffer.byteLength(rosterJson({ agents, truncated: false }), "utf8") > ROSTER_BYTES) {
+			if (Buffer.byteLength(rosterJson({ agents, truncated: true }), "utf8") > ROSTER_BYTES) {
 				agents.pop();
 				truncated = true;
 				break;

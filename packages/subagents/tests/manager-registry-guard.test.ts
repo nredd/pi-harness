@@ -130,8 +130,9 @@ describe("the registry spawn strips internal capabilities", () => {
 		// configCwd names where agent files and memory are resolved from.
 		const { entry, id, root, runOpts } = forge({ rootSessionId: "../../elsewhere", configCwd: "/etc" });
 
-		// Bind the authoritative SDK root, never the forged transcript path.
-		expect(entry.getRecord(id).rootSessionId).toBe("s1");
+		expect(entry.getRecord(id).rootSessionId).toBeUndefined();
+		// Roster membership is separate and never taken from the forged option.
+		expect(entry.getRecord(id).rosterRootId).toBe("s1");
 		expect(runOpts().configCwd).toBeUndefined();
 		await root.lifecycle.get("session_shutdown")?.();
 	});

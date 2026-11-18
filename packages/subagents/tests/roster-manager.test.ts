@@ -7,7 +7,7 @@ vi.mock("../src/agent-runner.ts", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn
 let manager: AgentManager;
 afterEach(() => manager?.dispose());
 
-it("binds the SDK root, retains it for a branch and renews identity for an accepted resume", async () => {
+it("binds the roster root, leaves rootSessionId semantics alone, retains it for a branch and renews identity for an accepted resume", async () => {
 	manager = new AgentManager();
 	vi.mocked(runAgent).mockResolvedValue({
 		responseText: "private",
@@ -19,23 +19,33 @@ it("binds the SDK root, retains it for a branch and renews identity for an accep
 	const pi = {} as never;
 	const context = { cwd: "/tmp", sessionManager: { getSessionId: () => "root-one" } } as never;
 	const { record } = await manager.spawnAndWait(pi, context, "Explore", "private prompt", { description: "inspect" });
-	expect(record.rootSessionId).toBe("root-one");
+	// Transcript-directory field is unchanged: set only by callers that pass it.
+	expect(record.rootSessionId).toBeUndefined();
+	expect(record.rosterRootId).toBe("root-one");
 	const run = record.runId;
 	expect(run).toMatch(/^[0-9a-f-]{36}$/);
 	await manager.resume(record.id, "again");
 	expect(record.runId).not.toBe(run);
-	const branch = await manager.spawnAndWait(pi, context, "Explore", "private", {
+	const childContext = { cwd: "/tmp", sessionManager: { getSessionId: () => "child-session" } } as never;
+	const branch = await manager.spawnAndWait(pi, childContext, "Explore", "private", {
 		description: "nested",
-		rootSessionId: record.rootSessionId,
+		rootSessionId: "transcripts",
 		parentAgentId: record.id,
 		depth: 2,
 	});
-	expect(branch.record.rootSessionId).toBe("root-one");
+	expect(branch.record.rootSessionId).toBe("transcripts");
+	expect(branch.record.rosterRootId).toBe("root-one");
 	expect(branch.record.runId).not.toBe(record.runId);
 	const unscoped = await manager.spawnAndWait(pi, { cwd: "/tmp", sessionManager: {} } as never, "Explore", "private", {
 		description: "no identity",
 	});
 	expect(unscoped.record.rootSessionId).toBeUndefined();
+	expect(unscoped.record.rosterRootId).toBeUndefined();
+	const forged = await manager.spawnAndWait(pi, context, "Explore", "x", {
+		description: "forged",
+		rosterRootId: "other",
+	} as never);
+	expect(forged.record.rosterRootId).toBe("root-one");
 	expect(manager.roster.parent("root-one").agents.map((r) => r.id)).toContain(branch.id);
 	expect(manager.roster.parent("root-one").agents.map((r) => r.id)).not.toContain(unscoped.id);
 });
