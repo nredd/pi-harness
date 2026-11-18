@@ -376,6 +376,8 @@ export interface AgentRecord {
 	 * directory as their ancestors' instead of the child session's own id.
 	 */
 	rootSessionId?: string;
+	/** Opaque identity of the current run, renewed on every accepted resume. */
+	runId?: string;
 }
 
 /**

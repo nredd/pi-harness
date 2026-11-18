@@ -1455,6 +1455,30 @@ describe("agent-runner master tool allowlist", () => {
 			);
 		});
 
+		it.each([false, true])(
+			"keeps opt-in roster at the depth cap but subjects it to Plan (extensions %s)",
+			async (extensions) => {
+				vi.mocked(getConfig).mockReturnValueOnce(makeConfig({ extensions }));
+				vi.mocked(getAgentConfig).mockReturnValueOnce(
+					makeAgentConfig({ extensions, builtinToolNames: ["read", "list_agents"], allowedSubagents: "all" }),
+				);
+				vi.mocked(getToolNamesForType).mockReturnValueOnce(["read", "list_agents"]);
+				const { session } = createSession("ROSTER");
+				createAgentSession.mockResolvedValue({ session });
+				await runAgent(ctx, "Explore", "go", {
+					pi,
+					nestedRuntime: { manager: {} as any, parentAgentId: "caller", depth: 2, maxSubagentDepth: 2 },
+					planGate: { policy: ({ toolName }) => (toolName === "list_agents" ? "Discovery denied by Plan" : undefined) },
+				});
+				expect(customToolNames()).toContain("list_agents");
+				expect(lastToolsPassed()).toContain("list_agents");
+				expect(lastToolsPassed()).not.toContain("Agent");
+				await expect(
+					session.agent.beforeToolCall?.({ toolCall: { name: "list_agents" }, args: {} }),
+				).resolves.toMatchObject({ block: true, reason: "Discovery denied by Plan" });
+			},
+		);
+
 		it("keeps StructuredOutput reachable with no tools: allowlist", async () => {
 			// The gate that would have silently killed this feature: `inScope` seeds
 			// `keep` from the built-in list, and a customTool is in neither that nor
