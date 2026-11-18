@@ -111,10 +111,10 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
         (f"{FRESH}:1", 1),
         (f"{FRESH}:0", 0),  # busy: overflow immediately
         (f"{FRESH}:-2", 0),
-        (f"{FRESH}:-3", 0),  # the allowed queue is taken
-        (f"{FRESH}:-9", 0),  # deeper backlog never goes negative
-        (FRESH, 1),  # no count means no backlog report: the one free slot, no queue allowance
-        (f"{FRESH}:drain", None),  # draining (also how low disk is published): nothing may be queued
+        (f"{FRESH}:-3", 0),  # deeper backlog
+        (f"{FRESH}:-9", 0),  # never negative
+        (FRESH, 1),  # a count-less beat is one free slot
+        (f"{FRESH}:drain", None),  # draining (also how low disk is published)
         ("0", None),
     ],
 )
@@ -353,6 +353,25 @@ def test_a_blocked_title_routes_nothing(table: dict[Any, int]) -> None:
     assert {c.runner for c in plan.values()} == {""}
 
 
+@pytest.fixture(autouse=True)
+def idle_census(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace the GitHub run census (a network call) with an empty one: heartbeat capacity passes through."""
+    monkeypatch.setattr(ci_paths, "live_capacity", lambda capacity, *_args: capacity)
+
+
+def test_a_missing_run_id_fails_closed_to_hosted(tmp_path: Path) -> None:
+    """Without the run's identity there is no census, so a fresh idle pool takes nothing."""
+    beat = str(int(time.time()))
+    out = tmp_path / "out"
+    out.write_text("")
+    argv = ["--full", "--event", "workflow_dispatch", "--github-output", str(out)]
+    assert ci_paths.main([*argv, "--pool-heartbeat", f"pi-linux={beat}:2"]) == 0
+    plan = json.loads(
+        next(x for x in out.read_text().splitlines() if x.startswith("plan=")).removeprefix("plan=")
+    )
+    assert set(cell_runners(plan, "owned (ubuntu-24.04)").values()) == {"ubuntu-24.04"}
+
+
 def plan_with(tmp_path: Path, name: str, *extra: str) -> dict[str, Any]:
     """Run the real CLI for a dispatch event and return the published plan.
 
@@ -367,6 +386,7 @@ def plan_with(tmp_path: Path, name: str, *extra: str) -> dict[str, Any]:
     out = tmp_path / name
     out.write_text("")
     argv = ["--full", "--event", "workflow_dispatch", "--github-output", str(out), *extra]
+    argv += ["--pool-run-id", "1", "--pool-repository", "o/r"]
     assert ci_paths.main(argv) == 0
     line = next(x for x in out.read_text().splitlines() if x.startswith("plan="))
     return json.loads(line.removeprefix("plan="))

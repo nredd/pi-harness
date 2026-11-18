@@ -29,10 +29,9 @@ from datetime import datetime
 from typing import Any
 
 from runner_pools import (
-    CELL_SECONDS,
-    MIN_HEAVY_S,
-    OS_POOLS,
+    GH,
     POOLS,
+    cell_pool,
     parse_heartbeats,
     pool_capacity,
     pool_is_up,
@@ -40,7 +39,6 @@ from runner_pools import (
 
 LOGGER = logging.getLogger(__name__)
 
-GH = "/usr/bin/gh"
 MIN_QUEUED_S = 300
 LIVE_QUEUED_S = 600
 # A run is rescued at most this many attempts in total, so a cell that cannot start anywhere cannot loop.
@@ -107,16 +105,6 @@ def stranded_runs(
             unstarted, with at least one overdue cell and observed destination room.
             Full job pages are refused because an unseen sibling could be running.
     """
-    # A queued hosted peer is evidence that the destination has no immediate room. GitHub does not
-    # expose hosted concurrency availability; this census is a conservative observable proxy.
-    hosted_busy = {
-        label
-        for jobs in jobs_by_run.values()
-        for job in jobs
-        if job["status"] == "queued"
-        for label in job["labels"]
-        if label in HOSTED_POOLS
-    }
     pool_busy = {
         label
         for jobs in jobs_by_run.values()
@@ -140,48 +128,74 @@ def stranded_runs(
         jobs = jobs_by_run.get(run["id"], ())
         unfinished = [job for job in jobs if job["status"] != "completed"]
         if (
-            len(jobs) < PAGE_SIZE
-            and unfinished
-            and all(
+            len(jobs) >= PAGE_SIZE
+            or not unfinished
+            or not all(
                 job["status"] in {"queued", "waiting", "pending", "requested"} and not job_started(job)
                 for job in unfinished
             )
-            and any(job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy) for job in unfinished)
         ):
-            # Each restart re-plans toward the pools its hosted cells would move to: one per free slot.
-            targets = {
-                pool
-                for job in unfinished
-                if not any(label in POOL_LABELS for label in job["labels"])
-                and job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy)
-                and (pool := eligible_pool(job)) is not None
-            }
-            if any(moved.get(pool, 0) >= capacity.get(pool, 0) for pool in targets):
-                continue
-            for pool in targets:
-                moved[pool] = moved.get(pool, 0) + 1
-            picked.append(run["id"])
+            continue
+        # A queued hosted peer in ANOTHER run is evidence the destination has no immediate room. GitHub
+        # does not expose hosted concurrency; this census is a conservative proxy. The run's own queued
+        # siblings are what the restart would re-plan, so they do not count.
+        hosted_busy = {
+            label
+            for other, other_jobs in jobs_by_run.items()
+            if other != run["id"]
+            for job in other_jobs
+            if job["status"] == "queued"
+            for label in job["labels"]
+            if label in HOSTED_POOLS
+        }
+        justified = [
+            job
+            for job in unfinished
+            if job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy)
+            and fits_pool(job, unfinished, capacity, moved)
+        ]
+        if not justified:
+            continue
+        # Each restart re-plans toward the pools its hosted cells would move to: one per free slot.
+        for pool in {p for job in justified if not is_pooled(job) and (p := cell_pool(job.get("name", "")))}:
+            moved[pool] = moved.get(pool, 0) + 1
+        picked.append(run["id"])
     return picked[:MAX_RUNS_PER_TICK]
 
 
-def eligible_pool(job: Mapping[str, Any]) -> str | None:
-    """Map a real poolable hosted job name to its pool; never migrate an unproven cell.
+def is_pooled(job: Mapping[str, Any]) -> bool:
+    """Return whether a job is queued on a self-hosted pool label."""
+    return any(label in POOL_LABELS for label in job["labels"])
+
+
+def fits_pool(
+    job: Mapping[str, Any],
+    unfinished: Sequence[Mapping[str, Any]],
+    capacity: Mapping[str, int],
+    moved: Mapping[str, int],
+) -> bool:
+    """Return whether a cancel-and-rerun may move this hosted cell into a pool.
+
+    A restart re-plans every unfinished cell of the run, and finished jobs are thrown away. Moving one cell
+    while the pool's admitted share cannot hold the run's other poolable cells just re-queues them hosted
+    behind everyone, so the run can finish later. Pooled jobs (dead or live pool takeover) always fit.
 
     Parameters:
-        job (Mapping[str, Any]): GitHub job with its stable check name.
+        job (Mapping[str, Any]): The overdue job.
+        unfinished (Sequence[Mapping[str, Any]]): Every unfinished job of its run.
+        capacity (Mapping[str, int]): Fresh pool capacity, empty while a run classifies.
+        moved (Mapping[str, int]): Restarts already admitted toward each pool this tick.
 
     Returns:
-        str | None: Compatible pool, or None for unsupported work.
+        bool: True for a pooled job, or when every poolable hosted cell of the run fits the pool's room.
     """
-    for (kind, os_name, variant), seconds in CELL_SECONDS.items():
-        name = (
-            f"owned shard ({os_name}, {variant})"
-            if kind == "owned"
-            else f"{kind} ({os_name}{', ' + variant if variant else ''})"
-        )
-        if job.get("name") == name and seconds >= MIN_HEAVY_S:
-            return OS_POOLS[os_name]
-    return None
+    if is_pooled(job):
+        return True
+    pool = cell_pool(job.get("name", ""))
+    if pool is None:
+        return False
+    cells = sum(cell_pool(other.get("name", "")) == pool and not is_pooled(other) for other in unfinished)
+    return cells <= capacity.get(pool, 0) - moved.get(pool, 0)
 
 
 def job_started(job: Mapping[str, Any]) -> bool:
@@ -231,7 +245,7 @@ def job_is_stranded(
             and not any(HOSTED_POOLS.get(label) == pool for label in hosted_busy or ())
             for pool in pools
         )
-    pool = eligible_pool(job)
+    pool = cell_pool(job.get("name", ""))
     return (
         waited > LIVE_QUEUED_S
         and pool is not None

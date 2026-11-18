@@ -22,6 +22,11 @@ import runner_rescue
 
 REPO = "example/project"
 NOW = 1_800_000_000
+# Replay inputs: observed hosted median start delay, assumed hosted executors, and the bounds to hold.
+HOSTED_MEDIAN_START_S = 215
+HOSTED_EXECUTORS = 9
+MAX_WAIT_S = 3000
+MAX_TOTAL_WAIT_S = 80000
 
 
 def census(count: int) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
@@ -61,15 +66,14 @@ def test_nine_run_burst_uses_both_pools_without_reusing_free_five() -> None:
         hosted.extend(key for key in cells if key not in chosen)
     assert pooled == [("stack", "macos-14", "local")]
     assert len(hosted) == 53
-    lanes = [215] * 9
+    lanes = [HOSTED_MEDIAN_START_S] * HOSTED_EXECUTORS
     waits = []
     for key in hosted:
         start = heapq.heappop(lanes)
         waits.append(start)
         heapq.heappush(lanes, start + runner_pools.CELL_SECONDS[key])
-    assert max(waits) <= 3000
-    assert sum(waits) <= 80000
-    assert len(pooled) <= 1  # No self-hosted queue, even with nine reads of the same free=5 beat.
+    assert max(waits) <= MAX_WAIT_S
+    assert sum(waits) <= MAX_TOTAL_WAIT_S
 
 
 def test_admission_accounts_for_jobs_and_unmaterialized_older_runs() -> None:
@@ -284,8 +288,8 @@ def test_bilateral_rescue_requires_room_and_a_supported_cell() -> None:
     assert not runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, beats, NOW, {"xcode-27"})
     # A dead pool is rescued even while the hosted queue is deep.
     assert runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, {}, NOW, {"xcode-27"})
-    assert runner_rescue.eligible_pool(queued | {"name": "contracts (macos-14)"}) == "pi-macos"
-    assert runner_rescue.eligible_pool(queued | {"name": "stack (macos-14, local)"}) == "pi-macos"
+    assert runner_pools.cell_pool("contracts (macos-14)") == "pi-macos"
+    assert runner_pools.cell_pool("stack (macos-14, local)") == "pi-macos"
 
 
 REAL_QUEUED = {
@@ -359,3 +363,59 @@ def test_a_newer_run_that_finished_classify_reserves_before_an_older_rerun() -> 
     assert runner_pools.admit_capacity({"pi-macos": 1}, runs, jobs, 1, REPO) == {"pi-macos": 0}
     jobs[2] = [{"name": "classify changed paths", "status": "in_progress", "labels": []}]
     assert runner_pools.admit_capacity({"pi-macos": 1}, runs, jobs, 1, REPO) == {"pi-macos": 1}
+
+
+def test_burst_over_both_pools_never_exceeds_either_capacity() -> None:
+    """Nine runs read linux free=2 and macOS free=5: both pools are used, neither is oversubscribed."""
+    runs, jobs = census(9)
+    beats = {"pi-linux": f"{NOW - 30}:2", "pi-macos": f"{NOW - 30}:5"}
+    capacity = runner_pools.pool_capacity(beats, NOW, trusted=True)
+    cells = [key for key in runner_pools.CELL_SECONDS if key[1] in {"macos-14", "ubuntu-24.04"}]
+    per_pool = {"pi-linux": 0, "pi-macos": 0}
+    for run in runs:
+        admitted = runner_pools.admit_capacity(capacity, runs[: run["id"]], jobs, run["id"], REPO)
+        for pool in runner_pools.assign_cells(cells, admitted).values():
+            per_pool[pool] += 1
+    assert per_pool["pi-macos"] == 1
+    assert 1 <= per_pool["pi-linux"] <= runner_pools.POOLS["pi-linux"].slots
+
+
+def test_a_classifying_run_reserves_only_the_pools_its_cells_target() -> None:
+    """An older run whose unlabeled cells are all macOS leaves the Linux pool free."""
+    runs, jobs = census(3)
+    for older in (1, 2):
+        jobs[older] = [{"name": "owned shard (macos-14, ts)", "status": "queued", "labels": []}]
+    got = runner_pools.admit_capacity({"pi-linux": 1, "pi-macos": 1}, runs, jobs, 3, REPO)
+    assert got == {"pi-linux": 1, "pi-macos": 0}
+
+
+def test_restart_for_one_cell_must_fit_the_runs_other_cells() -> None:
+    """Five queued hosted macOS cells and one free slot: a restart would re-queue four hosted, so no."""
+    names = [f"owned shard (macos-14, {v})" for v in ("subagents", "computer-use", "ts", "python")]
+    cells = [hosted_cell(n) for n in [*names, "contracts (macos-14)"]]
+    beats = {"pi-macos": f"{NOW}:5"}
+    assert runner_rescue.stranded_runs([RUN], {1: cells}, beats, NOW, REPO) == []
+    assert runner_rescue.stranded_runs([RUN], {1: cells[:1]}, beats, NOW, REPO) == [1]
+
+
+def test_own_hosted_siblings_do_not_block_a_live_pool_rescue() -> None:
+    """A cell queued 15 minutes on a fresh pool moves to hosted although its run has hosted siblings."""
+    stuck = REAL_QUEUED | {"created_at": "2027-01-15T07:00:00Z"}
+    sibling = hosted_cell("owned shard (macos-14, python)")
+    beats = {"pi-macos": f"{NOW}:0"}
+    assert runner_rescue.stranded_runs([RUN], {1: [stuck, sibling]}, beats, NOW, REPO) == [1]
+    other = RUN | {"id": 2}
+    assert runner_rescue.stranded_runs([RUN, other], {1: [stuck], 2: [sibling]}, beats, NOW, REPO) == []
+
+
+def test_a_dead_pool_cell_is_rescued_while_another_run_classifies() -> None:
+    """An in-progress classify only withholds moves INTO pools, never the dead-pool takeover."""
+    classifying = {"status": "in_progress", "labels": [], "name": "classify changed paths"}
+    runs = [RUN, RUN | {"id": 2}]
+    assert runner_rescue.stranded_runs(runs, {1: [REAL_QUEUED], 2: [classifying]}, {}, NOW, REPO) == [1]
+
+
+def test_an_unlisted_hosted_cell_never_fits_a_pool() -> None:
+    """Only listed, long enough cells may move into a pool."""
+    cell = hosted_cell("owned shard (macos-14, scripts)")
+    assert not runner_rescue.fits_pool(cell, [cell], {"pi-macos": 1}, {})

@@ -115,6 +115,24 @@ DRAINING = "drain"
 BEAT = re.compile(r"(?P<epoch>[0-9]+)(?::(?P<free>-?[0-9]+|drain))?", re.ASCII)
 
 
+def cell_pool(name: str) -> str | None:
+    """Return the pool a CI job can run on, from its check name.
+
+    Parameters:
+        name (str): A job name such as `owned shard (macos-14, ts)` or `contracts (macos-14)`.
+
+    Returns:
+        str | None: The pool for a listed cell at least `MIN_HEAVY_S` long, else None (never migrate an
+            unlisted or unproven cell).
+    """
+    for (kind, os_name, variant), seconds in CELL_SECONDS.items():
+        suffix = f", {variant}" if variant else ""
+        label = f"owned shard ({os_name}, {variant})" if kind == "owned" else f"{kind} ({os_name}{suffix})"
+        if name == label and seconds >= MIN_HEAVY_S:
+            return OS_POOLS[os_name]
+    return None
+
+
 def parse_beat(value: str) -> tuple[int, int | str | None] | None:
     """Parse a heartbeat value with the strict grammar.
 
@@ -288,9 +306,12 @@ def admit_capacity(
                 for job in unfinished
             )
         )
+        # Cells without runner labels name the pools they target; a run with no cells yet could use any.
+        named = {p for job in unfinished if not job.get("labels") and (p := cell_pool(job.get("name", "")))}
+        targeted = named or set(used)
         for pool, occupied_slots in used.items():
             occupied = sum(POOLS[pool].label in job.get("labels", ()) for job in unfinished)
-            reserved = int(planning and (run["id"] < run_id or classified))
+            reserved = int(planning and pool in targeted and (run["id"] < run_id or classified))
             used[pool] = occupied_slots + max(occupied, reserved)
     # Reported free already subtracts older running jobs. Take the minimum of independently observed
     # headroom and the heartbeat, rather than subtracting those jobs from the free count twice.

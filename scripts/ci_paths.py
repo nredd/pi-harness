@@ -938,8 +938,12 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error(f"Invalid --pool-heartbeat: {e}")
         return 2
     capacity = pool_capacity(heartbeats, time.time(), trusted=not args.no_pools)
-    if args.pool_run_id:
+    if args.pool_run_id > 0:
         capacity = live_capacity(capacity, args.pool_repository, args.pool_run_id, args.pool_attempt)
+    elif capacity:
+        # Without the run's identity there is no admission census: fail closed, never spend the raw beat.
+        LOGGER.warning("No `--pool-run-id`: pool admission is unavailable, so every cell stays hosted")
+        capacity = {}
     LOGGER.info(f"Self-hosted pools admitted (working slots): {capacity}")
     problem = ""
     if args.event == EVENT_PULL_REQUEST:
