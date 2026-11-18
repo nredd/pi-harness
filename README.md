@@ -450,7 +450,7 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 ### Pools
 
 CI plans cells across these pools and hosted runners by effective capacity, and a cron rescue moves cells
-queued too long on either side. Policy, bounds and residuals live in the `Self-hosted routing policy` comment
+queued too long on a pool back to hosted. Policy, bounds and residuals live in the `Self-hosted routing policy` comment
 in [`ci.yml`](.github/workflows/ci.yml) and the header of [`runner-rescue.yml`](.github/workflows/runner-rescue.yml);
 there is no hard queue-time guarantee.
 

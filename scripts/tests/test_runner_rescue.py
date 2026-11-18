@@ -1,4 +1,4 @@
-"""Test which runs the rescue re-routes and how it restarts them.
+"""Test which runs the rescue restarts (pool cells move to hosted only) and how.
 
 References:
     https://docs.github.com/en/rest/actions/workflow-runs#re-run-a-workflow

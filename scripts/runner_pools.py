@@ -5,7 +5,7 @@ supervisors) and writes `0` on a clean stop. `ci_paths.py` reads the values at c
 longest running cells to each live pool while it has free slots. Everything else, and every cell when a
 pool's beat is missing, `0`, stale, garbled or from the future, stays on the hosted runner, which is also
 what an untrusted event always gets. The rescue workflow (`runner_rescue.py`) uses the same freshness
-rule to find jobs stranded on either side. CI also reads an unfinished-run census before admission:
+rule to find pool cells stranded in a queue. CI also reads an unfinished-run census before admission:
 older classifiers reserve shared capacity before their cell jobs appear. Legacy macOS heartbeats are
 capped at one usable account, with no speculative queue. The remaining cells overflow immediately.
 GitHub read snapshots are not atomic leases; unseen jobs and API propagation remain a residual.
@@ -32,6 +32,7 @@ from typing import Any
 LOGGER = logging.getLogger(__name__)
 GH = "/usr/bin/gh"
 PAGE_SIZE = 100
+GH_TIMEOUT_S = 10
 CENSUS_TIMEOUT_S = 30
 ACTIVE_STATUSES = ("queued", "in_progress", "pending", "waiting", "requested")
 
@@ -340,7 +341,7 @@ def gh_read(path: str) -> Any:
     """
     return json.loads(
         subprocess.check_output(
-            [GH, "api", "--method", "GET", path], text=True, stderr=subprocess.STDOUT, timeout=10
+            [GH, "api", "--method", "GET", path], text=True, stderr=subprocess.STDOUT, timeout=GH_TIMEOUT_S
         )
     )
 

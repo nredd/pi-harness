@@ -1,4 +1,4 @@
-"""Re-plan CI runs stranded in either hosted or self-hosted queues.
+"""Move CI cells stranded in a self-hosted pool queue back to hosted runners.
 
 Only runs whose unfinished jobs are all unstarted may restart, with at least one stranded cell.
 A fresh job snapshot is checked immediately before cancelling. GitHub has no atomic cancel-if-queued
@@ -30,6 +30,7 @@ from typing import Any
 
 from runner_pools import (
     GH,
+    PAGE_SIZE,
     POOLS,
     parse_heartbeats,
     pool_is_up,
@@ -47,7 +48,6 @@ CANCEL_WAIT_S = 180
 RERUN_TRIES = 3
 RERUN_BACKOFF_S = 10
 # The API's page size; a full page may hide more runs or jobs, which the next tick picks up.
-PAGE_SIZE = 100
 POLL_S = 5
 RERUN_EVENTS = frozenset({"pull_request", "push", "workflow_dispatch"})
 POOL_LABELS = {pool.label: name for name, pool in POOLS.items()}
@@ -87,6 +87,8 @@ def stranded_runs(
     heartbeats: Mapping[str, str],
     now: float,
     repo: str,
+    *,
+    hosted_unknown: bool = False,
 ) -> list[int]:
     """Pick the runs to cancel and rerun.
 
@@ -97,6 +99,8 @@ def stranded_runs(
             disabled, which makes every pool stale.
         now (float): Current epoch seconds.
         repo (str): `owner/name` of this repository.
+        hosted_unknown (bool): Some run's jobs could not be read, so hosted load is unknown: no live-pool
+            move is made (dead and draining pool moves still are).
 
     Returns:
         list[int]: Oldest eligible runs, capped at `MAX_RUNS_PER_TICK`. Every unfinished job must be
@@ -130,6 +134,8 @@ def stranded_runs(
             for label in job["labels"]
             if label in HOSTED_POOLS
         }
+        if hosted_unknown:
+            hosted_busy |= set(HOSTED_POOLS)
         if any(job_is_stranded(job, heartbeats, now, hosted_busy) for job in unfinished):
             picked.append(run["id"])
     return picked[:MAX_RUNS_PER_TICK]
@@ -278,10 +284,13 @@ def main(argv: list[str] | None = None) -> int:
         argv (list[str] | None): Arguments, or `sys.argv` when omitted.
 
     Returns:
-        int: 0 when every picked run restarted (or none was picked), 1 when any restart failed.
+        int: 0 when every picked run restarted (or none was picked) and every run's jobs were read, 1 when any
+            restart failed or any run was skipped, so a total read failure is never a silent green.
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description="Re-route runs stranded on a dead self-hosted pool")
+    parser = argparse.ArgumentParser(
+        description="Move cells queued on a dead or backed-up self-hosted pool to hosted runners"
+    )
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--pool-heartbeat", action="append", default=[], metavar="POOL=VALUE")
     parser.add_argument(
@@ -304,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error(f"Failed to read runs from the API: {e.stderr}")
         return 1
     jobs_by_run: dict[int, list[dict[str, Any]]] = {}
+    skipped: list[int] = []
     for run in runs:
         try:
             jobs_by_run[run["id"]] = gh_api(
@@ -311,8 +321,10 @@ def main(argv: list[str] | None = None) -> int:
             )["jobs"]
         except subprocess.CalledProcessError as e:
             # One unreadable run (or a rate limit) must not stop the dead-pool rescue of the others.
-            LOGGER.warning(f"Skipping run '{run['id']}': its jobs could not be read: {e.stderr}")
-    picked = stranded_runs(runs, jobs_by_run, heartbeats, time.time(), args.repo)
+            LOGGER.error(f"Skipping run '{run['id']}': its jobs could not be read: {e.stderr}")
+            skipped.append(run["id"])
+    unknown = bool(skipped)
+    picked = stranded_runs(runs, jobs_by_run, heartbeats, time.time(), args.repo, hosted_unknown=unknown)
     LOGGER.info(f"Stranded runs: {picked}")
     failed = False
     for run_id in [] if args.dry_run else picked:
@@ -323,7 +335,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"repos/{args.repo}/actions/runs/{run_id}/jobs?filter=latest&per_page={PAGE_SIZE}"
             )["jobs"]
             fresh_jobs = {**jobs_by_run, run_id: fresh}
-            if not stranded_runs([current], fresh_jobs, heartbeats, time.time(), args.repo):
+            if not stranded_runs(
+                [current], fresh_jobs, heartbeats, time.time(), args.repo, hosted_unknown=unknown
+            ):
                 LOGGER.info(f"Leaving run '{run_id}': no longer safe to restart")
                 continue
             restart(args.repo, run_id)
@@ -331,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
         except (subprocess.CalledProcessError, TimeoutError) as e:
             LOGGER.error(f"Failed to restart run '{run_id}': {e}")
             failed = True
-    return 1 if failed else 0
+    return 1 if failed or skipped else 0
 
 
 if __name__ == "__main__":

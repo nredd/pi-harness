@@ -127,7 +127,7 @@ def fake_api(
 
 
 def test_live_census_and_retry_do_not_return_to_a_previous_pool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A hosted queue can migrate to a pool; a rescued pool cannot attract it back."""
+    """A rescued run never returns to a pool that stranded an earlier attempt."""
     calls = fake_api(monkeypatch)
     assert runner_pools.live_capacity({"pi-macos": 1}, REPO, 1) == {"pi-macos": 1}
     assert len(calls) == 6
@@ -318,7 +318,7 @@ def test_own_hosted_siblings_do_not_block_a_live_pool_rescue() -> None:
 
 
 def test_a_dead_pool_cell_is_rescued_while_another_run_classifies() -> None:
-    """An in-progress classify only withholds moves INTO pools, never the dead-pool takeover."""
+    """Another run's classify in progress does not delay the dead-pool takeover."""
     classifying = {"status": "in_progress", "labels": [], "name": "classify changed paths"}
     runs = [RUN, RUN | {"id": 2}]
     assert runner_rescue.stranded_runs(runs, {1: [REAL_QUEUED], 2: [classifying]}, {}, NOW, REPO) == [1]
@@ -404,7 +404,7 @@ def test_an_unreadable_run_does_not_stop_the_dead_pool_rescue(monkeypatch: pytes
     monkeypatch.setattr(runner_rescue, "gh_api", fake)
     monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
     monkeypatch.setattr(runner_rescue, "restart", lambda _repo, run_id: restarted.append(run_id))
-    assert runner_rescue.main(["--repo", REPO]) == 0
+    assert runner_rescue.main(["--repo", REPO]) == 1  # red tick, but run 1 is still rescued
     assert restarted == [1]
 
 
@@ -419,3 +419,53 @@ def test_a_linux_heavy_burst_cannot_oversubscribe_the_two_slot_pool(monkeypatch:
         admitted = runner_pools.admit_capacity(capacity, runs[: run["id"]], jobs, run["id"], REPO)
         placed += len(runner_pools.assign_cells(list(table), admitted))
     assert placed == runner_pools.POOLS["pi-linux"].slots
+
+
+def jobs_fail_for(
+    monkeypatch: pytest.MonkeyPatch, failing: set[int], runs: list[dict[str, Any]]
+) -> list[int]:
+    """Serve `runs`, failing the jobs read of `failing` runs; return the list that collects restarts.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Patches the API and `restart`.
+        failing (set[int]): Run ids whose `/jobs` read raises.
+        runs (list[dict[str, Any]]): Unfinished runs.
+
+    Returns:
+        list[int]: Ids passed to `restart`.
+    """
+    restarted: list[int] = []
+
+    def fake(*args: str, method: str = "GET") -> Any:
+        """Answer one API call."""
+        if "runs?" in args[0]:
+            return {"workflow_runs": runs if "status=queued" in args[0] else []}
+        if "/jobs" in args[0] and int(args[0].split("/runs/")[1].split("/")[0]) in failing:
+            raise subprocess.CalledProcessError(1, "gh", stderr="HTTP 403 rate limit")
+        if "/jobs" in args[0]:
+            return {"jobs": [REAL_QUEUED]}
+        return runs[0]
+
+    monkeypatch.setattr(runner_rescue, "gh_api", fake)
+    monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
+    monkeypatch.setattr(runner_rescue, "restart", lambda _repo, run_id: restarted.append(run_id))
+    return restarted
+
+
+def test_a_total_jobs_read_failure_is_not_a_silent_green(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every `/jobs` read rate-limited: nothing is rescued and the tick exits red."""
+    restarted = jobs_fail_for(monkeypatch, {1, 2}, [RUN, RUN | {"id": 2}])
+    assert runner_rescue.main(["--repo", REPO]) == 1
+    assert restarted == []
+
+
+def test_an_unreadable_run_blocks_live_pool_moves_but_not_dead_pool_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hosted load is unknown while a run is unreadable: a fresh pool keeps its cell, a dead one loses it."""
+    runs = [RUN, RUN | {"id": 2, "created_at": "2027-01-15T07:30:00Z"}]
+    restarted = jobs_fail_for(monkeypatch, {2}, runs)
+    assert runner_rescue.main(["--repo", REPO, "--pool-heartbeat", f"pi-macos={NOW}:5"]) == 1
+    assert restarted == []
+    assert runner_rescue.main(["--repo", REPO, "--pool-heartbeat", "pi-macos=0"]) == 1
+    assert restarted == [1]
