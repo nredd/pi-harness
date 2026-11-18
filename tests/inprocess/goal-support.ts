@@ -2,13 +2,9 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext, ExtensionFactory, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import {
-	createTestUiContext,
-	type FauxProviderRegistration,
-	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import type { Harness, HarnessOptions } from "@nredd/pi-test-lib/harness";
+import { createTestUiContext, type FauxProviderRegistration, registerFauxProvider } from "@nredd/pi-test-lib/harness";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
 import type { Profile } from "../../packages/subscription-router/src/config.ts";

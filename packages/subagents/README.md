@@ -498,6 +498,53 @@ Agent spawn/results and completion notices echo the resolved `provider/model` id
 
 **Exact configuration, convenient tool inputs.** Agent definitions, `agentModels`, tier members and legacy alias candidates resolve exactly, without version ranking or provider retry. An unavailable configured pin inherits the parent with a visible note by default; `modelResolution.onUnavailable: "error"` refuses it instead. Explicit literal/fuzzy tool inputs retain fuzzy matching and unresolved names remain errors; `@tier` and legacy aliases follow `modelResolution`. Built-in Explore uses `@cheap`; bind it globally or in the enterprise manifest. Unbound tiers inherit with disclosure by library default; personal configurations should set both resolution policies to `error`. During enterprise migration only, built-in Explore's unbound `@cheap` can use the existing `modelAliases["claude-haiku-4-5"]` exact candidates as a static cheap tier. An explicit `cheap` binding always wins, including when unavailable; no neighbouring tier or newer model is inferred. User-pinned legacy Explore definitions retain the exact `anthropic/claude-haiku-4-5` compatibility binding. Users who pin Explore explicitly through `agentModels` (e.g. the owner's `agentModels.Explore`) are unaffected. The router's shipped `examples/subscription-router.json` supplies an opt-in ordered `cheap` profile (Haiku then Luna); no profiles are registered implicitly.
 
+### Read-only agent discovery
+
+`list_agents` is default-off. A non-isolated agent must explicitly include `list_agents` in its
+`tools:` CSV AND set `allowed_subagents`. Neither `tools: all`, inherited extension tools, nor
+`allowed_subagents: all` alone grants discovery. `disallowed_tools: list_agents` wins.
+
+```yaml
+tools: read, list_agents
+allowed_subagents: code-reviewer, Explore
+```
+
+The parameterless tool binds the caller internally and returns JSON metadata for its root
+orchestrator, itself, and same-root agents whose enabled types pass its effective
+`allowed_subagents` list. No other root, process, user, payload, transcript or result is queried.
+Entries contain `id`, opaque `run` (renewed on resume), `handle` (type label for unnamed nested
+children), `type`, `status` (`queued`, `running`, `finished`, `error`), and `assignment`.
+Discovery still works at the nesting depth cap; it grants no delegation, sibling steering,
+mailbox, wake or resume capability. Existing ownership checks are unchanged.
+
+At most 32 entries and 16 KiB of serialized UTF-8 JSON are returned, with `truncated: true`
+when either cap cuts the roster. Assignments are limited to 160 code points and handles and type labels to 64 code points
+(never splitting a surrogate pair). Control/terminal syntax is removed and markup boundaries JSON-escaped.
+Every display value is **untrusted data**, never instructions or approval. A truncated view is
+not a complete fleet census.
+
+Discovery is **not exempt from Plan**. The inherited child policy evaluates every call and may
+allow or deny it; the bundled Plan policy currently denies this injected tool when it lacks the
+source metadata needed for admission. Read-only metadata does not override that decision.
+Hosts without the root-scoped roster API or an active caller/root identity return an explicit
+`Agent roster unavailable` error rather than inspecting a global registry.
+
+The parent uses `/agents roster` for the same bounded metadata, without adding another model
+tool schema. `/agents audit` inspects the retained audit suffix as `{events, truncated}`, capped at the same 16 KiB (oldest events dropped, `truncated: true`). Both cause no model turn. The caller's own row is listed right after the root row and counts against the caps. A child resolves its type grants once per run (re-resolved on resume), so agent files edited mid-run apply to the next run.
+Interactive inspection uses notifications; headless inspection appends a visible custom snapshot
+with `triggerTurn: false` (available to a later explicitly requested turn). Existing interactive
+`/agents` menus are unchanged.
+
+Each successful roster read appends `{version, sequence, kind, caller, run, time, data: {count}}`
+to a manager-owned, root-keyed in-memory log (`kind: "roster.read"`, `version: 1`). Only the
+latest 128 immutable-by-copy events per root are retained; old entries are evicted, never edited.
+The store accepts at most 32 roots, then refuses new roots explicitly; existing roots remain
+readable. Reading the audit store neither appends audit entries nor emits events. The log has no timers,
+model calls, message storage or persistence across extension reload/process exit. Future audit
+kinds extend the typed `RootAuditEventMap` without changing this envelope or resetting sequences.
+This is trusted in-process extension code, not an OS sandbox against malicious same-UID code.
+Live multi-agent usefulness and relay-versus-mailbox costs are unmeasured; messaging is absent.
+
 ### Nested subagents
 
 Nested delegation is default-off. Set `allowed_subagents` only on a non-isolated custom agent that owns a real fan-out responsibility:

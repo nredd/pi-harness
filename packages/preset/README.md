@@ -214,7 +214,9 @@ scoped selector.
 Grant changes in `0.5.0`: `architect` gains the four `pi-web-access` research tools (`web_search`,
 `fetch_content`, `get_search_content`, `source_check`; fetch tools may cache material, so read-only
 is not a filesystem sandbox), and `general-purpose` may delegate only to `code-reviewer` (was
-`all`). Passive waits and cleanup stay with the continuing parent; see the shipping skills.
+`all`). Passive waits and merged-worktree sweeps stay with the continuing parent; workers only prune
+worktree metadata. Scratch removal requires an exact creation-time content-hash match, a `??` status entry and an in-worktree real path;
+ignored files and unchecked contents stay untouched. See the shipping skills.
 
 Local overrides shadow these packaged definitions; update their managed source separately.
 Installing this package does not activate anything else or change a deployment's model bindings.

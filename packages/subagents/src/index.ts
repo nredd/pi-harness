@@ -54,6 +54,7 @@ import {
 	markConsumed,
 	type OwnedPending,
 } from "./agent-manager.ts";
+import { rosterJson } from "./agent-roster.ts";
 import {
 	getAgentConversation,
 	getDefaultMaxTurns,
@@ -5618,9 +5619,25 @@ Write the file using the write tool. Only write the file, nothing else.`;
 		ctx.ui.notify(message, level);
 	}
 
+	/** Explicit inspection output only: headless hosts have no notification UI. */
+	function presentRoster(ctx: ExtensionCommandContext, content: string, level: "info" | "error") {
+		if (ctx.hasUI) ctx.ui.notify(content, level);
+		else pi.sendMessage({ customType: "subagents-roster", content, display: true }, { triggerTurn: false });
+	}
+
 	pi.registerCommand("agents", {
 		description: "Manage agents",
-		handler: async (_args, ctx) => {
+		handler: async (args, ctx) => {
+			if (args.trim() === "roster" || args.trim() === "audit") {
+				try {
+					const root = ctx.sessionManager?.getSessionId?.() ?? "";
+					const data = args.trim() === "roster" ? manager.roster.parent(root) : manager.roster.auditView(root);
+					presentRoster(ctx, rosterJson(data), "info");
+				} catch (error) {
+					presentRoster(ctx, String(error), "error");
+				}
+				return;
+			}
 			await showAgentsMenu(ctx);
 		},
 	});
