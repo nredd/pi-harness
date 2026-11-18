@@ -261,7 +261,8 @@ def admit_capacity(
     Returns:
         dict[str, int]: Slots per pool, held to its `run_cap` (one for macOS).
             Observed unfinished pooled jobs consume slots;
-            older runs still classifying reserve one each even before their cells are materialized.
+            older runs still classifying, and any run that finished classify,
+            reserve one each until their cells appear.
             Missing snapshots fail closed. API visibility is not an atomic reservation service.
     """
     if run_id not in {run["id"] for run in runs} or any(run["id"] not in jobs_by_run for run in runs):
@@ -272,6 +273,9 @@ def admit_capacity(
             continue
         jobs = jobs_by_run[run["id"]]
         unfinished = [job for job in jobs if job["status"] != "completed"]
+        classified = any(
+            job.get("name") == "classify changed paths" and job["status"] == "completed" for job in jobs
+        )
         planning = (
             not jobs
             or all(job.get("name") == "classify changed paths" for job in jobs)
@@ -286,7 +290,7 @@ def admit_capacity(
         )
         for pool, occupied_slots in used.items():
             occupied = sum(POOLS[pool].label in job.get("labels", ()) for job in unfinished)
-            reserved = int(planning and run["id"] < run_id)
+            reserved = int(planning and (run["id"] < run_id or classified))
             used[pool] = occupied_slots + max(occupied, reserved)
     # Reported free already subtracts older running jobs. Take the minimum of independently observed
     # headroom and the heartbeat, rather than subtracting those jobs from the free count twice.
@@ -376,7 +380,7 @@ def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dic
     Parameters:
         running (Iterable[CellKey]): Cells this run actually executes, with their full work.
         capacity (Mapping[str, int]): Pool name -> cells it will take, from `pool_capacity` (free
-            slots plus its queue depth, held to its run cap).
+            working slots after admission, held to its run cap).
 
     Returns:
         dict[CellKey, str]: Cell -> pool for each cell sent to a pool. Cells that are short, unlisted, on an

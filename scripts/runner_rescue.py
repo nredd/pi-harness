@@ -125,6 +125,14 @@ def stranded_runs(
         for label in job["labels"]
         if label in POOLS
     }
+    # A rerun still in classify is about to take pool capacity, so no cell moves into a pool meanwhile.
+    classifying = any(
+        job.get("name") == "classify changed paths" and job["status"] != "completed"
+        for jobs in jobs_by_run.values()
+        for job in jobs
+    )
+    capacity = {} if classifying else pool_capacity(heartbeats, now, trusted=True)
+    moved: dict[str, int] = {}
     picked: list[int] = []
     for run in sorted(runs, key=lambda r: r["created_at"]):
         if not is_candidate(run, repo):
@@ -135,11 +143,23 @@ def stranded_runs(
             len(jobs) < PAGE_SIZE
             and unfinished
             and all(
-                job["status"] in {"queued", "waiting", "pending", "requested"} and not job.get("started_at")
+                job["status"] in {"queued", "waiting", "pending", "requested"} and not job_started(job)
                 for job in unfinished
             )
             and any(job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy) for job in unfinished)
         ):
+            # Each restart re-plans toward the pools its hosted cells would move to: one per free slot.
+            targets = {
+                pool
+                for job in unfinished
+                if not any(label in POOL_LABELS for label in job["labels"])
+                and job_is_stranded(job, heartbeats, now, hosted_busy, pool_busy)
+                and (pool := eligible_pool(job)) is not None
+            }
+            if any(moved.get(pool, 0) >= capacity.get(pool, 0) for pool in targets):
+                continue
+            for pool in targets:
+                moved[pool] = moved.get(pool, 0) + 1
             picked.append(run["id"])
     return picked[:MAX_RUNS_PER_TICK]
 
@@ -164,6 +184,21 @@ def eligible_pool(job: Mapping[str, Any]) -> str | None:
     return None
 
 
+def job_started(job: Mapping[str, Any]) -> bool:
+    """Return whether a job has begun on a runner.
+
+    Parameters:
+        job (Mapping[str, Any]): API job object. A queued job reports `started_at` equal to
+            `created_at`, so only the status and the runner assignment mean it started.
+
+    Returns:
+        bool: True for an in-progress or completed job, or one with a runner id or name.
+    """
+    return job["status"] in {"in_progress", "completed"} or bool(
+        job.get("runner_id") or job.get("runner_name")
+    )
+
+
 def job_is_stranded(
     job: Mapping[str, Any],
     heartbeats: Mapping[str, str],
@@ -183,7 +218,7 @@ def job_is_stranded(
     Returns:
         bool: False for any started job, or a queued job outside the pool takeover policy.
     """
-    if job["status"] != "queued" or job.get("started_at"):
+    if job["status"] != "queued" or job_started(job):
         return False
     waited = now - parse_time(job["created_at"])
     pools = {POOL_LABELS[label] for label in job["labels"] if label in POOL_LABELS}
@@ -320,7 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         parser.error(str(e))
     try:
-        runs = [run for run in unfinished_runs(args.repo) if is_candidate(run, args.repo)]
+        # Every unfinished run, candidate or not: its pooled jobs occupy the pools either way.
+        runs = unfinished_runs(args.repo)
         jobs_by_run = {
             run["id"]: gh_api(
                 f"repos/{args.repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page={PAGE_SIZE}"

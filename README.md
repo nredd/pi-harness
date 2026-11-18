@@ -510,7 +510,7 @@ The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` wi
 
 ### Remaining
 
-- `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
+- `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; the rescue now moves a cell queued past ten minutes (five on a dead pool) to hosted, so a sleeping laptop delays but no longer strands a run
 - Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](.github/workflows/ci.yml)
 - `pi-wsl2` acceptance before `PI_WSL2_HEARTBEAT` is set: three consecutive green real jobs and a clean smoke on the laptop, then replace the estimated `CELL_SECONDS` entries for the `wsl2` cells with measured ones. Until the variable exists the pool reads as down and every `wsl2` cell stays hosted. Pooled cells keep reporting as `owned (wsl2)` and `contracts (wsl2)`, and the pool's own job is `smoke (pi-wsl2)`; no new required check name is added
 - Alerting: the daemon only logs to journald; nothing pages when it is down

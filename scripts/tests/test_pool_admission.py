@@ -275,7 +275,6 @@ def test_bilateral_rescue_requires_room_and_a_supported_cell() -> None:
     beats = {"pi-macos": f"{NOW}:5"}
     assert runner_rescue.job_is_stranded(queued, beats, NOW)
     assert not runner_rescue.job_is_stranded(queued | {"status": "in_progress"}, beats, NOW)
-    assert not runner_rescue.job_is_stranded(queued | {"started_at": "2027-01-15T07:00:01Z"}, beats, NOW)
     assert not runner_rescue.job_is_stranded(queued, beats, NOW, pool_busy={"pi-macos"})
     assert not runner_rescue.job_is_stranded(queued, {"pi-macos": f"{NOW}:0"}, NOW)
     assert not runner_rescue.job_is_stranded(queued, {}, NOW)
@@ -287,3 +286,76 @@ def test_bilateral_rescue_requires_room_and_a_supported_cell() -> None:
     assert runner_rescue.job_is_stranded(queued | {"labels": ["pi-macos"]}, {}, NOW, {"xcode-27"})
     assert runner_rescue.eligible_pool(queued | {"name": "contracts (macos-14)"}) == "pi-macos"
     assert runner_rescue.eligible_pool(queued | {"name": "stack (macos-14, local)"}) == "pi-macos"
+
+
+REAL_QUEUED = {
+    # Real API shape: a queued job reports started_at == created_at, runner_id 0 and no runner name.
+    "status": "queued",
+    "labels": ["pi-macos"],
+    "name": "owned shard (macos-14, ts)",
+    "created_at": "2027-01-15T07:00:00Z",
+    "started_at": "2027-01-15T07:00:00Z",
+    "runner_id": 0,
+    "runner_name": "",
+}
+RUN = {
+    "id": 1,
+    "event": "pull_request",
+    "run_attempt": 1,
+    "created_at": "2027-01-15T07:00:00Z",
+    "head_repository": {"full_name": REPO},
+}
+
+
+def test_a_real_queued_job_is_rescuable_and_a_runner_assignment_is_not() -> None:
+    """Queued jobs carry a `started_at`; only a runner assignment means the job started."""
+    assert runner_rescue.job_is_stranded(REAL_QUEUED, {}, NOW)
+    assert runner_rescue.stranded_runs([RUN], {1: [REAL_QUEUED]}, {}, NOW, REPO) == [1]
+    for started in ({"runner_id": 7}, {"runner_name": "pi-macos-1"}):
+        job = REAL_QUEUED | started
+        assert not runner_rescue.job_is_stranded(job, {}, NOW)
+        assert runner_rescue.stranded_runs([RUN], {1: [job]}, {}, NOW, REPO) == []
+
+
+def hosted_cell(name: str = "owned shard (macos-14, ts)") -> dict[str, Any]:
+    """Build a real-shape hosted queued cell.
+
+    Parameters:
+        name (str): The job name.
+
+    Returns:
+        dict[str, Any]: A queued hosted job overdue for takeover.
+    """
+    return REAL_QUEUED | {"labels": ["xcode-27"], "name": name}
+
+
+def test_one_free_slot_takes_one_run_per_tick() -> None:
+    """Three runs queued hosted must not all be restarted toward one free pool slot."""
+    runs = [RUN | {"id": i, "created_at": f"2027-01-15T07:0{i}:00Z"} for i in (1, 2, 3)]
+    jobs = {i: [hosted_cell()] for i in (1, 2, 3)}
+    assert runner_rescue.stranded_runs(runs, jobs, {"pi-macos": f"{NOW}:5"}, NOW, REPO) == [1]
+
+
+def test_a_run_still_classifying_blocks_a_move_into_a_pool() -> None:
+    """A rerun in classify is about to use the pool slot."""
+    runs = [RUN, RUN | {"id": 2}]
+    classifying = {"status": "in_progress", "labels": [], "name": "classify changed paths"}
+    jobs = {1: [hosted_cell()], 2: [classifying]}
+    assert runner_rescue.stranded_runs(runs, jobs, {"pi-macos": f"{NOW}:5"}, NOW, REPO) == []
+
+
+def test_pooled_jobs_of_non_candidate_runs_still_block_a_move() -> None:
+    """A third-attempt run is never rescued but its pooled job still occupies the pool."""
+    busy = RUN | {"id": 2, "run_attempt": runner_rescue.MAX_ATTEMPT}
+    other = REAL_QUEUED | {"status": "in_progress", "runner_id": 3, "runner_name": "pi-macos-1"}
+    jobs = {1: [hosted_cell()], 2: [other]}
+    assert runner_rescue.stranded_runs([RUN, busy], jobs, {"pi-macos": f"{NOW}:5"}, NOW, REPO) == []
+
+
+def test_a_newer_run_that_finished_classify_reserves_before_an_older_rerun() -> None:
+    """Reserve by classify completion, not run id order."""
+    runs, jobs = census(2)
+    jobs[2] = [{"name": "classify changed paths", "status": "completed", "labels": []}]
+    assert runner_pools.admit_capacity({"pi-macos": 1}, runs, jobs, 1, REPO) == {"pi-macos": 0}
+    jobs[2] = [{"name": "classify changed paths", "status": "in_progress", "labels": []}]
+    assert runner_pools.admit_capacity({"pi-macos": 1}, runs, jobs, 1, REPO) == {"pi-macos": 1}

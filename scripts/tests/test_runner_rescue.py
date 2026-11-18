@@ -125,7 +125,7 @@ def test_rescue_preserves_running_but_can_replan_unstarted_siblings(status: str)
 
 def test_started_job_and_incomplete_page_cannot_be_rescued() -> None:
     """A queued status with a start time, or a potentially truncated page, fails closed."""
-    started = job("queued", ["pi-macos"], 900) | {"started_at": iso(NOW - 1)}
+    started = job("queued", ["pi-macos"], 900) | {"runner_id": 7}
     assert runner_rescue.stranded_runs([run(1)], {1: [started]}, STALE, NOW, REPO) == []
     jobs = [job("queued", ["pi-macos"], 900)] * runner_rescue.PAGE_SIZE
     assert runner_rescue.stranded_runs([run(1)], {1: jobs}, STALE, NOW, REPO) == []
@@ -345,16 +345,14 @@ def test_unfinished_runs_warns_when_a_page_is_full(
     assert "first 100 'queued' runs" in caplog.text
 
 
-def test_main_fetches_jobs_only_for_candidate_runs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fork, exhausted and scheduled runs cost no jobs call."""
+def test_main_fetches_jobs_of_every_unfinished_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fork, exhausted and scheduled runs are read too: their pooled jobs occupy the pools."""
     seen: list[str] = []
     runs = [run(1, head="fork/r"), run(2, event="schedule"), run(3, attempt=9), run(4)]
     monkeypatch.setattr(runner_rescue, "gh_api", api(runs, [], seen))
     monkeypatch.setattr(runner_rescue.time, "time", lambda: NOW)
     assert runner_rescue.main(["--repo", REPO, "--dry-run"]) == 0
-    assert [c for c in seen if "/jobs" in c] == [
-        "GET repos/o/r/actions/runs/4/jobs?filter=latest&per_page=100"
-    ]
+    assert [c.split("/")[5] for c in seen if "/jobs" in c] == ["1", "2", "3", "4"]
 
 
 def test_gh_api_decodes_json_and_empty_bodies_through_the_real_subprocess(
