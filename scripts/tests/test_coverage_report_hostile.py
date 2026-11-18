@@ -7,10 +7,12 @@ References:
 from __future__ import annotations
 
 import json
+import lzma
 import struct
 import sys
 import zipfile
 import zlib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -200,8 +202,8 @@ def test_archive_with_lying_declared_size_refused(tmp_path: Path) -> None:
         report.read_summary(path)
 
 
-def test_oversized_member_read_is_bounded_even_if_declared_sizes_agree(tmp_path: Path) -> None:
-    """The member read itself is capped, so a member just over the limit cannot be fully buffered.
+def test_stored_member_declared_just_over_json_limit_is_refused(tmp_path: Path) -> None:
+    """Reject a stored member at the declared-size check, before attempting its read.
 
     Parameters:
         tmp_path (Path): Scratch directory.
@@ -254,6 +256,31 @@ def test_one_bad_host_degrades_only_that_host(tmp_path: Path) -> None:
     assert "pkg&#47;primary | 4/4 (0)" in markdown
 
 
+def test_unreadable_artifact_does_not_publish_runner_paths(tmp_path: Path) -> None:
+    """Report only the error type and basename for a real unreadable artifact.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+    Returns:
+        None: Private parent paths do not reach the public report.
+    Raises:
+        AssertionError: An absolute filesystem path leaks.
+    """
+    manifest = tmp_path / "plan.json"
+    manifest.write_text(json.dumps({"wsl2": plan_document()}))
+    artifact = tmp_path / "coverage-wsl2.zip"
+    stored_zip(artifact, b"{}")
+    artifact.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            artifact.read_bytes()
+        cells = report.load_evidence(tmp_path, manifest)
+        assert cells[0].reason == "PermissionError: coverage-wsl2.zip"
+        assert str(tmp_path) not in report.render_markdown(cells, PROVENANCE)
+    finally:
+        artifact.chmod(0o600)
+
+
 def test_inconsistent_artifact_degrades_host_not_report(tmp_path: Path) -> None:
     """A summary for the wrong OS or an unplanned signal degrades its host instead of aborting.
 
@@ -296,6 +323,75 @@ def test_bad_manifest_still_fails_the_report(tmp_path: Path) -> None:
     manifest.write_text(json.dumps({"wsl2": plan_document() | {"signals": {"pkg/primary": {}}}}))
     with pytest.raises(ValueError, match=r"^Expected bounded text without control or format characters$"):
         report.load_evidence(tmp_path, manifest)
+
+
+def test_partial_rows_note_survives_a_full_signal_table() -> None:
+    """Keep the partial-evidence warning even when a long signal row cannot fit.
+
+    Parameters:
+        None.
+    Returns:
+        None: Essential state survives the public Markdown cap.
+    Raises:
+        AssertionError: File rows render without their partial marker.
+    """
+    summary = report.Summary.parse(summary_document() | {"rows_trimmed": {"original_file_rows": 2}})
+    signal = report.Signal("pkg/primary", "enforced", "\U0001f600" * 8192, "v1", "planned")
+    cell = report.Evidence("ubuntu-24.04", "available", (signal,), summary)
+    markdown = report.render_markdown((cell,), PROVENANCE)
+    assert "src&#47;a&#46;py" in markdown
+    assert "File rows partial (1 of 2)." in markdown
+    assert len(markdown) <= report.MAX_MARKDOWN
+
+
+def test_many_signals_validate_with_a_linear_row_budget() -> None:
+    """Bound work for 10,000 signals without a machine-speed-dependent timeout.
+
+    Parameters:
+        None.
+    Returns:
+        None: Validation visits at most twice the input rows.
+    Raises:
+        AssertionError: Validation rescans the row set per signal.
+    """
+    counters = report.Counters.parse({"lines": 4, "uncovered_lines": 0})
+    packages = {f"pkg{i}/primary": counters for i in range(10_000)}
+
+    class BoundedRows(list[report.File]):
+        """Fail promptly instead of letting a quadratic validation exhaust the test runner."""
+
+        visits = 0
+
+        def __iter__(self) -> Iterator[report.File]:
+            """Yield rows within the fixed linear work budget.
+
+            Parameters:
+                None.
+            Returns:
+                Iterator[report.File]: Rows within the visit budget.
+            Raises:
+                AssertionError: The caller exhausts the linear work budget.
+            """
+            for row in super().__iter__():
+                self.visits += 1
+                assert self.visits <= 2 * len(self)
+                yield row
+
+    rows = BoundedRows(report.File(name, "src/a.py", counters) for name in packages)
+    report.validate_totals(packages, rows, False)
+
+
+def test_filesystem_error_without_filename_is_type_only() -> None:
+    """Suppress even path-bearing strerror text when the exception has no filename.
+
+    Parameters:
+        None.
+    Returns:
+        None: The diagnostic contains only a type name.
+    Raises:
+        AssertionError: Private exception text reaches the diagnostic.
+    """
+    assert report.error_reason(OSError("cannot open /private/runner/file")) == "OSError"
 
 
 def test_finite_floats_still_decode() -> None:
@@ -397,7 +493,7 @@ def test_truncated_deflate_stream_is_a_clean_refusal(tmp_path: Path, monkeypatch
         report.read_summary(path)
 
 
-@pytest.mark.parametrize("damage", ["corrupt", "spliced"])
+@pytest.mark.parametrize("damage", ["corrupt", "spliced", "lzma"])
 def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> None:
     """One damaged host archive leaves it unavailable while healthy hosts still render.
 
@@ -417,13 +513,52 @@ def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> 
     good.parent.mkdir(parents=True)
     good.write_text(json.dumps(summary_document()))
     bad = tmp_path / "coverage-macos-14.zip"
-    offset, size = deflated_zip(bad)
-    data = bytearray(bad.read_bytes())
-    if damage == "corrupt":
-        data[offset : offset + size] = b"\xff" * size
+    if damage == "lzma":
+        with zipfile.ZipFile(bad, "w", compression=zipfile.ZIP_LZMA) as archive:
+            archive.writestr("coverage/summary.json", json.dumps(summary_document()))
+        data = bytearray(bad.read_bytes())
+        name_length, extra_length = struct.unpack_from("<HH", data, 26)
+        offset = 30 + name_length + extra_length
+        # ZIP LZMA carries a four-byte prefix, then five filter-property bytes.
+        data[offset + 4 : offset + 9] = b"\xff" * 5
+        bad.write_bytes(data)
+        with zipfile.ZipFile(bad) as archive, pytest.raises(lzma.LZMAError):
+            archive.read("coverage/summary.json")
     else:
-        data[offset + size // 2 : offset + size] = b""
-    bad.write_bytes(data)
+        offset, size = deflated_zip(bad)
+        data = bytearray(bad.read_bytes())
+        if damage == "corrupt":
+            data[offset : offset + size] = b"\xff" * size
+        else:
+            data[offset + size // 2 : offset + size] = b""
+        bad.write_bytes(data)
+    output = tmp_path / "report.md"
+    assert (
+        report.main(
+            [
+                "--artifacts",
+                str(tmp_path),
+                "--plan",
+                str(manifest),
+                "--repository",
+                "example/repo",
+                "--head-sha",
+                "a" * 40,
+                "--tested-sha",
+                "b" * 40,
+                "--run-id",
+                "1",
+                "--attempt",
+                "1",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert "macOS enforced signals: unavailable" in output.read_text()
+    with pytest.raises((ValueError, OSError)):
+        report.read_summary(bad)
     cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest)}
     assert cells["macos-14"].summary is None
     assert cells["macos-14"].state == "unavailable"

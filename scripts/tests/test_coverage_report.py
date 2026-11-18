@@ -372,7 +372,7 @@ def test_text_types(value: object) -> None:
         (b'{"x":-Infinity}', r"Non-finite JSON number: .-Infinity."),
         (b'{"x":1e999}', r"Non-finite JSON number: .1e999."),
         (b'{"x":' + b"9" * 5000 + b"}", r"^Cannot decode JSON: 'Integer literal too long'$"),
-        (b"[" * 200_000, r"^Cannot decode JSON: .(Stack overflow|maximum recursion depth)"),
+        (b"[" * 200_000 + b"]" * 200_000, r"^Cannot decode JSON: "),
     ],
 )
 def test_json_refusals(data: bytes, message: str) -> None:

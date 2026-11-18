@@ -26,6 +26,7 @@ import argparse
 import html
 import json
 import logging
+import lzma
 import math
 import re
 import stat
@@ -225,6 +226,7 @@ def read_summary(path: Path) -> dict[str, object]:
         RuntimeError,
         NotImplementedError,
         zlib.error,
+        lzma.LZMAError,
         EOFError,
         struct.error,
         OverflowError,
@@ -445,16 +447,15 @@ def validate_totals(packages: dict[str, Counters], files: list[File], trimmed: b
     Raises:
         ValueError: File rows disagree with, or when trimmed exceed, the signal totals.
     """
+    measured: dict[tuple[str, str], tuple[int, int]] = {}
+    for file in files:
+        for metric, total, uncovered in file.counters.values:
+            key = (file.signal, metric)
+            previous_total, previous_uncovered = measured.get(key, (0, 0))
+            measured[key] = (previous_total + total, previous_uncovered + uncovered)
     for label, counters in packages.items():
         for metric, total, uncovered in counters.values:
-            measured = [
-                (t, u)
-                for file in files
-                if file.signal == label
-                for name, t, u in file.counters.values
-                if name == metric
-            ]
-            rows_total, rows_uncovered = sum(t for t, _ in measured), sum(u for _, u in measured)
+            rows_total, rows_uncovered = measured.get((label, metric), (0, 0))
             if trimmed and (rows_total > total or rows_uncovered > uncovered):
                 raise ValueError("Measured file rows exceed the package counters")
             if not trimmed and (rows_total, rows_uncovered) != (total, uncovered):
@@ -695,8 +696,6 @@ def host_rows(cell: Evidence, main: Evidence | None) -> list[str]:
         if cell.reason:
             rows.append(f"\nUnavailable: {escape(cell.reason)}")
         return rows
-    if summary.trimmed_from is not None:
-        rows.append(f"\nFile rows partial ({len(summary.files)} of {summary.trimmed_from}).")
     rows.extend(f"Error: {escape(error)}" for error in summary.errors)
     rows.extend(
         f"Not measured: {escape(name)}: {escape(reason)}"
@@ -811,6 +810,12 @@ def render_markdown(
         "Unsupported: not measured; zero denominator: N/A. Signals are never averaged. "
         "Badges and cached reports are not merge evidence.",
     ]
+    blocks.extend(
+        f"{HOSTS[cell.host][0]}: File rows partial "
+        f"({len(cell.summary.files)} of {cell.summary.trimmed_from})."
+        for cell in ordered
+        if cell.summary is not None and cell.summary.trimmed_from is not None
+    )
     rows = [
         row
         for cell in ordered
@@ -892,8 +897,9 @@ def render_badge(evidence: Evidence) -> str:
     Raises:
         None.
     """
-    label = html.escape(headline(evidence), quote=True)
-    width = min(1200, 7 * len(headline(evidence)) + 20)
+    text = headline(evidence)
+    label = html.escape(text, quote=True)
+    width = min(1200, 7 * len(text) + 20)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="24" role="img" '
         f'aria-label="{label}"><title>{label}</title><rect width="100%" height="24" fill="#444"/>'
@@ -917,6 +923,22 @@ def read_host_summary(directory: Path, host: str) -> Summary | None:
     if not path.exists():
         path = directory / f"coverage-{host}" / "coverage" / "summary.json"
     return Summary.parse(read_summary(path)) if path.exists() else None
+
+
+def error_reason(error: OSError | ValueError) -> str:
+    """Bound diagnostics without exposing filesystem exception paths.
+
+    Parameters:
+        error (OSError | ValueError): Input or filesystem failure.
+    Returns:
+        str: Bounded validation text, or filesystem error type and basename only.
+    Raises:
+        None.
+    """
+    if isinstance(error, OSError):
+        name = f": {Path(error.filename).name}" if error.filename else ""
+        return f"{type(error).__name__}{name}"[:MAX_REASON]
+    return str(error)[:MAX_REASON]
 
 
 def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
@@ -947,8 +969,8 @@ def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
                     cells.append(Evidence.parse(host, obj, summary))
                     continue
             except (OSError, ValueError) as error:
-                LOGGER.warning(f"Host '{host}' artifact unusable: '{error}'")
-                reason = str(error)[:MAX_REASON]
+                reason = error_reason(error)
+                LOGGER.warning(f"Host '{host}' artifact unusable: '{reason}'")
             obj = obj | {"state": "unavailable"}
             cells.append(replace(Evidence.parse(host, obj, None), reason=reason))
         else:
@@ -999,7 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
             for cell in cells:
                 (args.badge_dir / f"{cell.host}.svg").write_text(render_badge(cell), encoding="utf-8")
     except (OSError, ValueError) as error:
-        LOGGER.error(f"Cannot render coverage report: '{error}'")
+        LOGGER.error(f"Cannot render coverage report: '{error_reason(error)}'")
         return 1
     return 0
 

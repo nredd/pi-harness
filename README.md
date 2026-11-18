@@ -28,6 +28,10 @@ put the why in the commit.
   providers, goldens, historical baselines and all retained unit tests. See [here](tests/integration/README.md)
 - `tests/benchmarks/`: the former `benchmarks/` tree, including its independent uv project
 - `scripts/`: CI classification, coverage accounting, package contracts and release tooling
+  - `coverage_report.py`: local-only Markdown/SVG renderer for trusted plans and downloaded evidence.
+    Malformed artifacts (including corrupt LZMA streams) degrade only their host; filesystem failures
+    expose only error types and basenames. File totals validate in one pass. Explicit partial-row
+    warnings remain essential state under the 60,000-character cap. No publishing or CI changes.
 - `coverage/policy.json`: enforced coverage policy
 - `releases/`: generated release manifests
 
