@@ -90,7 +90,7 @@ beforeEach(async () => {
 			"claude-5-6-sonnet",
 		].map((id) => ({
 			id,
-			name: id,
+			name: ref(id),
 			reasoning: false,
 			input: ["text"],
 			contextWindow: 1000,
@@ -417,6 +417,32 @@ it.each([ref("claude-5-5-sonnet"), "router/default"])(
 	},
 );
 
+function renderFleetRow(record: AgentRecord, showModel: boolean): string | undefined {
+	const fleet = new FleetList(
+		{ listAgents: () => [record] } as unknown as AgentManager,
+		new Map(),
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		() => showModel,
+		undefined,
+		clock,
+	);
+	const setWidget = vi.fn<FleetUICtx["setWidget"]>();
+	fleet.setUICtx({ setWidget, onTerminalInput: () => () => {} } as unknown as FleetUICtx);
+	fleet.update();
+	fleet.toggleCollapse();
+	const widget = setWidget.mock.lastCall?.[1];
+	if (typeof widget !== "function") throw new Error("No fleet widget");
+	const rows = widget({ terminal: { columns: 120, rows: 40 }, requestRender: () => {} }, {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as Parameters<typeof widget>[1]).render(120);
+	return rows.find((line) => line.includes(record.description));
+}
+
 const disclosures = [
 	{
 		name: "unmapped",
@@ -465,7 +491,7 @@ const disclosures = [
 	},
 ];
 
-it.each(disclosures)("discloses $name across Agent results, notice, transcript, fleet and settings", async (sample) => {
+it.each(disclosures)("discloses $name across model-tier surfaces", async (sample) => {
 	writeFileSync(
 		join(sandbox.dir, ".pi", "agents", "scout.md"),
 		`---\ndescription: scout\ntools: read\nmodel: "${sample.definition}"\noutput_transcript: true\n---\nScout.`,
@@ -520,38 +546,41 @@ it.each(disclosures)("discloses $name across Agent results, notice, transcript, 
 	);
 	const record = extensionRegistry.getRecord(start.details.agentId);
 	if (!record) throw new Error("Agent start did not leave a record");
-	const fleet = new FleetList(
-		{ listAgents: () => [record] } as unknown as AgentManager,
-		new Map(),
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		() => true,
-		undefined,
-		clock,
-	);
-	const setWidget = vi.fn<FleetUICtx["setWidget"]>();
-	fleet.setUICtx({ setWidget, onTerminalInput: () => () => {} } as unknown as FleetUICtx);
-	fleet.update();
-	fleet.toggleCollapse();
-	const widget = setWidget.mock.lastCall?.[1];
-	if (typeof widget !== "function") throw new Error("No fleet widget");
-	const rows = widget({ terminal: { columns: 120, rows: 40 }, requestRender: () => {} }, {
-		fg: (_color: string, text: string) => text,
-		bold: (text: string) => text,
-	} as Parameters<typeof widget>[1]).render(120);
-	const row = rows.find((line) => line.includes("background"));
-	expect(row).toContain(sample.selected);
-	if (sample.flag) expect(row).toContain(sample.flag);
-	else expect(row).not.toMatch(/\[@|\[fallback/);
+	const row = renderFleetRow(record, true);
+	expect(row).toContain(ref(sample.selected));
+	if (sample.flag) {
+		expect(row).toContain(sample.flag);
+		const withoutModel = renderFleetRow(record, false);
+		expect(withoutModel).toContain(sample.flag);
+		expect(withoutModel).not.toContain(ref(sample.selected));
+	} else expect(row).not.toMatch(/\[@|\[fallback/);
 
 	const completed = await run("foreground", false);
 	expectResult(completed.content[0].text, "Agent completed");
 	vi.mocked(runner.runAgent).mockRejectedValueOnce(new Error("fixture failure"));
 	const failed = await run("failed", false);
 	expectResult(failed.content[0].text, "Agent failed: fixture failure");
+
+	const [nestedAgent] = createNestedSubagentTools({
+		manager,
+		pi: boot.pi,
+		parentAgentId: "owner",
+		depth: 1,
+		maxSubagentDepth: 2,
+		allowedSubagents: "all",
+		configCwd: sandbox.dir,
+		projectTrusted: true,
+	});
+	const nested = await nestedAgent!.execute(
+		"nested",
+		{ subagent_type: "scout", description: "nested", prompt: "go", model: sample.param },
+		undefined,
+		undefined,
+		context,
+	);
+	const nestedText = nested.content[0];
+	if (nestedText?.type !== "text") throw new Error("Nested Agent did not return text");
+	expectResult(nestedText.text, "done");
 
 	const preview = explainModel({
 		agentType: "scout",
@@ -562,6 +591,7 @@ it.each(disclosures)("discloses $name across Agent results, notice, transcript, 
 		cwd: sandbox.dir,
 	});
 	expect(preview.text).toContain(sample.settings);
+	if (sample.param) expect(preview.text).toContain("Shadowed definition: @mapped");
 	expect(preview.text).toContain(`Selected: ${ref(sample.selected)}.`);
 });
 
