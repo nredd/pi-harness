@@ -1,6 +1,7 @@
 /** Actual entry paths + manager, real Pi registry/resolver; only child execution is stubbed. */
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
@@ -13,10 +14,11 @@ import { createSubagentsExtension } from "../src/index.ts";
 import { explainModel } from "../src/model-explanation.ts";
 import { setAgentModels, setModelAliases } from "../src/model-resolver.ts";
 import { setScopeModelsEnabled } from "../src/model-scope.ts";
-import { setModelTiers } from "../src/model-tiers.ts";
+import { setModelTiers, tierBinding } from "../src/model-tiers.ts";
 import { createNestedSubagentTools } from "../src/nested-tools.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
+import * as settings from "../src/settings.ts";
 import type { AgentRecord } from "../src/types.ts";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
@@ -159,6 +161,154 @@ afterEach(async () => {
 	setModelTiers(undefined, undefined);
 	delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")];
 	sandbox.restore();
+});
+
+describe("/agents propose-tiers", () => {
+	const agentDir = () => process.env.PI_CODING_AGENT_DIR!;
+	const globalSettings = () => join(agentDir(), "subagents.json");
+	const snapshot = (root: string) =>
+		readdirSync(root, { recursive: true, withFileTypes: true })
+			.map((entry) => {
+				const path = join(entry.parentPath, entry.name);
+				const digest = entry.isDirectory()
+					? "directory"
+					: createHash("sha256").update(readFileSync(path)).digest("hex");
+				return `${relative(root, path)}: ${digest}`;
+			})
+			.sort();
+	const route = () => {
+		throw new Error("A proposal must not route");
+	};
+	const register = (id: string, provider = "router") =>
+		registry.registerVirtualModel({ provider, id, name: id, route });
+	async function runProposal(hasUI = true) {
+		const roots = [agentDir(), sandbox.dir];
+		const before = roots.map(snapshot);
+		const notify = vi.fn<(message: string, level: string) => void>();
+		await boot.commands
+			.get("agents")
+			.handler(" propose-tiers ", makeCtx({ hasUI, modelRegistry: registry, ui: { notify } }));
+		expect(roots.map(snapshot)).toEqual(before);
+		expect(admissionModels).toEqual([]);
+		expect(boot.pi.sendMessage).not.toHaveBeenCalled();
+		return notify;
+	}
+
+	async function preview() {
+		const notify = await runProposal();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "info");
+		return notify.mock.calls[0]![0];
+	}
+
+	it("returns headless without reading settings or profiles or emitting output", async () => {
+		const load = vi.spyOn(settings, "loadTrustedSettings");
+		const list = vi.spyOn(registry, "getAll");
+		try {
+			expect(await runProposal(false)).not.toHaveBeenCalled();
+			expect(load).not.toHaveBeenCalled();
+			expect(list).not.toHaveBeenCalled();
+		} finally {
+			load.mockRestore();
+			list.mockRestore();
+		}
+	});
+
+	it("reports a throwing trusted settings read to the UI without exposing the raw error", async () => {
+		const load = vi.spyOn(settings, "loadTrustedSettings").mockImplementationOnce(() => {
+			throw new Error("synthetic private read failure");
+		});
+		try {
+			expect(await runProposal()).toHaveBeenCalledExactlyOnceWith(
+				"Could not read trusted settings or registered router profiles for the tier proposal.",
+				"error",
+			);
+		} finally {
+			load.mockRestore();
+		}
+	});
+
+	it("lists registered profiles in order and proposes only exact matches without applying or writing", async () => {
+		register("review");
+		register("cheap");
+		register("frontier-extra");
+		register("Deep");
+		register("deep", "other-provider");
+		const projectSettings = join(sandbox.dir, ".pi", "subagents.json");
+		writeFileSync(projectSettings, JSON.stringify({ modelTiers: {} }));
+		const display = await preview();
+		expect(display).toContain(
+			"Registered router profiles: router/cheap, router/default, router/frontier-extra, router/review.",
+		);
+		expect(display).toContain("No matching registered profile: @deep, @frontier.");
+		expect(display).toContain("If you approve");
+		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({
+			modelTiers: { cheap: ["router/cheap"], default: ["router/default"], review: ["router/review"] },
+		});
+		expect(await preview()).toBe(display);
+		expect(tierBinding("cheap")).toBeUndefined();
+	});
+
+	it("proposes nothing when no router profiles are registered", async () => {
+		registry.unregisterVirtualModel("router", "default");
+		expect(await preview()).toBe(
+			"Registered router profiles: none.\nNo matching registered profile: @cheap, @deep, @default, @frontier, @review.\nNo bindings proposed.",
+		);
+	});
+
+	it("does not substitute an unrelated profile or use a nonvirtual router entry", async () => {
+		registry.unregisterVirtualModel("router", "default");
+		const physical = registry.find("selection-path", "parent")!;
+		register("other");
+		const models = registry.getAll();
+		vi.spyOn(registry, "getAll").mockReturnValueOnce([...models, { ...physical, provider: "router", id: "cheap" }]);
+		const display = await preview();
+		expect(display).toContain("Registered router profiles: router/other.");
+		expect(display).toContain("No matching registered profile: @cheap, @deep, @default, @frontier, @review.");
+		expect(display).toContain("No bindings proposed.");
+	});
+
+	it("proposes all five tiers without reporting a missing profile when all are registered", async () => {
+		for (const tier of ["review", "frontier", "cheap", "deep"]) register(tier);
+		const display = await preview();
+		expect(display).not.toContain("No matching");
+		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({
+			modelTiers: {
+				cheap: ["router/cheap"],
+				deep: ["router/deep"],
+				default: ["router/default"],
+				frontier: ["router/frontier"],
+				review: ["router/review"],
+			},
+		});
+	});
+
+	it.each([{}, { cheap: ["selection-path/definition"] }])("leaves an explicit map alone: %j", async (modelTiers) => {
+		const initial = JSON.stringify({ modelTiers });
+		writeFileSync(globalSettings(), initial);
+		expect(await preview()).toBe(
+			"Registered router profiles: router/default.\nNo proposal: modelTiers is already configured (an empty map counts).",
+		);
+	});
+
+	it("honors an explicit empty tier map in the trusted enterprise overlay", async () => {
+		writeFileSync(
+			join(agentDir(), "enterprise.local.json"),
+			JSON.stringify({ version: 1, subagents: { modelTiers: {} } }),
+			{ mode: 0o600 },
+		);
+		expect(await preview()).toBe(
+			"Registered router profiles: router/default.\nNo proposal: modelTiers is already configured (an empty map counts).",
+		);
+	});
+
+	it("preserves the legacy Explore alias while proposing independent tiers", async () => {
+		register("cheap");
+		const initial = JSON.stringify({ modelAliases: { "Claude-Haiku-4-5": ["selection-path/definition"] } });
+		writeFileSync(globalSettings(), initial);
+		const display = await preview();
+		expect(display).toContain("Skipped @cheap: a binding would shadow the legacy Explore alias.");
+		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({ modelTiers: { default: ["router/default"] } });
+	});
 });
 
 async function invoke(path: Path, model?: string | null) {
