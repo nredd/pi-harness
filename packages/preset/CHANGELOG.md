@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Clarify scratch cleanup before worker handback and verify claimed leftovers in dirty merged worktrees before the parent sweeps again. Hash symlink text without touching its target. ([#1024](https://github.com/nredd/pi-harness/issues/1024))
+
 ## [0.5.0] - 2026-11-18
 
 ### Changed
