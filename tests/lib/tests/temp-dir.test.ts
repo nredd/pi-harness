@@ -1,7 +1,12 @@
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { makeTestTempDir } from "../src/temp-dir.ts";
+
+vi.mock(import("node:fs"), async (importOriginal) => {
+	const fs = await importOriginal();
+	return { ...fs, rmSync: vi.fn(fs.rmSync) };
+});
 
 test("registers recursive cleanup for each directory and tolerates repeated cleanup", ({ onTestFinished }) => {
 	const cleanups: (() => void)[] = [];
@@ -15,6 +20,8 @@ test("registers recursive cleanup for each directory and tolerates repeated clea
 	writeFileSync(join(first, "fixture.txt"), "fixture");
 	expect(cleanups).toHaveLength(2);
 	for (const cleanup of cleanups) cleanup();
+	// The platform owns the retry loop for transient errors, including EBUSY and EPERM.
+	expect(rmSync).toHaveBeenCalledWith(first, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 	expect(existsSync(first)).toBe(false);
 	expect(existsSync(second)).toBe(false);
 });
@@ -29,4 +36,18 @@ test("removes the directory if its cleanup cannot be registered", ({ onTestFinis
 		}),
 	).toThrow(error);
 	expect(readdirSync(parent)).toEqual([]);
+});
+
+test("preserves both errors when registration and cleanup fail", ({ onTestFinished }) => {
+	const parent = makeTestTempDir("pi-test-lib-", onTestFinished);
+	const registrationError = new Error("no active test");
+	const removalError = Object.assign(new Error("handle still open after retries"), { code: "EBUSY" });
+	vi.mocked(rmSync).mockImplementationOnce(() => {
+		throw removalError;
+	});
+	expect(() =>
+		makeTestTempDir(join(basename(parent), "child-"), () => {
+			throw registrationError;
+		}),
+	).toThrow(expect.objectContaining({ errors: [registrationError, removalError] }));
 });

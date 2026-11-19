@@ -41,7 +41,7 @@ check-commits:  ## Validate the complete PR/push commit range, or the latest loc
 	node scripts/check-commit-messages.mjs
 
 check-ts:  ## Test temp contract, Biome, tsc and Vitest (WORKSPACES can narrow the workspace checks)
-	node scripts/check-test-tempdirs.mjs
+	node scripts/check-test-tempdirs.mjs "$(or $(BASE),origin/main)"
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
