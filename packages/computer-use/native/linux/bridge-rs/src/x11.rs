@@ -6,9 +6,9 @@ use serde_json::{json, Value};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ButtonIndex, ClientMessageData, ClientMessageEvent, ConnectionExt as _,
-    Drawable, EventMask, ImageFormat, ImageOrder, Keycode, MapState, Window, BUTTON_PRESS_EVENT,
-    BUTTON_RELEASE_EVENT, CLIENT_MESSAGE_EVENT, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
-    MOTION_NOTIFY_EVENT,
+    Drawable, EventMask, GetImageReply, ImageFormat, ImageOrder, Keycode, MapState, Window,
+    BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, CLIENT_MESSAGE_EVENT, KEY_PRESS_EVENT,
+    KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
 };
 use x11rb::protocol::{composite, xtest};
 use x11rb::rust_connection::RustConnection;
@@ -233,45 +233,54 @@ pub fn capture_window(
     max_dimension: Option<u32>,
 ) -> Result<Capture, ProtocolError> {
     let (conn, _) = connect()?;
-    let g = conn
-        .get_geometry(window)
-        .map_err(xerr)?
-        .reply()
-        .map_err(xerr)?;
-    let pixels = u64::from(g.width) * u64::from(g.height);
-    if pixels == 0 || pixels > MAX_CAPTURE_PIXELS {
-        return Err(err(
-            format!(
-                "Refusing X11 capture of {}x{} window (64MP limit)",
-                g.width, g.height
-            ),
-            ErrorCode::CaptureFailed,
-        ));
+    capture_with(&conn, window, max_dimension)
+}
+
+/// X11 round trips needed by the capture policy and encoder.
+trait CaptureSource {
+    fn dimensions(&self, window: Window) -> Result<(u16, u16), ProtocolError>;
+    fn name_pixmap(&self, window: Window) -> Result<Option<Drawable>, ProtocolError>;
+    fn read_image(
+        &self,
+        drawable: Drawable,
+        width: u16,
+        height: u16,
+    ) -> Result<GetImageReply, ProtocolError>;
+    fn release_pixmap(&self, pixmap: Drawable);
+    fn image_order(&self) -> ImageOrder;
+}
+
+impl CaptureSource for RustConnection {
+    fn dimensions(&self, window: Window) -> Result<(u16, u16), ProtocolError> {
+        let g = self
+            .get_geometry(window)
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        Ok((g.width, g.height))
     }
-    let pixmap = conn.generate_id().map_err(xerr)?;
-    let mut warnings = Vec::new();
-    let (drawable, source) = match composite::name_window_pixmap(&conn, window, pixmap)
-        .ok()
-        .and_then(|c| c.check().ok())
-        .ok_or(())
-    {
-        Ok(()) => (pixmap as Drawable, "xcomposite"),
-        Err(_) => {
-            warnings.push(
-                "XComposite unavailable; GetImage fallback may contain stale or obscured pixels"
-                    .into(),
-            );
-            (window as Drawable, "get_image")
-        }
-    };
-    let image = conn
-        .get_image(
+
+    fn name_pixmap(&self, window: Window) -> Result<Option<Drawable>, ProtocolError> {
+        let pixmap = self.generate_id().map_err(xerr)?;
+        Ok(composite::name_window_pixmap(self, window, pixmap)
+            .ok()
+            .and_then(|cookie| cookie.check().ok())
+            .map(|()| pixmap))
+    }
+
+    fn read_image(
+        &self,
+        drawable: Drawable,
+        width: u16,
+        height: u16,
+    ) -> Result<GetImageReply, ProtocolError> {
+        self.get_image(
             ImageFormat::Z_PIXMAP,
             drawable,
             0,
             0,
-            g.width,
-            g.height,
+            width,
+            height,
             u32::MAX,
         )
         .map_err(xerr)?
@@ -281,19 +290,57 @@ pub fn capture_window(
                 format!("X11 GetImage failed: {e}"),
                 ErrorCode::CaptureFailed,
             )
-        })?;
-    if source == "xcomposite" {
-        let _ = conn.free_pixmap(pixmap);
+        })
+    }
+
+    fn release_pixmap(&self, pixmap: Drawable) {
+        let _ = self.free_pixmap(pixmap);
+    }
+
+    fn image_order(&self) -> ImageOrder {
+        self.setup().image_byte_order
+    }
+}
+
+/// Choose the drawable and encode a bounded PNG without depending on a live display.
+fn capture_with(
+    backend: &impl CaptureSource,
+    window: Window,
+    max_dimension: Option<u32>,
+) -> Result<Capture, ProtocolError> {
+    let (width, height) = backend.dimensions(window)?;
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels == 0 || pixels > MAX_CAPTURE_PIXELS {
+        return Err(err(
+            format!("Refusing X11 capture of {width}x{height} window (64MP limit)"),
+            ErrorCode::CaptureFailed,
+        ));
+    }
+    let pixmap = backend.name_pixmap(window)?;
+    let (source, warnings) = if pixmap.is_some() {
+        ("xcomposite", Vec::new())
+    } else {
+        (
+            "get_image",
+            vec![
+                "XComposite unavailable; GetImage fallback may contain stale or obscured pixels"
+                    .into(),
+            ],
+        )
+    };
+    let image = backend.read_image(pixmap.unwrap_or(window), width, height)?;
+    if let Some(pixmap) = pixmap {
+        backend.release_pixmap(pixmap);
     }
     let rgba = decode(
         &image.data,
-        g.width,
-        g.height,
+        width,
+        height,
         image.depth,
-        conn.setup().image_byte_order,
+        backend.image_order(),
     )?;
-    let (output_width, output_height) = scaled_dimensions(g.width, g.height, max_dimension);
-    let rgba = resize_rgba(&rgba, g.width, g.height, output_width, output_height);
+    let (output_width, output_height) = scaled_dimensions(width, height, max_dimension);
+    let rgba = resize_rgba(&rgba, width, height, output_width, output_height);
     let mut encoded = Vec::new();
     {
         let mut encoder =
@@ -812,6 +859,136 @@ fn capture_err(e: impl std::fmt::Display) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::io::Cursor;
+
+    #[derive(Debug, PartialEq)]
+    enum CaptureCall {
+        Dimensions(Window),
+        NamePixmap(Window),
+        ReadImage(Drawable, u16, u16),
+        ReleasePixmap(Drawable),
+    }
+
+    struct CaptureFixture {
+        calls: RefCell<Vec<CaptureCall>>,
+        size: (u16, u16),
+        pixmap: Option<Drawable>,
+        order: ImageOrder,
+        image: GetImageReply,
+    }
+
+    impl CaptureSource for CaptureFixture {
+        fn dimensions(&self, window: Window) -> Result<(u16, u16), ProtocolError> {
+            self.calls
+                .borrow_mut()
+                .push(CaptureCall::Dimensions(window));
+            Ok(self.size)
+        }
+
+        fn name_pixmap(&self, window: Window) -> Result<Option<Drawable>, ProtocolError> {
+            self.calls
+                .borrow_mut()
+                .push(CaptureCall::NamePixmap(window));
+            Ok(self.pixmap)
+        }
+
+        fn read_image(
+            &self,
+            drawable: Drawable,
+            w: u16,
+            h: u16,
+        ) -> Result<GetImageReply, ProtocolError> {
+            self.calls
+                .borrow_mut()
+                .push(CaptureCall::ReadImage(drawable, w, h));
+            Ok(self.image.clone())
+        }
+
+        fn release_pixmap(&self, pixmap: Drawable) {
+            self.calls
+                .borrow_mut()
+                .push(CaptureCall::ReleasePixmap(pixmap));
+        }
+
+        fn image_order(&self) -> ImageOrder {
+            self.order
+        }
+    }
+
+    #[test]
+    fn capture_selects_drawable_and_encodes_the_requested_pixels() {
+        use CaptureCall::{Dimensions, NamePixmap, ReadImage, ReleasePixmap};
+        for (pixmap, order, data) in [
+            (
+                Some(32),
+                ImageOrder::LSB_FIRST,
+                vec![30, 20, 10, 0, 60, 50, 40, 0],
+            ),
+            (
+                None,
+                ImageOrder::MSB_FIRST,
+                vec![0, 10, 20, 30, 0, 40, 50, 60],
+            ),
+        ] {
+            let fixture = CaptureFixture {
+                calls: RefCell::default(),
+                size: (2, 1),
+                pixmap,
+                order,
+                image: GetImageReply {
+                    depth: 24,
+                    sequence: 0,
+                    visual: 0,
+                    data,
+                },
+            };
+            let capture = capture_with(&fixture, 17, Some(1)).unwrap();
+            let mut calls = vec![
+                Dimensions(17),
+                NamePixmap(17),
+                ReadImage(pixmap.unwrap_or(17), 2, 1),
+            ];
+            if let Some(drawable) = pixmap {
+                calls.push(ReleasePixmap(drawable));
+                assert_eq!(capture.source, "xcomposite");
+                assert!(capture.warnings.is_empty());
+            } else {
+                assert_eq!(capture.source, "get_image");
+                assert_eq!(capture.warnings, ["XComposite unavailable; GetImage fallback may contain stale or obscured pixels"]);
+            }
+            assert_eq!(fixture.calls.into_inner(), calls);
+            assert_eq!((capture.width, capture.height), (1, 1));
+            let encoded = base64::engine::general_purpose::STANDARD
+                .decode(capture.png_base64)
+                .unwrap();
+            let mut png = png::Decoder::new(Cursor::new(encoded)).read_info().unwrap();
+            let mut rgba = vec![0; png.output_buffer_size()];
+            let output = png.next_frame(&mut rgba).unwrap();
+            assert_eq!((output.width, output.height), (1, 1));
+            assert_eq!(output.color_type, png::ColorType::Rgba);
+            assert_eq!(rgba, [10, 20, 30, 255]);
+        }
+
+        for size in [(0, 64), (8193, 8192)] {
+            let fixture = CaptureFixture {
+                calls: RefCell::default(),
+                size,
+                pixmap: None,
+                order: ImageOrder::LSB_FIRST,
+                image: GetImageReply {
+                    depth: 24,
+                    sequence: 0,
+                    visual: 0,
+                    data: vec![],
+                },
+            };
+            let error = capture_with(&fixture, 17, Some(1)).err().unwrap();
+            assert_eq!(error.code, ErrorCode::CaptureFailed);
+            assert!(error.message.contains("64MP limit"));
+            assert_eq!(fixture.calls.into_inner(), [Dimensions(17)]);
+        }
+    }
     #[test]
     fn policy_guards() {
         assert_eq!(
