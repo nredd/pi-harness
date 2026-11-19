@@ -224,6 +224,13 @@ inside the worktree. Unlink only the link, without resolving its target. Keep an
 directories, and exclude worktrees with those directories or `!!` entries from both sweeps. See the
 shipping skills.
 
+Use `architect` for architecture reviews and web research. It preloads `codebase-design`
+and ranks cited survey cards by payoff and migration cost (`S`, `M`, `L`). It treats
+`shortcut:` comments as decisions and reports unread scope. Surveys stay under 1500 words;
+concrete interface alternatives are reserved for opt-in grilling (`Q1`, `Q2`, `Rec:`).
+`general-purpose` delegates Standards and Spec reviews to `code-reviewer`; the parent
+owns the final critic review.
+
 Local overrides shadow these packaged definitions; update their managed source separately.
 Installing this package does not activate anything else or change a deployment's model bindings.
 
