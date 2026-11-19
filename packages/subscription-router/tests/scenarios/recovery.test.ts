@@ -1,5 +1,5 @@
 /** Ports terminal/retry/unconfirmed from e2e/run.sh through the real settle/retry machinery. */
-import { fauxAssistantMessage, fauxToolCall, getAssistantTexts } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall, getAssistantTexts } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.ts";

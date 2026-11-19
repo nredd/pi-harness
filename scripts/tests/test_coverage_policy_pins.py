@@ -38,6 +38,30 @@ from coverage_accounting import (
 )
 
 
+def test_session_pricing_is_registered_in_both_source_signals() -> None:
+    """Keep pricing in both complete source signals without relaxing their zero caps.
+
+    Parameters:
+        None.
+    Returns:
+        None: Pricing is present in both signals and all enforced counters remain zero.
+    Raises:
+        AssertionError: A new runtime path is omitted, inventories drift or caps loosen.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    package = cfg.packages["session-kit"]
+    owned = inventory(ROOT, package)
+    path = "src/stats/pricing.ts"
+    assert path in owned
+    assert not any(Path(path).full_match(item.path) for item in package.exclusions)
+    for name in ("primary", "bun"):
+        signal = package.signals[name]
+        assert path in (set(signal.files) if signal.files is not None else owned)
+        assert signal.files is None
+        for cap in signal.max_uncovered.values():
+            assert cap.lines == cap.functions == cap.branches == cap.statements == 0
+
+
 def test_serialized_policy_fields_have_descriptions() -> None:
     """Check every serialized field, including inherited and newly added declarations.
 
@@ -353,7 +377,7 @@ def test_async_helper_is_independently_measured_at_zero() -> None:
     assert "--config vitest.async.config.ts --coverage" in manifest["scripts"]["test:async"]
 
 
-@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu")])
 def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, host: str) -> None:
     """Reject missing selected-host artifacts instead of reporting a false zero.
 
@@ -412,7 +436,7 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     )
 
 
-@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu")])
 def test_subagents_runtime_scripts_missing_host_report_fails(
     tmp_path: Path, runner_os: str, host: str
 ) -> None:
@@ -599,10 +623,8 @@ def test_unaudited_languages_are_owned_pending_or_tracked_unmeasured() -> None:
 
 
 INERT_BY_DECISION = {
-    ".github/actions/capture-ci-wsl/action.yml",
     ".github/actions/report-plan/action.yml",
     ".github/actions/setup-ci-tools/action.yml",
-    ".github/actions/setup-ci-wsl/action.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/forks.yml",
     ".github/workflows/installer.yml",
@@ -611,7 +633,6 @@ INERT_BY_DECISION = {
     ".github/workflows/publish.yml",
     ".github/workflows/runner-rescue.yml",
     ".github/workflows/runner-smoke.yml",
-    ".github/workflows/wsl-watchdog.yml",
     "Makefile",
     "tests/integration/Makefile",
     "packages/computer-use/Makefile",

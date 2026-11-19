@@ -1,13 +1,13 @@
 /** Real router/session composition with isolated, credential-free usage and faux physical providers. */
 import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import {
 	createHarness,
 	createTestUiContext,
 	type FauxProviderRegistration,
 	type Harness,
 	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
-import { FakeClock } from "@nredd/pi-test-lib/clock";
+} from "@nredd/pi-test-lib/harness";
 import type { Profile } from "../../src/config.ts";
 import { ExhaustionTracker } from "../../src/exhaustion.ts";
 import { createSubscriptionRouter } from "../../src/index.ts";

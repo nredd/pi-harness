@@ -1,5 +1,5 @@
 /** Failure transparency and finite recovery through real router/model-runtime boundaries. */
-import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.ts";
 

@@ -48,13 +48,13 @@ local themes, skills, agents and their configuration. Restart sessions after act
 
 ## Select the shared agents and skills
 
-For a release containing the workspace entry, select its exact published version unfiltered in
+After `0.5.0` is published, select `npm:@nredd/pi-preset@0.5.0` unfiltered in
 `settings.json`'s `packages` (or a stack's `sources`) to load the footer, skills and themes.
-To keep themes disabled, use this shape with `VERSION` replaced by that published version:
+To keep themes disabled, use:
 
 ```json
 {
-  "source": "npm:@nredd/pi-preset@VERSION",
+  "source": "npm:@nredd/pi-preset@0.5.0",
   "extensions": ["src/index.ts"],
   "skills": ["skills/**"],
   "prompts": [],
@@ -154,8 +154,8 @@ and `InteractiveHarnessOptions` from the fork's `/testing/interactive`, and
 `tests/scenarios/footer-model.test.ts` still imports its `InteractiveHarness` type.
 Those hosts depend on private `InteractiveMode` and TUI render flushing; private model-route
 and interactive behavior are unchanged. Run `npm run check` for lint, types, Node and Bun tests plus the
-packed-file contract. `CHANGELOG.md` tracks unreleased changes; earlier history remains
-in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
+packed-file contract. `CHANGELOG.md` records releases from `0.5.0` on, with unreleased changes under `[Unreleased]`;
+earlier history remains in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
 
 ## Contents
 
@@ -215,8 +215,19 @@ Grant changes in `0.5.0`: `architect` gains the four `pi-web-access` research to
 `fetch_content`, `get_search_content`, `source_check`; fetch tools may cache material, so read-only
 is not a filesystem sandbox), and `general-purpose` may delegate only to `code-reviewer` (was
 `all`). Passive waits and merged-worktree sweeps stay with the continuing parent; workers only prune
-worktree metadata. Scratch removal requires an exact creation-time content-hash match, a `??` status entry and an in-worktree real path;
-ignored files and unchecked contents stay untouched. See the shipping skills.
+worktree metadata. Workers remove their untracked scratch before handback and claim any leftovers
+with a creation record. After merge, the parent removes only verified claims and sweeps again.
+Scratch removal is limited to regular files and symlinks with a `??` status entry and a matching
+creation-time type and SHA-256. Both roles hash file bytes or raw `readlink` bytes (no added newline).
+Check that the file's real path, or the link parent's real path joined with the link name, stays
+inside the worktree. Unlink only the link, without resolving its target. See the shipping skills.
+
+Use `architect` for architecture reviews and web research. It preloads `codebase-design`
+and ranks cited survey cards by payoff and migration cost (`S`, `M`, `L`). It treats
+`shortcut:` comments as decisions and reports unread scope. Surveys stay under 1500 words;
+concrete interface alternatives are reserved for opt-in grilling (`Q1`, `Q2`, `Rec:`).
+`general-purpose` delegates Standards and Spec reviews to `code-reviewer`; the parent
+owns the final critic review.
 
 Local overrides shadow these packaged definitions; update their managed source separately.
 Installing this package does not activate anything else or change a deployment's model bindings.
@@ -254,6 +265,10 @@ the continuing parent runs its independent final critic after exact-HEAD review.
 Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
 only when applicable protection is readable, effective and not bypassable by the merging caller.
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
+Before creating an issue worktree, after merge, and before any no-PR removal, the parent follows
+the [guarded sweep checks](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep).
+After merge, the PR's recorded head can prove the checked-out commit was pushed even if the remote
+branch is gone. A matching commit does not override any worktree safety check.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently

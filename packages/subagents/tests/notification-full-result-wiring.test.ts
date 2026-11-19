@@ -35,12 +35,12 @@ afterEach(async () => {
 });
 
 /** Boot with a parent that is running a turn. */
-async function boot(settings: Record<string, unknown> = {}) {
-	hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings } });
+async function boot(settings: Record<string, unknown> = {}, agentFiles?: Record<string, string>) {
+	hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings }, agentFiles });
 	booted = bootPi();
 	subagentsExtension(booted.pi);
 	const signal = new AbortController().signal;
-	const parentCtx = ctx();
+	const parentCtx = ctx({ isProjectTrusted: () => true });
 	Object.defineProperty(parentCtx, "signal", { get: () => signal });
 	await booted.lifecycle.get("session_start")!({ type: "session_start" }, parentCtx);
 	return { ...booted, parentCtx };
@@ -76,12 +76,12 @@ function runs(outcomes: Record<string, { text: string; failure?: string; aborted
 	};
 }
 
-const spawn = async (b: BootedPi, parentCtx: any, prompt: string): Promise<string> => {
+const spawn = async (b: BootedPi, parentCtx: any, prompt: string, type = "general-purpose"): Promise<string> => {
 	const result = await b.tools
 		.get("Agent")
 		.execute(
 			`call-${prompt}`,
-			{ prompt, description: prompt, subagent_type: "general-purpose", run_in_background: true },
+			{ prompt, description: prompt, subagent_type: type, run_in_background: true },
 			undefined,
 			undefined,
 			parentCtx,
@@ -104,6 +104,60 @@ function resultOf(content: string, id: string): string {
 const text = (n: number, head = "HEAD", tail = "TAIL") => head + "x".repeat(n - head.length - tail.length) + tail;
 
 describe("full result in a completion notice", () => {
+	it.each([16_000, 1_000, 0])("bounds Explore independently without changing other types (global=%s)", async (cap) => {
+		vi.useFakeTimers();
+		const body = text(5_000);
+		const r = runs({ scout: { text: body }, worker: { text: body } });
+		const b = await boot({ notificationResultChars: cap });
+		const scout = await spawn(b, b.parentCtx, "scout", "Explore");
+		const worker = await spawn(b, b.parentCtx, "worker");
+		r.settle("scout", "worker");
+		await vi.advanceTimersByTimeAsync(0);
+		turnEnd(b);
+		const content = sent(b)[0].content;
+		const result = resultOf(content, scout);
+		if (cap === 16_000) {
+			expect(result.replace(/\n\.\.\.\(truncated[^\n]*\n/, "")).toHaveLength(4_000);
+			expect(resultOf(content, worker)).toBe(body);
+		} else {
+			expect(result).toBe(resultOf(content, worker));
+		}
+		expect(result).toContain("truncated");
+		expect(result).toContain("get_subagent_result");
+		expect(record(scout).resultConsumed).toBeFalsy();
+		expect(record(scout).result).toBe(body);
+	});
+
+	it("leaves a failed Explore run unread even when its whole result fits", async () => {
+		vi.useFakeTimers();
+		const r = runs({ scout: { text: "half done", failure: "provider exploded" } });
+		const b = await boot();
+		const id = await spawn(b, b.parentCtx, "scout", "Explore");
+		r.settle("scout");
+		await vi.advanceTimersByTimeAsync(0);
+		turnEnd(b);
+
+		expect(resultOf(sent(b)[0].content, id)).toBe(
+			"Error: provider exploded\n\nPartial output before the failure:\nhalf done",
+		);
+		expect(record(id).resultConsumed).toBeFalsy();
+	});
+
+	it("carries only the full-result pointer when the agent type sets a zero cap", async () => {
+		vi.useFakeTimers();
+		const r = runs({ scout: { text: "hidden body" } });
+		const b = await boot({}, { scout: "---\nnotification_result_chars: 0\n---\nSearch." });
+		const id = await spawn(b, b.parentCtx, "scout", "scout");
+		r.settle("scout");
+		await vi.advanceTimersByTimeAsync(0);
+		turnEnd(b);
+
+		expect(resultOf(sent(b)[0].content, id).trim()).toBe(
+			"...(truncated: 11 of 11 chars omitted; use get_subagent_result for full output)...",
+		);
+		expect(record(id).resultConsumed).toBeFalsy();
+	});
+
 	it("carries a result under the cap whole, with no truncation note, and marks it read", async () => {
 		vi.useFakeTimers();
 		const body = text(2_000);

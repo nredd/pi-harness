@@ -84,12 +84,11 @@ describe("toolDescriptionMode", () => {
 		expect(desc).not.toContain("## Writing the prompt");
 		// Type list keeps every agent but only the first sentence of each description.
 		expect(desc).toContain("- general-purpose:");
-		expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
+		expect(desc).toContain("- Explore: Read-only search, bounded to 12 turns; breadth does not extend it. (Tools:");
 		expect(desc).not.toContain("very thorough");
-		// The point of the feature: materially smaller than the full version.
-		// The global agents dir is a per-runner temp path; measure with a fixed one
-		// so the budget does not depend on the runner's tmpdir length.
-		expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1600);
+		// Allow room for Explore's cap disclosure without dropping existing prompt cues.
+		// Normalize the global agents dir so the budget is independent of tmpdir length.
+		expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1640);
 	});
 
 	it("invalid mode in the settings file is dropped — full description", () => {
@@ -197,7 +196,7 @@ describe("toolDescriptionMode", () => {
 		});
 		const desc: string = tools.get("Agent").description;
 		expect(desc).toContain("GLOBAL CUSTOM");
-		expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
+		expect(desc).toContain("- Explore: Read-only search, bounded to 12 turns; breadth does not extend it. (Tools:");
 	});
 
 	it("{{scheduleGuideline}} expands to the schedule bullet when scheduling is on (default)", async () => {

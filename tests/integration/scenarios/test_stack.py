@@ -14,7 +14,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from pi_release.stack import find_package, load_stack, source_string
+from pi_release.stack import find_package, load_stack, package_directory, source_string
 
 from harness.golden import assert_golden
 from harness.headless import run_headless
@@ -102,6 +102,22 @@ def test_extensions_load_without_warnings(sandbox: Sandbox, tui: Callable[..., T
     assert not list((sandbox.home / "Applications").glob("*.app"))
 
 
+def test_package_filter_paths_exist(sandbox: Sandbox) -> None:
+    """Require every explicit stack filter path to name a file in its installed package.
+
+    Parameters:
+        sandbox (Sandbox): actual installed selection, including the pinned registry packages.
+    """
+    for package in sandbox.settings()["packages"]:
+        if not isinstance(package, dict):
+            continue
+        source = package["source"]
+        root = package_directory(source, sandbox.agent_dir)
+        for kind in ("extensions", "skills", "prompts", "themes"):
+            for path in package.get(kind, []):
+                assert (root / path).is_file(), f"{source}: {kind} filter '{path}' matches no file"
+
+
 def test_preset_resource_selection(sandbox: Sandbox) -> None:
     """Real discovery distinguishes footer-only personal from intentionally full local resources.
 
@@ -121,9 +137,8 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
     assert result.returncode == 0, result.transcript()
     assert not result.stderr.strip(), result.stderr
     receipt = json.loads(report.read_text())
-    expected = {"extensions": ["extensions/expanded-footer.ts"], "skills": [], "prompts": [], "themes": []}
+    expected = {"extensions": ["src/index.ts"], "skills": [], "prompts": [], "themes": []}
     if name == "local":
-        expected["extensions"] = ["src/index.ts"]
         expected["skills"] = [
             f"skills/{skill}/SKILL.md"
             for skill in ("code-review", "coding-like-redd", "get-it-merged", "ship-issue")

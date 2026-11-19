@@ -47,7 +47,8 @@ const ZERO_UNCOVERED_FILES = [
 const config = definePackageConfig("computer-use-vitest", {
 	provider: "istanbul",
 	test: {
-		dir: "test",
+		// Legacy `test/*.test.mjs` plus the standard `tests/*.test.ts`; new tests belong in `tests/` (#860).
+		include: ["test/**/*.test.mjs", "tests/**/*.test.ts"],
 		// The suites came from `node --test` and chained `node`/`tsx` scripts, which ran one at a time.
 		// Keep that: real process groups, Swift/cargo builds and git fixtures share the host. Forks like
 		// `dev-tools`, one worker like `resource-sampler`.
@@ -59,9 +60,16 @@ const config = definePackageConfig("computer-use-vitest", {
 		// own derived budgets.
 		testTimeout: 20_000,
 		coverage: {
-			thresholds: Object.fromEntries(
-				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100, statements: 100 }]),
-			),
+			// The launcher marks the report-only Bun run; keep the per-file pins on Node.
+			thresholds:
+				process.env.PI_EXPECT_BUN_RUNTIME === "1"
+					? undefined
+					: Object.fromEntries(
+							ZERO_UNCOVERED_FILES.map((path) => [
+								path,
+								{ lines: 100, functions: 100, branches: 100, statements: 100 },
+							]),
+						),
 		},
 	},
 });

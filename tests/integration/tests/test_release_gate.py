@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parents[3]
 # Its sibling modules (`runner_pools`) resolve through `sys.path`, which `run_path` does not extend.
 sys.path.insert(0, str(ROOT / "scripts"))
 CI_PLAN: dict[str, Any] = runpy.run_path(str(ROOT / "scripts/ci_paths.py"))
-OWNED_JOB_SUFFIX = {"ubuntu-24.04": "ubuntu", "macos-14": "macos", "wsl2": "wsl2"}
 
 
 def ci_job(name: str) -> str:
@@ -36,9 +35,9 @@ def ci_job(name: str) -> str:
         str: Job id; each OS has its own `owned-shards-<os>` and `owned-<os>` (fan-in) job.
     """
     if name.startswith("owned shard ("):
-        return f"owned-shards-{OWNED_JOB_SUFFIX[name.removeprefix('owned shard (').split(',')[0]]}"
+        return "owned-shards"
     if name.startswith("owned ("):
-        return f"owned-{OWNED_JOB_SUFFIX[name.removeprefix('owned (').removesuffix(')')]}"
+        return "owned"
     return name.split(" ", maxsplit=1)[0]
 
 
@@ -107,7 +106,7 @@ def test_exact_frozen_candidate() -> None:
     ],
 )
 def test_reject_other_or_incomplete_run(field: str, value: str) -> None:
-    """Reject PR green checks, selective main smoke and different candidates.
+    """Reject PR green checks, ordinary main runs and different candidates.
 
     Parameters:
         field (str): Run field to corrupt.
@@ -220,7 +219,6 @@ def test_required_job_names_are_pinned() -> None:
     assert set(gate.expected_jobs()) == {
         "owned (ubuntu-24.04)",
         "owned (macos-14)",
-        "owned (wsl2)",
         "owned shard (ubuntu-24.04, subagents)",
         "owned shard (ubuntu-24.04, computer-use)",
         "owned shard (ubuntu-24.04, ts)",
@@ -230,11 +228,8 @@ def test_required_job_names_are_pinned() -> None:
         "owned shard (macos-14, ts)",
         "owned shard (macos-14, scripts)",
         "owned shard (macos-14, python)",
-        "owned shard (wsl2, subagents-computer-use)",
-        "owned shard (wsl2, ts)",
         "contracts (ubuntu-24.04)",
         "contracts (macos-14)",
-        "contracts (wsl2)",
         "stack (ubuntu-24.04, personal)",
         "stack (ubuntu-24.04, local)",
         "stack (macos-14, local)",
@@ -356,24 +351,12 @@ def test_stack_cells_are_exactly_the_executing_matrix() -> None:
     matrix = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["stack"]["strategy"][
         "matrix"
     ]
-    # The plan owns which cells never run; the matrix only carries runner and platform for the rest.
-    idle = set(CI_PLAN["STACK_NOT_RUN"])
-    platform = {
-        entry["os"]: entry["platform"]
-        for entry in matrix["include"]
-        if "platform" in entry and (entry["os"], entry.get("stack")) not in idle
-    }
-    executing = {
-        (os, stack, platform[os])
-        for os in matrix["os"]
-        for stack in matrix["stack"]
-        if (os, stack) not in idle
-    }
+    rows = json.loads(matrix["include"].split(" || ", 1)[1].split("'")[1])
+    executing = {(row["os"], row["stack"], row["platform"]) for row in rows}
     assert {name for name in gate.expected_jobs() if name.startswith("stack ")} == {
         f"stack ({os}, {stack})" for os, stack, _ in executing
     }
     assert set(gate.STACK_CELLS) == executing
-    assert not any(f"stack ({os}, {stack})" in gate.expected_jobs() for os, stack in idle)
 
 
 def test_owned_gate_steps_follow_the_plan_and_exist_in_the_workflow() -> None:
@@ -633,8 +616,8 @@ def test_unfinished_producer_has_no_upload_window() -> None:
         None: Its artifact refuses.
     """
     run, jobs, artifacts = evidence()
-    next(job for job in jobs if job["name"] == "owned (wsl2)")["completed_at"] = None
-    with pytest.raises(ValueError, match=r"artifacts: \['coverage-wsl2'\]"):
+    next(job for job in jobs if job["name"] == "owned (macos-14)")["completed_at"] = None
+    with pytest.raises(ValueError, match=r"artifacts: \['coverage-macos-14'\]"):
         gate.validate_execution(SHA, run, jobs, artifacts)
 
 

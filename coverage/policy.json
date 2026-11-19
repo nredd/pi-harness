@@ -408,7 +408,6 @@
           "reason": "Source-complete Ubuntu producer baseline (#758); runtime and inline-test attribution closure remains #696, not a native 100-percent claim.",
           "reporters": ["text", "lcov", "json"],
           "skip_os": ["darwin"],
-          "skip_hosts": ["wsl2"],
           "gate": "check-ts"
         }
       }
@@ -446,7 +445,7 @@
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "#757 establishes the full-source baseline for #645 deterministic S1-S5 closures; no all-native coverage claim.",
-          "skip_hosts": ["linux", "wsl2"],
+          "skip_hosts": ["linux"],
           "gate": "check-ts"
         }
       }
@@ -463,6 +462,13 @@
         "primary": {
           "report": "coverage/primary/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "enforcement": "report-only",
+          "reason": "Compare full-suite Bun coverage to the primary zero budgets; establish a Bun floor only after complete-source hosted receipts on macOS and Linux (#645).",
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
@@ -530,12 +536,11 @@
       "owned": ["*.py"],
       "exclusions": [],
       "status": "measured",
-      "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
+      "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile).",
       "signals": {
         "primary": {
           "report": "coverage/python/lcov.info",
           "producer": "coverage.py",
-          "skip_hosts": ["wsl2"],
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         }
@@ -546,12 +551,11 @@
       "owned": ["harness/*.py"],
       "exclusions": [],
       "status": "measured",
-      "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
+      "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile).",
       "signals": {
         "primary": {
           "report": "coverage/python/lcov.info",
           "producer": "coverage.py",
-          "skip_hosts": ["wsl2"],
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         }
@@ -612,10 +616,10 @@
     },
     "probes": {
       "root": "tests/integration/probes",
-      "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
+      "owned": ["anthropic-block-types.mjs", "latency.ts", "render.ts", "request-ledger.ts", "session-kit-child-scope.ts", "stack-resources.ts", "transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S. compaction-children.test.ts is a test, not owned probe source: the ordinary pytest candidate-core scenario runs its unchanged Node assertions in Forks CI; check-probes supplies directory lint and strict types, not released-host or Bun compaction evidence.",
+      "note": "Every executable probe runs in process under `check-probes` on Node and Bun: the `pi -e` extensions against recording ExtensionAPI fakes, `anthropic-block-types.mjs` against the installed pi-ai build and a misclassifying fake. Both independent reports retain the complete owned inventory at zero L/F/B/S. compaction-children.test.ts is a test, not owned probe source: the ordinary pytest candidate-core scenario type-checks it against the Gitlink source before running its Node assertions in Forks CI; check-probes supplies directory lint but no released-host or Bun compaction evidence.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -682,9 +686,6 @@
         "primary": {
           "report": "coverage/python/lcov.info",
           "producer": "coverage.py",
-          "skip_hosts": [
-            "wsl2"
-          ],
           "max_uncovered": {
             "darwin": {
               "lines": 0,

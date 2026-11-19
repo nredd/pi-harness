@@ -94,7 +94,7 @@ jobs:
   #
   # TRUST assumption: same-repo PR branches are owner-reviewed code. Same-repo `pull_request` workflows are not fork-sandboxed: a branch author can edit the PR's workflow to request write permissions or reference secrets. The read-only block constrains this submitted workflow only; it is not a security boundary against arbitrary same-repo PR code. KNOWN RESIDUAL: same-UID package code inherits the PATH-prepended `gh` shim through `uvx`, the installer, `pi install`, npm/package scripts and Git children that preserve PATH. `make`/pytest also receive `INSTALLER_GH_CONFIG_DIR`; stripping it and the token variables from other child environments does not remove the capability. A child can invoke the shim to authenticate or read its embedded config path and plaintext `hosts.yml`. This is known credential-capability leakage, not merely a theoretical filesystem permission concern. It remains within the same-repo trust assumption: the submitted job token is read-only, but branch authors already control their workflow. No claim of package-script credential isolation is made. The sentinel subprocess test `test_acceptance_token_environment_is_clean_but_gh_capability_remains` demonstrates both clean environments and successful same-UID credential retrieval using the real CLI and a real-format `hosts.yml`.
   #
-  # It is not a required check and has no docs-only bypass; it only starts when its paths change.
+  # It is not required. PRs expand Ubuntu only; main pushes and dispatch also run macOS.
 
   installer:
     name: installer (${{ matrix.os }})
@@ -104,7 +104,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, xcode-27]
+        # Stay hosted: same-UID package code can reach the read-only gh login; no token-free replacement
+        # for that acceptance path (see AGENTS.md KNOWN RESIDUAL).
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["ubuntu-24.04","xcode-27"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

@@ -1,5 +1,5 @@
 /** New policies traverse real Pi prompts, tool continuations, retry and settle recovery. */
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import type { PolicyV1 } from "../../src/policy.ts";

@@ -1,13 +1,13 @@
 /**
- * In-process tests for the Vitest launcher's `main`. Only `spawnSync` is faked, so every case runs the
- * real home creation and cleanup; `tests/inprocess/verification/launcher.test.ts` and
+ * In-process tests for the Vitest launcher's `main`. The child is faked; cleanup uses the real
+ * filesystem except when a removal error is injected. `tests/inprocess/verification/launcher.test.ts` and
  * `scripts/tests/test_coverage_producers.py` keep the real-subprocess coverage of the CLI dispatch.
  */
 import assert from "node:assert/strict";
 import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { parseCLI } from "vitest/node";
@@ -18,6 +18,7 @@ interface SpawnCall {
 	args: readonly string[];
 	env: NodeJS.ProcessEnv;
 	homeExisted: boolean;
+	leftover: string;
 }
 
 const spawn = vi.hoisted(() => ({
@@ -25,10 +26,32 @@ const spawn = vi.hoisted(() => ({
 	result: { status: 0, signal: null } as Partial<SpawnSyncReturns<Buffer>>,
 }));
 
+const removal = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return {
+		...fs,
+		rmSync: (path: Parameters<typeof fs.rmSync>[0], options: Parameters<typeof fs.rmSync>[1]) => {
+			if (removal.error && options?.maxRetries === 1) throw removal.error;
+			fs.rmSync(path, options);
+		},
+	};
+});
+
 vi.mock("node:child_process", () => ({
 	spawnSync: (command: string, args: readonly string[], options: SpawnSyncOptions) => {
 		const env = options.env ?? {};
-		spawn.calls.push({ command, args, env, homeExisted: env.HOME !== undefined && statSync(env.HOME).isDirectory() });
+		assert.ok(env.TMPDIR);
+		const leftover = join(env.TMPDIR, "leftover.lock");
+		writeFileSync(leftover, "fixture");
+		spawn.calls.push({
+			command,
+			args,
+			env,
+			homeExisted: env.HOME !== undefined && statSync(env.HOME).isDirectory(),
+			leftover,
+		});
 		return spawn.result;
 	},
 }));
@@ -62,6 +85,8 @@ function onlyCall(): SpawnCall {
 	assert.ok(call);
 	assert.ok(call.homeExisted, "the isolated home must exist while the child runs");
 	assert.equal(existsSync(call.env.HOME ?? ""), false, "the isolated home must be removed afterwards");
+	assert.equal(existsSync(call.leftover), false, "the child temp artifact must be removed afterwards");
+	assert.equal(existsSync(call.env.TMPDIR ?? ""), false, "the isolated temp directory must be removed afterwards");
 	return call;
 }
 
@@ -93,15 +118,42 @@ test("entry dispatch launches only for the entry module and propagates the statu
 
 test("node runs Vitest under the current Node with the package arguments unchanged", () => {
 	spawn.result = { status: CHILD_STATUS, signal: null };
-	assert.equal(main(["node", "--coverage"], { KEEP: "1" }), CHILD_STATUS);
+	assert.equal(
+		main(["node", "--coverage"], { KEEP: "1", TMPDIR: "old-tmpdir", TMP: "old-tmp", TEMP: "old-temp" }),
+		CHILD_STATUS,
+	);
 	const call = onlyCall();
 	assert.equal(call.command, process.execPath);
 	assert.deepEqual(call.args, [VITEST, "run", "--coverage"]);
 	assert.equal(call.env.KEEP, "1");
 	assert.equal(call.env.JITI_FS_CACHE, "false");
 	const home = call.env.HOME ?? "";
-	assert.match(home, /pi-bun-vitest-/);
+	assert.match(home, /pi-vt-/);
+	assert.ok(call.env.TMPDIR);
+	assert.equal(dirname(home), dirname(call.env.TMPDIR));
+	assert.equal(call.env.TMP, call.env.TMPDIR);
+	assert.equal(call.env.TEMP, call.env.TMPDIR);
 	for (const [name, value] of Object.entries(isolatedHomeEnv(home))) assert.equal(call.env[name], value);
+});
+
+test("operator-backed run retains config and login but still isolates temp", () => {
+	const operator = { HOME: tmpdir(), PI_CODING_AGENT_DIR: "/operator/.pi/agent", TMPDIR: "/old-tmp" };
+	assert.equal(main(["node", "--keep-home", "scenarios"], operator), 0);
+	const call = spawn.calls[0];
+	assert.ok(call);
+	assert.deepEqual(call.args, [VITEST, "run", "scenarios"]);
+	assert.equal(call.env.HOME, operator.HOME);
+	assert.equal(call.env.PI_CODING_AGENT_DIR, operator.PI_CODING_AGENT_DIR);
+	assert.notEqual(call.env.TMPDIR, operator.TMPDIR);
+	assert.equal(existsSync(call.leftover), false);
+});
+
+test.each(["node", "bun"])("%s benchmarks retain the Vitest command without added coverage", (engine) => {
+	assert.equal(main([engine, "--keep-home", "bench", "--run"], {}), 0);
+	const call = spawn.calls[0];
+	assert.ok(call);
+	assert.deepEqual(call.args, [...(engine === "bun" ? ["--bun"] : []), VITEST, "bench", "--run"]);
+	assert.equal(existsSync(call.leftover), false);
 });
 
 test("bun appends the Istanbul coverage arguments after the package arguments", () => {
@@ -169,6 +221,27 @@ test("a signal-killed child exits 1 and the timing lands in the step summary", (
 		onlyCall();
 		assert.match(readFileSync(summary, "utf8"), /^\nnode Vitest timing: .* \| exit 1\n$/);
 	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a removal failure warns without replacing the child status or losing timing", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-run-vitest-removal-"));
+	const summary = join(dir, "summary.md");
+	const failure = Object.assign(new Error("directory not empty"), { code: "ENOTEMPTY" });
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+	spawn.result = { status: CHILD_STATUS, signal: null };
+	removal.error = failure;
+	try {
+		assert.equal(main(["node"], { GITHUB_STEP_SUMMARY: summary }), CHILD_STATUS);
+		const timing = new RegExp(`node Vitest timing: .* \\| exit ${CHILD_STATUS}`);
+		assert.match(readFileSync(summary, "utf8"), timing);
+		assert.match(String(vi.mocked(console.log).mock.calls[0]?.[0]), timing);
+		assert.equal(warn.mock.calls[0]?.[1], failure);
+	} finally {
+		removal.error = undefined;
+		const temp = spawn.calls[0]?.env.TMPDIR;
+		if (temp) rmSync(dirname(temp), { recursive: true, force: true });
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

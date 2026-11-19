@@ -215,6 +215,28 @@ export function describeSelection(
 	return model ? (isVirtualModel(model) ? describeVirtualModel(model) : describeModel(model)) : {};
 }
 
+/** Only model references, not commands, endpoints, diagnostics or model overlays, reach the UI. */
+export function safeRef(value: string | undefined): string {
+	return value && /^@?[a-zA-Z0-9][a-zA-Z0-9._/@-]*$/.test(value) && !value.includes("//")
+		? value
+		: value === undefined
+			? "session default"
+			: "[redacted]";
+}
+
+/** Name a tier overridden at fresh dispatch, without retaining or re-reading the definition later. */
+export function modelShadowNote(
+	definitionModel: string | undefined,
+	record: { modelSelection?: ModelSelection } | undefined,
+): string {
+	const selection = record?.modelSelection;
+	if (selection?.source !== "agentModels:*") return "";
+	const definitionRef = safeRef(definitionModel?.trim());
+	return definitionRef.startsWith("@") && definitionRef !== selection.requested?.trim()
+		? `Note: agentModels["*"] overrides definition model ${definitionRef}.`
+		: "";
+}
+
 /** Resolved selection identity for model-facing text, not an actionable fallback warning. */
 export function modelIdentityNote(
 	carrier: { modelSelection?: ModelSelection; modelTier?: TierDisclosure } | undefined,

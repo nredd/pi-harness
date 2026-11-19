@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_candidate_core_child_compaction(tmp_path: Path) -> None:
-    """Run both real child-session probes with private HOME/auth/tmp and no inherited credentials.
+    """Type-check against candidate sources, then run both probes without inherited credentials.
 
     Parameters:
         tmp_path (Path): Private scenario directory.
@@ -29,6 +29,22 @@ def test_candidate_core_child_compaction(tmp_path: Path) -> None:
     assert (ROOT / "forks/pi/packages/coding-agent/dist/index.js").is_file(), "Build the candidate core first"
     assert (ROOT / "packages/subagents/dist/index.ts").is_file(), "Run `make build` before child probes"
     box = build_sandbox(tmp_path / "candidate")
+    probes = ROOT / "tests/integration/probes"
+    typecheck = subprocess.run(
+        [
+            node,
+            str(ROOT / "node_modules/typescript/bin/tsc"),
+            "-p",
+            str(probes / "tsconfig.candidate-compaction.json"),
+        ],
+        cwd=ROOT,
+        env=box.env(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert typecheck.returncode == 0, typecheck.stdout + typecheck.stderr
     result = subprocess.run(
         [
             node,
@@ -37,7 +53,7 @@ def test_candidate_core_child_compaction(tmp_path: Path) -> None:
             "--test",
             "--test-concurrency=1",
             "--test-timeout=120000",
-            str(ROOT / "tests/integration/probes/compaction-children.test.ts"),
+            str(probes / "compaction-children.test.ts"),
         ],
         cwd=ROOT,
         env=box.env(

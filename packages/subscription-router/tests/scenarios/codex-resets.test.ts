@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHarness, createTestUiContext } from "@earendil-works/pi-coding-agent/testing";
+import { createHarness, createTestUiContext } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { codexIdentity } from "../../src/codex-contract.ts";
 import { CodexResets } from "../../src/codex-resets.ts";

@@ -301,14 +301,14 @@ describe("StatsView per-harness display", () => {
 
 	it("renders unpriced cost as such, never $0, with the count next to a partial total", () => {
 		const view = make(calls);
-		expect(text(view)).toMatch(/Notional cost +\$1\.50 \+ 3 unpriced/);
+		expect(text(view)).toMatch(/Recorded cost +\$1\.50 \+ 3 unpriced/);
 		view.handleInput("\t");
 		const wide = text(view, 170);
 		expect(wide).toContain("$1.50 + 2 unpriced");
 		expect(wide).toMatch(/sol[^\n]*unpriced/);
 		expect(text(view, 60)).toMatch(/\$1\.50 \+ 2 unpriced/);
 		const claudeOnly = make(calls.filter((c) => c.harness === "claude"));
-		expect(text(claudeOnly)).toMatch(/Notional cost +unpriced/);
+		expect(text(claudeOnly)).toMatch(/Recorded cost +unpriced/);
 		claudeOnly.handleInput("\t");
 		expect(text(claudeOnly, 60)).toMatch(/\bunpriced\n/);
 	});

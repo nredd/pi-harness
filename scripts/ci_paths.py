@@ -28,7 +28,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from runner_pools import (
-    OS_POOLS,
     POOLS,
     CellKey,
     assign_cells,
@@ -52,47 +51,18 @@ TESTED_DOCUMENTATION = frozenset(
         "packages/preset/README.md",
         "packages/session-kit/README.md",
         "packages/todo/README.md",
+        # Enrolled changelogs are inputs to `check-changelog-fragments`, even without fragment edits.
+        "packages/subagents/CHANGELOG.md",
+        "packages/session-kit/CHANGELOG.md",
+        "packages/dev-tools/CHANGELOG.md",
+        "packages/todo/CHANGELOG.md",
+        "packages/plan-mode/CHANGELOG.md",
+        "packages/resource-sampler/CHANGELOG.md",
     }
 )
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
 TOOLCHAIN_INPUTS = frozenset(
     {"Makefile", "package.json", ".npmrc", ".gitmodules", ".node-version", ".bun-version", ".python-version"}
-)
-WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
-    ".gitattributes",
-    # The guest's probes and import-audit Vitest configs read their coverage inventory from it, through the
-    # shared factory.
-    "coverage/policy.json",
-    "package-lock.json",
-    "tests/integration/pyproject.toml",
-    "tests/integration/uv.lock",
-    "release/pyproject.toml",
-    "release/uv.lock",
-    "scripts/check-commit-messages.mjs",
-    "scripts/tests/commit-messages.test.mjs",
-    "scripts/tests/commit-policy.test.mjs",
-    "scripts/coverage-configs.test.ts",
-    "scripts/import_audit.test.ts",
-    "scripts/import_audit.ts",
-    "scripts/install_gh_linux.py",
-    "scripts/install_gh_linux.sh",
-    "scripts/install_wsl_owned_tools.py",
-    "scripts/install_wsl_owned_tools.sh",
-    "scripts/router_contract.mjs",
-    "scripts/router_contract.test.mjs",
-    "scripts/run-vitest.test.ts",
-    "scripts/run-vitest.ts",
-    "scripts/vitest-package.ts",
-    "scripts/vitest.config.ts",
-    # `run-vitest.ts` imports `isolatedHomeEnv` from it.
-    "tests/lib/src/isolated-home.ts",
-}
-WSL_INPUT_PREFIXES = (
-    ".github/",
-    "tests/integration/probes/",
-    "tests/integration/providers/",
-    "scripts/wsl2_",
-    "scripts/ci",
 )
 STACK_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "package-lock.json",
@@ -112,10 +82,8 @@ STACK_INPUT_PREFIXES = (
     "tests/integration/providers/",
     "tests/integration/scenarios/",
     "release/",
-    "scripts/wsl2_",
 )
 EVENT_PULL_REQUEST = "pull_request"
-EVENT_PUSH = "push"
 # GitHub squashes a PR to `<title> (#N)`; `main` lints that subject (`check-commit-messages.mjs`).
 SQUASH_SUBJECT_LIMIT = 72
 CHECK_TS = "check-ts"
@@ -137,10 +105,7 @@ class Shard:
     workspaces: tuple[str, ...] = ()
 
 
-# Shard units and timings are in #350 and .github/workflows/ci.yml. Native cells run every Python gate;
-# WSL keeps only the LCOV producers (Ubuntu runs the Python unit suites). macOS mirrors Ubuntu's four
-# shards to keep the TypeScript work inside the job budget. WSL stays at two: each Windows job pays
-# ~3.5 min of guest setup, and two shards already finish inside the macOS critical path.
+# Shard units and timings are in #350 and .github/workflows/ci.yml.
 OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
     "ubuntu-24.04": (
         Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
@@ -157,52 +122,28 @@ OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
         Shard("scripts", ("check-scripts",)),
         Shard("python", ("check-integration",)),
     ),
-    "wsl2": (
-        Shard("subagents-computer-use", (CHECK_TS,), ("packages/computer-use", "packages/subagents")),
-        Shard("ts", (CHECK_TS, "check-probes", "check-providers", "check-import-audit")),
-    ),
 }
 OWNED_GATES = {
     os_name: tuple(dict.fromkeys(gate for shard in shards for gate in shard.gates))
     for os_name, shards in OWNED_SHARDS.items()
 }
-# Where a `wsl2` cell runs its guest. Hosted: the x64 Windows runner drives WSL through `wsl.exe`. Native: the
-# self-hosted pool runs the job inside a linux-arm64 distro, so the steps are plain Linux (#736). The guest
-# stays `wsl2` either way, so coverage accounting and `skip_hosts` keep working.
-HOST_WINDOWS = "windows"
-HOST_NATIVE = "native"
+HOSTED_MACOS = "xcode-27"
 # Runner label and execution guest per OS, as the `contracts` matrix spells them (a test pins the two).
 RUNNERS = {
     "ubuntu-24.04": ("ubuntu-24.04", "linux"),
     "macos-14": ("xcode-27", "macos"),
-    "wsl2": ("windows-2025", "wsl2"),
 }
 # The platform whose coverage floors account a cell's reports (`coverage_accounting.py --os`); the fan-in
-# runs on Ubuntu, so it cannot read its own `sys.platform`. WSL reports are Linux reports.
-COVERAGE_OS = {"ubuntu-24.04": "linux", "macos-14": "darwin", "wsl2": "linux"}
-STACKS = ("personal", "local")
-SMOKE_CELL = ("ubuntu-24.04", "personal")
+# runs on Ubuntu, so it cannot read its own `sys.platform`.
+COVERAGE_OS = {"ubuntu-24.04": "linux", "macos-14": "darwin"}
+STACKS = {"ubuntu-24.04": ("personal", "local"), "macos-14": ("local",)}
 # NOT RUN reasons; the reporter appends "This is not a pass." to each.
 NOT_RUN = {
     "docs_only": "Skipped because the change is docs-only.",
-    "main_smoke": "Skipped on a main push; stack (ubuntu-24.04, personal) validates the merged result.",
     "personal_without_inputs": (
         "This pull request changes no stack inputs; the personal stack installs published packages, "
         "so its scenarios cannot change. Setup still runs."
     ),
-}
-WSL_BYPASS = (
-    "This pull request changes no CI or WSL inputs; {job} (wsl2) runs for real on main pushes "
-    "and on PRs that change them."
-)
-_WSL_STACK = "WSL runs no stack cell; owned (wsl2) and contracts (wsl2) are its only evidence."
-STACK_NOT_RUN = {
-    (
-        "macos-14",
-        "personal",
-    ): "macOS runs only the local stack; ubuntu-24.04 carries the published personal stack.",
-    ("wsl2", "personal"): _WSL_STACK,
-    ("wsl2", "local"): _WSL_STACK,
 }
 # JavaScript's `\s` (ECMAScript WhiteSpace + LineTerminator), not Python's: Python adds \x1c-\x1f and \x85 and
 # omits U+FEFF. `check-commit-messages.mjs` `validSubject`: optional `area: ` prefix, a capital, no trailing
@@ -243,12 +184,10 @@ class ShardPlan:
         os (str): Matrix `os` value of the cell.
         name (str): Shard name.
         runner (str): Runner label.
-        guest (str): Execution guest, `linux`, `macos` or `wsl2`.
+        guest (str): Execution guest, `linux` or `macos`.
         gates (tuple[str, ...]): Make targets, one workflow step each.
         workspaces (tuple[str, ...]): npm workspaces its `check-ts` runs, in npm workspace order.
         skipped_gates (tuple[str, ...]): Its `PATH_GATED_GATES` this run reports NOT RUN.
-        host (str): Where a `wsl2` shard runs its guest: `windows` (hosted, through `wsl.exe`) or `native`
-            (the self-hosted linux-arm64 pool). Empty for every other guest.
     """
 
     os: str
@@ -258,16 +197,14 @@ class ShardPlan:
     gates: tuple[str, ...]
     workspaces: tuple[str, ...]
     skipped_gates: tuple[str, ...] = ()
-    host: str = ""
 
     def to_output(self) -> dict[str, str]:
         """Return the matrix `include` entry the shard job reads.
 
         Returns:
-            dict[str, str]: Strings only; gates, workspaces and skipped gates are space-joined. `host` is
-                present only for a `wsl2` shard.
+            dict[str, str]: Strings only; gates, workspaces and skipped gates are space-joined.
         """
-        output = {
+        return {
             "os": self.os,
             "shard": self.name,
             "runner": self.runner,
@@ -276,9 +213,6 @@ class ShardPlan:
             "workspaces": " ".join(self.workspaces),
             "skipped_gates": " ".join(self.skipped_gates),
         }
-        if self.host:
-            output["host"] = self.host
-        return output
 
 
 @dataclass(frozen=True)
@@ -299,8 +233,6 @@ class CellPlan:
             --skipped-gates`).
         runner (str): The self-hosted pool label a `contracts` or `stack` cell runs on, empty to keep the
             hosted runner its matrix names.
-        host (str): Where a `wsl2` `contracts` cell runs its guest, `windows` (hosted) or `native` (pool);
-            empty for every other cell.
     """
 
     run: bool
@@ -313,7 +245,6 @@ class CellPlan:
     coverage_os: str = ""
     skipped_gates: tuple[str, ...] = ()
     runner: str = ""
-    host: str = ""
 
     def to_output(self) -> dict[str, object]:
         """Return the JSON-ready form the workflow reads with `fromJSON`.
@@ -336,8 +267,6 @@ class CellPlan:
         # Only a pool-routed cell carries a runner, so the runner-less plan is unchanged while no pool is up.
         if self.runner:
             output["runner"] = self.runner
-        if self.host:
-            output["host"] = self.host
         return output
 
 
@@ -437,8 +366,8 @@ def is_documentation_path(path: str) -> bool:
 def changes_package_doc_presence(repo: Path, paths: tuple[str, ...], base: str, head: str) -> bool:
     """Return whether a changed `packages/<name>/README.md` or `CHANGELOG.md` was added or deleted.
 
-    A package doc edit is docs-only, but adding or deleting one changes which required files a package
-    has, which `scripts/package_layout.py` gates, so that diff must run `check-scripts`.
+    An untested package doc edit is docs-only, but adding or deleting one changes which required files a
+    package has, which `scripts/package_layout.py` gates, so that diff must run `check-scripts`.
 
     Parameters:
         repo (Path): Existing Git working tree.
@@ -462,18 +391,6 @@ def changes_package_doc_presence(repo: Path, paths: tuple[str, ...], base: str, 
     return any(path not in at_base or path not in at_head for path in docs)
 
 
-def is_wsl_input(path: str) -> bool:
-    """Return whether one changed path reaches the WSL setup, adapter or guest gates.
-
-    Parameters:
-        path (str): Git-relative path with POSIX separators.
-
-    Returns:
-        bool: Whether a PR changing the path must run the WSL cells for real.
-    """
-    return path in WSL_INPUT_FILES or path.startswith(WSL_INPUT_PREFIXES)
-
-
 def is_stack_input(path: str) -> bool:
     """Return whether one changed path reaches the personal stack scenarios.
 
@@ -489,7 +406,6 @@ def is_stack_input(path: str) -> bool:
 # One entry per class of paths that wakes optional work; `ChangeClassification.inputs` and the published
 # outputs follow this mapping.
 INPUT_CLASSES: dict[str, Callable[[str], bool]] = {
-    "wsl_inputs": is_wsl_input,
     "stack_inputs": is_stack_input,
 }
 
@@ -626,7 +542,7 @@ def npm_workspaces(root: Path) -> tuple[str, ...]:
 
 
 def skipped_gates(result: ChangeClassification, event: str) -> frozenset[str]:
-    """Return the `PATH_GATED_GATES` this run skips: a non-push run that changes none of a gate's inputs.
+    """Return the `PATH_GATED_GATES` this run skips: a PR that changes none of a gate's inputs.
 
     Parameters:
         result (ChangeClassification): Diff classification.
@@ -635,7 +551,7 @@ def skipped_gates(result: ChangeClassification, event: str) -> frozenset[str]:
     Returns:
         frozenset[str]: Make targets to report NOT RUN wherever a cell plans them.
     """
-    if event == EVENT_PUSH:
+    if event != EVENT_PULL_REQUEST:
         return frozenset()
     return frozenset(gate for gate, inputs in PATH_GATED_GATES.items() if not result.inputs[inputs])
 
@@ -680,10 +596,27 @@ def shard_plans(
                 shard.gates,
                 selected if CHECK_TS in shard.gates else (),
                 tuple(gate for gate in shard.gates if gate in path_gated),
-                HOST_WINDOWS if guest == "wsl2" else "",
             )
         )
     return tuple(plans)
+
+
+def pr_bypass(os_name: str, result: ChangeClassification, event: str) -> CellPlan | None:
+    """Return the PR bypass shared by runnable owned, contracts and stack cells.
+
+    Parameters:
+        os_name (str): Matrix OS name.
+        result (ChangeClassification): Diff classification.
+        event (str): Triggering event name.
+
+    Returns:
+        CellPlan | None: Reporting-only plan when bypassed, otherwise None.
+    """
+    if event != EVENT_PULL_REQUEST:
+        return None
+    if os_name == "ubuntu-24.04" and result.docs_only:
+        return skipped(NOT_RUN["docs_only"])
+    return None
 
 
 def native_plan(
@@ -705,14 +638,10 @@ def native_plan(
     Returns:
         CellPlan: Whether the cell runs and, for `owned`, which gates on which shards.
     """
-    if os_name == "wsl2" and event == EVENT_PULL_REQUEST and not result.inputs["wsl_inputs"]:
-        return skipped(WSL_BYPASS.format(job=job))
-    # A real WSL cell keeps its docs-only acceptance on `main`.
-    if result.docs_only and os_name != "wsl2":
-        return skipped(NOT_RUN["docs_only"])
+    if bypass := pr_bypass(os_name, result, event):
+        return bypass
     if job != "owned":
-        host = HOST_WINDOWS if RUNNERS[os_name][1] == "wsl2" else ""
-        return CellPlan(run=True, scenarios=True, gates=(), reason="", host=host)
+        return CellPlan(run=True, scenarios=True, gates=(), reason="")
     path_gated = skipped_gates(result, event)
     return CellPlan(
         run=True,
@@ -738,12 +667,8 @@ def stack_plan(os_name: str, stack: str, result: ChangeClassification, event: st
     Returns:
         CellPlan: Whether the cell runs and whether its scenario steps run.
     """
-    if (os_name, stack) in STACK_NOT_RUN:
-        return skipped(STACK_NOT_RUN[os_name, stack])
-    if result.docs_only:
-        return skipped(NOT_RUN["docs_only"])
-    if event == EVENT_PUSH and (os_name, stack) != SMOKE_CELL:
-        return skipped(NOT_RUN["main_smoke"])
+    if bypass := pr_bypass(os_name, result, event):
+        return bypass
     if event == EVENT_PULL_REQUEST and stack == "personal" and not result.inputs["stack_inputs"]:
         return CellPlan(run=True, scenarios=False, gates=(), reason=NOT_RUN["personal_without_inputs"])
     return CellPlan(run=True, scenarios=True, gates=(), reason="")
@@ -760,13 +685,15 @@ def running_cells(cells: Mapping[str, CellPlan]) -> dict[CellKey, str]:
             (`scenarios` false), a bypass cell and a blocked cell are left out: they are short or not run.
     """
     found: dict[CellKey, str] = {}
-    for os_name in OS_POOLS:
-        owned = cells[f"owned ({os_name})"]
+    for os_name in OWNED_SHARDS:
+        owned = cells.get(f"owned ({os_name})")
+        if owned is None:
+            continue
         if owned.run:
             found |= {("owned", os_name, shard.name): f"owned ({os_name})" for shard in owned.shards}
         if cells[f"contracts ({os_name})"].run:
             found[("contracts", os_name, "")] = f"contracts ({os_name})"
-        for stack in STACKS:
+        for stack in STACKS[os_name]:
             plan = cells[f"stack ({os_name}, {stack})"]
             if plan.run and plan.scenarios:
                 found[("stack", os_name, stack)] = f"stack ({os_name}, {stack})"
@@ -791,15 +718,13 @@ def apply_capacity(cells: Mapping[str, CellPlan], capacity: Mapping[str, int]) -
         name = running[job, os_name, variant]
         label = POOLS[pool].label
         if job == "owned":
-            host = HOST_NATIVE if os_name == "wsl2" else ""
             shards = tuple(
-                replace(shard, runner=label, host=host or shard.host) if shard.name == variant else shard
+                replace(shard, runner=label) if shard.name == variant else shard
                 for shard in planned[name].shards
             )
             planned[name] = replace(planned[name], shards=shards)
         else:
-            host = HOST_NATIVE if os_name == "wsl2" else cells[name].host
-            planned[name] = replace(cells[name], runner=label, host=host)
+            planned[name] = replace(cells[name], runner=label)
     return planned
 
 
@@ -819,7 +744,7 @@ def plan_cells(
             with room, the rest stay hosted. None or empty plans every cell hosted.
 
     Returns:
-        dict[str, CellPlan]: One plan per ruleset context, keyed by the check name.
+        dict[str, CellPlan]: One plan per active cell, keyed by the check name.
 
     Raises:
         ClassificationError: The checkout's npm workspaces cannot be read or split into shards.
@@ -828,9 +753,11 @@ def plan_cells(
     workspaces = npm_workspaces(REPO_ROOT)
     cells: dict[str, CellPlan] = {}
     for os_name in OWNED_SHARDS:
+        if event == EVENT_PULL_REQUEST and os_name != "ubuntu-24.04":
+            continue
         cells[f"owned ({os_name})"] = native_plan("owned", os_name, result, event, workspaces)
         cells[f"contracts ({os_name})"] = native_plan("contracts", os_name, result, event, workspaces)
-        for stack in STACKS:
+        for stack in STACKS[os_name]:
             cells[f"stack ({os_name}, {stack})"] = stack_plan(os_name, stack, result, event)
     if title_problem:
         blocked = CellPlan(run=False, scenarios=False, gates=(), reason=title_problem, blocked=True)
@@ -857,7 +784,21 @@ def write_github_output(path: Path, result: ChangeClassification, cells: Mapping
         for name, value in result.inputs.items():
             output.write(f"{name}={str(value).lower()}\n")
         output.write(f"plan={json.dumps(plan, sort_keys=True, separators=(',', ':'))}\n")
+        shards = [shard.to_output() for cell in cells.values() for shard in cell.shards]
+        output.write(f"owned_shards={json.dumps(shards, separators=(',', ':'))}\n")
         output.write(f"changed_files<<{delimiter}\n{changed}\n{delimiter}\n")
+
+
+def route_native_helper(capacity: Mapping[str, int]) -> str:
+    """Pick the runner for the macOS native-helper build.
+
+    Parameters:
+        capacity (Mapping[str, int]): Admitted pool capacity, empty when admission failed closed.
+
+    Returns:
+        str: `pi-macos` when it has an admitted slot, else the hosted `xcode-27`.
+    """
+    return "pi-macos" if capacity.get("pi-macos", 0) > 0 else HOSTED_MACOS
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -874,6 +815,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--head")
     parser.add_argument("--full", action="store_true", help="No diff to read: run every cell for real")
+    parser.add_argument("--native-helper", action="store_true", help="Route only the native helper build")
     parser.add_argument("--event", required=True, help="GitHub event name, e.g. pull_request or push")
     parser.add_argument("--pr-title", default="", help="Pull request title, checked as the squash subject")
     parser.add_argument("--pr-number", type=int, default=0, help="Pull request number")
@@ -896,8 +838,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--pool-attempt", type=int, default=1, help="Run attempt; excludes the previous attempt's pools"
     )
     args = parser.parse_args(argv)
-    if not args.full and not (args.base and args.head):
-        parser.error("--base and --head are required unless --full is given")
+    if not (args.full or args.native_helper or (args.base and args.head)):
+        parser.error("--base and --head are required unless --full or --native-helper is given")
     return args
 
 
@@ -916,6 +858,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         LOGGER.error(f"Invalid --pool-heartbeat: {e}")
         return 2
+    if args.native_helper:
+        heartbeats = {name: beat for name, beat in heartbeats.items() if name == "pi-macos"}
     capacity = pool_capacity(heartbeats, time.time(), trusted=not args.no_pools)
     if args.pool_run_id > 0:
         capacity = live_capacity(capacity, args.pool_repository, args.pool_run_id, args.pool_attempt)
@@ -924,6 +868,10 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.warning("No `--pool-run-id`: pool admission is unavailable, so every cell stays hosted")
         capacity = {}
     LOGGER.info(f"Self-hosted pools admitted (working slots): {capacity}")
+    if args.native_helper:
+        with args.github_output.open("a", encoding="utf-8") as output:
+            output.write(f"runner={route_native_helper(capacity)}\n")
+        return 0
     problem = ""
     if args.event == EVENT_PULL_REQUEST:
         # Block the cells rather than exit non-zero: a missing title must not skip the one rule only this

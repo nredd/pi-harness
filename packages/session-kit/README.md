@@ -44,9 +44,20 @@ and memory labels state their measurement basis) are in
 
 ## Install and config
 
+After `0.12.0` is published, install the release with:
+
 ```sh
-pi install npm:@nredd/pi-session-kit
+pi install npm:@nredd/pi-session-kit@0.12.0
 ```
+
+This release exports compact v3 snapshots and still imports v1/v2. Update portable exporter
+pins only after publication, using the published tarball's SHA-256; stack promotion and
+exporter deployment are separate from this release preparation.
+
+`0.12.0` adds the host-supplied `@earendil-works/pi-ai` peer. Current-rate estimates need
+its `estimateTokenCost` export (core `v1.3.0-nredd.12`); older hosts without it retain
+recorded costs and show unknown estimates. This remains a pre-1.0 minor release, not a
+requirement to upgrade the host for existing tools.
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 
@@ -155,6 +166,47 @@ navigate, `q` or Escape closes. Output is capped. Invalid refs and non-repositor
 errors. Print mode emits a stat (pi currently redirects extension stdout to stderr); JSON emits a
 non-triggering display message. The overlay is TUI-only and works in Plan mode.
 
+## Local subagent usage report
+
+The portable stats CLI also reports existing local pi child-session history:
+
+```sh
+node dist/pi-stats-export.mjs subagents --sessions-dir ./session-history > ./subagent-usage.json
+```
+
+Only `--agent-dir` and `--sessions-dir` are accepted; other flags are rejected by name.
+The default root is `PI_CODING_AGENT_SESSION_DIR`, else `<agentDir>/sessions`, like `/stats`.
+This reads originals only, never writes a cache or uploads data. Keep output private: it contains
+local model labels and diagnostic paths. Export/import and `/stats` behavior are unchanged.
+
+`groups` sort by agent type, physical provider/model, workflow and traffic. Each reports assistant
+API `calls`, `input`, `output`, `cacheRead`, `cacheWrite`, `recordedCost`, `pricedCalls`,
+`unpricedCalls`, `costComplete` and `unmatchedSessions`. Counts are not spawn counts or cost shares.
+Recorded cost is a notional priced subtotal, not an invoice; missing prices are unpriced, not free.
+Recorded zero prices remain priced, and aggregate costs preserve core's pricing-coverage semantics.
+The shared `/stats` parser dedupes copied/forked usage; parent Agent reports are not charged again.
+
+Attribution uses child names, `subagents:record`, Agent dispatch/result IDs and stable filenames
+across relocated/symlinked roots. The recorded type takes precedence over the child name, then
+the requested dispatch type. If a recorded path is absent, same-name copies must agree in
+session ID and JSONL content. Divergent backups or missing parent joins produce `unmatched-session`
+diagnostics and `complete: false`. Workflow grouping requires persisted native `subagents:workflow`
+progress with record IDs, so most history shows workflow `unknown`. Missing types stay `unknown`;
+missing/deleted children add to `missingSessions`/`unmatchedSessions`, never invented usage.
+
+Review labels are INFERRED, not compliance evidence: `review-standards`/`review-spec` require
+`Axis:` prompt headers; `review-critic` uses the agent type. `retry-repeat` means a resume or
+same-parent/type/axis/last-full-SHA repeat, and can label a legitimate same-HEAD re-review.
+Other review history stays `review-unknown`. Unpersisted provider retries cannot be measured.
+Nothing here recommends weakening either review axis or the independent critic.
+
+Output is bounded to 200 groups and 20 diagnostics, with bounded terminal-safe labels and paths.
+`totals` includes omitted groups; `omittedGroups` reports truncation. Errors, bad lines, unmatched
+sessions, unpriced calls and `priceFallbacks` make `complete` false. Unbound prices are unpriced
+with `price-fallback` diagnostics. Missing/unreadable roots and damaged files are reported, not
+fatal. Totals can be partial; growing files are not an atomic snapshot, and deleted originals
+have no cache fallback.
+
 ## Stats
 
 `/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,
@@ -165,14 +217,14 @@ not installed, last event, unreadable-line counts locally; last clean read and `
 machines) and remote exported-at UTC instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
 Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
 not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
-Print/JSON output includes the same provenance. Details: [here](#offline-stats-and-portable-snapshots).
+Print/JSON output includes the same provenance. Recorded costs stay unchanged; a separate offline current-rate API-equivalent estimate shows priced/unpriced coverage, never presenting a partial sum as complete. Details: [here](#offline-stats-and-portable-snapshots).
 
 Pinned header: tabs and the coverage note, then the date ranges, the harness and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
-total tokens, sessions, longest session, active days, streaks, cache tokens, notional cost) beside
+total tokens, sessions, longest session, active days, streaks, cache tokens, recorded cost) beside
 it from about 105 columns and under it below that, then the token chart. Models: the chart, then every
 model grouped under its provider. From about 100 columns that is a table (tokens, share, in, out, cache
-read, cache write, notional cost; a subtotal line per provider), else three-line cards. Tab switches
+read, cache write, recorded cost; a subtotal line per provider), else three-line cards. Tab switches
 tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `h`/`H` cycle the harness (All, then each of
 pi, claude, codex, opencode that has data; hidden when only one does), `m`/`M` cycle the filter (All,
 each provider, each `provider/model`; it composes with the harness and falls back to All where that
@@ -812,6 +864,26 @@ the published snapshots. To drop a harness on purpose, export without it using
   absent. The harness cache is version 4: older caches (cost 0, quota without `account`) are dropped and
   re-parsed.
 
+Current-rate API-equivalent value:
+
+- `Recorded cost` is the saved observation: never overwritten, never a current-rate fallback, not
+  subscription spend. Transcripts, snapshots, event IDs, dedup and deleted-file history are unchanged.
+- `/stats` also estimates each retained physical event with `estimateTokenCost` from the host's
+  `@earendil-works/pi-ai`, over already-loaded models only (no catalogue refresh, auth or network).
+  Context tiers apply per event before summing.
+- Overview and Models show the range/filter estimate and priced/unpriced event and token coverage;
+  print mode adds a per-model column. Machines adds source, checked date, units, conditions and
+  unpriced reasons. A partial sum reads `priced subset only`; no priced events reads `unknown`, never
+  $0. Verified free events price at zero.
+- Lookups are exact provider/model identities with assessed rates; aliases are never guessed. A host
+  without the estimator, unavailable models, non-token charges and unassessed rates stay unpriced.
+- It is list-price value, not request-date billing or an invoice. Bedrock uses published Standard,
+  global cross-region, US East (N. Virginia) USD per million tokens as a baseline, not actual routing.
+- Snapshots do not keep cache-write lifetime, service mode, region or provenance, so a write with
+  unknown TTL stays unpriced. Classifier/image calls reported inside tool results are not counted.
+- The exporter/importer carries recorded values only; no snapshot migration.
+- `tests/stats/pricing-core.test.ts` runs in the normal suite against the real estimator.
+
 Harness API:
 
 - `src/stats/library.ts` is a Pi-independent barrel for parser, aggregation and snapshot APIs.
@@ -881,3 +953,18 @@ owning process and detached group cleanup. Do not replace these with passing moc
 The stats CLI rebuild test writes to per-test temporary output, never shared `dist/`.
 Packed CLI tests disable lifecycle scripts and launch Node explicitly, including under Bun;
 byte-identical rebuilds verify the declared standalone Node artifact, not Bun's entry resolver.
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits any pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging.
+
+The #932 migration moves no historical bullets: `0.12.0` already released the
+previous `[Unreleased]` entries. The released changelog is unchanged.

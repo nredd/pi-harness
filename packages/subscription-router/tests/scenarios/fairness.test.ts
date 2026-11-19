@@ -1,5 +1,5 @@
 /** Allocation through real Pi prompts, including its persisted physical incumbent. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.ts";
 

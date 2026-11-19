@@ -10,6 +10,8 @@ export interface ComputerUseConfig {
 	desktop_control: boolean;
 	activity_glow: boolean;
 	managed_browser: "helium" | "chrome";
+	/** Dedicated credential-bearing profile. Only the user-global file may opt in. */
+	managed_browser_profile: string | null;
 	/** Bundle ids `act_ui`, `desktop_input` and `observe_ui` refuse (`app_blocked`), on top of `ALWAYS_BLOCKED_BUNDLE_IDS`. */
 	blocked_apps: string[];
 }
@@ -68,6 +70,7 @@ const DEFAULT_CONFIG: ComputerUseConfig = {
 	desktop_control: true,
 	activity_glow: false,
 	managed_browser: "chrome",
+	managed_browser_profile: null,
 	blocked_apps: [...DEFAULT_BLOCKED_APPS],
 };
 
@@ -149,6 +152,10 @@ function readConfigFile(
 			exists: true,
 			values: normalizePartial(parsed),
 		};
+		// Never let a repository opt into a credential-bearing profile.
+		const profile = parsed?.computer_use?.managed_browser_profile ?? parsed?.managed_browser_profile;
+		if (scope === "user" && typeof profile === "string" && profile.trim())
+			out.values = { ...out.values, managed_browser_profile: profile.trim() };
 		const rawList = rawBlockedApps(parsed);
 		if (rawList !== undefined) {
 			const result = parseBundleIdArray(rawList);
@@ -286,6 +293,29 @@ Default: `{{config-default:managed_browser}}`
 
 Selects `"helium"` or `"chrome"` for `launch_browser`. The debugging port is always allocated internally and isn't part of the model-facing contract.
 
+### `managed_browser_profile`
+
+Default: `null` (fresh temporary profile for every launch).
+
+Only the **user-global** config may set this option; project config cannot. Set an absolute path (or `~/...`) to a dedicated, pre-created directory, for example `mkdir -m 700 ~/.pi/computer-use-profile` with `"managed_browser_profile": "~/.pi/computer-use-profile"`. Pi refuses the launch unless the directory:
+
+- is a real directory owned by you with mode `0700`, with no symlink in any path component
+- is outside every Git checkout
+- is not your home directory, a browser's default data directory, a configuration root (`~/.config`, `XDG_CONFIG_HOME`, `CHROME_CONFIG_HOME`), or an ancestor or descendant of those
+- has only ancestors owned by you or root that are not group or world writable, unless sticky
+
+Checks read POSIX owner and mode bits only; extended ACLs are not inspected. Pi repairs nothing and never opens profile contents. Same-UID attackers are out of scope: another process running as you can modify your directories at any time. Native Windows persistent profiles are refused because POSIX modes do not establish an owner-only ACL; temporary profiles remain available.
+
+**SECURITY: persistent mode trusts every local process that can reach Chromium's debugging port, including other UIDs.** CDP uses an unauthenticated loopback TCP listener, not a UID-bound pipe. A local client can discover its websocket through `/json/version`, control pages and request cookies with `Storage.getCookies`. Directory mode `0700` and Pi's lease protect the profile on disk, NOT this live endpoint. Do not enable persistence on shared or untrusted hosts; loopback and a random port do not provide authentication. A UID-bound transport is not implemented.
+
+This directory holds **live credentials**, cookies and browsing history. Never commit, sync or share it. You may sign in manually once, then later launches reuse the profile. Pi does not import a personal browser profile or log in for you. Close other browsers using the directory first.
+
+- Lease: Pi creates a `.pi-computer-use.lock` directory and refuses to launch if one exists.
+- Chromium locks: Pi refuses any `SingletonLock`, `SingletonCookie` or `SingletonSocket` entry, including dangling symlinks, and never removes them or steals a lease.
+- Shutdown: normal shutdown and failed launches stop the browser and release only Pi's own lease; Pi never deletes the profile. If the browser will not stop, shutdown still clears saved state and stored output and shuts down the platform backend before reporting the error. A failed launch keeps its readiness error primary, with a stop failure attached as its cause. If Pi cannot confirm the profile and lease are unchanged, it leaves the lease in place.
+- Exit, crash or kill: on a normal Node `exit` Pi kills the browser and keeps the lease. If Pi itself is killed or crashes, that hook does not run: the browser may keep running, and the lease and Chromium locks remain. Verify that nothing is using the profile, then remove a stale lease with `rmdir <profile>/.pi-computer-use.lock`.
+- Revocation: remove the profile directory to revoke local reuse; server-side sessions may need separate revocation.
+
 ### `headless`
 
 Default: `{{config-default:headless}}`
@@ -368,9 +398,9 @@ On Linux, `launch_browser` launches the managed browser headless (`--headless=ne
 
 `PI_COMPUTER_USE_CDP_PORT` enables Chrome DevTools Protocol support for Chromium-family browsers. Launch the browser with `--remote-debugging-port=<port>` and set this variable to the same port.
 
-Use a dedicated, non-default profile with `--user-data-dir=<directory>`. Chrome 136 and later ignore remote-debugging switches for the default data directory as a security measure. `launch_browser` already creates a private temporary CDP profile for each launch (a fresh owner-only directory under the system temp dir, removed when the browser exits or Pi quits) and binds discovery to a randomly allocated loopback port. An aborted launch waiting behind another managed-browser lifecycle step does not start a browser. Session shutdown waits for admitted launches to enter that lifecycle and stops their managed browser.
+Use a dedicated, non-default profile with `--user-data-dir=<directory>`. Chrome 136 and later ignore remote-debugging switches for the default data directory as a security measure. Unless `managed_browser_profile` is set, `launch_browser` creates a private temporary CDP profile for each launch (a fresh owner-only directory under the system temp dir, removed when the browser exits or Pi quits) and binds discovery to a randomly allocated loopback port. An aborted launch waiting behind another managed-browser lifecycle step does not start a browser. Session shutdown waits for admitted launches to enter that lifecycle and stops their managed browser.
 
-When CDP is active, discovered pages participate in the same root and state system as desktop UI. `launch_browser` configures CDP automatically and returns an observed page state. `navigate_browser` and `evaluate_browser` accept only CDP browser-page states; native browser windows continue to use the normal desktop observe/act tools.
+When CDP is active, discovered pages participate in the same root and state system as desktop UI. `launch_browser` configures CDP automatically and returns an observed page state with the executable path used. Browser observations flag `authentication_required` for obvious login titles, login URL paths or password fields; this heuristic can miss or over-flag and neither proves authentication nor authorizes entering credentials. `navigate_browser` and `evaluate_browser` accept only CDP browser-page states; native browser windows continue to use the normal desktop observe/act tools.
 
 With the variable unset, CDP is inactive.
 PI_DOCS_REFERENCE_END

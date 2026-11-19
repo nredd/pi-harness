@@ -1,14 +1,16 @@
 # Releases
 
-Current core selection: `v1.3.0-nredd.12` at
-`35bcb8dce989a0994679a6e9afee2e84f63b4539`, owner-signed annotated tag object
-`8b2fe34ca7f8800b64ea216496c0807ff0422b0f`. Production `fork-release.yml`
-[44039154327](https://github.com/nredd/pi/actions/runs/44039154327) built, tested, attested and
+Current core selection: `v1.3.0-nredd.13` at
+`a40a2ced6d919edb46b7b640ddc21f095efb6ef9`, owner-signed annotated tag object
+`e858ef4e5df3c877dc4cda98f9fe15d2f88b9afc`. Production `fork-release.yml`
+[44401416484](https://github.com/nredd/pi/actions/runs/44401416484) built, tested, attested and
 published all four tarballs. Every downloaded asset passed `SHA256SUMS` and provenance verification
 for that exact workflow, tag ref and source digest, denying self-hosted runners. Root overrides,
 all native test-host dependencies, the Gitlink, digest guard, personal stack and both runtime
-lock targets move together; no owned npm package version changes.
-The generated [artifact receipt](../releases/2026-11-17-core-nredd.12.json) records the clean
+lock targets move together; no owned npm package version changes. Core adds GPT-6.2 Sol/Astra
+catalog entries (nredd/pi#117 and #124) and removes its stale audit exception. The fork check
+mirror now includes `check:fork-audit`.
+The generated [artifact receipt](../releases/2026-11-18-core-nredd.13.json) records the clean
 selection commit, all four published asset digests and release verification evidence. The previous
 receipt remains historical. Source selection is not stack promotion approval.
 This npm tarball publication does not establish standalone binary #72 or live-install acceptance.
@@ -30,26 +32,44 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 
 ## Changelog fragments
 
-Only `packages/subagents` uses fragments so far; its README defines the closed filename and
-one-bullet grammar. Add a fragment for new changes rather than editing the shared Unreleased
-block. `make check-changelog-fragments` is read-only and part of `make check-scripts`.
+`packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler}` use fragments;
+the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the unchanged
+closed filename and one-bullet grammar. `preset`, `subscription-router` and `computer-use`
+are not enrolled. For enrolled packages, add a fragment for new changes
+rather than editing the shared Unreleased block. `make check-changelog-fragments` is read-only
+and part of `make check-scripts`.
 `make fold-changelog` is an explicit source-maintenance command, never an automatic release step.
-It appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
-Security order and orders new bullets numerically by issue within each category. Existing entries, warning text,
-links and released sections remain byte-for-byte intact; repeated legacy category headings
-remain, with additions going into the last matching category. The partial historical migration
-and its exact retained entries are recorded in the package README. No other package is migrated.
+Of the five newly enrolled packages, only `todo` and `session-kit` ship `CHANGELOG.md`;
+none packs `changes/`. A release cut from `main` without folding ships a changelog missing
+its pending fragments. Run `make fold-changelog` during release prep and commit the result
+before tagging. `todo` currently has six pending fragments: #292, #414, #444, #448, #522 and #918.
 
-The folder validates all inputs before mutation, serializes cooperating folds with
-`packages/subagents/.changelog-fold.lock`, writes and fsyncs a same-directory temporary file,
+The fold appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
+Security order and orders new bullets numerically by issue within each category. Existing
+entries, warning text, links and released sections remain byte-for-byte intact, including unbracketed release headings.
+Only the five newly enrolled packages permit uncategorized bullets, wrapped bullets and prose
+as legacy source, not new fragment syntax. In legacy mode, an unrecognized level-one or
+level-two ATX heading, or a setext underline immediately after a non-blank line, inside
+`[Unreleased]` blocks the fold. `subagents` retains its strict validation. Repeated legacy
+category headings remain, with additions going into the last matching category.
+`---` immediately after a non-blank line is refused as a setext underline; after a blank line it is allowed. Underlines indented one to three spaces are not detected.
+The release matcher still treats any `## [..]` heading, e.g. `## [Notes]`, as a release boundary: the heading check never sees the lines below it, and fragments fold above it, not into a released section.
+Each package README records its partial historical migration and retained entries. Missing issue
+links, wrapped entries and repeated issue/category groups are retained rather than rewritten or
+given invented attribution.
+
+The folder validates every enrolled package before mutation (missing package directories fail
+closed), then serializes each package's cooperating folds with `packages/<package>/.changelog-fold.lock`,
+revalidates that package, writes and fsyncs a same-directory temporary file,
 then atomically replaces the changelog before deleting fragments. A write/replacement failure
 leaves fragments intact. If deletion fails or the process is interrupted after replacement,
 retry: an exact bullet already in its category is consumed without reinsertion. A conflicting
 category or duplicate bullet fails closed. Check the diff before committing. On a killed process,
 verify no fold is still running before manually removing its stale lock directory and retrying.
-The lock is never stolen automatically. This protects normal checkout maintenance, not hostile
-concurrent filesystem mutation or whole-tree power-loss durability. No version, tag, pin,
-publication or activation is implied by a fold.
+The lock is never stolen automatically. Folds are restart-safe per package, not a whole-checkout
+transaction: a later filesystem failure can leave earlier packages folded. This protects normal
+checkout maintenance, not hostile concurrent filesystem mutation or whole-tree power-loss
+durability. No version, tag, pin, publication or activation is implied by a fold.
 
 ## Root override gate
 
@@ -62,10 +82,10 @@ publication or activation is implied by a fold.
 - The tag comes only from `package.json`, never from a Gitlink or an unpublished tag. Any failure exits nonzero before `npm ci`; nothing is skipped.
 - Transient Sigstore init: `gh attestation verify` loads the public-good trust root over TUF on every call. When that fetch fails it exits with `public good verifier is not available (initialization may have failed)` and verified nothing. `release.verify_attestation`, the one path every Python caller (`--verify-root-overrides`, `fetch_release`, the installer, promotion) shares, retries *only* that text (`release.verifier_unavailable`): at most `ATTESTATION_VERIFY_ATTEMPTS` (3) calls, backoff 2s then 4s, each retry logged as a warning with the asset name and attempt. Exhausting them fails with gh's original message. Every other failure (signer, ref, digest, missing attestation, the `GitHub verifier` variant, a timeout) fails closed on the first attempt.
 - `release.py` and `paths.py` are standard library only, so this runs with `PYTHONPATH=release python3` and no `uv sync`.
-- Non-legacy tags need `gh` >= 2.49 with a read-only `GH_TOKEN` (or `gh auth login`). `make install` hides `GH_TOKEN` from `npm ci` and `uv sync`; only the preflight sees it. The current four overrides select non-legacy `.12`, so authenticated attestation verification is required. The preflight downloads the selected assets; unavailable network access fails closed.
+- Non-legacy tags need `gh` >= 2.49 with a read-only `GH_TOKEN` (or `gh auth login`). `make install` hides `GH_TOKEN` from `npm ci` and `uv sync`; only the preflight sees it. The current four overrides select non-legacy `.13`, so authenticated attestation verification is required. The preflight downloads the selected assets; unavailable network access fails closed.
 - Transient download failures: `release.fetch_bytes`, the one public-download path every caller shares (`SHA256SUMS`, release assets, the attestations API, the installer snapshot, promotion assets and the installer's npm graph tarballs, one `runtime_lock.acquire` fetch per unique non-bundled package), retries *only* HTTP 502/503/504/429, a connection reset (including `RemoteDisconnected`) and a socket timeout (`release.fetch_retry_delay`). At most `FETCH_ATTEMPTS` (8) requests, backoff `release.fetch_retry_backoff` 5s, 10s, 20s, 30s, 30s, 30s, 30s, at most 155s of waiting per request, the same window as the root `.npmrc` below. No retry starts past `FETCH_RETRY_DEADLINE_SECONDS` (300s) after the first attempt, so a run of 120s socket timeouts gives up after 3 attempts (~6 min) instead of 8 (~19 min, past the 15 min jobs). 3 attempts over ~6s did not survive a release-CDN 504 in `--verify-root-overrides` (#531). Only a 429's delta-seconds `Retry-After` replaces the backoff (a 5xx keeps the schedule), capped at `FETCH_RETRY_AFTER_CAP_SECONDS` (30s). Each retry is a redacted warning with the URL, reason and attempt, and restarts the request from scratch: no partial body is kept or resumed, and the caller's sha256/sha512 or SRI check of the final bytes stays authoritative. Exhausting the attempts fails with the last attempt's original `Could not fetch '<url>': HTTP 504 ...` diagnostic. Every other status (404, 401/403, other 4xx, 500/501), DNS/TLS/protocol/truncation failure and every digest, size, header or redirect refusal fails on the first attempt.
 - npm's own downloads of the same release URLs (`npm ci` in `make install-owned`, the `owned`, `contracts` and `stack` jobs) retry through the one root `.npmrc`: `fetch-retries=7`, `fetch-retry-factor=2`, `fetch-retry-mintimeout=5000`, `fetch-retry-maxtimeout=30000`, so backoff 5s, 10s, 20s, then 30s, at most 155s of waiting per request (npm's default 2 retries did not survive a CDN 504, and 5 retries over 95s did not survive a ~97s reset, #531). npm reads it from the root and, via the workspace root prefix, from every `packages/*` directory; `test_root_npmrc_bounds_npm_fetch_retries_for_every_workspace` pins the values, checks real npm sees them and that they equal `release.fetch_retry_backoff`. npm still checks each tarball's lockfile `integrity`. `forks/pi`'s own `npm ci` is a separate project and does not read it. On top of that, the `ci.yml` jobs (`owned`, `contracts`, `stack`) also restore the npm cache before their root `npm ci` (`setup-ci-tools`, keyed on the OS, arch and `hashFiles('package-lock.json')`, see [shared setup](../.github/actions/setup-ci-tools/action.yml)), and `publish.yml` `verify` restores the same entry read-only (`actions/cache/restore`; a tag run reads `main`'s cache and never writes one): with a warm cache the core tarballs come from `_cacache` by their lockfile `integrity` and no release URL is fetched. A cached tarball that fails its `integrity` is not used; npm refetches it, so the check is exactly as strict as an uncached install.
-- `test_root_overrides_stay_tied_to_the_attested_core_release` binds the current `.12` URLs, published SHA-256 values and lockfile SHA-512 values to that preflight contract. The legacy exception set remains unchanged. A new pin needs published `SHA256SUMS`, attestations and the matching guard update, not just a version bump.
+- `test_root_overrides_stay_tied_to_the_attested_core_release` binds the current `.13` URLs, published SHA-256 values and lockfile SHA-512 values to that preflight contract. The legacy exception set remains unchanged. A new pin needs published `SHA256SUMS`, attestations and the matching guard update, not just a version bump.
 - Callers: `make install-owned` (so `make install`), the `owned` and `contracts` CI jobs, the `stack` job (before `npm ci`), `publish.yml` verify, including the WSL2 cells of the shared CI matrices. The `forks.yml`/`stack` fork-local `npm ci` run in `forks/pi` with the fork's own lock and are not root installs.
 
 Historical release receipts follow. They preserve their dated Gitlink and `forks.yml` provenance; current package selection uses the imported workspaces and published npm packages.
@@ -105,17 +125,30 @@ owner's policy decision. Publication is not live-provider acceptance or activati
 
 ## Combined stack selection
 
-Current source now pins registry sampler `0.2.1` in both dev-tools and session-kit (#557).
-This consumer dependency update does not republish either plugin, change the selected stack or activate
-an install. The selection below describes the already-published artifacts, not current source.
+The current personal stack selects `@nredd/pi-preset@0.5.0` from
+`f99092dc985b6a93580999aafd5d3136772a04f2` ([publish run](https://github.com/nredd/pi-harness/actions/runs/44454628627))
+and `@nredd/pi-session-kit@0.12.0` from
+`e10fea0e27794ace410fa7c390b51aecfd73b85a` ([publish run](https://github.com/nredd/pi-harness/actions/runs/44487372796)).
+The preset stays footer-only: `src/index.ts` replaces the old entry path and the skill, prompt and
+theme filters stay empty. Session-kit ships `dist/pi-stats-export.mjs`; selecting the extension does
+not repin the separate dotfiles exporter. The [artifact receipt](../releases/2026-11-19-personal-preset-session-kit.json)
+records the downloaded registry bytes. On both targets, session-kit `0.12.0` brings its own nested
+`@nredd/pi-resource-sampler@0.2.1` alongside dev-tools' top-level `0.2.0`, and the regenerated
+lock updates `express-rate-limit` from `8.7.4` to `8.7.5`. Core stays at `v1.3.0-nredd.13`.
+This is source selection only;
+[frozen verification and promotion](../README.md#frozen-release-verification), dotfiles adoption and
+live activation are separate.
 
-The 2026-11-11 selection in `release/stacks/personal.json` uses core
-`v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the packages below,
-republished with fresh provenance after the history purge (#638). Plan-mode and subagents move
-together. The sampler stays an exact `0.2.0` registry dependency of dev-tools and session-kit
-(`0.2.1` is published but not selected), not another Pi extension. The footer-only preset
-filters and unchanged third-party sources remain in the stack manifest;
-`release/stacks/runtime-locks.json` is regenerated for this selection.
+The table below is historical. The registry sampler `0.2.1` bump in dev-tools and session-kit (#557)
+did not itself republish either plugin or change the stack.
+
+On 2026-11-11, the selection in `release/stacks/personal.json` used core
+`v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the extension versions
+listed below, republished with fresh provenance after the history purge (#638). Plan-mode and
+subagents moved together. Dev-tools and session-kit both depended on `@nredd/pi-resource-sampler`
+at exactly `0.2.0`; `0.2.1` had been published but was not used by that selection. The sampler
+was not a Pi extension. The stack kept the footer-only preset filters and the same third-party
+sources, and `release/stacks/runtime-locks.json` was regenerated for that selection.
 
 | Package | Version | Publication source | Successful `publish.yml` run |
 | --- | --- | --- | --- |

@@ -406,6 +406,23 @@ A failed agent whose session survived is resumable: a provider or credential err
 | `Explore` | read, grep, find, ls | `@cheap` | `replace` (standalone) | Fast codebase exploration (read-only); an unbound/unavailable tier visibly inherits the parent by default, or refuses under `modelResolution` `error` |
 | `Plan` | read, grep, find, ls | inherit | `replace` (standalone) | Software architect for implementation planning (read-only) |
 
+Built-in `Explore` has a 12-turn soft cap. Choose `quick` for one targeted lookup,
+`medium` (default) for nearby references, or `very thorough` for multiple locations
+and naming conventions. Breadth changes what it looks for, not the turn budget.
+`Explore` is prompted to give `path:line` findings in at most 300 words unless asked
+for more, and mark unfinished searches or truncated reports `INCOMPLETE`.
+
+In the `Agent` tool, built-in `Explore` uses its own cap: caller `max_turns` values
+of `1`, `3`, `40` and `99` all resolve to `12`. The project `defaultMaxTurns` is a
+fallback, so even a default of `9` does not lower the agent's cap. Scheduled jobs
+and `subagents:rpc:spawn` still use an explicit turn ceiling (`max_turns` for jobs,
+`maxTurns` for RPC) ahead of the agent's cap.
+
+Turn 12 steers `Explore` to wrap up. The default five grace turns allow up to 17
+ordinary turns, followed, if needed, by one tool-free final-report turn (18 total).
+`graceTurns` changes that allowance globally. Replacing the built-in definition also
+replaces these defaults. `Plan`, implementation agents and review roles are unchanged.
+
 The `general-purpose` agent is a **parent twin** — it receives the parent's entire system prompt plus a sub-agent context bridge, so it follows the same rules the parent does. Explore and Plan use standalone prompts tailored to their read-only roles.
 
 Default agents can be **ejected** (`/agents` → select agent → Eject) to export them as `.md` files for customization, **overridden** by creating a `.md` file with the same name (e.g. `.pi/agents/general-purpose.md`), or **disabled** per-project with `enabled: false` frontmatter.
@@ -476,6 +493,7 @@ All fields are optional — sensible defaults for everything.
 | `model` | inherit parent | Default exact `provider/modelId`, [tier](#model-tiers) such as `@cheap`, or [legacy alias](#machine-local-model-aliases). An explicit `Agent({ model })` selection overrides this default. Configured values are never fuzzy matched |
 | `thinking` | inherit | Default thinking level: off, minimal, low, medium, high, xhigh, max — an explicit `Agent({ thinking })` overrides it for that run. Actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
+| `notification_result_chars` | global cap | Per-type completion-notice result cap, reduced further by the global cap and batch share. Nonnegative integer; `0` carries only the truncation pointer for a nonempty result. Does not change `get_subagent_result` |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
 | `output_transcript` | `true` (or `subagents.json` `outputTranscript`) | Write this subagent's `.output` transcript; when set, overrides the `subagents.json` `outputTranscript` default. Set `false` to write no transcript file or path. Governs only the transcript — independent of `persist_session`, `isolation: worktree`, and `memory:` |
 | `session_dir` | pi default | Optional session directory when `persist_session: true`; omitted uses pi's normal session location, and relative paths resolve from the agent cwd. A session outside the parent's session directory (this override, or `isolation: worktree`) is listed separately, so it shows as a root instead of nesting |
@@ -661,9 +679,9 @@ Launch a sub-agent.
 | `subagent_type` | string | yes | Agent type (built-in or custom) |
 | `model` | string | no | Model — `provider/modelId`, [machine-local alias](#machine-local-model-aliases), or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
-| `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
+| `max_turns` | number | no | Soft turn cap. The agent definition takes precedence; if neither is set, the project default applies. |
 | `run_in_background` | boolean | no | Defaults to `true`; `false` blocks and returns the result inline, until [`ctrl+b`](#sending-a-foreground-agent-to-the-background) hands it to the background |
-| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and this call's `max_turns` applied. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
+| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and this call's `max_turns` applied unless the agent definition sets one. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
 | `isolated` | boolean | no | No extension/MCP tools |
 | `isolation` | `"off"` \| `"worktree"` | no | `worktree` runs in an isolated git worktree; `off` (the default) does not. Absent from the schema entirely when `worktreeIsolation: false` |
 | `cwd` | string | no | Working directory for the agent: absolute, `~/`-prefixed, or relative to the session cwd. Default: the session cwd. With `isolation: "worktree"`, the worktree comes from the repo containing it; see [Worktree Isolation](#worktree-isolation). Not combinable with `schedule` |
@@ -884,6 +902,12 @@ The cap counts the raw result characters, before XML escaping (`<` is one char, 
 
 **Trust model:** the `<result>` is the subagent's output, and a subagent reads files, web pages and tool output written by anyone, so the result can carry text crafted to look like instructions. It is XML-escaped, so it cannot close its own `<result>` or forge another notice's tags, and a `<result-note>` line before it tells the parent to evaluate it as data, not follow it. That is framing, not a sandbox: a full result puts more third-party text in the parent's context than a 500-char preview did, so treat agents that read untrusted input accordingly, or set `notificationResultChars: 0`.
 
+Built-in `Explore` carries at most 4,000 raw result characters per notice. An
+agent file can set `notification_result_chars` for its type; the type cap can only
+reduce the global cap or batch share. A clipped notice is an incomplete handoff:
+it keeps the head and tail and points to the rest. Fetch the full result before
+treating it as complete. `get_subagent_result` and foreground results remain whole.
+
 Only the model-facing `<result>` grows; the rendered notification box keeps its 500-char preview. `notificationResultChars: 0` restores the old result: a 500-char preview (300 per `group` member) with a pointer to `get_subagent_result`, and nothing is marked read. The `<result-note>` line stays in either mode. Set it from `/agents` → Settings → Notice result chars (0 to 1000000).
 
 ## Model tiers
@@ -937,6 +961,41 @@ Static tiers choose the first credentialed, admitted member and retain skipped m
 The `Agent` tool guideline and its `model` parameter list the configured tier keys, e.g. `Configured tiers: @cheap, @deep, @default, @frontier, @review. Prefer a tier over a model id.`, never their members. With no tiers configured they keep the generic tier / `provider/modelId` / fuzzy-name text.
 
 Results disclose `Model: @cheap -> provider/id via router/cheap` before the first response using admission's `resolvedModel`, then follow the answering model. Mid-run changes say `switched ... within tier`. Shared leading `[@cheap]` flags identify healthy tiers neutrally; warning flags and grouped alert counts cover only actual switches, parent inheritance, unavailable or unmapped outcomes. Structured `modelTier` outcomes survive records, events, transcripts, eviction and workflow journals. Reopened evicted sessions select/admit anew and retain old outcomes separately as `previousModelTier` and `previousModelFallback`; live resumes keep the existing session's selection. Scheduled tier jobs store `@cheap`, not today's physical pick, and resolve it again when they fire.
+
+Fresh top-level `Agent` results (background start, foreground completion and foreground failure) and fresh nested inline `Agent` results name the definition tier if `agentModels["*"]` overrides it. These results and background completion notices show the winning tier outcome, or the resolved identity for a literal model. Notices, fetched results and resumes do not replay the shadow note. A quota refusal is not a start and does not name the shadowed setting. Scheduled and quota-parked results can preview selection, but do not claim a model started.
+
+Child transcripts record tier outcome and fallback entries, not a separate selection note for literal models; assistant entries report the answering model. Fleet rows show the tier marker independently of **Show model**; enable **Show model** to see the selected model label for tiers and literals alike. Use **Explain model** for the full configuration precedence, including any shadowed tier.
+
+### Model disclosure inventory
+
+The `discloses … across model-tier surfaces` cases in `tests/model-selection-paths.test.ts` exercise live tool and renderer output with a stubbed child. The settings assertions use `explainModel`, not the menu; the menu has no per-call override.
+
+| Surface | Unmapped | Mapped | Unavailable | Wildcard over definition tier | Explicit parameter |
+| --- | --- | --- | --- | --- | --- |
+| Top-level `Agent` background start (`backgroundResult`, `fallbackNoteFor`) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Top-level `Agent` foreground completion | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Top-level `Agent` foreground failure after dispatch | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Background completion notice text (`formatTaskNotification`) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Foreground-to-background handoff (`backgroundResult`) | decision: Same `backgroundResult` as background start; handoff adds no model logic. | decision: Same `backgroundResult` as background start; handoff adds no model logic. | decision: Same `backgroundResult` as background start; handoff adds no model logic. | decision: Same `backgroundResult` as background start; handoff adds no model logic. | decision: Same `backgroundResult` as background start; handoff adds no model logic. |
+| Child transcript (`appendModelTierEntry`, `appendModelFallbackEntry`) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Fleet row (`ui/fleet-list.ts`) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Expanded `Agent` result row (`ui/agent-row.ts`, `detailBaseFor`) | decision: Uses the tested tier note from record or result details. | decision: Uses the tested tier note from record or result details. | decision: Uses the tested tier note from record or result details. | decision: Shows model label, not shadowed configuration. | decision: Shows model label, not a literal identity note. |
+| Notification view (`ui/notification-view.ts`, notice details) | decision: Projects the same tier marker as the fleet; notice text is tested separately. | decision: Projects the same tier marker as the fleet; notice text is tested separately. | decision: Projects the same tier marker as the fleet; notice text is tested separately. | decision: Projects the same tier marker as the fleet; notice text is tested separately. | decision: Projects the same tier marker as the fleet; notice text is tested separately. |
+| Workflow card/dialog and host result/progress (`workflow/host.ts`) | decision: Projects recorded tier/fallback only; dispatch-specific identity and shadow text do not belong to workflow progress. | decision: Projects recorded tier/fallback only; dispatch-specific identity and shadow text do not belong to workflow progress. | decision: Projects recorded tier/fallback only; dispatch-specific identity and shadow text do not belong to workflow progress. | decision: Projects recorded tier/fallback only; dispatch-specific identity and shadow text do not belong to workflow progress. | decision: Projects recorded tier/fallback only; dispatch-specific identity and shadow text do not belong to workflow progress. |
+| Fresh nested `Agent` inline result (`formatRecord`) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+| Nested result fetch or resume (`formatRecord`) | decision: Shares the inline record formatter; neither operation passes a fresh definition. | decision: Shares the inline record formatter; neither operation passes a fresh definition. | decision: Shares the inline record formatter; neither operation passes a fresh definition. | decision: Shares the inline record formatter; neither operation passes a fresh definition. | decision: Shares the inline record formatter; neither operation passes a fresh definition. |
+| Top-level `get_subagent_result` and evicted/reaped result (`describeEvicted`) | decision: Reads retained tier/fallback only; shares the tested tier text. | decision: Reads retained tier/fallback only; shares the tested tier text. | decision: Reads retained tier/fallback only; shares the tested tier text. | decision: Does not replay what the original call overrode. | decision: Does not add a literal identity note. |
+| Lifecycle event fields (`fallbackFields`) | decision: Structured tier/fallback projection only; no independent identity or shadow text. | decision: Structured tier/fallback projection only; no independent identity or shadow text. | decision: Structured tier/fallback projection only; no independent identity or shadow text. | decision: Structured tier/fallback projection only; no independent identity or shadow text. | decision: Structured tier/fallback projection only; no independent identity or shadow text. |
+| Quota-blocked/not-started (top-level refusal and manager startup throw) | tested: `leads the refusal with the tier note` | decision: Refusal reports the tier outcome and quota, not an answering model. | decision: Same refusal prefix as unmapped; no child ran. | decision: Refusal reports the blocker, not a shadowed definition. | decision: No child ran, so no literal identity claim. |
+| Top-level resume (`resumeNoteFor`, background and foreground) | decision: Reuses the stored tier or identity; ignores fresh configuration and does not replay shadow text. | decision: Reuses the stored tier or identity; ignores fresh configuration and does not replay shadow text. | decision: Reuses the stored tier or identity; ignores fresh configuration and does not replay shadow text. | decision: Reuses the stored tier or identity; ignores fresh configuration and does not replay shadow text. | decision: Reuses the stored tier or identity; ignores fresh configuration and does not replay shadow text. |
+| Scheduled and quota-parked acknowledgments (`fallbackNoteFor(undefined)`) | decision: Preview only: shares the tier formatter, claims no run identity or shadow, and reselects when fired. | decision: Preview only: shares the tier formatter, claims no run identity or shadow, and reselects when fired. | decision: Preview only: shares the tier formatter, claims no run identity or shadow, and reselects when fired. | decision: Preview only: shares the tier formatter, claims no run identity or shadow, and reselects when fired. | decision: Preview only: shares the tier formatter, claims no run identity or shadow, and reselects when fired. |
+| Settings (`explainModel`, used by **Explain model**) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
+
+Precedence edges:
+
+- `decision:` A wildcard over a literal definition does not get the tier-specific dispatch note. `explainModel` shows the shadowed literal without treating it as a tier.
+- `decision:` A wildcard identical to the definition after trimming does not get a shadow note. Equality is case-sensitive: tier names are case-sensitive, and whitespace alone does not make a different model request.
+- `tested:` `discloses explicit parameter across model-tier surfaces` checks that the explicit parameter beats both the definition tier and wildcard without a shadow note. `explainModel` still lists both shadowed settings.
 
 ### Effective-model explanation
 
@@ -2319,7 +2378,7 @@ Formatting and linting use the root `biome.json`. Four scoped rules retain the f
 
 `npm run typecheck` includes all TypeScript tests and fixtures with unchecked indexed access and erasable syntax enforced. The JavaScript build entry opts into TypeScript checking too. Indexed fixture lookups make their existing setup/bounds assumptions explicit; malformed-input probes retain their original runtime inputs. The recording hook map deliberately erases SDK event signatures because it stores every hook and wiring probes pass only the fields that hook reads. Real-host suites retain the complete SDK boundary.
 
-`npm run bench` retains `JITI_FS_CACHE=false vitest bench`; append `-- --run` for a bounded, non-watch run. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. `npm run bench:ab -- <ref>` retains its existing command through the moved `tests/fixtures/ab.mjs`; its existing baseline-comparison machinery is not redesigned here. The inherited `bench:ab` script-name layout waiver is retained to preserve that entry point; all structural package waivers are removed.
+`npm run bench` runs Vitest benchmarks through the shared temp sandbox without replacing the operator home; append `-- --run` for a bounded, non-watch run. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. `npm run bench:ab -- <ref>` retains its existing command through the moved `tests/fixtures/ab.mjs`; its existing baseline-comparison machinery is not redesigned here. The inherited `bench:ab` script-name layout waiver is retained to preserve that entry point; all structural package waivers are removed.
 
 `prepublishOnly` is removed because publishing is owned by the monorepo release workflow, not a package-local shortcut: `scripts/release_descriptors.py` runs this workspace's `check`, and `scripts/npm_release.py` packs once and exercises those bytes through stock Pi before `.github/workflows/publish.yml` publishes the verified tarball. `prepack` still builds local tarballs. Use the release workflow, not direct `npm publish`, for publication.
 
@@ -2344,7 +2403,9 @@ The initial migration moves 49 exact historical bullets. Eighteen bullets remain
 `[Unreleased]`: the repeated issue/category groups `330.fixed` (five), `436.fixed` (two),
 `548.fixed` (two), `264.fixed` (two), six unattributed bullets and the PR-only `#196` bullet.
 The nonbullet `#900` breaking warning also remains verbatim. No historical issue IDs were
-invented, and released sections are untouched. Other packages are not migrated yet.
+invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode
+and resource-sampler now use the same fragment contract; their READMEs record retained legacy
+entries. Preset, subscription-router and computer-use remain outside this migration.
 
 ### Contributing
 
