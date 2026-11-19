@@ -369,9 +369,11 @@ def test_fresh_install_matches_the_promotion_and_reruns_cleanly(
     # derived through `package_declarations`, so a regression in that helper cannot hide itself.
     preset = next(source for source in sources if source.startswith("npm:@nredd/pi-preset@"))
     computer_use = next(source for source in sources if source.startswith("npm:@nredd/pi-computer-use@"))
+    # Installer CI can still target a promotion that predates the entry move.
+    footer = "extensions/expanded-footer.ts" if preset == "npm:@nredd/pi-preset@0.4.0" else "src/index.ts"
     assert {
         "source": preset,
-        "extensions": ["extensions/expanded-footer.ts"],
+        "extensions": [footer],
         "skills": [],
         "prompts": [],
         "themes": [],

@@ -125,9 +125,19 @@ owner's policy decision. Publication is not live-provider acceptance or activati
 
 ## Combined stack selection
 
-Current source now pins registry sampler `0.2.1` in both dev-tools and session-kit (#557).
-This consumer dependency update does not republish either plugin, change the selected stack or activate
-an install. The selection below describes the already-published artifacts, not current source.
+The current personal stack selects `@nredd/pi-preset@0.5.0` from
+`f99092dc985b6a93580999aafd5d3136772a04f2` ([publish run](https://github.com/nredd/pi-harness/actions/runs/44454628627))
+and `@nredd/pi-session-kit@0.12.0` from
+`e10fea0e27794ace410fa7c390b51aecfd73b85a` ([publish run](https://github.com/nredd/pi-harness/actions/runs/44487372796)).
+The preset stays footer-only: `src/index.ts` replaces the old entry path and the skill, prompt and
+theme filters stay empty. Session-kit ships `dist/pi-stats-export.mjs`; selecting the extension does
+not repin the separate dotfiles exporter. The [artifact receipt](../releases/2026-11-19-personal-preset-session-kit.json)
+records the downloaded registry bytes. Core stays at `v1.3.0-nredd.13`. This is source selection only;
+[frozen verification and promotion](../README.md#frozen-release-verification), dotfiles adoption and
+live activation are separate.
+
+The table below is historical. The registry sampler `0.2.1` bump in dev-tools and session-kit (#557)
+did not itself republish either plugin or change the stack.
 
 The 2026-11-11 selection in `release/stacks/personal.json` uses core
 `v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the packages below,
