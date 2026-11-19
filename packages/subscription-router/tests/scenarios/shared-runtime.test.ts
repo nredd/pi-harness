@@ -3,8 +3,9 @@
  * it, so the registered route belongs to the last session that loaded. Real sessions on one
  * real runtime; only quota is a double.
  */
-import { createHarness, fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+
 import { deferred } from "@nredd/pi-test-lib/deferred";
+import { createHarness, fauxAssistantMessage, type Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSubscriptionRouter } from "../../src/index.ts";
 import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.ts";

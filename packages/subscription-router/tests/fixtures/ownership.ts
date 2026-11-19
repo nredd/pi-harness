@@ -1,6 +1,7 @@
 /** Shared real-session barrier for the router ownership scenarios. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+
 import { deferred } from "@nredd/pi-test-lib/deferred";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { expect } from "vitest";
 import { CachedUsage, Clock, prompt, startRouter } from "./router.ts";
 
