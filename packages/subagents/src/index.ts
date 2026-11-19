@@ -20,6 +20,7 @@ import {
 	type ExtensionContext,
 	type ExtensionFactory,
 	getSettingsListTheme,
+	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
@@ -56,6 +57,7 @@ import {
 } from "./agent-manager.ts";
 import { rosterJson } from "./agent-roster.ts";
 import {
+	childSessionDir,
 	getAgentConversation,
 	getDefaultMaxTurns,
 	getGraceTurns,
@@ -183,6 +185,7 @@ import {
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
 import { savedAgentNote } from "./saved-agent-record.ts";
+import { checkSavedChild } from "./saved-child-session.ts";
 import { SubagentScheduler } from "./schedule.ts";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
@@ -1017,7 +1020,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		};
 	}
 
-	function saveRunningSession(record: AgentRecord) {
+	function savePersistedRun(record: AgentRecord) {
 		if (!isTopLevelAgent(record) || !record.sessionFile || detachedSessionFile !== undefined) return;
 		// One entry commits both the new id and its predecessor, before the next prompt.
 		pi.appendEntry("subagents:record", historyRecord(record));
@@ -1185,7 +1188,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		(record) => {
 			if (!isTopLevelAgent(record)) return;
 			// A live resume already has a session; a fresh spawn journals it on creation.
-			saveRunningSession(record);
+			savePersistedRun(record);
 			// Agent-tool spawns refresh these surfaces in their tool handler, but RPC
 			// and scheduler spawns enter through the manager directly.
 			if (currentCtx?.hasUI) {
@@ -1286,15 +1289,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				{ deliverAs: "nextTurn" },
 			);
 		},
-		saveRunningSession,
+		savePersistedRun,
+		savePersistedRun,
 	);
 
 	// A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
 	// that keys by handle read this manager's newer agent and the survivor as one.
-	manager.reservedHandles = () =>
-		listAllRunningDetached().flatMap(({ agent }) =>
-			[agent.record.handle, agent.record.alias].filter((h): h is string => !!h),
-		);
+	manager.reservedHandles = (excludeId) =>
+		listAllRunningDetached()
+			.filter(({ agent }) => agent.record.id !== excludeId)
+			.flatMap(({ agent }) => [agent.record.handle, agent.record.alias].filter((h): h is string => !!h));
 
 	// Expose manager via Symbol.for() global registry for cross-package access.
 	// Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -1392,6 +1396,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	 * not an id at all. Only live records: a tombstone has nothing to steer and
 	 * no result to read. Callers still enforce the nested-ownership rejection.
 	 */
+	const liveAgentById = (id: string) =>
+		manager.getRecord(id) ?? listAllRunningDetached().find(({ agent }) => agent.record.id === id)?.agent.record;
+
 	const resolveAgentRef = (ref: string): AgentRecord | undefined => {
 		const byId = manager.getRecord(ref);
 		if (byId) return byId;
@@ -1451,6 +1458,25 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			// extension keeps working if e.g. .pi/ is unwritable.
 			console.warn("[pi-subagents] Failed to start scheduler:", err);
 		}
+	}
+
+	function checkSavedSession(ctx: ExtensionContext, type: string, file: string, status: string) {
+		const home = options.homeDir;
+		const agentDir = resolveAgentDir(home);
+		const settings = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: isProjectTrusted() });
+		return checkSavedChild(
+			file,
+			childSessionDir(
+				getAgentConfig(type)?.sessionDir,
+				process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.(),
+				ctx.cwd,
+				agentDir,
+				home,
+			),
+			ctx.sessionManager.getSessionFile(),
+			status,
+			Date.now(),
+		);
 	}
 
 	// Capture ctx from session_start for RPC spawn handler + start the scheduler.
@@ -1533,10 +1559,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			}
 		}
 		for (const note of saved.values()) {
-			if (resolveAgentRef(note.id) || manager.getEvictedNote(note.id)) continue;
+			if (liveAgentById(note.id) || manager.getEvictedNote(note.id)) continue;
 			manager.rememberEvicted(note);
-			if (manager.latestId(note.id) === note.id && note.sessionFile && existsSync(note.sessionFile)) {
-				manager.rememberTombstone({ ...note, sessionFile: note.sessionFile });
+			if (manager.latestId(note.id) === note.id && note.sessionFile) {
+				const checked = checkSavedSession(ctx, note.type, note.sessionFile, note.status);
+				if ("file" in checked) {
+					manager.rememberTombstone({ ...note, sessionFile: checked.file });
+				} else {
+					note.reopenRefusal = checked.refusal;
+					note.possiblyRunning = checked.recent;
+				}
 			}
 		}
 		// Retention (#900), off the startup path: whatever this session's records and
@@ -2252,6 +2284,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		prompt: string,
 		opts: { maxTurns?: number } = {},
 	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
+		const saved = manager.getEvictedNote(entry.id);
+		if (saved?.fromSavedSession) {
+			const checked = checkSavedSession(ctx, entry.type, saved.sessionFile!, saved.status);
+			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
+			entry = { ...entry, sessionFile: checked.file };
+		}
 		// Checked here rather than left to SessionManager.open: that runs inside
 		// runAgent, whose rejection lands on the record as an agent error, not in
 		// the catch below. A `/new` in another pi window or a manual delete makes
@@ -3086,7 +3124,7 @@ Terse command-style prompts produce shallow, generic work.
 				const latest = manager.latestId(params.resume);
 				const continued =
 					latest === params.resume ? "" : `Agent ${params.resume} continues as ${latest}; use that id from now on.\n`;
-				const existing = resolveAgentRef(latest);
+				const existing = liveAgentById(latest);
 				if (!existing) {
 					// Evicted by the retention sweep, but a persisted conversation is
 					// still on disk: reopen it, as `@handle` does.
@@ -3099,9 +3137,7 @@ Terse command-style prompts produce shallow, generic work.
 							: note?.nameTaken
 								? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
 								: note?.fromSavedSession
-									? note.sessionFile
-										? `only historical metadata is available; the saved session could not be reopened: ${note.sessionFile}`
-										: "only historical metadata is available; reopen the recorded session manually."
+									? `only historical metadata is available; ${note.reopenRefusal ?? "reopen the recorded session manually."}`
 									: "no saved session is left to reopen.";
 						const why = note
 							? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}`
@@ -4110,12 +4146,12 @@ Terse command-style prompts produce shallow, generic work.
 			}),
 			execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
 				const latest = manager.latestId(params.agent_id);
-				const record = resolveAgentRef(latest);
+				const record = liveAgentById(latest) ?? resolveAgentRef(latest);
 				if (!record) {
 					const note = manager.getEvictedNote(latest);
 					return note ? textResult(agentNotFound(latest, true)) : errorResult(agentNotFound(latest));
 				}
-				if (!isTopLevelAgent(record)) return errorResult(agentNotFound(params.agent_id));
+				if (!isTopLevelAgent(record)) return errorResult(agentNotFound(latest));
 
 				// Wait for completion if requested. Cancellation stops only this tool
 				// call; the background agent keeps running and remains unconsumed so its

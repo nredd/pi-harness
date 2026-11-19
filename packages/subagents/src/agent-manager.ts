@@ -237,6 +237,8 @@ export interface EvictedNote {
 	evictedAfterMin: number;
 	/** The diagnostic came from the saved parent, not a retention sweep. */
 	fromSavedSession?: true;
+	reopenRefusal?: string;
+	possiblyRunning?: true;
 	/** The `.output` transcript when one was written, else the session file. */
 	transcript?: string;
 	/** The child session path from saved history, even when no longer on disk. */
@@ -290,11 +292,12 @@ export function describeEvicted(note: EvictedNote): string {
 	const disclosure = modelSelectionNote(note);
 	const fallback = disclosure ? `\n${disclosure}` : "";
 	const state = note.fromSavedSession
-		? note.status === "running"
+		? note.status === "running" && !note.possiblyRunning
 			? "interrupted by a process restart (no live registry record)"
 			: `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
 		: `${note.status}, evicted after ${note.evictedAfterMin} min`;
-	return `Agent "${note.id}" (${note.description}) ${state}${where}${fallback}`;
+	const caution = note.possiblyRunning ? `; ${note.reopenRefusal}` : "";
+	return `Agent "${note.id}" (${note.description}) ${state}${where}${caution}${fallback}`;
 }
 
 /**
@@ -713,6 +716,7 @@ export class AgentManager {
 	private onComplete?: OnAgentComplete;
 	private onStart?: OnAgentStart;
 	private readonly onSessionCreated?: (record: AgentRecord) => void;
+	private readonly onForegroundResumeSettled?: (record: AgentRecord) => void;
 	private onQueuedStop?: OnAgentQueuedStop;
 	private onReaped?: OnAgentReaped;
 	private onCompact?: OnAgentCompact;
@@ -789,6 +793,7 @@ export class AgentManager {
 		onQueuedStop?: OnAgentQueuedStop,
 		onReaped?: OnAgentReaped,
 		onSessionCreated?: (record: AgentRecord) => void,
+		onForegroundResumeSettled?: (record: AgentRecord) => void,
 	) {
 		this.clock = clock;
 		this.homeDir = homeDir;
@@ -796,6 +801,7 @@ export class AgentManager {
 		this.onComplete = onComplete;
 		this.onStart = onStart;
 		this.onSessionCreated = onSessionCreated;
+		this.onForegroundResumeSettled = onForegroundResumeSettled;
 		this.onQueuedStop = guardObserver("queued stop", onQueuedStop);
 		this.onReaped = guardObserver("reaped", onReaped);
 		this.onCompact = guardObserver("compaction", onCompact);
@@ -1933,6 +1939,7 @@ export class AgentManager {
 		try {
 			// Positive evidence for the reap notice: only a live signal means the prompt runs.
 			record.ranThisRun = record.status === "running";
+			if (record.ranThisRun) this.onSessionCreated?.(record);
 			this.settleOutcome(
 				record,
 				await resumeAgent(record.session, prompt, {
@@ -1972,6 +1979,7 @@ export class AgentManager {
 
 		this.releaseLease(record);
 		this.drainQueue();
+		this.onForegroundResumeSettled?.(record);
 		return record;
 	}
 
@@ -2153,7 +2161,7 @@ export class AgentManager {
 	 * Handles held outside this manager, e.g. by live survivors of an orphaned one, which a fresh
 	 * spawn must not reuse: a listener keys lifecycle events by handle, so a twin would mix the two up.
 	 */
-	reservedHandles: () => Iterable<string> = () => [];
+	reservedHandles: (excludeId?: string) => Iterable<string> = () => [];
 
 	/** Handles already in use, so a fresh spawn can pick an unclaimed one. */
 	private takenHandles(): Set<string> {
@@ -2319,7 +2327,7 @@ export class AgentManager {
 	 */
 	rememberTombstone(entry: AgentTombstone): void {
 		const names = [entry.handle, ...(entry.alias ? [entry.alias] : [])];
-		const reserved = new Set<string>(this.reservedHandles());
+		const reserved = new Set<string>(this.reservedHandles(entry.id));
 		const owns = (own: { id: string; handle?: string; alias?: string }, name: string) =>
 			own.id !== entry.id && (name === own.handle || name === own.alias);
 		const taken = names.find(

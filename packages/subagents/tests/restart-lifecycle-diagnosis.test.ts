@@ -1,6 +1,15 @@
 /** Synthetic #330 diagnosis: distinguish activation reload, terminal stop and process-state loss. */
-import { existsSync, readFileSync, statSync, unlinkSync, utimesSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	statSync,
+	symlinkSync,
+	unlinkSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
@@ -60,7 +69,7 @@ it("reports unknown ids as errors to the model and to a nested tools caller", as
 	expect(outcomes(h, "settled_probe")[0]?.text).toBe("rejected");
 });
 
-it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
+it.each(["Agent", "steer_subagent", "deleted", "recent", "chain"] as const)(
 	"recovers a saved running child after a crash: %s",
 	{ timeout: 30_000 },
 	async (mode) => {
@@ -112,6 +121,10 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 			expect(lost.status).toBe("running");
 			expect(existsSync(childFile)).toBe(true);
 			if (mode === "deleted") unlinkSync(childFile);
+			else if (mode !== "recent") {
+				const stale = new Date(Date.now() - 121_000);
+				utimesSync(childFile, stale, stale);
+			}
 			if (mode === "chain") {
 				const row = { id, type: lost.type, description: lost.description, status: "running", sessionFile: childFile };
 				// An update is not another edge, and a different conversation cannot
@@ -147,17 +160,22 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 			const diagnostic = outcomes(reopened, "get_subagent_result").at(-1);
 			expect(diagnostic?.isError).toBe(false);
 			expect(diagnostic?.text).toContain(`Agent "${id}"`);
-			expect(diagnostic?.text).toContain("interrupted by a process restart");
+			expect(diagnostic?.text).toContain(
+				mode === "recent" ? "may still be running in another process" : "interrupted by a process restart",
+			);
 			expect(diagnostic?.text).toContain(`transcript: ${childFile}`);
 			expect(child.state.callCount).toBe(mode === "chain" ? 2 : 1);
 
-			if (mode === "deleted") {
+			if (mode === "deleted" || mode === "recent") {
+				if (mode === "recent") expect(diagnostic?.text).not.toContain("interrupted");
 				await call(reopened, resume(id), steer(id));
 				for (const tool of ["Agent", "steer_subagent"]) {
 					const failure = outcomes(reopened, tool).at(-1);
 					expect(failure?.isError).toBe(true);
 					expect(failure?.text).toContain("only historical metadata is available");
 					expect(failure?.text.split("\n")[0]).toContain(childFile);
+					if (mode === "recent")
+						expect(failure?.text).toMatch(/may still be running in another process \(last write \d+s ago\)/);
 				}
 				expect(child.state.callCount).toBe(1);
 				return;
@@ -198,6 +216,164 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 		}
 	},
 );
+
+it.each([false, true])("checks fork ownership with a live survivor: %s", { timeout: 30_000 }, async (live) => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const hold = fixture.heldTool();
+	const child = fixture.physical("kid", "child", [
+		live ? toolCalls({ name: "hold", args: {} }) : answer("DONE"),
+		answer("NEVER REOPEN"),
+	]);
+	const dir = join(fixture.root, "parents");
+	const parent = SessionManager.create(fixture.cwd, dir);
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("fork probe")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	const id = agentId(outcomes(h, "Agent")[0]?.text);
+	const record = fixture.record(id);
+	if (live) await hold.entered;
+	else await record.promise;
+	const original = parent.getSessionFile();
+	const file = record.sessionFile;
+	if (!original || !file) throw new Error("Missing transcript");
+	const old = readFileSync(file, "utf8");
+	const stale = new Date(Date.now() - 121_000);
+	utimesSync(file, stale, stale);
+	const fork = SessionManager.forkFrom(original, fixture.cwd, dir);
+	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "fork" });
+	h.cleanup();
+	const next = await fixture.start({ harness: { sessionManager: fork } });
+	const resume = spawn("resume fork child", { resume: id });
+	next.setResponses([toolCalls(resume, { name: "get_subagent_result", args: { agent_id: id } }), answer("CHECKED")]);
+	try {
+		await next.session.prompt("fork lookup");
+		const lookup = outcomes(next, "get_subagent_result")[0];
+		const refused = outcomes(next, "Agent")[0];
+		expect(refused?.isError).toBe(true);
+		expect(refused?.text).toContain(live ? "is still running" : "does not belong to this parent");
+		expect(lookup?.text).toContain(live ? "Status: running" : "last recorded status: completed");
+		expect(lookup?.text).not.toContain("interrupted");
+		expect(refused?.text).not.toContain("now belongs to another agent");
+		expect(readFileSync(file, "utf8")).toBe(old);
+		expect(child.state.callCount).toBe(1);
+	} finally {
+		hold.release();
+		await record.promise;
+	}
+	if (live) {
+		next.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("CHECKED AGAIN")]);
+		await next.session.prompt("look up after the original parent's survivor exits");
+		expect(outcomes(next, "get_subagent_result").at(-1)).toMatchObject({
+			isError: true,
+			text: expect.stringContaining("Agent not found"),
+		});
+	}
+});
+
+it("never opens forged child paths from saved history", { timeout: 30_000 }, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const child = fixture.physical("kid", "child", [answer("DONE"), answer("NEVER REOPEN")]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("create child directory")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	const record = fixture.record(agentId(outcomes(h, "Agent")[0]?.text));
+	await record.promise;
+	const parentFile = parent.getSessionFile();
+	const file = record.sessionFile;
+	if (!parentFile || !file) throw new Error("Missing transcript");
+	const outside = join(fixture.root, "empty.jsonl");
+	const link = join(dirname(file), "foreign.jsonl");
+	const directory = join(dirname(file), "directory");
+	const empty = join(dirname(file), "empty.jsonl");
+	const invalid = join(dirname(file), "bad-header.jsonl");
+	mkdirSync(directory);
+	writeFileSync(outside, "");
+	writeFileSync(empty, "");
+	writeFileSync(invalid, "not json\n");
+	symlinkSync(outside, link);
+	const entries = [
+		["forged", outside, "outside its configured directory"],
+		["symlink", link, "outside its configured directory"],
+		["dotdot", `${dirname(file)}/../${basename(dirname(file))}/${basename(file)}`, "invalid child session path"],
+		["relative", "relative.jsonl", "invalid child session path"],
+		["directory", directory, "not a regular file"],
+		["empty", empty, "no readable header"],
+		["malformed", invalid, "missing or unreadable"],
+	] as const;
+	for (const [id, sessionFile] of entries)
+		parent.appendCustomEntry("subagents:record", {
+			id,
+			sessionFile,
+			type: record.type,
+			description: id,
+			status: "completed",
+		});
+	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	h.cleanup();
+	const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	next.setResponses([toolCalls(...entries.map(([resume]) => spawn("forged resume", { resume }))), answer("CHECKED")]);
+	await next.session.prompt("refuse forged paths");
+	for (const [id, path, reason] of entries) {
+		const refusal = outcomes(next, "Agent").find((result) => result.text.startsWith(`Cannot resume agent "${id}"`));
+		expect(refusal).toMatchObject({ isError: true, text: expect.stringContaining(`${reason}: ${path}`) });
+	}
+	// A validated file replaced after startup still must not be reopened.
+	unlinkSync(file);
+	symlinkSync(outside, file);
+	next.setResponses([toolCalls(spawn("resume swapped file", { resume: record.id })), answer("CHECKED")]);
+	await next.session.prompt("refuse changed transcript");
+	expect(outcomes(next, "Agent").at(-1)).toMatchObject({
+		isError: true,
+		text: expect.stringContaining(`child session is outside its configured directory: ${file}`),
+	});
+	expect(readFileSync(outside, "utf8")).toBe("");
+	expect(child.state.callCount).toBe(1);
+});
+
+it("journals both ends of a foreground resume, including an interrupted second run", { timeout: 30_000 }, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const hold = fixture.heldTool();
+	fixture.physical("kid", "child", [
+		answer("FIRST DONE"),
+		answer("INLINE DONE"),
+		toolCalls({ name: "hold", args: {} }),
+		answer("DONE AFTER HOLD"),
+	]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("foreground probe", { run_in_background: false })), answer("SPAWNED")]);
+	await h.session.prompt("spawn foreground");
+	const row = parent.getBranch().find((entry) => entry.type === "custom" && entry.customType === "subagents:record");
+	if (row?.type !== "custom") throw new Error("Missing child record");
+	const { id, sessionFile } = row.data as { id: string; sessionFile: string };
+	const resume = spawn("resume foreground", { resume: id, run_in_background: false });
+	h.setResponses([toolCalls(resume), answer("INLINE SETTLED")]);
+	await h.session.prompt("resume to completion");
+	const latest = parent
+		.getBranch()
+		.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record")
+		.at(-1);
+	expect(latest).toMatchObject({ data: { id, status: "completed", result: "INLINE DONE" } });
+	h.setResponses([toolCalls(resume), answer("INLINE INTERRUPTED")]);
+	const old = h.session.prompt("resume into tool barrier");
+	await hold.entered;
+	try {
+		const parentFile = parent.getSessionFile();
+		if (!parentFile) throw new Error("Missing parent transcript");
+		const stale = new Date(Date.now() - 121_000);
+		utimesSync(sessionFile, stale, stale);
+		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+		next.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("CHECKED")]);
+		await next.session.prompt("lookup interrupted resume");
+		expect(outcomes(next, "get_subagent_result")[0]?.text).toContain("interrupted by a process restart");
+	} finally {
+		hold.release();
+		await old;
+		h.cleanup();
+	}
+});
 
 it("#330: a fresh stopped child retains its output across a fresh parent activation", { timeout: 30_000 }, async () => {
 	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
@@ -257,6 +433,10 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	const tasksDir = dirname(output);
 	const stale = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 	for (const path of [output, tasksDir, dirname(tasksDir)]) utimesSync(path, stale, stale);
+	// A recent write does not block a terminal child from reopening.
+	if (!record.sessionFile) throw new Error("Missing child transcript");
+	const recent = new Date();
+	utimesSync(record.sessionFile, recent, recent);
 	const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
 	await new Promise((resolve) => setImmediate(resolve));
 	await new Promise((resolve) => setImmediate(resolve));

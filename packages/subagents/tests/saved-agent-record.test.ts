@@ -6,7 +6,7 @@ import { savedAgentNote } from "../src/saved-agent-record.ts";
 
 const base = { id: "synthetic-child", type: "general-purpose", description: "synthetic job", status: "completed" };
 
-describe("saved terminal lookup notes", () => {
+describe("saved agent lookup notes", () => {
 	it.each([
 		null,
 		undefined,
@@ -21,7 +21,7 @@ describe("saved terminal lookup notes", () => {
 		expect(savedAgentNote(data)).toBeUndefined();
 	});
 
-	it.each(["queued", "unknown", null])("does not claim a saved %s child is alive or finished", (status) => {
+	it.each(["queued", "unknown", null])("ignores an unsupported saved %s status", (status) => {
 		expect(savedAgentNote({ ...base, status })).toBeUndefined();
 	});
 
