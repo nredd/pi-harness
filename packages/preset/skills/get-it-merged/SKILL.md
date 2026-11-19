@@ -86,11 +86,14 @@ no-PR cleanup. Check each candidate before removal:
 - Require a linked worktree on a branch, never the user's checkout or a detached HEAD. Verify the
   branch with `git -C <worktree> symbolic-ref --quiet HEAD`. Keep worktrees with a live process cwd
   inside them, a recorded live owner, or objects borrowed by another checkout
-- For a merged PR, verify the PR belongs to the candidate branch and source repository. Require
-  `gh pr view <N> --json headRefOid,state` to report `MERGED` and its full `headRefOid` to match
-  `git -C <worktree> rev-parse HEAD` exactly. This proves the checked-out commit was pushed even if
-  the upstream branch was deleted. A different HEAD, including local commits or a rewritten branch,
-  is ineligible even if pushed. Do not fall back to upstream proof for a mismatched merged PR
+- For a merged PR, run `gh pr view <N> --repo <base-owner>/<base-repo> --json headRefName,headRepository,headRepositoryOwner,headRefOid,state`.
+  Require `MERGED`, `headRefName` equal to the candidate's local branch name, and `headRepository.name`
+  and `headRepositoryOwner.login` equal to the candidate's verified source repository name and owner
+  (from the branch's push destination, not assumed from the PR's base). Keep on missing or mismatched
+  identity. Require the full `headRefOid` to match `git -C <worktree> rev-parse HEAD` exactly. This
+  proves the checked-out commit was pushed even if the upstream branch was deleted. A different HEAD,
+  including local commits or a rewritten branch, is ineligible even if pushed. Do not fall back to
+  upstream proof for a mismatched merged PR
 - Only for the explicit no-PR mode in `ship-issue`, fetch the configured upstream remote and verify
   the upstream branch still exists there and the local upstream ref is current. Require a successful,
   empty `git -C <worktree> rev-list '@{u}..HEAD'` against that ref. Keep the worktree if the upstream
@@ -104,6 +107,16 @@ no-PR cleanup. Check each candidate before removal:
   Also keep sparse-checkout worktrees and worktrees with effective `core.ignoreStat` enabled.
   Assume-unchanged and skip-worktree flags can hide edits from status. Non-forced worktree removal
   can still delete those edits, ignored files and empty directories
+- In both modes, run the shared ref, reflog and filter checks below. Keep if the worktree has local
+  `refs/worktree/*`, `refs/bisect/*` or `refs/rewritten/*`, or if any commit in its `HEAD` reflog is
+  missing from `git rev-list --all`. A matching PR head or empty upstream range says nothing about
+  a detached commit left behind after switching back to the branch. Preserve those commits on
+  shared refs and let the operator resolve worktree-local refs before retrying
+- Keep when any tracked path has a `filter` attribute unless the operator explicitly confirms, for
+  this exact worktree and the reported paths, that the raw file contents are disposable or backed up.
+  A clean filter can map different on-disk bytes to the same index blob, so empty status is not proof.
+  Report only paths and attributes, not file contents. Confirmation resolves only the filter hold;
+  rerun this scan and all other guards before removal, and keep on any new ambiguity
 - If a check fails or cannot be completed, keep and report the worktree. Recheck immediately before
   removal. Use a configured sweep only if its documented interface accepts an explicit scope to that
   exact worktree path (e.g. `--worktree <path>`). A dry-run match is not proof of scope. Without
@@ -120,7 +133,58 @@ no-PR cleanup. Check each candidate before removal:
     `core.ignoreStat` worktrees until the operator deliberately makes the full status visible
   - Verify branch and PR identity and preserve extra commits on a separate ref before addressing a
     HEAD mismatch. For no-PR work, restore or verify the upstream. Resolve any live ownership or
-    borrowed-object hold without discarding data. Rerun the full guard; confirmation never overrides it
+    borrowed-object hold without discarding data. Rerun the full guard; confirmation never overrides a failed check
+
+#### Shared ref, reflog and filter checks
+
+Set `worktree` to the candidate's exact path. The scan is read-only. An empty, successful result
+passes **only** these checks. A nonzero result or diagnostic means keep and report it, subject only
+to the explicit filter confirmation rule above. Use NUL-delimited paths throughout the attribute
+scan; splitting `git ls-files` on whitespace can miss tracked files.
+
+```sh
+python3 - "$worktree" <<'PY'
+import subprocess
+import sys
+
+
+def git(*args: str, data: bytes = b"") -> bytes:
+    """Read Git output, treating failed or warned scans as unknown."""
+    result = subprocess.run(
+        ["git", "-C", sys.argv[1], *args], input=data, capture_output=True, check=False
+    )
+    if result.returncode or result.stderr:
+        sys.exit(f"keep: git {args[0]} (exit {result.returncode}): {result.stderr!r}")
+    return result.stdout
+
+
+local_refs = git("for-each-ref", "--format=%(refname)", "refs/worktree", "refs/bisect", "refs/rewritten")
+if local_refs:
+    sys.exit(f"keep: worktree-local refs: {local_refs!r}")
+
+git("reflog", "exists", "HEAD")
+reflog = set(git("reflog", "show", "--format=%H", "HEAD").splitlines())
+if not reflog:
+    sys.exit("keep: empty HEAD reflog")
+missing = sorted(reflog.difference(git("rev-list", "--all").splitlines()))
+if missing:
+    sys.exit(f"keep: HEAD reflog commits outside refs: {missing!r}")
+
+paths = git("ls-files", "-z")
+attrs = git("check-attr", "-z", "--stdin", "-a", data=paths)
+if attrs:
+    fields = attrs.split(b"\0")
+    if fields[-1] or (len(fields) - 1) % 3:
+        sys.exit("keep: malformed attribute scan")
+    filters = [
+        (fields[i], fields[i + 2])
+        for i in range(0, len(fields) - 1, 3)
+        if fields[i + 1] == b"filter"
+    ]
+    if filters:
+        sys.exit(f"keep: filter attributes on tracked paths: {filters!r}")
+PY
+```
 
 ## 5. Report
 
