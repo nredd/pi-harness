@@ -464,6 +464,13 @@
           "report": "coverage/primary/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "enforcement": "report-only",
+          "reason": "Compare full-suite Bun coverage to the primary zero budgets; establish a Bun floor only after complete-source hosted receipts on macOS and Linux (#645).",
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },

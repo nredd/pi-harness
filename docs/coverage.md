@@ -127,10 +127,9 @@ remain separate acceptance evidence, not owned-source coverage. WSL reports are 
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. With `enforce_target: true`, the target
 overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
-use their explicit per-OS caps, not that target override; every currently declared Bun signal is
-`enforced` at zero uncovered lines/functions/branches/statements and measures its full owned inventory.
-`probes` and `import-audit` currently run Bun compatibility with coverage disabled, so neither has an
-independent Bun coverage signal yet (#320). Computer-use's Bun/native scope remains owned by #645.
+use their explicit per-OS caps, not that target override. Enforced Bun signals have zero uncovered
+lines/functions/branches/statements and measure their full owned inventory. Computer-use starts
+with independent report-only Bun accounting pending hosted evidence (#645).
 Primary signals of eligible packages remain `enforced`; pending eligible inventory also fails.
 Owner-excluded/report-only goals do not acquire the primary target override. Report-only means
 counter excess is informational, not that reporting is optional: every selected signal still needs
@@ -156,7 +155,7 @@ injected runtime facts let either engine exercise Node/Bun identity and GC/no-GC
 mutating Bun's immutable global. Real disposable producer tests retain an unimported gate as
 uncovered, exercise its success/refusal paths, and reject missing/malformed LCOV or statement
 summaries. Hosted receipts must bind these reports to the PR's own final HEAD; historical primary
-artifacts are not evidence for these new signals. Computer-use Bun/native work remains #645.
+artifacts are not evidence for these new signals. Computer-use Bun enforcement and native coverage work remain #645.
 
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
 recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
@@ -453,7 +452,12 @@ instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
 measured uncovered counts for lines, functions, branches and statements (darwin **0 / 0 / 0 / 0**;
 linux **0 / 0 / 0 / 0**). The earlier `1 / 0 / 1 / 1` receipt from run `43173083073` is historical.
-Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
+The full runtime suite also runs through `test:bun` with the same Istanbul inventory and separate
+`coverage/bun/` reports. Accounting requires complete reports and compares them to the primary zero
+budgets for reference only. Bun enforcement requires complete-source hosted receipts on both owned
+OSes (#645); the verification-only async suite retains its independent Node signal.
+Subprocess-run scripts count only what the suites import. On Node, files already at 0/0/0/0 on
+every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
 The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
