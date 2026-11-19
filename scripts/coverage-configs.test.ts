@@ -23,7 +23,7 @@ interface Coverage {
 interface Entry {
 	owned: string[];
 	exclusions: { path: string }[];
-	signals: { primary?: { report: string } };
+	signals: { primary?: { report: string }; bun?: { report: string; enforcement?: string; files?: string[] } };
 }
 
 type Loader = () => Promise<{ default: unknown }>;
@@ -569,6 +569,13 @@ test("computer-use-vitest is an enforced ratchet with a cap for every counter on
 		assert.deepEqual(Object.keys(caps).sort(), ["branches", "functions", "lines", "statements"]);
 		for (const cap of Object.values(caps)) assert.ok(Number.isInteger(cap) && cap >= 0);
 	}
+});
+
+test("computer-use Bun accounts the complete primary inventory in a separate report (#645)", () => {
+	const bun = realPolicy()["computer-use-vitest"]?.signals.bun;
+	assert.ok(bun);
+	assert.equal(bun.report, "coverage/bun/lcov.info");
+	assert.equal(bun.files, undefined);
 });
 
 test("computer-use pins every file already at zero uncovered, each owned (#645)", async () => {

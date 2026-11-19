@@ -157,8 +157,8 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     assert set(sources) == {"scripts", "tests/integration", "release"}
 
 
-def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
-    """Keep every declared Bun producer on Vitest/Istanbul through the isolated launcher.
+def test_workspace_bun_commands_delegate_coverage_to_the_launcher() -> None:
+    """Require each owned package and the in-process suite to use the isolated Bun launcher.
 
     Parameters:
         None.
@@ -171,8 +171,6 @@ def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
     manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "tests/inprocess/package.json"]
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
-        if not command:
-            continue
         expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
         assert command == expected, manifest
 

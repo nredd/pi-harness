@@ -473,7 +473,8 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
     data = json.loads((ROOT / "coverage/policy.json").read_text())
     packages = data["packages"]
     signals = {name: pkg["signals"]["bun"] for name, pkg in packages.items() if "bun" in pkg["signals"]}
-    assert signals.keys() == ENFORCED_BUN_PACKAGES
+    assert signals.keys() == ENFORCED_BUN_PACKAGES | {"computer-use-vitest"}
+    assert signals.pop("computer-use-vitest")["enforcement"] == "report-only"
     for name, signal in signals.items():
         assert signal["enforcement"] == "enforced", name
         assert "files" not in signal, name

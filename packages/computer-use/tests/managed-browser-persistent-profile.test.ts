@@ -323,7 +323,8 @@ describe("persistent profile opt-in", () => {
 
 		test("another Pi process cannot share a live persistent profile", async () => {
 			await testing.performLaunchBrowser({});
-			// Apply the same safe-ancestry metadata seam to the second process; the lease itself stays real.
+			// Apply the safe-ancestry metadata seam in a Node contender: Bun does not sync ESM builtin exports.
+			// The runtime under test still acquires the real lease, and the contender must reject it.
 			const script = `
 				import fs from "node:fs";
 				import { syncBuiltinESMExports } from "node:module";
@@ -341,7 +342,7 @@ describe("persistent profile opt-in", () => {
 				try { await testing.performLaunchBrowser({}); process.exitCode = 1; }
 				catch (error) { if (!/locked/.test(error.message)) throw error; }
 			`;
-			const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+			const child = spawn("node", ["--import", "tsx", "--input-type=module", "-e", script], {
 				cwd: fileURLToPath(new URL("..", import.meta.url)),
 				env: { ...process.env, TEST_CWD: root },
 				stdio: ["ignore", "ignore", "pipe"],

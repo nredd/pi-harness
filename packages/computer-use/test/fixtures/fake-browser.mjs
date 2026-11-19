@@ -20,7 +20,12 @@ if (process.env.FAKE_BROWSER_IGNORE_SIGTERM === "1")
 const arg = (name) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const port = Number(arg("remote-debugging-port"));
 const profile = arg("user-data-dir");
-if (process.env.FAKE_BROWSER_LOG) fs.writeFileSync(process.env.FAKE_BROWSER_LOG, JSON.stringify({ port, profile }));
+if (process.env.FAKE_BROWSER_LOG) {
+	// The parent polls for this path; publish only after the complete record is written.
+	const pending = `${process.env.FAKE_BROWSER_LOG}.${process.pid}.tmp`;
+	fs.writeFileSync(pending, JSON.stringify({ port, profile }));
+	fs.renameSync(pending, process.env.FAKE_BROWSER_LOG);
+}
 if (process.env.FAKE_BROWSER_LAUNCHES)
 	fs.appendFileSync(process.env.FAKE_BROWSER_LAUNCHES, `${JSON.stringify({ port, profile })}\n`);
 try {
