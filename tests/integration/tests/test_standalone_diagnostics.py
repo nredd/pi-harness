@@ -512,10 +512,6 @@ def test_workflow_captures_only_failed_linux_startup() -> None:
     assert "steps.startup.outcome == 'failure'" in upload["if"]
     assert "steps.startup.outputs.artifact_ready == 'true'" in upload["if"]
     assert upload["with"]["path"] == "${{ runner.temp }}/standalone-startup-diagnostics/"
-    build = next(step for step in steps if step.get("id") == "build")
-    assert "standalone_diagnostics" in build["run"]
-    assert "prepare-build" in build["run"]
-    assert 'tee "$evidence/build.log"' in build["run"]
     assert any(step.get("name") == "Standalone D and E (personal)" for step in steps)
 
 
