@@ -377,6 +377,24 @@ def test_missing_or_malformed_ack_cleans_process_and_scratch(
     pid_file = tmp_path / "pid"
     created: list[Path] = []
     original = tempfile.mkdtemp
+    start = startup.TmuxPane.start
+
+    def start_and_wait_for_pid(
+        pane: startup.TmuxPane, argv: list[str], cwd: Path, env: dict[str, str]
+    ) -> None:
+        """Wait for the fake child to write its PID before the sampler can tear down the pane.
+
+        Parameters:
+            pane (startup.TmuxPane): sampler's real pane.
+            argv (list[str]): command to launch.
+            cwd (Path): pane working directory.
+            env (dict[str, str]): pane environment.
+        """
+        start(pane, argv, cwd, env)
+        deadline = time.monotonic() + 3
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pid_file.exists(), "Fake child did not write its PID within 3s"
 
     def tracked_mkdtemp(**kwargs: Any) -> str:
         """Record the real short socket directory without extending its path.
@@ -392,6 +410,7 @@ def test_missing_or_malformed_ack_cleans_process_and_scratch(
         return directory
 
     monkeypatch.setattr(startup.tempfile, "mkdtemp", tracked_mkdtemp)
+    monkeypatch.setattr(startup.TmuxPane, "start", start_and_wait_for_pid)
     argv = [sys.executable, "-c", FAKE_PI]
     env = {"ACK_MODE": mode, "CHILD_PID": str(pid_file)}
     if mode == "valid":
