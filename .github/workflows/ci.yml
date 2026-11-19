@@ -444,8 +444,7 @@ jobs:
           if-no-files-found: error
       # The macOS scripts shard owns scripts/python + import-audit reports; python owns release/harness,
       # probes/providers. Dynamic artifact names and downloads include both without a second list.
-      # The receipt uses the actual checkout inside the guest, including hosted Windows/WSL.
-      # Only the receipt is written directly to the Windows artifact workspace on that route.
+      # Bind the receipt to the shard checkout, not the PR head or the artifact upload time.
       - name: Record shard coverage provenance
         if: always() && steps.tools.outcome == 'success'
         continue-on-error: true
@@ -454,12 +453,9 @@ jobs:
           COVERAGE_CELL: coverage-${{ matrix.os }}-${{ matrix.shard }}
           COVERAGE_SHARD: ${{ matrix.shard }}
         run: |
-          if ! tested_sha=$(git rev-parse HEAD) || ! python3 scripts/coverage_provenance.py \
-            --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
-            --output "${WSL_HOST_WORKSPACE:-.}/coverage/provenance-$COVERAGE_SHARD.json"; then
-            # Do not let the WSL adapter record a presentation failure as the guest gate's first failure.
-            echo '::warning title=Coverage provenance unavailable::Shard coverage could not be stamped'
-          fi
+          tested_sha=$(git rev-parse HEAD)
+          python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
+            --output "coverage/provenance-$COVERAGE_SHARD.json"
       # A shard can retain its receipt without measurements. The fan-in still fails if a report
       # expected by policy is missing.
       - name: Preserve this shard's coverage reports

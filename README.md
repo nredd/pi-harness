@@ -40,7 +40,9 @@ put the why in the commit.
     are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,
     `--event-name`, `--workflow-ref` and (on PRs only) `--head-sha`; measured-main comparison also
     requires `--baseline-identity SHA RUN ATTEMPT EVENT WORKFLOW_REF` independently of the PR inputs.
-    Matching a record is not authentication; the caller must authenticate the run and artifacts.
+    Fan-in evidence is Ubuntu-only on PRs; macOS is eligible on pushes and dispatches. There is no
+    WSL2 producer. Matching a record is not authentication; the caller must authenticate the run and
+    artifacts.
 - `coverage/policy.json`: enforced coverage policy
 - `releases/`: generated release manifests
 

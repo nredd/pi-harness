@@ -43,7 +43,7 @@ LOGGER = logging.getLogger(__name__)
 MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_PROVENANCE_BYTES = 4096
 PROVENANCE_MEMBER = "coverage/provenance.json"
-OWNED_JOBS = {"ubuntu-24.04": "owned-ubuntu", "macos-14": "owned-macos", "wsl2": "owned-wsl2"}
+COVERAGE_HOSTS = {"ubuntu-24.04", "macos-14"}
 CI_EVENTS = {"pull_request", "push", "workflow_dispatch"}
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
@@ -1015,12 +1015,19 @@ def read_host_summary(directory: Path, host: str, provenance: Provenance) -> Sum
         ValueError: The artifact is malformed or unsafe.
         OSError: The artifact cannot be read.
     """
-    path = directory / f"coverage-{host}.zip"
+    if host not in COVERAGE_HOSTS or (provenance.event_name == "pull_request" and host != "ubuntu-24.04"):
+        raise ValueError("No coverage producer for this host and event")
+    cell = f"coverage-{host}"
+    path = directory / f"{cell}.zip"
     if not path.exists() and not path.is_symlink():
-        path = directory / f"coverage-{host}" / "coverage" / "summary.json"
+        artifact = directory / cell
+        coverage = artifact / "coverage"
+        if artifact.is_symlink() or coverage.is_symlink():
+            raise ValueError("Symlinked coverage artifact directory")
+        path = coverage / "summary.json"
     if not path.exists() and not path.is_symlink():
         return None
-    expected = provenance.record(OWNED_JOBS[host], f"coverage-{host}")
+    expected = provenance.record("owned", cell)
     return Summary.parse(read_summary(path, expected))
 
 

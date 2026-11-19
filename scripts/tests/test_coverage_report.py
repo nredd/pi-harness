@@ -700,7 +700,7 @@ def test_load_json_zip_states_and_cli(tmp_path: Path) -> None:
     artifact = tmp_path / "coverage-ubuntu-24.04/coverage/summary.json"
     artifact.parent.mkdir(parents=True)
     artifact.write_text(json.dumps(document()))
-    receipt = json.dumps(PROVENANCE.record("owned-ubuntu", "coverage-ubuntu-24.04"))
+    receipt = json.dumps(PROVENANCE.record("owned", "coverage-ubuntu-24.04"))
     artifact.with_name("provenance.json").write_text(receipt)
     summary = report.load_evidence(tmp_path, manifest, PROVENANCE)[0].summary
     assert summary is not None

@@ -19,13 +19,12 @@ from coverage_report import Provenance, read_record, validate_record
 LOGGER = logging.getLogger(__name__)
 
 
-def attest_shards(directory: Path, run: Provenance, job: str, cell: str) -> None:
+def attest_shards(directory: Path, run: Provenance, cell: str) -> None:
     """Refuse to label merged reports as current if any input lacks matching provenance.
 
     Parameters:
         directory (Path): Download directory containing one directory per shard artifact.
         run (Provenance): The fan-in's independently known run and checkout identity.
-        job (str): The fan-in job key.
         cell (str): The fan-in's declared coverage artifact name.
     Returns:
         None: Every downloaded shard agrees with the fan-in.
@@ -36,11 +35,10 @@ def attest_shards(directory: Path, run: Provenance, job: str, cell: str) -> None
     shards = sorted(directory.glob(f"{cell}-*/"))
     if not shards:
         raise ValueError("No downloaded coverage shards to verify")
-    shard_job = job.replace("owned-", "owned-shards-", 1)
     for shard in shards:
         shard_name = shard.name.removeprefix(f"{cell}-")
         record = read_record(shard / "coverage" / f"provenance-{shard_name}.json")
-        validate_record(record, run.record(shard_job, shard.name))
+        validate_record(record, run.record("owned-shards", shard.name))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         job = os.environ["GITHUB_JOB"]
         if args.shards is not None:
-            attest_shards(args.shards, run, job, args.cell)
+            attest_shards(args.shards, run, args.cell)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(run.record(job, args.cell)) + "\n", encoding="utf-8")
     except (KeyError, OSError, ValueError) as error:
