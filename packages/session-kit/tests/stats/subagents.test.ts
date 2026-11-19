@@ -1,0 +1,308 @@
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { main } from "../../src/stats/cli.ts";
+import { reportSubagents } from "../../src/stats/subagents.ts";
+
+import { call, header, info, timestamp, writeSession } from "../fixtures/subagent-report.ts";
+
+let root: string;
+const file = (name: string, entries: unknown[]) => writeSession(root, name, entries);
+beforeEach(async () => {
+	root = await mkdtemp(join(tmpdir(), "agent-report-"));
+});
+afterEach(async () => {
+	vi.restoreAllMocks();
+	await rm(root, { recursive: true, force: true });
+});
+
+it("joins original child names, dedupes copies and parent usage, and preserves hand-computed prices/cache", async () => {
+	const parent = await file("parent.jsonl", [
+		header("parent"),
+		call("parent-api"),
+		{ type: "message", message: { role: "toolResult", toolName: "Agent", usage: { input: 9999 }, content: [] } },
+	]);
+	const entries = [
+		header("child", parent),
+		info("general-purpose#12345678"),
+		call("a"),
+		call("b", { total: 0, unpriced: true }),
+		call("c", { total: 5, unpriced: true, unpricedCalls: 2, pricedCalls: 3 }),
+	];
+	const path = await file("child.jsonl", entries);
+	await file("copied.jsonl", entries);
+	await file("fork.jsonl", [header("fork", parent), call("a")]);
+	const before = await readFile(path, "utf8");
+	const result = await reportSubagents(root);
+	expect(result.totals).toEqual({
+		calls: 3,
+		input: 30,
+		output: 9,
+		cacheRead: 21,
+		cacheWrite: 12,
+		recordedCost: 7,
+		pricedCalls: 4,
+		unpricedCalls: 3,
+	});
+	expect(result.groups).toEqual([
+		{
+			...result.totals,
+			agentType: "general-purpose",
+			provider: "example",
+			model: "model-a",
+			workflow: "unknown",
+			traffic: "other",
+			unmatchedSessions: 0,
+			costComplete: false,
+		},
+	]);
+	expect(result).toMatchObject({ complete: false, unmatchedSessions: 0, missingSessions: 0, errors: 0, badLines: 0 });
+	expect(await readFile(path, "utf8")).toBe(before);
+});
+
+it("reports unknown types, missing/deleted children, malformed/truncated files and missing prices without inventing spend", async () => {
+	const child = join(root, "child.jsonl");
+	const parent = await file("parent.jsonl", [
+		header("p"),
+		{
+			type: "custom",
+			customType: "subagents:record",
+			data: { id: "deadbeef-0000", type: "Explore", sessionFile: join(root, "deleted.jsonl") },
+		},
+	]);
+	await file("child.jsonl", [
+		header("c", parent),
+		{ type: "custom", customType: "session-kit:child", data: { version: 1, sessionId: "c" } },
+		call("unknown", undefined, { usage: { input: 1 } }),
+		'{"truncated":',
+		"[bad]",
+		"{bad}",
+	]);
+	const result = await reportSubagents(root);
+	expect(result).toMatchObject({ unmatchedSessions: 2, missingSessions: 1, badLines: 3, complete: false });
+	expect(result.groups[0]).toMatchObject({
+		agentType: "unknown",
+		unmatchedSessions: 1,
+		recordedCost: 0,
+		unpricedCalls: 1,
+	});
+	expect(result.diagnostics.map((d) => d.path)).toEqual([child, child, child]);
+});
+
+it.each(["original", "relocated", "symlinked"])(
+	"preserves recorded types, workflow and review lanes under a %s root",
+	async (location) => {
+		const parent = join(root, "parent.jsonl");
+		const sha = "a".repeat(40);
+		const tool = (id: string, prompt: string, type = "code-reviewer") => ({
+			type: "message",
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", name: "Agent", id, arguments: { subagent_type: type, prompt } }],
+			},
+		});
+		const result = (id: string, agentId: string, details = true) => ({
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolName: "Agent",
+				toolCallId: id,
+				details: details ? { agentId } : {},
+				content: [{ text: `Agent ID: ${agentId}` }],
+			},
+		});
+		await file("parent.jsonl", [
+			header("p"),
+			tool("t1", `Axis: Standards ${sha}`),
+			result("t1", "11111111"),
+			tool("t2", `Axis: Spec ${sha}`),
+			result("t2", "22222222", false),
+			tool("t3", `Axis: Standards ${sha}`),
+			result("t3", "33333333"),
+			{
+				type: "custom",
+				customType: "subagents:workflow",
+				data: { name: "audit", progress: [{ recordId: "22222222", type: "workflow_agent" }] },
+			},
+			{
+				type: "custom",
+				customType: "subagents:record",
+				data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
+			},
+		]);
+		for (const [name, id] of [
+			["a", "11111111"],
+			["b", "22222222"],
+			["c", "33333333"],
+		])
+			await file(`${name}.jsonl`, [header(name ?? "", parent), info(`code-reviewer#${id}`), call(name ?? "")]);
+		await file("d.jsonl", [header("d", parent), info("renamed"), call("critic")]);
+		// A /fork copies the dispatch and result entries under its own path; no child is missing.
+		await file("fork.jsonl", [
+			header("fork", parent),
+			tool("t1", `Axis: Standards ${sha}`),
+			result("t1", "11111111"),
+			{
+				type: "custom",
+				customType: "subagents:record",
+				data: { id: "44444444", type: "critic", sessionFile: join(root, "d.jsonl") },
+			},
+		]);
+		if (location === "relocated") {
+			await rename(root, `${root}-moved`);
+			root = `${root}-moved`;
+		}
+		const alias = `${root}-link`;
+		if (location === "symlinked") await symlink(root, alias, "dir");
+		let report: Awaited<ReturnType<typeof reportSubagents>>;
+		try {
+			report = await reportSubagents(location === "symlinked" ? alias : root);
+		} finally {
+			await rm(alias, { force: true });
+		}
+		expect(report.groups.map((g) => [g.traffic, g.workflow, g.calls])).toEqual([
+			["review-spec", "audit", 1],
+			["retry-repeat", "unknown", 1],
+			["review-standards", "unknown", 1],
+			["review-critic", "unknown", 1],
+		]);
+		expect(report).toMatchObject({ complete: true, unmatchedSessions: 0, missingSessions: 0 });
+	},
+);
+
+it.each([
+	["general-purpose#12345678", undefined, "general-purpose"],
+	["general-purpose#12345678", "", "general-purpose"],
+	["general-purpose#12345678", "Explore", "Explore"],
+	["#12345678", undefined, "reviewer"],
+])("attributes child %s with record type %s to %s", async (name, recordType, expected) => {
+	const parent = await file("parent.jsonl", [
+		header("p"),
+		{
+			type: "message",
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", name: "Agent", id: "dispatch", arguments: { subagent_type: "reviewer" } }],
+			},
+		},
+		{
+			type: "message",
+			message: { role: "toolResult", toolName: "Agent", toolCallId: "dispatch", details: { agentId: "12345678" } },
+		},
+		...(recordType === undefined
+			? []
+			: [{ type: "custom", customType: "subagents:record", data: { id: "12345678", type: recordType } }]),
+	]);
+	await file("child.jsonl", [header("c", parent), info(name), call("one")]);
+	expect(await reportSubagents(root)).toMatchObject({ complete: true, groups: [{ agentType: expected, calls: 1 }] });
+});
+
+it("joins many pathless records and retains the first explicit path match", async () => {
+	const record = (id: string, type: string, sessionFile?: string) => ({
+		type: "custom",
+		customType: "subagents:record",
+		data: { id, type, sessionFile },
+	});
+	const ids = Array.from({ length: 128 }, (_, i) => i.toString(16).padStart(8, "0"));
+	const explicitPath = join(root, "renamed.jsonl");
+	const parent = await file("parent.jsonl", [
+		header("p"),
+		...ids.map((id) => record(id, "Explore")),
+		record("12345678-first", "critic", explicitPath),
+		record("12345678-copy", "general-purpose", explicitPath),
+	]);
+	for (const id of ids) await file(`${id}.jsonl`, [header(id, parent), info(`Explore#${id}`), call(id)]);
+	await file("renamed.jsonl", [header("renamed"), call("explicit")]);
+	expect(await reportSubagents(root)).toMatchObject({
+		complete: true,
+		missingSessions: 0,
+		groups: [
+			{ agentType: "Explore", calls: 128 },
+			{ agentType: "critic", calls: 1 },
+		],
+	});
+});
+
+it("reports unreadable directories and missing roots as incomplete", async () => {
+	const notDirectory = await file("not-a-dir", []);
+	expect(await reportSubagents(notDirectory)).toMatchObject({
+		errors: 1,
+		complete: false,
+		groups: [],
+		diagnostics: [{ path: notDirectory, reason: "read-directory", line: 0 }],
+	});
+	const absent = join(root, "absent");
+	expect(await reportSubagents(absent)).toMatchObject({
+		errors: 1,
+		complete: false,
+		groups: [],
+		diagnostics: [{ path: absent, reason: "read-directory", line: 0 }],
+	});
+});
+
+it("adds a local-only portable CLI mode and refuses export/input flags", async () => {
+	const argv = process.argv;
+	const env = process.env.PI_CODING_AGENT_SESSION_DIR;
+	const log = vi.spyOn(console, "log").mockImplementation(() => {});
+	try {
+		await mkdir(join(root, "sessions"));
+		delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		process.argv = ["node", "stats", "subagents", "--agent-dir", root];
+		await main();
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string)).toMatchObject({ groups: [], complete: true });
+		process.argv = ["node", "stats", "subagents", "--sessions-dir", root];
+		await main();
+		process.argv.push("--output", join(root, "output"));
+		await expect(main()).rejects.toThrow("usage:");
+	} finally {
+		process.argv = argv;
+		if (env === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		else process.env.PI_CODING_AGENT_SESSION_DIR = env;
+	}
+});
+
+it("defaults to PI_CODING_AGENT_SESSION_DIR like /stats and export", async () => {
+	const argv = process.argv;
+	const env = process.env.PI_CODING_AGENT_SESSION_DIR;
+	const log = vi.spyOn(console, "log").mockImplementation(() => {});
+	try {
+		const sessions = join(root, "elsewhere");
+		await mkdir(sessions);
+		await writeFile(
+			join(sessions, "child.jsonl"),
+			[header("c", join(root, "parent.jsonl")), info("Explore#12345678"), call("x")]
+				.map((e) => JSON.stringify(e))
+				.join("\n"),
+		);
+		process.env.PI_CODING_AGENT_SESSION_DIR = sessions;
+		process.argv = ["node", "stats", "subagents", "--agent-dir", join(root, "agent")];
+		await main();
+		const report = JSON.parse(log.mock.calls[0]?.[0] as string);
+		expect(report.groups).toHaveLength(1);
+		expect(report.groups[0]).toMatchObject({ agentType: "Explore", calls: 1 });
+		delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		await main();
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ complete: false, errors: 1, groups: [] });
+	} finally {
+		process.argv = argv;
+		if (env === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		else process.env.PI_CODING_AGENT_SESSION_DIR = env;
+	}
+});
+
+it("names an unsupported subagents flag in a clear usage error", async () => {
+	const argv = process.argv;
+	try {
+		process.argv = ["node", "stats", "subagents", "--output", join(root, "out")];
+		await expect(main()).rejects.toThrow("flag '--output' is not valid for subagents");
+		process.argv = ["node", "stats", "subagents", "--bogus", "x"];
+		await expect(main()).rejects.toThrow("flag '--bogus' is not valid for subagents");
+		process.argv = ["node", "stats", "subagents", "--replace-harnesses"];
+		await expect(main()).rejects.toThrow("flag '--replace-harnesses' is not valid for subagents");
+	} finally {
+		process.argv = argv;
+	}
+});
