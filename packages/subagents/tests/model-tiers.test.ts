@@ -1,9 +1,9 @@
 /** Tier matching uses Pi's real credential-aware registry, never fuzzy registry doubles. */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeEvicted } from "../src/agent-manager.ts";
 import { DEFAULT_AGENTS } from "../src/default-agents.ts";
@@ -30,8 +30,8 @@ let dir: string;
 let registry: ModelRegistry;
 const ref = (id: string) => `tier-test/${id}`;
 const costs = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-beforeEach(async () => {
-	dir = mkdtempSync(join(tmpdir(), "model-tiers-"));
+beforeEach(async ({ onTestFinished }) => {
+	dir = makeTestTempDir("model-tiers-", onTestFinished);
 	const runtime = await ModelRuntime.create({
 		authPath: join(dir, "auth.json"),
 		modelsPath: null,
@@ -68,7 +68,6 @@ afterEach(() => {
 	setScopeModelsEnabled(false);
 	vi.unstubAllEnvs();
 	vi.restoreAllMocks();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 function select(model: string) {
