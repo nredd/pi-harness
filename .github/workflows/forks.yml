@@ -7,6 +7,8 @@ on:
       - forks/**
       - .gitmodules
       - .github/workflows/forks.yml
+      - scripts/forks_apt.sh
+      - scripts/ubuntu_apt.sh
       - Makefile
       - tests/integration/probes/**
       - tests/integration/scenarios/candidate/test_core_compaction.py
@@ -28,6 +30,8 @@ on:
       - forks/**
       - .gitmodules
       - .github/workflows/forks.yml
+      - scripts/forks_apt.sh
+      - scripts/ubuntu_apt.sh
       - Makefile
       - tests/integration/probes/**
       - tests/integration/scenarios/candidate/test_core_compaction.py
@@ -86,17 +90,15 @@ jobs:
           cache: npm
           cache-dependency-path: forks/pi/package-lock.json
       - name: System dependencies (upstream CI's list)
+        working-directory: .
         timeout-minutes: 5
         run: |
-          # Skip apt when the runner image already has every package (#655).
-          packages="libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep"
-          # shellcheck disable=SC2086
-          if ! dpkg -s $packages >/dev/null 2>&1; then
-            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120 update
-            # shellcheck disable=SC2086
-            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120 install -y $packages
+          # At most 2 * (30s update + 55s download) + 45s install + 5 * 10s kill grace = 265s.
+          sudo bash scripts/forks_apt.sh /etc/apt/sources.list.d/ubuntu.sources "$RUNNER_TEMP/forks-apt.log" 30 55 45
+          if ! command -v fd >/dev/null; then
+            fdfind=$(command -v fdfind)
+            sudo ln -s "$fdfind" /usr/local/bin/fd
           fi
-          command -v fd >/dev/null || sudo ln -s "$(which fdfind)" /usr/local/bin/fd
       - name: Install
         run: npm ci --ignore-scripts
       - name: Restore the release's model data

@@ -840,16 +840,14 @@ def test_apt_prerequisites_download_from_azure_then_install_offline(tmp_path: Pa
         assert line in conf
     azure = "URIs: http://azure.archive.ubuntu.com/ubuntu/"
     assert log.read_text().splitlines()[:3] == [
-        f"update|{azure}",
+        f"update --error-on=any|{azure}",
         f"{APT_FLAGS} --download-only {PACKAGES}|{azure}",
         f"{APT_FLAGS} {PACKAGES}|{azure}",
     ]
     # The sources stay on the mirror whose lists apt holds; the guest is ephemeral.
     assert sources.read_text() != UBUNTU_SOURCES
     assert azure in sources.read_text()
-    # Both stock hosts collapse to the one mirror, without a doubled slash.
-    assert "(archive|security)" in APT.read_text(encoding="utf-8")
-    assert "ubuntu/?#${mirror}/#" in APT.read_text(encoding="utf-8")
+    assert [line for line in sources.read_text().splitlines() if line.startswith("URIs:")] == [azure, azure]
 
 
 def test_apt_debs_are_cached_by_the_host_and_keyed_by_script_and_week() -> None:
@@ -959,7 +957,7 @@ def test_apt_dns_failure_retains_only_bounded_allowlisted_evidence(
     """
     result, _, log = run_apt(tmp_path, dns_failure=True, dns_tools=tools)
     assert result.returncode == 1, result.stderr
-    assert log.read_text().splitlines() == ["update", "update"]
+    assert log.read_text().splitlines() == ["update --error-on=any"] * 2
     assert result.stderr.count("Could not resolve fixture mirror") == 2
     assert "every mirror failed" in result.stderr
     report = (tmp_path / "apt-dns.txt").read_text()
@@ -1035,7 +1033,7 @@ def test_apt_dns_artifact_write_failure_cannot_mask_original_failure(tmp_path: P
     (tmp_path / "apt-dns.txt").mkdir()
     result, _, log = run_apt(tmp_path, dns_failure=True)
     assert result.returncode == 1
-    assert log.read_text().splitlines() == ["update", "update"]
+    assert log.read_text().splitlines() == ["update --error-on=any"] * 2
     assert "artifact unavailable" in result.stderr
     assert "capture complete" in result.stdout
 
@@ -1051,7 +1049,7 @@ def test_apt_dns_blocked_artifact_write_is_bounded_without_masking_failure(tmp_p
     os.mkfifo(tmp_path / "apt-dns.txt")
     result, _, log = run_apt(tmp_path, dns_failure=True)
     assert result.returncode == 1
-    assert log.read_text().splitlines() == ["update", "update"]
+    assert log.read_text().splitlines() == ["update --error-on=any"] * 2
     assert "every mirror failed" in result.stderr
     assert "DNS diagnostics unavailable or incomplete" in result.stderr
 
