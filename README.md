@@ -457,10 +457,13 @@ in [`ci.yml`](.github/workflows/ci.yml) and the header of [`runner-rescue.yml`](
 there is no hard queue-time guarantee.
 
 The macOS `native-helper.yml` build can use `pi-macos` through shared admission, with `xcode-27`
-as the hosted fallback. It has not passed on the pool image. Cron rescue covers `ci.yml` queue stalls
-only, not started failures or the separate native-helper workflow. The macOS `scripts` shard and
-installer stay hosted because of their existing read-only tokens; publish stays hosted for OIDC and
-attestation.
+as the hosted fallback (only on attempt 1). It has not passed on the pool image; a started failure fails its
+check. Cron rescue reads every repo run: a stranded pool `build` is rescued only once all unfinished jobs of
+its run are unstarted (e.g. `windows-helper` finished), and the whole run is then cancelled and re-run.
+The macOS `scripts` shard stays hosted (`HOSTED_ONLY_CELLS`), DEPARTING from the original issue scope, because
+core provenance verification in `make install-owned` needs `GH_TOKEN` and the pool has none. Follow-up: make
+that verification work without a token, then drop the denylist. The installer stays hosted for its read-only
+token; publish stays hosted for OIDC and attestation.
 
 | Label | Host | Isolation |
 | --- | --- | --- |

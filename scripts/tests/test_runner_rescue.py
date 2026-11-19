@@ -108,6 +108,19 @@ def test_stranded_runs_need_a_late_queued_job_on_an_eligible_pool(
     assert runner_rescue.stranded_runs([run(1)], {1: jobs}, beats, NOW, REPO) == picked
 
 
+@pytest.mark.parametrize(("windows", "picked"), [("completed", [1]), ("in_progress", [])])
+def test_native_helper_run_is_rescued_only_once_its_other_jobs_are_unstarted(
+    windows: str, picked: list[int]
+) -> None:
+    """A stranded pool `build` restarts the whole run, but never beside a started Windows job."""
+    jobs = [
+        job("completed", ["ubuntu-24.04"], LATE),
+        job(windows, ["windows-2025"], LATE),
+        job("queued", ["pi-macos"], LATE),
+    ]
+    assert runner_rescue.stranded_runs([run(1)], {1: jobs}, STALE, NOW, REPO) == picked
+
+
 @pytest.mark.parametrize(("age", "picked"), [(599, []), (600, []), (601, [1])])
 def test_live_macos_queue_age_threshold(age: int, picked: list[int]) -> None:
     """Live macOS queues spill to hosted only after ten minutes."""

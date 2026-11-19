@@ -133,14 +133,21 @@ def fake_api(
         list[str]: Paths read, in order.
     """
     runs, jobs = census(1)
+    native_runs, native_jobs = census(2)
+    native_runs = native_runs[1:]
+    native_jobs = {2: [{"name": "route native helper", "status": "in_progress", "labels": []}]}
     calls: list[str] = []
 
     def read(path: str) -> dict[str, Any]:
         calls.append(path)
         if "/attempts/" in path:
             return {"total_count": 100 if full == "previous" else 1, "jobs": previous or []}
+        if "/runs/2/jobs?" in path:
+            return {"total_count": 100 if full == "native-jobs" else 1, "jobs": native_jobs[2]}
         if "/jobs?" in path:
             return {"total_count": 100 if full == "jobs" else 1, "jobs": jobs[1]}
+        if "/workflows/native-helper.yml/" in path:
+            return {"total_count": 100 if full == "native-runs" else 1, "workflow_runs": native_runs}
         return {"total_count": 100 if full == "runs" else 1, "workflow_runs": runs}
 
     monkeypatch.setattr(runner_pools, "gh_read", read)
@@ -151,8 +158,9 @@ def test_live_census_and_retry_do_not_return_to_a_previous_pool(monkeypatch: pyt
     """A rescued run never returns to a pool that stranded an earlier attempt."""
     calls = fake_api(monkeypatch)
     assert runner_pools.live_capacity({"pi-macos": 1}, REPO, 1) == {"pi-macos": 1}
-    assert len(calls) == 11
+    assert len(calls) == 12
     assert sum("/workflows/native-helper.yml/" in path for path in calls) == 5
+    assert any("/runs/2/jobs?" in path for path in calls)
     fake_api(monkeypatch, previous=[{"labels": ["pi-macos"]}])
     assert runner_pools.live_capacity({"pi-linux": 1, "pi-macos": 1}, REPO, 1, 2) == {
         "pi-linux": 1,
@@ -164,7 +172,17 @@ def test_live_census_and_retry_do_not_return_to_a_previous_pool(monkeypatch: pyt
     assert runner_pools.live_capacity({"pi-macos": 0}, REPO, 1) == {}
 
 
-@pytest.mark.parametrize("full", ["runs", "jobs", "previous"])
+def test_native_census_is_skipped_without_macos_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a macOS slot needs the native-helper workflow's runs."""
+    calls = fake_api(monkeypatch)
+    assert runner_pools.live_capacity({"pi-linux": 1, "pi-macos": 0}, REPO, 1) == {
+        "pi-linux": 1,
+        "pi-macos": 0,
+    }
+    assert not any("native-helper.yml" in path for path in calls)
+
+
+@pytest.mark.parametrize("full", ["runs", "jobs", "previous", "native-runs", "native-jobs"])
 def test_incomplete_census_fails_closed(monkeypatch: pytest.MonkeyPatch, full: str) -> None:
     """Unseen jobs or runs could own every slot."""
     fake_api(monkeypatch, full=full)
@@ -192,7 +210,7 @@ def test_unavailable_census_overflows_hosted(monkeypatch: pytest.MonkeyPatch, er
     assert runner_pools.live_capacity({"pi-macos": 1}, REPO, 1) == {}
 
 
-@pytest.mark.parametrize("after", [1, 6])
+@pytest.mark.parametrize("after", [1, 11])
 def test_census_deadline_preserves_time_for_classification(
     monkeypatch: pytest.MonkeyPatch, after: int
 ) -> None:

@@ -171,6 +171,7 @@ OWNED_GATES = {
 # stays `wsl2` either way, so coverage accounting and `skip_hosts` keep working.
 HOST_WINDOWS = "windows"
 HOST_NATIVE = "native"
+HOSTED_MACOS = "xcode-27"
 # Runner label and execution guest per OS, as the `contracts` matrix spells them (a test pins the two).
 RUNNERS = {
     "ubuntu-24.04": ("ubuntu-24.04", "linux"),
@@ -860,6 +861,18 @@ def write_github_output(path: Path, result: ChangeClassification, cells: Mapping
         output.write(f"changed_files<<{delimiter}\n{changed}\n{delimiter}\n")
 
 
+def route_native_helper(capacity: Mapping[str, int]) -> str:
+    """Pick the runner for the macOS native-helper build.
+
+    Parameters:
+        capacity (Mapping[str, int]): Admitted pool capacity, empty when admission failed closed.
+
+    Returns:
+        str: `pi-macos` when it has an admitted slot, else the hosted `xcode-27`.
+    """
+    return "pi-macos" if capacity.get("pi-macos", 0) > 0 else HOSTED_MACOS
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments.
 
@@ -928,9 +941,8 @@ def main(argv: list[str] | None = None) -> int:
         capacity = {}
     LOGGER.info(f"Self-hosted pools admitted (working slots): {capacity}")
     if args.native_helper:
-        runner = "pi-macos" if capacity.get("pi-macos", 0) > 0 else "xcode-27"
         with args.github_output.open("a", encoding="utf-8") as output:
-            output.write(f"runner={runner}\n")
+            output.write(f"runner={route_native_helper(capacity)}\n")
         return 0
     problem = ""
     if args.event == EVENT_PULL_REQUEST:

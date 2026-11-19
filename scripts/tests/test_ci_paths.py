@@ -27,6 +27,32 @@ import runner_pools
 GIT = ci_paths.GIT
 
 
+def test_native_helper_rejects_a_mistyped_heartbeat_and_the_build_falls_back_hosted(tmp_path: Path) -> None:
+    """Exit 2 writes no `runner`; the build's `runs-on` then takes hosted `xcode-27` for a failed route."""
+    out = tmp_path / "output"
+    assert (
+        ci_paths.main(
+            [
+                "--native-helper",
+                "--event",
+                "push",
+                "--github-output",
+                str(out),
+                "--pool-heartbeat",
+                "pi-mac=1",
+            ]
+        )
+        == 2
+    )
+    assert not out.exists()
+    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/native-helper.yml").read_text()
+    expression = next(line for line in workflow.splitlines() if "needs.route.result" in line)
+    assert expression.strip() == (
+        "runs-on: ${{ needs.route.result == 'success' && github.run_attempt == 1 && "
+        "needs.route.outputs.runner == 'pi-macos' && 'pi-macos' || 'xcode-27' }}"
+    )
+
+
 @pytest.mark.parametrize(
     ("beat", "extra", "api", "expected"),
     [

@@ -85,9 +85,12 @@ OS_POOLS = {"ubuntu-24.04": "pi-linux", "macos-14": "pi-macos", "wsl2": "pi-wsl2
 CellKey = tuple[str, str, str]
 
 # Seconds a cell runs on a hosted runner (the clean `main` run 41914882314, #463; the macOS `check-ts`
-# shards from run 42799667706, #660). Only a cell listed here and at least `MIN_HEAVY_S` long is ever sent
-# to a pool: a self-hosted job pays ~25 s to clone and boot a VM, so short jobs lose, and an unlisted cell
-# is not known to pass on the pool images.
+# shards from run 42799667706, #660). Only a routable cell (`_routable`: listed, at least `MIN_HEAVY_S`
+# long, not hosted-only) is ever sent to a pool: a self-hosted job pays ~25 s to clone and boot a VM, so
+# short jobs lose. Listing is not proof: besides `owned shard (macos-14, ts)` and `owned shard (ubuntu-24.04,
+# ts)`, the pool-image behaviour of listed cells is unverified, and `native-helper.yml` is routed (outside
+# this table) without a pool-image pass. A failure there fails that required check; only a stranded queue is
+# moved to hosted by `runner_rescue.py`.
 CELL_SECONDS: dict[CellKey, int] = {
     # Known macOS work, ranked by expected completion time so the longest admitted cell starts locally
     # while shorter peers execute hosted. The `scripts` shard took 1420 s on hosted run 44119846540
@@ -109,6 +112,7 @@ CELL_SECONDS: dict[CellKey, int] = {
 MIN_HEAVY_S = 240
 # `make install-owned` needs authenticated core provenance verification for the current pin.
 # Record the timing without moving the scripts shard or its existing GH_TOKEN step to the pool.
+# TODO(redd): make provenance verification work without a token, then drop this denylist.
 HOSTED_ONLY_CELLS: frozenset[CellKey] = frozenset({("owned", "macos-14", "scripts")})
 
 
@@ -118,6 +122,11 @@ DRAINING = "drain"
 # `<epoch>:drain`. `int()` alone also takes `+3`, `1_0`, padded text and non-ASCII digits, which a writer
 # never sends; anything else is garbled, and routing and the rescue must agree on that.
 BEAT = re.compile(r"(?P<epoch>[0-9]+)(?::(?P<free>-?[0-9]+|drain))?", re.ASCII)
+
+
+def _routable(key: CellKey) -> bool:
+    """Return whether a cell may ever go to a pool: listed, long enough and not hosted-only."""
+    return key not in HOSTED_ONLY_CELLS and CELL_SECONDS.get(key, 0) >= MIN_HEAVY_S
 
 
 def cell_pool(name: str) -> str | None:
@@ -130,11 +139,11 @@ def cell_pool(name: str) -> str | None:
         str | None: The pool for a listed cell at least `MIN_HEAVY_S` long, else None (never migrate an
             unlisted cell).
     """
-    for key, seconds in CELL_SECONDS.items():
+    for key in CELL_SECONDS:
         kind, os_name, variant = key
         suffix = f", {variant}" if variant else ""
         label = f"owned shard ({os_name}, {variant})" if kind == "owned" else f"{kind} ({os_name}{suffix})"
-        if name == label and key not in HOSTED_ONLY_CELLS and seconds >= MIN_HEAVY_S:
+        if name == label and _routable(key):
             return OS_POOLS[os_name]
     return None
 
@@ -433,13 +442,7 @@ def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dic
     """
     free = dict(capacity)
     heavy = sorted(
-        (
-            key
-            for key in running
-            if key not in HOSTED_ONLY_CELLS
-            and CELL_SECONDS.get(key, 0) >= MIN_HEAVY_S
-            and OS_POOLS.get(key[1]) in free
-        ),
+        (key for key in running if _routable(key) and OS_POOLS.get(key[1]) in free),
         key=lambda key: (-CELL_SECONDS[key], key),
     )
     chosen: dict[CellKey, str] = {}

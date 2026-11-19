@@ -44,9 +44,10 @@ jobs:
   build:
     needs: route
     if: ${{ !cancelled() }}
+    # A rerun of failed jobs keeps `route`'s attempt-1 output, so only attempt 1 may use the pool.
     # CLT 27.2 compiled and ad hoc signed a trivial source with the required frameworks for both arches.
     # That probe did not run the real native-check workflow or compile its Swift sources on the pool.
-    runs-on: ${{ needs.route.result == 'success' && needs.route.outputs.runner == 'pi-macos' && 'pi-macos' || 'xcode-27' }}
+    runs-on: ${{ needs.route.result == 'success' && github.run_attempt == 1 && needs.route.outputs.runner == 'pi-macos' && 'pi-macos' || 'xcode-27' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

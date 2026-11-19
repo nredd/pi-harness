@@ -26,7 +26,8 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
   path and plaintext hosts.yml. Environment scrubbing is NOT credential-capability isolation. This
   remains within the same-repo TRUST assumption and the submitted workflow's read-only token scope.
 - Second credential exception: the hosted CI `classify` job (owner-approved 2026-11-18) and the hosted
-  native-helper `route` job get job-level `actions: read` (`contents` stays read-only) and `GH_TOKEN`
+  native-helper `route` job (owner-approved 2026-11-19; GET-only, hosted `ubuntu-24.04`, same-repo
+  non-fork events only, skipped on fork PRs and `PI_POOLS_DISABLED`) get job-level `actions: read` (`contents` stays read-only) and `GH_TOKEN`
   for the shared pool census, which only issues GET
   reads (argv-tested; a description plus a test, not a technical restriction). The token goes to pushes
   and `workflow_dispatch` on ANY branch and to same-repo PRs; fork PRs get an empty token and
