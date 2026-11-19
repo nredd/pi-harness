@@ -25,11 +25,14 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
   pi/npm scripts and Git subprocesses that preserve PATH). It can invoke gh or read the shim's config
   path and plaintext hosts.yml. Environment scrubbing is NOT credential-capability isolation. This
   remains within the same-repo TRUST assumption and the submitted workflow's read-only token scope.
-- Second credential exception, owner-approved 2026-11-18: the CI `classify` job gets job-level
-  `actions: read` (`contents` stays read-only) and `GH_TOKEN` for its pool census, which only issues GET
+- Second credential exception: the hosted CI `classify` job (owner-approved 2026-11-18) and the hosted
+  native-helper `route` job (owner-approved 2026-11-19; GET-only, hosted `ubuntu-24.04`, same-repo
+  non-fork events only, skipped on fork PRs and `PI_POOLS_DISABLED`) get job-level `actions: read` (`contents` stays read-only) and `GH_TOKEN`
+  for the shared pool census, which only issues GET
   reads (argv-tested; a description plus a test, not a technical restriction). The token goes to pushes
   and `workflow_dispatch` on ANY branch and to same-repo PRs; fork PRs get an empty token and
-  `--no-pools`, which leaves every cell hosted. It is a plain env var visible to every child process of
+  `--no-pools` for CI; the native-helper route job is skipped altogether on fork PRs. Both leave
+  every cell hosted. The token is a plain env var visible to every child process of
   repo scripts, and `actions: read` is job-wide, so those processes can read every run and job in the
   repo. Read scope only: no write scope. It rests on the same-repo TRUST assumption above.
 - Do not alter the live Pi install, bump pins or run `chezmoi` from this repository.
