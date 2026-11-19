@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+protocol AgentCursorSurface: AnyObject {
+    var isVisible: Bool { get }
+    func orderFrontRegardless()
+    func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int)
+    func dismiss()
+}
+
 /// Visual-only cursor; native action delivery remains authoritative.
 @MainActor
 final class AgentCursor {
@@ -8,13 +16,25 @@ final class AgentCursor {
 
     static let shared = AgentCursor(scheduleIdleHide: scheduleDefaultIdleHide)
 
-    private var overlay: AgentCursorOverlayWindow?
+    private var overlay: (any AgentCursorSurface)?
     private var idleHideTask: Task<Void, Never>?
     private var idleGeneration: UInt = 0
     private let scheduleIdleHide: IdleHideScheduler
+    private let renderer: AgentCursorRenderer
+    private let mainFrame: () -> CGRect
+    private let makeSurface: () -> any AgentCursorSurface
 
-    init(scheduleIdleHide: @escaping IdleHideScheduler) {
+    convenience init(scheduleIdleHide: @escaping IdleHideScheduler) {
+        self.init(scheduleIdleHide: scheduleIdleHide, renderer: .shared,
+                  mainFrame: { NSScreen.main?.frame ?? .zero }, makeSurface: Self.makeWindow)
+    }
+
+    init(scheduleIdleHide: @escaping IdleHideScheduler, renderer: AgentCursorRenderer,
+         mainFrame: @escaping () -> CGRect, makeSurface: @escaping () -> any AgentCursorSurface) {
         self.scheduleIdleHide = scheduleIdleHide
+        self.renderer = renderer
+        self.mainFrame = mainFrame
+        self.makeSurface = makeSurface
     }
 
     func animate(to point: CGPoint, above windowId: UInt32) {
@@ -26,9 +46,8 @@ final class AgentCursor {
         if !window.isVisible { window.orderFrontRegardless() }
         window.order(.above, relativeTo: Int(windowId))
 
-        let renderer = AgentCursorRenderer.shared
         if renderer.position.x < -100 {
-            let frame = NSScreen.main?.frame ?? .zero
+            let frame = mainFrame()
             renderer.setInitialPosition(CGPoint(
                 x: min(max(point.x - 140, frame.minX + 2), frame.maxX - 2),
                 y: min(max(point.y - 140, frame.minY + 2), frame.maxY - 2)
@@ -42,9 +61,7 @@ final class AgentCursor {
             guard generation == idleGeneration, self.overlay === window else { return }
 
             renderer.cancelAnimation()
-            window.orderOut(nil)
-            window.contentView = nil
-            window.close()
+            window.dismiss()
             overlay = nil
             idleHideTask = nil
         }
@@ -58,8 +75,14 @@ final class AgentCursor {
         }
     }
 
-    private func ensureWindow() -> AgentCursorOverlayWindow {
+    private func ensureWindow() -> any AgentCursorSurface {
         if let overlay { return overlay }
+        let window = makeSurface()
+        overlay = window
+        return window
+    }
+
+    private static func makeWindow() -> AgentCursorOverlayWindow {
         let window = AgentCursorOverlayWindow(
             contentRect: NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? .zero,
             styleMask: .borderless,
@@ -67,13 +90,18 @@ final class AgentCursor {
             defer: false
         )
         window.contentView = NSHostingView(rootView: AgentCursorView())
-        overlay = window
         return window
     }
 }
 
 /// Main-display-only, click-through overlay that can never take focus.
-private final class AgentCursorOverlayWindow: NSWindow {
+private final class AgentCursorOverlayWindow: NSWindow, AgentCursorSurface {
+    func dismiss() {
+        orderOut(nil)
+        contentView = nil
+        close()
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 

@@ -346,7 +346,17 @@ print("macos keyboard layout checks passed (\(checked) reference sources)")
 }
 @main
 struct HeadlessTests {
- @MainActor static func main() { runPureAssertions(); runRefLookAssertions(); runKeyboardAssertions(); runRequestFramingAssertions(); testMotionLifecycle(); runCursorMotionAssertions() }
+    @MainActor static func main() async {
+        runPureAssertions()
+        runRefLookAssertions()
+        runKeyboardAssertions()
+        runRequestFramingAssertions()
+        testMotionLifecycle()
+        runCursorMotionAssertions()
+        runCursorLifecycleAssertions()
+        runGlowLayoutAssertions()
+        await runGlowLifecycleAssertions()
+    }
     @MainActor
     static func testMotionLifecycle() {
         let renderer = AgentCursorRenderer()

@@ -17,6 +17,7 @@ export const sources = [
 export const testSources = [
 	"native/macos/headless_tests.swift",
 	"native/macos/cursor_motion_tests.swift",
+	"native/macos/overlay_tests.swift",
 	"native/macos/ref_look_tests.swift",
 	"native/macos/request_framing_tests.swift",
 ];
