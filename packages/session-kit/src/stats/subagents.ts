@@ -1,4 +1,5 @@
 /** Local-only subagent accounting. Reuses stats parsing/dedup, never writes its cache or exports transcripts. */
+import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { feedFile, listJsonl, type ScanDiagnostic, timeOf } from "./jsonl.ts";
@@ -78,6 +79,7 @@ interface Dispatch {
 interface Metadata {
 	path: string;
 	session: string;
+	contentDigest: string;
 	parent: string;
 	name: string;
 	child: boolean;
@@ -236,10 +238,12 @@ async function scanFile(scan: Scan, path: string): Promise<void> {
 	let parent = "";
 	let name = "";
 	let lineNumber = 0;
+	const content = createHash("sha256");
 	try {
 		await feedFile(path, {
 			accept(line) {
 				lineNumber++;
+				content.update(line).update("\n");
 				// Every line goes through the shared parser, so its fast path and counters match `/stats`.
 				parser.accept(line);
 				let entry: Record<string, unknown> | undefined;
@@ -269,6 +273,7 @@ async function scanFile(scan: Scan, path: string): Promise<void> {
 	scan.metadata.push({
 		path,
 		session: parsed.sessionId ?? opaqueId(`legacy-session:${path}`),
+		contentDigest: content.digest("hex"),
 		parent,
 		name,
 		child: parsed.child,
@@ -322,7 +327,7 @@ async function scan(root: string): Promise<Scan> {
 	return out;
 }
 
-/** Resolve copied/aliased roots by stable session filenames, never guess between different sessions. */
+/** Resolve relocated filenames only when the candidates agree on identity and content. */
 function relocateReferences(scan: Scan): void {
 	const byName = new Map<string, Metadata[]>();
 	for (const meta of scan.metadata) {
@@ -332,8 +337,9 @@ function relocateReferences(scan: Scan): void {
 	const locate = (path: string, required: boolean): string => {
 		if (!path || scan.paths.has(path)) return path;
 		const candidates = byName.get(basename(path)) ?? [];
-		if (candidates.length > 0 && new Set(candidates.map((meta) => meta.session)).size === 1)
-			return nth(candidates, 0).path;
+		const [first, ...copies] = candidates;
+		if (first && copies.every((copy) => copy.session === first.session && copy.contentDigest === first.contentDigest))
+			return first.path;
 		if (required || candidates.length > 0) {
 			scan.errors++;
 			diagnose(scan, { path, line: 0, reason: "unmatched-session" });

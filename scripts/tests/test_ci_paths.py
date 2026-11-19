@@ -101,7 +101,7 @@ def classify_change(repo: Path, files: dict[str, str]) -> ci_paths.ChangeClassif
         "CONTRIBUTING.md",
         "NOTES.md",
         "packages/dev-tools/README.md",
-        "packages/session-kit/CHANGELOG.md",
+        "packages/preset/CHANGELOG.md",
     ],
 )
 def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
@@ -130,6 +130,12 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
         "packages/preset/README.md",
         "packages/session-kit/README.md",
         "packages/todo/README.md",
+        "packages/subagents/CHANGELOG.md",
+        "packages/session-kit/CHANGELOG.md",
+        "packages/dev-tools/CHANGELOG.md",
+        "packages/todo/CHANGELOG.md",
+        "packages/plan-mode/CHANGELOG.md",
+        "packages/resource-sampler/CHANGELOG.md",
         ".github/workflows/ci.yml",
         "AGENTS.md",
         "docs/coverage.md",
@@ -152,6 +158,8 @@ def test_classify_rejects_code_and_tested_documentation(repo: Path, path: str) -
     Returns:
         None: Assertions verify classification.
     """
+    if path.endswith("/CHANGELOG.md"):
+        classify_change(repo, {path: "seed\n"})
     result = classify_change(repo, {path: "input\n"})
     assert not result.docs_only
     assert result.paths == (path,)

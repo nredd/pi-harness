@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
-- Add a read-only local subagent usage report grouped by agent type, physical model, workflow and review traffic, preserving recorded pricing coverage and child-session deduplication ([#1003](https://github.com/nredd/pi-harness/issues/1003)).
+## [0.12.0] - 2026-11-18
+
+- Show a separately labelled, offline current-rate API-equivalent estimate in `/stats` next to recorded costs, with priced/unpriced coverage; partial sums read `priced subset only` and unknown is never `$0`. Add the host-supplied `@earendil-works/pi-ai` peer; estimates require its `estimateTokenCost` export (available in core `v1.3.0-nredd.12`). Older hosts without it keep recorded costs and report estimates as unknown ([#813](https://github.com/nredd/pi-harness/pull/813), part of [#799](https://github.com/nredd/pi-harness/issues/799)).
+
+- Export compact snapshot v3: dictionary/tuple JSON compressed with gzip, authenticated compressed bytes and bounded per-machine expansion; continue importing v1 and v2. Reuse sealed months with deltas, regenerate corrected usage/session generations, and prune superseded shards after manifest publication while retaining one recovery generation and frozen unreadable-history files. Cleanup failures warn without undoing publication; recovery warnings do not disable later pruning ([#1036](https://github.com/nredd/pi-harness/pull/1036)).
+
+- Isolate injected-home harness reads from the process environment unless `env` is supplied explicitly, so `XDG_DATA_HOME` cannot redirect the OpenCode database outside that home ([#938](https://github.com/nredd/pi-harness/issues/938)).
 
 - Split session and harness JSONL on `\n` only (a trailing `\r` is dropped): `node:readline` also broke lines at U+2028 and U+2029, which `JSON.stringify` leaves raw inside strings, so one valid record became two bad lines and `pi-stats-export` failed with `Incomplete local scan` ([#991](https://github.com/nredd/pi-harness/issues/991)). Cached pi and Claude/Codex records that counted bad lines are re-read on the next scan, so no cache bump; a record for a file that is deleted or outside the scanned root cannot be re-read and keeps its old count
 
@@ -16,7 +22,7 @@
 
 - Export Claude Code, Codex and OpenCode usage: snapshot version 2 adds `harness` on events, a nullable `cost` (`null` for Claude and Codex, not 0) and quota observations (freshest `observedAt` per `(provider, limitId, window)` wins across machines); `harness` joins the event fingerprint and the dedup key; v1 snapshots still import as `pi`. `pi-stats-export export` gains `--harness` (default `pi` only) and `--claude-dir` / `--codex-dir` / `--opencode-db`. The harness cache is bumped to version 4 and records a hash of the installation salt, so a salt change drops only quota (usage records are kept, files re-parse). Quota readings carry an `account` (salted local hash of the harness's account ID, `""` when none) so two accounts do not merge, and an expired reading never beats a live one. Export state (`export-state.json`: salt and published harness set) refuses a narrower `--harness` than last published unless `--replace-harnesses`; a harness that fails mid-export keeps its last published contents instead of aborting. A harness not found while the last snapshot holds data for it is kept, not replaced by an empty one; manifests carry `lastGoodAt` per harness and `import` reports `stale` ones (over 2 days behind); a published export exits 0 however many harnesses failed (`failed`, `consecutiveFailures` and import `stale` are in the JSON result for callers to warn on);  a lost `export-state.json` is rebuilt from the published snapshot. Counts only (part of [#367](https://github.com/nredd/pi-harness/issues/367))
 
-- Add readers for Claude Code, Codex CLI and OpenCode usage in `src/stats/harness/` and a `harness` field on `Call` (pi calls are `"pi"`), with entry dedup by `(message.id, requestId)` for Claude, per-turn Codex records joined to their model, Codex `rate_limits` quota observations and a read-only WAL-aware OpenCode query. Counts only; not yet exported or shown in `/stats` (part of [#367](https://github.com/nredd/pi-harness/issues/367))
+- Add readers for Claude Code, Codex CLI and OpenCode usage in `src/stats/harness/` and a `harness` field on `Call` (pi calls are `"pi"`), with entry dedup by `(message.id, requestId)` for Claude, per-turn Codex records joined to their model, Codex `rate_limits` quota observations and a read-only WAL-aware OpenCode query. Counts only; export and display are covered above (part of [#367](https://github.com/nredd/pi-harness/issues/367))
 
 - Cover omitted stats API arguments and remove the unreachable private help default; preserve the stats library's runtime/type export contract with a validated named facade. Full local Node/Bun L/F/B/S reports are zero-miss; hosted zero receipts remain required before Bun enforcement (#824)
 
@@ -24,6 +30,10 @@
 - Run the full session-kit suite through the disposable-home Vitest launcher on Bun; retain report-only enforcement until the remaining stats branch/facade work is admitted (#320)
 
 - Pin published `@nredd/pi-resource-sampler@0.2.1` for `/mon`, removing the known Linux `/proc` iterator PID-exit collection race (#499); the historical #557 WSL incident errno remains unproven
+
+- Read optional Claude statusLine `rate-limits.json` captures into the offline stats/export quota pipeline (#963). Allowlist the two numeric windows, reject future observations, keep missing/invalid windows unknown, and reuse reset/staleness display without adding account identity. Capture deployment and reader publication remain separate.
+
+## [0.11.0] - 2026-11-11
 
 - Add an optional `todo` (an id, or a list of up to 20) to `monitor_start`, and carry `wake`, `match` and `todos` on `session-kit:monitor:started` / `:stopped` (`{ sessionId, id, name, wake, match?, todos? }`), so todo can show the linked work as waiting on the monitor instead of held; a monitor without `todo` no longer counts as a todo's continuation ([#522](https://github.com/nredd/pi-harness/issues/522))
 
@@ -48,8 +58,6 @@
 - Explain RSS versus footprint, compressed pages, executable names (`pi` as `node`), strong native identity and unavailable-CPU fallback in `?`; native metrics require the subsequent published sampler dependency bump
 
 - Raise the `monitor_start` `timeout_s` cap from 24h to 7 days (`604800`) so monitors can outlive long jobs
-
-- Read optional Claude statusLine `rate-limits.json` captures into the existing offline stats/export quota pipeline (#963). Allowlist the two numeric windows, reject future observations, keep missing/invalid windows unknown, and reuse reset/staleness display without adding account identity. Capture deployment (nredd/dotfiles#144) and reader publication remain separate.
 
 ## 0.8.0
 

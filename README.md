@@ -49,7 +49,8 @@ make help                    # every target
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
 - `check-changelog-fragments` and explicit `fold-changelog` use the managed `tests/integration` uv project;
-  folding edits source fragments only, never publishes or releases
+  folding edits source fragments only, never publishes or releases. Edits to enrolled packages'
+  `CHANGELOG.md` files run the scripts gate, including fragment validation, rather than bypassing CI as docs-only
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
 - `install-owned` also runs `install-lint-tools`: checksum-pinned ShellCheck `0.11.0`, actionlint
@@ -234,9 +235,11 @@ The twelve jobs are the configured required checks of ruleset `main required che
 - `make check` is not the core gate. `forks.yml` runs the core suite at the exact Gitlink and
   the ordinary `tests/integration/scenarios/candidate/test_core_compaction.py` pytest scenario runs the
   assembled direct/routed child probes after authenticated root installation and `make build`.
-  It requires the built candidate core, fails rather than skips when missing, and owns its private
-  HOME/auth/tmp and offline environment through `harness.sandbox`. `make check-integration`
-  covers probe Biome/types through the normal `check-probes` path. The fork gate's non-rewriting
+  It type-checks `compaction-children.test.ts` against the Gitlink source via `forks/pi/tsconfig.json`
+  before running the Node tests. It requires the built candidate core, fails rather than skips when
+  missing, and owns its private HOME/auth/tmp and offline environment through `harness.sandbox`.
+  `make check-probes` still lints the whole probe directory and type-checks the other probes against
+  the released host. The fork gate's non-rewriting
   check mirrors the entire selected core script, including worktree readiness and binary-release
   type checks; only Biome's `--write` is removed
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with

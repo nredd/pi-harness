@@ -157,7 +157,7 @@ describe("StatsView", () => {
 		expect(requestRender).toHaveBeenCalled();
 		const lines = view.render(120).map(strip);
 		const header = lines.find((l) => l.includes("Cache read")) ?? "";
-		expect(header).toMatch(/Tokens +Share +In +Out +Cache read +Cache write +Cost \(notional\)/);
+		expect(header).toMatch(/Tokens +Share +In +Out +Cache read +Cache write +Recorded cost/);
 		// provider subtotal, then its models, one aligned line each, every column ending on the same edge
 		const provider = lines.find((l) => /• anthropic /.test(l)) ?? "";
 		const model = lines.find((l) => l.includes("claude-opus-5-5") && /\d%/.test(l)) ?? "";
@@ -170,7 +170,7 @@ describe("StatsView", () => {
 		const cards = view.render(70).map(strip);
 		expect(cards.join("\n")).toMatch(/• anthropic {2}\S+ \(\d+\.\d%\)/);
 		expect(cards.join("\n")).toContain("In: ");
-		expect(cards.join("\n")).toMatch(/Cache: \S+ read · \S+ write · \$\d+\.\d\d notional/);
+		expect(cards.join("\n")).toMatch(/Cache: \S+ read · \S+ write · \$\d+\.\d\d recorded/);
 		expect(cards.some((l) => l.includes("Cache read"))).toBe(false);
 	});
 
@@ -307,7 +307,7 @@ describe("StatsView", () => {
 			stacked.findIndex((l) => l.includes("Less ░")),
 		);
 		// one column of cells, labels and values aligned
-		const values = beside.filter((l) => /Total tokens|Sessions|Notional cost/.test(l)).map((l) => l.search(/\S+$/));
+		const values = beside.filter((l) => /Total tokens|Sessions|Recorded cost/.test(l)).map((l) => l.search(/\S+$/));
 		expect(values.length).toBe(3);
 	});
 
@@ -318,7 +318,7 @@ describe("StatsView", () => {
 			// Labels are padded to their column's longest, so a short label with a long value (`Favorite
 			// model`) next to a long label with a short value must still fit the width the grid budgeted.
 			const LABELS = ["Favorite model", "Total tokens", "Sessions", "Longest session", "Active days"];
-			const LABELS2 = ["Longest streak", "Most active day", "Current streak", "Cache tokens", "Notional cost"];
+			const LABELS2 = ["Longest streak", "Most active day", "Current streak", "Cache tokens", "Recorded cost"];
 			// Pinned to the fixture's day: against the real clock the hourly ranges hold no calls, lay out no
 			// grid, and would pass without checking a row. 24 rows lay out the same grid rows as 60 at every
 			// width here, with a shorter chart under them.
@@ -475,9 +475,9 @@ describe("summary", () => {
 		]);
 		expect(text.split("\n")).toEqual([
 			"/stats: 5M tokens (in + out + cache), all time",
-			"provider      model  in  out  cache read  cache write   cost       %",
-			"anthropic     opus   1k   2k          5M           7k  $1.25  100.0%",
-			"openai-codex  sol    10    0           0            0  $0.00    0.0%",
+			"provider      model  in  out  cache read  cache write  recorded cost       %",
+			"anthropic     opus   1k   2k          5M           7k          $1.25  100.0%",
+			"openai-codex  sol    10    0           0            0          $0.00    0.0%",
 		]);
 		expect(summary([])).toBe("/stats: no usage recorded yet");
 	});

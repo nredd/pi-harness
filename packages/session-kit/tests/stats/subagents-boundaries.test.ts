@@ -109,6 +109,28 @@ it("resolves identical copies of a relocated parent and diagnoses missing parent
 	});
 });
 
+it("reports divergence instead of joining a relocated child to a stale parent copy", async () => {
+	await mkdir(join(root, "backup"));
+	await mkdir(join(root, "current"));
+	await file("backup/parent.jsonl", [header("p")]);
+	await file("current/parent.jsonl", [
+		header("p"),
+		{ customType: "subagents:workflow", data: { name: "audit", progress: [{ recordId: "12345678" }] } },
+	]);
+	await file("child.jsonl", [header("c", "/old/parent.jsonl"), info("Explore#12345678"), call("one")]);
+	const report = await reportSubagents(root);
+	expect(report).toMatchObject({
+		complete: false,
+		groups: [{ agentType: "Explore", workflow: "unknown", calls: 1 }],
+		diagnostics: [{ reason: "unmatched-session", path: "/old/parent.jsonl" }],
+	});
+	await rm(join(root, "backup"), { recursive: true });
+	expect(await reportSubagents(root)).toMatchObject({
+		complete: true,
+		groups: [{ agentType: "Explore", workflow: "audit", calls: 1 }],
+	});
+});
+
 it("reports real directory read failures and read races nonfatally", async () => {
 	// ENOTDIR exercises the same readdir rejection as EACCES, including when tests run as root.
 	const notDirectory = await file("not-directory", []);

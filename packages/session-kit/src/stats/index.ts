@@ -12,6 +12,7 @@ import { StatsView, summary } from "./component.ts";
 import { freshnessLines } from "./freshness.ts";
 import { EXTERNAL_HARNESSES } from "./harness/index.ts";
 import type { Loaded } from "./load.ts";
+import { createValuer } from "./pricing.ts";
 import { type Combined, coverageLabel, loadCombined } from "./snapshot.ts";
 
 const STATUS_KEY = "session-kit:stats";
@@ -63,6 +64,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 				if (tui) ctx.ui.setStatus(STATUS_KEY, undefined);
 			}
 
+			const valueCall = createValuer(ctx.modelRegistry.getAll());
 			const damage = [
 				...problems(loaded),
 				...loaded.coverage.problems.map((p) => `/stats: ${p}`),
@@ -80,6 +82,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 							loaded.calls.filter((c) => c.ms <= clock.now()),
 							loaded.quota,
 							clock.now(),
+							valueCall,
 						),
 						coverage,
 						...freshness,
@@ -103,6 +106,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 						badLines,
 						coverage,
 						freshness,
+						valueCall,
 						quota,
 						now: clock.now(),
 						theme,

@@ -218,6 +218,7 @@ const RESOLVED: Record<string, unknown> = {
 				"anthropic-block-types.test.ts",
 				"latency.test.ts",
 				"process-lifecycle.test.ts",
+				"request-ledger.test.ts",
 				"render.test.ts",
 				"session-kit-child-scope.test.ts",
 				"stack-resources.test.ts",
@@ -256,7 +257,8 @@ const RESOLVED: Record<string, unknown> = {
 	},
 	"packages/computer-use/vitest.config.ts": {
 		test: {
-			dir: "test",
+			// Legacy `test/*.test.mjs` plus the standard `tests/*.test.ts` (#674 moved its tests under #860's layout).
+			include: ["test/**/*.test.mjs", "tests/**/*.test.ts"],
 			pool: "forks",
 			maxWorkers: 1,
 			fileParallelism: false,
