@@ -342,6 +342,7 @@ describe("persistent profile opt-in", () => {
 				try { await testing.performLaunchBrowser({}); process.exitCode = 1; }
 				catch (error) { if (!/locked/.test(error.message)) throw error; }
 			`;
+			// Use the toolchain Node on PATH even when Bun supplies the parent executable or starts the suite directly.
 			const child = spawn("node", ["--import", "tsx", "--input-type=module", "-e", script], {
 				cwd: fileURLToPath(new URL("..", import.meta.url)),
 				env: { ...process.env, TEST_CWD: root },

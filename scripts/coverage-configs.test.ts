@@ -575,10 +575,12 @@ test("computer-use Bun accounts the complete primary inventory in a separate rep
 	const bun = realPolicy()["computer-use-vitest"]?.signals.bun;
 	assert.ok(bun);
 	assert.equal(bun.report, "coverage/bun/lcov.info");
+	assert.equal(bun.enforcement, "report-only");
 	assert.equal(bun.files, undefined);
 });
 
-test("computer-use pins every file already at zero uncovered, each owned (#645)", async () => {
+test("computer-use Node pins every file already at zero uncovered, each owned (#645)", async () => {
+	vi.stubEnv("PI_EXPECT_BUN_RUNTIME", undefined);
 	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-vitest");
 	assert.ok(producer);
 	const { thresholds, include } = await coverageOf(producer);
@@ -591,4 +593,11 @@ test("computer-use pins every file already at zero uncovered, each owned (#645)"
 		assert.ok(owned.has(path), `${path} is an owned source file`);
 		assert.deepEqual(thresholds[path], { lines: 100, functions: 100, branches: 100, statements: 100 });
 	}
+});
+
+test("computer-use Bun reports coverage without Vitest thresholds (#645)", async () => {
+	vi.stubEnv("PI_EXPECT_BUN_RUNTIME", "1");
+	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-vitest");
+	assert.ok(producer);
+	assert.equal((await coverageOf(producer)).thresholds, undefined);
 });

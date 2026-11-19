@@ -60,9 +60,16 @@ const config = definePackageConfig("computer-use-vitest", {
 		// own derived budgets.
 		testTimeout: 20_000,
 		coverage: {
-			thresholds: Object.fromEntries(
-				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100, statements: 100 }]),
-			),
+			// The launcher marks the report-only Bun run; keep the per-file pins on Node.
+			thresholds:
+				process.env.PI_EXPECT_BUN_RUNTIME === "1"
+					? undefined
+					: Object.fromEntries(
+							ZERO_UNCOVERED_FILES.map((path) => [
+								path,
+								{ lines: 100, functions: 100, branches: 100, statements: 100 },
+							]),
+						),
 		},
 	},
 });

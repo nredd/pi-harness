@@ -204,8 +204,9 @@ prose below is retained verbatim, not a claim that the retired website or sync c
 
 `npm run check` runs the deterministic package checks, including the same JS/TS runtime suite on Node
 and Bun. `npm run test:bun` writes independent Istanbul reports in `coverage/bun/`; the Node
-primary and separate async report retain their own paths and thresholds. Bun accounting requires
-complete reports but is report-only until hosted coverage is verified on both owned OSes (#645).
+primary and separate async report retain their own paths and thresholds. The Bun run does not apply
+Vitest coverage thresholds. Bun accounting requires complete reports but is report-only until
+hosted coverage is verified on both owned OSes (#645).
 Vitest reports native and live suites off their platform or opt-in as skipped. Never run
 `test/macos-helper-live.test.mjs` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.

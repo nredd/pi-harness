@@ -456,7 +456,8 @@ The full runtime suite also runs through `test:bun` with the same Istanbul inven
 `coverage/bun/` reports. Accounting requires complete reports and compares them to the primary zero
 budgets for reference only. Bun enforcement requires complete-source hosted receipts on both owned
 OSes (#645); the verification-only async suite retains its independent Node signal.
-Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
+Subprocess-run scripts count only what the suites import. On Node, files already at 0/0/0/0 on
+every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
 The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
