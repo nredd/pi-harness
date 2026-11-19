@@ -10,8 +10,8 @@
   },
   "sources": [
     {
-      "source": "npm:@nredd/pi-preset@0.4.0",
-      "extensions": ["extensions/expanded-footer.ts"],
+      "source": "npm:@nredd/pi-preset@0.5.0",
+      "extensions": ["src/index.ts"],
       "skills": [],
       "prompts": [],
       "themes": []
@@ -27,7 +27,7 @@
     "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
     "npm:pi-memory@0.4.2",
     "npm:@nredd/pi-computer-use@0.7.0",
-    "npm:@nredd/pi-session-kit@0.11.0"
+    "npm:@nredd/pi-session-kit@0.12.0"
   ],
   "settings": {"quietStartup": true, "fullscreen": true},
   "disabled_extensions": {
