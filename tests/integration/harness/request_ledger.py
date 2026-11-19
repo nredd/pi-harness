@@ -1,4 +1,4 @@
-"""Pure accounting of original UTF-8 JSON request bytes, not tokens or spend.
+"""Account for original UTF-8 JSON bytes in wire bodies and faux SDK transcripts.
 
 Only explicit wire structure or exact caller-supplied provenance is attributed.
 The wire adapter erases custom-message types; absent provenance remains shared.
@@ -42,6 +42,7 @@ CONTROL_FIELDS = frozenset(
         "stop_sequences",
     }
 )
+MESSAGE_CATEGORIES = {"assistant": "assistant_text", "user": "user"}
 SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:"
 
 
@@ -433,7 +434,7 @@ class _Attributor:
             path: tuple[str | int, ...] = ("messages", index, "content")
             content = message.get("content", [])
             role = message.get("role")
-            category = {"assistant": "assistant_text", "user": "user"}.get(role, "shared")
+            category = MESSAGE_CATEGORIES.get(role, "shared")
             blocks: list[tuple[tuple[str | int, ...], dict[str, Any]]] = (
                 [(path, {"type": "text", "text": content})]
                 if isinstance(content, str)
@@ -441,6 +442,48 @@ class _Attributor:
             )
             for block_path, block in blocks:
                 self.block(block_path, block, isinstance(content, str), category, role == "system")
+
+    def sdk_messages(self, body: dict[str, Any]) -> list[dict[str, Any]]:
+        """Attribute a public SDK transcript, where system messages declare tools.
+
+        Parameters:
+            body (dict[str, Any]): serialized model id and faux factory `TranscriptContext`.
+
+        Returns:
+            list[dict[str, Any]]: ordered tool declarations, including mid-session additions.
+        """
+        tools: list[dict[str, Any]] = []
+        for index, message in enumerate(body["messages"]):
+            path = ("messages", index)
+            role = message["role"]
+            if role == "toolResult":
+                self.claim((*path, "content"), f"tool_result:{_safe(message['toolName'], SAFE_NAME)}")
+                continue
+            if role == "system":
+                for number, tool in enumerate(message.get("toolsAdded", [])):
+                    tools.append(tool)
+                    self.claim((*path, "toolsAdded", number), self.tool_bucket(tool["name"]))
+                for name, text in message.get("sections", {}).items():
+                    if text is not None:
+                        self.text((*path, "sections", name), f"system:{_safe(name, SAFE_NAME)}")
+            category = MESSAGE_CATEGORIES.get(role, "shared")
+            content_path = (*path, "content")
+            content = message["content"]
+            if isinstance(content, str):
+                self.block(content_path, {"type": "text", "text": content}, True, category, role == "system")
+                continue
+            for number, block in enumerate(content):
+                block_path = (*content_path, number)
+                if block["type"] == "toolCall":
+                    self.claim(
+                        (*block_path, "arguments"), f"tool_call_args:{_safe(block['name'], SAFE_NAME)}"
+                    )
+                elif block["type"] == "thinking":
+                    for field in ("thinking", "thinkingSignature"):
+                        self.claim((*block_path, field), "thinking")
+                else:
+                    self.block(block_path, block, False, category, role == "system")
+        return tools
 
     def block(
         self,
@@ -486,6 +529,7 @@ def request_ledger(
     provenance: dict[str, str] | None = None,
     previous: str | None = None,
     parent: str | None = None,
+    sdk: bool = False,
 ) -> Ledger:
     """Partition one recorded request without mutation, I/O or provider usage.
 
@@ -497,6 +541,7 @@ def request_ledger(
             never inferred from arbitrary natural language.
         previous (str | None): preceding recorded request, original body.
         parent (str | None): spawning parent's request, original body.
+        sdk (bool): account for a faux factory transcript instead of an Anthropic wire body.
 
     Returns:
         Ledger: additive bytes, tool-array hash, literal prefix and marker offsets.
@@ -504,6 +549,7 @@ def request_ledger(
     Raises:
         ValueError: invalid, non-object or duplicate-key JSON, an invalid provenance category,
             or spans that are out of bounds or overlap.
+        KeyError: a required structural field is missing, such as SDK `messages` or message `content`.
         UnicodeError: the body cannot be represented as UTF-8.
     """
     categories = _categories(provenance or {})
@@ -511,16 +557,21 @@ def request_ledger(
     body = nodes[()].value
     encoded = raw.encode()
     attributor = _Attributor(nodes, raw, owners or {}, categories)
-    attributor.tools(body)
-    attributor.system(body)
-    attributor.messages(body)
+    if sdk:
+        tools = attributor.sdk_messages(body)
+    else:
+        attributor.tools(body)
+        attributor.system(body)
+        attributor.messages(body)
+        tools = body.get("tools", [])
     for key in body.keys() - {"system", "tools", "messages"} - CONTROL_FIELDS:
         attributor.claim((key,), "shared")
     markers: list[CacheMarker] = [
         {"path": list(path), "bytes_through_block": len(raw[: node.end].encode())}
         for path, node in nodes.items()
         if (
-            isinstance(node.value, dict)
+            not sdk
+            and isinstance(node.value, dict)
             and "cache_control" in node.value
             and (
                 (path[:1] in {("system",), ("tools",)} and len(path) == 2)
@@ -529,14 +580,14 @@ def request_ledger(
         )
     ]
     return {
-        "measurement": "utf8_wire_bytes",
+        "measurement": "utf8_sdk_context_bytes" if sdk else "utf8_wire_bytes",
         "request_bytes": len(encoded),
         "model": body.get("model"),
         "buckets": attributor.collector.finish(),
         "tool_array_sha256": hashlib.sha256(
-            json.dumps(
-                body.get("tools", []), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8", "surrogatepass")
+            json.dumps(tools, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8", "surrogatepass"
+            )
         ).hexdigest(),
         "cache_markers": markers,
         "common_prefix_previous_bytes": _prefix(encoded, previous),
