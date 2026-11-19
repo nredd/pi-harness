@@ -1178,6 +1178,9 @@ describe("macOS release download", () => {
 
 	test("a nested archive layout is searched, skipping files and empty directories", async () => {
 		const host = await makeHost();
+		// Enumerate the empty sibling before the helper's parent on every filesystem.
+		host.deps.fs.readdir = async (dir, options) =>
+			(await realFs.readdir(dir, options)).sort((a, b) => a.name.localeCompare(b.name, "en"));
 		serveRelease(host, async (dir) => {
 			await put(path.join(dir, "README.txt"), "file entry");
 			await realFs.mkdir(path.join(dir, "aaa-empty"));
