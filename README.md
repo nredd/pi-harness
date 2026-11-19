@@ -48,8 +48,6 @@ make help                    # every target
 
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
-- The startup acknowledgement cleanup test waits for the fake child's PID while the tmux pane is live,
-  then checks that sampling removed both the process and its scratch directory.
 - `check-changelog-fragments` and explicit `fold-changelog` use the managed `tests/integration` uv project;
   folding edits source fragments only, never publishes or releases. Edits to enrolled packages'
   `CHANGELOG.md` files run the scripts gate, including fragment validation, rather than bypassing CI as docs-only
