@@ -93,6 +93,8 @@ jobs:
         working-directory: .
         timeout-minutes: 5
         run: |
+          # Replace the image mirror list for this step only: Azure first, then archive.ubuntu.com.
+          # If both are unreachable, the per-command failure log names the mirror.
           # At most 2 * (30s update + 55s download) + 45s install + 5 * 10s kill grace = 265s.
           sudo bash scripts/forks_apt.sh /etc/apt/sources.list.d/ubuntu.sources "$RUNNER_TEMP/forks-apt.log" 30 55 45
           if ! command -v fd >/dev/null; then

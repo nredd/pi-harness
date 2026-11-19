@@ -251,10 +251,10 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   and fork-audit type checks; only Biome's `--write` is removed
 - The Forks system dependency step always installs the upstream packages. It shares Ubuntu mirror
   selection with WSL2: try Azure first, then the Ubuntu archive if the index or package download
-  fails. Each apt command has its own deadline inside the five-minute step, and apt output streams
-  into the job log. The hosted step rewrites the image's direct or mirror-list URIs in a temporary
-  source file, then installs from the downloaded packages without another network fetch or any
-  changes to the runner's configured sources
+  fails. Each apt command has its own deadline inside the five-minute step and prints its captured
+  output on completion or timeout. For this step only, the two mirrors replace the image's list in
+  a temporary source file. If both fail, the log names each one. Install from the downloaded
+  packages without another network fetch or any changes to the runner's configured sources
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with
   upstream; each README records where it came from
 

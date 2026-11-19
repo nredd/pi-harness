@@ -14,6 +14,11 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%/*}/ubuntu_apt.sh"
 apt_label=wsl2-apt
 apt_log=
+apt_on_timeout=show_guest_processes
+show_guest_processes() {
+  printf 'wsl2-apt: guest processes, newest first:\n' >&2
+  { ps -eo pid,ppid,etime,stat,args --sort=etime | head -n 40 >&2; } || true
+}
 if [ "$(id -u)" -ne 0 ]; then
   echo 'wsl2-apt: must run as root' >&2
   exit 1
@@ -41,7 +46,10 @@ download_seconds=${WSL_APT_DOWNLOAD_SECONDS:-360}
 install_seconds=${WSL_APT_INSTALL_SECONDS:-180}
 packages=(build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils)
 # `timeout` runs a program, not a shell function, so the install command is an array.
-install=(env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends)
+apt=(apt-get)
+UPDATE_ARGS=(update)
+INSTALL_ARGS=(install --yes --no-install-recommends)
+INSTALL_PREFIX=(env DEBIAN_FRONTEND=noninteractive)
 printf '%s\n' \
   'Acquire::Retries "3";' \
   'Acquire::http::Timeout "20";' \
@@ -57,14 +65,17 @@ if [ -n "$cache" ] && compgen -G "$cache/*.deb" > /dev/null; then
   cp -n "$cache"/*.deb "$archives/"
   printf 'wsl2-apt: restored %s cached packages\n' "$(find "$cache" -name '*.deb' | wc -l | tr -d ' ')"
 fi
-fetch() {
-  local mirror=$1
-  apt_bounded "apt-get update ($mirror)" "$update_seconds" apt-get update --error-on=any &&
-    apt_bounded "apt-get download ($mirror)" "$download_seconds" "${install[@]}" --download-only "${packages[@]}"
+rewrite_sources() {
+  local original=$1 selected=$2 mirror=$3
+  # Preserve the guest's stock archive/security rewrite and warn if no replacement was made.
+  printf '%s\n' "$original" | sed -E "s#http://(archive|security)\\.ubuntu\\.com/ubuntu/?#${mirror}/#" > "$selected" || return "$?"
+  if ! grep -q "$mirror" "$selected"; then
+    printf 'wsl2-apt: %s is not in %s after rewriting it\n' "$mirror" "$selected" >&2
+  fi
 }
-apt_fetch_from_mirror "$sources" "$sources" fetch
+apt_fetch_from_mirror "$sources" "$sources" rewrite_sources "$update_seconds" "$download_seconds" "${apt[@]}"
 # Everything is on disk now: the install needs no network, so a failure here is not a mirror problem.
-apt_bounded "apt-get install" "$install_seconds" "${install[@]}" "${packages[@]}"
+apt_bounded "apt-get install" "$install_seconds" "${INSTALL_PREFIX[@]}" "${apt[@]}" "${INSTALL_ARGS[@]}" "${packages[@]}"
 # Refresh the host cache. Housekeeping must not fail a setup whose install succeeded: a partly
 # emptied cache only costs the next run a download (a failed job saves no cache anyway). Calling it
 # on the left of `||` also suspends `set -e` inside it.

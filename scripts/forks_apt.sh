@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # shellcheck source=scripts/ubuntu_apt.sh
-source "${BASH_SOURCE[0]%/*}/ubuntu_apt.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/ubuntu_apt.sh"
 apt_label=forks-apt
 sources=$1
 apt_log=$2
@@ -13,17 +13,30 @@ install_seconds=$5
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 selected="$scratch/ubuntu.sources"
+apt_capture="$scratch/apt-output"
 packages=(libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep)
-apt=(env DEBIAN_FRONTEND=noninteractive apt-get
+apt=(apt-get
   -o "Dir::Etc::sourcelist=$selected" -o Dir::Etc::sourceparts=-
   -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10
   -o Acquire::Languages=none -o DPkg::Lock::Timeout=10 -o Dpkg::Use-Pty=0)
 
-fetch() {
-  local mirror=$1
-  apt_bounded "apt-get update ($mirror)" "$update_seconds" "${apt[@]}" update --error-on=any &&
-    apt_bounded "apt-get download ($mirror)" "$download_seconds" "${apt[@]}" install --yes --download-only "${packages[@]}"
+UPDATE_ARGS=(update --error-on=any)
+INSTALL_ARGS=(install --yes)
+INSTALL_PREFIX=(env DEBIAN_FRONTEND=noninteractive)
+
+rewrite_sources() {
+  local original=$1 selected=$2 mirror=$3 source=$4
+  # GitHub's Noble image can point both stanzas at its on-disk mirror list.
+  local ubuntu_uri='(https?://(azure\.archive|archive|security|us-east-2\.ec2\.archive)\.ubuntu\.com/ubuntu/?|mirror\+file:/etc/apt/apt-mirrors\.txt)'
+  if ! grep -Eq "^URIs:[[:blank:]].*$ubuntu_uri([[:blank:]]|$)" <<< "$original"; then
+    printf '%s: no supported Ubuntu mirror URI in %s\n' "$apt_label" "$source" >&2
+    return 1
+  fi
+  if ! sed -E "/^URIs:/ s#${ubuntu_uri}([[:blank:]]|$)#${mirror}/\3#g" <<< "$original" > "$selected"; then
+    printf '%s: could not write apt sources: %s\n' "$apt_label" "$selected" >&2
+    return 1
+  fi
 }
-apt_fetch_from_mirror "$sources" "$selected" fetch
+apt_fetch_from_mirror "$sources" "$selected" rewrite_sources "$update_seconds" "$download_seconds" "${apt[@]}"
 # Do not retry dpkg failures on another mirror. Everything needed is already in the archives.
-apt_bounded 'apt-get install' "$install_seconds" "${apt[@]}" install --yes --no-download "${packages[@]}"
+apt_bounded "apt-get install ($apt_mirror)" "$install_seconds" "${INSTALL_PREFIX[@]}" "${apt[@]}" "${INSTALL_ARGS[@]}" --no-download "${packages[@]}"

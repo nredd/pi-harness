@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import textwrap
 from pathlib import Path
@@ -32,7 +33,8 @@ def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
     assert "if" not in step
     assert "env" not in step
     assert step["working-directory"] == "."
-    sudo, bash, script, source, log, update, download, install = shlex.split(step["run"].splitlines()[1])
+    command = next(line for line in step["run"].splitlines() if line.startswith("sudo bash "))
+    sudo, bash, script, source, log, update, download, install = shlex.split(command)
     assert (sudo, bash, script) == ("sudo", "bash", "scripts/forks_apt.sh")
     assert source == "/etc/apt/sources.list.d/ubuntu.sources"
     assert log == "$RUNNER_TEMP/forks-apt.log"
@@ -59,10 +61,16 @@ def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
         ),
         ("both-hang", 1, ["azure-update", "stock-update"], "every mirror failed"),
         (
+            "orphaned-child",
+            0,
+            ["azure-update", "stock-update", "stock-download", "stock-install"],
+            f"FAILED: apt-get update ({AZURE.rstrip('/')}) (status 100)",
+        ),
+        (
             "install-error",
             47,
             ["azure-update", "azure-download", "azure-install"],
-            "FAILED: apt-get install (status 47)",
+            f"FAILED: apt-get install ({AZURE.rstrip('/')}) (status 47)",
         ),
         (
             "install-hang",
@@ -80,7 +88,7 @@ def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
     ],
     ids=["direct", "runner-mirror-list"],
 )
-def test_forks_apt_retries_only_mirror_work_and_streams_output(
+def test_forks_apt_retries_only_mirror_work_and_replays_output(
     tmp_path: Path,
     mode: str,
     status: int,
@@ -136,6 +144,11 @@ def test_forks_apt_retries_only_mirror_work_and_streams_output(
             printf 'apt stderr: %s-%s\\n' "$mirror" "$phase" >&2
             case "$MODE:$mirror:$phase" in
                 update-error:azure:update) exit 100 ;;
+                orphaned-child:azure:update)
+                    /bin/sleep 30 &
+                    echo "$!" > "$CHILD_PID_FILE"
+                    exit 100
+                    ;;
                 download-hang:azure:download|both-hang:*:update|install-hang:*:install) exec /bin/sleep 30 ;;
                 install-error:*:install) exit 47 ;;
             esac
@@ -143,15 +156,28 @@ def test_forks_apt_retries_only_mirror_work_and_streams_output(
         )
     )
     stub.chmod(0o755)
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/forks_apt.sh"), str(sources), str(log), "1", "1", "1"],
-        capture_output=True,
-        check=False,
-        text=True,
-        env=os.environ
-        | {"PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}", "MODE": mode, "PACKAGES": PACKAGES},
-        timeout=20,
-    )
+    child_pid_file = tmp_path / "child.pid"
+    try:
+        result = subprocess.run(
+            ["/bin/bash", str(ROOT / "scripts/forks_apt.sh"), str(sources), str(log), "1", "1", "1"],
+            capture_output=True,
+            check=False,
+            text=True,
+            env=os.environ
+            | {
+                "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+                "MODE": mode,
+                "PACKAGES": PACKAGES,
+                "CHILD_PID_FILE": str(child_pid_file),
+            },
+            timeout=5 if mode == "orphaned-child" else 15,
+        )
+        if mode == "orphaned-child":
+            # The step returned while the inherited output descriptor was still open.
+            os.kill(int(child_pid_file.read_text()), 0)
+    finally:
+        if child_pid_file.is_file():
+            os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
     assert result.returncode == status, result.stdout + result.stderr
     assert diagnostic in result.stderr
     if mode == "both-hang":
@@ -160,3 +186,59 @@ def test_forks_apt_retries_only_mirror_work_and_streams_output(
     assert log.read_text().splitlines() == expected
     assert [line for line in result.stdout.splitlines() if line.startswith("apt ")] == expected
     assert sources.read_text() == original
+
+
+@pytest.mark.parametrize(
+    ("mode", "diagnostic"),
+    [
+        ("unreadable", "cannot read apt sources"),
+        ("unsupported", "no supported Ubuntu mirror URI"),
+        ("write-failed", "could not write apt sources"),
+        ("append-failed", "could not append to"),
+    ],
+)
+def test_forks_apt_reports_setup_and_log_io_failures(tmp_path: Path, mode: str, diagnostic: str) -> None:
+    """Fail on real filesystem errors or unknown sources; do not accept a successful apt with a broken log.
+
+    Parameters:
+        tmp_path (Path): Disposable sources, subprocess stubs, and log destination.
+        mode (str): Filesystem or source failure to exercise.
+        diagnostic (str): Expected explanation for the nonzero status.
+    """
+    sources = tmp_path / "ubuntu.sources"
+    log = tmp_path / "apt.log"
+    marker = tmp_path / "apt-called"
+    scratch = tmp_path / "scratch"
+    if mode != "unreadable":
+        uri = "https://unsupported.invalid/ubuntu" if mode == "unsupported" else AZURE
+        sources.write_text(f"URIs: {uri}\n")
+    if mode == "append-failed":
+        log.mkdir()
+    if mode == "write-failed":
+        (scratch / "ubuntu.sources").mkdir(parents=True)
+        mktemp = tmp_path / "mktemp"
+        mktemp.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_SCRATCH"\n')
+        mktemp.chmod(0o755)
+    apt = tmp_path / "apt-get"
+    apt.write_text('#!/bin/sh\nprintf "apt ran\\n" >> "$FIXTURE_MARKER"\n')
+    apt.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/forks_apt.sh"), str(sources), str(log), "1", "1", "1"],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=os.environ
+        | {
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "FIXTURE_SCRATCH": str(scratch),
+            "FIXTURE_MARKER": str(marker),
+        },
+        timeout=15,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert diagnostic in result.stderr
+    if mode == "append-failed":
+        assert marker.read_text().splitlines() == ["apt ran"] * 2
+        assert "FAILED: apt-get update" in result.stderr
+    else:
+        assert not marker.exists()
