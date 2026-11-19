@@ -1,6 +1,6 @@
 /** Real SDK requests with scripted replies. No provider adapter or fork testing exports. */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -19,7 +19,12 @@ import { isolateStackHome, loadFork } from "./support.ts";
 type Owners = Record<string, string>;
 type Capture = { session: "parent" | "child"; raw: string; owners: Owners };
 type Row = {
-	measurement: string;
+	session: Capture["session"];
+	synthetic: { usage: "faux, not reported" };
+	measurement: "utf8_sdk_context_bytes";
+	model: string;
+	tool_array_sha256: string;
+	token_estimates: null;
 	request_bytes: number;
 	buckets: Record<string, number>;
 	common_prefix_previous_bytes: number | null;
@@ -31,6 +36,36 @@ const INTEGRATION = new URL("../integration/", import.meta.url);
 const OLD = "Old history to replace: 🦩";
 const SUMMARY = "Scripted replacement summary";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isByteCount(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Reject malformed subprocess output before the assertions or artifact writer use it. */
+function isRow(row: unknown): row is Row {
+	return (
+		isRecord(row) &&
+		(row.session === "parent" || row.session === "child") &&
+		isRecord(row.synthetic) &&
+		row.synthetic.usage === "faux, not reported" &&
+		row.measurement === "utf8_sdk_context_bytes" &&
+		typeof row.model === "string" &&
+		typeof row.tool_array_sha256 === "string" &&
+		/^[a-f0-9]{64}$/.test(row.tool_array_sha256) &&
+		row.token_estimates === null &&
+		isByteCount(row.request_bytes) &&
+		isRecord(row.buckets) &&
+		Object.values(row.buckets).every(isByteCount) &&
+		(row.common_prefix_previous_bytes === null || isByteCount(row.common_prefix_previous_bytes)) &&
+		(row.common_prefix_parent_bytes === null || isByteCount(row.common_prefix_parent_bytes)) &&
+		Array.isArray(row.cache_markers) &&
+		row.cache_markers.length === 0
+	);
+}
+
 /** Call the same byte partitioner as the wire scenario, in one batch and without extra dependencies. */
 function measure(captures: Capture[]): Row[] {
 	const rows = execFileSync(
@@ -40,13 +75,14 @@ function measure(captures: Capture[]): Row[] {
 			"-c",
 			`import json, sys
 from pathlib import Path
-from harness.request_ledger import request_ledger, stable_owner
+from harness import request_ledger as ledger
 
+root = Path(ledger.__file__).resolve().parents[3]
 previous = {}
 for item in json.load(sys.stdin):
     raw, session = item["raw"], item["session"]
-    owners = {name: stable_owner(source, Path.cwd().parents[1]) for name, source in item["owners"].items()}
-    row = request_ledger(raw, sdk=True, owners=owners, previous=previous.get(session),
+    owners = {name: ledger.stable_owner(source, root) for name, source in item["owners"].items()}
+    row = ledger.request_ledger(raw, sdk=True, owners=owners, previous=previous.get(session),
                          parent=previous["parent"] if session == "child" else None)
     print(json.dumps({"session": session, **row, "synthetic": {"usage": "faux, not reported"}}))
     previous[session] = raw`,
@@ -56,7 +92,13 @@ for item in json.load(sys.stdin):
 	return rows
 		.trimEnd()
 		.split("\n")
-		.map((line) => JSON.parse(line));
+		.map((line, index) => {
+			const row: unknown = JSON.parse(line);
+			if (!isRow(row) || row.session !== captures[index]?.session) {
+				throw new Error(`Invalid SDK ledger row ${index}`);
+			}
+			return row;
+		});
 }
 
 /** Capture only model id and transcript; keep prior faux usage out of the measured body. */
@@ -75,11 +117,39 @@ function recorder(sink: Capture[], session: Capture["session"], owners: () => Ow
 }
 
 /** Keep only nondeterministic metadata out of the second, comparison-only measurement. */
-function normalize(raw: string, root: string): string {
-	// Core may omit `durationMs` if the scripted response predates stream creation.
-	// Remove timing properties in both cases, rather than normalizing only their values.
-	return raw.replaceAll(JSON.stringify(root).slice(1, -1), "/sandbox").replace(/,"(?:timestamp|durationMs)":\d+/g, "");
+function normalize(raw: string, root: string, resolvedRoot: string): string {
+	// Decode first so JSON escape spellings do not matter. Only strip timing
+	// properties on messages, not identically named application data in tool args.
+	const body: { model: string; messages: Record<string, unknown>[] } = JSON.parse(raw, (_key, value: unknown) =>
+		typeof value === "string" ? value.replaceAll(resolvedRoot, "/sandbox").replaceAll(root, "/sandbox") : value,
+	);
+	const messages = body.messages.map(({ timestamp: _timestamp, durationMs: _durationMs, ...message }) => {
+		if (message.role !== "toolResult" || message.toolName !== "Agent") return message;
+		// The foreground tool puts elapsed time in both its details and its result text.
+		if (isRecord(message.details)) {
+			const { durationMs: _elapsed, ...details } = message.details;
+			message.details = details;
+		}
+		if (Array.isArray(message.content)) {
+			message.content = message.content.map((block: unknown) =>
+				isRecord(block) && block.type === "text" && typeof block.text === "string"
+					? { ...block, text: block.text.replace(/Agent completed in \d+\.\d+s/, "Agent completed in 0.0s") }
+					: block,
+			);
+		}
+		return message;
+	});
+	return JSON.stringify({ ...body, messages });
 }
+
+it("normalizes escaped and resolved sandbox paths and timing in any position", () => {
+	const root = '/var/tmp/ledger"fixture';
+	const resolvedRoot = `/private${root}`;
+	const raw = String.raw`{"model":"ledger","messages":[{"timestamp":7,"content":"\/private\/var\/tmp\/ledger\u0022fixture/a","durationMs":3},{"role":"user","durationMs":2,"content":"/var/tmp/ledger\"fixture/b","timestamp":5},{"content":{"timestamp":4}}]}`;
+	expect(normalize(raw, root, resolvedRoot)).toBe(
+		'{"model":"ledger","messages":[{"content":"/sandbox/a"},{"role":"user","content":"/sandbox/b"},{"content":{"timestamp":4}}]}',
+	);
+});
 
 /** Drive a real foreground `Agent` call and a manual compaction with a faux summary. */
 async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }> {
@@ -151,7 +221,11 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 		await session.prompt("Spawn the child");
 		expect(outcomes(h, "Agent")).toEqual([{ isError: false, text: expect.stringContaining("Child answer") }]);
 		expect(h.getPendingResponseCount()).toBe(0);
-		return { original, normalized: original.map(({ raw, ...rest }) => ({ ...rest, raw: normalize(raw, home.root) })) };
+		const resolvedRoot = realpathSync(home.root);
+		return {
+			original,
+			normalized: original.map(({ raw, ...rest }) => ({ ...rest, raw: normalize(raw, home.root, resolvedRoot) })),
+		};
 	} finally {
 		try {
 			await session?.abort();
@@ -186,11 +260,14 @@ it("accounts for compacted history and the actual spawned child's registry", asy
 			expect(row.cache_markers).toEqual([]);
 			expect(row.request_bytes).toBe(Buffer.byteLength(request.raw));
 			expect(Object.values(row.buckets).reduce((a, b) => a + b, 0)).toBe(row.request_bytes);
+			expect(
+				Object.keys(row.buckets).filter((key) => key.startsWith("tool:") && key.endsWith(":owner:unknown")),
+			).toEqual([]);
 		}
 		expect(original[1]?.raw).toContain(OLD);
 		expect(original[4]?.raw).not.toContain(OLD);
 		expect(original[4]?.raw).toContain(SUMMARY);
-		expect(rows[4]?.buckets.compaction_summary).toBeGreaterThan(SUMMARY.length);
+		expect(rows[4]?.buckets.compaction_summary).toBe(204);
 		expect(rows[4]?.buckets["tool:Agent:owner:inline"]).toBeGreaterThan(0);
 		expect(rows[5]?.buckets["tool:read:owner:builtin"]).toBeGreaterThan(0);
 		expect(rows[5]?.buckets["tool:SubagentWorkflow:owner:sdk"]).toBeGreaterThan(0);

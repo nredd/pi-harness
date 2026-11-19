@@ -128,6 +128,31 @@ def test_sdk_transcript_charges_native_blocks() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("raw", "key"),
+    [("{}", "messages"), ('{"messages":[{"role":"system"}]}', "content")],
+)
+def test_sdk_transcript_requires_structural_fields(raw: str, key: str) -> None:
+    """Refuse absent transcript or system content instead of attributing phantom bytes."""
+    with pytest.raises(KeyError, match=key):
+        request_ledger(raw, sdk=True)
+
+
+def test_sdk_transcript_sanitizes_labels_and_omits_removed_section() -> None:
+    """Charge unsafe names under digests, and leave section removals in framing."""
+    raw = (
+        '{"messages":[{"role":"system","content":"","sections":{"bad name":"é","gone":null},'
+        '"toolsAdded":[{"name":"bad name"}]}]}'
+    )
+    buckets = request_ledger(raw, sdk=True)["buckets"]
+    assert buckets == {
+        "serialization_overhead": 100,
+        "shared": 0,
+        "system:unsafe-9c262781c6b0": 2,
+        "tool:unsafe-9c262781c6b0:owner:unknown": 19,
+    }
+
+
 def test_escaped_sections_and_provenance() -> None:
     """Split only explicit tags and exact supplied provenance, not text guesses."""
     body = {

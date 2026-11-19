@@ -1,4 +1,4 @@
-"""Pure accounting of original UTF-8 JSON request bytes, not tokens or spend.
+"""Account for original UTF-8 JSON bytes in wire bodies and faux SDK transcripts.
 
 Only explicit wire structure or exact caller-supplied provenance is attributed.
 The wire adapter erases custom-message types; absent provenance remains shared.
@@ -42,6 +42,7 @@ CONTROL_FIELDS = frozenset(
         "stop_sequences",
     }
 )
+MESSAGE_CATEGORIES = {"assistant": "assistant_text", "user": "user"}
 SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:"
 
 
@@ -433,7 +434,7 @@ class _Attributor:
             path: tuple[str | int, ...] = ("messages", index, "content")
             content = message.get("content", [])
             role = message.get("role")
-            category = {"assistant": "assistant_text", "user": "user"}.get(role, "shared")
+            category = MESSAGE_CATEGORIES.get(role, "shared")
             blocks: list[tuple[tuple[str | int, ...], dict[str, Any]]] = (
                 [(path, {"type": "text", "text": content})]
                 if isinstance(content, str)
@@ -465,7 +466,7 @@ class _Attributor:
                 for name, text in message.get("sections", {}).items():
                     if text is not None:
                         self.text((*path, "sections", name), f"system:{_safe(name, SAFE_NAME)}")
-            category = {"assistant": "assistant_text", "user": "user"}.get(role, "shared")
+            category = MESSAGE_CATEGORIES.get(role, "shared")
             content_path = (*path, "content")
             content = message["content"]
             if isinstance(content, str):
@@ -548,6 +549,7 @@ def request_ledger(
     Raises:
         ValueError: invalid, non-object or duplicate-key JSON, an invalid provenance category,
             or spans that are out of bounds or overlap.
+        KeyError: a required structural field is missing, such as SDK `messages` or message `content`.
         UnicodeError: the body cannot be represented as UTF-8.
     """
     categories = _categories(provenance or {})
