@@ -27,11 +27,11 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
   remains within the same-repo TRUST assumption and the submitted workflow's read-only token scope.
 - Second credential exception: the hosted CI `classify` job (owner-approved 2026-11-18) and the hosted
   native-helper `route` job (owner-approved 2026-11-19; GET-only, hosted `ubuntu-24.04`, same-repo
-  non-fork events only, skipped on fork PRs and `PI_POOLS_DISABLED`) get job-level `actions: read` (`contents` stays read-only) and `GH_TOKEN`
+  non-fork events only, skipped on `PI_POOLS_DISABLED`; native-helper routing also skips all PRs) get job-level `actions: read` (`contents` stays read-only) and `GH_TOKEN`
   for the shared pool census, which only issues GET
   reads (argv-tested; a description plus a test, not a technical restriction). The token goes to pushes
   and `workflow_dispatch` on ANY branch and to same-repo PRs; fork PRs get an empty token and
-  `--no-pools` for CI; the native-helper route job is skipped altogether on fork PRs. Both leave
+  `--no-pools` for CI; the native-helper route job is skipped altogether on PRs. Fork PRs leave
   every cell hosted. The token is a plain env var visible to every child process of
   repo scripts, and `actions: read` is job-wide, so those processes can read every run and job in the
   repo. Read scope only: no write scope. It rests on the same-repo TRUST assumption above.
@@ -41,11 +41,18 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
 
 PRs need their own exact final-HEAD green checks and independent reviews, not another run solely
 because `main` advanced. Resolve actual conflicts and re-review every HEAD change. Preserve the
-active twelve app-bound checks and non-strict ruleset policy; never re-enable strictness, disable
+four app-bound Ubuntu checks and non-strict ruleset policy; never re-enable strictness, disable
 protection or bypass checks. Before publishing, promoting or deploying, require the exact frozen
-combined candidate's full executed CI and artifact evidence, not selective main smoke or old PR
+combined candidate's full executed CI and artifact evidence, not ordinary main runs or old PR
 checks. Follow "Frozen release verification" in `README.md`; unrelated later main advances do not stale that
 candidate, but changed selected inputs do.
+
+# macOS CI
+
+- PR CI has four required Ubuntu names: `owned`, `contracts` and both `stack` cells. It has no macOS placeholders or WSL2 jobs. See `macOS PR skip` in the CI job summary.
+- Full macOS CI runs on `main` pushes and `workflow_dispatch`, including frozen release verification.
+- To test a PR head before merge, run `make check` on macOS. Dispatch `CI` for the full matrix on `main` or an eligible frozen release candidate, not an arbitrary PR ref.
+- Fix macOS failures on `main` forward. No auto-revert; do not block other PRs on red macOS `main`.
 
 # Mandatory PR review
 

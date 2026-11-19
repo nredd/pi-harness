@@ -53,7 +53,7 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     assert upload["with"]["if-no-files-found"] == "error"
     for report in ("lcov.info", "coverage.json", "metadata.json", "summary.txt", "*.log"):
         assert report in upload["with"]["path"]
-    assert "computer-use-windows" in jobs["owned-ubuntu"]["needs"]
+    assert "computer-use-windows" in jobs["owned"]["needs"]
     assert (
         "packages/computer-use/native/windows/bridge-rs/** text eol=lf"
         in (ROOT / ".gitattributes").read_text()
@@ -102,7 +102,7 @@ def test_required_check_rejects_failed_or_missing_native_producer(
         result (str): Native producer outcome.
         required (str): Whether the classified cell requires computer-use.
     """
-    steps = workflow_jobs()["owned-ubuntu"]["steps"]
+    steps = workflow_jobs()["owned"]["steps"]
     step = next(step for step in steps if step.get("name") == "Require every planned shard to succeed")
     script = tmp_path / "require.sh"
     script.write_text(step["run"])

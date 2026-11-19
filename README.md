@@ -132,15 +132,10 @@ make help                    # every target
   enforcement at `tests/integration/probes/coverage/bun` and `scripts/coverage/bun`.
   Windows build-routing failures retain bounded child output tails and exit/deadline provenance;
   the native build deadline is still 120 seconds, not a claim that a cold-build cause is proven.
-- WSL setup runs after apt guarantees Python3: `scripts/wsl2_setup.sh` is a compatible argv-forwarding
-  bootstrap over measured `scripts/wsl2_setup.py`. Hosted copy, baked-tool reuse, bounds and PATH receipts
-  are tested locally; real WSL execution remains CI proof. Pre-Python apt/DNS/host scripts and PowerShell
-  are not ported by this #695 slice.
-- Shared tool/cache setup, WSL bootstrap and capture: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml),
-  [setup-ci-wsl](.github/actions/setup-ci-wsl/action.yml), [capture-ci-wsl](.github/actions/capture-ci-wsl/action.yml)
+- CI expands only Ubuntu cells on PRs; macOS runs on `main` and full dispatches, including frozen release verification. See `macOS PR skip` in the PR CI summary. WSL2 is not a CI target.
+- Shared tool and cache setup: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml).
 - Other workflow policy: [installer](.github/workflows/installer.yml), [core forks](.github/workflows/forks.yml),
-  [publishing](.github/workflows/publish.yml), [runner rescue](.github/workflows/runner-rescue.yml),
-  [WSL watchdog controls](.github/workflows/wsl-watchdog.yml). Review policy stays [here](#review-and-merge-evidence); flakes follow the comments in `ci.yml`
+  [publishing](.github/workflows/publish.yml), [runner rescue](.github/workflows/runner-rescue.yml). Review policy stays [here](#review-and-merge-evidence); flakes follow the comments in `ci.yml`
 - Owned packages publish through `publish.yml` from a signed tag; core ships through
   `nredd/tap/pi-coding-agent`. Procedure: [releases](docs/releases.md)
 - `promote-stack.yml` attests a gated `main` commit as `stack/<sha>`:
@@ -151,11 +146,12 @@ make help                    # every target
 
 ### Required checks
 
-Required checks on `main`, twelve contexts:
+Required checks on `main`, four contexts:
 
-- `owned (ubuntu-24.04)`, `owned (macos-14)` and `owned (wsl2)`
-- `contracts (ubuntu-24.04)`, `contracts (macos-14)` and `contracts (wsl2)`
-- `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)`, `stack (macos-14, local)`, `stack (wsl2, personal)` and `stack (wsl2, local)`
+- `owned (ubuntu-24.04)`
+- `contracts (ubuntu-24.04)`
+- `stack (ubuntu-24.04, personal)`
+- `stack (ubuntu-24.04, local)`
 
 Dropping a cell from a matrix would leave its context pending forever, which is why the cells that no longer test anything stay as bypass cells.
 
@@ -165,7 +161,7 @@ The `macos-14` in these names is a stable check context, not the OS version: Git
 
 The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
 
-The twelve jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` ("Stack promotion" in `README.md`). `migration-review/standards` and
+The four Ubuntu jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` ("Stack promotion" in `README.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
@@ -195,7 +191,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
 - A zero-step completed/cancelled literal CI matrix placeholder (`owned`, `contracts`, `stack`, and
   the non-required `owned shard` jobs)
   is stale only with a later completed/successful execution of the same workflow ID/path, event,
-  PR/head/base (including repository identity), Actions app and SHA. All twelve expected expanded
+  PR/head/base (including repository identity), Actions app and SHA. All four expected expanded
   matrix cells must individually succeed. The latest workflow execution must qualify; an intermediate
   green run cannot hide a later cancellation. Ordering uses `run_number`, then `run_attempt`, never
   timestamps or API page order. Evidence is fully paginated and validated as strict Pydantic records;
@@ -268,19 +264,17 @@ need resolution; every HEAD change needs fresh checks and both reviews. Never we
 protection, app bindings or review requirements to merge.
 
 The owner authorized non-strict required status checks on ruleset `25524267` on 2026-10-29.
-All twelve matrix contexts remain bound to Actions app `15368`, with no bypass actors. This
+All four matrix contexts remain bound to Actions app `15368`, with no bypass actors. This
 source change does not edit remote protection. Keep `strict_required_status_checks_policy=false`.
 The merge helper still compares the old and replacement executions' tested base SHA when proving
 that a cancelled zero-step placeholder was superseded. It does not compare that base SHA against
 the moving current main tip. Required checks and reviews remain tied to the unchanged PR HEAD.
 
 Before publication or promotion, freeze one combined `main` candidate and run the complete CI
-lane for that exact commit. `ci.yml` manual dispatch disables docs-only and main-push smoke
-shortcuts, executes every owned and contracts cell plus the three stack cells that run a stack
+lane for that exact commit. `ci.yml` manual dispatch disables PR shortcuts, executes every owned
+and contracts cell plus the three stack cells that run a stack
 (`ubuntu-24.04` personal and local, `macos-14` local), and calls the existing complete core fork
-gate. The `not_run` stack cells (`macos-14` personal, both `wsl2`) are required-check names with
-no work behind them; the verifier never asks for them, and a test binds its stack cells to the
-`ci.yml` matrix. It reuses the native checks, packed contracts, Node D/E and standalone D/E producers.
+gate. It reuses the native checks, packed contracts, Node D/E and standalone D/E producers.
 It does not make bench F, live-provider G, linux-arm64 runtime, native desktop or the documented
 standalone auth-interception exclusions into passes.
 
@@ -313,7 +307,7 @@ the verifier that matches its candidate: `publish.yml` runs from the tag's commi
 change (e.g. the #660 macOS split) therefore verifies under its own commit's gate, not current
 `main`'s; do not promote such a candidate from a later `main` without re-freezing it.
 
-The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
+The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
 uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
@@ -325,7 +319,7 @@ never wins. After "Re-run failed jobs", the new attempt lists the carried-over s
 their original timestamps, so their original uploads still qualify; a re-run job qualifies only
 through its new upload, never the failed attempt's same-named artifact. Missing, skipped, failed,
 expired or mismatched evidence refuses, and so does a malformed REST page. `python -m pi_release.release_gate` exits 0 with evidence and 1 when refused; a
-harness defect raises instead of reading as a refusal. Ordinary push/main smoke and old PR checks are
+harness defect raises instead of reading as a refusal. Ordinary `main` runs and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
 trusted `/usr/bin/gh`, not PATH lookup; the `publish.yml` `verify` job runs computer-use releases on
@@ -361,7 +355,7 @@ are not retroactively relabelled as fully verified by this lane.
 
 Full [frozen-candidate verification](#frozen-release-verification) is mandatory before snapshot
 construction. It requires actual full matrix/core execution and retained artifacts for the exact
-combined source SHA, not the selective push/main smoke or old PR checks. Unrelated later main
+combined source SHA, not ordinary `main` runs or old PR checks. Unrelated later main
 advancement does not invalidate a frozen verified candidate. No operation waives this barrier.
 
 ### Snapshot format
@@ -393,8 +387,8 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 - Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`.github/workflows/ci.yml`), so there is nothing to read; reviews stay a process step.
 - Deferred, tap readiness when core changes: not implemented; the core release's asset digests and attestation are the only core gate, and a tap bump is gated by its own green CI.
 - Registry-stack evidence: the exact full `workflow_dispatch` run validated by `pi_release.release_gate`. Every owned and contracts cell, each stack cell that runs a stack, and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
-- Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so docs-only and main-push smoke cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
-- Push, PR and docs-only runs never qualify: only a full `ci.yml` dispatch of the exact SHA does, and it skips no docs, WSL-input or stack-input shortcut, so a docs-only candidate is promotable once dispatched; see [release verification](#frozen-release-verification). WSL cells do not run a stack, and differently named artifacts are not promotion substitutes. Artifacts expire with CI retention, so an old SHA must be dispatched again before it can be promoted.
+- Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so PR bypass cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
+- Push, PR and docs-only runs never qualify: only a full `ci.yml` dispatch of the exact SHA does, and it skips no docs or stack-input shortcut, so a docs-only candidate is promotable once dispatched; see [release verification](#frozen-release-verification). Differently named artifacts are not promotion substitutes. Artifacts expire with CI retention, so an old SHA must be dispatched again before it can be promoted.
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit. The registry lookup (`npm view`) runs in a fresh empty directory with `NPM_CONFIG_USERCONFIG=/dev/null` and `--registry https://registry.npmjs.org`, so a `.npmrc` in the selected tag's tree cannot steer it.
 - Core: asset digests are compared with the release's `SHA256SUMS`. For non-legacy tags `SHA256SUMS` is a mutable release asset, so each recorded asset is also downloaded, hashed against the recorded digest, and verified read-only with `gh attestation verify --repo nredd/pi --signer-workflow nredd/pi/.github/workflows/fork-release.yml --source-ref refs/tags/<tag>`. Legacy tags `v1.3.0-nredd.3` through `.7` predate that workflow and rely on the frozen `LEGACY_CHECKSUMS` hashes.
 
@@ -410,7 +404,7 @@ The CI evidence is the only coupling to CI: run IDs are read with `gh run list/v
 
 ### Required-check visibility
 
-The twelve required checks live in ruleset `main required checks` (id `25524267`, non-strict). See [CI](.github/workflows/ci.yml) for which of them are bypass cells: a green bypass cell is a reported name, not evidence, which is why the registry-stack artifact below is the evidence. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
+The four required checks live in ruleset `main required checks` (id `25524267`, non-strict). See [CI](.github/workflows/ci.yml) for which of them are bypass cells: a green bypass cell is a reported name, not evidence, which is why the registry-stack artifact below is the evidence. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
 
 ### Operations
 
@@ -435,7 +429,7 @@ Resume: `prepare-release` runs before any attestation. It asks `git/matching-ref
 
 Created 2026-10-20 via `gh api`; the workflow does not create or change any of them:
 
-- Ruleset `25524267` `main required checks`: twelve contexts (`integration_id` 15368, non-strict).
+- Ruleset `25524267` `main required checks`: four Ubuntu contexts (`integration_id` 15368, non-strict).
 - Environment `stack-promotion`: required reviewer the owner, deployment branches `main` only. The only job in it is `attest-and-publish`.
 - Ruleset `25524298` `stack snapshot tags` on `refs/tags/stack/**`: blocks tag update and deletion; bypass is admin. It does not protect release assets, but consumers verify the attestation, so a tampered asset is rejected. Creation stays open: an unattested tag is unconsumable because consumers verify attestation, and `GITHUB_TOKEN` creates the tag through the release.
 
@@ -486,15 +480,13 @@ token; publish stays hosted for OIDC and attestation.
 | --- | --- | --- |
 | `pi-linux` | Linux VM host | One linked-clone VM per job, destroyed after the job. Per-VM PVE firewall drops every private net, so no LAN, no tailnet. 8 vCPU, 10 GiB, 50 min cap |
 | `pi-macos` | macOS arm64 host | One job at a time as the unprivileged hidden `ci` user. All `ci` processes killed and its home and `/tmp` files wiped before and after every job, runner restored from a root-owned golden copy. pf rules block `ci` from every private net. 50 min cap |
-| `pi-wsl2` | ARM64 Windows host | One job at a time inside a fresh WSL2 distro (linux-arm64), imported from a read-only golden image under a dedicated non-admin Windows user `ci`, so it gets its own utility VM apart from the owner's dev distros. Unregistered and the VM shut down after every job. NAT networking; a guest nftables deny set (private ranges, tailnet/CGNAT, link-local, the gateway, plus every non-default route prefix of the host at job start) is the enforced layer, and a calibrated Hyper-V firewall rule is best effort. `wsl.conf`: automount, interop and `appendWindowsPath` off, no sudo, IPv6 off. Runs only on AC with enough free disk. 50 min cap |
 
-`pi-wsl2` status: planned, not live. The isolation controls in its row and in the threat model below are the design; the native path has only run against stubs, and nothing is claimed as verified until the acceptance smoke and three real jobs have run (see Remaining).
 
 All register repo-scoped with single-use JIT configs: a runner takes one job and its registration dies with it. No org or user level runners, no runner groups to misconfigure, nothing persistent to steal. The PAT that mints configs (`Administration: write`, `Actions: read`, this repo only) lives root-only (SYSTEM and Administrators on Windows) on the host, never inside a VM or the `ci` account.
 
 ### Repo settings (enforced, check with `gh api`)
 
-- Actions allowed: `selected` -- GitHub-owned plus `astral-sh/setup-uv`, `oven-sh/setup-bun`, `taiki-e/install-action`, `Vampire/setup-wsl`
+- Actions allowed: `selected` -- GitHub-owned plus `astral-sh/setup-uv`, `oven-sh/setup-bun`, `taiki-e/install-action`
 - `sha_pinning_required: true` (every `uses:` is already a full SHA)
 - Fork PR approval: `all_external_contributors`, i.e. EVERY fork PR run waits for the owner. Never use "first-time contributors". Do NOT approve a fork PR run without reading its workflow diff: a fork can rewrite `runs-on` to a self-hosted label
 - Workflow token default `read`, `can_approve_pull_request_reviews: false`
@@ -508,28 +500,13 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 - Compromised dependency in a job: can burn that one VM or the `ci` account, cannot reach the LAN, tailnet, the PAT, the owner's home or any credential, and leaves nothing for the next job
 - RESIDUAL on `pi-macos`: `ci` shares a kernel with the laptop, so a local privilege-escalation exploit would break out; loopback services stay reachable; DNS (port 53) to the resolvers stays open. A VM would be better but there is no disk for a macOS+Xcode image. Keep macOS patched
 - RESIDUAL on `pi-linux`: `runner` has passwordless sudo inside the throwaway VM (apt installs); link-local IPv6 is not dropped
-- `pi-wsl2` jobs assume hostile code as an unprivileged user in a fresh VM with outbound internet. A job can burn its one VM for the cap, use the public internet (including exfiltrating anything it can see: the checkout, the read-only job token, its own single-use JIT credential), resolve DNS through public resolvers and use CPU within the VM's cap. It cannot read the PAT or any Windows path (no automount, no interop, `ci` has no ACE on the secrets directory), reach the LAN, tailnet, routed prefixes, the Windows host or the dev distros' loopback, run `.exe` files, persist anything or register a second runner. The supervisor admits a run only when its head repository is this one, so a fork that rewrites `runs-on: pi-wsl2` sits queued until GitHub expires it (the rescue workflow leaves fork runs alone, and the supervisor leaves refused jobs out of its free-slot count); the workflow-side same-repo guard is NOT the boundary
-- RESIDUAL on `pi-wsl2` (GitHub-side): a repo-scoped JIT runner is bound to its label, not to the job whose run the supervisor admitted, so an owner-approved fork job queued on `pi-wsl2` could be assigned to a runner minted for a same-repo job. The supervisor re-checks the run the runner actually took and kills the job on denial, so exposure is the seconds before that check. Never approve a fork run without reading its workflow diff; runner groups are not available to a personal repository
-- RESIDUAL on `pi-wsl2`: a Linux kernel or WSL guest-to-host vulnerability breaks out of the VM (keep Windows, WSL and its kernel patched); the pool shares a host with the owner's dev VM and Windows session, so a job can still cost RAM, disk, CPU, battery and thermals (caps and preflights, not isolation); the Hyper-V firewall layer is per creator and calibrated per job, UNVERIFIED on a NAT port, and the guest layer falls to a kernel LPE; public internet means exfiltration, DNS exfiltration and any IP-allowlisted public service; a tunnel that comes up mid-job adds routes the job-start deny set does not hold (the supervisor aborts the job when the host's route set grows); host management policy may re-grant rights, and an administrator can always read `ci`'s data; there is no hosted ARM64 WSL2 to fall back to
 
 ### Smoke
 
-`.github/workflows/runner-smoke.yml` runs on same-repo PRs touching it and on `workflow_dispatch`. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Host-specific extra targets go in the repository variable `SMOKE_EXTRA_TARGETS` (space-separated `host:port`, appended to the neutral targets in both loops; the job prints a note when it is empty and fails on any entry that is not `host:port`) and the home directory to probe in `SMOKE_OWNER_HOME` (the macOS home probe is skipped with a note when unset and fails when the path is not a directory). Set both privately, never in the repository. `scripts/tests/test_private_probe_addresses.py` enforces this across every tracked file except `forks/`, lockfiles and generated build output (`dist/` and `*.map`). Any RFC1918, CGNAT (`100.64/10`) or link-local address, tailnet-style hostname (`*.ts.net`, `*.tailscale.net`) or ULA/link-local IPv6 address (also zero-padded octets and IPv4-mapped IPv6 forms), and any path rooted at a `Users` or `home` directory whose next segment is not `<user>`, `$USER` or `runner`, fails unless it is one of the neutral probe targets allowlisted in that test. Fixture files that carry synthetic values (e.g. made-up home names or private-range test addresses) are scanned too: their exact values are listed per file in `FIXTURE_VALUES`, and a stale entry fails the test. `pi-wsl2` runs `scripts/wsl2_smoke.sh`, which also checks non-root, no sudo, aarch64, IPv6 off, no `/mnt/c`, an explicitly disabled interop and automount policy, no Windows path or `.exe` on `PATH`, no drvfs/9p mounts and closed loopback ports. The host's address and the dev environment's address and ports come from the runner's environment (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository. The same script is the first step of every `pi-wsl2` cell in `ci.yml`.
-
-`scripts/wsl2_smoke.sh` remains the compatible shell entry for measured `scripts/wsl2_smoke.py`,
-using system Python that its original `wsl.conf` check already required. The original `curl`
-10-second bounds and external `timeout 4` dependency remain. TCP children use native sockets
-without shell command strings; only classified network refusal/drop (exit 10) or timeout (124)
-counts as blocked, never generic interpreter/startup/DNS errors. Public HTTP and TCP controls
-must pass before any negative result counts. A missing gateway, failed namespace probe or failed
-mount inspection refuses rather than claiming isolation. Disposable command/socket fixtures
-prove these paths locally, not real WSL isolation or image acceptance; those remain CI/runtime proof.
-
-The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` with explicit `false` values for interop, Windows PATH injection, automount and fstab mounting in their respective sections. Inherited `[DEFAULT]` settings and boolean aliases such as `off`, `no` or `0` do not satisfy this check. WSL may retain binfmt registrations or broker paths even with execution disabled. A `WSLInterop` or `WSLInterop-late` registration must read exactly `disabled` on its first line (anything else, including `enabled`, empty or unreadable, fails) and then is only a diagnostic note; broker paths are notes. Mount, PATH and Windows-command checks remain blocking. Image acceptance must separately verify rejection of a checksum-verified Windows executable, including explicit broker overrides; mocked smoke fixtures do not prove that runtime property.
+`runner-smoke.yml` is `workflow_dispatch` only. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Host-specific extra targets go in the repository variable `SMOKE_EXTRA_TARGETS` (space-separated `host:port`, appended to the neutral targets in both loops; the job prints a note when it is empty and fails on any entry that is not `host:port`) and the home directory to probe in `SMOKE_OWNER_HOME` (the macOS home probe is skipped with a note when unset and fails when the path is not a directory). Set both privately, never in the repository. `scripts/tests/test_private_probe_addresses.py` enforces this across every tracked file except `forks/`, lockfiles and generated build output (`dist/` and `*.map`). Any RFC1918, CGNAT (`100.64/10`) or link-local address, tailnet-style hostname (`*.ts.net`, `*.tailscale.net`) or ULA/link-local IPv6 address (also zero-padded octets and IPv4-mapped IPv6 forms), and any path rooted at a `Users` or `home` directory whose next segment is not `<user>`, `$USER` or `runner`, fails unless it is one of the neutral probe targets allowlisted in that test. Fixture files that carry synthetic values (e.g. made-up home names or private-range test addresses) are scanned too: their exact values are listed per file in `FIXTURE_VALUES`, and a stale entry fails the test. `pi-wsl2` runs `scripts/wsl2_smoke.sh`, which also checks non-root, no sudo, aarch64, IPv6 off, no `/mnt/c`, an explicitly disabled interop and automount policy, no Windows path or `.exe` on `PATH`, no drvfs/9p mounts and closed loopback ports. The host's address and the dev environment's address and ports come from the runner's environment (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository. The same script is the first step of every `pi-wsl2` cell in `ci.yml`.
 
 ### Remaining
 
 - `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; the rescue moves an idle-queued cell to hosted after five minutes on a stale pool, but not while a sibling job of the run is already running (it never cancels a started job)
 - Quiet benchmark runner (`bench`): `pi-linux` is a shared host, so it does NOT yet meet the [bench admission policy](.github/workflows/ci.yml)
-- `pi-wsl2` acceptance before `PI_WSL2_HEARTBEAT` is set: three consecutive green real jobs and a clean smoke on the laptop, then replace the estimated `CELL_SECONDS` entries for the `wsl2` cells with measured ones. Until the variable exists the pool reads as down and every `wsl2` cell stays hosted. Pooled cells keep reporting as `owned (wsl2)` and `contracts (wsl2)`, and the pool's own job is `smoke (pi-wsl2)`; no new required check name is added
 - Alerting: the daemon only logs to journald; nothing pages when it is down

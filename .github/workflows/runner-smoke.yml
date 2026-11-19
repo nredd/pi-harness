@@ -3,21 +3,12 @@ name: Runner smoke
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/runner-smoke.yml
-      - scripts/wsl2_smoke.sh
-      - scripts/wsl2_smoke.py
-      - scripts/wsl2_exec.py
 
 permissions:
   contents: read
 
 jobs:
   pi-linux:
-    # Same-repo only: a fork PR could rewrite `runs-on`, so this guard is NOT the security boundary.
-    # The boundary is fork-PR approval, repo-scoped JIT runners and the per-VM firewall.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: smoke (pi-linux)
     runs-on: [self-hosted, pi-linux]
     timeout-minutes: 10
@@ -50,7 +41,6 @@ jobs:
           exit $fail
 
   pi-macos:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: smoke (pi-macos)
     runs-on: [self-hosted, pi-macos]
     timeout-minutes: 10
@@ -88,33 +78,3 @@ jobs:
           if [ ! -d "$SMOKE_OWNER_HOME" ]; then echo "::error::SMOKE_OWNER_HOME is not a directory on this runner"; exit 1; fi
           if ls "$SMOKE_OWNER_HOME" >/dev/null 2>&1; then echo "::error::can read the owner home"; exit 1; fi
           echo "blocked: owner home"
-
-  pi-wsl2:
-    # Same-repo guard as above, and the same caveat: the boundary is the pool supervisor's admission check (it
-    # refuses any run whose head repository is not this one), repo-scoped single-use JIT runners and the
-    # per-job VM's firewall. The host-specific targets arrive through the runner's environment
-    # (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository.
-    # Until the pool's heartbeat variable exists no runner carries the label, so a PR-triggered job would queue
-    # forever (`timeout-minutes` only starts once a runner picks it up): PRs wait for the pool, and the acceptance
-    # smoke before that is a manual `workflow_dispatch`.
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || (vars.PI_WSL2_HEARTBEAT != '' && github.event.pull_request.head.repo.full_name == github.repository)
-    name: smoke (pi-wsl2)
-    runs-on: [self-hosted, pi-wsl2]
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: scripts
-          persist-credentials: false
-      - name: Identify the runner
-        run: |
-          uname -a
-          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH user=$(id -un)"
-          nproc
-          free -g | head -2
-      # The golden image already requires system Python for the protected wsl.conf check.
-      # Keep the shell entry; measured Python calibrates HTTP/TCP before accepting blocked probes.
-      - name: Isolation smoke
-        run: bash scripts/wsl2_smoke.sh
