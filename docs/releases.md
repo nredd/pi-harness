@@ -132,20 +132,23 @@ and `@nredd/pi-session-kit@0.12.0` from
 The preset stays footer-only: `src/index.ts` replaces the old entry path and the skill, prompt and
 theme filters stay empty. Session-kit ships `dist/pi-stats-export.mjs`; selecting the extension does
 not repin the separate dotfiles exporter. The [artifact receipt](../releases/2026-11-19-personal-preset-session-kit.json)
-records the downloaded registry bytes. Core stays at `v1.3.0-nredd.13`. This is source selection only;
+records the downloaded registry bytes. On both targets, session-kit `0.12.0` brings its own nested
+`@nredd/pi-resource-sampler@0.2.1` alongside dev-tools' top-level `0.2.0`, and the regenerated
+lock updates `express-rate-limit` from `8.7.4` to `8.7.5`. Core stays at `v1.3.0-nredd.13`.
+This is source selection only;
 [frozen verification and promotion](../README.md#frozen-release-verification), dotfiles adoption and
 live activation are separate.
 
 The table below is historical. The registry sampler `0.2.1` bump in dev-tools and session-kit (#557)
 did not itself republish either plugin or change the stack.
 
-The 2026-11-11 selection in `release/stacks/personal.json` uses core
-`v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the packages below,
-republished with fresh provenance after the history purge (#638). Plan-mode and subagents move
-together. The sampler stays an exact `0.2.0` registry dependency of dev-tools and session-kit
-(`0.2.1` is published but not selected), not another Pi extension. The footer-only preset
-filters and unchanged third-party sources remain in the stack manifest;
-`release/stacks/runtime-locks.json` is regenerated for this selection.
+On 2026-11-11, the selection in `release/stacks/personal.json` used core
+`v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the extension versions
+listed below, republished with fresh provenance after the history purge (#638). Plan-mode and
+subagents moved together. Dev-tools and session-kit both depended on `@nredd/pi-resource-sampler`
+at exactly `0.2.0`; `0.2.1` had been published but was not used by that selection. The sampler
+was not a Pi extension. The stack kept the footer-only preset filters and the same third-party
+sources, and `release/stacks/runtime-locks.json` was regenerated for that selection.
 
 | Package | Version | Publication source | Successful `publish.yml` run |
 | --- | --- | --- | --- |
