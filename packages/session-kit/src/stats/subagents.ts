@@ -1,0 +1,481 @@
+/** Local-only subagent accounting. Reuses stats parsing/dedup, never writes its cache or exports transcripts. */
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
+import { feedFile, listJsonl, type ScanDiagnostic, timeOf } from "./jsonl.ts";
+import { type Call, type CallTuple, type FileStats, flatten, legacyKey, opaqueId, SessionParser } from "./load.ts";
+import { nth } from "./nth.ts";
+
+/** Agent types the mandated review lanes use. Names are conventions, not recorded facts. */
+const AGENT_CRITIC = "critic";
+const AGENT_REVIEWER = "code-reviewer";
+/** Review axis headers in the dispatch prompt: the only evidence of which lane a reviewer ran. */
+const AXIS_STANDARDS = /\baxis\s*:\s*standards\b/i;
+const AXIS_SPEC = /\baxis\s*:\s*spec\b/i;
+/** Full SHAs in a prompt; the last one is conventionally the reviewed HEAD. */
+const FULL_SHA = /\b[0-9a-f]{40}\b/g;
+/** pi-subagents names child sessions `<agent type>#<8 hex>`. */
+const CHILD_NAME = /^(.*)#([0-9a-f]{8})$/;
+const AGENT_ID_TEXT = /Agent ID: ([a-zA-Z0-9-]+)/;
+const NUL_LINE = /^\0+$/;
+const MAX_GROUPS = 200;
+const MAX_DIAGNOSTICS = 20;
+/** No recorded price: unpriced, never free. */
+const UNPRICED: Price = { recordedCost: 0, pricedCalls: 0, unpricedCalls: 1 };
+
+/**
+ * Review lane and retry-repeat are inferred labels, see the README.
+ * History cannot prove a review was required: these labels describe explicit prompt evidence only.
+ */
+export type Traffic =
+	| "review-standards"
+	| "review-spec"
+	| "review-critic"
+	| "retry-repeat"
+	| "other"
+	| "review-unknown";
+interface Attribution {
+	agentType: string;
+	workflow: string;
+	traffic: Traffic;
+}
+interface Price {
+	recordedCost: number;
+	pricedCalls: number;
+	unpricedCalls: number;
+}
+export interface AgentTotals extends Price {
+	calls: number;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+export interface AgentGroup extends AgentTotals, Attribution {
+	provider: string;
+	model: string;
+	unmatchedSessions: number;
+	/** False means recordedCost is only the priced subtotal, not a complete price. */
+	costComplete: boolean;
+}
+export interface SubagentReport {
+	groups: AgentGroup[];
+	totals: AgentTotals;
+	unmatchedSessions: number;
+	missingSessions: number;
+	errors: number;
+	badLines: number;
+	diagnostics: ScanDiagnostic[];
+	omittedGroups: number;
+	/** Calls whose recorded price could not be bound to them exactly; counted unpriced, never guessed. */
+	priceFallbacks: number;
+	complete: boolean;
+}
+interface Dispatch {
+	ms: number;
+	type: string | undefined;
+	standards: boolean;
+	spec: boolean;
+	target: string | undefined;
+	resume: boolean;
+}
+interface Metadata {
+	path: string;
+	session: string;
+	contentDigest: string;
+	parent: string;
+	name: string;
+	child: boolean;
+	startMs: number;
+}
+
+/** Whether a parsed JSON value is a plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+/** Treat arbitrary JSON values as objects only after checking their shape. */
+function object(value: unknown): Record<string, unknown> {
+	return isRecord(value) ? value : {};
+}
+/** Only finite nonnegative numbers can contribute to accounting. */
+function amount(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+/** Missing or empty agent types supply no attribution evidence. */
+function readAgentType(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+/** Local labels are bounded and terminal-safe; opaque joins always use the original values. */
+function label(value: unknown, fallback = "unknown"): string {
+	if (typeof value !== "string" || !value) return fallback;
+	const safe = value.replace(/[\p{Cc}\p{Cf}]/gu, "?");
+	return safe.length <= 120 ? safe : `${safe.slice(0, 90)}#${opaqueId(value).slice(0, 16)}`;
+}
+/** Match core's pricedCallsOf/unpricedCallsOf, with absent cost explicitly unknown rather than free. */
+function price(value: unknown): Price {
+	const cost = object(value);
+	if (cost.unpriced === true)
+		return {
+			recordedCost: amount(cost.total),
+			pricedCalls: amount(cost.pricedCalls ?? (amount(cost.total) > 0 ? 1 : 0)),
+			unpricedCalls: Math.max(1, amount(cost.unpricedCalls ?? 1)),
+		};
+	if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+		return { recordedCost: value, pricedCalls: 1, unpricedCalls: 0 };
+	if (typeof cost.total === "number" && Number.isFinite(cost.total) && cost.total >= 0)
+		return { recordedCost: cost.total, pricedCalls: 1, unpricedCalls: 0 };
+	return UNPRICED;
+}
+/** Shared dedup identity, including physical model/tokens even when an entry has a preserved ID. */
+function identity(call: Call): string {
+	return JSON.stringify([call.entryId, legacyKey(call)]);
+}
+/** Zeroed totals are explicit so JSON consumers can distinguish absent groups from zero usage. */
+function zero(): AgentTotals {
+	return {
+		calls: 0,
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		recordedCost: 0,
+		pricedCalls: 0,
+		unpricedCalls: 0,
+	};
+}
+/** Sum tokens and prices separately. Counts are never used as cost shares. */
+function add(total: AgentTotals, call: Call, cost: Price): void {
+	total.calls++;
+	total.input += call.input;
+	total.output += call.output;
+	total.cacheRead += call.cacheRead;
+	total.cacheWrite += call.cacheWrite;
+	total.recordedCost += cost.recordedCost;
+	total.pricedCalls += cost.pricedCalls;
+	total.unpricedCalls += cost.unpricedCalls;
+}
+
+interface Scan {
+	files: Record<string, FileStats>;
+	metadata: Metadata[];
+	/** Dedup identity -> price bound to that exact parsed call. */
+	prices: Map<string, Price>;
+	dispatches: Map<string, Dispatch>;
+	results: { parent: string; call: string; id: string }[];
+	records: { parent: string; id: string; type: string | undefined; path: string }[];
+	workflows: Map<string, string>;
+	paths: Set<string>;
+	diagnostics: ScanDiagnostic[];
+	errors: number;
+	/** Dedup identities whose only parsed copy had no bound price. */
+	unbound: Set<string>;
+}
+interface Timeline extends Attribution {
+	ms: number;
+}
+interface Attributed {
+	timelines: Map<string, Timeline[]>;
+	unmatched: Set<string>;
+	matchedRecords: Set<string>;
+}
+
+/** Record a bounded local diagnostic. */
+function diagnose(scan: Scan, diagnostic: ScanDiagnostic): void {
+	if (scan.diagnostics.length < MAX_DIAGNOSTICS) scan.diagnostics.push({ ...diagnostic, path: label(diagnostic.path) });
+}
+
+/** Collect join metadata from one already-parsed entry of the file at `path`. */
+function collect(scan: Scan, path: string, entry: Record<string, unknown>): string {
+	const message = object(entry.message);
+	let parent = "";
+	if (entry.type === "session" && typeof entry.parentSession === "string")
+		parent = resolve(dirname(path), entry.parentSession);
+	if (entry.customType === "subagents:record") {
+		const data = object(entry.data);
+		if (typeof data.id === "string")
+			scan.records.push({
+				parent: path,
+				id: data.id,
+				type: readAgentType(data.type),
+				path: typeof data.sessionFile === "string" ? resolve(dirname(path), data.sessionFile) : "",
+			});
+	}
+	// Persisted native workflow progress contains stable manager record IDs, not just wf-agent-N handles.
+	const data = entry.customType === "subagents:workflow" ? object(entry.data) : object(message.details);
+	if (Array.isArray(data.progress))
+		for (const item of data.progress) {
+			const row = object(item);
+			if (typeof row.recordId === "string")
+				scan.workflows.set(`${path}\0${row.recordId.slice(0, 8)}`, label(data.name));
+		}
+	if (message.role === "assistant" && Array.isArray(message.content))
+		for (const item of message.content) {
+			const tool = object(item);
+			if (tool.type !== "toolCall" || tool.name !== "Agent" || typeof tool.id !== "string") continue;
+			const args = object(tool.arguments);
+			const prompt = typeof args.prompt === "string" ? args.prompt : "";
+			scan.dispatches.set(`${path}\0${tool.id}`, {
+				ms: timeOf(entry.timestamp),
+				type: readAgentType(args.subagent_type),
+				standards: AXIS_STANDARDS.test(prompt),
+				spec: AXIS_SPEC.test(prompt),
+				target: prompt.match(FULL_SHA)?.at(-1),
+				resume: typeof args.resume === "string",
+			});
+		}
+	if (message.role === "toolResult" && message.toolName === "Agent" && typeof message.toolCallId === "string") {
+		const details = object(message.details);
+		const text = Array.isArray(message.content) ? message.content.map((c) => object(c).text).join("\n") : "";
+		const id = typeof details.agentId === "string" ? details.agentId : AGENT_ID_TEXT.exec(text)?.[1];
+		if (id) scan.results.push({ parent: path, call: message.toolCallId, id });
+	}
+	return parent;
+}
+
+/** Scan usage with the shared parser, validate full metadata, and bind every price to its exact parsed call. */
+async function scanFile(scan: Scan, path: string): Promise<void> {
+	const recorded = new Map<CallTuple, Price>();
+	const badLines = new Set<number>();
+	const damaged = (line: number): void => {
+		if (badLines.has(line)) return;
+		badLines.add(line);
+		diagnose(scan, { path, line, reason: "invalid-record" });
+	};
+	const parser = new SessionParser(0, 0, damaged, (tuple, cost) => recorded.set(tuple, price(cost)));
+	let parent = "";
+	let name = "";
+	let lineNumber = 0;
+	const content = createHash("sha256");
+	try {
+		await feedFile(path, {
+			accept(line) {
+				lineNumber++;
+				content.update(line).update("\n");
+				// Every line goes through the shared parser, so its fast path and counters match `/stats`.
+				parser.accept(line);
+				let entry: Record<string, unknown> | undefined;
+				try {
+					const parsed: unknown = JSON.parse(line);
+					if (isRecord(parsed)) entry = parsed;
+				} catch {
+					// Falls through to the damaged-line handling below.
+				}
+				if (entry === undefined) {
+					// Blank and NUL crash padding are not damage.
+					if (line && !NUL_LINE.test(line)) damaged(lineNumber);
+					return;
+				}
+				parent = collect(scan, path, entry) || parent;
+				if (entry.type === "session_info" && !name && typeof entry.name === "string") name = entry.name;
+			},
+		});
+	} catch {
+		scan.errors++;
+		diagnose(scan, { path, line: 0, reason: "read-file" });
+	}
+	const parsed = parser.finish();
+	// Full JSON validation catches damaged non-usage entries the fast stats parser deliberately skips.
+	parsed.badLines = badLines.size;
+	scan.files[path] = parsed;
+	scan.metadata.push({
+		path,
+		session: parsed.sessionId ?? opaqueId(`legacy-session:${path}`),
+		contentDigest: content.digest("hex"),
+		parent,
+		name,
+		child: parsed.child,
+		startMs: parsed.startMs,
+	});
+	for (const [index, tuple] of parsed.calls.entries()) {
+		const own = flatten({
+			[path]: { ...parsed, calls: [tuple], entryIds: [parsed.entryIds?.[index] ?? null] },
+		});
+		const bound = recorded.get(tuple);
+		const id = identity(nth(own.calls, 0));
+		if (bound === undefined) {
+			diagnose(scan, { path, line: 0, reason: "price-fallback" });
+			// Only reported if this call reaches the totals; a bound copy elsewhere supersedes it.
+			if (!scan.prices.has(id)) {
+				scan.prices.set(id, UNPRICED);
+				scan.unbound.add(id);
+			}
+		} else if (!scan.prices.has(id) || scan.unbound.delete(id)) scan.prices.set(id, bound);
+	}
+}
+
+/** Phase 1: read every original session file. */
+async function scan(root: string): Promise<Scan> {
+	const out: Scan = {
+		files: {},
+		metadata: [],
+		prices: new Map(),
+		dispatches: new Map(),
+		results: [],
+		records: [],
+		workflows: new Map(),
+		paths: new Set(),
+		diagnostics: [],
+		errors: 0,
+		unbound: new Set(),
+	};
+	// A missing root is a reported condition here, never a silent empty (complete) report.
+	try {
+		await stat(resolve(root));
+	} catch {
+		out.errors = 1;
+		diagnose(out, { path: resolve(root), line: 0, reason: "read-directory" });
+		return out;
+	}
+	const listed = await listJsonl(resolve(root), (d) => diagnose(out, d));
+	out.errors = listed.errors;
+	out.paths = new Set(listed.paths);
+	for (const path of listed.paths) await scanFile(out, path);
+	relocateReferences(out);
+	return out;
+}
+
+/** Resolve relocated filenames only when the candidates agree on identity and content. */
+function relocateReferences(scan: Scan): void {
+	const byName = new Map<string, Metadata[]>();
+	for (const meta of scan.metadata) {
+		const name = basename(meta.path);
+		byName.set(name, [...(byName.get(name) ?? []), meta]);
+	}
+	const locate = (path: string, required: boolean): string => {
+		if (!path || scan.paths.has(path)) return path;
+		const candidates = byName.get(basename(path)) ?? [];
+		const [first, ...copies] = candidates;
+		if (first && copies.every((copy) => copy.session === first.session && copy.contentDigest === first.contentDigest))
+			return first.path;
+		if (required || candidates.length > 0) {
+			scan.errors++;
+			diagnose(scan, { path, line: 0, reason: "unmatched-session" });
+		}
+		return path;
+	};
+	for (const meta of scan.metadata) meta.parent = locate(meta.parent, meta.child);
+	for (const record of scan.records) record.path = locate(record.path, false);
+}
+
+/** Phase 2: attribute each child session to an agent type, workflow and traffic lane (heuristic labels). */
+function attribute(scanned: Scan): Attributed {
+	const dispatchByAgent = new Map<string, Dispatch[]>();
+	for (const result of scanned.results) {
+		const dispatch = scanned.dispatches.get(`${result.parent}\0${result.call}`);
+		if (!dispatch) continue;
+		const key = `${result.parent}\0${result.id.slice(0, 8)}`;
+		dispatchByAgent.set(key, [...(dispatchByAgent.get(key) ?? []), dispatch]);
+	}
+	const recordByAgent = new Map(scanned.records.map((r) => [`${r.parent}\0${r.id.slice(0, 8)}`, r]));
+	const recordByPath = new Map<string, Scan["records"][number]>();
+	// Keep the first record for a path, as copies may repeat the same link.
+	for (const record of scanned.records)
+		if (record.path && !recordByPath.has(record.path)) recordByPath.set(record.path, record);
+	const out: Attributed = { timelines: new Map(), unmatched: new Set(), matchedRecords: new Set() };
+	const reviewSeen = new Set<string>();
+	const ordered = [...scanned.metadata].sort((a, b) => a.startMs - b.startMs || a.path.localeCompare(b.path));
+	for (const meta of ordered) {
+		const match = CHILD_NAME.exec(meta.name);
+		const byPath = recordByPath.get(meta.path);
+		if ((!meta.child && !byPath) || out.timelines.has(meta.session)) continue;
+		const key = `${meta.parent}\0${byPath?.id.slice(0, 8) ?? match?.[2]}`;
+		const record = byPath ?? recordByAgent.get(key);
+		if (record) out.matchedRecords.add(`${record.parent}\0${record.id.slice(0, 8)}`);
+		if (match) out.matchedRecords.add(`${meta.parent}\0${match[2]}`);
+		const dispatches = dispatchByAgent.get(key) ?? [];
+		const type = record?.type ?? readAgentType(match?.[1]) ?? dispatches[0]?.type;
+		const base: Attribution = {
+			agentType: label(type),
+			workflow: scanned.workflows.get(key) ?? "unknown",
+			traffic: type === AGENT_CRITIC ? "review-critic" : type === AGENT_REVIEWER ? "review-unknown" : "other",
+		};
+		const timeline: Timeline[] = [{ ...base, ms: 0 }];
+		for (const dispatch of dispatches.sort((a, b) => a.ms - b.ms)) {
+			let traffic = base.traffic;
+			if (type === AGENT_REVIEWER && dispatch.standards) traffic = "review-standards";
+			if (type === AGENT_REVIEWER && dispatch.spec) traffic = "review-spec";
+			const target = dispatch.target;
+			const review = JSON.stringify([meta.parent, type, traffic, target]);
+			if (dispatch.resume || (target && traffic.startsWith("review-") && reviewSeen.has(review)))
+				traffic = "retry-repeat";
+			reviewSeen.add(review);
+			timeline.push({ ...base, traffic, ms: dispatch.ms });
+		}
+		if (base.agentType === "unknown") out.unmatched.add(meta.session);
+		out.timelines.set(meta.session, timeline);
+	}
+	return out;
+}
+
+/** Phase 3: deduplicate, price and group calls. */
+function aggregate(scanned: Scan, attributed: Attributed): SubagentReport {
+	const loaded = flatten(scanned.files);
+	const groups = new Map<string, { group: AgentGroup; sessions: Set<string> }>();
+	const totals = zero();
+	let priceFallbacks = 0;
+	for (const call of loaded.calls) {
+		const timeline = attributed.timelines.get(call.session);
+		if (!timeline) continue;
+		const eligible = timeline.filter((row) => row.ms <= call.ms);
+		const { ms: _ms, ...attr } = nth(eligible, eligible.length - 1);
+		const provider = label(call.provider);
+		const model = label(call.model);
+		const key = JSON.stringify([attr.agentType, provider, model, attr.workflow, attr.traffic]);
+		const entry = groups.get(key) ?? {
+			group: { ...zero(), ...attr, provider, model, unmatchedSessions: 0, costComplete: true },
+			sessions: new Set<string>(),
+		};
+		groups.set(key, entry);
+		const id = identity(call);
+		let cost = scanned.prices.get(id);
+		if (cost === undefined || scanned.unbound.has(id)) {
+			// Never throw or guess: an unbound call is unpriced and counted, but only once it is in the totals.
+			priceFallbacks++;
+			cost = UNPRICED;
+		}
+		add(entry.group, call, cost);
+		add(totals, call, cost);
+		if (attributed.unmatched.has(call.session)) entry.sessions.add(call.session);
+		entry.group.unmatchedSessions = entry.sessions.size;
+		entry.group.costComplete &&= cost.unpricedCalls === 0;
+	}
+	// Forks copy records and results under their own path, so match on the agent id alone: a reference is
+	// missing only when no child session anywhere carries that id.
+	const matchedIds = new Set([...attributed.matchedRecords].map((key) => key.slice(key.indexOf("\0") + 1)));
+	const referenced = [...scanned.records, ...scanned.results.map((row) => ({ ...row, path: "" }))];
+	const missing = new Set(
+		referenced
+			.filter((r) => !matchedIds.has(r.id.slice(0, 8)) && (!r.path || !scanned.paths.has(r.path)))
+			.map((r) => r.id.slice(0, 8)),
+	);
+	// Map keys are unique, so the comparator never receives equal values.
+	const ordered = [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, { group }]) => group);
+	return {
+		groups: ordered.slice(0, MAX_GROUPS),
+		totals,
+		unmatchedSessions: attributed.unmatched.size + missing.size,
+		missingSessions: missing.size,
+		errors: scanned.errors,
+		badLines: loaded.badLines,
+		diagnostics: scanned.diagnostics,
+		omittedGroups: Math.max(0, ordered.length - MAX_GROUPS),
+		priceFallbacks,
+		complete:
+			scanned.errors === 0 &&
+			loaded.badLines === 0 &&
+			attributed.unmatched.size === 0 &&
+			missing.size === 0 &&
+			totals.unpricedCalls === 0 &&
+			priceFallbacks === 0,
+	};
+}
+
+/**
+ * Re-read original local session metadata, joining child names/record IDs and Agent result IDs.
+ * Unrecorded workflow and review purpose remain unknown; no prompt or parent usage is billed.
+ * Output is at most 200 groups (all-group totals remain explicit) and 20 diagnostics.
+ */
+export async function reportSubagents(root: string): Promise<SubagentReport> {
+	const scanned = await scan(root);
+	return aggregate(scanned, attribute(scanned));
+}

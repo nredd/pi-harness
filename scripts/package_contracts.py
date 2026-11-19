@@ -514,6 +514,7 @@ CONTRACTS = (
             "src/stats/pricing.ts",
             "src/stats/quota.ts",
             "src/stats/snapshot.ts",
+            "src/stats/subagents.ts",
             "src/stats/ticks.ts",
             "src/titles/aliases.ts",
             "src/titles/index.ts",

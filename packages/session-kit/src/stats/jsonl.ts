@@ -63,7 +63,14 @@ export async function feedFile(path: string, parser: { accept(line: string): voi
 export interface ScanDiagnostic {
 	path: string;
 	line: number;
-	reason: "invalid-record" | "read-directory" | "read-file" | "write-cache" | "cached-invalid-record";
+	reason:
+		| "invalid-record"
+		| "read-directory"
+		| "read-file"
+		| "write-cache"
+		| "cached-invalid-record"
+		| "price-fallback"
+		| "unmatched-session";
 }
 
 /**

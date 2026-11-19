@@ -32,8 +32,8 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 
 `packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler}` use fragments;
 the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the unchanged
-closed filename and one-bullet grammar. `preset` stays unenrolled because its changelog
-is being edited for release prep. `subscription-router` and `computer-use` are also not enrolled. Add a fragment for new changes
+closed filename and one-bullet grammar. `preset`, `subscription-router` and `computer-use`
+are not enrolled. For enrolled packages, add a fragment for new changes
 rather than editing the shared Unreleased block. `make check-changelog-fragments` is read-only
 and part of `make check-scripts`.
 `make fold-changelog` is an explicit source-maintenance command, never an automatic release step.
@@ -46,9 +46,12 @@ The fold appends missing categories in Added, Changed, Fixed, Refactored, Remove
 Security order and orders new bullets numerically by issue within each category. Existing
 entries, warning text, links and released sections remain byte-for-byte intact, including unbracketed release headings.
 Only the five newly enrolled packages permit uncategorized bullets, wrapped bullets and prose
-as legacy source, not new fragment syntax. An unrecognized `## ` heading inside `[Unreleased]`
-blocks the fold. `subagents` retains its strict validation;
-repeated legacy category headings remain, with additions going into the last matching category.
+as legacy source, not new fragment syntax. In legacy mode, an unrecognized level-one or
+level-two ATX heading, or a setext underline immediately after a non-blank line, inside
+`[Unreleased]` blocks the fold. `subagents` retains its strict validation. Repeated legacy
+category headings remain, with additions going into the last matching category.
+`---` immediately after a non-blank line is refused as a setext underline; after a blank line it is allowed. Underlines indented one to three spaces are not detected.
+The release matcher still treats any `## [..]` heading, e.g. `## [Notes]`, as a release boundary: the heading check never sees the lines below it, and fragments fold above it, not into a released section.
 Each package README records its partial historical migration and retained entries. Missing issue
 links, wrapped entries and repeated issue/category groups are retained rather than rewritten or
 given invented attribution.

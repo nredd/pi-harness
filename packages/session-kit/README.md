@@ -166,6 +166,47 @@ navigate, `q` or Escape closes. Output is capped. Invalid refs and non-repositor
 errors. Print mode emits a stat (pi currently redirects extension stdout to stderr); JSON emits a
 non-triggering display message. The overlay is TUI-only and works in Plan mode.
 
+## Local subagent usage report
+
+The portable stats CLI also reports existing local pi child-session history:
+
+```sh
+node dist/pi-stats-export.mjs subagents --sessions-dir ./session-history > ./subagent-usage.json
+```
+
+Only `--agent-dir` and `--sessions-dir` are accepted; other flags are rejected by name.
+The default root is `PI_CODING_AGENT_SESSION_DIR`, else `<agentDir>/sessions`, like `/stats`.
+This reads originals only, never writes a cache or uploads data. Keep output private: it contains
+local model labels and diagnostic paths. Export/import and `/stats` behavior are unchanged.
+
+`groups` sort by agent type, physical provider/model, workflow and traffic. Each reports assistant
+API `calls`, `input`, `output`, `cacheRead`, `cacheWrite`, `recordedCost`, `pricedCalls`,
+`unpricedCalls`, `costComplete` and `unmatchedSessions`. Counts are not spawn counts or cost shares.
+Recorded cost is a notional priced subtotal, not an invoice; missing prices are unpriced, not free.
+Recorded zero prices remain priced, and aggregate costs preserve core's pricing-coverage semantics.
+The shared `/stats` parser dedupes copied/forked usage; parent Agent reports are not charged again.
+
+Attribution uses child names, `subagents:record`, Agent dispatch/result IDs and stable filenames
+across relocated/symlinked roots. The recorded type takes precedence over the child name, then
+the requested dispatch type. If a recorded path is absent, same-name copies must agree in
+session ID and JSONL content. Divergent backups or missing parent joins produce `unmatched-session`
+diagnostics and `complete: false`. Workflow grouping requires persisted native `subagents:workflow`
+progress with record IDs, so most history shows workflow `unknown`. Missing types stay `unknown`;
+missing/deleted children add to `missingSessions`/`unmatchedSessions`, never invented usage.
+
+Review labels are INFERRED, not compliance evidence: `review-standards`/`review-spec` require
+`Axis:` prompt headers; `review-critic` uses the agent type. `retry-repeat` means a resume or
+same-parent/type/axis/last-full-SHA repeat, and can label a legitimate same-HEAD re-review.
+Other review history stays `review-unknown`. Unpersisted provider retries cannot be measured.
+Nothing here recommends weakening either review axis or the independent critic.
+
+Output is bounded to 200 groups and 20 diagnostics, with bounded terminal-safe labels and paths.
+`totals` includes omitted groups; `omittedGroups` reports truncation. Errors, bad lines, unmatched
+sessions, unpriced calls and `priceFallbacks` make `complete` false. Unbound prices are unpriced
+with `price-fallback` diagnostics. Missing/unreadable roots and damaged files are reported, not
+fatal. Totals can be partial; growing files are not an atomic snapshot, and deleted originals
+have no cache fallback.
+
 ## Stats
 
 `/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,

@@ -224,6 +224,10 @@ cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked
 export PATH="$(dirname "$(rustup which --toolchain 1.97.1 cargo)"):$PATH"
 ```
 
+The Linux Rust integration suite tests X11 root enrichment with synthetic snapshots: it checks
+process ID filtering, title and geometry ranking, one-to-one window assignment, and propagation of
+window metadata. It does not connect to X11 or AT-SPI.
+
 `npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
 compiler worker. It covers analytic geometry, clock/lifecycle checks and the clamp mutation control.
 This does not run the live overlay suite or prove physical pointer behavior.
