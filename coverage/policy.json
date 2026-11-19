@@ -6,6 +6,8 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_apt.sh", "reason": "Delete retired WSL apt setup after Forks switched to the shared helper (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_dns_diagnostics.sh", "reason": "Delete diagnostics used only by the retired WSL apt setup (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/install_wsl_owned_tools.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_capture.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_exec.py", "replacement": "scripts/ci_process.py", "reason": "Preserve measured Linux gh bootstrap process helpers after WSL CI removal (#1084)." },

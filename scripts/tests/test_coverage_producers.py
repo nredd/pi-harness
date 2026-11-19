@@ -339,7 +339,7 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     assert install_step["with"]["tool"] == "ripgrep@14.1.1,fd-find@10.5.0"
     assert install_step["env"]["BINSTALL_DISABLE_STRATEGIES"] == "compile"
     assert "run" not in install_step
-    apt = (ROOT / "scripts/wsl2_apt.sh").read_text()
+    apt = (ROOT / "scripts/forks_apt.sh").read_text()
     packages = apt.split("packages=(", 1)[1].splitlines()[0].rstrip(")").split()
     assert {"ripgrep", "fd-find"}.issubset(packages)
     assert "rg --version" in owned
