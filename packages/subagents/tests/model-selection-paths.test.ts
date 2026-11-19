@@ -673,6 +673,7 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 		.mocked(boot.pi.sendMessage)
 		.mock.calls.find(([message]: [{ customType: string }]) => message.customType === "subagent-notification");
 	expect(notice?.[0].content).toContain(`<model-note>${sample.note.replace("->", "-&gt;")}</model-note>`);
+	expect(notice?.[0].content).not.toContain("overrides definition model");
 
 	const transcript = /^Output file: (.+)$/m.exec(start.content[0].text)?.[1];
 	if (!transcript) throw new Error("Agent start did not report a transcript");
@@ -721,16 +722,22 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 		configCwd: sandbox.dir,
 		projectTrusted: true,
 	});
-	const nested = await nestedAgent!.execute(
-		"nested",
-		{ subagent_type: "scout", description: "nested", prompt: "go", model: sample.param },
-		undefined,
-		undefined,
-		context,
-	);
-	const nestedText = nested.content[0];
-	if (nestedText?.type !== "text") throw new Error("Nested Agent did not return text");
-	expectResult(nestedText.text, "done");
+	if (!nestedAgent) throw new Error("Missing nested Agent tool");
+	const runNested = async (description: string) => {
+		const result = await nestedAgent.execute(
+			description,
+			{ subagent_type: "scout", description, prompt: "go", model: sample.param },
+			undefined,
+			undefined,
+			context,
+		);
+		const content = result.content[0];
+		if (content?.type !== "text") throw new Error("Nested Agent did not return text");
+		return content.text;
+	};
+	expectResult(await runNested("nested"), "done");
+	vi.mocked(runner.runAgent).mockRejectedValueOnce(new Error("nested fixture failure"));
+	expectResult(await runNested("nested failure"), "Agent failed: nested fixture failure");
 
 	const preview = explainModel({
 		agentType: "scout",
@@ -761,9 +768,14 @@ it("releases the concurrency slot on tier refusal before starting another child"
 	setModelTiers({ cheap: [ref("typed")] }, {});
 	setAgentModels({ scout: "@cheap" });
 	manager.setMaxConcurrent(1);
-	blockedUntil = clock.now() + 1000;
+	const resetAt = clock.now() + 1000;
+	blockedUntil = resetAt;
 	const refused = manager.spawn(boot.pi, context, "scout", "refused", { description: "refused", isBackground: true });
-	await expect(manager.awaitStartup(refused)).rejects.toThrow("Model: @cheap is exhausted");
+	await expect(manager.awaitStartup(refused)).rejects.toThrow(
+		new Error(
+			`Model: @cheap is exhausted. Subscription quota for @cheap is exhausted; it resets at ${new Date(resetAt).toISOString()}. The agent was not started.`,
+		),
+	);
 	expect(runner.runAgent).not.toHaveBeenCalled();
 	blockedUntil = undefined;
 	const next = manager.spawn(boot.pi, context, "scout", "next", { description: "next", isBackground: true });
