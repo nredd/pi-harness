@@ -387,123 +387,13 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
     result = ci_paths.ChangeClassification(
         paths=("docs/guide.md", "NOTES.md"),
         docs_only=True,
-        inputs={"wsl_inputs": False, "stack_inputs": False},
+        inputs={"stack_inputs": False},
     )
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
     contents = output.read_text(encoding="utf-8")
     assert "docs_only=true\n" in contents
-    assert "wsl_inputs=false\n" in contents
     assert "stack_inputs=false\n" in contents
     assert "docs/guide.md\nNOTES.md\n" in contents
-
-
-@pytest.mark.parametrize(
-    ("wsl_inputs", "stack_inputs"), [(True, False), (False, True), (True, True), (False, False)]
-)
-def test_write_github_output_keeps_input_flags_independent(
-    tmp_path: Path, wsl_inputs: bool, stack_inputs: bool
-) -> None:
-    """Publish each input flag from its own field.
-
-    Parameters:
-        tmp_path (Path): Pytest temporary directory.
-        wsl_inputs (bool): Whether the fixture touches WSL inputs.
-        stack_inputs (bool): Whether the fixture touches stack inputs.
-
-    Returns:
-        None: Assertions verify workflow output.
-    """
-    output = tmp_path / "output"
-    result = ci_paths.ChangeClassification(
-        paths=("a",), docs_only=False, inputs={"wsl_inputs": wsl_inputs, "stack_inputs": stack_inputs}
-    )
-    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
-    lines = output.read_text(encoding="utf-8").splitlines()
-    assert f"wsl_inputs={str(wsl_inputs).lower()}" in lines
-    assert f"stack_inputs={str(stack_inputs).lower()}" in lines
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        ".github/workflows/ci.yml",
-        ".github/actions/setup-ci-wsl/action.yml",
-        "scripts/wsl2_setup.sh",
-        "scripts/wsl2_shell.ps1",
-        "scripts/wsl2_capture.py",
-        "scripts/wsl2_exec.py",
-        "scripts/wsl2_run.py",
-        "scripts/ci_paths.py",
-        "scripts/install_gh_linux.py",
-        "scripts/install_gh_linux.sh",
-        "scripts/install_wsl_owned_tools.py",
-        "scripts/install_wsl_owned_tools.sh",
-        "Makefile",
-        "package.json",
-        ".npmrc",
-        ".node-version",
-        ".bun-version",
-        ".python-version",
-        ".gitattributes",
-        ".gitmodules",
-        "coverage/policy.json",
-        "package-lock.json",
-        "tests/integration/pyproject.toml",
-        "tests/integration/uv.lock",
-        "tests/integration/probes/stack-resources.ts",
-        "tests/integration/providers/faux.ts",
-        "scripts/check-commit-messages.mjs",
-        "scripts/tests/commit-messages.test.mjs",
-        "scripts/tests/commit-policy.test.mjs",
-        "scripts/coverage-configs.test.ts",
-        "scripts/import_audit.test.ts",
-        "scripts/import_audit.ts",
-        "scripts/router_contract.mjs",
-        "scripts/router_contract.test.mjs",
-        "scripts/run-vitest.test.ts",
-        "scripts/run-vitest.ts",
-        "scripts/vitest-package.ts",
-        "scripts/vitest.config.ts",
-        "tests/lib/src/isolated-home.ts",
-    ],
-)
-def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> None:
-    """Run WSL on a PR whenever setup, adapter, make or tool pins change.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        path (str): WSL path input.
-
-    Returns:
-        None: Assertions verify classification.
-    """
-    assert classify_change(repo, {path: "input\n"}).inputs["wsl_inputs"]
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "docs/guide.md",
-        "NOTES.md",
-        "packages/dev-tools/src/index.ts",
-        "release/pi_release/stack.py",
-        "scripts/merge_pr_checks.py",
-        "scripts/tests/test_wsl2_workflow.py",
-        "scripts/tests/ci_helper.py",
-        "docs/.github/notes.md",
-    ],
-)
-def test_wsl_inputs_reject_paths_outside_the_guest_path(repo: Path, path: str) -> None:
-    """Bypass WSL on a PR that only changes ordinary package or test sources.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        path (str): Path the WSL path does not depend on.
-
-    Returns:
-        None: Assertions verify classification.
-    """
-    assert not classify_change(repo, {path: "input\n"}).inputs["wsl_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -528,7 +418,6 @@ def test_wsl_inputs_reject_paths_outside_the_guest_path(repo: Path, path: str) -
         ".node-version",
         ".bun-version",
         ".python-version",
-        "scripts/wsl2_run.sh",
     ],
 )
 def test_stack_inputs_accept_paths_the_personal_stack_reads(repo: Path, path: str) -> None:
@@ -580,11 +469,8 @@ def test_mixed_change_reports_each_input_family(repo: Path) -> None:
         None: Assertions verify classification.
     """
     result = classify_change(repo, {"docs/guide.md": "docs\n", "scripts/ci_paths.py": "code\n"})
-    assert (result.docs_only, result.inputs["wsl_inputs"], result.inputs["stack_inputs"]) == (
-        False,
-        True,
-        False,
-    )
+    assert not result.docs_only
+    assert not result.inputs["stack_inputs"]
 
 
 @pytest.mark.parametrize("case", ["invalid-base", "gitlink", "empty"])
@@ -605,7 +491,6 @@ def test_input_flags_fail_closed(repo: Path, case: str) -> None:
         git(repo, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},forks/pi")
         commit(repo, "bump gitlink")
     result = ci_paths.classify(repo, base, "HEAD")
-    assert result.inputs["wsl_inputs"]
     assert result.inputs["stack_inputs"]
 
 
@@ -613,7 +498,6 @@ PULL_REQUEST = "pull_request"
 PUSH = "push"
 ALL_NATIVE_GATES = ("check-ts", "check-scripts", "check-integration")
 MAC_GATES = ALL_NATIVE_GATES
-WSL_GATES = ("check-ts", "check-probes", "check-providers", "check-import-audit")
 
 
 def plan_change(repo: Path, files: dict[str, str], event: str) -> dict[str, ci_paths.CellPlan]:
@@ -639,12 +523,11 @@ def test_plan_names_are_exactly_the_required_checks(repo: Path) -> None:
     Returns:
         None: Assertions verify the plan keys.
     """
-    for event in (PULL_REQUEST, PUSH):
-        assert set(plan_change(repo, {"a.txt": event}, event)) == merge_pr_checks.EXPECTED_MATRIX
+    assert set(plan_change(repo, {"a.txt": "pr"}, PULL_REQUEST)) == merge_pr_checks.EXPECTED_MATRIX
 
 
-def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
-    """Run native `owned` with all three gates and keep WSL to its LCOV producers.
+def test_code_change_runs_ubuntu_with_its_gates(repo: Path) -> None:
+    """Plan every Ubuntu gate for a code PR.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -658,22 +541,11 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
         True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards, guest="linux", coverage_os="linux"
     )
     assert len(ubuntu.shards) == 4
-    assert plan["owned (macos-14)"].gates == MAC_GATES
-    assert plan["contracts (macos-14)"] == ci_paths.CellPlan(True, True, (), "")
-    assert plan["stack (macos-14, local)"].scenarios
     assert plan["stack (ubuntu-24.04, local)"].scenarios
     # `packages/` feeds `local` only: the personal stack runs setup without scenarios.
     assert plan["stack (ubuntu-24.04, personal)"].run
     assert not plan["stack (ubuntu-24.04, personal)"].scenarios
     assert "no stack inputs" in plan["stack (ubuntu-24.04, personal)"].reason
-    # No WSL inputs: WSL bypasses on a PR, with the reason named per job.
-    assert not plan["owned (wsl2)"].run
-    assert plan["owned (wsl2)"].reason.startswith(
-        "This pull request changes no CI or WSL inputs; owned (wsl2)"
-    )
-    assert plan["contracts (wsl2)"].reason.startswith(
-        "This pull request changes no CI or WSL inputs; contracts"
-    )
 
 
 @pytest.mark.parametrize(
@@ -702,9 +574,8 @@ def test_layout_relevant_changes_run_check_scripts_on_every_native_cell(repo: Pa
     """
     assert not classify_change(repo, {path: "x\n"}).docs_only
     plan = plan_change(repo, {path: "y\n"}, PULL_REQUEST)
-    for cell in ("owned (ubuntu-24.04)", "owned (macos-14)"):
-        assert plan[cell].run
-        assert "check-scripts" in plan[cell].gates
+    assert plan["owned (ubuntu-24.04)"].run
+    assert "check-scripts" in plan["owned (ubuntu-24.04)"].gates
 
 
 @pytest.mark.parametrize("name", ["README.md", "CHANGELOG.md"])
@@ -771,25 +642,6 @@ def test_classify_fails_closed_when_the_trees_cannot_be_listed(
     assert all(result.inputs.values())
 
 
-def test_wsl_inputs_wake_wsl_with_only_the_lcov_producers(repo: Path) -> None:
-    """Run WSL on a PR that changes its inputs, without the duplicate Python unit suites.
-
-    Parameters:
-        repo (Path): Disposable repository.
-
-    Returns:
-        None: Assertions verify the plan.
-    """
-    plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PULL_REQUEST)
-    wsl = plan["owned (wsl2)"]
-    assert wsl == ci_paths.CellPlan(
-        True, True, WSL_GATES, "", shards=wsl.shards, guest="wsl2", coverage_os="linux"
-    )
-    assert len(wsl.shards) == 2
-    assert plan["contracts (wsl2)"].run
-    assert plan["stack (ubuntu-24.04, personal)"].scenarios
-
-
 def test_stack_inputs_wake_the_personal_scenarios(repo: Path) -> None:
     """Run personal scenarios on a PR that changes the stack harness.
 
@@ -801,72 +653,23 @@ def test_stack_inputs_wake_the_personal_scenarios(repo: Path) -> None:
     """
     plan = plan_change(repo, {"release/pi_release/stack.py": "x\n"}, PULL_REQUEST)
     assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
-    assert not plan["owned (wsl2)"].run
 
 
-@pytest.mark.parametrize("event", [PULL_REQUEST, PUSH])
-def test_docs_only_change_bypasses_native_cells_and_wsl_runs_on_main(repo: Path, event: str) -> None:
-    """Report NOT RUN for docs-only changes everywhere except a real WSL cell on `main`.
+@pytest.mark.parametrize("path", ["docs/guide.md", "unknown.bin", ".github/workflows/ci.yml"])
+def test_pr_always_bypasses_macos(repo: Path, path: str) -> None:
+    """The macOS PR decision is independent of docs, code and workflow inputs."""
+    result = classify_change(repo, {path: "x\n"})
+    plan = ci_paths.plan_cells(result, PULL_REQUEST, capacity={"pi-macos": 3})
+    assert set(plan) == merge_pr_checks.EXPECTED_MATRIX
 
-    Parameters:
-        repo (Path): Disposable repository.
-        event (str): Triggering event name.
 
-    Returns:
-        None: Assertions verify the plan.
-    """
+@pytest.mark.parametrize("event", [PUSH, "workflow_dispatch"])
+def test_non_pr_events_run_every_runnable_cell(repo: Path, event: str) -> None:
+    """A docs-only diff does not limit non-PR verification."""
     plan = plan_change(repo, {"docs/guide.md": "x\n"}, event)
-    for name in (
-        "owned (ubuntu-24.04)",
-        "owned (macos-14)",
-        "contracts (ubuntu-24.04)",
-        "contracts (macos-14)",
-    ):
-        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["docs_only"])
-    assert plan["stack (ubuntu-24.04, personal)"].reason == ci_paths.NOT_RUN["docs_only"]
-    assert plan["stack (macos-14, local)"].reason == ci_paths.NOT_RUN["docs_only"]
-    assert plan["owned (wsl2)"].run is (event == PUSH)
-    assert plan["contracts (wsl2)"].run is (event == PUSH)
-    if event == PUSH:
-        assert plan["owned (wsl2)"].gates == WSL_GATES
-
-
-@pytest.mark.parametrize("event", [PULL_REQUEST, PUSH])
-@pytest.mark.parametrize("stack_cell", [("macos-14", "personal"), ("wsl2", "personal"), ("wsl2", "local")])
-def test_permanent_stack_bypass_cells_report_why_on_every_change(
-    repo: Path, event: str, stack_cell: tuple[str, str]
-) -> None:
-    """Keep the three stack names that never run reporting NOT RUN, even for docs-only changes.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        event (str): Triggering event name.
-        stack_cell (tuple[str, str]): Matrix `os` and `stack`.
-
-    Returns:
-        None: Assertions verify the plan.
-    """
-    for files in ({"docs/guide.md": "x\n"}, {".github/workflows/ci.yml": "x\n"}):
-        plan = plan_change(repo, files, event)[f"stack ({stack_cell[0]}, {stack_cell[1]})"]
-        assert plan == ci_paths.CellPlan(False, False, (), ci_paths.STACK_NOT_RUN[stack_cell])
-
-
-def test_main_push_keeps_only_the_ubuntu_personal_smoke(repo: Path) -> None:
-    """Run the merged-result smoke on `main` and skip the other running stack cells.
-
-    Parameters:
-        repo (Path): Disposable repository.
-
-    Returns:
-        None: Assertions verify the plan.
-    """
-    plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PUSH)
-    # `stack_inputs` is false here, yet `main` ignores it for the smoke cell.
-    assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
-    for name in ("stack (ubuntu-24.04, local)", "stack (macos-14, local)"):
-        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["main_smoke"])
+    assert all(cell.run for cell in plan.values())
     assert plan["owned (macos-14)"].gates == MAC_GATES
-    assert plan["owned (wsl2)"].gates == WSL_GATES
+    assert all(not cell.skipped_gates for cell in plan.values())
 
 
 @pytest.mark.parametrize("case", ["invalid-base", "gitlink", "empty"])
@@ -887,8 +690,7 @@ def test_plan_fails_closed_to_running_everything(repo: Path, case: str) -> None:
         git(repo, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},forks/pi")
         commit(repo, "bump gitlink")
     plan = ci_paths.plan_cells(ci_paths.classify(repo, base, "HEAD"), PULL_REQUEST)
-    assert plan["owned (wsl2)"].run
-    assert plan["owned (macos-14)"].gates == MAC_GATES
+    assert "owned (macos-14)" not in plan
     assert plan["stack (ubuntu-24.04, personal)"].scenarios
 
 
@@ -972,7 +774,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     """
     result = classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     output = tmp_path / "out"
-    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
+    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PUSH))
     plan = read_plan(output)
     split = {"packages/subagents", "packages/computer-use"}
     rest = " ".join(w for w in ci_paths.npm_workspaces(ci_paths.REPO_ROOT) if w not in split)
@@ -1035,7 +837,6 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     }
     assert plan["contracts (macos-14)"]["shards"] == []
     assert (plan["contracts (macos-14)"]["guest"], plan["contracts (macos-14)"]["coverage_os"]) == ("", "")
-    assert plan["stack (wsl2, local)"]["reason"] == ci_paths.STACK_NOT_RUN["wsl2", "local"]
 
 
 def read_plan(output: Path) -> dict[str, dict[str, Any]]:
@@ -1084,7 +885,7 @@ def test_cli_plans_a_pull_request_and_a_push(repo: Path, tmp_path: Path) -> None
     pr_plan = read_plan(pr)
     push_plan = read_plan(push)
     assert pr_plan["stack (ubuntu-24.04, local)"]["run"]
-    assert push_plan["stack (ubuntu-24.04, local)"]["run"] is False
+    assert push_plan["stack (ubuntu-24.04, local)"]["run"] is True
     assert not any(cell["blocked"] for cell in pr_plan.values())
 
 
@@ -1271,7 +1072,7 @@ def test_script_entry_point_writes_the_plan(
     with pytest.raises(SystemExit) as raised:
         runpy.run_path(ci_paths.__file__, run_name="__main__")
     assert raised.value.code == 0
-    assert set(read_plan(output)) == merge_pr_checks.EXPECTED_MATRIX
+    assert set(read_plan(output)) > merge_pr_checks.EXPECTED_MATRIX
 
 
 def test_cli_full_plans_every_cell_to_run_without_reading_a_diff(tmp_path: Path) -> None:
@@ -1283,16 +1084,11 @@ def test_cli_full_plans_every_cell_to_run_without_reading_a_diff(tmp_path: Path)
     output = tmp_path / "out"
     assert ci_paths.main(["--full", "--event", "workflow_dispatch", "--github-output", str(output)]) == 0
     lines = output.read_text(encoding="utf-8").splitlines()
-    for flag in ("docs_only=false", "wsl_inputs=true", "stack_inputs=true"):
+    for flag in ("docs_only=false", "stack_inputs=true"):
         assert flag in lines
     assert ci_paths.FULL_RELEASE_CANDIDATE in lines
     plan = read_plan(output)
-    assert {name for name, cell in plan.items() if not cell["run"]} == {
-        "stack (macos-14, personal)",
-        "stack (wsl2, personal)",
-        "stack (wsl2, local)",
-    }
-    assert plan["owned (wsl2)"]["gates"] == " ".join(WSL_GATES)
+    assert all(cell["run"] for cell in plan.values())
     assert plan["stack (ubuntu-24.04, local)"]["scenarios"]
 
 
@@ -1312,7 +1108,6 @@ WORKSPACES = ci_paths.npm_workspaces(ci_paths.REPO_ROOT)
 SHARD_NAMES = {
     "ubuntu-24.04": ("subagents", "computer-use", "ts", "python"),
     "macos-14": ("subagents", "computer-use", "ts", "scripts", "python"),
-    "wsl2": ("subagents-computer-use", "ts"),
 }
 
 
@@ -1366,7 +1161,7 @@ def test_macos_scripts_have_an_independent_budget_without_dropping_gates(repo: P
 
 
 def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> None:
-    """Pin the shard split: four Ubuntu shards, five macOS shards, two WSL shards.
+    """Pin the Ubuntu and macOS shard split.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -1391,10 +1186,7 @@ def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> No
     ]
     assert mac["scripts"]["gates"] == "check-scripts"
     assert mac["python"]["gates"] == "check-integration"
-    wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
-    assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
-    assert wsl["ts"]["gates"] == "check-ts check-probes check-providers check-import-audit"
-    for os_name, entries in (("ubuntu-24.04", ubuntu), ("macos-14", mac), ("wsl2", wsl)):
+    for os_name, entries in (("ubuntu-24.04", ubuntu), ("macos-14", mac)):
         runner, guest = ci_paths.RUNNERS[os_name]
         assert all(entry["os"] == os_name for entry in entries.values())
         assert all((entry["runner"], entry["guest"]) == (runner, guest) for entry in entries.values())
@@ -1414,9 +1206,7 @@ def test_cell_gates_are_its_shards_gates_in_order(repo: Path, os_name: str) -> N
     assert plan.gates == ci_paths.OWNED_GATES[os_name]
 
 
-@pytest.mark.parametrize(
-    ("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin"), ("wsl2", "linux")]
-)
+@pytest.mark.parametrize(("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin")])
 def test_owned_cells_publish_the_fan_ins_accounting_platform(
     repo: Path, monkeypatch: pytest.MonkeyPatch, os_name: str, coverage_os: str
 ) -> None:
@@ -1452,13 +1242,11 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     """
     docs = plan_change(repo, {"docs/guide.md": "x\n"}, PULL_REQUEST)
     assert docs["owned (ubuntu-24.04)"].shards == ()
-    assert docs["owned (wsl2)"].shards == ()
     code = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
-    assert code["owned (wsl2)"].shards == ()
     assert code["contracts (ubuntu-24.04)"].shards == ()
     assert code["stack (ubuntu-24.04, local)"].shards == ()
-    assert code["owned (macos-14)"].shards
-    assert all((cell.guest, cell.coverage_os) == ("", "") for cell in (*docs.values(), code["owned (wsl2)"]))
+    assert "owned (macos-14)" not in code
+    assert all((cell.guest, cell.coverage_os) == ("", "") for cell in docs.values())
     blocked = ci_paths.plan_cells(classify_change(repo, {"b.txt": "x\n"}), PULL_REQUEST, "too long")
     assert all(cell.shards == () for cell in blocked.values())
 

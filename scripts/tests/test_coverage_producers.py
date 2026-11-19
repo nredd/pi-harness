@@ -96,7 +96,7 @@ def test_tmux_apt_steps_skip_present_tools_and_are_bounded() -> None:
         AssertionError: An apt step can stall for the whole job budget.
     """
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    for name in ("owned-shards-ubuntu", "stack"):
+    for name in ("owned-shards", "stack"):
         step = step_named(ci["jobs"][name]["steps"], "Install tmux (Linux)")
         assert step["timeout-minutes"] == 5
         assert "command -v tmux" in step["run"]
@@ -142,7 +142,7 @@ def test_python_signals_match_the_shared_python_gate() -> None:
         assert f"--cov-report=lcov:{primary['report']}" in recipe, name
         source = sources[package["root"]]
         assert {Path(pattern).parent.as_posix() for pattern in package["owned"]} == {source}, name
-        assert primary["skip_hosts"] == ["wsl2"], name
+        assert not primary.get("skip_hosts"), name
         assert primary["producer"] == "coverage.py", name
     assert set(sources) == {"scripts", "tests/integration", "release"}
 
@@ -232,7 +232,7 @@ def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         OSError: The workflow cannot be read.
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    return jobs["owned-shards-ubuntu"]["steps"], jobs["owned-ubuntu"]["steps"]
+    return jobs["owned-shards"]["steps"], jobs["owned"]["steps"]
 
 
 def step_named(steps: list[dict[str, Any]], prefix: str) -> dict[str, Any]:
@@ -266,9 +266,6 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
     assert reports["if"] == "always()"
     assert reports["with"]["name"] == "coverage-${{ matrix.os }}-${{ matrix.shard }}"
     assert "lcov.info" in reports["with"]["path"]
-    # WSL runs ordinary producers inside Linux, but uploads from the Windows host.
-    export = next(i for i, step in enumerate(shard) if step.get("uses") == "./.github/actions/capture-ci-wsl")
-    assert last_gate < export < shard.index(reports)
     checkout = next(step for step in shard if "actions/checkout@" in step.get("uses", ""))
     assert checkout["with"]["fetch-depth"] == 0
     accounting = step_named(fan_in, "Coverage accounting")
@@ -316,7 +313,7 @@ def test_native_ubuntu_rust_producer_is_pinned_and_preserved() -> None:
     signal = cfg["signals"]["primary"]
     assert signal["producer"] == "llvm-cov"
     assert signal["skip_os"] == ["darwin"]
-    assert signal["skip_hosts"] == ["wsl2"]
+    assert not signal.get("skip_hosts")
     assert signal["enforcement"] == "report-only"
 
 
@@ -337,7 +334,7 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     verify = shard.index(step_named(shard, "Verify reviewer read dependencies"))
     assert install < verify < shard.index(step_named(shard, "Owned gate "))
     # Prebuilt GitHub release binaries on Ubuntu and macOS: no apt mirror on the critical path.
-    assert install_step["if"] == "matrix.os == 'ubuntu-24.04' || runner.os == 'macOS'"
+    assert "if" not in install_step
     assert install_step["uses"] == "taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283"
     assert install_step["with"]["tool"] == "ripgrep@14.1.1,fd-find@10.5.0"
     assert install_step["env"]["BINSTALL_DISABLE_STRATEGIES"] == "compile"
