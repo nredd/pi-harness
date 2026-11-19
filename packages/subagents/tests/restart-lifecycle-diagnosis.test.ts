@@ -116,9 +116,10 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 				const row = { id, type: lost.type, description: lost.description, status: "running", sessionFile: childFile };
 				// An update is not another edge, and a different conversation cannot
 				// claim this one as a predecessor, even with a syntactically valid id.
+				parent.appendCustomEntry("subagents:record", { ...row, id: "unrelated" });
 				parent.appendCustomEntry("subagents:record", {
 					...row,
-					previousId: first,
+					previousId: "unrelated",
 					handle: lost.handle,
 					alias: lost.alias,
 				});
@@ -156,7 +157,7 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 					const failure = outcomes(reopened, tool).at(-1);
 					expect(failure?.isError).toBe(true);
 					expect(failure?.text).toContain("only historical metadata is available");
-					expect(failure?.text).toContain(childFile);
+					expect(failure?.text.split("\n")[0]).toContain(childFile);
 				}
 				expect(child.state.callCount).toBe(1);
 				return;
@@ -173,6 +174,8 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 			expect(await request.promise).toContain("PROGRESS BEFORE CRASH");
 			expect(await request.promise).toContain("CONTINUE AFTER CRASH");
 			if (mode === "chain") {
+				await call(reopened, get("unrelated"));
+				expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toContain('Agent "unrelated"');
 				await call(reopened, resume(id));
 				const duplicate = outcomes(reopened, "Agent").at(-1);
 				expect(duplicate?.isError).toBe(true);

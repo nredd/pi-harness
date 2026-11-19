@@ -2216,7 +2216,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
 	/** Why `reopenEvicted` did not reopen; `type-unavailable` keeps the tombstone, `session-gone` drops it. */
 	type ReopenFailure =
-		| { reason: "session-gone"; sessionFile: string }
+		| { reason: "session-gone" }
 		| { reason: "type-unavailable"; type: string }
 		| { reason: "spawn-failed"; message: string };
 
@@ -2224,7 +2224,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	function couldNotResume(target: string, failure: ReopenFailure): string {
 		switch (failure.reason) {
 			case "session-gone":
-				return `Could not resume ${target} — its session is gone. Missing file: ${failure.sessionFile}`;
+				return `Could not resume ${target} — its session is gone.`;
 			case "type-unavailable":
 				return `Could not resume ${target} — the ${failure.type} agent is no longer available.`;
 			case "spawn-failed":
@@ -2258,7 +2258,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// so rather than quietly sending this message to an unrelated agent.
 		if (!existsSync(entry.sessionFile)) {
 			manager.dropTombstone(entry.handle);
-			return { ok: false, failure: { reason: "session-gone", sessionFile: entry.sessionFile } };
+			return { ok: false, failure: { reason: "session-gone" } };
 		}
 
 		// The Agent tool deliberately falls back to general-purpose for a type it
