@@ -23,7 +23,10 @@ const MAX_DIAGNOSTICS = 20;
 /** No recorded price: unpriced, never free. */
 const UNPRICED: Price = { recordedCost: 0, pricedCalls: 0, unpricedCalls: 1 };
 
-/** Review lane and retry-repeat are INFERRED labels, see the README. History cannot prove a review was required: these labels describe explicit prompt evidence only. */
+/**
+ * Review lane and retry-repeat are inferred labels, see the README.
+ * History cannot prove a review was required: these labels describe explicit prompt evidence only.
+ */
 export type Traffic =
 	| "review-standards"
 	| "review-spec"
@@ -70,7 +73,7 @@ export interface SubagentReport {
 }
 interface Dispatch {
 	ms: number;
-	type: string;
+	type: string | undefined;
 	standards: boolean;
 	spec: boolean;
 	target: string | undefined;
@@ -97,6 +100,10 @@ function object(value: unknown): Record<string, unknown> {
 /** Only finite nonnegative numbers can contribute to accounting. */
 function amount(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+/** Missing or empty agent types supply no attribution evidence. */
+function readAgentType(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 /** Local labels are bounded and terminal-safe; opaque joins always use the original values. */
 function label(value: unknown, fallback = "unknown"): string {
@@ -155,7 +162,7 @@ interface Scan {
 	prices: Map<string, Price>;
 	dispatches: Map<string, Dispatch>;
 	results: { parent: string; call: string; id: string }[];
-	records: { parent: string; id: string; type: string; path: string }[];
+	records: { parent: string; id: string; type: string | undefined; path: string }[];
 	workflows: Map<string, string>;
 	paths: Set<string>;
 	diagnostics: ScanDiagnostic[];
@@ -189,7 +196,7 @@ function collect(scan: Scan, path: string, entry: Record<string, unknown>): stri
 			scan.records.push({
 				parent: path,
 				id: data.id,
-				type: label(data.type),
+				type: readAgentType(data.type),
 				path: typeof data.sessionFile === "string" ? resolve(dirname(path), data.sessionFile) : "",
 			});
 	}
@@ -209,7 +216,7 @@ function collect(scan: Scan, path: string, entry: Record<string, unknown>): stri
 			const prompt = typeof args.prompt === "string" ? args.prompt : "";
 			scan.dispatches.set(`${path}\0${tool.id}`, {
 				ms: timeOf(entry.timestamp),
-				type: label(args.subagent_type),
+				type: readAgentType(args.subagent_type),
 				standards: AXIS_STANDARDS.test(prompt),
 				spec: AXIS_SPEC.test(prompt),
 				target: prompt.match(FULL_SHA)?.at(-1),
@@ -360,21 +367,25 @@ function attribute(scanned: Scan): Attributed {
 		dispatchByAgent.set(key, [...(dispatchByAgent.get(key) ?? []), dispatch]);
 	}
 	const recordByAgent = new Map(scanned.records.map((r) => [`${r.parent}\0${r.id.slice(0, 8)}`, r]));
+	const recordByPath = new Map<string, Scan["records"][number]>();
+	// Keep the first record for a path, as copies may repeat the same link.
+	for (const record of scanned.records)
+		if (record.path && !recordByPath.has(record.path)) recordByPath.set(record.path, record);
 	const out: Attributed = { timelines: new Map(), unmatched: new Set(), matchedRecords: new Set() };
 	const reviewSeen = new Set<string>();
 	const ordered = [...scanned.metadata].sort((a, b) => a.startMs - b.startMs || a.path.localeCompare(b.path));
 	for (const meta of ordered) {
 		const match = CHILD_NAME.exec(meta.name);
-		const byPath = scanned.records.find((r) => r.path === meta.path);
+		const byPath = recordByPath.get(meta.path);
 		if ((!meta.child && !byPath) || out.timelines.has(meta.session)) continue;
 		const key = `${meta.parent}\0${byPath?.id.slice(0, 8) ?? match?.[2]}`;
 		const record = byPath ?? recordByAgent.get(key);
 		if (record) out.matchedRecords.add(`${record.parent}\0${record.id.slice(0, 8)}`);
 		if (match) out.matchedRecords.add(`${meta.parent}\0${match[2]}`);
 		const dispatches = dispatchByAgent.get(key) ?? [];
-		const type = label(record?.type ?? dispatches[0]?.type ?? match?.[1]);
+		const type = record?.type ?? readAgentType(match?.[1]) ?? dispatches[0]?.type;
 		const base: Attribution = {
-			agentType: type,
+			agentType: label(type),
 			workflow: scanned.workflows.get(key) ?? "unknown",
 			traffic: type === AGENT_CRITIC ? "review-critic" : type === AGENT_REVIEWER ? "review-unknown" : "other",
 		};
@@ -390,7 +401,7 @@ function attribute(scanned: Scan): Attributed {
 			reviewSeen.add(review);
 			timeline.push({ ...base, traffic, ms: dispatch.ms });
 		}
-		if (type === "unknown") out.unmatched.add(meta.session);
+		if (base.agentType === "unknown") out.unmatched.add(meta.session);
 		out.timelines.set(meta.session, timeline);
 	}
 	return out;

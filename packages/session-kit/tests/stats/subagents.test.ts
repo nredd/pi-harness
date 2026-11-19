@@ -172,6 +172,60 @@ it.each(["original", "relocated", "symlinked"])(
 	},
 );
 
+it.each([
+	["general-purpose#12345678", undefined, "general-purpose"],
+	["general-purpose#12345678", "", "general-purpose"],
+	["general-purpose#12345678", "Explore", "Explore"],
+	["#12345678", undefined, "reviewer"],
+])("attributes child %s with record type %s to %s", async (name, recordType, expected) => {
+	const parent = await file("parent.jsonl", [
+		header("p"),
+		{
+			type: "message",
+			timestamp,
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", name: "Agent", id: "dispatch", arguments: { subagent_type: "reviewer" } }],
+			},
+		},
+		{
+			type: "message",
+			message: { role: "toolResult", toolName: "Agent", toolCallId: "dispatch", details: { agentId: "12345678" } },
+		},
+		...(recordType === undefined
+			? []
+			: [{ type: "custom", customType: "subagents:record", data: { id: "12345678", type: recordType } }]),
+	]);
+	await file("child.jsonl", [header("c", parent), info(name), call("one")]);
+	expect(await reportSubagents(root)).toMatchObject({ complete: true, groups: [{ agentType: expected, calls: 1 }] });
+});
+
+it("joins many pathless records and retains the first explicit path match", async () => {
+	const record = (id: string, type: string, sessionFile?: string) => ({
+		type: "custom",
+		customType: "subagents:record",
+		data: { id, type, sessionFile },
+	});
+	const ids = Array.from({ length: 128 }, (_, i) => i.toString(16).padStart(8, "0"));
+	const explicitPath = join(root, "renamed.jsonl");
+	const parent = await file("parent.jsonl", [
+		header("p"),
+		...ids.map((id) => record(id, "Explore")),
+		record("12345678-first", "critic", explicitPath),
+		record("12345678-copy", "general-purpose", explicitPath),
+	]);
+	for (const id of ids) await file(`${id}.jsonl`, [header(id, parent), info(`Explore#${id}`), call(id)]);
+	await file("renamed.jsonl", [header("renamed"), call("explicit")]);
+	expect(await reportSubagents(root)).toMatchObject({
+		complete: true,
+		missingSessions: 0,
+		groups: [
+			{ agentType: "Explore", calls: 128 },
+			{ agentType: "critic", calls: 1 },
+		],
+	});
+});
+
 it("reports unreadable directories and missing roots as incomplete", async () => {
 	const notDirectory = await file("not-a-dir", []);
 	expect(await reportSubagents(notDirectory)).toMatchObject({
@@ -191,6 +245,7 @@ it("reports unreadable directories and missing roots as incomplete", async () =>
 
 it("adds a local-only portable CLI mode and refuses export/input flags", async () => {
 	const argv = process.argv;
+	const env = process.env.PI_CODING_AGENT_SESSION_DIR;
 	const log = vi.spyOn(console, "log").mockImplementation(() => {});
 	try {
 		await mkdir(join(root, "sessions"));
@@ -204,6 +259,8 @@ it("adds a local-only portable CLI mode and refuses export/input flags", async (
 		await expect(main()).rejects.toThrow("usage:");
 	} finally {
 		process.argv = argv;
+		if (env === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		else process.env.PI_CODING_AGENT_SESSION_DIR = env;
 	}
 });
 

@@ -187,7 +187,8 @@ Recorded zero prices remain priced, and aggregate costs preserve core's pricing-
 The shared `/stats` parser dedupes copied/forked usage; parent Agent reports are not charged again.
 
 Attribution uses child names, `subagents:record`, Agent dispatch/result IDs and stable filenames
-across relocated/symlinked roots. If a recorded path is absent, same-name copies must agree in
+across relocated/symlinked roots. The recorded type takes precedence over the child name, then
+the requested dispatch type. If a recorded path is absent, same-name copies must agree in
 session ID and JSONL content. Divergent backups or missing parent joins produce `unmatched-session`
 diagnostics and `complete: false`. Workflow grouping requires persisted native `subagents:workflow`
 progress with record IDs, so most history shows workflow `unknown`. Missing types stay `unknown`;
