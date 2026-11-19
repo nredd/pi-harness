@@ -1,8 +1,9 @@
+use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use linux_bridge::atspi::{
-    outline_json, root_json, AtspiClient, NodeSnapshot, Rect, RootSnapshot, TEXT,
+    outline_json, root_json, AccessibleRef, AtspiClient, NodeSnapshot, Rect, RootSnapshot, TEXT,
 };
 use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::state::{fresh_state_id, HelperState};
@@ -263,7 +264,38 @@ fn initial_image_size(root: &RootSnapshot, base_size: Option<(u16, u16)>) -> (u1
     })
 }
 
+/// The accessibility operation needed after a look has resolved its target.
+trait SnapshotSource {
+    async fn snapshot_from(
+        &self,
+        start: &AccessibleRef,
+        max_nodes: usize,
+        max_depth: usize,
+    ) -> Result<Vec<NodeSnapshot>, ProtocolError>;
+}
+
+impl SnapshotSource for AtspiClient {
+    async fn snapshot_from(
+        &self,
+        start: &AccessibleRef,
+        max_nodes: usize,
+        max_depth: usize,
+    ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
+        self.snapshot_from(start, max_nodes, max_depth).await
+    }
+}
+
 async fn look(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
+    look_with(state, args, AtspiClient::connect, x11::capture_window).await
+}
+
+/// Assemble and store an observation using the selected accessibility and capture backends.
+async fn look_with<S: SnapshotSource>(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    connect: impl AsyncFnOnce() -> Result<S, ProtocolError>,
+    capture: impl FnOnce(u32, Option<u32>) -> Result<x11::Capture, ProtocolError>,
+) -> Result<Value, ProtocolError> {
     let started = Instant::now();
     let (root_ref, root) = resolve_root(state, args).await?;
     let read_text = args
@@ -287,7 +319,7 @@ async fn look(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, Pr
         .get("maxDimension")
         .and_then(Value::as_u64)
         .map(|value| value.clamp(1, 16_384) as u32);
-    let client = AtspiClient::connect().await?;
+    let client = connect().await?;
     let scope_ref = args.get("scopeRef").and_then(Value::as_str);
     let base_look_id = args.get("baseLookId").and_then(Value::as_str);
     let (nodes, base) = if let Some(scope_ref) = scope_ref {
@@ -305,7 +337,12 @@ async fn look(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, Pr
             Some(base),
         )
     } else {
-        (client.snapshot(&root, max_nodes, max_depth).await?, None)
+        (
+            client
+                .snapshot_from(&root.accessible, max_nodes, max_depth)
+                .await?,
+            None,
+        )
     };
     let (look_id, nodes) = lock(state)?.insert_look(root.clone(), nodes, base.as_ref());
     let mut outline = outline_json(&root, &nodes, max_nodes);
@@ -327,7 +364,7 @@ async fn look(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, Pr
     {
         match root.x11_window {
             Some(window) => {
-                let shot = x11::capture_window(window, max_dimension)?;
+                let shot = capture(window, max_dimension)?;
                 image_size = (shot.width, shot.height);
                 Some(json!({
                     "jpegBase64": shot.png_base64, "mimeType":"image/png", "width":shot.width, "height":shot.height,
@@ -644,6 +681,17 @@ fn physical_act(
 }
 
 async fn act_batch(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
+    act_batch_with(args, |action| act(state, action)).await
+}
+
+/// Validate the entire batch before executing any step, then stop at the first failure.
+async fn act_batch_with<'args, F>(
+    args: &'args Value,
+    mut perform: impl FnMut(&'args Value) -> F,
+) -> Result<Value, ProtocolError>
+where
+    F: Future<Output = Result<Value, ProtocolError>>,
+{
     let actions = args
         .get("actions")
         .and_then(Value::as_array)
@@ -661,7 +709,7 @@ async fn act_batch(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Valu
     let mut steps = Vec::new();
     let mut stopped_at = None;
     for (index, action) in actions.iter().enumerate() {
-        match act(state, action).await {
+        match perform(action).await {
             Ok(step) => {
                 let stopped = step.get("outcome").and_then(Value::as_str) == Some("didnt");
                 steps.push(step);
@@ -703,6 +751,18 @@ fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
 }
 
 async fn read_text(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
+    read_text_with(state, args, async |accessible| {
+        AtspiClient::connect().await?.read_text(accessible).await
+    })
+    .await
+}
+
+/// Resolve and authorize a text read before requesting its content from accessibility.
+async fn read_text_with(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    read: impl AsyncFnOnce(&AccessibleRef) -> Result<String, ProtocolError>,
+) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "atspiReadText requires lookId")?;
     let element_ref = required_str(args, "elementRef", "atspiReadText requires elementRef")?;
     let node = lock(state)?.element(look_id, element_ref)?;
@@ -713,8 +773,7 @@ async fn read_text(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Valu
         ));
     }
     let text = if node.interfaces.contains(TEXT) {
-        let client = AtspiClient::connect().await?;
-        client.read_text(&node.accessible).await?
+        read(&node.accessible).await?
     } else {
         String::new()
     };
@@ -869,7 +928,6 @@ fn capability(message: impl Into<String>) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use linux_bridge::atspi::AccessibleRef;
     use std::collections::HashSet;
 
     fn node() -> NodeSnapshot {
@@ -889,6 +947,240 @@ mod tests {
             is_secure: false,
             depth: 0,
         }
+    }
+
+    struct SnapshotFixture {
+        path: &'static str,
+        limits: (usize, usize),
+        nodes: Vec<NodeSnapshot>,
+    }
+
+    impl SnapshotSource for SnapshotFixture {
+        async fn snapshot_from(
+            &self,
+            start: &AccessibleRef,
+            max_nodes: usize,
+            max_depth: usize,
+        ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
+            assert_eq!(start.path, self.path);
+            assert_eq!((max_nodes, max_depth), self.limits);
+            Ok(self.nodes.clone())
+        }
+    }
+
+    fn observed_root() -> RootSnapshot {
+        RootSnapshot {
+            accessible: AccessibleRef {
+                destination: ":1.1".into(),
+                path: "/window".into(),
+            },
+            pid: 42,
+            name: "Editor".into(),
+            app_name: "Editor".into(),
+            role: "Dialog".into(),
+            frame: Some(Rect {
+                x: 100,
+                y: 50,
+                width: 400,
+                height: 200,
+            }),
+            x11_window: Some(71),
+            is_focused: true,
+            is_minimized: false,
+            z_order: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn look_capture_and_scope_share_the_stored_image_space() {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let mut other = observed_root();
+        other.pid = 43;
+        other.accessible.path = "/other".into();
+        let roots = lock(&state)
+            .unwrap()
+            .replace_roots(vec![other, observed_root()]);
+        let mut button = node();
+        button.bounds = Some(Rect {
+            x: 120,
+            y: 70,
+            width: 40,
+            height: 20,
+        });
+        let whole = look_with(
+            &state,
+            &json!({"pid":42,"maxNodes":9000,"maxDepth":0,"maxDimension":100}),
+            async || {
+                Ok(SnapshotFixture {
+                    path: "/window",
+                    limits: (4096, 1),
+                    nodes: vec![button.clone()],
+                })
+            },
+            |window, max_dimension| {
+                assert_eq!((window, max_dimension), (71, Some(100)));
+                Ok(x11::Capture {
+                    png_base64: "fixture".into(),
+                    width: 100,
+                    height: 50,
+                    source: "get_image",
+                    warnings: vec!["obscured".into()],
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(whole["window"]["rootRef"], roots[1].0);
+        assert_eq!(whole["window"]["isModal"], true);
+        assert_eq!(
+            whole["outline"]["rect"],
+            json!({"x":5.0,"y":5.0,"w":10.0,"h":5.0})
+        );
+        assert_eq!(
+            whole["image"],
+            json!({"jpegBase64":"fixture","mimeType":"image/png","width":100,"height":50,"metadata":{"source":"get_image","warnings":["obscured"]}})
+        );
+        let scope = |root: &str| {
+            json!({
+                "rootRef": root, "scopeRef": whole["outline"]["ref"],
+                "baseLookId": whole["lookId"], "includeImage": false, "readText": "never"
+            })
+        };
+        let scoped = look_with(
+            &state,
+            &scope(&roots[1].0),
+            async || {
+                Ok(SnapshotFixture {
+                    path: "/node",
+                    limits: (512, 20),
+                    nodes: vec![button],
+                })
+            },
+            |_, _| panic!("no-image look requested capture"),
+        )
+        .await
+        .unwrap();
+        assert!(scoped.get("image").is_none());
+        assert_eq!(
+            scoped["readText"],
+            json!({"requested":"never","executed":false})
+        );
+        assert_eq!(scoped["outline"]["rect"], whole["outline"]["rect"]);
+        let look_id = scoped["lookId"].as_str().unwrap();
+        let record = lock(&state).unwrap().look(look_id).unwrap();
+        assert_eq!((record.image_width, record.image_height), (100, 50));
+        let error = look_with(
+            &state,
+            &scope(&roots[0].0),
+            async || {
+                Ok(SnapshotFixture {
+                    path: "/must-not-snapshot",
+                    limits: (0, 0),
+                    nodes: vec![],
+                })
+            },
+            |_, _| panic!("foreign scope requested capture"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::StaleRef);
+        let error = look_with(
+            &state,
+            &json!({"readText":"invalid"}),
+            async || Err::<SnapshotFixture, _>(capability("fixture connection unavailable")),
+            |_, _| panic!("invalid look requested capture"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+
+    #[tokio::test]
+    async fn read_text_pages_unicode_and_refuses_secure_content() {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let mut editor = node();
+        editor.interfaces.insert(TEXT.into());
+        let mut password = editor.clone();
+        password.accessible.path = "/password".into();
+        password.is_secure = true;
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![editor, password], None);
+        let args = |index: usize, offset| json!({"lookId":look_id,"elementRef":nodes[index].reference,"offset":offset,"limit":2});
+        let read = async |target: &AccessibleRef| {
+            assert_eq!(target.path, "/node");
+            Ok("A雪😊z".into())
+        };
+        assert_eq!(
+            read_text_with(&state, &args(0, 1), read).await.unwrap(),
+            json!({"text":"雪😊","offset":1,"limit":2,"totalChars":4,"hasMore":true})
+        );
+        assert_eq!(
+            read_text_with(&state, &args(0, 9), read).await.unwrap(),
+            json!({"text":"","offset":9,"limit":2,"totalChars":4,"hasMore":false})
+        );
+        assert_eq!(
+            read_text_with(&state, &args(1, 0), read)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::SecureTextUnreadable
+        );
+    }
+
+    #[tokio::test]
+    async fn batches_validate_before_dispatch_and_stop_after_failure() {
+        for invalid_batch in [
+            json!({}),
+            json!({"actions":[]}),
+            json!({"actions":[{}]}),
+            json!({"actions":[{"lookId":"one"},{"lookId":"two"}]}),
+            json!({"actions":vec![json!({"lookId":"one"}); 21]}),
+        ] {
+            let error = act_batch_with(&invalid_batch, |_| async {
+                panic!("invalid batch performed an action")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidRequest);
+        }
+        let batch = json!({"actions":[{"lookId":"one","value":0},{"lookId":"one","value":1},{"lookId":"one","value":2}]});
+        for failure in [false, true] {
+            let mut seen = Vec::new();
+            let result = act_batch_with(&batch, |action| {
+                let value = action["value"].as_u64().unwrap();
+                seen.push(value);
+                std::future::ready(match value {
+                    0 => Ok(json!({"outcome":"unknown"})),
+                    1 if failure => Err(invalid("step failed")),
+                    1 => Ok(json!({"outcome":"didnt"})),
+                    _ => panic!("ran an action after failure"),
+                })
+            })
+            .await
+            .unwrap();
+            assert_eq!(seen, [0, 1]);
+            assert_eq!(result["outcome"], "didnt");
+            assert_eq!(result["stoppedAt"], 1);
+            assert_eq!(result["performed"]["actionCount"], 2);
+            assert_eq!(result["steps"][0]["outcome"], "unknown");
+            assert_eq!(result["steps"][1]["outcome"], "didnt");
+            if failure {
+                assert_eq!(
+                    result["steps"][1]["error"],
+                    json!({"code":"invalid_request","message":"step failed"})
+                );
+            }
+        }
+        let result = act_batch_with(&batch, |action| async move {
+            Ok(json!({"outcome":if action["value"] == 1 {"unknown"} else {"worked"}}))
+        })
+        .await
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert!(result.get("stoppedAt").is_none());
+        assert_eq!(result["performed"]["actionCount"], 3);
     }
 
     #[test]
