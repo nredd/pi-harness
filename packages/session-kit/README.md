@@ -921,5 +921,9 @@ its matching issue link. From the repository root, `make check-changelog-fragmen
 all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
 See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
 
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits any pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging.
+
 The #932 migration moves no historical bullets: `0.12.0` already released the
 previous `[Unreleased]` entries. The released changelog is unchanged.

@@ -175,6 +175,7 @@ def unreleased_data(lines: list[str], *, legacy: bool = False) -> tuple[dict[str
 
     Returns:
         tuple[dict[str, str], dict[str, int]]: Exact bullets' categories and insertion offsets.
+            An empty category string marks a legacy bullet with no category.
 
     Raises:
         ValueError: Existing headings, bullets or other data are ambiguous/malformed.
@@ -183,6 +184,9 @@ def unreleased_data(lines: list[str], *, legacy: bool = False) -> tuple[dict[str
     existing: dict[str, str] = {}
     positions: dict[str, int] = {}
     for index, line in enumerate(lines):
+        # Recognized section headings were already excluded by folded_text.
+        if line.startswith("## "):
+            raise ValueError(f"Invalid heading in Unreleased: '{line.rstrip()}'")
         if line.startswith("### "):
             category = line[4:].strip().lower()
             if category not in CATEGORIES or line != f"### {category.title()}\n":

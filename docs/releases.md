@@ -32,16 +32,22 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 
 `packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler}` use fragments;
 the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the unchanged
-closed filename and one-bullet grammar. Preset remains unenrolled after the `0.5.0` release preparation in #1037;
-subscription-router and computer-use are also not enrolled. Add a fragment for new changes
+closed filename and one-bullet grammar. `preset` stays unenrolled because its changelog
+is being edited for release prep. `subscription-router` and `computer-use` are also not enrolled. Add a fragment for new changes
 rather than editing the shared Unreleased block. `make check-changelog-fragments` is read-only
 and part of `make check-scripts`.
 `make fold-changelog` is an explicit source-maintenance command, never an automatic release step.
-It appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
+Of the five newly enrolled packages, only `todo` and `session-kit` ship `CHANGELOG.md`;
+none packs `changes/`. A release cut from `main` without folding ships a changelog missing
+its pending fragments. Run `make fold-changelog` during release prep and commit the result
+before tagging. `todo` currently has six pending fragments: #292, #414, #444, #448, #522 and #918.
+
+The fold appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
 Security order and orders new bullets numerically by issue within each category. Existing
 entries, warning text, links and released sections remain byte-for-byte intact, including unbracketed release headings.
 Only the five newly enrolled packages permit uncategorized bullets, wrapped bullets and prose
-as legacy source, not new fragment syntax. Subagents retains its strict validation;
+as legacy source, not new fragment syntax. An unrecognized `## ` heading inside `[Unreleased]`
+blocks the fold. `subagents` retains its strict validation;
 repeated legacy category headings remain, with additions going into the last matching category.
 Each package README records its partial historical migration and retained entries. Missing issue
 links, wrapped entries and repeated issue/category groups are retained rather than rewritten or

@@ -415,6 +415,75 @@ def test_real_cli_success_and_failure(repo: Path) -> None:
     assert "Cannot process changelog fragments" in refused.stderr
 
 
+@pytest.mark.parametrize(
+    ("heading", "matches"),
+    [
+        ("## 1.2.3", True),
+        ("## 0.59.2-nredd.3", True),
+        ("## [1.2.3] - 2027-01-01", True),
+        ("## [Unreleased]", True),
+        ("## 1.2.3 - 2027-01-01", False),
+        ("## v1.2.3", False),
+        ("## Notes", False),
+    ],
+)
+def test_release_header_grammar(heading: str, matches: bool) -> None:
+    """Check the shared release-boundary regex against whole headings.
+
+    Parameters:
+        heading (str): Candidate changelog heading.
+        matches (bool): Whether the heading is a recognized boundary.
+
+    Returns:
+        None: The regex accepts only the expected headings.
+    """
+    assert (changelog_fragments.RELEASE_HEADER.fullmatch(heading) is not None) is matches
+
+
+def test_subagents_stays_strict_with_plain_release_header(repo: Path) -> None:
+    """Recognize the shared release boundary without allowing uncategorized legacy data.
+
+    Parameters:
+        repo (Path): Disposable enrolled repository root.
+
+    Returns:
+        None: An orphan bullet above the boundary refuses, with both inputs intact.
+    """
+    target = repo / "packages/subagents/CHANGELOG.md"
+    released = "## 1.2.3\n\n- Released without a category.\n"
+    target.write_text("## [Unreleased]\n\n" + released)
+    changelog_fragments.run(repo, fold=False)
+    malformed = "## [Unreleased]\n\n- Orphan.\n\n" + released
+    target.write_text(malformed)
+    with pytest.raises(ValueError, match="Ambiguous Unreleased bullet"):
+        changelog_fragments.run(repo, fold=True)
+    assert target.read_text() == malformed
+    assert (target.parent / "changes/932.fixed.md").read_text() == BULLET
+
+
+def test_uncategorized_legacy_bullet_conflicts_with_equal_fragment(repo: Path) -> None:
+    """Refuse to consume or reclassify an uncategorized bullet on a byte-equal match.
+
+    Parameters:
+        repo (Path): Disposable enrolled repository root.
+
+    Returns:
+        None: The changelog and fragment survive the category conflict unchanged.
+    """
+    directory = repo / "packages/todo"
+    changes = directory / "changes"
+    changes.mkdir()
+    fragment = changes / "932.fixed.md"
+    fragment.write_text(BULLET)
+    target = directory / "CHANGELOG.md"
+    original = "## [Unreleased]\n\n" + BULLET
+    target.write_text(original)
+    with pytest.raises(ValueError, match="Fragment category conflicts"):
+        changelog_fragments.run(repo, fold=True, package="packages/todo")
+    assert target.read_text() == original
+    assert fragment.read_text() == BULLET
+
+
 @pytest.mark.parametrize("package", ["session-kit", "dev-tools", "todo", "plan-mode", "resource-sampler"])
 def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Path, package: str) -> None:
     """Fold strict fragments without rewriting uncategorized, wrapped or prose legacy data.
@@ -430,8 +499,7 @@ def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Pat
     changes = directory / "changes"
     changes.mkdir(parents=True)
     legacy = (
-        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\n"
-        "## Notes\n\nLegacy release history note.\n\n"
+        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\nLegacy release history note.\n\n"
     )
     released = "## 0.59.2-nredd.3\n\n### Fixed\n\n- Released.\n  Continuation.\n"
     target = directory / "CHANGELOG.md"
@@ -439,6 +507,15 @@ def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Pat
     fragment = changes / "932.fixed.md"
     fragment.write_text(BULLET)
     cmd = [sys.executable, str(Path(changelog_fragments.__file__)), "--repo", str(repo)]
+    for heading in ("## Notes", "## v1.2.3", "## 1.2.3 - 2027-01-01"):
+        invalid = legacy + heading + "\n\n- Not Unreleased.\n\n" + released
+        target.write_text(invalid)
+        result = subprocess.run([*cmd, "--fold"], capture_output=True, text=True, check=False)
+        assert result.returncode == 1
+        assert f"Invalid heading in Unreleased: '{heading}'" in result.stderr
+        assert target.read_text() == invalid
+        assert fragment.read_text() == BULLET
+    target.write_text(legacy + released)
     assert subprocess.run(cmd, capture_output=True, check=False).returncode == 0
     assert target.read_text() == legacy + released
     assert subprocess.run([*cmd, "--fold"], capture_output=True, check=False).returncode == 0

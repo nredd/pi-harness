@@ -842,11 +842,6 @@ Every explicit confirmation request supersedes earlier permission, including a v
 
 Escape or `Stay in Plan mode` on a ready plan, or a message sent while a plan awaits action, is a decline; `Edit plan…` is not. `declinedPlans` remains historical, while the persisted `reproposalReview` lifecycle controls both the completion guard and model instruction. After a decline, `plan_mode_complete` errors until `plan_mode_question` is called with `mode: "reproposal_confirmation"` and its canonical **Re-propose now** choice is selected, or `/plan finalize` runs. The tool fixes the confirmation wording to permission to submit the revised plan for review, not implementation. Ordinary clarification, **Not yet**, cancellation, custom text, and label-like text never grant permission. On `ui_unavailable`, the model tells the user to run `/plan finalize`; after cancellation or **Not yet**, it continues material planning or waits for input instead of immediately repeating confirmation. One decline asks the model to restate and re-verify; two or more require a resolved/open thread list. The counter resets when Plan mode exits or a new workflow starts.
 
-## 📄 License
-
-MIT.
-See [`LICENSE`](./LICENSE).
-
 ## Changelog fragments
 
 Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
@@ -858,3 +853,8 @@ See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/re
 The #932 migration preserves 16 historical bullets: 0 exact bullets move to fragments
 and 16 remain in `CHANGELOG.md`. All entries lack the required matching issue link; wrapped legacy bullets and unbracketed release headings remain verbatim.
 Historical attribution and released sections are unchanged; no issue IDs are invented.
+
+## 📄 License
+
+MIT.
+See [`LICENSE`](./LICENSE).
