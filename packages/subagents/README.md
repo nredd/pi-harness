@@ -412,7 +412,12 @@ and naming conventions. Breadth changes what it looks for, not the turn budget.
 `Explore` is prompted to give `path:line` findings in at most 300 words unless asked
 for more, and mark unfinished searches or truncated reports `INCOMPLETE`.
 
-The built-in `maxTurns` overrides the caller's `max_turns`, even a smaller one.
+In the `Agent` tool, built-in `Explore` uses its own cap: caller `max_turns` values
+of `1`, `3`, `40` and `99` all resolve to `12`. The project `defaultMaxTurns` is a
+fallback, so even a default of `9` does not lower the agent's cap. Scheduled jobs
+and `subagents:rpc:spawn` still use an explicit turn ceiling (`max_turns` for jobs,
+`maxTurns` for RPC) ahead of the agent's cap.
+
 Turn 12 steers `Explore` to wrap up. The default five grace turns allow up to 17
 ordinary turns, followed, if needed, by one tool-free final-report turn (18 total).
 `graceTurns` changes that allowance globally. Replacing the built-in definition also
@@ -674,7 +679,7 @@ Launch a sub-agent.
 | `subagent_type` | string | yes | Agent type (built-in or custom) |
 | `model` | string | no | Model — `provider/modelId`, [machine-local alias](#machine-local-model-aliases), or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
-| `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
+| `max_turns` | number | no | Soft turn cap. The agent definition takes precedence; if neither is set, the project default applies. |
 | `run_in_background` | boolean | no | Defaults to `true`; `false` blocks and returns the result inline, until [`ctrl+b`](#sending-a-foreground-agent-to-the-background) hands it to the background |
 | `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and this call's `max_turns` applied. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
 | `isolated` | boolean | no | No extension/MCP tools |

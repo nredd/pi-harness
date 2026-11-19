@@ -35,12 +35,12 @@ afterEach(async () => {
 });
 
 /** Boot with a parent that is running a turn. */
-async function boot(settings: Record<string, unknown> = {}) {
-	hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings } });
+async function boot(settings: Record<string, unknown> = {}, agentFiles?: Record<string, string>) {
+	hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings }, agentFiles });
 	booted = bootPi();
 	subagentsExtension(booted.pi);
 	const signal = new AbortController().signal;
-	const parentCtx = ctx();
+	const parentCtx = ctx({ isProjectTrusted: () => true });
 	Object.defineProperty(parentCtx, "signal", { get: () => signal });
 	await booted.lifecycle.get("session_start")!({ type: "session_start" }, parentCtx);
 	return { ...booted, parentCtx };
@@ -126,6 +126,36 @@ describe("full result in a completion notice", () => {
 		expect(result).toContain("get_subagent_result");
 		expect(record(scout).resultConsumed).toBeFalsy();
 		expect(record(scout).result).toBe(body);
+	});
+
+	it("leaves a failed Explore run unread even when its whole result fits", async () => {
+		vi.useFakeTimers();
+		const r = runs({ scout: { text: "half done", failure: "provider exploded" } });
+		const b = await boot();
+		const id = await spawn(b, b.parentCtx, "scout", "Explore");
+		r.settle("scout");
+		await vi.advanceTimersByTimeAsync(0);
+		turnEnd(b);
+
+		expect(resultOf(sent(b)[0].content, id)).toBe(
+			"Error: provider exploded\n\nPartial output before the failure:\nhalf done",
+		);
+		expect(record(id).resultConsumed).toBeFalsy();
+	});
+
+	it("carries only the full-result pointer when the agent type sets a zero cap", async () => {
+		vi.useFakeTimers();
+		const r = runs({ scout: { text: "hidden body" } });
+		const b = await boot({}, { scout: "---\nnotification_result_chars: 0\n---\nSearch." });
+		const id = await spawn(b, b.parentCtx, "scout", "scout");
+		r.settle("scout");
+		await vi.advanceTimersByTimeAsync(0);
+		turnEnd(b);
+
+		expect(resultOf(sent(b)[0].content, id).trim()).toBe(
+			"...(truncated: 11 of 11 chars omitted; use get_subagent_result for full output)...",
+		);
+		expect(record(id).resultConsumed).toBeFalsy();
 	});
 
 	it("carries a result under the cap whole, with no truncation note, and marks it read", async () => {

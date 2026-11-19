@@ -142,6 +142,7 @@ import {
 	NOTIFICATION_RESULT_CHARS_CEILING,
 	type NoticeFrame,
 	type NoticeParts,
+	noticeResultLength,
 	PREVIEW_RESULT_CHARS,
 	previewResult,
 	renderNotice,
@@ -819,7 +820,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		return {
 			id: record.id,
 			details,
-			chars: Math.min(parts.body.length, parts.cap),
+			chars: noticeResultLength(parts),
 			parts,
 			render: (share?: number) => clipNotice(parts, share),
 		};
@@ -1098,7 +1099,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			const notice = typeof result.notice?.body === "string" ? result.notice : undefined;
 			outbox.add({
 				ids: [details.id, ...(details.others?.map((other) => other.id) ?? [])],
-				...(notice ? { resultChars: { [details.id]: Math.min(notice.body.length, notice.cap) } } : {}),
+				...(notice ? { resultChars: { [details.id]: noticeResultLength(notice) } } : {}),
 				build: (_ids, caps) =>
 					notice
 						? { content: clipNotice(notice, caps[details.id]).text + notice.footer, details }
@@ -2583,7 +2584,7 @@ Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.
 
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
-- Parallel work: one message, multiple Agent calls — they run concurrently.
+- Agent calls in one message run concurrently.
 - Subagents run in the background by default; you'll be notified when one completes. Pass run_in_background: false only when your very next action depends on the result and nothing else could usefully happen while it runs. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent by ID; steer_subagent messages one, steering it mid-run or resuming it once finished.${isolationCompactGuideline}`;
@@ -2729,7 +2730,8 @@ Terse command-style prompts produce shallow, generic work.
 			),
 			max_turns: Type.Optional(
 				Type.Number({
-					description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
+					description:
+						"Soft turn cap before asking the agent to wrap up. The agent's own max_turns (built-in or agent definition) takes precedence over this value. If neither is set, the project default applies.",
 					minimum: 1,
 				}),
 			),

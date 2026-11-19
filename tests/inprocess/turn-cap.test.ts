@@ -26,7 +26,7 @@ afterAll(async () => {
 	await home.cleanup();
 });
 
-it.each([undefined, 1, 99])(
+it.each([undefined, 1, 3, 40, 99])(
 	"built-in Explore overrides caller max_turns=%s and forces a tool-free report",
 	async (max_turns) => {
 		const schemas: string[][] = [];

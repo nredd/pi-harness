@@ -225,6 +225,7 @@ function loadOneFile(path: string, agents: Map<string, AgentConfig>, source: Age
 		model: str(fm.model),
 		thinking: str(fm.thinking) as ThinkingLevel | undefined,
 		maxTurns: nonNegativeInt(fm.max_turns),
+		// Notice caps count whole characters; keep existing max_turns parsing unchanged.
 		notificationResultChars: Number.isInteger(fm.notification_result_chars)
 			? nonNegativeInt(fm.notification_result_chars)
 			: undefined,
