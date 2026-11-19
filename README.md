@@ -7,8 +7,7 @@ Documentation lives in this file, each package's `README.md` and git history. `d
 the long references a test or release procedure reads: [coverage](docs/coverage.md) (720 lines,
 policy pins and hosted replay), [install](docs/install.md) (254 lines, including the tested recovery
 table) and [releases](docs/releases.md) (336 lines, publication and recovery procedures), plus
-`docs/agents/issue-tracker.md` for the `code-review` skill and the repository tooling
-[changelog](docs/CHANGELOG.md). The long references exceed the roughly 100-line folding
+`docs/agents/issue-tracker.md` for the `code-review` skill. These exceed the roughly 100-line folding
 threshold and stay separate. Shorter documentation goes in a README; CI policy lives in comments
 next to its workflow or action. Do not add plans, coverage write-ups or investigation notes;
 put the why in the commit.

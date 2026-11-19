@@ -461,6 +461,23 @@ def test_subagents_stays_strict_with_plain_release_header(repo: Path) -> None:
     assert (target.parent / "changes/932.fixed.md").read_text() == BULLET
 
 
+@pytest.mark.parametrize("heading", ["# 1.0.0", "1.0.0\n====="])
+def test_subagents_keeps_strict_heading_diagnostic(repo: Path, heading: str) -> None:
+    """Keep strict-mode refusal on the original malformed-data path.
+
+    Parameters:
+        repo (Path): Disposable enrolled repository root.
+        heading (str): Unclassified section heading in the strict changelog.
+    """
+    target = repo / "packages/subagents/CHANGELOG.md"
+    original = CHANGELOG.replace("### Fixed\n", f"{heading}\n\n### Fixed\n")
+    target.write_text(original)
+    with pytest.raises(ValueError, match=r"^Malformed Unreleased data$"):
+        changelog_fragments.run(repo, fold=True)
+    assert target.read_text() == original
+    assert (target.parent / "changes/932.fixed.md").read_text() == BULLET
+
+
 def test_uncategorized_legacy_bullet_conflicts_with_equal_fragment(repo: Path) -> None:
     """Refuse to consume or reclassify an uncategorized bullet on a byte-equal match.
 
@@ -536,19 +553,27 @@ def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Pat
         ("##\t1.0.0", "##\t1.0.0"),
         ("1.0.0\n=====", "====="),
         ("1.0.0\n----- \t", "-----"),
+        ("- x\n---", "---"),
+        ("- x\n  Wrapped continuation.\n---", "---"),
     ],
 )
-def test_legacy_fold_refuses_ambiguous_heading(repo: Path, heading: str, refused_line: str) -> None:
+@pytest.mark.parametrize("ending", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_legacy_fold_refuses_ambiguous_heading(
+    repo: Path, heading: str, refused_line: str, ending: str
+) -> None:
     """Refuse to fold into a category below an unclassified release boundary.
 
     Parameters:
         repo (Path): Disposable enrolled repository root.
         heading (str): Ambiguous boundary above a plausible category.
         refused_line (str): Heading or underline reported in the diagnostic.
+        ending (str): Line ending of the candidate heading.
     """
     target = repo / "packages/todo/CHANGELOG.md"
-    original = f"# Changelog\n\n## [Unreleased]\n\n{heading}\n\n### Fixed\n- Released.\n"
-    target.write_text(original)
+    # Keep the canonical section header LF so the candidate lines reach legacy validation.
+    candidate = (heading + "\n").replace("\n", ending)
+    original = f"# Changelog\n\n## [Unreleased]\n\n{candidate}\n### Fixed\n- Released.\n".encode()
+    target.write_bytes(original)
     fragment = target.parent / "changes/932.fixed.md"
     fragment.parent.mkdir()
     fragment.write_text(BULLET)
@@ -556,7 +581,7 @@ def test_legacy_fold_refuses_ambiguous_heading(repo: Path, heading: str, refused
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert result.returncode == 1
     assert f"Invalid heading in Unreleased: '{refused_line}'" in result.stderr
-    assert target.read_text() == original
+    assert target.read_bytes() == original
     assert fragment.read_text() == BULLET
 
 

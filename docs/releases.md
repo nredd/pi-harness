@@ -50,6 +50,8 @@ as legacy source, not new fragment syntax. In legacy mode, an unrecognized level
 level-two ATX heading, or a setext underline immediately after a non-blank line, inside
 `[Unreleased]` blocks the fold. `subagents` retains its strict validation. Repeated legacy
 category headings remain, with additions going into the last matching category.
+`---` immediately after a non-blank line is refused as a setext underline; after a blank line it is allowed. Underlines indented one to three spaces are not detected.
+The release matcher still treats any `## [..]` heading, e.g. `## [Notes]`, as a release boundary: the heading check never sees the lines below it, and fragments fold above it, not into a released section.
 Each package README records its partial historical migration and retained entries. Missing issue
 links, wrapped entries and repeated issue/category groups are retained rather than rewritten or
 given invented attribution.
