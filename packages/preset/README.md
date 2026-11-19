@@ -217,9 +217,12 @@ is not a filesystem sandbox), and `general-purpose` may delegate only to `code-r
 `all`). Passive waits and merged-worktree sweeps stay with the continuing parent; workers only prune
 worktree metadata. Workers remove their untracked scratch before handback and claim any leftovers
 with a creation record. After merge, the parent removes only verified claims and sweeps again.
-Scratch removal requires a `??` status entry, an in-worktree real path, and a matching entry type and
-creation-time hash. For symlinks, hash the link text and unlink only the link. Ignored files and
-unchecked contents stay untouched. See the shipping skills.
+Scratch removal is limited to regular files and symlinks with a `??` status entry and a matching
+creation-time type and SHA-256. Both roles hash file bytes or raw `readlink` bytes (no added newline).
+Check that the file's real path, or the link parent's real path joined with the link name, stays
+inside the worktree. Unlink only the link, without resolving its target. Keep and report claimed
+directories, and exclude worktrees with those directories or `!!` entries from both sweeps. See the
+shipping skills.
 
 Local overrides shadow these packaged definitions; update their managed source separately.
 Installing this package does not activate anything else or change a deployment's model bindings.
