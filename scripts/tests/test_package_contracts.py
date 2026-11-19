@@ -3328,7 +3328,8 @@ def test_shared_runner_report_records_computer_use_not_run(
     }
     entry = GOOD_ENTRY | {"tarball": "nredd-pi-computer-use-0.3.0.tgz", "evidence": evidence}
     report = pc.validate_report(good_report({"@nredd/pi-computer-use": entry}))
-    monkeypatch.setattr(nr, "run_stock_contract", lambda *args, **kwargs: report)
+    run = Mock(return_value=report)
+    monkeypatch.setattr(nr, "run_stock_contract", run)
     path = tmp_path / "report.json"
     assert (
         spc.main(
@@ -3336,6 +3337,8 @@ def test_shared_runner_report_records_computer_use_not_run(
         )
         == 0
     )
+    run.assert_called_once()
+    assert not run.call_args.args[0].exists()
     written = json.loads(path.read_text())
     assert written == json.loads(capsys.readouterr().out)
     assert written["packages"]["@nredd/pi-computer-use"]["evidence"]["postinstall"] == "NOT RUN"
@@ -3400,13 +3403,13 @@ def test_shared_runner_failure_exits_one_without_report(
 ) -> None:
     """A contract or release error exits 1 and writes no report."""
 
-    def fail(*args: object, **kwargs: object) -> pc.ContractReport:
-        raise error
-
-    monkeypatch.setattr(nr, "run_stock_contract", fail)
+    run = Mock(side_effect=error)
+    monkeypatch.setattr(nr, "run_stock_contract", run)
     path = tmp_path / "report.json"
     argv = ["--package", "@nredd/pi-computer-use", "--stock-prefix", str(tmp_path), "--report", str(path)]
     assert spc.main(argv) == 1
+    run.assert_called_once()
+    assert not run.call_args.args[0].exists()
     assert not path.exists()
 
 
