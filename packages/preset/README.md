@@ -218,6 +218,13 @@ is not a filesystem sandbox), and `general-purpose` may delegate only to `code-r
 worktree metadata. Scratch removal requires an exact creation-time content-hash match, a `??` status entry and an in-worktree real path;
 ignored files and unchecked contents stay untouched. See the shipping skills.
 
+Use `architect` for architecture reviews and web research. It preloads `codebase-design`
+and ranks cited survey cards by payoff and migration cost (`S`, `M`, `L`). It treats
+`shortcut:` comments as decisions and reports unread scope. Surveys stay under 1500 words;
+concrete interface alternatives are reserved for opt-in grilling (`Q1`, `Q2`, `Rec:`).
+`general-purpose` delegates Standards and Spec reviews to `code-reviewer`; the parent
+owns the final critic review.
+
 Local overrides shadow these packaged definitions; update their managed source separately.
 Installing this package does not activate anything else or change a deployment's model bindings.
 
