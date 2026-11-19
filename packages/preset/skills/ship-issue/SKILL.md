@@ -39,10 +39,11 @@ cwd repo.
 
 Never work in the user's checkout. One issue, one worktree.
 
-- `git -C <repo> fetch origin`. Delegated workers run only `git -C <repo> worktree prune`;
-  only the parent/top-level driver sweeps merged worktrees
+- `git -C <repo> fetch origin`. Delegated workers may only prune metadata, never sweep worktrees.
+  Run `git -C <repo> worktree prune` only after confirming all registered worktree volumes are
+  mounted; otherwise use `git -C <repo> worktree prune --dry-run` for inspection only
 - Parent: read `/skill:get-it-merged` and apply only its `### Guarded merged-worktree sweep` section
-  at the end of step 4. Do not run its merge or scratch cleanup steps when preparing a worktree
+  at the end of `get-it-merged` step 4. Do not run merge or scratch cleanup when preparing a worktree
 - Branch: `<prefix>/issue-<N>`. `<prefix>` is the repo's documented branch-prefix convention
   (check `AGENTS.md` / `CONTRIBUTING.md` and recent branches), else the operator's GitHub login
   (`gh api user --jq .login`). Append a short kebab slug from the title when the bare number is
@@ -175,8 +176,8 @@ spawned by a parent for this issue. Never hand off to yourself.
   - Remove only regular files and symlinks listed as `??` in THAT worktree's `git status --porcelain --untracked-files=all`, on an exact type and hash match. Require the real path of a regular file, or the real path of a symlink's parent directory joined with the link name, to be inside the worktree. Never resolve the link itself; unlink only the link and leave its target untouched.
   - Never remove ignored files or recursively delete contents. Keep and report directories. In the handback, claim only leftover scratch you created, with its path, type, creation hash for files and symlinks, and reason it remains. Report other changes separately; do not claim them
 - For work where no PR will ever exist (abandoned, duplicate, parked or deferred), the parent must
-  pass every check in the guarded sweep from step 2 except the MERGED PR requirement. This includes
-  the ignored-status, claimed-directory and index-flag checks. Only then may the parent use a
+  pass the no-PR upstream check and every shared check in the guarded sweep from step 2. This
+  includes the ignored-status, claimed-directory and index-flag checks. Only then may the parent use a
   documented no-PR mode scoped to that exact checked worktree, e.g. `--no-pr --worktree <path>`.
   Run from outside it, preserve remote branches and report the helper's verdict verbatim. If any
   check is unknown or fails, or no safe scoped mode is documented, keep the worktree, report it as

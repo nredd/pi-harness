@@ -267,6 +267,8 @@ only when applicable protection is readable, effective and not bypassable by the
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
 Before creating an issue worktree, after merge, and before any no-PR removal, the parent follows
 the [guarded sweep checks](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep).
+After merge, the PR's recorded head can prove the checked-out commit was pushed even if the remote
+branch is gone. A matching commit does not override any worktree safety check.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently
