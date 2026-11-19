@@ -41,8 +41,8 @@ Never work in the user's checkout. One issue, one worktree.
 
 - `git -C <repo> fetch origin`. Delegated workers run only `git -C <repo> worktree prune`;
   only the parent/top-level driver sweeps merged worktrees
-- Parent: read `/skill:get-it-merged` and apply only its "Guarded merged-worktree sweep" below the
-  merge procedure. Do not run its merge or scratch cleanup steps when preparing a worktree
+- Parent: read `/skill:get-it-merged` and apply only its `### Guarded merged-worktree sweep` section
+  at the end of step 4. Do not run its merge or scratch cleanup steps when preparing a worktree
 - Branch: `<prefix>/issue-<N>`. `<prefix>` is the repo's documented branch-prefix convention
   (check `AGENTS.md` / `CONTRIBUTING.md` and recent branches), else the operator's GitHub login
   (`gh api user --jq .login`). Append a short kebab slug from the title when the bare number is
@@ -168,17 +168,26 @@ spawned by a parent for this issue. Never hand off to yourself.
 - Parent driver: for admission, protection, merge and terminal monitoring, follow `/skill:get-it-merged` steps 3-4 as a one-PR train. That shared procedure requires effective non-bypassable protection before auto-merge; otherwise it keeps auto-merge off, completes exact-HEAD CI and merges explicitly. Do not duplicate or weaken it here
 - Parent completion: continue until this PR is `MERGED`, or a genuine external blocker has a named owner and an armed continuation monitor linked to its todo (without native monitors: the exact resume command). Queued CI, ordinary setup, tests and review fixes are unfinished work, not successful completion
 - Delegated worker: keep auto-merge off, do not merge or arm it. Once the substantive work is done, return the PR URL, final SHA, exact review handles, and concrete CI run IDs or monitor command to the parent, once. Never declare the overall task done
-- Do NOT remove the worktree before the PR lands. Use the same guarded merged-worktree sweep as in step 2 after merge; a delegated worker leaves its worktree for the parent. Never force-remove a worktree or discard another worker's changes
+- If a PR exists or is planned, do NOT remove its worktree before the PR lands. After merge, use the
+  guarded sweep from step 2; a delegated worker leaves its worktree for the parent. Never
+  force-remove a worktree or discard another worker's changes
 - Before handback, remove only untracked scratch you created yourself. At creation, record the path, entry type and SHA-256 hash of each regular file's bytes or symlink's raw `readlink` bytes (no added newline). Use the same method as the parent in `get-it-merged`.
   - Remove only regular files and symlinks listed as `??` in THAT worktree's `git status --porcelain --untracked-files=all`, on an exact type and hash match. Require the real path of a regular file, or the real path of a symlink's parent directory joined with the link name, to be inside the worktree. Never resolve the link itself; unlink only the link and leave its target untouched.
   - Never remove ignored files or recursively delete contents. Keep and report directories. In the handback, claim only leftover scratch you created, with its path, type, creation hash for files and symlinks, and reason it remains. Report other changes separately; do not claim them
-- For work where no PR will ever exist (abandoned, duplicate, parked or deferred), use the deployment's configured merged-worktree sweep's explicit no-PR mode only if it supports one, e.g. `--no-pr --worktree <path>`. Run from a cwd outside that worktree and report the helper's verdict verbatim. Do not assume those flags exist on other commands; without a configured safe no-PR mode, retain the worktree and name its owner. Preserve dirty or unpushed work, borrowed submodule objects and remote branches
+- For work where no PR will ever exist (abandoned, duplicate, parked or deferred), the parent must
+  pass every check in the guarded sweep from step 2 except the MERGED PR requirement. This includes
+  the ignored-status, claimed-directory and index-flag checks. Only then may the parent use a
+  documented no-PR mode scoped to that exact checked worktree, e.g. `--no-pr --worktree <path>`.
+  Run from outside it, preserve remote branches and report the helper's verdict verbatim. If any
+  check is unknown or fails, or no safe scoped mode is documented, keep the worktree, report it as
+  in step 10, and name its owner
 - Without native monitors, the parent follows `/skill:get-it-merged` step 1's bounded foreground fallback. Workers never poll. Report the next owner and exact resume command rather than claiming a continuation monitor exists
 
 ## 10. Report
 
-Short. Issue -> branch -> PR URL -> gate result -> review outcome -> retained worktree path
-and reason, or the configured sweep's actual cleanup verdict. No closing summary paragraph, no restating the plan back.
+Short. Issue -> branch -> PR URL -> gate result -> review outcome -> guarded sweep report. For each
+retained worktree report the path, reason, and actual `git status --porcelain --ignored --untracked-files=all`
+output (or the scan error). No closing summary paragraph, no restating the plan back.
 
 ## Guardrails
 

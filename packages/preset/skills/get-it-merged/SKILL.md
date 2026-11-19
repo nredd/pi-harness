@@ -69,10 +69,10 @@ For the next unblocked PR in the order:
 - On failure: diagnose the real cause. Fix through a delegated worker or inline, renew reviews on the new HEAD, and continue. Rerun only per the repository's flake policy
 - Keep a heartbeat monitor linked to the tracked todos (`todo: [<id>, ...]`) while any PR remains so the loop continues unprompted. Without native monitors, continue the bounded foreground waits from step 1
 - Before stopping, apply the "Guarded merged-worktree sweep" below, then consider claimed scratch separately:
-  - For each dirty worktree left by the sweep, confirm its PR is MERGED before considering scratch removal. Do not touch worktrees with a live process cwd inside them or a recorded live owner, or objects borrowed by another checkout. If use cannot be checked, retain the worktree.
+  - Consider only dirty candidates left by the MERGED PR sweep. Apply its linked-worktree, ownership, and borrowed-object checks before touching any scratch.
   - Remove only regular files and symlinks claimed in the handback and listed as `??` in THAT worktree's `git status --porcelain --untracked-files=all`, on an exact type and hash match. Use the same method as the worker in `ship-issue`: SHA-256 of a regular file's bytes or a symlink's raw `readlink` bytes (no added newline). Require the real path of a regular file, or the real path of a symlink's parent directory joined with the link name, to be inside the worktree. Never resolve the link itself; unlink only the link and leave its target untouched.
   - Never remove modified tracked files, ignored files or unclaimed paths as scratch. Keep and report directories; never recursively delete contents as scratch.
-  - Run the guarded sweep again after scratch cleanup and report each retained worktree's status and reason
+  - Run the guarded sweep again after scratch cleanup. Report each retained worktree's path, reason, and actual `git status --porcelain --ignored --untracked-files=all` output
 - Stop only when every requested PR is merged, or the remaining ones have a genuine external blocker (e.g. required human approval, an outage) with a named owner and a continuation monitor armed and linked to its todo (without native monitors: the exact resume command). Ordinary docs, test, or conflict work is not a blocker
 
 A release or deployment is different: run the repository's frozen combined gate immediately before
@@ -80,21 +80,29 @@ publish/deploy. Do not impose that gate on ordinary PR merges.
 
 ### Guarded merged-worktree sweep
 
-Parent only. Check each candidate before invoking any remover:
+Parent only. Require a MERGED PR before adding a worktree to the merged sweep. The explicit no-PR
+mode in `ship-issue` can waive only the MERGED PR requirement, not the checks below.
 
-- Require a clean, fully pushed linked worktree of a MERGED PR, never the user's checkout.
-  Preserve worktrees with a live process cwd inside them, a recorded live owner, or objects borrowed
-  by another checkout. If a check cannot be completed, keep the worktree and report why
+- Check that the candidate is a linked worktree, never the user's checkout. Preserve worktrees with
+  a live process cwd inside them, a recorded live owner, or objects borrowed by another checkout
+- Fetch the branch's configured upstream remote, then run `git -C <worktree> rev-list '@{u}..HEAD'`.
+  Require a successful, empty result against the actual upstream branch. A missing or unverifiable
+  upstream is not proof that the work is fully pushed
 - Run `git -C <worktree> status --porcelain --ignored --untracked-files=all`. Require a successful,
   empty scan with no warnings about incomplete results. Keep worktrees with any `!!` entries or
-  retained claimed directories, even empty ones that Git status cannot see. Non-forced
-  `git worktree remove` can delete ignored files and empty directories. Recheck eligibility
-  immediately before removal
-- Run the configured sweep only if it can enforce these checks for every removal or be scoped to
-  just the checked candidates. Otherwise use a per-worktree fallback for eligible candidates only,
-  with no `--force` or `git branch -D`. If safe removal is not possible, keep and report the worktree
-- Report the worktree path, retention reason, and actual status output (including each `!!` path,
-  not file contents) to the operator. Ask them to confirm which entries are disposable or already
+  retained claimed directories, even empty ones that Git status cannot see. If the claims or handback
+  are unavailable, keep the worktree and report why; an empty status is not proof of no claims
+- Run `git -C <worktree> ls-files -v`. Require success and no entries whose leading tag is lowercase
+  or `S`. Assume-unchanged and skip-worktree entries can hide local edits from status. Non-forced
+  `git worktree remove` can delete those edits as well as ignored files and empty directories
+- If any check fails or cannot be completed, keep and report the worktree. Recheck eligibility
+  immediately before removal. Use a configured sweep only when its documented flags or dry-run output
+  show it enforces every check or limits removal to the exact candidates you just verified. If neither
+  is verifiable, the merged sweep fallback is `git worktree remove <path>` from outside that worktree
+  for an eligible candidate only. Leave branches alone in the fallback. Never use `--force` or
+  `git branch -D`. There is no manual no-PR fallback
+- Report the worktree path, retention reason, and actual status output (or the scan error) to the
+  operator. Include each `!!` path, not file contents. Ask them to confirm which entries are disposable or already
   backed up, and to clear or move them outside the worktree themselves before a fresh guarded sweep.
   Confirmation alone does not override an exclusion. Never assume `node_modules/`, `.venv/`,
   or `dist/` is safe to delete

@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- Use the same guarded sweep before creating an issue worktree and after merge. Report retained ignored paths rather than deleting them. ([#1050](https://github.com/nredd/pi-harness/issues/1050))
+- Share the same worktree safety checks before creating an issue worktree, after merge, and before no-PR removal. Report retained ignored paths and preserve files hidden by index flags. ([#1050](https://github.com/nredd/pi-harness/issues/1050))
 - Remove claimed scratch before handback or after merge. For symlinks, check the resolved parent plus link name and unlink only the link. Keep worktrees with ignored files. ([#1024](https://github.com/nredd/pi-harness/issues/1024))
 
 ## [0.5.0] - 2026-11-18

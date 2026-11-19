@@ -220,9 +220,7 @@ with a creation record. After merge, the parent removes only verified claims and
 Scratch removal is limited to regular files and symlinks with a `??` status entry and a matching
 creation-time type and SHA-256. Both roles hash file bytes or raw `readlink` bytes (no added newline).
 Check that the file's real path, or the link parent's real path joined with the link name, stays
-inside the worktree. Unlink only the link, without resolving its target. Keep and report claimed
-directories, and exclude worktrees with those directories or `!!` entries from both sweeps. See the
-shipping skills.
+inside the worktree. Unlink only the link, without resolving its target. See the shipping skills.
 
 Use `architect` for architecture reviews and web research. It preloads `codebase-design`
 and ranks cited survey cards by payoff and migration cost (`S`, `M`, `L`). It treats
@@ -267,10 +265,8 @@ the continuing parent runs its independent final critic after exact-HEAD review.
 Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
 only when applicable protection is readable, effective and not bypassable by the merging caller.
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
-The parent uses the same guarded merged-worktree sweep before creating an issue worktree and after
-merge. It keeps and reports worktrees with ignored files or retained claimed directories. Operators
-can move those paths out or clear them after confirming they are disposable or backed up, then rerun
-the guarded sweep.
+Before creating an issue worktree, after merge, and before any no-PR removal, the parent follows
+the [guarded sweep checks](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep).
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently
