@@ -40,8 +40,7 @@ apt_fetch() {
 apt_fetch_from_mirror() {
   local source=$1 selected=$2 rewrite=$3 update_seconds=$4 download_seconds=$5 original
   shift 5
-  # Bash 5.2 exits the script on a failed `$(< file)` redirection, so test readability first. No `cat`:
-  # the WSL failure fixtures run with a minimal PATH.
+  # Test readability before `$(< file)`: Bash 5.2 can exit on a failed redirection before printing our diagnostic.
   if [ ! -r "$source" ] || ! original=$(< "$source"); then
     printf '%s: cannot read apt sources: %s\n' "$apt_label" "$source" >&2
     return 1

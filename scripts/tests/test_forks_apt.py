@@ -11,6 +11,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -20,6 +21,24 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGES = "libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep"
 AZURE = "http://azure.archive.ubuntu.com/ubuntu/"
+TIMEOUT_FIXTURE = Path(__file__).with_name("fixtures") / "wsl_timeout.py"
+
+
+@pytest.fixture
+def command_path(tmp_path: Path) -> str:
+    """Install the deadline fixture ahead of any host tools.
+
+    Parameters:
+        tmp_path (Path): Disposable command directory.
+
+    Returns:
+        str: PATH for the script under test.
+    """
+    timeout = tmp_path / "timeout"
+    command = shlex.join([sys.executable, str(TIMEOUT_FIXTURE)])
+    timeout.write_text(f'#!/bin/sh\nexec {command} "$@"\n')
+    timeout.chmod(0o755)
+    return f"{tmp_path}{os.pathsep}{os.environ['PATH']}"
 
 
 def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
@@ -78,6 +97,12 @@ def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
             ["azure-update", "azure-download", "azure-install"],
             "TIMEOUT: apt-get install",
         ),
+        (
+            "install-kill",
+            137,
+            ["azure-update", "azure-download", "azure-install"],
+            "TIMEOUT: apt-get install",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -95,9 +120,10 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
     attempts: list[str],
     diagnostic: str,
     *,
+    command_path: str,
     ubuntu_uris: tuple[str, str],
 ) -> None:
-    """Exercise actual apt exit propagation and real timeouts across the three command phases.
+    """Exercise exit propagation and enforce real deadlines with a portable timeout fixture.
 
     Parameters:
         tmp_path (Path): Disposable apt sources, commands and logs.
@@ -105,6 +131,7 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
         status (int): Expected script exit status.
         attempts (list[str]): Expected command order and selected mirrors.
         diagnostic (str): Expected failure or timeout explanation, if any.
+        command_path (str): PATH with the deadline fixture.
         ubuntu_uris (tuple[str, str]): Original archive and security URIs.
     """
     sources = tmp_path / "ubuntu.sources"
@@ -121,10 +148,15 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
             #!/bin/sh
             set -eu
             selected=
+            keep_lists=
             while [ "$1" = -o ]; do
-                case "$2" in Dir::Etc::sourcelist=*) selected=${2#*=} ;; esac
+                case "$2" in
+                    Dir::Etc::sourcelist=*) selected=${2#*=} ;;
+                    APT::Get::List-Cleanup=0) keep_lists=1 ;;
+                esac
                 shift 2
             done
+            [ "$keep_lists" = 1 ] || exit 93
             case "$(grep -m1 '^URIs:' "$selected")" in
                 'URIs: http://azure.archive.ubuntu.com/ubuntu/') mirror=azure ;;
                 'URIs: http://archive.ubuntu.com/ubuntu/') mirror=stock ;;
@@ -151,6 +183,7 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
                     ;;
                 download-hang:azure:download|both-hang:*:update|install-hang:*:install) exec /bin/sleep 30 ;;
                 install-error:*:install) exit 47 ;;
+                install-kill:*:install) trap '' TERM; exec /bin/sleep 30 ;;
             esac
             """
         )
@@ -165,12 +198,12 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
             text=True,
             env=os.environ
             | {
-                "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+                "PATH": command_path,
                 "MODE": mode,
                 "PACKAGES": PACKAGES,
                 "CHILD_PID_FILE": str(child_pid_file),
             },
-            timeout=5 if mode == "orphaned-child" else 15,
+            timeout=5 if mode == "orphaned-child" else 20,
         )
         if mode == "orphaned-child":
             # The step returned while the inherited output descriptor was still open.
@@ -197,11 +230,14 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
         ("append-failed", "could not append to"),
     ],
 )
-def test_forks_apt_reports_setup_and_log_io_failures(tmp_path: Path, mode: str, diagnostic: str) -> None:
+def test_forks_apt_reports_setup_and_log_io_failures(
+    tmp_path: Path, command_path: str, mode: str, diagnostic: str
+) -> None:
     """Fail on real filesystem errors or unknown sources; do not accept a successful apt with a broken log.
 
     Parameters:
         tmp_path (Path): Disposable sources, subprocess stubs, and log destination.
+        command_path (str): PATH with the deadline fixture.
         mode (str): Filesystem or source failure to exercise.
         diagnostic (str): Expected explanation for the nonzero status.
     """
@@ -229,7 +265,7 @@ def test_forks_apt_reports_setup_and_log_io_failures(tmp_path: Path, mode: str, 
         text=True,
         env=os.environ
         | {
-            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "PATH": command_path,
             "FIXTURE_SCRATCH": str(scratch),
             "FIXTURE_MARKER": str(marker),
         },

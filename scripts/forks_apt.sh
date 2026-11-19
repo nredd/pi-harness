@@ -16,7 +16,7 @@ selected="$scratch/ubuntu.sources"
 apt_capture="$scratch/apt-output"
 packages=(libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep)
 apt=(apt-get
-  -o "Dir::Etc::sourcelist=$selected" -o Dir::Etc::sourceparts=-
+  -o "Dir::Etc::sourcelist=$selected" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
   -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10
   -o Acquire::Languages=none -o DPkg::Lock::Timeout=10 -o Dpkg::Use-Pty=0)
 
