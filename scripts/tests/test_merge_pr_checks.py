@@ -53,16 +53,9 @@ class Replay(checks.GitHub):
             ValueError: The captured fixture contains invalid JSON.
         """
         self.data = json.loads(FIXTURE.read_text())
-        # Keep the historical capture unchanged. Explicit synthetic successors extend
-        # its replacement-run proof to the current matrix, not hosted WSL evidence.
+        # The historical capture already carries every currently required job name.
         present = {job["name"] for job in self.data["new_jobs"]}
-        template = next(job for job in self.data["new_jobs"] if job["name"] in checks.EXPECTED_MATRIX)
-        for index, name in enumerate(sorted(checks.EXPECTED_MATRIX - present), start=1):
-            job = copy.deepcopy(template)
-            job["id"] += index * 100000
-            job["name"] = name
-            job["html_url"] = f"https://github.com/{REPO}/actions/runs/{job['run_id']}/job/{job['id']}"
-            self.data["new_jobs"].append(job)
+        assert present >= checks.EXPECTED_MATRIX
         self.old_run = self.data["runs"][1]
         self.commands: list[tuple[str, ...]] = []
         self.binary = "/fixture/gh"
