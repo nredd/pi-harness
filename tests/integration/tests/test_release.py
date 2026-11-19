@@ -76,12 +76,12 @@ class HTTPBody(io.BytesIO):
 # sha256 its release `SHA256SUMS` publishes and the npm SRI sha512 of the same downloaded bytes.
 # Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
 # `shasum -a 256 <asset>` and `printf 'sha512-%s' "$(openssl dgst -sha512 -binary <asset> | base64)"`.
-ROOT_OVERRIDE_TAG = "v1.3.0-nredd.12"
+ROOT_OVERRIDE_TAG = "v1.3.0-nredd.13"
 ROOT_OVERRIDE_DIGESTS = MappingProxyType(
     {
         "earendil-works-pi-coding-agent-1.3.0.tgz": (
-            "32042879cb8d1d559edf9785f1809dfc9c0cdf4e0f8ef1e1d216b49028c7a732",
-            "sha512-c/bGarQieJ6gPwUCeYFA6FLBANbuRFQ38Lz7W0ak6GEvItxEqRw6Ztg/KlZhULECAELag+6oFbw4fAJu8WaAyw==",
+            "17374c272841b6d688020d1b7b6fa8412afd59d45d4e9529075ea716cf5107e4",
+            "sha512-awhGLXGRGVT8RDExBKT3XSs3T0BXBh3z+ZN5vs784XMhuK3wZ8PpuHoTTIDfSQJBLmHhzFdRKXAqUVkOMwQIvQ==",
         ),
         "earendil-works-pi-tui-1.3.0.tgz": (
             "882a979b8c26be39f5f63cf5f905b1ebe423ab48417b35e2812840e5654a2f57",
@@ -92,8 +92,8 @@ ROOT_OVERRIDE_DIGESTS = MappingProxyType(
             "sha512-rMqFVJ6z2ZkxTlj8j8a+KUWKA/SV69LgbV9UFQwJIV6GzMn72tpFzqeYhjeeoqt5uzQ/sCGkE6ps8BadTjwjZg==",
         ),
         "earendil-works-pi-ai-1.3.0.tgz": (
-            "67742ad37e76540212c967ff6bc403e625302f9752a9df82548b250edbd7e062",
-            "sha512-6AhQmtchfIOv7JaRc70MKAuIqdqUE8dWsa1wRW1ABaAv/5nhfVJX4VUINKekgSoQdqibqLPM2IzxS7xk4BsnIg==",
+            "b2a16082dcbb9e7895b186492c0a8220b2dae61cf0f715ec0f93f740dd563cf9",
+            "sha512-sLiOeLXHlAQllMWyRbGqo8C1TFR7wRBoBRhYyBBnSo7Yf29eFLNKMJceXfZRzHgqE3Wza/tsogMoJaR8RZ0ydA==",
         ),
     }
 )
