@@ -66,7 +66,7 @@ fn ranks_title_then_geometry_and_assigns_each_window_once() {
 
     assert_eq!(
         roots.each_ref().map(|root| root.x11_window),
-        [Some(4), Some(3), Some(2), None,]
+        [Some(4), Some(3), Some(2), None]
     );
     assert_eq!(roots[0].frame, Some(frame(10)));
     assert_eq!(roots[0].name, "Editor");
@@ -78,6 +78,27 @@ fn ranks_title_then_geometry_and_assigns_each_window_once() {
     assert_eq!(roots[3].name, "Unmatched");
     assert_eq!(roots[3].frame, Some(frame(90)));
     assert_eq!(roots[3].z_order, None);
+}
+
+#[test]
+fn prefers_window_title_contained_in_root_name_over_closer_unrelated_title() {
+    let mut roots = [root(7, "Editor - file.txt", Some(frame(0)))];
+    let windows = [window(1, 7, "Notes", 0), window(2, 7, "Editor", 30)];
+
+    enrich_roots(&mut roots, &windows);
+
+    assert_eq!(roots[0].x11_window, Some(2));
+}
+
+#[test]
+fn missing_root_frame_leaves_equally_ranked_titles_in_window_order() {
+    let mut roots = [root(7, "", None)];
+    let windows = [window(1, 7, "Editor", 30), window(2, 7, "Notes", 0)];
+
+    enrich_roots(&mut roots, &windows);
+
+    assert_eq!(roots[0].x11_window, Some(1));
+    assert_eq!(roots[0].frame, Some(frame(30)));
 }
 
 #[test]
