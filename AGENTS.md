@@ -41,7 +41,7 @@ Do not claim a prerequisite, platform, gate, or live check passed without record
 
 PRs need their own exact final-HEAD green checks and independent reviews, not another run solely
 because `main` advanced. Resolve actual conflicts and re-review every HEAD change. Preserve the
-active twelve app-bound checks and non-strict ruleset policy; never re-enable strictness, disable
+four app-bound Ubuntu checks and non-strict ruleset policy; never re-enable strictness, disable
 protection or bypass checks. Before publishing, promoting or deploying, require the exact frozen
 combined candidate's full executed CI and artifact evidence, not ordinary main runs or old PR
 checks. Follow "Frozen release verification" in `README.md`; unrelated later main advances do not stale that
@@ -49,8 +49,8 @@ candidate, but changed selected inputs do.
 
 # macOS CI
 
-- Heavy macOS jobs skip on PRs. See `macOS PR skip` in the CI job summary and `NOT RUN` in the required placeholders.
-- Full macOS CI runs on `main` pushes and full dispatches, and also on scheduled or merge-queue CI if enabled.
+- PR CI has four required Ubuntu names: `owned`, `contracts` and both `stack` cells. It has no macOS placeholders or WSL2 jobs. See `macOS PR skip` in the CI job summary.
+- Full macOS CI runs on `main` pushes and `workflow_dispatch`, including frozen release verification.
 - To test a PR head before merge, run `make check` on macOS. Dispatch `CI` for the full matrix on `main` or an eligible frozen release candidate, not an arbitrary PR ref.
 - Fix macOS failures on `main` forward. No auto-revert; do not block other PRs on red macOS `main`.
 

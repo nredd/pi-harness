@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -28,7 +29,10 @@ sys.stderr.write('--- Startup Timings: main ---\\n  TOTAL: 7ms\\n'
 sys.stderr.flush()
 print('footer ctx 1%',flush=True)
 if os.environ.get('CHILD_PID'):
-    Path(os.environ['CHILD_PID']).write_text(str(os.getpid()))
+    pid_file = Path(os.environ['CHILD_PID'])
+    pending = pid_file.with_suffix('.tmp')
+    pending.write_text(str(os.getpid()))
+    pending.replace(pid_file)
 time.sleep(0.1)
 nonce = os.environ['PI_STARTUP_NONCE']
 mode = os.environ.get('ACK_MODE', 'valid')
@@ -377,6 +381,39 @@ def test_missing_or_malformed_ack_cleans_process_and_scratch(
     pid_file = tmp_path / "pid"
     created: list[Path] = []
     original = tempfile.mkdtemp
+    start = startup.TmuxPane.start
+    launch_delay = 0.0
+
+    def sampler_clock() -> float:
+        """Return monotonic time excluding the fixture's launch delay.
+
+        Returns:
+            float: time in seconds on the sampler's test clock.
+        """
+        return time.monotonic() - launch_delay
+
+    def start_and_wait_for_pid(
+        pane: startup.TmuxPane, argv: list[str], cwd: Path, env: dict[str, str]
+    ) -> None:
+        """Start the real pane and wait for the fake child's PID.
+
+        Parameters:
+            pane (startup.TmuxPane): sampler's real pane.
+            argv (list[str]): command to launch.
+            cwd (Path): pane working directory.
+            env (dict[str, str]): pane environment.
+
+        Raises:
+            AssertionError: the fake child did not publish its PID in time.
+        """
+        nonlocal launch_delay
+        launched = time.monotonic()
+        start(pane, argv, cwd, env)
+        deadline = time.monotonic() + 3
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pid_file.exists(), "Fake child did not write its PID within 3s"
+        launch_delay = time.monotonic() - launched
 
     def tracked_mkdtemp(**kwargs: Any) -> str:
         """Record the real short socket directory without extending its path.
@@ -392,12 +429,15 @@ def test_missing_or_malformed_ack_cleans_process_and_scratch(
         return directory
 
     monkeypatch.setattr(startup.tempfile, "mkdtemp", tracked_mkdtemp)
+    monkeypatch.setattr(startup.TmuxPane, "start", start_and_wait_for_pid)
+    monkeypatch.setattr(startup, "time", SimpleNamespace(monotonic=sampler_clock, sleep=time.sleep))
     argv = [sys.executable, "-c", FAKE_PI]
     env = {"ACK_MODE": mode, "CHILD_PID": str(pid_file)}
     if mode == "valid":
         startup.sample(argv, env=env)
     else:
-        with pytest.raises(TimeoutError, match="No ready UI"):
+        submitted = mode != "unregistered"
+        with pytest.raises(TimeoutError, match=rf"No ready UI.*'frame_s':.*submitted={submitted}$"):
             startup.sample(argv, env=env, timeout_s=0.5)
     assert created
     assert all(not directory.exists() for directory in created)
