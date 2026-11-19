@@ -96,7 +96,7 @@ def test_apt_steps_skip_present_tools_and_are_bounded() -> None:
         AssertionError: An apt step can stall for the whole job budget.
     """
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    for name in ("owned-shards", "stack"):
+    for name in ("owned-shards-ubuntu", "stack"):
         step = step_named(ci["jobs"][name]["steps"], "Install tmux (Linux)")
         assert step["timeout-minutes"] == 5
         assert "command -v tmux" in step["run"]
@@ -242,7 +242,7 @@ def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         OSError: The workflow cannot be read.
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    return jobs["owned-shards"]["steps"], jobs["owned"]["steps"]
+    return jobs["owned-shards-ubuntu"]["steps"], jobs["owned-ubuntu"]["steps"]
 
 
 def step_named(steps: list[dict[str, Any]], prefix: str) -> dict[str, Any]:

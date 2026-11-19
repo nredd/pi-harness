@@ -1,8 +1,7 @@
-"""Pin the CI matrix and exercise the guest adapter without pretending to run WSL.
+"""Pin the CI matrix and exercise the real plan and coverage reporting steps.
 
 References:
     https://docs.github.com/actions/using-jobs/using-a-matrix-for-your-jobs
-    https://learn.microsoft.com/windows/wsl/filesystems
 """
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ import fnmatch
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -49,8 +47,8 @@ PERSONAL_STEPS = {
 LOCAL_STEPS = {"Standalone D and E (local)"}
 BUILD_AND_NODE = {"Assembled D and E boundaries (explicit stack, no machine config)", "Build standalone"}
 # Each `owned (<os>)` check is its own fan-in job over its own shard job (#350).
-OWNED_FAN_IN = dict.fromkeys(PLATFORMS, "owned")
-OWNED_SHARD_JOBS = dict.fromkeys(PLATFORMS, "owned-shards")
+OWNED_FAN_IN = {"ubuntu-24.04": "owned-ubuntu", "macos-14": "owned-macos"}
+OWNED_SHARD_JOBS = {"ubuntu-24.04": "owned-shards-ubuntu", "macos-14": "owned-shards-macos"}
 
 
 @dataclass(frozen=True)
@@ -86,14 +84,20 @@ def jobs() -> dict[str, Any]:
 
 def expand(name: str, event: str = "pull_request") -> dict[str, dict[str, str]]:
     """Expand the real workflow matrix for an event, keyed by reported check name."""
+    if name == "owned":
+        return {check: cell for job in OWNED_FAN_IN.values() for check, cell in expand(job, event).items()}
     job = jobs()[name]
-    matrix = job["strategy"]["matrix"]
     context = {"github.event_name": event}
-    records = (
-        evaluate(matrix["include"], context)
-        if "include" in matrix
-        else [{"os": system} for system in evaluate(matrix["os"], context)]
-    )
+    if name in OWNED_FAN_IN.values() and not evaluate(job["if"], context):
+        return {}
+    matrix = job["strategy"]["matrix"]
+    if "include" in matrix:
+        records = evaluate(matrix["include"], context)
+    else:
+        systems = matrix["os"]
+        records = [
+            {"os": system} for system in (evaluate(systems, context) if isinstance(systems, str) else systems)
+        ]
     return {
         render(job["name"], {f"matrix.{key}": value for key, value in cell.items()}): cell for cell in records
     }
@@ -212,7 +216,6 @@ def classify_context(trigger: Trigger) -> dict[str, str]:
     outputs = classify_outputs(trigger)
     return {
         "needs.classify.outputs.plan": outputs["plan"],
-        "needs.classify.outputs.owned_shards": outputs.get("owned_shards", ""),
         "needs.classify.outputs.changed_files": "a.txt",
         "needs.classify.result": trigger.classify_result,
         "github.event_name": trigger.event,
@@ -231,7 +234,8 @@ def runner_for(name: str, cell: dict[str, str], trigger: Trigger = PULL_REQUEST)
         str: Selected runner label.
     """
     context = {f"matrix.{key}": value for key, value in cell.items()}
-    return render(jobs()[name]["runs-on"], context | classify_context(trigger))
+    job = OWNED_FAN_IN[cell["os"]] if name == "owned" else name
+    return render(jobs()[job]["runs-on"], context | classify_context(trigger))
 
 
 def report_step() -> dict[str, Any]:
@@ -259,7 +263,8 @@ def run_plan(
         tuple[dict[str, str], str, str]: Step outputs, output text and the step summary.
     """
     cell = expand(name, trigger.event)[check]
-    job_step = next(step for step in jobs()[name]["steps"] if step.get("id") == "plan")
+    job = OWNED_FAN_IN[cell["os"]] if name == "owned" else name
+    job_step = next(step for step in jobs()[job]["steps"] if step.get("id") == "plan")
     assert job_step["uses"] == "./.github/actions/report-plan"
     values = {f"matrix.{key}": value for key, value in cell.items()} | classify_context(trigger)
     inputs = {f"inputs.{key}": render(value, values) for key, value in job_step["with"].items()}
@@ -302,7 +307,8 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
-    return walk_steps(jobs()[name]["steps"], context)
+    job = OWNED_FAN_IN[cell["os"]] if name == "owned" else name
+    return walk_steps(jobs()[job]["steps"], context)
 
 
 def walk_steps(steps: list[dict[str, Any]], context: dict[str, Any]) -> set[str]:
@@ -341,7 +347,7 @@ def shard_entries(os_name: str, trigger: Trigger = PULL_REQUEST) -> list[dict[st
     # No status function in the `if`, so GitHub's implicit `success()` needs a successful `classify`.
     if trigger.classify_result != "success" or not evaluate(job["if"], context):
         return []
-    return [cell for cell in evaluate(job["strategy"]["matrix"]["include"], context) if cell["os"] == os_name]
+    return evaluate(job["strategy"]["matrix"]["include"], context)
 
 
 def shard_runner(os_name: str, entry: dict[str, str]) -> str:
@@ -404,7 +410,7 @@ def test_every_required_check_name_keeps_reporting(name: str) -> None:
 @pytest.mark.parametrize("name", ["owned", "contracts"])
 @pytest.mark.parametrize("os_name", ["ubuntu-24.04", "macos-14"])
 def test_native_cells_use_their_runner(tmp_path: Path, name: str, os_name: str) -> None:
-    """Never route native evidence through the WSL bypass.
+    """Run native evidence on the planned runner.
 
     Parameters:
         tmp_path (Path): Disposable output directory.
@@ -756,7 +762,7 @@ def test_every_planned_gate_has_a_step_that_survives_other_gate_failures() -> No
     planned = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates}
     steps = {
         step["name"].removeprefix("Owned gate ").split(" ")[0]: step
-        for step in jobs()["owned-shards"]["steps"]
+        for step in jobs()["owned-shards-ubuntu"]["steps"]
         if step.get("name", "").startswith("Owned gate ")
     }
     assert set(steps) == planned
@@ -766,8 +772,7 @@ def test_every_planned_gate_has_a_step_that_survives_other_gate_failures() -> No
         assert "!cancelled()" in condition
         assert "steps.install.outcome == 'success'" in condition
         assert f"contains(matrix.gates, '{gate}')" in condition
-    # `check-ts` runs exactly the shard's workspaces, rendered into the command: the WSL adapter forwards
-    # only an explicit environment allowlist.
+    # `check-ts` runs exactly the shard's workspaces, rendered into the command.
     assert steps["check-ts"]["run"] == 'make check-ts WORKSPACES="${{ matrix.workspaces }}"'
 
 
@@ -842,7 +847,7 @@ def test_blocked_plan_fails_every_cell_before_any_work(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("result", ["failure", "skipped", "cancelled"])
-def test_a_failed_classify_fails_all_twelve_required_checks_instead_of_skipping_them(
+def test_a_failed_classify_fails_all_four_required_checks_instead_of_skipping_them(
     tmp_path: Path, result: str
 ) -> None:
     """A skipped job satisfies a required check, so no `classify` outcome may skip a cell.
@@ -857,7 +862,7 @@ def test_a_failed_classify_fails_all_twelve_required_checks_instead_of_skipping_
     assert not any(shard_entries(os_name, trigger) for os_name in OWNED_SHARD_JOBS)
     for name in ("owned", "contracts", "stack"):
         for check, cell in expand(name, trigger.event).items():
-            job = jobs()[name]
+            job = jobs()[OWNED_FAN_IN[cell["os"]] if name == "owned" else name]
             # The job still starts: its `if` holds when `needs.classify` did not succeed.
             context = {"needs.classify.result": result}
             assert evaluate(job["if"], context) is True
@@ -1024,9 +1029,82 @@ def test_shared_guest_matrix(name: str) -> None:
     assert jobs()[name]["defaults"]["run"]["shell"] == "bash -e {0}"
 
 
-def test_owned_fan_in_waits_for_shards_and_native_windows() -> None:
-    """Require the active shard matrix and the existing native Windows evidence."""
-    assert jobs()["owned"]["needs"] == ["classify", "owned-shards", "computer-use-windows"]
+def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards() -> None:
+    """Keep the required Ubuntu result and its scheduling independent of macOS."""
+    cfg = jobs()
+    assert cfg["owned-ubuntu"]["steps"] == cfg["owned-macos"]["steps"]
+    for os_name, name in OWNED_FAN_IN.items():
+        fan_in = cfg[name]
+        shards = OWNED_SHARD_JOBS[os_name]
+        ubuntu = os_name == "ubuntu-24.04"
+        assert fan_in["needs"] == ["classify", shards, *(["computer-use-windows"] if ubuntu else [])]
+        assert fan_in["env"]["SHARDS_RESULT"] == f"${{{{ needs.{shards}.result }}}}"
+        if ubuntu:
+            assert fan_in["env"]["WINDOWS_RESULT"] == "${{ needs.computer-use-windows.result }}"
+            assert "packages/computer-use" in fan_in["env"]["WINDOWS_REQUIRED"]
+        else:
+            assert set(fan_in["env"]) == {"SHARDS_RESULT"}
+        assert fan_in["runs-on"] == "ubuntu-24.04"
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_owned_shard_jobs_share_one_definition_and_read_only_their_cell(event: str) -> None:
+    """Evaluate the real matrix expressions without filtering out a wrong-OS shard."""
+    cfg = jobs()
+    assert cfg["owned-shards-ubuntu"]["steps"] == cfg["owned-shards-macos"]["steps"]
+    trigger = Trigger(event=event, docs_only="true")
+    plan = json.loads(classify_outputs(trigger)["plan"])
+    for os_name, name in OWNED_SHARD_JOBS.items():
+        assert cfg[name]["needs"] == "classify"
+        assert cfg[name]["strategy"]["fail-fast"] is False
+        entries = shard_entries(os_name, trigger)
+        assert entries == plan[f"owned ({os_name})"]["shards"]
+        assert {entry["os"] for entry in entries} == {os_name}
+        assert f"owned ({os_name})" in expand(OWNED_FAN_IN[os_name], event)
+
+
+def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
+    """Keep provenance ahead of installers and expose tokens only to fetch steps."""
+    tools = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())["runs"]["steps"]
+    pinned_inputs = {
+        "setup-node": ("node-version-file", ".node-version"),
+        "setup-bun": ("bun-version-file", ".bun-version"),
+        "setup-uv": ("version", "0.13.1"),
+    }
+    for action, (key, value) in pinned_inputs.items():
+        step = next(step for step in tools if f"/{action}@" in step.get("uses", ""))
+        assert step["with"][key] == value
+    assert any('require("./package.json").packageManager' in step.get("run", "") for step in tools)
+    cfg = jobs()
+    for name in (
+        *OWNED_FAN_IN.values(),
+        *OWNED_SHARD_JOBS.values(),
+        "contracts",
+        "stack",
+        "computer-use-windows",
+    ):
+        job = cfg[name]
+        assert "GH_TOKEN" not in job.get("env", {})
+        steps = job["steps"]
+        token_steps = [step for step in steps if "GH_TOKEN" in step.get("env", {})]
+        if name in OWNED_FAN_IN.values():
+            assert not token_steps
+        elif name == "stack":
+            assert [step["name"] for step in token_steps] == [
+                "Verify root core overrides before install",
+                "Fetch exact Gitlinked core release, formula-equivalent install",
+            ]
+            commands = "\n".join(step.get("run", "") for step in steps)
+            assert commands.index("--verify-root-overrides") < commands.index("npm ci --ignore-scripts")
+            assert commands.index("--gitlink ../../forks/pi") < commands.index("pytest scenarios/")
+        elif name == "computer-use-windows":
+            assert [step["name"] for step in token_steps] == [
+                "Verify root core overrides before installing dependencies"
+            ]
+        else:
+            assert [step["name"] for step in token_steps] == ["Install"]
+            assert token_steps[0]["run"] == "make install-owned"
+        assert all(step["env"]["GH_TOKEN"] == "${{ github.token }}" for step in token_steps)
 
 
 def fan_in_step(name: str) -> dict[str, Any]:
@@ -1038,7 +1116,7 @@ def fan_in_step(name: str) -> dict[str, Any]:
     Returns:
         dict[str, Any]: The step record.
     """
-    return next(step for step in jobs()["owned"]["steps"] if step.get("name") == name)
+    return next(step for step in jobs()["owned-ubuntu"]["steps"] if step.get("name") == name)
 
 
 @pytest.mark.parametrize(
@@ -1185,7 +1263,7 @@ def test_fan_in_downloads_exactly_its_own_shard_uploads() -> None:
     """Match every shard upload of the cell, and neither another cell's nor the fan-in's own artifact."""
     shard_upload = next(
         step
-        for step in jobs()["owned-shards"]["steps"]
+        for step in jobs()["owned-shards-macos"]["steps"]
         if step.get("name") == "Preserve this shard's coverage reports"
     )
     download = fan_in_step("Download the shards' coverage reports")
@@ -1304,7 +1382,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         "needs": "classify",
         "uses": "./.github/workflows/forks.yml",
     }
-    owned = cfg["owned-shards"]["steps"]
+    owned = cfg["owned-shards-ubuntu"]["steps"]
     arm = next(step for step in owned if step.get("name") == "Add the aarch64 Linux compile target")
     assert arm["if"] == "matrix.guest == 'linux' && contains(matrix.workspaces, 'packages/computer-use')"
     contracts = [step["run"] for step in cfg["contracts"]["steps"] if "run" in step]
@@ -1364,495 +1442,6 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
             # A control-test workflow may name the action in its path filter without invoking guest setup.
             assert "uses: ./.github/actions/setup-ci-wsl" not in path.read_text()
             assert "wsl2_run.sh" not in path.read_text()
-
-
-def guest_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
-    """Prepare a Linux-shaped guest HOME with real adapter inputs.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-
-    Returns:
-        tuple[Path, dict[str, str]]: Guest checkout and adapter environment.
-    """
-    home = tmp_path / "guest home"
-    worktree = home / "pi-harness-ci"
-    ti = worktree / ".ci-temp"
-    ti.mkdir(parents=True)
-    (ti / "tool-path").write_text(os.environ["PATH"])
-    (worktree / "tests/integration").mkdir(parents=True)
-    (worktree / "release").mkdir()
-    step = tmp_path / "host step.sh"
-    env = dict(os.environ) | {
-        "HOME": str(home),
-        "WSL_STEP_SCRIPT": str(step),
-        "WSL_STEP_DIRECTORY": "tests/integration",
-        "GITHUB_OUTPUT": str(tmp_path / "output"),
-        "GITHUB_ENV": str(tmp_path / "env"),
-        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
-        "GH_TOKEN": "synthetic-sentinel",
-    }
-    return worktree, env
-
-
-@pytest.mark.parametrize("status", [0, 47])
-def test_guest_adapter_real_execution_and_status(tmp_path: Path, status: int) -> None:
-    """Exercise CRLF, paths with spaces, guest cwd/temp, outputs and failure retention.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-        status (int): Exit status of the ordinary gate.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    Path(env["WSL_STEP_SCRIPT"]).write_bytes(
-        (
-            'test "$PWD" = "$GITHUB_WORKSPACE/tests/integration"\r\n'
-            'test "$RUNNER_TEMP" = "$GITHUB_WORKSPACE/.ci-temp"\r\n'
-            'echo "PI_BIN=$GITHUB_WORKSPACE/pi-release/bin/pi" >> "$GITHUB_ENV"\r\n'
-            'echo "ran=true" >> "$GITHUB_OUTPUT"\r\n'
-            f"exit {status}\r\n"
-        ).encode()
-    )
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
-    )
-    assert result.returncode == status
-    assert Path(env["GITHUB_OUTPUT"]).read_text() == "ran=true\n"
-    assert Path(env["GITHUB_ENV"]).read_text() == f"PI_BIN={worktree}/pi-release/bin/pi\n"
-    assert "synthetic-sentinel" not in result.stdout + result.stderr
-    failure = worktree / ".ci-temp/first-failure"
-    assert failure.exists() is bool(status)
-    if status:
-        assert failure.read_text() == f"{status}\n"
-    assert not list((worktree / ".ci-temp").glob("step.*"))
-
-
-@pytest.mark.parametrize("directory", ["..", "../escape", "tests/integration/../../..", "escape-link"])
-def test_guest_adapter_refuses_escaping_directory(tmp_path: Path, directory: str) -> None:
-    """Fail before running a host script outside the guest checkout.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-        directory (str): Logical or symlink traversal outside the guest checkout.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    (worktree / "escape-link").symlink_to(tmp_path, target_is_directory=True)
-    env["WSL_STEP_DIRECTORY"] = directory
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
-    )
-    assert result.returncode == 1
-    assert "escapes guest checkout" in result.stderr
-
-
-def stub_guest_state_commands(commands: Path, *, dmesg: bool = False, kernel: str = "") -> Path:
-    """Stub the guest-state collector's kernel commands, plus a `sudo` that only records calls.
-
-    Parameters:
-        commands (Path): PATH-prepended stub directory, created when absent.
-        dmesg (bool): unprivileged `dmesg` succeeds.
-        kernel (str): Extra kernel-log line, e.g. a planted credential.
-
-    Returns:
-        Path: Marker file that records every attempted kernel-log read.
-    """
-    commands.mkdir(exist_ok=True)
-    marker = commands.parent / "kernel-log-attempts"
-    sudo_calls = commands.parent / "sudo-calls"
-    log = f"printf '%s\\n' \"$0 $*\" >> {shlex.quote(str(marker))}\n"
-    stubs = {
-        # The capture must never escalate; any call is recorded and fails.
-        "sudo": f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(sudo_calls))}\nexit 90\n",
-        "dmesg": (
-            f"#!/bin/sh\n{log}"
-            + (
-                f"printf '[    2.0] unprivileged kernel line\\n{kernel}\\n'\n"
-                if dmesg
-                else "echo 'dmesg: read kernel buffer failed: Operation not permitted' >&2\nexit 1\n"
-            )
-        ),
-        # GitHub's macos-14 image has no coreutils `timeout`; the guest's bounds are not under test here.
-        "timeout": '#!/bin/sh\nshift\nexec "$@"\n',
-        "python3": f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n',
-    }
-    for name, body in stubs.items():
-        (commands / name).write_text(body)
-        (commands / name).chmod(0o755)
-    return marker
-
-
-@pytest.mark.parametrize("export_failure", [False, True])
-def test_capture_retains_first_failure_and_only_explicit_reports(
-    tmp_path: Path, export_failure: bool
-) -> None:
-    """Run real export/cleanup against successively failed/successful guest steps.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-        export_failure (bool): Inject a report-copy failure before cleanup.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    ti = worktree / ".ci-temp"
-    (ti / "first-failure").write_text("47\n")
-    (ti / "package-contracts.json").write_text("{}\n")
-    (ti / "secret.txt").write_text("must not upload")
-    startup = ti / "standalone-startup-diagnostics"
-    startup.mkdir()
-    (startup / "SHA256SUMS").write_text("synthetic scanned manifest\n")
-    for name in ("artifacts", "artifacts-node", "artifacts-personal"):
-        artifacts = worktree / "tests/integration" / name
-        artifacts.mkdir()
-        (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
-    host = tmp_path / "host"
-    host_temp = host / "temp"
-    (host_temp / "wsl2-diagnostics").mkdir(parents=True)
-    env |= {"WSL_HOST_WORKSPACE": str(host), "WSL_HOST_TEMP": str(host_temp), "RUNNER_TEMP": str(ti)}
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    # Model DrvFs refusing timestamp/ownership preservation by an ordinary user.
-    copy_script = (
-        "#!/bin/sh\nexit 92\n"
-        if export_failure
-        else (
-            f"#!{sys.executable}\n"
-            "import os\nimport sys\n"
-            "if sys.argv[1] in ('-a', '-p') or sys.argv[1].startswith('--preserve'):\n"
-            "    sys.exit(93)\n"
-            "os.execv('/bin/cp', ['/bin/cp', *sys.argv[1:]])\n"
-        )
-    )
-    (commands / "cp").write_text(copy_script)
-    (commands / "cp").chmod(0o755)
-    stub_guest_state_commands(commands)
-    env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
-    (ti / "tool-path").write_text(env["PATH"])
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 47
-    assert not worktree.exists()
-    for name in ("artifacts", "artifacts-node", "artifacts-personal"):
-        assert (host / "tests/integration" / name / "wsl2-personal.xml").is_file() is not export_failure
-    assert (host_temp / "package-contracts.json").is_file() is not export_failure
-    assert (host_temp / "wsl2-diagnostics/artifacts/wsl2-personal.xml").is_file() is not export_failure
-    assert not (host_temp / "secret.txt").exists()
-    assert (host_temp / "standalone-startup-diagnostics/SHA256SUMS").is_file() is not export_failure
-    assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
-
-
-@pytest.mark.parametrize(
-    ("case", "heading"),
-    [
-        ("unprivileged", "== dmesg unprivileged (last 400 lines) =="),
-        ("unavailable", "UNAVAILABLE: unprivileged dmesg failed (see dmesg_restrict above)"),
-        ("credential", "withheld"),
-        ("no-scanner", "withheld"),
-    ],
-)
-def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, heading: str) -> None:
-    """Record kernel and memory state after a guest failure (#445), only past the shared credential scan.
-
-    Parameters:
-        tmp_path (Path): Disposable guest and host directories.
-        case (str): Kernel-log source, a planted credential, or a scanner that cannot run.
-        heading (str): Report text proving which path ran.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    ti = worktree / ".ci-temp"
-    (ti / "first-failure").write_text("47\n")
-    if case != "no-scanner":
-        shutil.copytree(
-            ROOT / "release/pi_release",
-            worktree / "release/pi_release",
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-    credential = "ghp_" + "A" * 36
-    stub_guest_state_commands(
-        tmp_path / "commands",
-        dmesg=case in {"unprivileged", "credential", "no-scanner"},
-        kernel=credential if case == "credential" else "",
-    )
-    host_temp = tmp_path / "host/temp"
-    (host_temp / "wsl2-diagnostics").mkdir(parents=True)
-    env |= {
-        "WSL_HOST_WORKSPACE": str(tmp_path / "host"),
-        "WSL_HOST_TEMP": str(host_temp),
-        "WSL_JOB_STATUS": "failure",
-        "PATH": f"{tmp_path / 'commands'}{os.pathsep}{env['PATH']}",
-    }
-    (ti / "tool-path").write_text(env["PATH"])
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 47
-    assert not worktree.exists()
-    exported = (host_temp / "wsl2-diagnostics/guest-state.txt").read_text()
-    assert heading in exported
-    assert "synthetic-sentinel" not in exported + result.stdout + result.stderr
-    assert credential not in exported + result.stdout + result.stderr
-    assert not (tmp_path / "sudo-calls").exists()
-    if heading != "withheld":
-        assert exported.startswith("WSL guest state at ")
-        assert exported.splitlines()[0].endswith(" (UTC): guest status 47, job status failure")
-        for section in ("/proc/meminfo", "/proc/swaps", "/proc/pressure/memory", "/proc/loadavg"):
-            assert f"== {section} ==" in exported
-        assert "== /proc/vmstat (swap, reclaim, OOM) ==" in exported
-    assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
-
-
-@pytest.mark.parametrize(
-    ("job_status", "collected"), [("cancelled", True), ("failure", True), ("success", False), ("", False)]
-)
-def test_job_status_alone_triggers_guest_state(tmp_path: Path, job_status: str, collected: bool) -> None:
-    """Collect after a timeout or cancel that killed the guest step before it wrote first-failure.
-
-    A green guest with a green job never reads the kernel log. The job status never changes the
-    capture's own exit status.
-
-    Parameters:
-        tmp_path (Path): Disposable guest and host directories.
-        job_status (str): The caller's `job.status`; empty when an older caller passes none.
-        collected (bool): Guest state is expected.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    shutil.copytree(
-        ROOT / "release/pi_release",
-        worktree / "release/pi_release",
-        ignore=shutil.ignore_patterns("__pycache__"),
-    )
-    marker = stub_guest_state_commands(tmp_path / "commands", dmesg=True)
-    host_temp = tmp_path / "host/temp"
-    (host_temp / "wsl2-diagnostics").mkdir(parents=True)
-    env |= {
-        "WSL_HOST_WORKSPACE": str(tmp_path / "host"),
-        "WSL_HOST_TEMP": str(host_temp),
-        "WSL_JOB_STATUS": job_status,
-        "PATH": f"{tmp_path / 'commands'}{os.pathsep}{env['PATH']}",
-    }
-    (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
-    command = ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"]
-    subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    assert not (worktree / ".ci-temp/first-failure").exists()
-    assert marker.exists() is collected
-    assert not (tmp_path / "sudo-calls").exists()
-    exported = host_temp / "wsl2-diagnostics/guest-state.txt"
-    assert exported.exists() is collected
-    if collected:
-        text = exported.read_text()
-        assert text.splitlines()[0].endswith(f" (UTC): guest status 0, job status {job_status}")
-        assert "== dmesg unprivileged (last 400 lines) ==" in text
-    assert "status 0" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
-
-
-def test_capture_does_not_publish_partial_startup_evidence(tmp_path: Path) -> None:
-    """Refuse a partial host copy before announcing uploadable startup evidence.
-
-    Parameters:
-        tmp_path (Path): Disposable guest and host directories.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    startup = worktree / ".ci-temp/standalone-startup-diagnostics"
-    startup.mkdir()
-    (startup / "SHA256SUMS").write_text("synthetic manifest\n")
-    host = tmp_path / "host"
-    host_temp = host / "temp"
-    host_temp.mkdir(parents=True)
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    (commands / "cp").write_text('#!/bin/sh\nprintf partial > "$3/partial"\nexit 92\n')
-    (commands / "cp").chmod(0o755)
-    env |= {
-        "WSL_HOST_WORKSPACE": str(host),
-        "WSL_HOST_TEMP": str(host_temp),
-        "PATH": f"{commands}{os.pathsep}{env['PATH']}",
-    }
-    (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh")],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1
-    assert not (host_temp / "standalone-startup-diagnostics").exists()
-    assert not list(host_temp.glob(".standalone-startup.*"))
-
-
-def test_capture_replaces_stale_node_snapshot(tmp_path: Path) -> None:
-    """Keep Node and standalone report trees distinct across guest renames.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    host = tmp_path / "host"
-    (host / "temp/wsl2-diagnostics").mkdir(parents=True)
-    env |= {"WSL_HOST_WORKSPACE": str(host), "WSL_HOST_TEMP": str(host / "temp")}
-    artifacts = worktree / "tests/integration/artifacts"
-    artifacts.mkdir()
-    (artifacts / "node.xml").write_text("Node report")
-    command = ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh")]
-    subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    artifacts.rename(worktree / "tests/integration/artifacts-node")
-    artifacts.mkdir()
-    (artifacts / "standalone.xml").write_text("Standalone report")
-    subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    assert not (host / "tests/integration/artifacts/node.xml").exists()
-    assert (host / "tests/integration/artifacts/standalone.xml").read_text() == "Standalone report"
-    assert (host / "tests/integration/artifacts-node/node.xml").read_text() == "Node report"
-
-
-@pytest.mark.parametrize("ambiguous_path", [False, True])
-def test_host_launcher_preserves_script_arguments_and_exit_status(
-    tmp_path: Path, ambiguous_path: bool
-) -> None:
-    """Prove host forwarding with a PowerShell argv stub, not a WSL runtime claim.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-        ambiguous_path (bool): Resolve a shadowing legacy Windows Bash first.
-    """
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    (commands / "pwsh").write_text(
-        '#!/bin/sh\ncase ";${MSYS2_ENV_CONV_EXCL:-};" in *";PI_BIN;"*) ;; *) exit 93 ;; esac\n'
-        'test "$PI_BIN" = /root/pi-harness-ci/pi-release/bin/pi || exit 94\n'
-        'printf "%s\\n" "$@" > "$ARGV_CAPTURE"\nexit 49\n'
-    )
-    (commands / "cygpath").write_text(
-        '#!/bin/sh\ncase "$2" in */ambiguous/bash) printf "%s" "$LEGACY_BASH" ;; '
-        '*) printf "%s" "$PI_CI_GIT_BASH" ;; esac\n'
-    )
-    for command in commands.iterdir():
-        command.chmod(0o755)
-    step = tmp_path / "step with spaces.sh"
-    original = b'printf "%s\\n" "unchanged guest script"\n'
-    step.write_bytes(original)
-    workspace = tmp_path / "host checkout"
-    arguments = tmp_path / "arguments.txt"
-    env = dict(os.environ) | {
-        "GITHUB_WORKSPACE": str(workspace),
-        "ARGV_CAPTURE": str(arguments),
-        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-        "PI_CI_GIT_BASH": r"C:\Program Files\Git\bin\bash.exe",
-        "LEGACY_BASH": r"C:\Windows\System32\bash.exe",
-        "PI_BIN": "/root/pi-harness-ci/pi-release/bin/pi",
-    }
-    if ambiguous_path:
-        ambiguous = tmp_path / "ambiguous"
-        ambiguous.mkdir()
-        (ambiguous / "bash").write_text("#!/bin/sh\nexit 97\n")
-        (ambiguous / "bash").chmod(0o755)
-        env["PATH"] = f"{ambiguous}{os.pathsep}{env['PATH']}"
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_host.sh"), str(step)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if ambiguous_path:
-        assert result.returncode == 1
-        assert "Refusing ambiguous Bash" in result.stderr
-        assert not arguments.exists()
-        return
-    assert result.returncode == 49
-    assert arguments.read_text().splitlines() == [
-        "-NoProfile",
-        "-File",
-        str(workspace / "scripts/wsl2_shell.ps1"),
-        str(step),
-    ]
-    assert step.read_bytes() == original
-
-
-def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:
-    """Retain missing-toolchain failure before attempting an ordinary script.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    (worktree / ".ci-temp/tool-path").unlink()
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_run.sh")], env=env, capture_output=True, text=True, check=False
-    )
-    assert result.returncode == 1
-    assert (worktree / ".ci-temp/first-failure").read_text() == "1\n"
-
-
-@pytest.mark.parametrize("script", ["wsl2_setup.sh", "wsl2_run.sh"])
-def test_guest_refuses_root_before_copy_or_gate(tmp_path: Path, script: str) -> None:
-    """Reject privileged execution rather than skipping permission-error tests.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-        script (str): Guest bootstrap or ordinary execution boundary.
-    """
-    worktree, env = guest_fixture(tmp_path)
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    (commands / "id").write_text("#!/bin/sh\nprintf '0\\n'\n")
-    (commands / "id").chmod(0o755)
-    env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
-    (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
-    Path(env["WSL_STEP_SCRIPT"]).write_text("echo unexpected-gate\n")
-    env["WSL_HOST_WORKSPACE"] = "/mnt/c/synthetic-checkout"
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts" / script)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1
-    assert "unprivileged Linux user" in result.stderr
-    assert "unexpected-gate" not in result.stdout
-
-
-@pytest.mark.parametrize("filesystem", ["drvfs", ""])
-def test_setup_refuses_non_linux_filesystem(tmp_path: Path, filesystem: str) -> None:
-    """Execute setup's mount refusal before any download or install.
-
-    Parameters:
-        tmp_path (Path): Disposable fixture directory.
-        filesystem (str): Unsupported findmnt result.
-    """
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    (commands / "cp").write_text("#!/bin/sh\nexit 0\n")
-    (commands / "findmnt").write_text(f"#!/bin/sh\nprintf '%s' '{filesystem}'\n")
-    (commands / "curl").write_text("#!/bin/sh\necho unexpected-download >&2\nexit 99\n")
-    # `timeout` is absent on some hosts; the bounds are not under test here.
-    (commands / "timeout").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')
-    for command in commands.iterdir():
-        command.chmod(0o755)
-    home = tmp_path / "home"
-    home.mkdir()
-    env = dict(os.environ) | {
-        "HOME": str(home),
-        "WSL_HOST_WORKSPACE": "/mnt/c/synthetic-checkout",
-        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-    }
-    result = subprocess.run(
-        ["/bin/bash", str(ROOT / "scripts/wsl2_setup.sh")],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1
-    assert "not on a Linux filesystem" in result.stderr
-    assert "unexpected-download" not in result.stderr
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:

@@ -1,4 +1,4 @@
-"""Exercise the shared guest process plumbing in `wsl2_exec.py`."""
+"""Exercise the CI process plumbing in `ci_process.py`."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from wsl2_exec import run_command, terminate
+from ci_process import run_command, terminate
 
 
 def test_run_command_passes_stdout_through_and_captures_on_request(tmp_path: Path) -> None:
@@ -72,6 +72,6 @@ def test_quiet_discards_stderr_and_start_failures_and_cwd_moves_the_child(
 
 
 def test_undecodable_output_is_kept_not_raised() -> None:
-    """Kernel logs and `/proc` text can hold arbitrary bytes; they survive as surrogates."""
+    """Undecodable command output survives as surrogates."""
     code = "import sys; sys.stdout.buffer.write(b'a\\xffb')"
     assert run_command([sys.executable, "-c", code], subprocess.run, capture=True) == (0, "a\udcffb")

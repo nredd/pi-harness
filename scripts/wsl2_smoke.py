@@ -25,7 +25,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from wsl2_exec import Runner, run_command
+from ci_process import Runner, run_command
 
 PRIVATE_TARGETS = (
     ("192.168.1.1", "80"),
