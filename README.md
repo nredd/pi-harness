@@ -226,6 +226,9 @@ The twelve jobs are the configured required checks of ruleset `main required che
 
 ## Core fork
 
+The selected core is `v1.3.0-nredd.13`, with GPT-6.2 Sol/Astra in its model catalog.
+See [releases](docs/releases.md) for the artifact and provenance details.
+
 - `forks/pi` is `nredd/pi` (integration branch `main`), a patch queue on an `earendil-works/pi` release tag. Inspect it
   with `git submodule status`; add the `upstream` remote by hand when rebasing the queue
 - A parent worktree does NOT isolate the submodule. Never `--force`, clean or discard inside it
@@ -240,8 +243,8 @@ The twelve jobs are the configured required checks of ruleset `main required che
   missing, and owns its private HOME/auth/tmp and offline environment through `harness.sandbox`.
   `make check-probes` still lints the whole probe directory and type-checks the other probes against
   the released host. The fork gate's non-rewriting
-  check mirrors the entire selected core script, including worktree readiness and binary-release
-  type checks; only Biome's `--write` is removed
+  check mirrors the entire selected core script, including worktree readiness and the binary-release
+  and fork-audit type checks; only Biome's `--write` is removed
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with
   upstream; each README records where it came from
 
