@@ -35,6 +35,10 @@ type Row = {
 const INTEGRATION = new URL("../integration/", import.meta.url);
 const OLD = "Old history to replace: 🦩";
 const SUMMARY = "Scripted replacement summary";
+const TURN_PREFIX = "Scripted turn prefix";
+const WRAPPED_SUMMARY =
+	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n" +
+	`${SUMMARY}\n\n---\n\n**Turn Context (split turn):**\n\n${TURN_PREFIX}\n</summary>`;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,6 +69,45 @@ function isRow(row: unknown): row is Row {
 		row.cache_markers.length === 0
 	);
 }
+
+// A valid first parent row; change one field at a time so another guard can't mask a regression.
+const validRow: Row = {
+	session: "parent",
+	synthetic: { usage: "faux, not reported" },
+	measurement: "utf8_sdk_context_bytes",
+	model: "ledger",
+	tool_array_sha256: "ab".repeat(32),
+	token_estimates: null,
+	request_bytes: 20,
+	buckets: { shared: 0, serialization_overhead: 20 },
+	common_prefix_previous_bytes: null,
+	common_prefix_parent_bytes: null,
+	cache_markers: [],
+};
+
+it.each([
+	["null row", null],
+	["unexpected session", { ...validRow, session: "peer" }],
+	["missing synthetic object", { ...validRow, synthetic: undefined }],
+	["reported usage", { ...validRow, synthetic: { usage: "reported" } }],
+	["wire measurement", { ...validRow, measurement: "utf8_wire_bytes" }],
+	["missing model", { ...validRow, model: undefined }],
+	["non-string hash", { ...validRow, tool_array_sha256: [validRow.tool_array_sha256] }],
+	["short hash", { ...validRow, tool_array_sha256: "a".repeat(63) }],
+	["non-hex hash", { ...validRow, tool_array_sha256: "g".repeat(64) }],
+	["reported tokens", { ...validRow, token_estimates: 1 }],
+	["negative request bytes", { ...validRow, request_bytes: -1 }],
+	["string request bytes", { ...validRow, request_bytes: "20" }],
+	["array buckets", { ...validRow, buckets: [20] }],
+	["fractional bucket bytes", { ...validRow, buckets: { shared: 0, serialization_overhead: 19.5 } }],
+	["unsafe previous prefix bytes", { ...validRow, common_prefix_previous_bytes: Number.MAX_SAFE_INTEGER + 1 }],
+	["missing parent prefix bytes", { ...validRow, common_prefix_parent_bytes: undefined }],
+	["non-array cache markers", { ...validRow, cache_markers: "" }],
+	["nonempty cache markers", { ...validRow, cache_markers: [{ path: ["tools", 0], bytes_through_block: 20 }] }],
+] as const)("rejects a malformed SDK ledger row: %s", (_label, row) => {
+	expect(isRow(validRow)).toBe(true);
+	expect(isRow(row)).toBe(false);
+});
 
 /** Call the same byte partitioner as the wire scenario, in one batch and without extra dependencies. */
 function measure(captures: Capture[]): Row[] {
@@ -151,6 +194,40 @@ it("normalizes escaped and resolved sandbox paths and timing in any position", (
 	);
 });
 
+it("normalizes only Agent tool result elapsed time and preserves result data", () => {
+	const agentResult = {
+		role: "toolResult",
+		toolName: "Agent",
+		timestamp: 8,
+		details: { durationMs: 1420, child: "ledger-child", data: { durationMs: 7 } },
+		content: [
+			{ type: "text", text: "Agent completed in 1.42s\nChild answer" },
+			{ type: "image", data: "fixture", mimeType: "image/png" },
+		],
+	};
+	const otherResult = {
+		role: "toolResult",
+		toolName: "read",
+		details: { durationMs: 15 },
+		content: [{ type: "text", text: "Agent completed in 2.5s" }],
+	};
+	const user = { role: "user", toolName: "Agent", content: [{ type: "text", text: "Agent completed in 3.0s" }] };
+	const raw = JSON.stringify({ model: "ledger", messages: [agentResult, otherResult, user] });
+	expect(JSON.parse(normalize(raw, "/fixture", "/private/fixture"))).toEqual({
+		model: "ledger",
+		messages: [
+			{
+				role: "toolResult",
+				toolName: "Agent",
+				details: { child: "ledger-child", data: { durationMs: 7 } },
+				content: [{ type: "text", text: "Agent completed in 0.0s\nChild answer" }, agentResult.content[1]],
+			},
+			otherResult,
+			user,
+		],
+	});
+});
+
 /** Drive a real foreground `Agent` call and a manual compaction with a faux summary. */
 async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }> {
 	const home = await isolateStackHome();
@@ -194,7 +271,7 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 		await session.prompt(OLD);
 		h.setResponses([parent(fauxAssistantMessage("Keep this turn"))]);
 		await session.prompt("Recent history");
-		h.setResponses([parent(fauxAssistantMessage(SUMMARY)), parent(fauxAssistantMessage("Scripted turn prefix"))]);
+		h.setResponses([parent(fauxAssistantMessage(SUMMARY)), parent(fauxAssistantMessage(TURN_PREFIX))]);
 		expect((await session.compact()).summary).toContain(SUMMARY);
 		expect(h.getPendingResponseCount()).toBe(0);
 
@@ -267,7 +344,12 @@ it("accounts for compacted history and the actual spawned child's registry", asy
 		expect(original[1]?.raw).toContain(OLD);
 		expect(original[4]?.raw).not.toContain(OLD);
 		expect(original[4]?.raw).toContain(SUMMARY);
-		expect(rows[4]?.buckets.compaction_summary).toBe(204);
+		// Pin the core wrapper and split-turn text independently of the captured request.
+		// The bucket includes JSON escapes (e.g. `\\n`) but not the enclosing quotes.
+		const summaryBytes = Buffer.byteLength(JSON.stringify(WRAPPED_SUMMARY).slice(1, -1));
+		expect(rows[4]?.buckets.compaction_summary, "escaped compaction summary text, excluding JSON quotes").toBe(
+			summaryBytes,
+		);
 		expect(rows[4]?.buckets["tool:Agent:owner:inline"]).toBeGreaterThan(0);
 		expect(rows[5]?.buckets["tool:read:owner:builtin"]).toBeGreaterThan(0);
 		expect(rows[5]?.buckets["tool:SubagentWorkflow:owner:sdk"]).toBeGreaterThan(0);
