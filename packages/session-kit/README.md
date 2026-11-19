@@ -44,9 +44,20 @@ and memory labels state their measurement basis) are in
 
 ## Install and config
 
+After `0.12.0` is published, install the release with:
+
 ```sh
-pi install npm:@nredd/pi-session-kit
+pi install npm:@nredd/pi-session-kit@0.12.0
 ```
+
+This release exports compact v3 snapshots and still imports v1/v2. Update portable exporter
+pins only after publication, using the published tarball's SHA-256; stack promotion and
+exporter deployment are separate from this release preparation.
+
+`0.12.0` adds the host-supplied `@earendil-works/pi-ai` peer. Current-rate estimates need
+its `estimateTokenCost` export (core `v1.3.0-nredd.12`); older hosts without it retain
+recorded costs and show unknown estimates. This remains a pre-1.0 minor release, not a
+requirement to upgrade the host for existing tools.
 
 Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
 

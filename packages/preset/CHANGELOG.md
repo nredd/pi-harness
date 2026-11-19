@@ -7,6 +7,10 @@
 - Restore the `architect` routing hint, cost-ranked survey cards, `shortcut:` decisions, large-repo scoping, grill format and survey length limit. Keep the preset's intentional `codebase-design` preload (the local definition had `skills: false`). ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 - Document that `general-purpose` no longer runs critics; the parent owns the final critic review. ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 
+### Fixed
+
+- Remove claimed scratch before handback or after merge. For symlinks, check the resolved parent plus link name and unlink only the link. Keep worktrees with ignored files. ([#1024](https://github.com/nredd/pi-harness/issues/1024))
+
 ## [0.5.0] - 2026-11-18
 
 ### Changed
