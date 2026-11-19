@@ -1,7 +1,10 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonitorError, MonitorManager } from "../../src/monitor/manager.ts";
+import { MATCH_TIMEOUT_MS } from "../../src/monitor/matcher.ts";
 import { type SpawnOptions, spawnMonitor } from "../../src/monitor/process.ts";
 import type { MonitorMessage } from "../../src/monitor/types.ts";
 import { alive, tempDir, waitFor } from "../fixtures/monitor/helpers.ts";
@@ -15,28 +18,94 @@ const node = (code: string) => ["node", "-e", code];
 /** A group leader with an in-group descendant (its pid is the first output line) that outlives only while this worker does. */
 const WITH_DESCENDANT = ["sh", "-c", `(${STAY_SH}) & echo $!; wait`];
 
-function make(spawn = spawnMonitor): MonitorManager {
+function make(): MonitorManager {
 	return new MonitorManager({
 		sessionId: "sess-1",
 		root: tmp.dir,
 		coalesceMs: 80,
 		killGraceMs: 300,
 		send: (m) => sent.push(m),
-		spawnMonitor: spawn,
 	});
 }
 
-beforeEach(() => {
-	tmp = tempDir();
-	sent = [];
-	mgr = make();
-});
-afterEach(async () => {
-	await mgr.dispose();
-	tmp.cleanup();
+const matchReplies = vi.hoisted(() => ({ suppress: false }));
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return {
+		...actual,
+		spawn: (...args: Parameters<typeof actual.spawn>) => {
+			const child = actual.spawn(...args);
+			if (Array.isArray(args[2]?.stdio) && args[2].stdio.includes("ipc")) {
+				const emit = child.emit.bind(child);
+				child.emit = (event: string | symbol, ...values: unknown[]) => {
+					// Suppress only match replies, not the readiness handshake or exit/close events.
+					if (matchReplies.suppress && event === "message" && typeof values[0] === "boolean") return true;
+					return emit(event, ...values);
+				};
+			}
+			return child;
+		},
+	};
 });
 
+it("lets the parent advance two turns while a pathological match is pending", async () => {
+	const tmp = tempDir();
+	const sent: MonitorMessage[] = [];
+	const clock = new FakeClock();
+	const coalesceMs = 80;
+	let onStdout: SpawnOptions["onStdout"] | undefined;
+	const mgr = new MonitorManager({
+		sessionId: "sess-1",
+		root: tmp.dir,
+		coalesceMs,
+		killGraceMs: 300,
+		clock,
+		send: (m) => sent.push(m),
+		spawnMonitor: (argv, options) => {
+			onStdout = options.onStdout;
+			return spawnMonitor(argv, options);
+		},
+	});
+	try {
+		const info = await mgr.start({ argv: node(STAY), name: "bad", match: "^(a+)+$|^a+!$" }, tmp.dir);
+		if (!onStdout) throw new Error("Monitor did not register a stdout handler");
+		// Warm up the matcher so the pathological line is dispatched, not waiting for worker startup.
+		await onStdout(Buffer.from("ready\n"));
+		clock.advance(coalesceMs);
+		// Hold replies and deadlines so host scheduling cannot shorten the observation window.
+		matchReplies.suppress = true;
+		const ingested = onStdout(Buffer.from(`${"a".repeat(26)}!\n`));
+		let pendingTurns = 0;
+		for (let turn = 0; turn < 2; turn++) {
+			await setImmediate();
+			// The second regex alternative makes an inline or deferred parent-side match count immediately.
+			const state = mgr.info(info.id);
+			if (state?.lines === 2 && state.matches === 0) pendingTurns++;
+		}
+		expect(pendingTurns).toBe(2);
+		// Expire the withheld reply and deliver the conservative wake using the virtual clock.
+		clock.advance(MATCH_TIMEOUT_MS + coalesceMs);
+		await ingested;
+		expect(sent[0]).toMatchObject({ wake: true, details: { matched: [2] } });
+		await mgr.dispose();
+		expect(alive(info.pid)).toBe(false);
+	} finally {
+		matchReplies.suppress = false;
+		await mgr.dispose();
+		tmp.cleanup();
+	}
+}, 15_000);
+
 describe("MonitorManager", () => {
+	beforeEach(() => {
+		tmp = tempDir();
+		sent = [];
+		mgr = make();
+	});
+	afterEach(async () => {
+		await mgr.dispose();
+		tmp.cleanup();
+	});
 	it("keeps passive output only in the readable ring buffer", async () => {
 		const info = await mgr.start({ argv: node(`console.log("one");console.log("two");${STAY}`), name: "w" }, tmp.dir);
 		await waitFor(() => (mgr.read(info.id)?.lines.length ?? 0) === 2);
@@ -88,26 +157,6 @@ describe("MonitorManager", () => {
 		expect(sent[0]?.wake).toBe(true);
 		expect(sent[0]?.details.matched).toEqual([2]);
 	});
-
-	it("returns from stdout handling before pathological matching completes", async () => {
-		let onStdout: SpawnOptions["onStdout"] | undefined;
-		await mgr.dispose();
-		mgr = make((argv, options) => {
-			onStdout = options.onStdout;
-			return spawnMonitor(argv, options);
-		});
-		const info = await mgr.start({ argv: node(STAY), name: "bad", match: "^(a+)+$|^a+!$" }, tmp.dir);
-		if (!onStdout) throw new Error("Monitor did not register a stdout handler");
-		const ingested = onStdout(Buffer.from(`${"a".repeat(26)}!\n`));
-		// The first alternative backtracks; the second matches even without the fail-open timeout.
-		// Inspect this turn: an inline regex would already have counted the match.
-		expect(mgr.info(info.id)).toMatchObject({ lines: 1, matches: 0 });
-		await ingested;
-		await waitFor(() => sent.length > 0, 10_000);
-		expect(sent[0]?.wake).toBe(true);
-		await mgr.dispose();
-		expect(alive(info.pid)).toBe(false);
-	}, 15_000);
 
 	it("disposes while a full-length pathological line is still being matched", async () => {
 		const info = await mgr.start(
