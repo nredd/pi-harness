@@ -377,7 +377,7 @@ def test_async_helper_is_independently_measured_at_zero() -> None:
     assert "--config vitest.async.config.ts --coverage" in manifest["scripts"]["test:async"]
 
 
-@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu")])
 def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, host: str) -> None:
     """Reject missing selected-host artifacts instead of reporting a false zero.
 
@@ -436,7 +436,7 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     )
 
 
-@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu")])
 def test_subagents_runtime_scripts_missing_host_report_fails(
     tmp_path: Path, runner_os: str, host: str
 ) -> None:
@@ -623,10 +623,8 @@ def test_unaudited_languages_are_owned_pending_or_tracked_unmeasured() -> None:
 
 
 INERT_BY_DECISION = {
-    ".github/actions/capture-ci-wsl/action.yml",
     ".github/actions/report-plan/action.yml",
     ".github/actions/setup-ci-tools/action.yml",
-    ".github/actions/setup-ci-wsl/action.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/forks.yml",
     ".github/workflows/installer.yml",
@@ -635,7 +633,6 @@ INERT_BY_DECISION = {
     ".github/workflows/publish.yml",
     ".github/workflows/runner-rescue.yml",
     ".github/workflows/runner-smoke.yml",
-    ".github/workflows/wsl-watchdog.yml",
     "Makefile",
     "tests/integration/Makefile",
     "packages/computer-use/Makefile",

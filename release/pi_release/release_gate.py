@@ -20,10 +20,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
 from pi_release.promotion import SHA_PATTERN, EvidenceError, run_command
 
 LOGGER = logging.getLogger(__name__)
-SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")
+SYSTEMS = ("ubuntu-24.04", "macos-14")
 # One `ci.yml` step per owned gate. Each `owned (<os>)` check is a fan-in over `owned shard (<os>, <shard>)`
-# jobs, and `scripts/ci_paths.py` `OWNED_SHARDS` plans which gates each shard runs: native cells run the
-# Python suites; WSL keeps only the LCOV producers.
+# jobs, and `scripts/ci_paths.py` `OWNED_SHARDS` plans which gates each shard runs.
 # Tests pin both tables to the plan and the step names to `ci.yml`.
 OWNED_GATE_STEPS = {
     "check-ts": "Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)",
@@ -31,9 +30,6 @@ OWNED_GATE_STEPS = {
     "check-integration": (
         "Owned gate check-integration (ruff, ty, pytest integration units, probes, providers)"
     ),
-    "check-probes": "Owned gate check-probes (WSL LCOV producer)",
-    "check-providers": "Owned gate check-providers (WSL LCOV producer)",
-    "check-import-audit": "Owned gate check-import-audit (WSL LCOV producer)",
 }
 OWNED_SHARDS = {
     "ubuntu-24.04": {
@@ -48,10 +44,6 @@ OWNED_SHARDS = {
         "ts": ("check-ts",),
         "scripts": ("check-scripts",),
         "python": ("check-integration",),
-    },
-    "wsl2": {
-        "subagents-computer-use": ("check-ts",),
-        "ts": ("check-ts", "check-probes", "check-providers", "check-import-audit"),
     },
 }
 # The fan-in proves every shard succeeded, then accounts for the merged coverage reports.
@@ -68,8 +60,7 @@ CONTRACT_STEPS = (
 )
 STACK_STEP = "Assembled D and E boundaries (explicit stack, no machine config)"
 STARTUP_STEP = "Strict standalone startup with failure-only diagnostics"
-# Cells that run a stack, as (system, stack, standalone platform). Every other stack cell is a
-# required-check name with no work behind it (`STACK_NOT_RUN` in `scripts/ci_paths.py`) and is never evidence.
+# Cells that run a stack, as (system, stack, standalone platform).
 STACK_CELLS = (
     ("ubuntu-24.04", "personal", "linux-x64"),
     ("ubuntu-24.04", "local", "linux-x64"),
@@ -182,7 +173,7 @@ def expected_artifacts() -> dict[str, str]:
 def validate_execution(
     source_sha: str, run: dict[str, Any], jobs: list[dict[str, Any]], artifacts: list[dict[str, Any]]
 ) -> int:
-    """Validate one exact dispatch, never a PR run or selective main-push smoke.
+    """Validate one exact dispatch, never a PR or ordinary main run.
 
     Parameters:
         source_sha (str): Frozen combined candidate commit.
