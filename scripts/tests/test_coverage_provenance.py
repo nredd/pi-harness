@@ -64,6 +64,10 @@ def test_bad_provenance_is_unavailable(tmp_path: Path, zipped: bool, data: bytes
         tmp_path (Path): Artifact download directory.
         zipped (bool): Read a ZIP instead of an already-unpacked artifact.
         data (bytes | None): Malformed or missing sidecar.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
     """
     manifest = tmp_path / "plan.json"
     manifest.write_text(json.dumps({HOST: plan()}))
@@ -93,6 +97,10 @@ def set_run_env(monkeypatch: pytest.MonkeyPatch, job: str) -> None:
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Environment fixture.
         job (str): Current job key.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
     """
     for key, value in {
         "GITHUB_REPOSITORY": "example/repo",
@@ -114,6 +122,10 @@ def test_producer_fan_in_refuses_old_and_missing_shards(
     Parameters:
         tmp_path (Path): Download and producer output directory.
         monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
     """
     downloads = tmp_path / "downloads"
     shard = f"{CELL}-ts"
@@ -148,6 +160,10 @@ def test_non_pr_record_uses_null_pr_head(tmp_path: Path, monkeypatch: pytest.Mon
         tmp_path (Path): Output directory.
         monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
         event (str): Non-PR event.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
     """
     set_run_env(monkeypatch, "owned-ubuntu")
     monkeypatch.setenv("GITHUB_EVENT_NAME", event)
@@ -172,6 +188,10 @@ def test_zip_cannot_take_provenance_from_unpacked_artifact(tmp_path: Path) -> No
 
     Parameters:
         tmp_path (Path): Download directory.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
     """
     sidecar = tmp_path / CELL / "coverage/provenance.json"
     sidecar.parent.mkdir(parents=True)
@@ -193,6 +213,10 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     Parameters:
         tmp_path (Path): Artifact directory.
         monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
     """
     set_run_env(monkeypatch, "owned-ubuntu")
     output = tmp_path / "provenance.json"
@@ -213,7 +237,15 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_ci_wires_receipts_to_existing_uploads() -> None:
-    """Keep each producer's receipt beside the report, not in a separate artifact."""
+    """Keep each producer's receipt beside the report, not in a separate artifact.
+
+    Parameters:
+        None.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     for job in report.OWNED_JOBS.values():
         steps = jobs[job]["steps"]
