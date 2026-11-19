@@ -1008,20 +1008,6 @@ def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate(os_name: st
         assert (guest in skipped) == (gate not in ci_paths.OWNED_GATES[os_name])
 
 
-def pool_runs_on(name_format: str, args: str) -> str:
-    """Return the `runs-on` expression of a cell that a self-hosted pool may take.
-
-    Parameters:
-        name_format (str): The check name's `format` string, e.g. `contracts ({0})`.
-        args (str): The matrix arguments it formats.
-
-    Returns:
-        str: A bypass cell runs hosted; a running one on the plan's pool, else its matrix's runner.
-    """
-    cell = f"fromJSON(needs.classify.outputs.plan || '{{}}')[format('{name_format}', {args})]"
-    return f"${{{{ !{cell}.run && 'ubuntu-24.04' || {cell}.runner || matrix.runner }}}}"
-
-
 @pytest.mark.parametrize("name", ["contracts", "stack"])
 def test_shared_guest_matrix(name: str) -> None:
     """Only the native platforms expand outside PRs; the shell stays Bash."""
