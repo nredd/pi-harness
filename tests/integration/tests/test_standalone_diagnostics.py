@@ -992,24 +992,13 @@ def test_cli_verify_reproducible(
     assert diag.main() == status
 
 
-def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
-    """Require a second identical build, verified before `PI_BIN` is exported or any stack runs."""
+def test_workflow_wires_the_verified_standalone_builder() -> None:
+    """Pass the matrix platform to the measured builder, and keep its verification receipt."""
     workflow = yaml.safe_load((Path(__file__).parents[3] / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["stack"]["steps"]
-    run = next(step for step in steps if step.get("id") == "build")["run"]
-    # One wrapped function invoked twice: both builds share argv and tee their logs under pipefail.
-    assert run.count("./scripts/build-binaries.sh --skip-install --offline-model-data") == 1
-    assert run.count("\nbuild_standalone\n") == 1
-    assert "build_standalone || { keep_first_build; exit 1; }" in run
-    assert run.index("build_standalone || ") < run.index("\nbuild_standalone\n")
-    assert 'PATH="$evidence/bin:$PATH"' in run
-    assert "set -o pipefail" in run
-    assert 'cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"' in run
-    assert run.index("cmp ") < run.index("verify-reproducible")
-    assert "--skip-build" not in run
-    assert "verify-reproducible" in run
-    assert "standalone-pi.sha256" in run
-    assert run.index("verify-reproducible") < run.index('echo "PI_BIN=')
+    build = next(step for step in steps if step.get("id") == "build")
+    assert build["env"]["PLATFORM"] == "${{ matrix.platform }}"
+    assert build["run"] == 'tests/integration/.venv/bin/python scripts/ci_standalone.py "$PLATFORM"'
     upload = next(
         step
         for step in steps
