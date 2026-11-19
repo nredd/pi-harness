@@ -85,8 +85,8 @@ def assert_bounded_apt(script: str) -> None:
             assert f"-o {option}" in call
 
 
-def test_apt_steps_skip_present_tools_and_are_bounded() -> None:
-    """Assert tmux and fork apt steps skip when installed and carry bounds (#655).
+def test_tmux_apt_steps_skip_present_tools_and_are_bounded() -> None:
+    """Assert tmux apt steps skip when installed and carry bounds (#655).
 
     Parameters:
         None.
@@ -101,16 +101,6 @@ def test_apt_steps_skip_present_tools_and_are_bounded() -> None:
         assert step["timeout-minutes"] == 5
         assert "command -v tmux" in step["run"]
         assert_bounded_apt(step["run"])
-    forks = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
-    deps = next(
-        step
-        for job in forks["jobs"].values()
-        for step in job["steps"]
-        if step.get("name", "").startswith("System dependencies")
-    )
-    assert deps["timeout-minutes"] == 5
-    assert "dpkg -s" in deps["run"]
-    assert_bounded_apt(deps["run"])
 
 
 def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> None:

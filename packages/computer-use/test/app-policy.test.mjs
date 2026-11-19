@@ -1,8 +1,8 @@
 // Blocked apps (`app_blocked`) and locked sessions (`screen_locked`) fail closed (nredd/pi-harness#646).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, test } from "vitest";
 
 const ENV = "PI_COMPUTER_USE_BLOCKED_APPS";
@@ -20,15 +20,11 @@ afterEach(() => {
 test("blocked_apps config: defaults, user JSON, env and the always-blocked system agents", async ({
 	onTestFinished,
 }) => {
-	const {
-		DEFAULT_BLOCKED_APPS,
-		ALWAYS_BLOCKED_BUNDLE_IDS,
-		loadComputerUseConfig,
-		isBlockedBundleId,
-		effectiveBlockedBundleIds,
-	} = await import("../src/config.ts");
+	const { DEFAULT_BLOCKED_APPS, ALWAYS_BLOCKED_BUNDLE_IDS, loadComputerUseConfig, isBlockedBundleId } = await import(
+		"../src/config.ts"
+	);
 	assert.deepEqual([...ALWAYS_BLOCKED_BUNDLE_IDS], SYSTEM_AGENTS);
-	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
+	const agentDir = makeTestTempDir("cu-agent-", onTestFinished);
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	onTestFinished(() => {
@@ -37,7 +33,7 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 	});
 	mkdirSync(path.join(agentDir, "extensions"));
 	const userFile = path.join(agentDir, "extensions", "pi-computer-use.json");
-	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
+	const cwd = makeTestTempDir("cu-policy-", onTestFinished);
 	const load = () => loadComputerUseConfig(cwd);
 	const list = () => load().config.blocked_apps;
 
@@ -94,7 +90,7 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 
 test("blocked_apps: invalid entries are a config error that keeps the defaults", async ({ onTestFinished }) => {
 	const { DEFAULT_BLOCKED_APPS, loadComputerUseConfig } = await import("../src/config.ts");
-	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
+	const agentDir = makeTestTempDir("cu-agent-", onTestFinished);
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	onTestFinished(() => {
@@ -103,7 +99,7 @@ test("blocked_apps: invalid entries are a config error that keeps the defaults",
 	});
 	mkdirSync(path.join(agentDir, "extensions"));
 	const userFile = path.join(agentDir, "extensions", "pi-computer-use.json");
-	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
+	const cwd = makeTestTempDir("cu-policy-", onTestFinished);
 	for (const bad of [
 		[{ id: "com.example.Vault" }],
 		[123],
@@ -125,14 +121,14 @@ test("blocked_apps: invalid entries are a config error that keeps the defaults",
 
 test("project config can only add to blocked_apps, never remove", async ({ onTestFinished }) => {
 	const { DEFAULT_BLOCKED_APPS, loadComputerUseConfig, isBlockedBundleId } = await import("../src/config.ts");
-	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
+	const agentDir = makeTestTempDir("cu-agent-", onTestFinished);
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	onTestFinished(() => {
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousDir;
 	});
-	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
+	const cwd = makeTestTempDir("cu-policy-", onTestFinished);
 	mkdirSync(path.join(cwd, ".pi"));
 	const projectFile = path.join(cwd, ".pi", "computer-use.json");
 	const list = () => loadComputerUseConfig(cwd).config.blocked_apps;
@@ -410,7 +406,7 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 		},
 	});
 	const ctx = {
-		cwd: mkdtempSync(path.join(os.tmpdir(), "cu-policy-")),
+		cwd: makeTestTempDir("cu-policy-", onTestFinished),
 		hasUI: false,
 		ui: { notify() {} },
 		sessionManager: { getBranch: () => [] },
@@ -527,7 +523,7 @@ test.skipIf(process.platform !== "darwin")(
 			macosHelper.command = command;
 		});
 		process.env[ENV] = "com.example.Vault";
-		loadComputerUseConfig(mkdtempSync(path.join(os.tmpdir(), "cu-policy-")));
+		loadComputerUseConfig(makeTestTempDir("cu-policy-", onTestFinished));
 		const { effectiveBlockedBundleIds } = await import("../src/config.ts");
 		const expected = effectiveBlockedBundleIds();
 		assert.ok(SYSTEM_AGENTS.every((id) => expected.includes(id)) && expected.includes("com.example.Vault"));
@@ -578,7 +574,7 @@ test("macOS act and actBatch send the effective blocklist so coordinate input is
 		macosHelper.command = command;
 	});
 	process.env[ENV] = "com.example.Vault";
-	loadComputerUseConfig(mkdtempSync(path.join(os.tmpdir(), "cu-policy-")));
+	loadComputerUseConfig(makeTestTempDir("cu-policy-", onTestFinished));
 	const sent = [];
 	macosHelper.command = async (name, args) => {
 		sent.push({ name, args });

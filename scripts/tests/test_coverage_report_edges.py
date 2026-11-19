@@ -31,7 +31,15 @@ def test_unsafe_source_paths_are_display_only(path: str) -> None:
         AssertionError: The boundary contract regresses.
     """
     file = report.File("pkg/primary", path, report.Counters.parse({"lines": 1, "uncovered_lines": 0}))
-    provenance = report.Provenance("example/repo", "a" * 40, "b" * 40, 1, 1)
+    provenance = report.Provenance(
+        "example/repo",
+        "a" * 40,
+        "b" * 40,
+        1,
+        1,
+        "pull_request",
+        "example/repo/.github/workflows/ci.yml@refs/pull/1/merge",
+    )
     assert report.source_link(file, (), provenance) == report.escape(path)
 
 
@@ -60,7 +68,15 @@ def test_source_url_uses_trusted_root_and_tested_sha() -> None:
             "source_root": "packages/pkg",
         },
     )
-    provenance = report.Provenance("example/repo", "a" * 40, "b" * 40, 1, 1)
+    provenance = report.Provenance(
+        "example/repo",
+        "a" * 40,
+        "b" * 40,
+        1,
+        1,
+        "pull_request",
+        "example/repo/.github/workflows/ci.yml@refs/pull/1/merge",
+    )
     link = report.source_link(file, (signal,), provenance)
     assert f"https://github.com/example/repo/blob/{'b' * 40}/packages/pkg/src/%40owner%28x%29.py" in link
     assert "@owner" not in link
@@ -107,7 +123,19 @@ def test_invalid_manifest_host(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({"../../escape": {}}))
     with pytest.raises(ValueError, match=r"^Invalid evidence host$"):
-        report.load_evidence(tmp_path, path)
+        report.load_evidence(
+            tmp_path,
+            path,
+            report.Provenance(
+                "example/repo",
+                "a" * 40,
+                "b" * 40,
+                1,
+                1,
+                "pull_request",
+                "example/repo/.github/workflows/ci.yml@refs/pull/1/merge",
+            ),
+        )
 
 
 def test_zip_expanded_byte_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,6 +181,10 @@ def test_cli_without_badges(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         str(manifest),
         "--repository",
         "example/repo",
+        "--event-name",
+        "pull_request",
+        "--workflow-ref",
+        "example/repo/.github/workflows/ci.yml@refs/pull/1/merge",
         "--head-sha",
         "a" * 40,
         "--tested-sha",
