@@ -90,7 +90,15 @@ def test_real_fan_in_counts(host: str) -> None:
         },
     }
     cell = report.Evidence.parse(host, declaration, summary)
-    provenance = report.Provenance("nredd/pi-harness", HEAD, HEAD, 44104072624, 1)
+    provenance = report.Provenance(
+        "nredd/pi-harness",
+        None,
+        HEAD,
+        44104072624,
+        1,
+        "workflow_dispatch",
+        "nredd/pi-harness/.github/workflows/ci.yml@refs/heads/main",
+    )
     rendered = report.render_markdown((cell,), provenance)
     assert len(rendered) <= 60_000
     assert f"{enforced}/{enforced} zero uncovered" in rendered

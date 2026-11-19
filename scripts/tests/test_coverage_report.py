@@ -20,7 +20,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
 
-PROVENANCE = report.Provenance("example/repository", "a" * 40, "b" * 40, 123, 2)
+PROVENANCE = report.Provenance(
+    "example/repository",
+    "a" * 40,
+    "b" * 40,
+    123,
+    2,
+    "pull_request",
+    "example/repository/.github/workflows/ci.yml@refs/pull/1/merge",
+)
 
 
 def document() -> dict[str, Any]:
@@ -320,7 +328,11 @@ def test_deterministic_ordering_and_bounded_whole_rows() -> None:
     with pytest.raises(ValueError, match=r"^Essential report state exceeds Markdown limit$"):
         report.render_markdown(
             (current, replace(current, host="wsl2"), replace(current, host="macos-14")),
-            replace(PROVENANCE, repository="x" * 300 + "/repo"),
+            replace(
+                PROVENANCE,
+                repository="x" * 300 + "/repo",
+                workflow_ref="x" * 300 + "/repo/.github/workflows/ci.yml@refs/pull/1/merge",
+            ),
             limit=1000,
         )
 
@@ -684,11 +696,13 @@ def test_load_json_zip_states_and_cli(tmp_path: Path) -> None:
     """
     manifest = tmp_path / "plan.json"
     manifest.write_text(json.dumps({"ubuntu-24.04": plan()}))
-    assert report.load_evidence(tmp_path, manifest)[0].state == "unavailable"
+    assert report.load_evidence(tmp_path, manifest, PROVENANCE)[0].state == "unavailable"
     artifact = tmp_path / "coverage-ubuntu-24.04/coverage/summary.json"
     artifact.parent.mkdir(parents=True)
     artifact.write_text(json.dumps(document()))
-    summary = report.load_evidence(tmp_path, manifest)[0].summary
+    receipt = json.dumps(PROVENANCE.record("owned", "coverage-ubuntu-24.04"))
+    artifact.with_name("provenance.json").write_text(receipt)
+    summary = report.load_evidence(tmp_path, manifest, PROVENANCE)[0].summary
     assert summary is not None
     assert summary.packages["pkg/primary"].values[0] == (
         "lines",
@@ -698,9 +712,10 @@ def test_load_json_zip_states_and_cli(tmp_path: Path) -> None:
     zipped = tmp_path / "coverage-ubuntu-24.04.zip"
     with zipfile.ZipFile(zipped, "w") as archive:
         archive.writestr("coverage/summary.json", json.dumps(document()))
-    assert report.load_evidence(tmp_path, manifest)[0].state == "available"
+        archive.writestr("coverage/provenance.json", receipt)
+    assert report.load_evidence(tmp_path, manifest, PROVENANCE)[0].state == "available"
     manifest.write_text(json.dumps({"ubuntu-24.04": plan("pending")}))
-    assert report.load_evidence(tmp_path, manifest)[0].summary is None
+    assert report.load_evidence(tmp_path, manifest, PROVENANCE)[0].summary is None
     args = [
         "--artifacts",
         str(tmp_path),
@@ -708,6 +723,10 @@ def test_load_json_zip_states_and_cli(tmp_path: Path) -> None:
         str(manifest),
         "--repository",
         "example/repository",
+        "--event-name",
+        "pull_request",
+        "--workflow-ref",
+        "example/repository/.github/workflows/ci.yml@refs/pull/1/merge",
         "--head-sha",
         "a" * 40,
         "--tested-sha",
@@ -725,7 +744,24 @@ def test_load_json_zip_states_and_cli(tmp_path: Path) -> None:
     assert "pending" in (tmp_path / "report.md").read_text()
     assert (tmp_path / "badges/ubuntu-24.04.svg").is_file()
     assert report.main([*args, "--baseline-artifacts", str(tmp_path)]) == 1
-    assert report.main([*args, "--baseline-artifacts", str(tmp_path), "--baseline-plan", str(manifest)]) == 0
+    assert (
+        report.main(
+            [
+                *args,
+                "--baseline-artifacts",
+                str(tmp_path),
+                "--baseline-plan",
+                str(manifest),
+                "--baseline-identity",
+                "c" * 40,
+                "124",
+                "1",
+                "push",
+                "example/repository/.github/workflows/ci.yml@refs/heads/main",
+            ]
+        )
+        == 0
+    )
     manifest.write_text("broken")
     assert report.main(args) == 1
     completed = subprocess.run(

@@ -45,13 +45,15 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     assert "cargo clippy --locked --all-targets" in commands
     assert "rust-coverage.mjs --crate windows --output" in commands
     assert "test/windows-build-scripts.test.mjs" in commands
-    assert not any(step.get("continue-on-error") for step in steps)
+    assert [step["name"] for step in steps if step.get("continue-on-error")] == [
+        "Record Windows native coverage provenance"
+    ]
     upload = next(
         step for step in steps if step.get("name") == "Preserve Windows source-bound native reports"
     )
     assert upload["if"] == "always()"
     assert upload["with"]["if-no-files-found"] == "error"
-    for report in ("lcov.info", "coverage.json", "metadata.json", "summary.txt", "*.log"):
+    for report in ("lcov.info", "coverage.json", "metadata.json", "summary.txt", "*.log", "provenance.json"):
         assert report in upload["with"]["path"]
     assert "computer-use-windows" in jobs["owned"]["needs"]
     assert (

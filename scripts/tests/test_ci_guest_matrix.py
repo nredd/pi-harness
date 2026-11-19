@@ -1233,9 +1233,11 @@ def test_fan_in_downloads_exactly_its_own_shard_uploads() -> None:
             name for name, other in names.items() if other == os_name
         }
         assert not fnmatch.fnmatchcase(render(fan_in_upload["with"]["name"], {"matrix.os": os_name}), pattern)
-    # The shards upload reports only; the fan-in's accounting writes the one summary.
-    assert "coverage/summary.json" not in shard_upload["with"]["path"]
-    assert shard_upload["with"]["path"] + "coverage/summary.json\n" == fan_in_upload["with"]["path"]
+    # The fan-in uploads the same reports, but replaces per-shard receipts with its own receipt and summary.
+    shard_paths = shard_upload["with"]["path"].splitlines()
+    fan_in_paths = fan_in_upload["with"]["path"].splitlines()
+    assert shard_paths[0] == "coverage/provenance-${{ matrix.shard }}.json"
+    assert fan_in_paths == [*shard_paths[1:], "coverage/summary.json", "coverage/provenance.json"]
 
 
 @pytest.mark.parametrize(("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin")])
