@@ -239,6 +239,8 @@ export interface EvictedNote {
 	fromSavedSession?: true;
 	/** The `.output` transcript when one was written, else the session file. */
 	transcript?: string;
+	/** The child session path from saved history, even when no longer on disk. */
+	sessionFile?: string;
 	/** The run's model fallback, so even an evicted agent's id still discloses it. */
 	modelFallback?: ModelFallback;
 	modelTier?: TierDisclosure;
@@ -288,7 +290,9 @@ export function describeEvicted(note: EvictedNote): string {
 	const disclosure = modelSelectionNote(note);
 	const fallback = disclosure ? `\n${disclosure}` : "";
 	const state = note.fromSavedSession
-		? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
+		? note.status === "running"
+			? "interrupted by a process restart (no live registry record)"
+			: `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
 		: `${note.status}, evicted after ${note.evictedAfterMin} min`;
 	return `Agent "${note.id}" (${note.description}) ${state}${where}${fallback}`;
 }
@@ -708,6 +712,7 @@ export class AgentManager {
 	private readonly unreadTtlMs = retentionMs("PI_SUBAGENTS_UNREAD_TTL_MIN", UNCONSUMED_RECORD_TTL_MS);
 	private onComplete?: OnAgentComplete;
 	private onStart?: OnAgentStart;
+	private readonly onSessionCreated?: (record: AgentRecord) => void;
 	private onQueuedStop?: OnAgentQueuedStop;
 	private onReaped?: OnAgentReaped;
 	private onCompact?: OnAgentCompact;
@@ -783,12 +788,14 @@ export class AgentManager {
 		homeDir?: string,
 		onQueuedStop?: OnAgentQueuedStop,
 		onReaped?: OnAgentReaped,
+		onSessionCreated?: (record: AgentRecord) => void,
 	) {
 		this.clock = clock;
 		this.homeDir = homeDir;
 
 		this.onComplete = onComplete;
 		this.onStart = onStart;
+		this.onSessionCreated = onSessionCreated;
 		this.onQueuedStop = guardObserver("queued stop", onQueuedStop);
 		this.onReaped = guardObserver("reaped", onReaped);
 		this.onCompact = guardObserver("compaction", onCompact);
@@ -1478,6 +1485,7 @@ export class AgentManager {
 					}
 					record.pendingSteers = undefined;
 				}
+				this.onSessionCreated?.(record);
 				options.onSessionCreated?.(session);
 			},
 		})

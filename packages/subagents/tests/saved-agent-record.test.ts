@@ -21,7 +21,7 @@ describe("saved terminal lookup notes", () => {
 		expect(savedAgentNote(data)).toBeUndefined();
 	});
 
-	it.each(["running", "queued", "unknown", null])("does not claim a saved %s child is alive or finished", (status) => {
+	it.each(["queued", "unknown", null])("does not claim a saved %s child is alive or finished", (status) => {
 		expect(savedAgentNote({ ...base, status })).toBeUndefined();
 	});
 
@@ -29,7 +29,7 @@ describe("saved terminal lookup notes", () => {
 		"recovers the recorded %s status without claiming TTL eviction",
 		(status) => {
 			const note = savedAgentNote({ ...base, status });
-			expect(note).toEqual({ ...base, status, evictedAfterMin: 0, fromSavedSession: true });
+			expect(note).toMatchObject({ ...base, status, evictedAfterMin: 0, fromSavedSession: true, handle: base.id });
 			const diagnostic = describeEvicted(note!);
 			expect(diagnostic).toContain(`${status}, recovered from saved parent session (no live registry record)`);
 			expect(diagnostic).not.toContain("evicted after");
