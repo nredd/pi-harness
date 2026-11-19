@@ -499,7 +499,8 @@ def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Pat
     changes = directory / "changes"
     changes.mkdir(parents=True)
     legacy = (
-        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\nLegacy release history note.\n\n"
+        "## [Unreleased]\n\n- Uncategorized.\n  Wrapped continuation.\n\n"
+        "Legacy release history note.\n\n---\n\n"
     )
     released = "## 0.59.2-nredd.3\n\n### Fixed\n\n- Released.\n  Continuation.\n"
     target = directory / "CHANGELOG.md"
@@ -524,6 +525,39 @@ def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Pat
     assert not fragment.exists()
     assert subprocess.run([*cmd, "--fold"], capture_output=True, check=False).returncode == 0
     assert target.read_text() == expected
+
+
+@pytest.mark.parametrize(
+    ("heading", "refused_line"),
+    [
+        ("# 1.0.0", "# 1.0.0"),
+        ("#", "#"),
+        ("##", "##"),
+        ("##\t1.0.0", "##\t1.0.0"),
+        ("1.0.0\n=====", "====="),
+        ("1.0.0\n----- \t", "-----"),
+    ],
+)
+def test_legacy_fold_refuses_ambiguous_heading(repo: Path, heading: str, refused_line: str) -> None:
+    """Refuse to fold into a category below an unclassified release boundary.
+
+    Parameters:
+        repo (Path): Disposable enrolled repository root.
+        heading (str): Ambiguous boundary above a plausible category.
+        refused_line (str): Heading or underline reported in the diagnostic.
+    """
+    target = repo / "packages/todo/CHANGELOG.md"
+    original = f"# Changelog\n\n## [Unreleased]\n\n{heading}\n\n### Fixed\n- Released.\n"
+    target.write_text(original)
+    fragment = target.parent / "changes/932.fixed.md"
+    fragment.parent.mkdir()
+    fragment.write_text(BULLET)
+    cmd = [sys.executable, str(Path(changelog_fragments.__file__)), "--repo", str(repo), "--fold"]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert result.returncode == 1
+    assert f"Invalid heading in Unreleased: '{refused_line}'" in result.stderr
+    assert target.read_text() == original
+    assert fragment.read_text() == BULLET
 
 
 def test_cli_validates_every_package_before_folding(repo: Path) -> None:

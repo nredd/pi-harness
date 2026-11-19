@@ -32,6 +32,9 @@ RELEASE_HEADER = re.compile(
     r"^## (?:\[[^\]\n]+\][^\n]*|[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)[ \t]*$", re.MULTILINE
 )
 
+LEGACY_ATX_HEADING = re.compile(r"^#{1,2}(?:[ \t]|$)")
+SETEXT_UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*")
+
 
 @dataclass(frozen=True)
 class Fragment:
@@ -185,7 +188,15 @@ def unreleased_data(lines: list[str], *, legacy: bool = False) -> tuple[dict[str
     positions: dict[str, int] = {}
     for index, line in enumerate(lines):
         # Recognized section headings were already excluded by folded_text.
-        if line.startswith("## "):
+        if line.startswith("## ") or (
+            legacy
+            and (
+                LEGACY_ATX_HEADING.match(line.rstrip("\r\n"))
+                or (
+                    index > 0 and lines[index - 1].strip() and SETEXT_UNDERLINE.fullmatch(line.rstrip("\r\n"))
+                )
+            )
+        ):
             raise ValueError(f"Invalid heading in Unreleased: '{line.rstrip()}'")
         if line.startswith("### "):
             category = line[4:].strip().lower()
