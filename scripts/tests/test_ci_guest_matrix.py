@@ -500,7 +500,7 @@ def test_every_required_check_name_keeps_reporting(name: str) -> None:
     [
         ("stack (ubuntu-24.04, personal)", "ubuntu-24.04", False),
         ("stack (ubuntu-24.04, local)", "ubuntu-24.04", False),
-        ("stack (macos-14, local)", "xcode-27", False),
+        ("stack (macos-14, local)", "ubuntu-24.04", False),
         ("stack (macos-14, personal)", "ubuntu-24.04", True),
         ("stack (wsl2, personal)", "ubuntu-24.04", True),
         ("stack (wsl2, local)", "ubuntu-24.04", True),
@@ -627,7 +627,7 @@ def test_native_cells_ignore_wsl_inputs(tmp_path: Path, name: str, os_name: str)
         os_name (str): Native matrix cell.
     """
     check = f"{name} ({os_name})"
-    trigger = Trigger(wsl_inputs="false")
+    trigger = Trigger(event="push" if os_name == "macos-14" else "pull_request", wsl_inputs="false")
     if name == "owned":
         entries = shard_entries(os_name, trigger)
         assert entries
@@ -639,9 +639,7 @@ def test_native_cells_ignore_wsl_inputs(tmp_path: Path, name: str, os_name: str)
     assert "NOT RUN" not in stdout
 
 
-@pytest.mark.parametrize(
-    "check", ["stack (ubuntu-24.04, personal)", "stack (ubuntu-24.04, local)", "stack (macos-14, local)"]
-)
+@pytest.mark.parametrize("check", ["stack (ubuntu-24.04, personal)", "stack (ubuntu-24.04, local)"])
 def test_docs_only_bypass_still_covers_running_stack_cells(tmp_path: Path, check: str) -> None:
     """Keep the existing docs-only bypass on the cells that do run.
 
@@ -700,25 +698,45 @@ def test_local_cells_own_standalone_local(tmp_path: Path, os_name: str, stack_in
         stack_inputs (str): `classify` output; `packages/` feeds `local` regardless.
     """
     check = f"stack ({os_name}, local)"
-    steps = executed_steps("stack", check, tmp_path, Trigger(stack_inputs=stack_inputs))
+    event = "push" if os_name == "macos-14" else "pull_request"
+    steps = executed_steps("stack", check, tmp_path, Trigger(event=event, stack_inputs=stack_inputs))
     assert steps >= LOCAL_STEPS | BUILD_AND_NODE
     assert not steps & PERSONAL_STEPS
 
 
 @pytest.mark.parametrize(
-    "check",
-    ["stack (ubuntu-24.04, local)", "stack (macos-14, local)"],
+    ("job", "check"),
+    [
+        ("owned", "owned (macos-14)"),
+        ("contracts", "contracts (macos-14)"),
+        ("stack", "stack (macos-14, local)"),
+    ],
 )
-def test_main_smoke_retains_only_ubuntu_personal(tmp_path: Path, check: str) -> None:
-    """Keep the existing `main` selective smoke for the other running cells.
-
-    Parameters:
-        tmp_path (Path): Disposable output directory.
-        check (str): Cell skipped by the smoke.
-    """
-    outputs, stdout, _ = run_plan("stack", check, tmp_path, Trigger(event="push"))
+def test_macos_pr_keeps_required_names_on_ubuntu(tmp_path: Path, job: str, check: str) -> None:
+    """Only the report steps execute; no macOS runner, shard or coverage gate is used."""
+    assert runner_for(job, expand(job)[check]) == "ubuntu-24.04"
+    outputs, stdout, summary = run_plan(job, check, tmp_path, PULL_REQUEST)
     assert outputs["run"] == "false"
-    assert ci_paths.NOT_RUN["main_smoke"] in stdout
+    assert f"::notice title={check} NOT RUN::" in stdout
+    assert ci_paths.NOT_RUN["macos_pr"] in summary
+    assert executed_steps(job, check, tmp_path, PULL_REQUEST) == PLAN_ONLY
+    assert not shard_entries("macos-14", PULL_REQUEST)
+
+
+def test_other_pool_routed_macos_jobs_skip_prs() -> None:
+    """Keep optional pool work off PRs without skipping the Windows helper or Linux smoke."""
+    workflows = ROOT / ".github/workflows"
+    helper = yaml.safe_load((workflows / "native-helper.yml").read_text())["jobs"]
+    smoke = yaml.safe_load((workflows / "runner-smoke.yml").read_text())["jobs"]
+    pr_guard = "github.event_name != 'pull_request'"
+    assert helper["route"]["if"] == "${{ " + pr_guard + " && !vars.PI_POOLS_DISABLED }}"
+    assert helper["build"]["if"] == "${{ !cancelled() && " + pr_guard + " }}"
+    assert "if" not in helper["windows-helper"]
+    assert smoke["pi-macos"]["if"] == pr_guard
+    assert "pull_request.head.repo.full_name" in smoke["pi-linux"]["if"]
+    report = next(step for step in jobs()["classify"]["steps"] if step.get("name") == "Report classification")
+    assert 'if [ "$GITHUB_EVENT_NAME" = pull_request ]; then' in report["run"]
+    assert "macOS PR skip:" in report["run"]
 
 
 def test_standalone_uploads_cannot_collide_between_stack_cells() -> None:
@@ -1201,7 +1219,10 @@ def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate(os_name: st
     """
     # `ci_paths` owns each owned cell's gates and guest; the fan-in reads the guest from the shards' plan.
     accounting = fan_in_step("Coverage accounting (existing reports, including test failures)")
-    context = {"matrix.os": os_name, "needs.classify.outputs.plan": classify_outputs(PULL_REQUEST)["plan"]}
+    context = {
+        "matrix.os": os_name,
+        "needs.classify.outputs.plan": classify_outputs(Trigger(event="push"))["plan"],
+    }
     guest = ci_paths.RUNNERS[os_name][1]
     assert render(accounting["env"]["COVERAGE_HOST"], context) == guest
     assert 'COVERAGE_HOST="$COVERAGE_HOST"' in accounting["run"]
@@ -1565,7 +1586,10 @@ def test_fan_in_accounts_each_cell_against_its_own_os_floors(os_name: str, cover
         coverage_os (str): `coverage_accounting.py --os` it must select.
     """
     step = fan_in_step("Coverage accounting (existing reports, including test failures)")
-    context = {"matrix.os": os_name, "needs.classify.outputs.plan": classify_outputs(PULL_REQUEST)["plan"]}
+    context = {
+        "matrix.os": os_name,
+        "needs.classify.outputs.plan": classify_outputs(Trigger(event="push"))["plan"],
+    }
     assert render(step["env"]["COVERAGE_OS"], context) == coverage_os
     assert step["run"] == (
         'make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST" '

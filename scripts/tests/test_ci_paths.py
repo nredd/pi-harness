@@ -643,7 +643,7 @@ def test_plan_names_are_exactly_the_required_checks(repo: Path) -> None:
         assert set(plan_change(repo, {"a.txt": event}, event)) == merge_pr_checks.EXPECTED_MATRIX
 
 
-def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
+def test_code_change_runs_ubuntu_with_its_gates(repo: Path) -> None:
     """Run native `owned` with all three gates and keep WSL to its LCOV producers.
 
     Parameters:
@@ -658,9 +658,6 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
         True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards, guest="linux", coverage_os="linux"
     )
     assert len(ubuntu.shards) == 4
-    assert plan["owned (macos-14)"].gates == MAC_GATES
-    assert plan["contracts (macos-14)"] == ci_paths.CellPlan(True, True, (), "")
-    assert plan["stack (macos-14, local)"].scenarios
     assert plan["stack (ubuntu-24.04, local)"].scenarios
     # `packages/` feeds `local` only: the personal stack runs setup without scenarios.
     assert plan["stack (ubuntu-24.04, personal)"].run
@@ -702,9 +699,8 @@ def test_layout_relevant_changes_run_check_scripts_on_every_native_cell(repo: Pa
     """
     assert not classify_change(repo, {path: "x\n"}).docs_only
     plan = plan_change(repo, {path: "y\n"}, PULL_REQUEST)
-    for cell in ("owned (ubuntu-24.04)", "owned (macos-14)"):
-        assert plan[cell].run
-        assert "check-scripts" in plan[cell].gates
+    assert plan["owned (ubuntu-24.04)"].run
+    assert "check-scripts" in plan["owned (ubuntu-24.04)"].gates
 
 
 @pytest.mark.parametrize("name", ["README.md", "CHANGELOG.md"])
@@ -804,31 +800,13 @@ def test_stack_inputs_wake_the_personal_scenarios(repo: Path) -> None:
     assert not plan["owned (wsl2)"].run
 
 
-@pytest.mark.parametrize("event", [PULL_REQUEST, PUSH])
-def test_docs_only_change_bypasses_native_cells_and_wsl_runs_on_main(repo: Path, event: str) -> None:
-    """Report NOT RUN for docs-only changes everywhere except a real WSL cell on `main`.
-
-    Parameters:
-        repo (Path): Disposable repository.
-        event (str): Triggering event name.
-
-    Returns:
-        None: Assertions verify the plan.
-    """
-    plan = plan_change(repo, {"docs/guide.md": "x\n"}, event)
-    for name in (
-        "owned (ubuntu-24.04)",
-        "owned (macos-14)",
-        "contracts (ubuntu-24.04)",
-        "contracts (macos-14)",
-    ):
-        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["docs_only"])
-    assert plan["stack (ubuntu-24.04, personal)"].reason == ci_paths.NOT_RUN["docs_only"]
-    assert plan["stack (macos-14, local)"].reason == ci_paths.NOT_RUN["docs_only"]
-    assert plan["owned (wsl2)"].run is (event == PUSH)
-    assert plan["contracts (wsl2)"].run is (event == PUSH)
-    if event == PUSH:
-        assert plan["owned (wsl2)"].gates == WSL_GATES
+@pytest.mark.parametrize("path", ["docs/guide.md", "unknown.bin", ".github/workflows/ci.yml"])
+def test_pr_always_bypasses_macos(repo: Path, path: str) -> None:
+    """The macOS PR decision is independent of docs, code and workflow inputs."""
+    result = classify_change(repo, {path: "x\n"})
+    plan = ci_paths.plan_cells(result, PULL_REQUEST, capacity={"pi-macos": 3})
+    for name in ("owned (macos-14)", "contracts (macos-14)", "stack (macos-14, local)"):
+        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["macos_pr"])
 
 
 @pytest.mark.parametrize("event", [PULL_REQUEST, PUSH])
@@ -851,22 +829,18 @@ def test_permanent_stack_bypass_cells_report_why_on_every_change(
         assert plan == ci_paths.CellPlan(False, False, (), ci_paths.STACK_NOT_RUN[stack_cell])
 
 
-def test_main_push_keeps_only_the_ubuntu_personal_smoke(repo: Path) -> None:
-    """Run the merged-result smoke on `main` and skip the other running stack cells.
-
-    Parameters:
-        repo (Path): Disposable repository.
-
-    Returns:
-        None: Assertions verify the plan.
-    """
-    plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PUSH)
-    # `stack_inputs` is false here, yet `main` ignores it for the smoke cell.
-    assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
-    for name in ("stack (ubuntu-24.04, local)", "stack (macos-14, local)"):
-        assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["main_smoke"])
+@pytest.mark.parametrize(
+    "event", [PUSH, "schedule", "workflow_dispatch", "release-verification", "merge_group"]
+)
+def test_non_pr_events_run_every_runnable_cell(repo: Path, event: str) -> None:
+    """A docs-only diff does not limit non-PR verification."""
+    plan = plan_change(repo, {"docs/guide.md": "x\n"}, event)
+    assert {name for name, cell in plan.items() if not cell.run} == {
+        f"stack ({os_name}, {stack})" for os_name, stack in ci_paths.STACK_NOT_RUN
+    }
     assert plan["owned (macos-14)"].gates == MAC_GATES
     assert plan["owned (wsl2)"].gates == WSL_GATES
+    assert all(not cell.skipped_gates for cell in plan.values())
 
 
 @pytest.mark.parametrize("case", ["invalid-base", "gitlink", "empty"])
@@ -888,7 +862,7 @@ def test_plan_fails_closed_to_running_everything(repo: Path, case: str) -> None:
         commit(repo, "bump gitlink")
     plan = ci_paths.plan_cells(ci_paths.classify(repo, base, "HEAD"), PULL_REQUEST)
     assert plan["owned (wsl2)"].run
-    assert plan["owned (macos-14)"].gates == MAC_GATES
+    assert plan["owned (macos-14)"].reason == ci_paths.NOT_RUN["macos_pr"]
     assert plan["stack (ubuntu-24.04, personal)"].scenarios
 
 
@@ -972,7 +946,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     """
     result = classify_change(repo, {"release/pi_release/stack.py": "x\n"})
     output = tmp_path / "out"
-    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
+    ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PUSH))
     plan = read_plan(output)
     split = {"packages/subagents", "packages/computer-use"}
     rest = " ".join(w for w in ci_paths.npm_workspaces(ci_paths.REPO_ROOT) if w not in split)
@@ -1084,7 +1058,7 @@ def test_cli_plans_a_pull_request_and_a_push(repo: Path, tmp_path: Path) -> None
     pr_plan = read_plan(pr)
     push_plan = read_plan(push)
     assert pr_plan["stack (ubuntu-24.04, local)"]["run"]
-    assert push_plan["stack (ubuntu-24.04, local)"]["run"] is False
+    assert push_plan["stack (ubuntu-24.04, local)"]["run"] is True
     assert not any(cell["blocked"] for cell in pr_plan.values())
 
 
@@ -1457,7 +1431,7 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     assert code["owned (wsl2)"].shards == ()
     assert code["contracts (ubuntu-24.04)"].shards == ()
     assert code["stack (ubuntu-24.04, local)"].shards == ()
-    assert code["owned (macos-14)"].shards
+    assert code["owned (macos-14)"].shards == ()
     assert all((cell.guest, cell.coverage_os) == ("", "") for cell in (*docs.values(), code["owned (wsl2)"]))
     blocked = ci_paths.plan_cells(classify_change(repo, {"b.txt": "x\n"}), PULL_REQUEST, "too long")
     assert all(cell.shards == () for cell in blocked.values())

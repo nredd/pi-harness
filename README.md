@@ -125,6 +125,10 @@ make help                    # every target
   enforcement at `tests/integration/probes/coverage/bun` and `scripts/coverage/bun`.
   Windows build-routing failures retain bounded child output tails and exit/deadline provenance;
   the native build deadline is still 120 seconds, not a claim that a cold-build cause is proven.
+- PRs skip the heavy macOS CI cells, the pool-routed native helper build and the macOS pool smoke.
+  The required macOS names report `NOT RUN` from Ubuntu; see `macOS PR skip` in the CI summary.
+  All runnable CI cells execute on `main` pushes, merge-queue runs and full dispatches.
+  The hosted installer acceptance matrix keeps its own path rules.
 - WSL setup runs after apt guarantees Python3: `scripts/wsl2_setup.sh` is a compatible argv-forwarding
   bootstrap over measured `scripts/wsl2_setup.py`. Hosted copy, baked-tool reuse, bounds and PATH receipts
   are tested locally; real WSL execution remains CI proof. Pre-Python apt/DNS/host scripts and PowerShell
@@ -268,7 +272,7 @@ that a cancelled zero-step placeholder was superseded. It does not compare that 
 the moving current main tip. Required checks and reviews remain tied to the unchanged PR HEAD.
 
 Before publication or promotion, freeze one combined `main` candidate and run the complete CI
-lane for that exact commit. `ci.yml` manual dispatch disables docs-only and main-push smoke
+lane for that exact commit. `ci.yml` manual dispatch disables PR shortcuts
 shortcuts, executes every owned and contracts cell plus the three stack cells that run a stack
 (`ubuntu-24.04` personal and local, `macos-14` local), and calls the existing complete core fork
 gate. The `not_run` stack cells (`macos-14` personal, both `wsl2`) are required-check names with
@@ -318,7 +322,7 @@ never wins. After "Re-run failed jobs", the new attempt lists the carried-over s
 their original timestamps, so their original uploads still qualify; a re-run job qualifies only
 through its new upload, never the failed attempt's same-named artifact. Missing, skipped, failed,
 expired or mismatched evidence refuses, and so does a malformed REST page. `python -m pi_release.release_gate` exits 0 with evidence and 1 when refused; a
-harness defect raises instead of reading as a refusal. Ordinary push/main smoke and old PR checks are
+harness defect raises instead of reading as a refusal. Ordinary `main` runs and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
 trusted `/usr/bin/gh`, not PATH lookup; the `publish.yml` `verify` job runs computer-use releases on
@@ -354,7 +358,7 @@ are not retroactively relabelled as fully verified by this lane.
 
 Full [frozen-candidate verification](#frozen-release-verification) is mandatory before snapshot
 construction. It requires actual full matrix/core execution and retained artifacts for the exact
-combined source SHA, not the selective push/main smoke or old PR checks. Unrelated later main
+combined source SHA, not ordinary `main` runs or old PR checks. Unrelated later main
 advancement does not invalidate a frozen verified candidate. No operation waives this barrier.
 
 ### Snapshot format
@@ -386,7 +390,7 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 - Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`.github/workflows/ci.yml`), so there is nothing to read; reviews stay a process step.
 - Deferred, tap readiness when core changes: not implemented; the core release's asset digests and attestation are the only core gate, and a tap bump is gated by its own green CI.
 - Registry-stack evidence: the exact full `workflow_dispatch` run validated by `pi_release.release_gate`. Every owned and contracts cell, each stack cell that runs a stack, and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
-- Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so docs-only and main-push smoke cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
+- Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so PR bypass cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
 - Push, PR and docs-only runs never qualify: only a full `ci.yml` dispatch of the exact SHA does, and it skips no docs, WSL-input or stack-input shortcut, so a docs-only candidate is promotable once dispatched; see [release verification](#frozen-release-verification). WSL cells do not run a stack, and differently named artifacts are not promotion substitutes. Artifacts expire with CI retention, so an old SHA must be dispatched again before it can be promoted.
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit. The registry lookup (`npm view`) runs in a fresh empty directory with `NPM_CONFIG_USERCONFIG=/dev/null` and `--registry https://registry.npmjs.org`, so a `.npmrc` in the selected tag's tree cannot steer it.
 - Core: asset digests are compared with the release's `SHA256SUMS`. For non-legacy tags `SHA256SUMS` is a mutable release asset, so each recorded asset is also downloaded, hashed against the recorded digest, and verified read-only with `gh attestation verify --repo nredd/pi --signer-workflow nredd/pi/.github/workflows/fork-release.yml --source-ref refs/tags/<tag>`. Legacy tags `v1.3.0-nredd.3` through `.7` predate that workflow and rely on the frozen `LEGACY_CHECKSUMS` hashes.

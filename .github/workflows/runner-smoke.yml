@@ -50,7 +50,7 @@ jobs:
           exit $fail
 
   pi-macos:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request'
     name: smoke (pi-macos)
     runs-on: [self-hosted, pi-macos]
     timeout-minutes: 10

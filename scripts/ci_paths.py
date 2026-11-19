@@ -122,7 +122,6 @@ STACK_INPUT_PREFIXES = (
     "scripts/wsl2_",
 )
 EVENT_PULL_REQUEST = "pull_request"
-EVENT_PUSH = "push"
 # GitHub squashes a PR to `<title> (#N)`; `main` lints that subject (`check-commit-messages.mjs`).
 SQUASH_SUBJECT_LIMIT = 72
 CHECK_TS = "check-ts"
@@ -189,11 +188,10 @@ RUNNERS = {
 # runs on Ubuntu, so it cannot read its own `sys.platform`. WSL reports are Linux reports.
 COVERAGE_OS = {"ubuntu-24.04": "linux", "macos-14": "darwin", "wsl2": "linux"}
 STACKS = ("personal", "local")
-SMOKE_CELL = ("ubuntu-24.04", "personal")
 # NOT RUN reasons; the reporter appends "This is not a pass." to each.
 NOT_RUN = {
     "docs_only": "Skipped because the change is docs-only.",
-    "main_smoke": "Skipped on a main push; stack (ubuntu-24.04, personal) validates the merged result.",
+    "macos_pr": "macOS verification is skipped on pull_request events.",
     "personal_without_inputs": (
         "This pull request changes no stack inputs; the personal stack installs published packages, "
         "so its scenarios cannot change. Setup still runs."
@@ -634,7 +632,7 @@ def npm_workspaces(root: Path) -> tuple[str, ...]:
 
 
 def skipped_gates(result: ChangeClassification, event: str) -> frozenset[str]:
-    """Return the `PATH_GATED_GATES` this run skips: a non-push run that changes none of a gate's inputs.
+    """Return the `PATH_GATED_GATES` this run skips: a PR that changes none of a gate's inputs.
 
     Parameters:
         result (ChangeClassification): Diff classification.
@@ -643,7 +641,7 @@ def skipped_gates(result: ChangeClassification, event: str) -> frozenset[str]:
     Returns:
         frozenset[str]: Make targets to report NOT RUN wherever a cell plans them.
     """
-    if event == EVENT_PUSH:
+    if event != EVENT_PULL_REQUEST:
         return frozenset()
     return frozenset(gate for gate, inputs in PATH_GATED_GATES.items() if not result.inputs[inputs])
 
@@ -715,9 +713,11 @@ def native_plan(
     """
     if os_name == "wsl2" and event == EVENT_PULL_REQUEST and not result.inputs["wsl_inputs"]:
         return skipped(WSL_BYPASS.format(job=job))
-    # A real WSL cell keeps its docs-only acceptance on `main`.
-    if result.docs_only and os_name != "wsl2":
-        return skipped(NOT_RUN["docs_only"])
+    if event == EVENT_PULL_REQUEST:
+        if os_name == "macos-14":
+            return skipped(NOT_RUN["macos_pr"])
+        if result.docs_only and os_name == "ubuntu-24.04":
+            return skipped(NOT_RUN["docs_only"])
     if job != "owned":
         host = HOST_WINDOWS if RUNNERS[os_name][1] == "wsl2" else ""
         return CellPlan(run=True, scenarios=True, gates=(), reason="", host=host)
@@ -748,10 +748,11 @@ def stack_plan(os_name: str, stack: str, result: ChangeClassification, event: st
     """
     if (os_name, stack) in STACK_NOT_RUN:
         return skipped(STACK_NOT_RUN[os_name, stack])
-    if result.docs_only:
-        return skipped(NOT_RUN["docs_only"])
-    if event == EVENT_PUSH and (os_name, stack) != SMOKE_CELL:
-        return skipped(NOT_RUN["main_smoke"])
+    if event == EVENT_PULL_REQUEST:
+        if os_name == "macos-14":
+            return skipped(NOT_RUN["macos_pr"])
+        if result.docs_only:
+            return skipped(NOT_RUN["docs_only"])
     if event == EVENT_PULL_REQUEST and stack == "personal" and not result.inputs["stack_inputs"]:
         return CellPlan(run=True, scenarios=False, gates=(), reason=NOT_RUN["personal_without_inputs"])
     return CellPlan(run=True, scenarios=True, gates=(), reason="")
