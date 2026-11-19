@@ -71,20 +71,13 @@ jobs:
       - name: Exercise only disposable native fixture windows
         shell: pwsh
         run: |
+          'FAILED' | Set-Content -Encoding ascii native-fixture-status.txt
           cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path packages/computer-use/native/windows/bridge-rs/Cargo.toml --example disposable_windows_fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $PSNativeCommandUseErrorActionPreference = $false
           & packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/examples/disposable_windows_fixture.exe 2>&1 | Tee-Object native-fixture.log
           $fixtureExit = $LASTEXITCODE
-          $headlessReasons = @(
-            'NATIVE_FIXTURE_UNSUPPORTED: session 0 is a noninteractive service session',
-            'NATIVE_FIXTURE_UNSUPPORTED: OpenInputDesktop denied access to the interactive desktop'
-          )
-          $knownHeadless = Select-String -Quiet -SimpleMatch -Pattern $headlessReasons -Path native-fixture.log
-          if ($fixtureExit -eq 3 -and $knownHeadless) {
-            'NOT_RUN_HEADLESS' | Set-Content -Encoding ascii native-fixture-status.txt
-            'Native GUI fixture: NOT RUN. Session 0 or input-desktop access denied; exact reason in native-fixture.log. Native link/unit evidence is separate.' >> $env:GITHUB_STEP_SUMMARY
-          } elseif ($fixtureExit -ne 0) {
+          if ($fixtureExit -ne 0) {
             'FAILED' | Set-Content -Encoding ascii native-fixture-status.txt
             exit $fixtureExit
           } else {

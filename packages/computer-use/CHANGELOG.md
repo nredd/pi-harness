@@ -35,6 +35,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Fail the Windows GUI fixture and native-helper job when an interactive desktop is unavailable, including session 0. Remove headless success handling; retain separate mixed-DPI/negative-monitor `NOT RUN` evidence. Keep the kernel-abandonment fixture Windows-only with a non-test entry point for portable all-target builds (#1038).
+
 - Return native Windows text mismatch evidence as `didnt`, skip password value read-back, and serialize single semantic actions with checked physical input. Replace the kernel-abandonment test's environment toggle with a separate crash fixture (#983).
 
 - Native Windows capture is uncertain only after a real transition, accepts uniform light windows and identical active/inactive frames, refuses keyboard input aimed at coordinates, and stops on malformed UIA RuntimeIds (#983).

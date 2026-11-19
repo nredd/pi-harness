@@ -32,7 +32,7 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 
 `packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler}` use fragments;
 the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the unchanged
-closed filename and one-bullet grammar. Preset is deferred while #1037 prepares `0.5.0`;
+closed filename and one-bullet grammar. Preset remains unenrolled after the `0.5.0` release preparation in #1037;
 subscription-router and computer-use are also not enrolled. Add a fragment for new changes
 rather than editing the shared Unreleased block. `make check-changelog-fragments` is read-only
 and part of `make check-scripts`.

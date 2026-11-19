@@ -289,18 +289,17 @@ mod native {
         unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) }
             .expect("query real fixture session");
         if session == 0 {
-            eprintln!("NATIVE_FIXTURE_UNSUPPORTED: session 0 is a noninteractive service session");
-            return 3;
+            eprintln!("NATIVE_FIXTURE_FAILED: session 0 is a noninteractive service session; an interactive desktop is required");
+            return 1;
         }
         match unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) } {
             Ok(input) => {
                 unsafe { CloseDesktop(input) }.expect("close preflight desktop handle");
             }
-            Err(error) if error.code() == windows::Win32::Foundation::E_ACCESSDENIED => {
-                eprintln!("NATIVE_FIXTURE_UNSUPPORTED: OpenInputDesktop denied access to the interactive desktop");
-                return 3;
+            Err(error) => {
+                eprintln!("NATIVE_FIXTURE_FAILED: OpenInputDesktop could not access the required interactive desktop: {error}");
+                return 1;
             }
-            Err(error) => panic!("unexpected input-desktop preflight failure: {error}"),
         }
         let mut screen_reader_before = windows::Win32::Foundation::BOOL(0);
         unsafe {
@@ -614,7 +613,7 @@ fn main() {
     std::process::exit(native::run());
     #[cfg(not(windows))]
     {
-        eprintln!("NATIVE_FIXTURE_UNSUPPORTED: Windows execution required");
-        std::process::exit(3);
+        eprintln!("NATIVE_FIXTURE_FAILED: Windows execution required");
+        std::process::exit(1);
     }
 }

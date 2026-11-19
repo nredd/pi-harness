@@ -73,6 +73,7 @@ describe("defaults", () => {
 			desktop_control: true,
 			activity_glow: false,
 			managed_browser: "chrome",
+			managed_browser_profile: null,
 			blocked_apps: [...DEFAULT_BLOCKED_APPS],
 		});
 		assert.deepEqual(
