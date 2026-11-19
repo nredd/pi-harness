@@ -133,7 +133,7 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
     pages = gh_json(f"repos/{ctx.repo}/commits/{source_sha}/check-runs?per_page=100")
     required = required_checks(flatten_pages(rules))
     checks = verify_required_checks(required, flatten_pages(pages), source_sha)
-    # Record the actual full dispatch, not the selective push/main smoke.
+    # Record the actual full dispatch, not ordinary main runs.
     stack_runs = [full_run]
     # Resolve the layout from the selected commit, never from this workflow's checkout.
     # Once selected, malformed or incomplete new content must fail without legacy fallback.

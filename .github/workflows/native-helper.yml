@@ -2,7 +2,7 @@ name: Native helper build
 
 on:
   pull_request:
-    paths:
+    paths: &helper-inputs
       - '.github/workflows/native-helper.yml'
       - '.github/workflows/publish.yml'
       - 'scripts/ci_paths.py'
@@ -10,6 +10,9 @@ on:
       - 'scripts/npm_release.py'
       - 'scripts/release_descriptors.py'
       - 'packages/computer-use/**'
+  push:
+    branches: [main]
+    paths: *helper-inputs
   workflow_dispatch:
 
 permissions:
@@ -18,7 +21,7 @@ permissions:
 jobs:
   route:
     name: route native helper
-    if: ${{ !vars.PI_POOLS_DISABLED && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ github.event_name != 'pull_request' && !vars.PI_POOLS_DISABLED }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -43,7 +46,7 @@ jobs:
 
   build:
     needs: route
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     # A rerun of failed jobs keeps `route`'s attempt-1 output, so only attempt 1 may use the pool.
     # CLT 27.2 compiled and ad hoc signed a trivial source with the required frameworks for both arches.
     # That probe did not run the real native-check workflow or compile its Swift sources on the pool.
