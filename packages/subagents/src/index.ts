@@ -130,6 +130,7 @@ import {
 	describeSelection,
 	modelIdentityNote,
 	modelSelectionNote,
+	modelShadowNote,
 	selectModel,
 } from "./model-selection.ts";
 import { configuredTierNames, tierDisclosure } from "./model-tiers.ts";
@@ -2932,7 +2933,8 @@ Terse command-style prompts produce shallow, generic work.
 			};
 			const fallbackNoteFor = (rec: AgentRecord | undefined): string => {
 				// No record means a schedule or quota park, reselected at fire time: no identity claim.
-				const modelNote = [modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
+				const shadowNote = modelShadowNote(customConfig?.model, rec);
+				const modelNote = [shadowNote, modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
 				return typeNote + (modelNote ? `${modelNote}\n\n` : "");
 			};
 			const detailBase = {

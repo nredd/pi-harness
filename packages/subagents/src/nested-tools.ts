@@ -19,7 +19,13 @@ import {
 import { loadCustomAgents } from "./custom-agents.ts";
 import { errorMessage } from "./error-message.ts";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.ts";
-import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.ts";
+import {
+	type ModelSelection,
+	modelIdentityNote,
+	modelSelectionNote,
+	modelShadowNote,
+	selectModel,
+} from "./model-selection.ts";
 import {
 	createOutputFilePath,
 	getOutputTranscriptDefault,
@@ -164,10 +170,12 @@ function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): rec
  */
 type ResultPosition = "inline" | "fetched";
 
-function formatRecord(record: AgentRecord, position: ResultPosition): string {
+function formatRecord(record: AgentRecord, position: ResultPosition, definitionModel?: string): string {
 	// Read off the record, so a fetched or resumed child reports what ran, not
 	// what the current call would have configured.
-	const note = [modelSelectionNote(record), modelIdentityNote(record)].filter(Boolean).join("\n");
+	const note = [modelShadowNote(definitionModel, record), modelSelectionNote(record), modelIdentityNote(record)]
+		.filter(Boolean)
+		.join("\n");
 	return note ? `${note}\n\n${formatOutcome(record, position)}` : formatOutcome(record, position);
 }
 
@@ -442,7 +450,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 					signal,
 					onPrepare: attachTranscript,
 				});
-				return textResult(formatRecord(record, "inline"), record.status === "error");
+				return textResult(formatRecord(record, "inline", config?.model), record.status === "error");
 			} catch (err) {
 				return textResult(errorMessage(err), true);
 			}

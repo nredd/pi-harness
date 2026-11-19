@@ -1,16 +1,7 @@
 /** Read-only, allowlisted projections of the real dispatch selector. Never admit or route. */
 import { isVirtualModel } from "./model-resolver.ts";
-import { hasModelConfigurationError, modelInputBinding, modelInputs, selectModel } from "./model-selection.ts";
+import { hasModelConfigurationError, modelInputBinding, modelInputs, safeRef, selectModel } from "./model-selection.ts";
 import { getModelResolution } from "./model-tiers.ts";
-
-/** Only model references, not commands, endpoints, diagnostics or model overlays, reach the UI. */
-function safeRef(value: string | undefined): string {
-	return value && /^@?[a-zA-Z0-9][a-zA-Z0-9._/@-]*$/.test(value) && !value.includes("//")
-		? value
-		: value === undefined
-			? "session default"
-			: "[redacted]";
-}
 
 /** A configuration preview is neither quota admission nor evidence that a model answered. */
 export interface ModelExplanation {
