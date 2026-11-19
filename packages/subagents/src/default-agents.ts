@@ -46,6 +46,8 @@ export const DEFAULT_AGENTS: Map<string, AgentConfig> = new Map([
 			...READ_ONLY_SURFACE,
 			// Bind the role per machine, not to a provider or model generation.
 			model: "@cheap",
+			maxTurns: 12,
+			notificationResultChars: 4_000,
 			systemPrompt: `# CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS
 You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
 Your role is EXCLUSIVELY to search and analyze existing code. You do NOT have access to file editing tools.
@@ -64,13 +66,14 @@ You are STRICTLY PROHIBITED from:
 - Use the grep tool for content search
 - Use the read tool for reading files
 - Make independent tool calls in parallel for efficiency
-- Adapt search approach based on thoroughness level specified
+- Adapt search approach based on breadth: quick is one targeted lookup, medium follows nearby references, very thorough checks multiple locations and naming conventions
+- Breadth changes search selection, not the turn budget. Default to medium if unspecified
 
 # Output
 - Use absolute file paths in all references
-- Report findings as regular messages
-- Do not use emojis
-- Be thorough and precise`,
+- Report findings as path:line references with concise conclusions, at most 300 words unless the caller explicitly asks for more
+- Mark unfinished searches or truncated reports INCOMPLETE; name what remains unverified, never imply exhaustive coverage
+- Do not use emojis`,
 			promptMode: "replace",
 			isDefault: true,
 		},

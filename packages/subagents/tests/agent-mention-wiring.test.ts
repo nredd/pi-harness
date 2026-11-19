@@ -451,7 +451,7 @@ describe("mentioning an agent that has never run", () => {
 	it("shows the turn limit it will actually be held to (#181)", async () => {
 		// The spawn passes no maxTurns on purpose (see the test above), so the
 		// tracker has to resolve the same limit runAgent will enforce — otherwise
-		// the row reads `↻1` where the Agent tool would read `↻1≤9`.
+		// the row reads `↻1` instead of the built-in Explore limit `↻1≤12`.
 		const prevMax = getDefaultMaxTurns();
 		try {
 			const { lifecycle } = bootDirect({ defaultMaxTurns: 9 });
@@ -480,7 +480,7 @@ describe("mentioning an agent that has never run", () => {
 			const lines = factory({ terminal: { columns: 200 }, requestRender: vi.fn() }, theme)
 				.render()
 				.join("\n");
-			expect(lines).toContain("≤9");
+			expect(lines).toContain("≤12");
 		} finally {
 			setDefaultMaxTurns(prevMax);
 		}
@@ -1399,7 +1399,7 @@ describe("resuming an evicted agent by name", () => {
 			);
 		});
 
-		it("hands max_turns to the reopened run", async () => {
+		it("keeps the built-in Explore cap when reopening despite caller max_turns", async () => {
 			const { tools } = boot();
 			finishedRun(fakeSession());
 			const id = await spawnBackground(tools);
@@ -1414,7 +1414,7 @@ describe("resuming an evicted agent by name", () => {
 				expect.anything(),
 				"Explore",
 				"anything else?",
-				expect.objectContaining({ resumeSessionFile: sessionPath(), maxTurns: 3 }),
+				expect.objectContaining({ resumeSessionFile: sessionPath(), maxTurns: 12 }),
 			);
 		});
 

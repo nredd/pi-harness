@@ -497,6 +497,11 @@ describe("serializeAgentFile", () => {
 		promptMode: "replace",
 	} as const;
 
+	it.each([undefined, 0, 4000])("preserves a per-type notice cap %s when ejecting", (cap) => {
+		const out = serializeAgentFile({ ...base, notificationResultChars: cap });
+		expect(parseAgentFrontmatter(out).frontmatter.notification_result_chars).toBe(cap);
+	});
+
 	it("writes `*` plus selectors when built-ins are unrestricted but ext selectors exist", () => {
 		const out = serializeAgentFile({ ...base, builtinToolNames: undefined, extSelectors: ["ext:mcp/github"] });
 		expect(out).toContain("tools: *, ext:mcp/github\n");

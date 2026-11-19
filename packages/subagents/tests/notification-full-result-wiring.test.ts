@@ -76,12 +76,12 @@ function runs(outcomes: Record<string, { text: string; failure?: string; aborted
 	};
 }
 
-const spawn = async (b: BootedPi, parentCtx: any, prompt: string): Promise<string> => {
+const spawn = async (b: BootedPi, parentCtx: any, prompt: string, type = "general-purpose"): Promise<string> => {
 	const result = await b.tools
 		.get("Agent")
 		.execute(
 			`call-${prompt}`,
-			{ prompt, description: prompt, subagent_type: "general-purpose", run_in_background: true },
+			{ prompt, description: prompt, subagent_type: type, run_in_background: true },
 			undefined,
 			undefined,
 			parentCtx,
@@ -104,6 +104,30 @@ function resultOf(content: string, id: string): string {
 const text = (n: number, head = "HEAD", tail = "TAIL") => head + "x".repeat(n - head.length - tail.length) + tail;
 
 describe("full result in a completion notice", () => {
+	it.each([16_000, 1_000, 0])("bounds Explore independently without changing other types (global=%s)", async (cap) => {
+		vi.useFakeTimers();
+		const body = text(5_000);
+		const r = runs({ scout: { text: body }, worker: { text: body } });
+		const b = await boot({ notificationResultChars: cap });
+		const scout = await spawn(b, b.parentCtx, "scout", "Explore");
+		const worker = await spawn(b, b.parentCtx, "worker");
+		r.settle("scout", "worker");
+		await vi.advanceTimersByTimeAsync(0);
+		turnEnd(b);
+		const content = sent(b)[0].content;
+		const result = resultOf(content, scout);
+		if (cap === 16_000) {
+			expect(result.replace(/\n\.\.\.\(truncated[^\n]*\n/, "")).toHaveLength(4_000);
+			expect(resultOf(content, worker)).toBe(body);
+		} else {
+			expect(result).toBe(resultOf(content, worker));
+		}
+		expect(result).toContain("truncated");
+		expect(result).toContain("get_subagent_result");
+		expect(record(scout).resultConsumed).toBeFalsy();
+		expect(record(scout).result).toBe(body);
+	});
+
 	it("carries a result under the cap whole, with no truncation note, and marks it read", async () => {
 		vi.useFakeTimers();
 		const body = text(2_000);

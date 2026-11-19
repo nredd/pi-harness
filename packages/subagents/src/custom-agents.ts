@@ -225,6 +225,9 @@ function loadOneFile(path: string, agents: Map<string, AgentConfig>, source: Age
 		model: str(fm.model),
 		thinking: str(fm.thinking) as ThinkingLevel | undefined,
 		maxTurns: nonNegativeInt(fm.max_turns),
+		notificationResultChars: Number.isInteger(fm.notification_result_chars)
+			? nonNegativeInt(fm.notification_result_chars)
+			: undefined,
 		persistSession: fm.persist_session != null ? fm.persist_session === true : undefined,
 		outputTranscript: fm.output_transcript != null ? fm.output_transcript !== false : undefined,
 		sessionDir: str(fm.session_dir),
