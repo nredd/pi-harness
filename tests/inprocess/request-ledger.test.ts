@@ -76,10 +76,9 @@ function recorder(sink: Capture[], session: Capture["session"], owners: () => Ow
 
 /** Keep only nondeterministic metadata out of the second, comparison-only measurement. */
 function normalize(raw: string, root: string): string {
-	return raw
-		.replaceAll(JSON.stringify(root).slice(1, -1), "/sandbox")
-		.replace(/"timestamp":\d+/g, '"timestamp":0')
-		.replace(/"durationMs":\d+(?:\.\d+)?/g, '"durationMs":0');
+	// Core may omit `durationMs` if the scripted response predates stream creation.
+	// Remove timing properties in both cases, rather than normalizing only their values.
+	return raw.replaceAll(JSON.stringify(root).slice(1, -1), "/sandbox").replace(/,"(?:timestamp|durationMs)":\d+/g, "");
 }
 
 /** Drive a real foreground `Agent` call and a manual compaction with a faux summary. */
