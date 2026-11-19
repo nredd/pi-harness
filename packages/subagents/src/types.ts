@@ -59,6 +59,8 @@ export interface AgentConfig {
 	model?: string;
 	thinking?: ThinkingLevel;
 	maxTurns?: number;
+	/** Per-type completion-notice result cap; the global cap and batch share may reduce it further. */
+	notificationResultChars?: number;
 	/** Persist this subagent as a normal pi session instead of keeping it in memory only. */
 	persistSession?: boolean;
 	/** Write the subagent's .output transcript. Defaults to true; false suppresses only that transcript. */

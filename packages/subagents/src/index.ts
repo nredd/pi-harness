@@ -143,6 +143,7 @@ import {
 	NOTIFICATION_RESULT_CHARS_CEILING,
 	type NoticeFrame,
 	type NoticeParts,
+	noticeResultLength,
 	PREVIEW_RESULT_CHARS,
 	previewResult,
 	renderNotice,
@@ -809,7 +810,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		const parts: NoticeParts = {
 			...frame,
 			body: noticeBody(record),
-			cap: notificationResultChars,
+			cap: Math.min(
+				notificationResultChars,
+				getAgentConfig(record.type)?.notificationResultChars ?? notificationResultChars,
+			),
 			outputFile: record.outputFile,
 			// A failure stays unread: delivering its notice must not acknowledge it in FleetView (README, FleetView).
 			failed: record.status === "error" || record.status === "aborted",
@@ -817,13 +821,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		return {
 			id: record.id,
 			details,
-			chars: parts.body.length,
+			chars: noticeResultLength(parts),
 			parts,
 			render: (share?: number) => clipNotice(parts, share),
 		};
 	}
 
-	/** Full result lengths of the notices that have one, for the batch budget. */
+	/** Capped result lengths for the batch budget; legacy previews have no share. */
 	function resultCharsOf(notices: readonly ReturnType<typeof snapshotNotice>[]): Record<string, number> | undefined {
 		const withChars = notices.filter((n) => n.chars !== undefined);
 		return withChars.length > 0 ? Object.fromEntries(withChars.map((n) => [n.id, n.chars])) : undefined;
@@ -1096,7 +1100,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			const notice = typeof result.notice?.body === "string" ? result.notice : undefined;
 			outbox.add({
 				ids: [details.id, ...(details.others?.map((other) => other.id) ?? [])],
-				...(notice ? { resultChars: { [details.id]: notice.body.length } } : {}),
+				...(notice ? { resultChars: { [details.id]: noticeResultLength(notice) } } : {}),
 				build: (_ids, caps) =>
 					notice
 						? { content: clipNotice(notice, caps[details.id]).text + notice.footer, details }
@@ -2727,7 +2731,8 @@ Terse command-style prompts produce shallow, generic work.
 			),
 			max_turns: Type.Optional(
 				Type.Number({
-					description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
+					description:
+						"Soft turn cap before asking the agent to wrap up. The agent's own max_turns (built-in or agent definition) takes precedence over this value. If neither is set, the project default applies.",
 					minimum: 1,
 				}),
 			),

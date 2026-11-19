@@ -406,6 +406,23 @@ A failed agent whose session survived is resumable: a provider or credential err
 | `Explore` | read, grep, find, ls | `@cheap` | `replace` (standalone) | Fast codebase exploration (read-only); an unbound/unavailable tier visibly inherits the parent by default, or refuses under `modelResolution` `error` |
 | `Plan` | read, grep, find, ls | inherit | `replace` (standalone) | Software architect for implementation planning (read-only) |
 
+Built-in `Explore` has a 12-turn soft cap. Choose `quick` for one targeted lookup,
+`medium` (default) for nearby references, or `very thorough` for multiple locations
+and naming conventions. Breadth changes what it looks for, not the turn budget.
+`Explore` is prompted to give `path:line` findings in at most 300 words unless asked
+for more, and mark unfinished searches or truncated reports `INCOMPLETE`.
+
+In the `Agent` tool, built-in `Explore` uses its own cap: caller `max_turns` values
+of `1`, `3`, `40` and `99` all resolve to `12`. The project `defaultMaxTurns` is a
+fallback, so even a default of `9` does not lower the agent's cap. Scheduled jobs
+and `subagents:rpc:spawn` still use an explicit turn ceiling (`max_turns` for jobs,
+`maxTurns` for RPC) ahead of the agent's cap.
+
+Turn 12 steers `Explore` to wrap up. The default five grace turns allow up to 17
+ordinary turns, followed, if needed, by one tool-free final-report turn (18 total).
+`graceTurns` changes that allowance globally. Replacing the built-in definition also
+replaces these defaults. `Plan`, implementation agents and review roles are unchanged.
+
 The `general-purpose` agent is a **parent twin** — it receives the parent's entire system prompt plus a sub-agent context bridge, so it follows the same rules the parent does. Explore and Plan use standalone prompts tailored to their read-only roles.
 
 Default agents can be **ejected** (`/agents` → select agent → Eject) to export them as `.md` files for customization, **overridden** by creating a `.md` file with the same name (e.g. `.pi/agents/general-purpose.md`), or **disabled** per-project with `enabled: false` frontmatter.
@@ -476,6 +493,7 @@ All fields are optional — sensible defaults for everything.
 | `model` | inherit parent | Default exact `provider/modelId`, [tier](#model-tiers) such as `@cheap`, or [legacy alias](#machine-local-model-aliases). An explicit `Agent({ model })` selection overrides this default. Configured values are never fuzzy matched |
 | `thinking` | inherit | Default thinking level: off, minimal, low, medium, high, xhigh, max — an explicit `Agent({ thinking })` overrides it for that run. Actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
+| `notification_result_chars` | global cap | Per-type completion-notice result cap, reduced further by the global cap and batch share. Nonnegative integer; `0` carries only the truncation pointer for a nonempty result. Does not change `get_subagent_result` |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
 | `output_transcript` | `true` (or `subagents.json` `outputTranscript`) | Write this subagent's `.output` transcript; when set, overrides the `subagents.json` `outputTranscript` default. Set `false` to write no transcript file or path. Governs only the transcript — independent of `persist_session`, `isolation: worktree`, and `memory:` |
 | `session_dir` | pi default | Optional session directory when `persist_session: true`; omitted uses pi's normal session location, and relative paths resolve from the agent cwd. A session outside the parent's session directory (this override, or `isolation: worktree`) is listed separately, so it shows as a root instead of nesting |
@@ -661,9 +679,9 @@ Launch a sub-agent.
 | `subagent_type` | string | yes | Agent type (built-in or custom) |
 | `model` | string | no | Model — `provider/modelId`, [machine-local alias](#machine-local-model-aliases), or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
-| `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
+| `max_turns` | number | no | Soft turn cap. The agent definition takes precedence; if neither is set, the project default applies. |
 | `run_in_background` | boolean | no | Defaults to `true`; `false` blocks and returns the result inline, until [`ctrl+b`](#sending-a-foreground-agent-to-the-background) hands it to the background |
-| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and this call's `max_turns` applied. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
+| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and this call's `max_turns` applied unless the agent definition sets one. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
 | `isolated` | boolean | no | No extension/MCP tools |
 | `isolation` | `"off"` \| `"worktree"` | no | `worktree` runs in an isolated git worktree; `off` (the default) does not. Absent from the schema entirely when `worktreeIsolation: false` |
 | `cwd` | string | no | Working directory for the agent: absolute, `~/`-prefixed, or relative to the session cwd. Default: the session cwd. With `isolation: "worktree"`, the worktree comes from the repo containing it; see [Worktree Isolation](#worktree-isolation). Not combinable with `schedule` |
@@ -883,6 +901,12 @@ A completion notice carries the agent's whole result, as Claude Code's does, up 
 The cap counts the raw result characters, before XML escaping (`<` is one char, not the four of `&lt;`); the truncation marker is extra. Past the cap the notice keeps the head and the tail of the result around one marker line, `...(truncated: N of M chars omitted; full result in <output-file>, or use get_subagent_result)...`, and the result stays unread. Notices that land in one message, a `group` batch or completions coalesced at one boundary, share a budget of four caps (64k chars by default): each result takes what it needs up to an even split of what is left, so a short result is never cut to make room for a long one. A notice spooled across a session switch carries the same body and is clipped when it is delivered, so survivors that land together after `/resume` share that budget too. Their records live in the orphaned instance, so they are not marked read.
 
 **Trust model:** the `<result>` is the subagent's output, and a subagent reads files, web pages and tool output written by anyone, so the result can carry text crafted to look like instructions. It is XML-escaped, so it cannot close its own `<result>` or forge another notice's tags, and a `<result-note>` line before it tells the parent to evaluate it as data, not follow it. That is framing, not a sandbox: a full result puts more third-party text in the parent's context than a 500-char preview did, so treat agents that read untrusted input accordingly, or set `notificationResultChars: 0`.
+
+Built-in `Explore` carries at most 4,000 raw result characters per notice. An
+agent file can set `notification_result_chars` for its type; the type cap can only
+reduce the global cap or batch share. A clipped notice is an incomplete handoff:
+it keeps the head and tail and points to the rest. Fetch the full result before
+treating it as complete. `get_subagent_result` and foreground results remain whole.
 
 Only the model-facing `<result>` grows; the rendered notification box keeps its 500-char preview. `notificationResultChars: 0` restores the old result: a 500-char preview (300 per `group` member) with a pointer to `get_subagent_result`, and nothing is marked read. The `<result-note>` line stays in either mode. Set it from `/agents` → Settings → Notice result chars (0 to 1000000).
 

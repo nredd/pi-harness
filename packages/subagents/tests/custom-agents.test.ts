@@ -178,6 +178,16 @@ You are a security auditor.`,
 		expect(agent.systemPrompt).toBe("You are a security auditor.");
 	});
 
+	it.each([0, 4_000])("accepts per-type notice cap %s", (cap) => {
+		writeAgent("scout", `---\nnotification_result_chars: ${cap}\n---\nSearch.`);
+		expect(loadCustomAgents(tmpDir).get("scout")!.notificationResultChars).toBe(cap);
+	});
+
+	it.each([-1, 1.5, "bad"])("rejects per-type notice cap %s", (cap) => {
+		writeAgent("scout", `---\nnotification_result_chars: ${cap}\n---\nSearch.`);
+		expect(loadCustomAgents(tmpDir).get("scout")!.notificationResultChars).toBeUndefined();
+	});
+
 	it("uses sensible defaults when frontmatter is empty", () => {
 		writeAgent(
 			"minimal",

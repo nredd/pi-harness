@@ -268,6 +268,9 @@ export function serializeAgentFile(cfg: AgentConfig): string {
 	if (cfg.model) fmFields.push(`model: ${cfg.model}`);
 	if (cfg.thinking) fmFields.push(`thinking: ${cfg.thinking}`);
 	if (cfg.maxTurns) fmFields.push(`max_turns: ${cfg.maxTurns}`);
+	if (cfg.notificationResultChars !== undefined) {
+		fmFields.push(`notification_result_chars: ${cfg.notificationResultChars}`);
+	}
 	if (cfg.allowedSubagents !== undefined) {
 		fmFields.push(`allowed_subagents: ${cfg.allowedSubagents === "all" ? "all" : cfg.allowedSubagents.join(", ")}`);
 	}
