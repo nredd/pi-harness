@@ -73,12 +73,10 @@ POOLS = {
     "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 1, run_cap=1),
     # One ARM64 WSL2 slot and strict: nothing else can run that guest, and the hosted x64 `windows-2025`
     # cell keeps the required check names green whenever the pool is down or busy.
-    "pi-wsl2": Pool("pi-wsl2", "PI_WSL2_HEARTBEAT", 1),
 }
 
-# Matrix `os` value -> the pool that can run that OS. A `wsl2` cell that takes the pool runs natively on its
-# linux-arm64 runner (`host` "native" in the plan); otherwise it stays on the hosted Windows guest.
-OS_POOLS = {"ubuntu-24.04": "pi-linux", "macos-14": "pi-macos", "wsl2": "pi-wsl2"}
+# Matrix OS to the pool that can run it.
+OS_POOLS = {"ubuntu-24.04": "pi-linux", "macos-14": "pi-macos"}
 
 # A cell's identity: `(job, matrix os, variant)` where variant is the owned shard or the stack name, and
 # empty for `contracts`.
@@ -105,9 +103,6 @@ CELL_SECONDS: dict[CellKey, int] = {
     ("owned", "ubuntu-24.04", "ts"): 428,
     # UNMEASURED best estimates for the ARM64 WSL2 pool (#736): a pooled cell skips the ~3.5 min guest setup
     # but runs on a laptop VM capped at 4 cores. Replace with measured seconds after the first green jobs.
-    ("owned", "wsl2", "subagents-computer-use"): 600,
-    ("owned", "wsl2", "ts"): 600,
-    ("contracts", "wsl2", ""): 400,
 }
 MIN_HEAVY_S = 240
 # `make install-owned` needs authenticated core provenance verification for the current pin.

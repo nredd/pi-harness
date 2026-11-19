@@ -419,20 +419,14 @@ def test_workflow_matrix_contract() -> None:
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
     jobs = yaml.safe_load(workflow)["jobs"]
     expected = set()
-    for name in ("contracts", "stack"):
+    for name in ("owned", "contracts", "stack"):
         matrix = jobs[name]["strategy"]["matrix"]
-        assert matrix["os"] == ["ubuntu-24.04", "macos-14", "wsl2"]
-        assert "exclude" not in matrix
-        for os_name in matrix["os"]:
-            if name == "stack":
-                assert matrix["stack"] == ["personal", "local"]
-                expected |= {f"stack ({os_name}, {stack})" for stack in matrix["stack"]}
-            else:
-                expected.add(f"{name} ({os_name})")
-    # Each `owned (<os>)` is its own one-cell fan-in job, so all three share one placeholder name.
-    fan_ins = [job for job in jobs.values() if job.get("name") == "owned (${{ matrix.os }})"]
-    assert [job["strategy"]["matrix"]["os"] for job in fan_ins] == [["ubuntu-24.04"], ["macos-14"], ["wsl2"]]
-    expected |= {"owned (ubuntu-24.04)", "owned (macos-14)", "owned (wsl2)"}
+        pr_json = next(iter(matrix.values())).split(" && ", 1)[1].split("'")[1]
+        rows = json.loads(pr_json)
+        if name == "stack":
+            expected |= {f"stack ({row['os']}, {row['stack']})" for row in rows}
+        else:
+            expected |= {f"{name} ({system})" for system in rows}
     assert expected == checks.EXPECTED_MATRIX
     names = {job.get("name") for job in jobs.values()}
     assert set(checks.MATRIX) <= names

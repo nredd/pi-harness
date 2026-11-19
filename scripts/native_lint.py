@@ -35,7 +35,7 @@ VERSIONS = {"shellcheck": "0.11.0", "actionlint": "1.7.12", "pwsh": "7.4.22"}
 EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
 SHELL_TOKEN = re.compile(r"'(?:[^']|'')*'|&&|\|\||!(?!=)")
 # These are the actual custom labels in the workflows, not arbitrary runner-label waivers.
-LABELS = "self-hosted-runner:\n  labels: [xcode-27, pi-linux, pi-macos, pi-wsl2]\n"
+LABELS = "self-hosted-runner:\n  labels: [xcode-27, pi-linux, pi-macos]\n"
 PS_SCRIPT = """$ErrorActionPreference = 'Stop'
 Import-Module $args[0] -RequiredVersion 1.24.0 -Force
 if ((Get-Module PSScriptAnalyzer).Version.ToString() -ne '1.24.0') { throw 'Wrong analyzer version' }
