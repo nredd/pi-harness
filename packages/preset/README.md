@@ -267,6 +267,10 @@ the continuing parent runs its independent final critic after exact-HEAD review.
 Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
 only when applicable protection is readable, effective and not bypassable by the merging caller.
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
+The parent uses the same guarded merged-worktree sweep before creating an issue worktree and after
+merge. It keeps and reports worktrees with ignored files or retained claimed directories. Operators
+can move those paths out or clear them after confirming they are disposable or backed up, then rerun
+the guarded sweep.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently
