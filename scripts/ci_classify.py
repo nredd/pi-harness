@@ -36,18 +36,27 @@ def classify() -> int:
         "--pool-attempt",
         env.get("GITHUB_RUN_ATTEMPT") or "1",
     ]
-    for pool in ("linux", "macos"):
-        args += ["--pool-heartbeat", f"pi-{pool}={env.get(f'PI_{pool.upper()}_HEARTBEAT', '')}"]
+    args += [
+        "--pool-heartbeat",
+        f"pi-linux={env.get('PI_LINUX_HEARTBEAT', '')}",
+        "--pool-heartbeat",
+        f"pi-macos={env.get('PI_MACOS_HEARTBEAT', '')}",
+    ]
     if env.get("UNTRUSTED") or env.get("PI_POOLS_DISABLED"):
         args.append("--no-pools")
     if event != "workflow_dispatch":
+        base, head = env.get("BASE"), env.get("HEAD")
+        if not base or not head:
+            missing = ", ".join(f"`{name}`" for name, value in (("BASE", base), ("HEAD", head)) if not value)
+            sys.stderr.write(f"Missing required CI environment variable(s): {missing}\n")
+            return 1
         return ci_paths.main(
             [
                 *args,
                 "--base",
-                env["BASE"],
+                base,
                 "--head",
-                env["HEAD"],
+                head,
                 f"--pr-title={env.get('PR_TITLE', '')}",
                 "--pr-number",
                 env.get("PR_NUMBER") or "0",
