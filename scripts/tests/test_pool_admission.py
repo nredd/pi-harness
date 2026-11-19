@@ -54,7 +54,11 @@ def test_nine_run_burst_uses_both_pools_without_reusing_free_five() -> None:
     """
     runs, jobs = census(9)
     capacity = runner_pools.pool_capacity({"pi-macos": f"{NOW - 30}:5"}, NOW, trusted=True)
-    cells = [key for key in runner_pools.CELL_SECONDS if key[1] == "macos-14"]
+    cells = [
+        key
+        for key in runner_pools.CELL_SECONDS
+        if key[1] == "macos-14" and key not in runner_pools.HOSTED_ONLY_CELLS
+    ]
     pooled: list[runner_pools.CellKey] = []
     hosted: list[runner_pools.CellKey] = []
     # Even progressively visible snapshots cannot let a later classifier spend the same slot.
@@ -98,6 +102,23 @@ def test_admission_accounts_for_jobs_and_unmaterialized_older_runs() -> None:
     assert runner_pools.admit_capacity({"pi-macos": 1}, runs, jobs, 10, REPO) == {}
 
 
+@pytest.mark.parametrize("build_labels", [None, [], ["pi-macos"], ["xcode-27"]])
+def test_native_helper_reserves_only_macos_even_with_windows_sibling(build_labels: list[str] | None) -> None:
+    """A materializing native build is not invisible just because Windows started first."""
+    runs, jobs = census(2)
+    runs[0]["workflow_file"] = runner_pools.NATIVE_HELPER_WORKFLOW
+    jobs[1] = [
+        {"name": "route native helper", "status": "completed", "labels": ["ubuntu-24.04"]},
+        {"name": "windows-helper", "status": "in_progress", "labels": ["windows-2025"]},
+    ]
+    if build_labels is not None:
+        jobs[1].append({"name": "build", "status": "queued", "labels": build_labels})
+    assert runner_pools.admit_capacity({"pi-macos": 1, "pi-linux": 2}, runs, jobs, 2, REPO) == {
+        "pi-macos": int(build_labels == ["xcode-27"]),
+        "pi-linux": 2,
+    }
+
+
 def fake_api(
     monkeypatch: pytest.MonkeyPatch, *, full: str = "", previous: list[dict[str, Any]] | None = None
 ) -> list[str]:
@@ -130,7 +151,8 @@ def test_live_census_and_retry_do_not_return_to_a_previous_pool(monkeypatch: pyt
     """A rescued run never returns to a pool that stranded an earlier attempt."""
     calls = fake_api(monkeypatch)
     assert runner_pools.live_capacity({"pi-macos": 1}, REPO, 1) == {"pi-macos": 1}
-    assert len(calls) == 6
+    assert len(calls) == 11
+    assert sum("/workflows/native-helper.yml/" in path for path in calls) == 5
     fake_api(monkeypatch, previous=[{"labels": ["pi-macos"]}])
     assert runner_pools.live_capacity({"pi-linux": 1, "pi-macos": 1}, REPO, 1, 2) == {
         "pi-linux": 1,

@@ -28,6 +28,7 @@ permissions: {}
 jobs:
   verify:
     # Swift compiles both architectures on macOS; no signing keys or desktop setup.
+    # Keep release verification and publishing hosted for OIDC and attestation.
     runs-on: ${{ startsWith(github.ref_name, '@nredd/pi-computer-use@') && 'xcode-27' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:

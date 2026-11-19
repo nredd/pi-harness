@@ -147,7 +147,7 @@ Required checks on `main`, twelve contexts:
 
 Dropping a cell from a matrix would leave its context pending forever, which is why the cells that no longer test anything stay as bypass cells.
 
-The `macos-14` in these names is a stable check context, not the OS version: GitHub retired that image, so the cells run on `xcode-27` (macOS 27, GitHub names new images after the Xcode major) via `matrix.runner`. Renaming them would need a ruleset change.
+The `macos-14` in these names is a stable check context, not the OS version: GitHub retired that image, so the hosted cells run on `xcode-27` (macOS 27, GitHub names new images after the Xcode major) via `matrix.runner`. Renaming them would need a ruleset change.
 
 ### Review and merge evidence
 
@@ -455,6 +455,12 @@ CI plans cells across these pools and hosted runners by effective capacity, and 
 queued too long on a pool back to hosted. Policy, bounds and residuals live in the `Self-hosted routing policy` comment
 in [`ci.yml`](.github/workflows/ci.yml) and the header of [`runner-rescue.yml`](.github/workflows/runner-rescue.yml);
 there is no hard queue-time guarantee.
+
+The macOS `native-helper.yml` build can use `pi-macos` through shared admission, with `xcode-27`
+as the hosted fallback. It has not passed on the pool image. Cron rescue covers `ci.yml` queue stalls
+only, not started failures or the separate native-helper workflow. The macOS `scripts` shard and
+installer stay hosted because of their existing read-only tokens; publish stays hosted for OIDC and
+attestation.
 
 | Label | Host | Isolation |
 | --- | --- | --- |

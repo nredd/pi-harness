@@ -104,6 +104,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Stay hosted: same-UID package code can reach the read-only gh login; no token-free replacement
+        # for that acceptance path (see AGENTS.md KNOWN RESIDUAL).
         os: [ubuntu-24.04, xcode-27]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

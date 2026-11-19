@@ -874,6 +874,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--head")
     parser.add_argument("--full", action="store_true", help="No diff to read: run every cell for real")
+    parser.add_argument("--native-helper", action="store_true", help="Route only the native helper build")
     parser.add_argument("--event", required=True, help="GitHub event name, e.g. pull_request or push")
     parser.add_argument("--pr-title", default="", help="Pull request title, checked as the squash subject")
     parser.add_argument("--pr-number", type=int, default=0, help="Pull request number")
@@ -896,8 +897,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--pool-attempt", type=int, default=1, help="Run attempt; excludes the previous attempt's pools"
     )
     args = parser.parse_args(argv)
-    if not args.full and not (args.base and args.head):
-        parser.error("--base and --head are required unless --full is given")
+    if not (args.full or args.native_helper or (args.base and args.head)):
+        parser.error("--base and --head are required unless --full or --native-helper is given")
     return args
 
 
@@ -916,6 +917,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         LOGGER.error(f"Invalid --pool-heartbeat: {e}")
         return 2
+    if args.native_helper:
+        heartbeats = {name: beat for name, beat in heartbeats.items() if name == "pi-macos"}
     capacity = pool_capacity(heartbeats, time.time(), trusted=not args.no_pools)
     if args.pool_run_id > 0:
         capacity = live_capacity(capacity, args.pool_repository, args.pool_run_id, args.pool_attempt)
@@ -924,6 +927,11 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.warning("No `--pool-run-id`: pool admission is unavailable, so every cell stays hosted")
         capacity = {}
     LOGGER.info(f"Self-hosted pools admitted (working slots): {capacity}")
+    if args.native_helper:
+        runner = "pi-macos" if capacity.get("pi-macos", 0) > 0 else "xcode-27"
+        with args.github_output.open("a", encoding="utf-8") as output:
+            output.write(f"runner={runner}\n")
+        return 0
     problem = ""
     if args.event == EVENT_PULL_REQUEST:
         # Block the cells rather than exit non-zero: a missing title must not skip the one rule only this

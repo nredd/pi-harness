@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/native-helper.yml'
       - '.github/workflows/publish.yml'
+      - 'scripts/ci_paths.py'
+      - 'scripts/runner_pools.py'
       - 'scripts/npm_release.py'
       - 'scripts/release_descriptors.py'
       - 'packages/computer-use/**'
@@ -14,8 +16,37 @@ permissions:
   contents: read
 
 jobs:
+  route:
+    name: route native helper
+    if: ${{ !vars.PI_POOLS_DISABLED && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 2
+    outputs:
+      runner: ${{ steps.admit.outputs.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Admit a macOS pool slot
+        id: admit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PI_MACOS_HEARTBEAT: ${{ vars.PI_MACOS_HEARTBEAT }}
+        run: >-
+          python3 scripts/ci_paths.py --native-helper --event "$GITHUB_EVENT_NAME"
+          --github-output "$GITHUB_OUTPUT" --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT"
+          --pool-run-id "$GITHUB_RUN_ID" --pool-repository "$GITHUB_REPOSITORY"
+          --pool-attempt "$GITHUB_RUN_ATTEMPT"
+
   build:
-    runs-on: xcode-27
+    needs: route
+    if: ${{ !cancelled() }}
+    # CLT 27.2 compiled and ad hoc signed a trivial source with the required frameworks for both arches.
+    # That probe did not run the real native-check workflow or compile its Swift sources on the pool.
+    runs-on: ${{ needs.route.result == 'success' && needs.route.outputs.runner == 'pi-macos' && 'pi-macos' || 'xcode-27' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

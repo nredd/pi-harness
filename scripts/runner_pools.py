@@ -34,6 +34,7 @@ GH = "/usr/bin/gh"
 PAGE_SIZE = 100
 GH_TIMEOUT_S = 10
 CENSUS_TIMEOUT_S = 30
+NATIVE_HELPER_WORKFLOW = "native-helper.yml"
 ACTIVE_STATUSES = ("queued", "in_progress", "pending", "waiting", "requested")
 
 # A heartbeat is written every ~45 s; two minutes tolerates a missed write or two without routing long
@@ -89,9 +90,9 @@ CellKey = tuple[str, str, str]
 # is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
     # Known macOS work, ranked by expected completion time so the longest admitted cell starts locally
-    # while shorter peers execute hosted. The macOS `scripts`
-    # shard (~1140 s, run 44008954118) is deliberately NOT listed: it has not passed on the pool image (only
-    # `ts` is known to), and as the longest cell it would take the first slot. List it after one pool pass.
+    # while shorter peers execute hosted. The `scripts` shard took 1420 s on hosted run 44119846540
+    # (run 44008954118 measured 1141 s for the gate before the split). No pool-image pass yet.
+    ("owned", "macos-14", "scripts"): 1420,
     ("owned", "macos-14", "subagents"): 680,
     ("owned", "macos-14", "computer-use"): 360,
     ("owned", "macos-14", "ts"): 480,
@@ -106,6 +107,9 @@ CELL_SECONDS: dict[CellKey, int] = {
     ("contracts", "wsl2", ""): 400,
 }
 MIN_HEAVY_S = 240
+# `make install-owned` needs authenticated core provenance verification for the current pin.
+# Record the timing without moving the scripts shard or its existing GH_TOKEN step to the pool.
+HOSTED_ONLY_CELLS: frozenset[CellKey] = frozenset({("owned", "macos-14", "scripts")})
 
 
 DRAINING = "drain"
@@ -124,12 +128,13 @@ def cell_pool(name: str) -> str | None:
 
     Returns:
         str | None: The pool for a listed cell at least `MIN_HEAVY_S` long, else None (never migrate an
-            unlisted or unproven cell).
+            unlisted cell).
     """
-    for (kind, os_name, variant), seconds in CELL_SECONDS.items():
+    for key, seconds in CELL_SECONDS.items():
+        kind, os_name, variant = key
         suffix = f", {variant}" if variant else ""
         label = f"owned shard ({os_name}, {variant})" if kind == "owned" else f"{kind} ({os_name}{suffix})"
-        if name == label and seconds >= MIN_HEAVY_S:
+        if name == label and key not in HOSTED_ONLY_CELLS and seconds >= MIN_HEAVY_S:
             return OS_POOLS[os_name]
     return None
 
@@ -289,26 +294,32 @@ def admit_capacity(
     for run in runs:
         if run["id"] == run_id or (run.get("head_repository") or {}).get("full_name") != repo:
             continue
+        native_helper = run.get("workflow_file") == NATIVE_HELPER_WORKFLOW
+        planner = "route native helper" if native_helper else "classify changed paths"
         jobs = jobs_by_run[run["id"]]
+        if native_helper:
+            # The independent Windows job must not mask a macOS build that has not materialized.
+            jobs = [job for job in jobs if job.get("name") != "windows-helper"]
         unfinished = [job for job in jobs if job["status"] != "completed"]
-        classified = any(
-            job.get("name") == "classify changed paths" and job["status"] == "completed" for job in jobs
-        )
+        classified = any(job.get("name") == planner and job["status"] == "completed" for job in jobs)
         planning = (
             not jobs
-            or all(job.get("name") == "classify changed paths" for job in jobs)
+            or all(job.get("name") == planner for job in jobs)
             or any(
-                job.get("name") == "classify changed paths"
+                job.get("name") == planner
                 or (
-                    job.get("name", "").startswith(("owned shard (", "stack (", "contracts ("))
-                    and not job.get("labels")
+                    not job.get("labels")
+                    and (
+                        (native_helper and job.get("name") == "build")
+                        or job.get("name", "").startswith(("owned shard (", "stack (", "contracts ("))
+                    )
                 )
                 for job in unfinished
             )
         )
-        # Cells without runner labels name the pools they target; a run with no cells yet could use any.
+        # Cells without runner labels name the pools they target; a CI run with no cells yet could use any.
         named = {p for job in unfinished if not job.get("labels") and (p := cell_pool(job.get("name", "")))}
-        targeted = named or set(used)
+        targeted = {"pi-macos"} if native_helper else named or set(used)
         for pool, occupied_slots in used.items():
             # A run with no cells yet may materialise the pool's whole run-placeable room.
             reserve = _cap(POOLS[pool].slots, POOLS[pool].run_cap)
@@ -346,6 +357,22 @@ def gh_read(path: str) -> Any:
     )
 
 
+def _active_runs(repo: str, workflows: tuple[str, ...], deadline: float) -> dict[int, Mapping[str, Any]]:
+    """Read the unfinished runs of each workflow, tagged with their workflow file."""
+    runs: dict[int, Mapping[str, Any]] = {}
+    for workflow in workflows:
+        for status in ACTIVE_STATUSES:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Pool run census exceeded its admission deadline")
+            page = gh_read(
+                f"repos/{repo}/actions/workflows/{workflow}/runs?status={status}&per_page={PAGE_SIZE}"
+            )
+            if page["total_count"] >= PAGE_SIZE:
+                raise ValueError(f"Incomplete pool run census for '{workflow}'")
+            runs |= {run["id"]: run | {"workflow_file": workflow} for run in page["workflow_runs"]}
+    return runs
+
+
 def live_capacity(capacity: Mapping[str, int], repo: str, run_id: int, attempt: int = 1) -> dict[str, int]:
     """Read a bounded unfinished-run census, then admit this run or fall back hosted.
 
@@ -362,14 +389,8 @@ def live_capacity(capacity: Mapping[str, int], repo: str, run_id: int, attempt: 
         return {}
     deadline = time.monotonic() + CENSUS_TIMEOUT_S
     try:
-        runs: dict[int, Mapping[str, Any]] = {}
-        for status in ACTIVE_STATUSES:
-            if time.monotonic() > deadline:
-                raise TimeoutError("Pool run census exceeded its admission deadline")
-            page = gh_read(f"repos/{repo}/actions/workflows/ci.yml/runs?status={status}&per_page={PAGE_SIZE}")
-            if page["total_count"] >= PAGE_SIZE:
-                return {}
-            runs |= {run["id"]: run for run in page["workflow_runs"]}
+        workflows = ("ci.yml", NATIVE_HELPER_WORKFLOW) if capacity.get("pi-macos", 0) else ("ci.yml",)
+        runs = _active_runs(repo, workflows, deadline)
         jobs: dict[int, list[dict[str, Any]]] = {}
         for ident in runs:
             if time.monotonic() > deadline:
@@ -412,7 +433,13 @@ def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dic
     """
     free = dict(capacity)
     heavy = sorted(
-        (key for key in running if CELL_SECONDS.get(key, 0) >= MIN_HEAVY_S and OS_POOLS.get(key[1]) in free),
+        (
+            key
+            for key in running
+            if key not in HOSTED_ONLY_CELLS
+            and CELL_SECONDS.get(key, 0) >= MIN_HEAVY_S
+            and OS_POOLS.get(key[1]) in free
+        ),
         key=lambda key: (-CELL_SECONDS[key], key),
     )
     chosen: dict[CellKey, str] = {}

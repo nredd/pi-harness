@@ -413,6 +413,7 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
     )
     assert cell_runners(routed, "owned (ubuntu-24.04)")["ts"] == "pi-linux"
     assert cell_runners(routed, "owned (macos-14)")["subagents"] == "xcode-27"
+    assert cell_runners(routed, "owned (macos-14)")["scripts"] == "xcode-27"
     assert routed["stack (macos-14, local)"]["runner"] == "pi-macos"
     blocked = plan_with(tmp_path, "b", "--pool-heartbeat", f"pi-linux={beat}:2", "--no-pools")
     assert set(cell_runners(blocked, "owned (ubuntu-24.04)").values()) == {"ubuntu-24.04"}
@@ -430,6 +431,16 @@ def test_main_rejects_a_mistyped_heartbeat_argument(tmp_path: Path) -> None:
     out.write_text("")
     argv = ["--full", "--event", "push", "--github-output", str(out), "--pool-heartbeat", "pi-mac=1"]
     assert ci_paths.main(argv) == 2
+
+
+def test_macos_scripts_has_measured_duration_but_stays_hosted() -> None:
+    """A measured duration must not override the credential hold."""
+    scripts = ("owned", "macos-14", "scripts")
+    assert runner_pools.CELL_SECONDS[scripts] == 1420
+    assert runner_pools.cell_pool("owned shard (macos-14, scripts)") is None
+    assert runner_pools.assign_cells([scripts, ("stack", "macos-14", "local")], {"pi-macos": 1}) == {
+        ("stack", "macos-14", "local"): "pi-macos"
+    }
 
 
 # The real table, not the fixture: the ARM64 WSL2 pool (#736) routes its cells by the shipped estimates.

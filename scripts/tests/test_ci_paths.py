@@ -22,8 +22,62 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ci_paths
 import coverage_accounting
 import merge_pr_checks
+import runner_pools
 
 GIT = ci_paths.GIT
+
+
+@pytest.mark.parametrize(
+    ("beat", "extra", "api", "expected"),
+    [
+        ("1800000000:1", [], "live", "pi-macos"),
+        ("1800000000:1", [], "offline", "xcode-27"),
+        ("1800000000:1", [], "missing", "xcode-27"),
+        ("1799999000:1", [], "unused", "xcode-27"),
+        ("1800000000:0", [], "unused", "xcode-27"),
+        ("1800000000:1", ["--no-pools"], "unused", "xcode-27"),
+        ("1800000000:1", ["--pool-run-id", "0"], "unused", "xcode-27"),
+    ],
+)
+def test_native_helper_uses_shared_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, beat: str, extra: list[str], api: str, *, expected: str
+) -> None:
+    """Route only on fresh, admitted capacity; exercise the real CLI and census code."""
+    calls: list[str] = []
+
+    def read(path: str) -> dict[str, Any]:
+        calls.append(path)
+        if api == "offline":
+            raise OSError("unavailable")
+        if path.endswith("/jobs?filter=latest&per_page=100"):
+            return {"total_count": 1, "jobs": [{"name": "route native helper", "status": "in_progress"}]}
+        runs = [{"id": 4}] if api == "live" and "/native-helper.yml/" in path else []
+        return {"total_count": len(runs), "workflow_runs": runs}
+
+    monkeypatch.setattr(ci_paths.time, "time", lambda: 1_800_000_000)
+    monkeypatch.setattr(runner_pools, "gh_read", read)
+    out = tmp_path / "output"
+    assert (
+        ci_paths.main(
+            [
+                "--native-helper",
+                "--event",
+                "pull_request",
+                "--github-output",
+                str(out),
+                "--pool-heartbeat",
+                f"pi-macos={beat}",
+                "--pool-run-id",
+                "4",
+                "--pool-repository",
+                "example/project",
+                *extra,
+            ]
+        )
+        == 0
+    )
+    assert out.read_text() == f"runner={expected}\n"
+    assert bool(calls) == (api != "unused")
 
 
 def git(repo: Path, *args: str) -> str:
