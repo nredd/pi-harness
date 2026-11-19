@@ -125,6 +125,12 @@ once per human prompt, independently of the plan reminder. The context hook subs
 list only on that request, and only if the work remains held and unarmed. A wake is not proof of
 completion; only the parent changes todo status with evidence.
 
+An unchanged list with `pending` or `in_progress` todos adds a hidden
+`rpiv-todo-stale-reminder` on the tenth completed settle that would otherwise stop, even when a
+background agent is armed. It asks the parent to run `todo list` and reconcile actual progress.
+A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
+counting. Only human input rearms the reminder; monitor and agent wakes do not.
+
 ### Session switches and survivors
 
 `/new`, `/resume`, `/fork` and `/reload` are not process restarts: pi-subagents detaches background

@@ -50,6 +50,14 @@ export const PLAN_REMINDER_MARKER = "[rpiv-todo] Plan items were still open when
 export const HELD_REMINDER_MARKER =
 	"[rpiv-todo] Todos were held with nothing armed to wake you when this run tried to finish.";
 
+const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
+const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
+const STALE_AFTER_SETTLES = 10;
+
+function hasOpenTodos(state: TaskState): boolean {
+	return state.tasks.some((task) => task.status === "pending" || task.status === "in_progress");
+}
+
 interface SettleMessage {
 	role?: string;
 	customType?: string;
@@ -461,23 +469,36 @@ export function registerPlanHooks(
 		return { entries: [...event.entries, draft], continue: true };
 	};
 
+	// Todo writes replace the canonical state; reads and rejected writes keep its identity.
+	// The age follows the snapshot, while the reminder budget follows human input.
+	const staleAge = new WeakMap<TaskState, number>();
+	const staleReminded = new Set<string>();
 	const onSettle: SettleHandler = (event, ctx) => {
 		const messages = event.context.contextMessages;
 		if (event.outcome !== "completed" || isPlanning(ctx, messages)) return undefined;
 		const id = sid(ctx);
 		refreshSurvivors(id);
+		const state = getState(id);
 		if (!remindedSinceLastPrompt(messages)) {
-			const open = selectOpenPlanItems(getState(id));
+			const open = selectOpenPlanItems(state);
 			if (open.length)
 				return reminderDraft(event, PLAN_REMINDER_MESSAGE_TYPE, PLAN_REMINDER_MARKER, {
 					open: open.map((t) => t.id),
 				});
 		}
 		// Held work with nothing armed can never wake the parent: remind once per prompt, not every settle.
-		if (remindedSinceLastPrompt(messages, HELD_REMINDER_MESSAGE_TYPE)) return undefined;
-		const held = unarmedHeld(getState(id), agentLookup(id), settleFacts(id));
-		if (!held.length) return undefined;
-		return reminderDraft(event, HELD_REMINDER_MESSAGE_TYPE, HELD_REMINDER_MARKER, { held: held.map((t) => t.id) });
+		if (!remindedSinceLastPrompt(messages, HELD_REMINDER_MESSAGE_TYPE)) {
+			const held = unarmedHeld(state, agentLookup(id), settleFacts(id));
+			if (held.length)
+				return reminderDraft(event, HELD_REMINDER_MESSAGE_TYPE, HELD_REMINDER_MARKER, { held: held.map((t) => t.id) });
+		}
+		// Age only completed settles that would otherwise stop, independent of any armed wake.
+		if (!hasOpenTodos(state)) return undefined;
+		const age = Math.min((staleAge.get(state) ?? 0) + 1, STALE_AFTER_SETTLES);
+		staleAge.set(state, age);
+		if (age < STALE_AFTER_SETTLES || staleReminded.has(id)) return undefined;
+		staleReminded.add(id);
+		return reminderDraft(event, STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER, {});
 	};
 	pi.on("agent_before_settle", onSettle);
 
@@ -490,7 +511,10 @@ export function registerPlanHooks(
 	// runs no `input` handlers; extension prompts (`sendUserMessage`) arrive as `extension`.
 	const reported = new Map<string, string>();
 	pi.on("input", (event, ctx) => {
-		if (event.source !== "extension") reported.delete(sid(ctx));
+		if (event.source === "extension") return;
+		const id = sid(ctx);
+		reported.delete(id);
+		staleReminded.delete(id);
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		if (isPlanning(ctx, [])) return;
@@ -518,6 +542,10 @@ export function registerPlanHooks(
 			const held = unarmedHeld(state, agentLookup(id), settleFacts(id));
 			if (!held.length) return undefined;
 			content = formatHeldReminder(held);
+		} else if (isReminder(last, STALE_REMINDER_MESSAGE_TYPE)) {
+			if (!hasOpenTodos(state)) return undefined;
+			content =
+				"The open todo list has not changed for several settles. Run `todo` with action `list` and reconcile it with what actually happened. Complete only with evidence, defer with a reason, and leave work that is still running open.";
 		} else return undefined;
 		const messages = [...event.messages];
 		messages[messages.length - 1] = { ...(last as object), content } as (typeof messages)[number];
@@ -545,6 +573,7 @@ export function registerPlanHooks(
 			live.delete(sessionId);
 			reported.delete(sessionId);
 			resumedOwners.delete(sessionId);
+			staleReminded.delete(sessionId);
 		},
 	};
 }
