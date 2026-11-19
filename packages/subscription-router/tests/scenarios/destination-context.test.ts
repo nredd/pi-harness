@@ -1,5 +1,5 @@
 /** Physical destination limits stay core-owned when terminal recovery changes provider. */
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it } from "vitest";
 import { CachedUsage, Clock, type RouterScenario, startRouter } from "../fixtures/router.ts";
 

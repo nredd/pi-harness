@@ -1,5 +1,5 @@
 /** Exercise the actual command/transcript boundary with no credentials, network or model request. */
-import { createHarness } from "@earendil-works/pi-coding-agent/testing";
+import { createHarness } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { createSubscriptionRouter } from "../../src/index.ts";
 import { CachedUsage, Clock } from "../fixtures/router.ts";
@@ -27,6 +27,18 @@ it("prints cached reset schedules through the real session without triggering ad
 			(entry) => entry.role === "custom" && entry.customType === "router:resets",
 		);
 		expect(message).toMatchObject({ display: true, content: expect.stringContaining("75% used") });
+		expect(harness.session.messages.some((entry) => entry.role === "assistant")).toBe(false);
+		expect(usage.reads).toEqual([]);
+
+		await harness.session.reload();
+		usage.set("anthropic", 80);
+		await harness.session.prompt("/router resets");
+		expect(harness.session.messages.at(-1)).toMatchObject({
+			role: "custom",
+			customType: "router:resets",
+			display: true,
+			content: expect.stringContaining("80% used"),
+		});
 		expect(harness.session.messages.some((entry) => entry.role === "assistant")).toBe(false);
 		expect(usage.reads).toEqual([]);
 	} finally {

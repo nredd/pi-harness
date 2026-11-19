@@ -1,10 +1,5 @@
 /** Two real Pi sessions share the production collector/cache while confirmations overlap. */
-import {
-	createHarness,
-	fauxAssistantMessage,
-	type Harness,
-	registerFauxProvider,
-} from "@earendil-works/pi-coding-agent/testing";
+import { createHarness, fauxAssistantMessage, type Harness, registerFauxProvider } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { ExhaustionTracker } from "../../src/exhaustion.ts";
 import { createSubscriptionRouter } from "../../src/index.ts";

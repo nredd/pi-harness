@@ -5,7 +5,7 @@ import {
 	fauxToolCall,
 	getToolResult,
 	type Harness,
-} from "@earendil-works/pi-coding-agent/testing";
+} from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSubscriptionRouter } from "../../src/index.ts";
 import { UsageService } from "../../src/usage.ts";

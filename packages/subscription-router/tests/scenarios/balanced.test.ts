@@ -1,5 +1,5 @@
 /** Source-fixture physical dispatch arrays, now driven in-process rather than via the RPC CLI. */
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { STALE_GRACE_MS } from "../../src/selection.ts";

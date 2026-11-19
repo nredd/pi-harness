@@ -17,6 +17,30 @@ recording Pi doubles come from `@nredd/pi-test-lib`. The byte-pinned legacy orac
 formatting, linting and assists there. Snapshot provenance and oracle rules are below;
 `tests/policy-compatibility.test.ts` and `tests/policy-differential.test.ts` keep warning headers.
 
+Headless session scenarios use `@nredd/pi-test-lib/harness`. The graph tests follow the router
+suite through its shared helpers and reject the real fork-only `tests/inprocess/footer-router.test.ts`
+graph. The fixed 494-case Node/Bun scope for the pinned fork and stock Pi `1.5.2` is the router
+suite minus these four `tests/scenarios/` files, which still run in the full fork suite:
+
+- `core-settle-cancellation.test.ts` needs an active-run `ctx.signal` in `agent_before_settle`
+  that aborts while the handler is awaiting confirmation.
+- `ownership.test.ts` needs settlement cancellation and requester-owned selection state so a pin,
+  profile switch (including away-and-back), shutdown or abort invalidates in-flight recovery.
+- `recovery.test.ts` needs settlement cancellation to prevent recovery edits and a second
+  physical dispatch when a terminal failure is being confirmed.
+- `shared-runtime.test.ts` needs retry routing to carry the requesting session and its durable
+  model changes, even if only a sibling session loaded the router extension.
+
+The portable reset scenario exercises real session reload and command rebinding. The RPC UI
+double used by the Codex-reset scenario does not mount a terminal.
+
+The footer integration still uses the preset's `FooterFixture` and fork-only
+`@earendil-works/pi-coding-agent/testing/interactive`. That host needs the core testing harness,
+`AgentSessionRuntime`, `FooterDataProvider`, `KeybindingsManager`, `InteractiveMode.init/stop/flushRender`
+and the interactive option hooks (`keybindings`, `footerDataProvider`, `prepareTools`, `onInput`,
+`onEditorSubmit`). It renders through `VirtualTerminal` from `@earendil-works/pi-tui/testing`,
+`TUI.flushRender` and `@xterm/headless`. It is not part of the stock scope.
+
 ### Cancellation ownership
 
 Recovery relies on core's active-run `ctx.signal` (core `v1.3.0-nredd.12` or later; `.11` and

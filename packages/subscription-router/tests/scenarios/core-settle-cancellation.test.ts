@@ -1,6 +1,6 @@
 /** Minimal core contract regression: no router, quota service, or provider network. */
-import { createHarness, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
+import { createHarness, fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 
 it("exposes cancellation to an awaited pre-settle handler before it commits recovery", async () => {
