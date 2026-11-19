@@ -4,6 +4,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ## [Unreleased]
 
+- Remove the app-policy tests' temporary agent and project directories at test completion, including on failures (#1064).
+
 - Move the entry to `src/index.ts`, retire the inherited website/media/workflows, preserve prose, and build native payloads instead of committing them (#870).
 
 ### Removed
