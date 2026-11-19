@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -28,7 +29,10 @@ function make(): MonitorManager {
 	});
 }
 
-const matchReplies = vi.hoisted(() => ({ suppress: false }));
+const matchReplies = vi.hoisted(() => ({
+	suppress: false,
+	onSuppressed: undefined as ((child: ChildProcess) => void) | undefined,
+}));
 vi.mock("node:child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:child_process")>();
 	return {
@@ -39,7 +43,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 				const emit = child.emit.bind(child);
 				child.emit = (event: string | symbol, ...values: unknown[]) => {
 					// Suppress only match replies, not the readiness handshake or exit/close events.
-					if (matchReplies.suppress && event === "message" && typeof values[0] === "boolean") return true;
+					if (matchReplies.suppress && event === "message" && typeof values[0] === "boolean") {
+						matchReplies.onSuppressed?.(child);
+						return true;
+					}
 					return emit(event, ...values);
 				};
 			}
@@ -49,25 +56,25 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 it("lets the parent advance two turns while a pathological match is pending", async () => {
-	const tmp = tempDir();
-	const sent: MonitorMessage[] = [];
+	const turnTmp = tempDir();
+	const turnMessages: MonitorMessage[] = [];
 	const clock = new FakeClock();
 	const coalesceMs = 80;
 	let onStdout: SpawnOptions["onStdout"] | undefined;
 	const mgr = new MonitorManager({
 		sessionId: "sess-1",
-		root: tmp.dir,
+		root: turnTmp.dir,
 		coalesceMs,
 		killGraceMs: 300,
 		clock,
-		send: (m) => sent.push(m),
+		send: (m) => turnMessages.push(m),
 		spawnMonitor: (argv, options) => {
 			onStdout = options.onStdout;
 			return spawnMonitor(argv, options);
 		},
 	});
 	try {
-		const info = await mgr.start({ argv: node(STAY), name: "bad", match: "^(a+)+$|^a+!$" }, tmp.dir);
+		const info = await mgr.start({ argv: node(STAY), name: "bad", match: "^(a+)+$|^a+!$" }, turnTmp.dir);
 		if (!onStdout) throw new Error("Monitor did not register a stdout handler");
 		// Warm up the matcher so the pathological line is dispatched, not waiting for worker startup.
 		await onStdout(Buffer.from("ready\n"));
@@ -82,18 +89,55 @@ it("lets the parent advance two turns while a pathological match is pending", as
 			const state = mgr.info(info.id);
 			if (state?.lines === 2 && state.matches === 0) pendingTurns++;
 		}
+		// This checks turn ordering, not turn duration: a synchronous delay without a match update can pass.
 		expect(pendingTurns).toBe(2);
 		// Expire the withheld reply and deliver the conservative wake using the virtual clock.
 		clock.advance(MATCH_TIMEOUT_MS + coalesceMs);
 		await ingested;
-		expect(sent[0]).toMatchObject({ wake: true, details: { matched: [2] } });
+		expect(turnMessages[0]).toMatchObject({ wake: true, details: { matched: [2] } });
 		await mgr.dispose();
 		expect(alive(info.pid)).toBe(false);
 	} finally {
 		matchReplies.suppress = false;
 		await mgr.dispose();
-		tmp.cleanup();
+		turnTmp.cleanup();
 	}
+}, 15_000);
+
+it("disposes with a match reply still withheld and reaps both children", async ({ onTestFinished }) => {
+	const disposeTmp = tempDir();
+	const clock = new FakeClock();
+	const manager = new MonitorManager({ sessionId: "sess-1", root: disposeTmp.dir, clock, send: () => {} });
+	let disposal: Promise<void> | undefined;
+	onTestFinished(async () => {
+		matchReplies.suppress = false;
+		matchReplies.onSuppressed = undefined;
+		// Let the match deadline unblock cleanup if the test timed out waiting for disposal.
+		clock.advance(MATCH_TIMEOUT_MS);
+		try {
+			await (disposal ?? manager.dispose());
+		} finally {
+			disposeTmp.cleanup();
+		}
+	});
+
+	matchReplies.suppress = true;
+	const withheld = new Promise<ChildProcess>((resolve) => {
+		matchReplies.onSuppressed = resolve;
+	});
+	const info = await manager.start(
+		{ argv: node(`console.log("a".repeat(4095) + "!");${STAY}`), name: "busy", match: "^a+!$" },
+		disposeTmp.dir,
+	);
+	const matcher = await withheld;
+	if (!matcher.pid) throw new Error("Expected a real matcher child");
+	expect(alive(matcher.pid)).toBe(true);
+	expect(manager.info(info.id)).toMatchObject({ lines: 1, matches: 0 });
+	// Neither reply delivery nor virtual deadlines can finish the pending match for dispose.
+	disposal = manager.dispose();
+	await disposal;
+	expect(alive(info.pid)).toBe(false);
+	expect(alive(matcher.pid)).toBe(false);
 }, 15_000);
 
 describe("MonitorManager", () => {
@@ -156,18 +200,6 @@ describe("MonitorManager", () => {
 		await waitFor(() => sent.length === 1, 4000);
 		expect(sent[0]?.wake).toBe(true);
 		expect(sent[0]?.details.matched).toEqual([2]);
-	});
-
-	it("disposes while a full-length pathological line is still being matched", async () => {
-		const info = await mgr.start(
-			{ argv: node(`console.log("a".repeat(4095) + "!");${STAY}`), name: "busy", match: "^(a+)+$" },
-			tmp.dir,
-		);
-		await waitFor(() => (mgr.info(info.id)?.lines ?? 0) === 1);
-		const start = Date.now();
-		await mgr.dispose();
-		expect(Date.now() - start).toBeLessThan(1000);
-		expect(alive(info.pid)).toBe(false);
 	});
 
 	it("wakes on every batch with wake: true", async () => {
