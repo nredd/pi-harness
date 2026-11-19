@@ -916,6 +916,10 @@ Use `model: "@cheap"` in an agent, `agentModels`, `Agent({ model: "@cheap" })`, 
 
 Bindings live ONLY in global `~/.pi/agent/subagents.json` or the `subagents` object of an owner-only `enterprise.local.json`. Project tier definitions and resolution policies are ignored with a warning. Keys match `^[a-z0-9][a-z0-9._-]*$` and are case sensitive. Each nonempty list contains either exactly one registered `router/<profile>`, or only exact physical `provider/id` members. No mixtures, nested tiers, fuzzy entries or implicit neighbouring tiers. Exact model IDs may contain revision markers such as `@20240620`; a bare `@other-tier` binding entry is still rejected. Invalid bindings are dropped with a warning; references to them are `unmapped`.
 
+Run `/agents propose-tiers` in an interactive session to list registered `router/*` profiles and preview a `modelTiers` map. It suggests only exact, case-sensitive matches for `cheap`, `deep`, `default`, `frontier` and `review`. A missing profile is left unmapped; arbitrary profile names are listed but never substituted. Registration is not a check of credentials, quota or the health of a profile's members.
+
+The command proposes nothing when a trusted `modelTiers` map already exists, even `{}`, and skips `cheap` if it would shadow the legacy Explore compatibility alias. Review the JSON and, only if you approve, copy the `modelTiers` field into your trusted global configuration yourself. The command never writes settings or changes routing.
+
 Routed personal setup (configure the router profiles separately):
 
 ```json

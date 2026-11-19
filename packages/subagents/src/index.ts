@@ -133,7 +133,7 @@ import {
 	modelShadowNote,
 	selectModel,
 } from "./model-selection.ts";
-import { configuredTierNames, tierDisclosure } from "./model-tiers.ts";
+import { configuredTierNames, describeTierProposal, tierDisclosure } from "./model-tiers.ts";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.ts";
 import {
 	clipNotice,
@@ -187,6 +187,7 @@ import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
 	applyAndEmitLoaded,
 	loadSettings,
+	loadTrustedSettings,
 	type SubagentsSettings,
 	saveAndEmitChanged,
 	type ToolDescriptionMode,
@@ -5633,8 +5634,13 @@ Write the file using the write tool. Only write the file, nothing else.`;
 	}
 
 	pi.registerCommand("agents", {
-		description: "Manage agents",
+		description: "Manage agents (propose-tiers to preview modelTiers)",
 		handler: async (args, ctx) => {
+			if (args.trim() === "propose-tiers") {
+				const { modelTiers, modelAliases } = loadTrustedSettings(options.homeDir);
+				ctx.ui.notify(describeTierProposal(ctx.modelRegistry.getAll(), modelTiers, modelAliases), "info");
+				return;
+			}
 			if (args.trim() === "roster" || args.trim() === "audit") {
 				try {
 					const root = ctx.sessionManager?.getSessionId?.() ?? "";

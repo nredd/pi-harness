@@ -1,5 +1,5 @@
 /** Actual entry paths + manager, real Pi registry/resolver; only child execution is stubbed. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -13,7 +13,7 @@ import { createSubagentsExtension } from "../src/index.ts";
 import { explainModel } from "../src/model-explanation.ts";
 import { setAgentModels, setModelAliases } from "../src/model-resolver.ts";
 import { setScopeModelsEnabled } from "../src/model-scope.ts";
-import { setModelTiers } from "../src/model-tiers.ts";
+import { setModelTiers, tierBinding } from "../src/model-tiers.ts";
 import { createNestedSubagentTools } from "../src/nested-tools.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
@@ -159,6 +159,100 @@ afterEach(async () => {
 	setModelTiers(undefined, undefined);
 	delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:manager")];
 	sandbox.restore();
+});
+
+describe("/agents propose-tiers", () => {
+	const globalSettings = () => join(process.env.PI_CODING_AGENT_DIR!, "subagents.json");
+	const route = () => {
+		throw new Error("A proposal must not route");
+	};
+	const register = (id: string, provider = "router") =>
+		registry.registerVirtualModel({ provider, id, name: id, route });
+	async function preview() {
+		const notify = vi.fn<(message: string, level: string) => void>();
+		await boot.commands
+			.get("agents")
+			.handler(" propose-tiers ", makeCtx({ hasUI: true, modelRegistry: registry, ui: { notify } }));
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "info");
+		expect(admissionModels).toEqual([]);
+		return notify.mock.calls[0]![0];
+	}
+
+	it("lists registered profiles in order and proposes only exact matches without applying or writing", async () => {
+		register("review");
+		register("cheap");
+		register("frontier-extra");
+		register("Deep");
+		register("deep", "other-provider");
+		const projectSettings = join(sandbox.dir, ".pi", "subagents.json");
+		const before = readFileSync(projectSettings, "utf8");
+		const display = await preview();
+		expect(display).toContain(
+			"Registered router profiles: router/cheap, router/default, router/frontier-extra, router/review.",
+		);
+		expect(display).toContain("No matching registered profile: @deep, @frontier.");
+		expect(display).toContain("If you approve");
+		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({
+			modelTiers: { cheap: ["router/cheap"], default: ["router/default"], review: ["router/review"] },
+		});
+		expect(await preview()).toBe(display);
+		expect(existsSync(globalSettings())).toBe(false);
+		expect(readFileSync(projectSettings, "utf8")).toBe(before);
+		expect(tierBinding("cheap")).toBeUndefined();
+	});
+
+	it("proposes nothing when no router profiles are registered", async () => {
+		registry.unregisterVirtualModel("router", "default");
+		expect(await preview()).toBe(
+			"Registered router profiles: none.\nNo matching registered profile: @cheap, @deep, @default, @frontier, @review.\nNo bindings proposed.",
+		);
+	});
+
+	it("does not substitute an unrelated profile or use a nonvirtual router entry", async () => {
+		registry.unregisterVirtualModel("router", "default");
+		const physical = registry.find("selection-path", "parent")!;
+		register("other");
+		const models = registry.getAll();
+		vi.spyOn(registry, "getAll").mockReturnValueOnce([...models, { ...physical, provider: "router", id: "cheap" }]);
+		const display = await preview();
+		expect(display).toContain("Registered router profiles: router/other.");
+		expect(display).toContain("No matching registered profile: @cheap, @deep, @default, @frontier, @review.");
+		expect(display).toContain("No bindings proposed.");
+	});
+
+	it("proposes all five tiers without reporting a missing profile when all are registered", async () => {
+		for (const tier of ["review", "frontier", "cheap", "deep"]) register(tier);
+		const display = await preview();
+		expect(display).not.toContain("No matching");
+		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({
+			modelTiers: {
+				cheap: ["router/cheap"],
+				deep: ["router/deep"],
+				default: ["router/default"],
+				frontier: ["router/frontier"],
+				review: ["router/review"],
+			},
+		});
+	});
+
+	it.each([{}, { cheap: ["selection-path/definition"] }])("leaves an explicit map alone: %j", async (modelTiers) => {
+		const initial = JSON.stringify({ modelTiers });
+		writeFileSync(globalSettings(), initial);
+		expect(await preview()).toBe(
+			"Registered router profiles: router/default.\nNo proposal: modelTiers is already configured (an empty map counts).",
+		);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(initial);
+	});
+
+	it("preserves the legacy Explore alias while proposing independent tiers", async () => {
+		register("cheap");
+		const initial = JSON.stringify({ modelAliases: { "Claude-Haiku-4-5": ["selection-path/definition"] } });
+		writeFileSync(globalSettings(), initial);
+		const display = await preview();
+		expect(display).toContain("Skipped @cheap: a binding would shadow the legacy Explore alias.");
+		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({ modelTiers: { default: ["router/default"] } });
+		expect(readFileSync(globalSettings(), "utf8")).toBe(initial);
+	});
 });
 
 async function invoke(path: Path, model?: string | null) {
