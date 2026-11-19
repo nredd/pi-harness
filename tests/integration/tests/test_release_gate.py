@@ -29,15 +29,16 @@ def ci_job(name: str) -> str:
     """Return the `ci.yml` job id that reports one expected job name.
 
     Parameters:
-        name (str): Job name, e.g. `owned shard (macos-14, ts)` or `contracts (wsl2)`.
+        name (str): Job name, e.g. `owned shard (macos-14, ts)` or `contracts (ubuntu-24.04)`.
 
     Returns:
         str: Job id; each OS has its own `owned-shards-<os>` and `owned-<os>` (fan-in) job.
     """
-    if name.startswith("owned shard ("):
-        return "owned-shards"
-    if name.startswith("owned ("):
-        return "owned"
+    if name.startswith("owned "):
+        system = name.split("(", maxsplit=1)[1].rstrip(")").split(",", maxsplit=1)[0]
+        os_key = system.split("-", maxsplit=1)[0]
+        prefix = "owned-shards" if name.startswith("owned shard (") else "owned"
+        return f"{prefix}-{os_key}"
     return name.split(" ", maxsplit=1)[0]
 
 
