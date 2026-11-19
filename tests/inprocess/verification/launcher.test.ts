@@ -168,25 +168,26 @@ test("the direct-launch matcher sees every shell form of a test command", () => 
 	expect(directLaunches("vitest-coverage-merge && bun tests")).toEqual([]);
 });
 
-test("scripts that bypass the launcher disable jiti's fs cache themselves", () => {
+test("workspace scripts do not invoke Vitest or Bun tests directly", () => {
 	const root = fileURLToPath(new URL("../../../", import.meta.url));
-	const packages = readdirSync(join(root, "packages")).map((name) => join("packages", name));
+	const manifest: { workspaces: string[] } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+	const workspaces = manifest.workspaces.flatMap((pattern) => {
+		if (!pattern.endsWith("/*")) return [pattern];
+		const directory = pattern.slice(0, -2);
+		return readdirSync(join(root, directory), { withFileTypes: true })
+			.filter((entry) => entry.isDirectory())
+			.map(({ name }) => join(directory, name));
+	});
 	const direct: string[] = [];
-	const unguarded: string[] = [];
-	for (const workspace of [".", ...packages, "tests/inprocess"]) {
+	for (const workspace of [".", ...workspaces]) {
 		// A workspace without a manifest is a broken checkout, not a reason to skip it.
 		const scripts: Record<string, string> =
 			JSON.parse(readFileSync(join(root, workspace, "package.json"), "utf8")).scripts ?? {};
 		for (const [name, script] of Object.entries(scripts)) {
-			for (const { command, guarded } of directLaunches(script)) {
-				direct.push(`${workspace} ${name}`);
-				if (!guarded) unguarded.push(`${workspace} ${name}: ${command}`);
-			}
+			for (const { command } of directLaunches(script)) direct.push(`${workspace} ${name}: ${command}`);
 		}
 	}
-	expect(unguarded).toEqual([]);
-	// Exact, so a new direct launcher is a deliberate edit here.
-	expect(direct.sort()).toEqual(["packages/subagents bench", "packages/subagents test:e2e"]);
+	expect(direct).toEqual([]);
 });
 
 test.each([

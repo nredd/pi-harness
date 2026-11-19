@@ -8,6 +8,7 @@ import { isolatedHomeEnv } from "../tests/lib/src/isolated-home.ts";
 const FAILURE_EXIT_STATUS = 1;
 const MILLISECONDS_PER_SECOND = 1000;
 const TIMING_DECIMAL_PLACES = 2;
+const CLEANUP_RETRIES = 1;
 // Activation goes FIRST: Vitest's CLI parser turns a bare `--coverage` into `{ enabled: true }` and drops any
 // `--coverage.*` field parsed before it, so a caller's own reporter would be erased if it came after.
 const BUN_COVERAGE_ACTIVATION = "--coverage";
@@ -53,20 +54,25 @@ export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string>
  * exact `--coverage.enabled=false` argument opts out of the Bun signal's appended coverage arguments.
  * Bun children also get `PI_EXPECT_BUN_RUNTIME=1`, which a suite may check to prove its engine.
  *
- * @param argv The engine, `node` or `bun`, then the arguments Vitest's `run` receives.
+ * @param argv The engine (`node` or `bun`), optional `--keep-home` for operator-backed commands,
+ *   optional `bench` command (default: `run`), then Vitest arguments.
  * @param env The environment the child inherits under the isolated home; also where
  *   `GITHUB_STEP_SUMMARY` is read.
  * @returns The child's exit status, or 1 when it was killed by a signal.
  * @throws When the engine is neither `node` nor `bun`, or the child cannot be spawned.
  */
 export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
-	const [engine, ...packageArgs] = argv;
+	const [engine, ...args] = argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
+	const keepHome = args[0] === "--keep-home";
+	if (keepHome) args.shift();
+	const command = args[0] === "bench" ? "bench" : "run";
+	const packageArgs = command === "bench" ? args.slice(1) : args;
 	const directory =
 		[...packageArgs].reverse().find((arg) => arg.startsWith("--coverage.reportsDirectory=")) ??
 		"--coverage.reportsDirectory=coverage/bun";
 	const vitestArgs =
-		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
+		engine === "bun" && command === "run" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
 			? [
 					BUN_COVERAGE_ACTIVATION,
 					...packageArgs.filter(
@@ -82,14 +88,14 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 	try {
 		const home = join(sandbox, "home");
 		const temp = join(sandbox, "tmp");
-		mkdirSync(home);
+		if (!keepHome) mkdirSync(home);
 		mkdirSync(temp);
 		const result = spawnSync(
 			engine === "node" ? process.execPath : "bun",
 			[
 				...(engine === "bun" ? ["--bun"] : []),
 				fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url)),
-				"run",
+				command,
 				...vitestArgs,
 			],
 			{
@@ -97,8 +103,7 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 				env: {
 					...env,
 					...(engine === "bun" ? BUN_RUNTIME_ENV : {}),
-					...toolchainHomeEnv(env),
-					...isolatedHomeEnv(home),
+					...(keepHome ? {} : { ...toolchainHomeEnv(env), ...isolatedHomeEnv(home) }),
 					...TEST_JITI_ENV,
 					// Node, Bun and child tools use different precedence across platforms.
 					TMPDIR: temp,
@@ -110,7 +115,11 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 		if (result.error) throw result.error;
 		status = result.status ?? FAILURE_EXIT_STATUS;
 	} finally {
-		rmSync(sandbox, { recursive: true, force: true });
+		try {
+			rmSync(sandbox, { recursive: true, force: true, maxRetries: CLEANUP_RETRIES });
+		} catch (error) {
+			console.warn(`Could not remove Vitest sandbox ${sandbox}:`, error);
+		}
 		const timing = `${process.platform} | ${basename(process.cwd())} | ${((performance.now() - start) / MILLISECONDS_PER_SECOND).toFixed(TIMING_DECIMAL_PLACES)} s | exit ${status}`;
 		console.log(`${engine} Vitest timing: ${timing}`);
 		if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `\n${engine} Vitest timing: ${timing}\n`);

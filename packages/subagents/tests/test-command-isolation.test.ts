@@ -10,10 +10,12 @@ import { expect, it } from "vitest";
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 const CHILD_TIMEOUT_MS = 60_000;
 
-it("the opt-in live smoke entry point retains its operator-backed Vitest command", () => {
+it("live smoke and benchmarks sandbox temp without replacing the operator home", () => {
 	const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
-	expect(manifest.scripts["test:e2e"]).toBe("JITI_FS_CACHE=false vitest run scenarios --reporter=verbose");
-	expect(manifest.scripts.bench).toBe("JITI_FS_CACHE=false vitest bench");
+	expect(manifest.scripts["test:e2e"]).toBe(
+		"node ../../scripts/run-vitest.ts node --keep-home scenarios --reporter=verbose",
+	);
+	expect(manifest.scripts.bench).toBe("node ../../scripts/run-vitest.ts node --keep-home bench");
 	expect(manifest.scripts["bench:ab"]).toBe("node tests/fixtures/ab.mjs");
 	expect(manifest).not.toHaveProperty("type");
 });
