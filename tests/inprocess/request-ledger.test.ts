@@ -1,0 +1,212 @@
+/** Real SDK requests with scripted replies. No provider adapter or fork testing exports. */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { outcomes } from "@nredd/pi-test-lib/faux";
+import {
+	createHarness,
+	type FauxResponseFactory,
+	fauxAssistantMessage,
+	fauxThinking,
+	fauxToolCall,
+	registerFauxProvider,
+} from "@nredd/pi-test-lib/harness";
+import { expect, it } from "vitest";
+import { isolateStackHome, loadFork } from "./support.ts";
+
+type Owners = Record<string, string>;
+type Capture = { session: "parent" | "child"; raw: string; owners: Owners };
+type Row = {
+	measurement: string;
+	request_bytes: number;
+	buckets: Record<string, number>;
+	common_prefix_previous_bytes: number | null;
+	common_prefix_parent_bytes: number | null;
+	cache_markers: unknown[];
+};
+
+const INTEGRATION = new URL("../integration/", import.meta.url);
+const OLD = "Old history to replace: 🦩";
+const SUMMARY = "Scripted replacement summary";
+
+/** Call the same byte partitioner as the wire scenario, in one batch and without extra dependencies. */
+function measure(captures: Capture[]): Row[] {
+	const rows = execFileSync(
+		"python3",
+		[
+			"-B",
+			"-c",
+			`import json, sys
+from pathlib import Path
+from harness.request_ledger import request_ledger, stable_owner
+
+previous = {}
+for item in json.load(sys.stdin):
+    raw, session = item["raw"], item["session"]
+    owners = {name: stable_owner(source, Path.cwd().parents[1]) for name, source in item["owners"].items()}
+    row = request_ledger(raw, sdk=True, owners=owners, previous=previous.get(session),
+                         parent=previous["parent"] if session == "child" else None)
+    print(json.dumps({"session": session, **row, "synthetic": {"usage": "faux, not reported"}}))
+    previous[session] = raw`,
+		],
+		{ cwd: INTEGRATION, input: JSON.stringify(captures), encoding: "utf8", timeout: 10_000 },
+	);
+	return rows
+		.trimEnd()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+}
+
+/** Capture only model id and transcript; keep prior faux usage out of the measured body. */
+function recorder(sink: Capture[], session: Capture["session"], owners: () => Owners) {
+	return (response: ReturnType<typeof fauxAssistantMessage>): FauxResponseFactory =>
+		(context, _options, _state, model) => {
+			const messages = context.messages.map((message) => {
+				if (message.role !== "assistant") return message;
+				const { usage: _synthetic, ...rest } = message;
+				return rest;
+			});
+			const raw = JSON.stringify({ model: model.id, messages });
+			sink.push({ session, raw, owners: owners() });
+			return response;
+		};
+}
+
+/** Keep only nondeterministic metadata out of the second, comparison-only measurement. */
+function normalize(raw: string, root: string): string {
+	return raw
+		.replaceAll(JSON.stringify(root).slice(1, -1), "/sandbox")
+		.replace(/"timestamp":\d+/g, '"timestamp":0')
+		.replace(/"durationMs":\d+(?:\.\d+)?/g, '"durationMs":0');
+}
+
+/** Drive a real foreground `Agent` call and a manual compaction with a faux summary. */
+async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }> {
+	const home = await isolateStackHome();
+	const provider = registerFauxProvider({ api: "ledger-faux", models: [{ id: "ledger" }] });
+	let session: AgentSession | undefined;
+	let cleanup: (() => void) | undefined;
+	try {
+		const agentDir = join(home.root, "agent");
+		const agents = join(agentDir, "agents");
+		const cwd = join(home.root, "work");
+		mkdirSync(agents, { recursive: true });
+		mkdirSync(cwd);
+		writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ rememberAgents: false, widgetMode: "off" }));
+		const probe = fileURLToPath(new URL("fixtures/ledger-child.ts", import.meta.url));
+		writeFileSync(
+			join(agents, "ledger-child.md"),
+			`---\nname: ledger-child\ndescription: Ledger fixture\ntools: read\nextensions: [${JSON.stringify(probe)}]\n---\nRead-only ledger fixture.\n`,
+		);
+		const h = await createHarness({
+			cwd,
+			fauxProvider: provider,
+			useModelRuntimeStream: true,
+			extensionFactories: [await loadFork("pi-subagents")],
+			settings: {
+				retry: { enabled: false },
+				compaction: { enabled: false, keepRecentTokens: 1 },
+			},
+		});
+		session = h.session;
+		cleanup = h.cleanup;
+		await session.bindExtensions({ mode: "print" });
+		const model = provider.getModel();
+		const original: Capture[] = [];
+		const parent = recorder(original, "parent", () =>
+			Object.fromEntries(h.session.getAllTools().map(({ name, sourceInfo }) => [name, sourceInfo.source])),
+		);
+		const child = recorder(original, "child", () =>
+			JSON.parse(readFileSync(join(cwd, "ledger-child-owners.json"), "utf8")),
+		);
+		h.setResponses([parent(fauxAssistantMessage([fauxThinking("plan"), { type: "text", text: "Prior answer" }]))]);
+		await session.prompt(OLD);
+		h.setResponses([parent(fauxAssistantMessage("Keep this turn"))]);
+		await session.prompt("Recent history");
+		h.setResponses([parent(fauxAssistantMessage(SUMMARY)), parent(fauxAssistantMessage("Scripted turn prefix"))]);
+		expect((await session.compact()).summary).toContain(SUMMARY);
+		expect(h.getPendingResponseCount()).toBe(0);
+
+		h.setResponses([
+			parent(
+				fauxAssistantMessage(
+					fauxToolCall(
+						"Agent",
+						{
+							subagent_type: "ledger-child",
+							description: "Record child",
+							prompt: "Report fixture",
+							model: `${model.provider}/${model.id}`,
+							run_in_background: false,
+						},
+						{ id: "ledger-call" },
+					),
+					{ stopReason: "toolUse" },
+				),
+			),
+			child(fauxAssistantMessage("Child answer")),
+			parent(fauxAssistantMessage("Parent finished")),
+		]);
+		await session.prompt("Spawn the child");
+		expect(outcomes(h, "Agent")).toEqual([{ isError: false, text: expect.stringContaining("Child answer") }]);
+		expect(h.getPendingResponseCount()).toBe(0);
+		return { original, normalized: original.map(({ raw, ...rest }) => ({ ...rest, raw: normalize(raw, home.root) })) };
+	} finally {
+		try {
+			await session?.abort();
+			await session?.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		} finally {
+			cleanup?.();
+			provider.unregister();
+			await home.cleanup();
+		}
+	}
+}
+
+it("accounts for compacted history and the actual spawned child's registry", async () => {
+	const runs = [await capture(), await capture()];
+	const stable = runs.map(({ normalized }) => measure(normalized));
+	expect(stable[0]).toEqual(stable[1]);
+	const rows = runs.flatMap(({ original }, run) => {
+		const rows = measure(original);
+		expect(original.map(({ session }) => session)).toEqual([
+			"parent",
+			"parent",
+			"parent",
+			"parent",
+			"parent",
+			"child",
+			"parent",
+		]);
+		for (const [index, request] of original.entries()) {
+			const row = rows[index];
+			if (!row) throw new Error(`Missing ledger row ${index}`);
+			expect(row.measurement).toBe("utf8_sdk_context_bytes");
+			expect(row.cache_markers).toEqual([]);
+			expect(row.request_bytes).toBe(Buffer.byteLength(request.raw));
+			expect(Object.values(row.buckets).reduce((a, b) => a + b, 0)).toBe(row.request_bytes);
+		}
+		expect(original[1]?.raw).toContain(OLD);
+		expect(original[4]?.raw).not.toContain(OLD);
+		expect(original[4]?.raw).toContain(SUMMARY);
+		expect(rows[4]?.buckets.compaction_summary).toBeGreaterThan(SUMMARY.length);
+		expect(rows[4]?.buckets["tool:Agent:owner:inline"]).toBeGreaterThan(0);
+		expect(rows[5]?.buckets["tool:read:owner:builtin"]).toBeGreaterThan(0);
+		expect(rows[5]?.buckets["tool:SubagentWorkflow:owner:sdk"]).toBeGreaterThan(0);
+		expect(rows[5]?.buckets["tool:Agent:owner:inline"]).toBeUndefined();
+		expect(rows[5]?.common_prefix_parent_bytes).toBeGreaterThan(0);
+		expect(rows[5]?.common_prefix_previous_bytes).toBeNull();
+		expect(rows[6]?.buckets["tool_call_args:Agent"]).toBeGreaterThan(0);
+		expect(rows[6]?.buckets["tool_result:Agent"]).toBeGreaterThan(0);
+		return rows.map((row, request) => ({ run, request, ...row }));
+	});
+	const artifacts = new URL("artifacts/", INTEGRATION);
+	mkdirSync(artifacts, { recursive: true });
+	const runtime = process.versions.bun ? "bun" : "node";
+	writeFileSync(
+		new URL(`request-ledger-sdk-${runtime}.jsonl`, artifacts),
+		`${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+	);
+});

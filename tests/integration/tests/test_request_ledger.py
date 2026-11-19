@@ -94,6 +94,40 @@ def test_messages_cache_markers_hash_and_comparisons() -> None:
     assert ledger["token_estimates"] is None
 
 
+def test_sdk_transcript_charges_native_blocks() -> None:
+    """Attribute native sections, tool deltas and results without a wire projection."""
+    raw = (
+        '{"model":"fixture","messages":['
+        '{"role":"system","content":"π<tag>x</tag>","sections":{"named":"é","removed":null},'
+        '"toolsAdded":[{"name":"read"},{"name":"other"}]},'
+        '{"role":"assistant","content":[{"type":"thinking","thinking":"h","thinkingSignature":"s"},'
+        '{"type":"toolCall","name":"read","arguments":{}}]},'
+        '{"role":"toolResult","toolName":"read","content":[{"type":"text","text":"ok"}]},'
+        '{"role":"user","content":[{"type":"text","text":"hi"},'
+        '{"type":"image","data":"x","cache_control":{}}]}]}'
+    )
+    ledger = request_ledger(raw, sdk=True, owners={"read": "builtin"}, provenance={"hi": "extension:fixture"})
+    assert ledger["measurement"] == "utf8_sdk_context_bytes"
+    assert ledger["cache_markers"] == []
+    assert ledger["request_bytes"] == len(raw.encode())
+    assert ledger["buckets"] == {
+        "system:tag": 12,
+        "system:named": 2,
+        "tool:read:owner:builtin": 15,
+        "tool:other:owner:unknown": 16,
+        "tool_call_args:read": 2,
+        "tool_result:read": 29,
+        "extension:fixture": 2,
+        "thinking": 6,
+        "shared": 48,
+        "serialization_overhead": 358,
+    }
+    assert (
+        ledger["tool_array_sha256"]
+        == request_ledger('{"tools":[{"name":"read"},{"name":"other"}]}')["tool_array_sha256"]
+    )
+
+
 def test_escaped_sections_and_provenance() -> None:
     """Split only explicit tags and exact supplied provenance, not text guesses."""
     body = {
