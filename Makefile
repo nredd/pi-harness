@@ -40,7 +40,8 @@ check: check-commits check-ts check-scripts check-integration  ## Owned-code gat
 check-commits:  ## Validate the complete PR/push commit range, or the latest local commit (COMMIT_RANGE overrides)
 	node scripts/check-commit-messages.mjs
 
-check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
+check-ts:  ## Test temp contract, Biome, tsc and Vitest (WORKSPACES can narrow the workspace checks)
+	node scripts/check-test-tempdirs.mjs "$(or $(BASE),origin/main)"
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)

@@ -52,7 +52,14 @@ make help                    # every target
   folding edits source fragments only, never publishes or releases. Edits to enrolled packages'
   `CHANGELOG.md` files run the scripts gate, including fragment validation, rather than bypassing CI as docs-only
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
-- `check-ts` takes `WORKSPACES=<paths>`
+- `check-ts` takes `WORKSPACES=<paths>` and always checks literal `mkdtemp` and `mkdtempSync`
+  references in owned JS/TS test sources only. Python and the `forks/pi` Gitlink are not scanned.
+  The regex counts comments and strings as well as code (including aliased imports), but misses
+  computed spellings assembled from fragments. Use `makeTestTempDir(prefix, onTestFinished)` from
+  `@nredd/pi-test-lib/temp-dir` for scratch paths that should live until a test finishes.
+  `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
+  (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
+  the merge base is allowed for its initial introduction only.
 - Scripts that use `node ../../scripts/run-vitest.ts` give Vitest and its subprocesses a private
   `TMPDIR`, `TMP` and `TEMP`. The launcher removes the sandbox after the child exits, even on test
   failure. Direct Vitest and Bun invocations bypass this cleanup. `SIGINT` or `SIGTERM` delivered

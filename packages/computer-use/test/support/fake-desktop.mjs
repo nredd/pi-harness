@@ -1,7 +1,5 @@
 // Fake desktop backend for driving the public observe/query tools without a native helper.
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 
 /**
  * Build one wire outline node.
@@ -127,6 +125,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	const { currentPlatformBackend } = await import("../../src/platform/index.ts");
 	const bridge = await import("../../src/bridge.ts");
 	const { parseLookResponse } = await import("../../src/outline.ts");
+	const cwd = makeTestTempDir("cu-fake-", onTestFinished);
 	const saved = new Map(BACKEND_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(currentPlatformBackend, key)]));
 	onTestFinished(async () => {
 		await bridge.shutdownComputerUseSession();
@@ -134,10 +133,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			if (descriptor) Object.defineProperty(currentPlatformBackend, key, descriptor);
 			else delete currentPlatformBackend[key];
 		}
-		rmSync(cwd, { recursive: true, force: true });
 	});
-
-	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-fake-"));
 	const fake = {
 		roots: options.roots ?? [desktopRoot()],
 		frontmostPid: 1,
