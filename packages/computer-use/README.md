@@ -212,7 +212,10 @@ starts, restarts and stops its own helper instance on the test home's socket, ne
 that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot). The producer hashes
 `Cargo.toml`, `Cargo.lock` and every file recursively under `src/` and `tests/`, including nested
 fixture sources. Directory entries are not file inputs; linked/special inputs fail explicitly rather
-than escape the crate or disappear from metadata. This inventory does not select or exclude LLVM regions:
+than escape the crate or disappear from metadata. The Linux Rust integration suite tests X11 root
+enrichment with synthetic snapshots: it checks process ID filtering, title and geometry ranking,
+one-to-one window assignment, and propagation of window metadata. It does not connect to X11 or
+AT-SPI. The input inventory does not select or exclude LLVM regions:
 
 ```sh
 rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
