@@ -2,6 +2,7 @@
 
 References:
     https://github.com/nredd/pi-harness/issues/1067
+    https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt-sources.sh
 """
 
 from __future__ import annotations
@@ -71,8 +72,22 @@ def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "ubuntu_uris",
+    [
+        ("https://azure.archive.ubuntu.com/ubuntu", "http://security.ubuntu.com/ubuntu/"),
+        ("mirror+file:/etc/apt/apt-mirrors.txt", "mirror+file:/etc/apt/apt-mirrors.txt"),
+    ],
+    ids=["direct", "runner-mirror-list"],
+)
 def test_forks_apt_retries_only_mirror_work_and_streams_output(
-    tmp_path: Path, mode: str, status: int, attempts: list[str], diagnostic: str
+    tmp_path: Path,
+    mode: str,
+    status: int,
+    attempts: list[str],
+    diagnostic: str,
+    *,
+    ubuntu_uris: tuple[str, str],
 ) -> None:
     """Exercise actual apt exit propagation and real timeouts across the three command phases.
 
@@ -82,11 +97,12 @@ def test_forks_apt_retries_only_mirror_work_and_streams_output(
         status (int): Expected script exit status.
         attempts (list[str]): Expected command order and selected mirrors.
         diagnostic (str): Expected failure or timeout explanation, if any.
+        ubuntu_uris (tuple[str, str]): Original archive and security URIs.
     """
     sources = tmp_path / "ubuntu.sources"
     original = (
-        "Types: deb\nURIs: https://azure.archive.ubuntu.com/ubuntu\nSuites: noble noble-updates\n\n"
-        "Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n"
+        f"Types: deb\nURIs: {ubuntu_uris[0]}\nSuites: noble noble-updates\n\n"
+        f"Types: deb\nURIs: {ubuntu_uris[1]}\nSuites: noble-security\n"
     )
     sources.write_text(original)
     log = tmp_path / "apt.log"

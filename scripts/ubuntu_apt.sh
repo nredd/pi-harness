@@ -33,7 +33,8 @@ apt_bounded() {
 # The successful source must stay selected for the install to use the matching lists and .debs.
 apt_fetch_from_mirror() {
   local source=$1 selected=$2 fetch=$3 original mirror
-  local ubuntu_uri='https?://(azure\.archive|archive|security)\.ubuntu\.com/ubuntu/?'
+  # GitHub's Noble image can point both stanzas at its on-disk mirror list.
+  local ubuntu_uri='(https?://(azure\.archive|archive|security|us-east-2\.ec2\.archive)\.ubuntu\.com/ubuntu/?|mirror\+file:/etc/apt/apt-mirrors\.txt)'
   if ! original=$(< "$source"); then
     printf '%s: cannot read apt sources: %s\n' "$apt_label" "$source" >&2
     return 1
@@ -43,7 +44,7 @@ apt_fetch_from_mirror() {
     return 1
   fi
   for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
-    if ! sed -E "/^URIs:/ s#${ubuntu_uri}([[:blank:]]|$)#${mirror}/\2#g" <<< "$original" > "$selected"; then
+    if ! sed -E "/^URIs:/ s#${ubuntu_uri}([[:blank:]]|$)#${mirror}/\3#g" <<< "$original" > "$selected"; then
       printf '%s: could not write apt sources: %s\n' "$apt_label" "$selected" >&2
       return 1
     fi
