@@ -216,7 +216,18 @@ def test_zip_cannot_take_provenance_from_unpacked_artifact(tmp_path: Path) -> No
     ],
 )
 def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, host: str, state: str) -> None:
-    """Accept receipts only for cells that really run on the event."""
+    """Accept receipts only for cells that really run on the event.
+
+    Parameters:
+        tmp_path (Path): Artifact download directory.
+        event (str): GitHub workflow event.
+        host (str): Fan-in host declared by the plan.
+        state (str): Expected evidence state.
+    Returns:
+        None: The event and host contract is satisfied.
+    Raises:
+        AssertionError: The renderer accepts evidence from an unavailable producer or rejects a live one.
+    """
     run = (
         RUN
         if event == "pull_request"
@@ -249,7 +260,16 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
 
 @pytest.mark.parametrize("link", [CELL, "coverage", "provenance.json"])
 def test_unpacked_provenance_must_stay_in_its_artifact(tmp_path: Path, link: str) -> None:
-    """Reject receipts aliased from another unpacked artifact."""
+    """Reject receipts aliased from another unpacked artifact.
+
+    Parameters:
+        tmp_path (Path): Artifact download directory.
+        link (str): Artifact component replaced with a symlink.
+    Returns:
+        None: The aliased receipt is rejected.
+    Raises:
+        AssertionError: The renderer accepts evidence through a symlink.
+    """
     manifest = tmp_path / "plan.json"
     manifest.write_text(json.dumps({HOST: plan()}))
     coverage = tmp_path / CELL / "coverage"
