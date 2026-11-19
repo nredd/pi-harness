@@ -86,10 +86,9 @@ describe("toolDescriptionMode", () => {
 		expect(desc).toContain("- general-purpose:");
 		expect(desc).toContain("- Explore: Read-only search, bounded to 12 turns; breadth does not extend it. (Tools:");
 		expect(desc).not.toContain("very thorough");
-		// The point of the feature: materially smaller than the full version.
-		// The global agents dir is a per-runner temp path; measure with a fixed one
-		// so the budget does not depend on the runner's tmpdir length.
-		expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1600);
+		// Allow room for Explore's cap disclosure without dropping existing prompt cues.
+		// Normalize the global agents dir so the budget is independent of tmpdir length.
+		expect(desc.replaceAll(hermeticAgentDir, "/tmp/agent").length).toBeLessThan(1640);
 	});
 
 	it("invalid mode in the settings file is dropped — full description", () => {

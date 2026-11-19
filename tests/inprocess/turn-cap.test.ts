@@ -17,6 +17,7 @@ beforeAll(async () => {
 		neverDefer: ["Agent", "bash", "get_subagent_result"],
 	});
 	h = await agentStack(home.root, {
+		subagents: { defaultMaxTurns: 9 },
 		factories: [await loadThirdParty("deferred")],
 		packages: [fileURLToPath(new URL("./", import.meta.resolve("pi-deferred-context-engine")))],
 	});
@@ -26,27 +27,32 @@ afterAll(async () => {
 	await home.cleanup();
 });
 
-it.each([undefined, 1, 3, 40, 99])(
-	"built-in Explore overrides caller max_turns=%s and forces a tool-free report",
-	async (max_turns) => {
+it.each([
+	...[undefined, 1, 3, 40, 99].map((maxTurns) => ({ type: "Explore", maxTurns, cap: 12 })),
+	{ type: "general-purpose", maxTurns: undefined, cap: 9 },
+])(
+	"Agent gives $type a $cap-turn cap with project default 9 and caller max_turns=$maxTurns",
+	async ({ type, maxTurns, cap }) => {
+		const tool = type === "Explore" ? "ls" : "bash";
+		const args: Record<string, string> = tool === "ls" ? { path: home.root } : { command: "echo loop" };
 		const schemas: string[][] = [];
 		const steeringSeen: number[] = [];
-		const steps: Step[] = Array.from({ length: 17 }, (_, index) => (ctx) => {
+		const steps: Step[] = Array.from({ length: cap + 5 }, (_, index) => (ctx) => {
 			if (ctx.messages.some((message) => getMessageText(message).includes("You have reached your turn limit"))) {
 				steeringSeen.push(index + 1);
 			}
 			schemas.push(getCurrentTools(ctx.messages).map((t) => t.name));
-			return fauxAssistantMessage([fauxToolCall("ls", { path: home.root })], { stopReason: "toolUse" });
+			return fauxAssistantMessage([fauxToolCall(tool, args)], { stopReason: "toolUse" });
 		});
 		steps.push((ctx) => {
 			schemas.push(getCurrentTools(ctx.messages).map((t) => t.name));
 			return fauxAssistantMessage("INCOMPLETE: src/example.ts:7 -- bounded search findings");
 		});
-		const answer = await ask(h, "Explore", steps, { max_turns });
+		const answer = await ask(h, type, steps, { max_turns: maxTurns });
 		expect(answer).toContain("INCOMPLETE: src/example.ts:7");
-		expect(schemas).toHaveLength(18);
-		expect(steeringSeen[0]).toBe(13);
-		for (const before of schemas.slice(0, -1)) expect(before).toContain("ls");
+		expect(schemas).toHaveLength(cap + 6);
+		expect(steeringSeen[0]).toBe(cap + 1);
+		for (const before of schemas.slice(0, -1)) expect(before).toContain(tool);
 		expect(schemas.at(-1)).toEqual([]);
 	},
 );

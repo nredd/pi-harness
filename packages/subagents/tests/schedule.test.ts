@@ -1135,7 +1135,7 @@ describe("SubagentScheduler — fire path", () => {
 		});
 	});
 
-	it("keeps a scheduled Explore job's explicit turn ceiling", () => {
+	it("pins current scheduled Explore precedence pending alignment with Agent", () => {
 		scheduler.addJob({
 			name: "scout",
 			description: "search",

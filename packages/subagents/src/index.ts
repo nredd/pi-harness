@@ -2584,7 +2584,7 @@ Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.
 
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
-- Agent calls in one message run concurrently.
+- Parallel work: one message, multiple Agent calls — they run concurrently.
 - Subagents run in the background by default; you'll be notified when one completes. Pass run_in_background: false only when your very next action depends on the result and nothing else could usefully happen while it runs. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent by ID; steer_subagent messages one, steering it mid-run or resuming it once finished.${isolationCompactGuideline}`;
