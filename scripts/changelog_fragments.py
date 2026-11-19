@@ -32,6 +32,10 @@ RELEASE_HEADER = re.compile(
     r"^## (?:\[[^\]\n]+\][^\n]*|[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)[ \t]*$", re.MULTILINE
 )
 
+LEGACY_ATX_HEADING = re.compile(r"^#{1,2}(?:[ \t]|$)")
+# Use fullmatch for the underline and check that the previous line is non-blank.
+SETEXT_UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*")
+
 
 @dataclass(frozen=True)
 class Fragment:
@@ -166,6 +170,22 @@ def folded_text(text: str, fragments: list[Fragment], *, legacy: bool = False) -
     return text[:start] + "".join(lines) + text[end:]
 
 
+def _ambiguous_legacy_heading(lines: list[str], index: int) -> bool:
+    """Detect an unclassified ATX heading or a setext underline in Unreleased.
+
+    Parameters:
+        lines (list[str]): Unreleased lines with original endings.
+        index (int): Current line index.
+
+    Returns:
+        bool: Whether the current line could introduce an ambiguous section boundary.
+    """
+    line = lines[index].rstrip("\r\n")
+    return LEGACY_ATX_HEADING.match(line) is not None or (
+        index > 0 and bool(lines[index - 1].strip()) and SETEXT_UNDERLINE.fullmatch(line) is not None
+    )
+
+
 def unreleased_data(lines: list[str], *, legacy: bool = False) -> tuple[dict[str, str], dict[str, int]]:
     """Validate existing legacy lines and locate category insertion points.
 
@@ -185,7 +205,7 @@ def unreleased_data(lines: list[str], *, legacy: bool = False) -> tuple[dict[str
     positions: dict[str, int] = {}
     for index, line in enumerate(lines):
         # Recognized section headings were already excluded by folded_text.
-        if line.startswith("## "):
+        if line.startswith("## ") or (legacy and _ambiguous_legacy_heading(lines, index)):
             raise ValueError(f"Invalid heading in Unreleased: '{line.rstrip()}'")
         if line.startswith("### "):
             category = line[4:].strip().lower()
