@@ -188,6 +188,7 @@ it.each(["Agent", "steer_subagent", "deleted", "chain"] as const)(
 			await call(reopened, get(first));
 			expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toContain(`Agent: ${next}`);
 			expect(continued.sessionFile).toBe(childFile);
+			expect(continued.handle).toBe("general-purpose");
 			expect(continued.alias).toBe("crash-probe");
 		} finally {
 			lost.abortController?.abort();
