@@ -53,6 +53,9 @@ make help                    # every target
   `CHANGELOG.md` files run the scripts gate, including fragment validation, rather than bypassing CI as docs-only
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
+- Run focused Vitest suites through `scripts/run-vitest.ts <node|bun>` from the workspace, not a bare
+  `vitest run`. The launcher gives the suite and its subprocesses a private `TMPDIR`, `TMP` and
+  `TEMP`, and removes that directory even when the suite fails.
 - `install-owned` also runs `install-lint-tools`: checksum-pinned ShellCheck `0.11.0`, actionlint
   `1.7.12`, PowerShell LTS `7.4.22` and PSScriptAnalyzer `1.24.0` unpack into the gitignored
   `.native-lint/` prefix, never global tools or the live home. The manifest supports macOS x64/arm64

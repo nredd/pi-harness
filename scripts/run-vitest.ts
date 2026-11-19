@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,7 +46,7 @@ export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string>
 }
 
 /**
- * Run Vitest once under `engine` with a disposable home, then remove it and report the timing.
+ * Run Vitest once under `engine` with a disposable home and temp directory, then remove both.
  *
  * The child gets the home before any import: Bun caches `os.homedir()`, and Pi can read global model
  * policy. A run that disables coverage must not overwrite another signal's report, so only the
@@ -76,10 +76,14 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 					directory,
 				]
 			: packageArgs;
-	const home = mkdtempSync(join(tmpdir(), "pi-bun-vitest-"));
+	const sandbox = mkdtempSync(join(tmpdir(), "pi-vt-"));
 	const start = performance.now();
 	let status = FAILURE_EXIT_STATUS;
 	try {
+		const home = join(sandbox, "home");
+		const temp = join(sandbox, "tmp");
+		mkdirSync(home);
+		mkdirSync(temp);
 		const result = spawnSync(
 			engine === "node" ? process.execPath : "bun",
 			[
@@ -96,13 +100,17 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 					...toolchainHomeEnv(env),
 					...isolatedHomeEnv(home),
 					...TEST_JITI_ENV,
+					// Node, Bun and child tools use different precedence across platforms.
+					TMPDIR: temp,
+					TMP: temp,
+					TEMP: temp,
 				},
 			},
 		);
 		if (result.error) throw result.error;
 		status = result.status ?? FAILURE_EXIT_STATUS;
 	} finally {
-		rmSync(home, { recursive: true, force: true });
+		rmSync(sandbox, { recursive: true, force: true });
 		const timing = `${process.platform} | ${basename(process.cwd())} | ${((performance.now() - start) / MILLISECONDS_PER_SECOND).toFixed(TIMING_DECIMAL_PLACES)} s | exit ${status}`;
 		console.log(`${engine} Vitest timing: ${timing}`);
 		if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `\n${engine} Vitest timing: ${timing}\n`);

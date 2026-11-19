@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ interface SpawnCall {
 	args: readonly string[];
 	env: NodeJS.ProcessEnv;
 	homeExisted: boolean;
+	leftover: string;
 }
 
 const spawn = vi.hoisted(() => ({
@@ -28,7 +29,16 @@ const spawn = vi.hoisted(() => ({
 vi.mock("node:child_process", () => ({
 	spawnSync: (command: string, args: readonly string[], options: SpawnSyncOptions) => {
 		const env = options.env ?? {};
-		spawn.calls.push({ command, args, env, homeExisted: env.HOME !== undefined && statSync(env.HOME).isDirectory() });
+		assert.ok(env.TMPDIR);
+		const leftover = join(env.TMPDIR, "leftover.lock");
+		writeFileSync(leftover, "fixture");
+		spawn.calls.push({
+			command,
+			args,
+			env,
+			homeExisted: env.HOME !== undefined && statSync(env.HOME).isDirectory(),
+			leftover,
+		});
 		return spawn.result;
 	},
 }));
@@ -62,6 +72,8 @@ function onlyCall(): SpawnCall {
 	assert.ok(call);
 	assert.ok(call.homeExisted, "the isolated home must exist while the child runs");
 	assert.equal(existsSync(call.env.HOME ?? ""), false, "the isolated home must be removed afterwards");
+	assert.equal(existsSync(call.leftover), false, "the child temp artifact must be removed afterwards");
+	assert.equal(existsSync(call.env.TMPDIR ?? ""), false, "the isolated temp directory must be removed afterwards");
 	return call;
 }
 
@@ -93,14 +105,20 @@ test("entry dispatch launches only for the entry module and propagates the statu
 
 test("node runs Vitest under the current Node with the package arguments unchanged", () => {
 	spawn.result = { status: CHILD_STATUS, signal: null };
-	assert.equal(main(["node", "--coverage"], { KEEP: "1" }), CHILD_STATUS);
+	assert.equal(
+		main(["node", "--coverage"], { KEEP: "1", TMPDIR: "old-tmpdir", TMP: "old-tmp", TEMP: "old-temp" }),
+		CHILD_STATUS,
+	);
 	const call = onlyCall();
 	assert.equal(call.command, process.execPath);
 	assert.deepEqual(call.args, [VITEST, "run", "--coverage"]);
 	assert.equal(call.env.KEEP, "1");
 	assert.equal(call.env.JITI_FS_CACHE, "false");
 	const home = call.env.HOME ?? "";
-	assert.match(home, /pi-bun-vitest-/);
+	assert.match(home, /pi-vt-/);
+	assert.equal(call.env.TMPDIR, join(home, "..", "tmp"));
+	assert.equal(call.env.TMP, call.env.TMPDIR);
+	assert.equal(call.env.TEMP, call.env.TMPDIR);
 	for (const [name, value] of Object.entries(isolatedHomeEnv(home))) assert.equal(call.env[name], value);
 });
 

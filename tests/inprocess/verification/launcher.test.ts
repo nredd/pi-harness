@@ -12,22 +12,27 @@ const launcher = fileURLToPath(new URL("../../../scripts/run-vitest.ts", import.
 // The package root export, not a dist path: the fake engine runs outside Vitest's resolver.
 const piUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 
-test("launcher isolates HOME before Bun starts, forwards arguments and propagates failure with cleanup", () => {
+test("launcher isolates home and temp before the child starts and cleans both on failure", () => {
 	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-test-"));
 	try {
 		const bin = join(fixture, "bin");
 		mkdirSync(bin);
+		const shared = join(fixture, "shared-tmp");
+		mkdirSync(shared);
 		const receipt = join(fixture, "receipt.json");
 		writeFileSync(
 			join(bin, "bun"),
-			`#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-writeFileSync(process.env.RECEIPT, JSON.stringify({ home: process.env.HOME, resolved: homedir(), xdg: process.env.XDG_CONFIG_HOME, argv: process.argv.slice(2) }));
+			`#!/usr/bin/env node\nimport { mkdtempSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+const dir = mkdtempSync(join(tmpdir(), "bare-fixture-"));
+writeFileSync(join(tmpdir(), "uv-fixture.lock"), "lock");
+writeFileSync(process.env.RECEIPT, JSON.stringify({ home: process.env.HOME, resolved: homedir(), xdg: process.env.XDG_CONFIG_HOME, temp: tmpdir(), dir, argv: process.argv.slice(2) }));
 process.exitCode = ${CHILD_FAILURE_STATUS};\n`,
 			{ mode: EXECUTABLE_MODE },
 		);
 		const result = spawnSync("node", [launcher, "bun", "--maxWorkers=1"], {
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt },
+			env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt, TMPDIR: shared },
 			encoding: "utf8",
 		});
 		expect(result.error).toBeUndefined();
@@ -41,6 +46,9 @@ process.exitCode = ${CHILD_FAILURE_STATUS};\n`,
 		// arguments; scripts/tests/test_coverage_producers.py pins the provider, reporters and directory that follow.
 		expect(actual.argv.slice(2, 5)).toEqual(["run", "--coverage", "--maxWorkers=1"]);
 		expect(existsSync(actual.home)).toBe(false);
+		expect(dirname(actual.dir)).toBe(actual.temp);
+		expect(existsSync(actual.temp)).toBe(false);
+		expect(readdirSync(shared)).toEqual([]);
 		expect(result.stdout).toContain(`exit ${CHILD_FAILURE_STATUS}`);
 	} finally {
 		rmSync(fixture, { recursive: true, force: true });
