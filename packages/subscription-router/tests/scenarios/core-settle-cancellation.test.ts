@@ -1,5 +1,4 @@
 /** Minimal core contract regression: no router, quota service, or provider network. */
-
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { createHarness, fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";

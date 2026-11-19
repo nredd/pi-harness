@@ -1,5 +1,4 @@
 /** Shared real-session barrier for the router ownership scenarios. */
-
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
 import { expect } from "vitest";

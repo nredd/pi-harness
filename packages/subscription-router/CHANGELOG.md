@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Run headless router scenarios on the public SDK test harness and guard against transitive fork-only testing imports (Refs #916)
-
 - Guard asynchronous recovery with requester-owned selection generations, durable model-change identities and cancellation; prove same-child routed failover, retained mutation results, finite budgets and sibling isolation. Abort handling requires the active-run signal from core `v1.3.0-nredd.12` (#971)
 
 - Add `/router resets codex` with a version-checked first-party app-server bound to Pi's current OAuth identity, actual FREE grant listing, explicit human confirmation, durable idempotency/reload reconciliation, authoritative quota refresh and exact-scope block reconciliation; exclude paid/automatic redemption and preserve manual resume (#776)
