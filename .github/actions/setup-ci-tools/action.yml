@@ -1,14 +1,6 @@
 name: Set up CI tools
 description: Install pinned tools in the selected execution environment
 inputs:
-  guest:
-    description: Execution environment, linux, macos, windows or wsl2
-    required: true
-  host:
-    description: >-
-      Where a wsl2 guest runs: `windows` (hosted, through wsl.exe; the default) or `native` (the self-hosted
-      linux-arm64 pool, whose caller runs `scripts/wsl2_setup.sh` in place of the host-side WSL setup)
-    default: windows
   owned:
     description: Install the native owned-gate toolchain
     default: 'false'
@@ -17,57 +9,47 @@ inputs:
       Restore the npm cache for the root lockfile, and save it when the job succeeds. Only a job that runs `npm ci`
       may leave this on, or it saves an empty cache under the key every other job restores
     default: 'true'
-# Policy: Owned guest toolchain policy
-# Owned guest tools reuse the exact native `taiki-e/install-action` SHA from `setup-ci-tools/action.yml`: `install_wsl_owned_tools.sh` (via `install_wsl_owned_tools.py`) runs its documented `main.sh`/`INPUT_*` interface with Linux/X64 metadata, checksum verification and `fallback: none`. Its manifest pins nextest to the same action-selected version as Ubuntu; no unversioned source compilation remains. Guest Rust follows the action's documented floating stable policy with rustfmt/clippy components; native Rust comes from the runner image, so each logs actual `rustc`, `cargo`, and `cargo nextest` identities rather than claiming identical compiler versions. References: [here](https://github.com/taiki-e/install-action/tree/8cca0918f8471c33515202b73f56ab27f2bed283#security-on-installation-from-github-releases).
-
-# Shared setup lives in `.github/actions/setup-ci-tools`, with WSL-specific host setup in `setup-ci-wsl` and tool bootstrap in `scripts/wsl2_setup.sh`; `scripts/wsl2_run.sh` and `scripts/install_wsl_owned_tools.sh` only exec measured Python (`wsl2_run.py`, `install_wsl_owned_tools.py`, shared `wsl2_exec.py`). Node, npm, Bun and Python read `.node-version`, `packageManager`, `.bun-version` and `.python-version`; uv stays at the existing CI pin. The pinned, checksum-verified `scripts/install_gh_linux.sh` (a bootstrap for the measured `scripts/install_gh_linux.py`) supplies attestation-capable gh. Only owned cells need Rust/nextest. The contract graph is `Makefile` -> `stock_package_contract.py` / `npm_release.run_stock_contract` -> `package_contracts.run_gate`: npm pack/install use `--ignore-scripts`, computer-use audits its Rust source and Mach-O assets without running `postinstall`, and the resource-sampler build is `tsc`. No contract builds Rust; helper compilation remains owned coverage, not a skipped contract. Native cells restore an explicit `actions/cache` of `npm config get cache`, key `npm-ci-<os>-<arch>-<hashFiles('package-lock.json')>`, restore-keys `npm-ci-<os>-<arch>-`, saved only when the job succeeds. A lockfile-changing run restores the previous entry, so only the tarballs it changed are fetched live (a core pin bump fetches its new core tarballs once per cell until an entry under the new key exists); each new entry carries forward every tarball of the one it restored, so it grows with each lockfile change; renaming the `npm-ci-` prefix resets it. Setup-node's own npm cache is off (`package-manager-cache: false`) in every job that runs no `npm ci`, because `installer.yml` and `promote-stack.yml` saved an empty cache under setup-node's shared `node-cache-*` key and every hosted macOS cell restored it (#531). The `owned` fan-in passes `npm-cache: 'false'` for the same reason; `test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one` pins both. `forks.yml` `core` keys setup-node's cache on `forks/pi/package-lock.json`, the lockfile its `npm ci` installs, and `test_setup_node_caches_only_the_lockfile_its_job_installs` fails any setup-node cache keyed on a lockfile its job does not install. Self-hosted pool VMs use the same Actions cache service. WSL uses its guest HOME tool cache, never Windows Node/Bun/cache paths, so its `npm ci` still fetches live with only the `.npmrc` retries (155s). Frozen model-data tarballs, strict locks and release verification remain in the shared gate steps. Bun follows the repository's pinned `1.4.4` from merged #197 through `.bun-version`; #162 must preserve its future coverage producer/upload steps through this guest boundary when integrated.
-
+# Keep roots on the same explicit npm cache; jobs without `npm ci` opt out.
+# Bun uses the repository's pinned `1.4.4` from `.bun-version`.
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/setup-ci-wsl
-      if: inputs.guest == 'wsl2' && inputs.host != 'native'
-      with:
-        owned: ${{ inputs.owned }}
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-      if: inputs.guest != 'wsl2'
       with:
         node-version-file: .node-version
         # setup-node's own npm cache key is shared with every workflow that calls setup-node, including ones that
         # never run `npm ci` and so save an empty cache under it (#531). The explicit cache below replaces it.
         package-manager-cache: false
     - name: Pin npm to packageManager
-      if: inputs.guest != 'wsl2'
       shell: bash
       run: npm install --global "$(node -p 'require("./package.json").packageManager')"
     - name: Locate the npm cache
       id: npm-cache
-      if: inputs.guest != 'wsl2' && inputs.npm-cache == 'true'
+      if: inputs.npm-cache == 'true'
       shell: bash
       run: echo "dir=$(npm config get cache)" >>"$GITHUB_OUTPUT"
     # Release-asset core tarballs then come from the cache instead of the release CDN. npm still checks every cached
     # tarball against its lockfile `integrity` (docs/releases.md).
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      if: inputs.guest != 'wsl2' && inputs.npm-cache == 'true'
+      if: inputs.npm-cache == 'true'
       with:
         path: ${{ steps.npm-cache.outputs.dir }}
         key: npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
         # A lockfile change still starts warm: unchanged tarballs (usually the core ones) come from the previous entry.
         restore-keys: npm-ci-${{ runner.os }}-${{ runner.arch }}-
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      if: inputs.guest != 'wsl2' && inputs.owned == 'true'
+      if: inputs.owned == 'true'
       with:
         bun-version-file: .bun-version
     - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-      if: inputs.guest != 'wsl2'
       with:
         version: '0.13.1'
     - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-      if: inputs.guest != 'wsl2' && inputs.owned == 'true'
+      if: inputs.owned == 'true'
       with:
         tool: cargo-nextest
     - name: Report native Rust and nextest identities
-      if: inputs.guest != 'wsl2' && inputs.owned == 'true'
+      if: inputs.owned == 'true'
       shell: bash
       run: |
         rustc --version
