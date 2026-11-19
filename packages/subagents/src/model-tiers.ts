@@ -59,14 +59,19 @@ export interface TierAdmission {
 
 const TIER_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 const MODEL_REF = /^[^\s/]+\/\S+$/;
+
+/** Whether the name is a valid exact tier key. */
+export function isTierName(tier: string): boolean {
+	return tier.trim() === tier && TIER_NAME.test(tier);
+}
+
 let bindings: Record<string, string[]> = {};
 let policy: ModelResolution = {};
 
 /** Reject the entire binding, never silently shorten a malformed chain. */
 export function parseTierBinding(tier: string, members: unknown): TierBinding | undefined {
 	if (
-		tier.trim() !== tier ||
-		!TIER_NAME.test(tier) ||
+		!isTierName(tier) ||
 		!Array.isArray(members) ||
 		members.length === 0 ||
 		members.some((ref) => typeof ref !== "string" || ref.trim() !== ref || !MODEL_REF.test(ref))

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -59,14 +58,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if descriptor is None:
         LOGGER.error(f"FAILED: no release descriptor for '{args.package}'")
         return 1
-    work = Path(tempfile.mkdtemp(prefix=f"{descriptor.workspace.name}-contract-"))
     try:
-        report = nr.run_stock_contract(work, args.stock_prefix.resolve(), descriptor, {})
+        with tempfile.TemporaryDirectory(
+            prefix=f"{descriptor.workspace.name}-contract-", ignore_cleanup_errors=True
+        ) as work:
+            report = nr.run_stock_contract(Path(work), args.stock_prefix.resolve(), descriptor, {})
     except (pc.ContractError, nr.ReleaseError) as e:
         LOGGER.error(f"FAILED: {e}")
         return 1
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
     text = pc.serialize_report(report)
     if args.report:
         args.report.write_text(text)
