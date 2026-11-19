@@ -243,6 +243,8 @@ export interface EvictedNote {
 	transcript?: string;
 	/** The child session path from saved history, even when no longer on disk. */
 	sessionFile?: string;
+	/** The cwd in the child header that determined its session directory. */
+	sessionCwd?: string;
 	/** The run's model fallback, so even an evicted agent's id still discloses it. */
 	modelFallback?: ModelFallback;
 	modelTier?: TierDisclosure;

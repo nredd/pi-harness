@@ -1,4 +1,5 @@
 /** Synthetic #330 diagnosis: distinguish activation reload, terminal stop and process-state loss. */
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -69,153 +70,231 @@ it("reports unknown ids as errors to the model and to a nested tools caller", as
 	expect(outcomes(h, "settled_probe")[0]?.text).toBe("rejected");
 });
 
-it.each(["Agent", "steer_subagent", "deleted", "recent", "chain"] as const)(
-	"recovers a saved running child after a crash: %s",
-	{ timeout: 30_000 },
-	async (mode) => {
-		fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
-		const hold = fixture.heldTool();
-		const progress = fauxAssistantMessage([{ type: "text", text: "PROGRESS BEFORE CRASH" }, fauxToolCall("hold", {})], {
-			stopReason: "toolUse",
-		});
-		const request = deferred<string>();
-		const child = fixture.physical("kid", "child", [
-			...(mode === "chain" ? [answer("FIRST RUN DONE")] : []),
-			progress,
-			(context) => {
-				request.resolve(JSON.stringify(context.messages));
-				return mode === "chain" ? progress : answer("RECOVERED CHILD DONE");
-			},
-			answer("AFTER HOLD"),
-		]);
-		const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
-		const h = await fixture.start({ harness: { sessionManager: parent } });
-		const call = async (host: typeof h, ...calls: Parameters<typeof toolCalls>) => {
-			host.setResponses([toolCalls(...calls), answer("CHECKED")]);
-			await host.session.prompt("check child");
-		};
-		const resume = (id: string, prompt = "CONTINUE AFTER CRASH") => spawn("resume", { resume: id, prompt });
-		const get = (id: string) => ({ name: "get_subagent_result", args: { agent_id: id } });
-		const steer = (id: string) => ({ name: "steer_subagent", args: { agent_id: id, message: "CONTINUE AFTER CRASH" } });
-		await call(h, spawn("crash probe", { name: "crash-probe" }));
-		const first = agentId(outcomes(h, "Agent")[0]?.text);
-		let id = first;
-		if (mode === "chain") {
-			const a = fixture.record(first);
-			await a.promise;
-			await h.session.waitForIdle();
-			fixture.clock.advance(61 * 60_000);
-			await h.session.waitForIdle();
-			await call(h, resume(first, "SECOND RUN BEFORE CRASH"));
-			id = agentId(outcomes(h, "Agent").at(-1)?.text);
-			expect(id).not.toBe(first);
-			await hold.entered;
-			expect(fixture.record(id).sessionFile).toBe(a.sessionFile);
-		}
+it.each([
+	"Agent",
+	"steer_subagent",
+	"deleted",
+	"recent",
+	"chain-A",
+	"chain-B",
+	"cwd",
+	"relative-dir",
+	"worktree",
+	"parent-alias",
+] as const)("recovers a saved running child after a crash: %s", { timeout: 30_000 }, async (mode) => {
+	const chain = mode === "chain-A" || mode === "chain-B";
+	fixture = new ScenarioSession({
+		rememberAgents: true,
+		agentModels: { "general-purpose": "kid/child", "crash-relative": "kid/child" },
+	});
+	const hold = fixture.heldTool();
+	const subdir = join(fixture.cwd, "subdir");
+	if (mode === "cwd" || mode === "relative-dir") mkdirSync(subdir);
+	if (mode === "relative-dir") {
+		const agents = join(fixture.agentDir, "agents");
+		mkdirSync(agents);
+		writeFileSync(
+			join(agents, "crash-relative.md"),
+			"---\ndescription: Crash probe\nsession_dir: child-sessions\n---\nCrash probe.\n",
+		);
+	}
+	if (mode === "worktree") {
+		const git = (...args: string[]) => execFileSync("git", args, { cwd: fixture.cwd, stdio: "pipe" });
+		git("init");
+		git("add", ".pi/extensions/hold.ts");
+		git(
+			"-c",
+			"user.email=fixture@example.com",
+			"-c",
+			"user.name=Fixture",
+			"-c",
+			"commit.gpgsign=false",
+			"commit",
+			"-m",
+			"Initialize fixture",
+		);
+	}
+	const progress = fauxAssistantMessage([{ type: "text", text: "PROGRESS BEFORE CRASH" }, fauxToolCall("hold", {})], {
+		stopReason: "toolUse",
+	});
+	const request = deferred<string>();
+	const child = fixture.physical("kid", "child", [
+		...(chain ? [answer("FIRST RUN DONE")] : []),
+		progress,
+		(context) => {
+			request.resolve(JSON.stringify(context.messages));
+			return chain ? progress : answer("RECOVERED CHILD DONE");
+		},
+		answer("AFTER HOLD"),
+	]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	const call = async (host: typeof h, ...calls: Parameters<typeof toolCalls>) => {
+		host.setResponses([toolCalls(...calls), answer("CHECKED")]);
+		await host.session.prompt("check child");
+	};
+	const resume = (id: string, prompt = "CONTINUE AFTER CRASH") => spawn("resume", { resume: id, prompt });
+	const get = (id: string) => ({ name: "get_subagent_result", args: { agent_id: id } });
+	const steer = (id: string) => ({ name: "steer_subagent", args: { agent_id: id, message: "CONTINUE AFTER CRASH" } });
+	await call(
+		h,
+		spawn("crash probe", {
+			name: "crash-probe",
+			...(mode === "cwd" || mode === "relative-dir" ? { cwd: subdir } : {}),
+			...(mode === "relative-dir" ? { subagent_type: "crash-relative" } : {}),
+			...(mode === "worktree" ? { isolation: "worktree" } : {}),
+		}),
+	);
+	const first = agentId(outcomes(h, "Agent")[0]?.text);
+	let id = first;
+	if (chain) {
+		const a = fixture.record(first);
+		await a.promise;
+		await h.session.waitForIdle();
+		fixture.clock.advance(61 * 60_000);
+		await h.session.waitForIdle();
+		await call(h, resume(first, "SECOND RUN BEFORE CRASH"));
+		id = agentId(outcomes(h, "Agent").at(-1)?.text);
+		expect(id).not.toBe(first);
 		await hold.entered;
-		const lost = fixture.record(id);
-		try {
-			const childFile = lost.sessionFile;
-			const parentFile = parent.getSessionFile();
-			if (!parentFile || !childFile) throw new Error("Missing session path");
-			expect(lost.status).toBe("running");
-			expect(existsSync(childFile)).toBe(true);
-			if (mode === "deleted") unlinkSync(childFile);
-			else if (mode !== "recent") {
-				const stale = new Date(Date.now() - 121_000);
-				utimesSync(childFile, stale, stale);
-			}
-			if (mode === "chain") {
-				const row = { id, type: lost.type, description: lost.description, status: "running", sessionFile: childFile };
-				// An update is not another edge, and a different conversation cannot
-				// claim this one as a predecessor, even with a syntactically valid id.
-				parent.appendCustomEntry("subagents:record", { ...row, id: "unrelated" });
-				parent.appendCustomEntry("subagents:record", {
-					...row,
-					previousId: "unrelated",
-					handle: lost.handle,
-					alias: lost.alias,
-				});
-				parent.appendCustomEntry("subagents:record", {
-					...row,
-					id: "other",
-					previousId: id,
-					sessionFile: `${childFile}.missing`,
-				});
-				parent.appendCustomEntry("subagents:record", {
-					...row,
-					id: "legacy",
-					previousId: id,
-					sessionFile: undefined,
-					status: "completed",
-				});
-			}
-
-			// Drop the registry without emitting session_shutdown. The held child
-			// cannot advance until cleanup, simulating a process that died mid-run.
-			Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
-			const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
-			expect(child.state.callCount).toBe(mode === "chain" ? 2 : 1);
-			await call(reopened, get(first));
-			const diagnostic = outcomes(reopened, "get_subagent_result").at(-1);
-			expect(diagnostic?.isError).toBe(false);
-			expect(diagnostic?.text).toContain(`Agent "${id}"`);
-			expect(diagnostic?.text).toContain(
-				mode === "recent" ? "may still be running in another process" : "interrupted by a process restart",
-			);
-			expect(diagnostic?.text).toContain(`transcript: ${childFile}`);
-			expect(child.state.callCount).toBe(mode === "chain" ? 2 : 1);
-
-			if (mode === "deleted" || mode === "recent") {
-				if (mode === "recent") expect(diagnostic?.text).not.toContain("interrupted");
-				await call(reopened, resume(id), steer(id));
-				for (const tool of ["Agent", "steer_subagent"]) {
-					const failure = outcomes(reopened, tool).at(-1);
-					expect(failure?.isError).toBe(true);
-					expect(failure?.text).toContain("only historical metadata is available");
-					expect(failure?.text.split("\n")[0]).toContain(childFile);
-					if (mode === "recent")
-						expect(failure?.text).toMatch(/may still be running in another process \(last write \d+s ago\)/);
-				}
-				expect(child.state.callCount).toBe(1);
-				return;
-			}
-
-			const tool = mode === "steer_subagent" ? steer(first) : resume(first);
-			await call(reopened, tool);
-			const receipt = outcomes(reopened, tool.name).at(-1);
-			expect(receipt?.isError).toBe(false);
-			expect(receipt?.text).toContain(`Agent resumed in background, reopening evicted agent ${id}`);
-			const next = agentId(receipt?.text);
-			expect(next).not.toBe(id);
-			const continued = fixture.record(next);
-			expect(await request.promise).toContain("PROGRESS BEFORE CRASH");
-			expect(await request.promise).toContain("CONTINUE AFTER CRASH");
-			if (mode === "chain") {
-				await call(reopened, get("unrelated"));
-				expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toContain('Agent "unrelated"');
-				await call(reopened, resume(id));
-				const duplicate = outcomes(reopened, "Agent").at(-1);
-				expect(duplicate?.isError).toBe(true);
-				expect(duplicate?.text).toContain(`Agent "${next}" is still running`);
-				expect(child.state.callCount).toBe(3);
-			} else {
-				await continued.promise;
-				expect(continued.result).toBe("RECOVERED CHILD DONE");
-			}
-			await call(reopened, get(first));
-			expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toContain(`Agent: ${next}`);
-			expect(continued.sessionFile).toBe(childFile);
-			expect(continued.handle).toBe("general-purpose");
-			expect(continued.alias).toBe("crash-probe");
-		} finally {
-			lost.abortController?.abort();
-			hold.release();
-			await lost.promise;
-			h.cleanup();
+		expect(fixture.record(id).sessionFile).toBe(a.sessionFile);
+	}
+	await hold.entered;
+	const lost = fixture.record(id);
+	try {
+		const childFile = lost.sessionFile;
+		const parentFile = parent.getSessionFile();
+		if (!parentFile || !childFile) throw new Error("Missing session path");
+		expect(lost.status).toBe("running");
+		expect(existsSync(childFile)).toBe(true);
+		if (mode === "deleted") unlinkSync(childFile);
+		else {
+			const written = new Date(fixture.clock.now() - (mode === "recent" ? 23_000 : 121_000));
+			utimesSync(childFile, written, written);
 		}
-	},
-);
+		if (mode === "cwd") expect(lost.session?.sessionManager.getHeader()?.cwd).toBe(subdir);
+		if (mode === "relative-dir") expect(dirname(childFile)).toBe(join(subdir, "child-sessions"));
+		if (mode === "worktree") expect(lost.worktree?.path).toBe(lost.session?.sessionManager.getHeader()?.cwd);
+		if (chain) {
+			const row = { id, type: lost.type, description: lost.description, status: "running", sessionFile: childFile };
+			// An update is not another edge, and a different conversation cannot
+			// claim this one as a predecessor, even with a syntactically valid id.
+			parent.appendCustomEntry("subagents:record", { ...row, id: "unrelated" });
+			parent.appendCustomEntry("subagents:record", {
+				...row,
+				previousId: "unrelated",
+				handle: lost.handle,
+				alias: lost.alias,
+			});
+			parent.appendCustomEntry("subagents:record", {
+				...row,
+				id: "other",
+				previousId: id,
+				sessionFile: `${childFile}.missing`,
+			});
+			parent.appendCustomEntry("subagents:record", {
+				...row,
+				id: "legacy",
+				previousId: id,
+				sessionFile: undefined,
+				status: "completed",
+			});
+		}
+
+		// Drop the registry without emitting session_shutdown. The held child
+		// cannot advance until cleanup, simulating a process that died mid-run.
+		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		const alias = join(fixture.root, "parents-alias");
+		if (mode === "parent-alias") symlinkSync(dirname(parentFile), alias);
+		const parentPath = mode === "parent-alias" ? join(alias, basename(parentFile)) : parentFile;
+		const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentPath) } });
+		expect(child.state.callCount).toBe(chain ? 2 : 1);
+		await call(reopened, get(first));
+		const diagnostic = outcomes(reopened, "get_subagent_result").at(-1);
+		expect(diagnostic?.isError).toBe(false);
+		expect(diagnostic?.text).toContain(`Agent "${id}"`);
+		expect(diagnostic?.text).toContain(
+			mode === "recent" ? "may still be running in another process" : "interrupted by a process restart",
+		);
+		expect(diagnostic?.text).toContain(`transcript: ${childFile}`);
+		expect(child.state.callCount).toBe(chain ? 2 : 1);
+
+		if (mode === "deleted" || mode === "recent") {
+			if (mode === "recent") expect(diagnostic?.text).not.toContain("interrupted");
+			await call(reopened, resume(id), steer(id));
+			for (const tool of ["Agent", "steer_subagent"]) {
+				const failure = outcomes(reopened, tool).at(-1);
+				expect(failure?.isError).toBe(true);
+				expect(failure?.text.split("\n")[0]).toContain(childFile);
+				expect(failure?.text).toContain(
+					mode === "recent"
+						? "may still be running in another process (last write 23s ago; retry in 97 s)"
+						: "only historical metadata is available",
+				);
+			}
+			expect(child.state.callCount).toBe(1);
+			if (mode === "recent") {
+				child.setResponses([answer("SECOND CHILD"), answer("SECOND CHILD RESUMED"), answer("FIRST CHILD RESUMED")]);
+				await call(reopened, spawn("second child", { name: "crash-probe" }));
+				const second = fixture.record(agentId(outcomes(reopened, "Agent").at(-1)?.text));
+				await second.promise;
+				expect(second.handle).toBe("general-purpose-2");
+				expect(second.alias).toBe("crash-probe-2");
+				await reopened.session.waitForIdle();
+				Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+				try {
+					const again = await fixture.start({ harness: { sessionManager: SessionManager.open(parentPath) } });
+					await call(again, resume(second.id));
+					const newer = fixture.record(agentId(outcomes(again, "Agent").at(-1)?.text));
+					await newer.promise;
+					expect(newer.result).toBe("SECOND CHILD RESUMED");
+					fixture.clock.advance(97_000);
+					await again.session.waitForIdle();
+					await call(again, resume(first));
+					const older = fixture.record(agentId(outcomes(again, "Agent").at(-1)?.text));
+					await older.promise;
+					expect(older.result).toBe("FIRST CHILD RESUMED");
+				} finally {
+					reopened.cleanup();
+				}
+			}
+			return;
+		}
+
+		const tool = mode === "chain-B" ? steer(id) : mode === "steer_subagent" ? steer(first) : resume(first);
+		await call(reopened, tool);
+		const receipt = outcomes(reopened, tool.name).at(-1);
+		expect(receipt?.isError).toBe(false);
+		expect(receipt?.text).toContain(`Agent resumed in background, reopening evicted agent ${id}`);
+		const next = agentId(receipt?.text);
+		expect(next).not.toBe(id);
+		const continued = fixture.record(next);
+		expect(await request.promise).toContain("PROGRESS BEFORE CRASH");
+		expect(await request.promise).toContain("CONTINUE AFTER CRASH");
+		if (chain) {
+			await call(reopened, get("unrelated"));
+			expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toContain('Agent "unrelated"');
+			await call(reopened, resume(mode === "chain-B" ? first : id));
+			const duplicate = outcomes(reopened, "Agent").at(-1);
+			expect(duplicate?.isError).toBe(true);
+			expect(duplicate?.text).toContain(`Agent "${next}" is still running`);
+			expect(child.state.callCount).toBe(3);
+		} else {
+			await continued.promise;
+			expect(continued.result).toBe("RECOVERED CHILD DONE");
+		}
+		await call(reopened, get(first));
+		expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toContain(`Agent: ${next}`);
+		expect(continued.sessionFile).toBe(childFile);
+		expect(continued.handle).toBe(mode === "relative-dir" ? "crash-relative" : "general-purpose");
+		expect(continued.alias).toBe("crash-probe");
+	} finally {
+		lost.abortController?.abort();
+		hold.release();
+		await lost.promise;
+		h.cleanup();
+	}
+});
 
 it.each([false, true])("checks fork ownership with a live survivor: %s", { timeout: 30_000 }, async (live) => {
 	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
@@ -237,7 +316,7 @@ it.each([false, true])("checks fork ownership with a live survivor: %s", { timeo
 	const file = record.sessionFile;
 	if (!original || !file) throw new Error("Missing transcript");
 	const old = readFileSync(file, "utf8");
-	const stale = new Date(Date.now() - 121_000);
+	const stale = new Date(fixture.clock.now() - 121_000);
 	utimesSync(file, stale, stale);
 	const fork = SessionManager.forkFrom(original, fixture.cwd, dir);
 	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "fork" });
@@ -287,10 +366,12 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 	const directory = join(dirname(file), "directory");
 	const empty = join(dirname(file), "empty.jsonl");
 	const invalid = join(dirname(file), "bad-header.jsonl");
+	const unowned = join(dirname(file), "unowned.jsonl");
 	mkdirSync(directory);
 	writeFileSync(outside, "");
 	writeFileSync(empty, "");
 	writeFileSync(invalid, "not json\n");
+	writeFileSync(unowned, '{"type":"session"}\n');
 	symlinkSync(outside, link);
 	const entries = [
 		["forged", outside, "outside its configured directory"],
@@ -300,11 +381,16 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 		["directory", directory, "not a regular file"],
 		["empty", empty, "no readable header"],
 		["malformed", invalid, "missing or unreadable"],
+		["unowned", unowned, "does not belong to this parent"],
+		["forged-cwd", file, "does not match its saved working directory"],
 	] as const;
 	for (const [id, sessionFile] of entries)
 		parent.appendCustomEntry("subagents:record", {
 			id,
 			sessionFile,
+			// The default directory is unchanged by a duplicate separator, but the
+			// journal must not override the working directory in a real child header.
+			...(id === "forged-cwd" ? { sessionCwd: `${fixture.cwd}/.` } : {}),
 			type: record.type,
 			description: id,
 			status: "completed",
@@ -361,7 +447,7 @@ it("journals both ends of a foreground resume, including an interrupted second r
 	try {
 		const parentFile = parent.getSessionFile();
 		if (!parentFile) throw new Error("Missing parent transcript");
-		const stale = new Date(Date.now() - 121_000);
+		const stale = new Date(fixture.clock.now() - 121_000);
 		utimesSync(sessionFile, stale, stale);
 		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
 		const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
@@ -435,7 +521,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	for (const path of [output, tasksDir, dirname(tasksDir)]) utimesSync(path, stale, stale);
 	// A recent write does not block a terminal child from reopening.
 	if (!record.sessionFile) throw new Error("Missing child transcript");
-	const recent = new Date();
+	const recent = new Date(fixture.clock.now());
 	utimesSync(record.sessionFile, recent, recent);
 	const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
 	await new Promise((resolve) => setImmediate(resolve));

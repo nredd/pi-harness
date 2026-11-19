@@ -38,6 +38,7 @@ export function savedAgentNote(data: unknown): SavedAgentNote | undefined {
 		previousId: typeof row.previousId === "string" ? row.previousId : undefined,
 		completedAt: typeof row.completedAt === "number" ? row.completedAt : 0,
 		sessionFile,
+		sessionCwd: typeof row.sessionCwd === "string" ? row.sessionCwd : undefined,
 		...(transcript ? { transcript } : {}),
 		...(typeof row.result === "string" ? { result: capRetained(row.result, transcript) } : {}),
 		...(typeof row.error === "string" ? { error: capRetained(row.error, transcript) } : {}),

@@ -51,6 +51,7 @@ import {
 	AgentManager,
 	describeEvicted,
 	describeEvictedResult,
+	type EvictedNote,
 	isTopLevelAgent,
 	markConsumed,
 	type OwnedPending,
@@ -1001,6 +1002,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
 	/** The `subagents:record` history entry, shared by live runs and the detached spool. */
 	function historyRecord(record: AgentRecord): Record<string, unknown> {
+		const sessionCwd = record.session?.sessionManager?.getHeader?.()?.cwd;
 		return {
 			id: record.id,
 			type: record.type,
@@ -1014,7 +1016,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			alias: record.alias,
 			previousId: record.previousId,
 			...(record.outputFile ? { outputFile: record.outputFile } : {}),
-			...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+			...(record.sessionFile ? { sessionFile: record.sessionFile, sessionCwd } : {}),
 			...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
 			...(record.modelTier ? { modelTier: record.modelTier } : {}),
 		};
@@ -1389,6 +1391,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
 	};
 
+	const liveAgentById = (id: string) =>
+		manager.getRecord(id) ?? listAllRunningDetached().find(({ agent }) => agent.record.id === id)?.agent.record;
+
 	/**
 	 * Resolve a tool's `agent_id` as an id OR a handle, so the model addresses
 	 * agents by the same names the user types. Ids are tried first, keeping the
@@ -1396,9 +1401,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	 * not an id at all. Only live records: a tombstone has nothing to steer and
 	 * no result to read. Callers still enforce the nested-ownership rejection.
 	 */
-	const liveAgentById = (id: string) =>
-		manager.getRecord(id) ?? listAllRunningDetached().find(({ agent }) => agent.record.id === id)?.agent.record;
-
 	const resolveAgentRef = (ref: string): AgentRecord | undefined => {
 		const byId = manager.getRecord(ref);
 		if (byId) return byId;
@@ -1460,22 +1462,23 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		}
 	}
 
-	function checkSavedSession(ctx: ExtensionContext, type: string, file: string, status: string) {
+	function checkSavedSession(ctx: ExtensionContext, note: EvictedNote, file: string) {
 		const home = options.homeDir;
 		const agentDir = resolveAgentDir(home);
 		const settings = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: isProjectTrusted() });
 		return checkSavedChild(
 			file,
 			childSessionDir(
-				getAgentConfig(type)?.sessionDir,
+				getAgentConfig(note.type)?.sessionDir,
 				process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.(),
-				ctx.cwd,
+				note.sessionCwd ?? ctx.cwd,
 				agentDir,
 				home,
 			),
 			ctx.sessionManager.getSessionFile(),
-			status,
-			Date.now(),
+			note.status,
+			clock.now(),
+			note.sessionCwd,
 		);
 	}
 
@@ -1560,16 +1563,18 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		}
 		for (const note of saved.values()) {
 			if (liveAgentById(note.id) || manager.getEvictedNote(note.id)) continue;
-			manager.rememberEvicted(note);
-			if (manager.latestId(note.id) === note.id && note.sessionFile) {
-				const checked = checkSavedSession(ctx, note.type, note.sessionFile, note.status);
-				if ("file" in checked) {
-					manager.rememberTombstone({ ...note, sessionFile: checked.file });
-				} else {
-					note.reopenRefusal = checked.refusal;
-					note.possiblyRunning = checked.recent;
-				}
-			}
+			const checked =
+				manager.latestId(note.id) === note.id && note.sessionFile
+					? checkSavedSession(ctx, note, note.sessionFile)
+					: undefined;
+			manager.rememberEvicted({
+				...note,
+				reopenRefusal: checked && "refusal" in checked ? checked.refusal : undefined,
+				possiblyRunning: checked?.recent,
+			});
+			// A recent, owned transcript still holds its names. Recheck the write
+			// age at dispatch so the user can retry without restarting the parent.
+			if (checked && "file" in checked) manager.rememberTombstone({ ...note, sessionFile: checked.file });
 		}
 		// Retention (#900), off the startup path: whatever this session's records and
 		// eviction notes (or its fork source) still point at is touched and exempted.
@@ -2286,7 +2291,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
 		const saved = manager.getEvictedNote(entry.id);
 		if (saved?.fromSavedSession) {
-			const checked = checkSavedSession(ctx, entry.type, saved.sessionFile!, saved.status);
+			const checked = checkSavedSession(ctx, saved, saved.sessionFile!);
 			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
 			entry = { ...entry, sessionFile: checked.file };
 		}
