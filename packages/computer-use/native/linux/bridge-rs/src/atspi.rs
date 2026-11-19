@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde_json::{json, Value};
 use zbus::zvariant::OwnedObjectPath;
-use zbus::{Connection, Proxy};
+use zbus::{Address, Connection, Proxy};
 
 use crate::{ErrorCode, ProtocolError};
 
@@ -98,11 +98,8 @@ pub struct AtspiClient {
 impl AtspiClient {
     pub async fn connect() -> Result<Self, ProtocolError> {
         let session = Connection::session().await.map_err(unavailable)?;
-        let bus = Proxy::new(&session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus")
-            .await
-            .map_err(unavailable)?;
-        let address: String = bus.call("GetAddress", &()).await.map_err(unavailable)?;
-        let connection = zbus::connection::Builder::address(address.as_str())
+        let address = accessibility_bus_address(&session).await?;
+        let connection = zbus::connection::Builder::address(address)
             .map_err(unavailable)?
             .build()
             .await
@@ -517,6 +514,15 @@ fn relative_coordinate(value: i32, origin: i32) -> i32 {
     value.saturating_sub(origin)
 }
 
+/// Resolve and validate the accessibility bus address advertised on the session bus.
+async fn accessibility_bus_address(session: &Connection) -> Result<Address, ProtocolError> {
+    let bus = Proxy::new(session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus")
+        .await
+        .map_err(unavailable)?;
+    let address: String = bus.call("GetAddress", &()).await.map_err(unavailable)?;
+    address.parse().map_err(unavailable)
+}
+
 fn unavailable(error: impl std::fmt::Display) -> ProtocolError {
     ProtocolError::new(
         format!("AT-SPI2 is unavailable: {error}"),
@@ -624,12 +630,48 @@ mod tests {
         .expect("mock accessibility bus should respond promptly");
     }
 
+    struct MockAccessibilityBus(&'static str);
+
+    #[zbus::interface(name = "org.a11y.Bus")]
+    impl MockAccessibilityBus {
+        fn get_address(&self) -> &str {
+            self.0
+        }
+    }
+
+    /// Drive address discovery over a private peer connection, without a session daemon.
+    async fn discover_from_peer(reply: &'static str) -> Result<Address, ProtocolError> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
+            let server = zbus::connection::Builder::unix_stream(server_socket)
+                .server(zbus::Guid::generate())
+                .unwrap()
+                .p2p()
+                .serve_at("/org/a11y/bus", MockAccessibilityBus(reply))
+                .unwrap()
+                .build();
+            let client = zbus::connection::Builder::unix_stream(client_socket)
+                .p2p()
+                .build();
+            let (_server, session) = tokio::try_join!(server, client).unwrap();
+            accessibility_bus_address(&session).await
+        })
+        .await
+        .expect("mock session bus should respond promptly")
+    }
+
     #[tokio::test]
-    #[ignore = "requires a live session AT-SPI bus"]
-    async fn connects_through_get_address_method() {
-        AtspiClient::connect()
-            .await
-            .expect("org.a11y.Bus.GetAddress should return a usable bus address");
+    async fn discovers_accessibility_address_via_get_address_method() {
+        let advertised = "unix:path=/fixture/atspi";
+        let address = discover_from_peer(advertised).await.unwrap();
+        assert_eq!(address.to_string(), advertised);
+    }
+
+    #[tokio::test]
+    async fn defers_capability_when_accessibility_address_is_invalid() {
+        let error = discover_from_peer("not a bus address").await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::CapabilityDeferred);
+        assert!(error.message.starts_with("AT-SPI2 is unavailable: "));
     }
 
     #[test]
