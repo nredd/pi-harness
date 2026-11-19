@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "release": {
+    "id": "2026-11-19-personal-preset-session-kit",
+    "created_at": "2026-11-19T12:38:52.298618Z",
+    "commit": "a527f372a2d1b4d4004e8aad05792a6981d7b7b1",
+    "dirty": false
+  },
+  "forks": [
+    {
+      "path": "forks/pi",
+      "commit": "a40a2ced6d919edb46b7b640ddc21f095efb6ef9",
+      "remote_url": "https://github.com/nredd/pi.git",
+      "initialized": true,
+      "tag": "v1.3.0-nredd.13",
+      "fetched_tag_object": null
+    }
+  ],
+  "owned_packages": [
+    {
+      "name": "@nredd/pi-dev-tools",
+      "version": "0.8.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-session-kit",
+      "version": "0.12.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-subscription-router",
+      "version": "0.6.0",
+      "private": false,
+      "tarball_sha256": null
+    },
+    {
+      "name": "@nredd/pi-preset",
+      "version": "0.5.0",
+      "private": false,
+      "tarball_sha256": null
+    }
+  ],
+  "third_party": {
+    "package_lock_lockfile_version": 3,
+    "files": [
+      {
+        "path": "package-lock.json",
+        "sha256": "bbb32d21ec8b56765721e5fde3a4401d4e8f83d08338997d94054aea9dac0ad4"
+      },
+      {
+        "path": "tests/integration/uv.lock",
+        "sha256": "71c168d4fa4f4f0ea71a9aafa8dc2a52ad7825af3340af12ce90574d5999d0dc"
+      },
+      {
+        "path": "release/uv.lock",
+        "sha256": "19848a3a9c17873bf800a81d42002888e7490cb0ba2182220b167d70b8dd2889"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "nredd-pi-preset-0.5.0.tgz",
+      "basename": "nredd-pi-preset-0.5.0.tgz",
+      "size": 63817,
+      "sha256": "b3f39da627136454854dbbd4dd52f494dd9687e96b4ef5a1198af4d292b33fd1",
+      "url": "https://registry.npmjs.org/@nredd/pi-preset/-/pi-preset-0.5.0.tgz"
+    },
+    {
+      "name": "nredd-pi-session-kit-0.12.0.tgz",
+      "basename": "nredd-pi-session-kit-0.12.0.tgz",
+      "size": 199677,
+      "sha256": "b10b5f91c8fe7d4ef31fcbaa20c4e5dbabe9ce46bf1aef4364294e5d60cb2745",
+      "url": "https://registry.npmjs.org/@nredd/pi-session-kit/-/pi-session-kit-0.12.0.tgz"
+    }
+  ],
+  "evidence": {
+    "preset_publish": "https://github.com/nredd/pi-harness/actions/runs/44454628627",
+    "session_kit_publish": "https://github.com/nredd/pi-harness/actions/runs/44487372796"
+  }
+}
