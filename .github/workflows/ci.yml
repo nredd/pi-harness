@@ -141,56 +141,13 @@ jobs:
           # Maintainer kill switch: any non-empty value sends every cell back to hosted runners.
           PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
           UNTRUSTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'true' || '' }}
-        run: |
-          pools=(
-            --pool-run-id "${GITHUB_RUN_ID:-0}"
-            --pool-repository "${GITHUB_REPOSITORY:-}"
-            --pool-attempt "${GITHUB_RUN_ATTEMPT:-1}"
-            --pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT"
-            --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT"
-          )
-          if [ -n "$UNTRUSTED" ] || [ -n "$PI_POOLS_DISABLED" ]; then pools+=(--no-pools); fi
-          if [ "$EVENT" = workflow_dispatch ]; then
-            # A frozen release-verification/<sha> ref can verify an older main
-            # candidate without moving it forward merely because main advanced.
-            case "$GITHUB_REF" in
-              refs/heads/main|"refs/heads/release-verification/$GITHUB_SHA") ;;
-              *) echo 'Full verification requires main or an exact frozen candidate ref' >&2; exit 1 ;;
-            esac
-            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-            # No diff to read: every input is true and every cell runs for real.
-            python3 scripts/ci_paths.py --full --event "$EVENT" --github-output "$GITHUB_OUTPUT" "${pools[@]}"
-          else
-            python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --event "$EVENT" \
-              --pr-title="$PR_TITLE" --pr-number "${PR_NUMBER:-0}" --github-output "$GITHUB_OUTPUT" "${pools[@]}"
-          fi
+        run: python3 scripts/ci_classify.py plan
       - name: Report classification
         env:
           DOCS_ONLY: ${{ steps.classify.outputs.docs_only }}
           STACK_INPUTS: ${{ steps.classify.outputs.stack_inputs }}
           CHANGED_FILES: ${{ steps.classify.outputs.changed_files }}
-        run: |
-          echo "Changed-path classification: docs-only=$DOCS_ONLY stack-inputs=$STACK_INPUTS"
-          echo "::notice title=bench not run::No quiet self-hosted runner yet; hosted runners cannot meet the bench admission policy"
-          {
-            echo "### CI path classification"
-            echo
-            echo "Docs-only: \`$DOCS_ONLY\`"
-            echo
-            echo "Stack inputs: \`$STACK_INPUTS\`"
-            echo
-            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-              echo 'macOS PR skip: macOS cells are not in the PR matrix.'
-              echo
-            fi
-            echo "Changed files:"
-            echo '```text'
-            printf '%s\n' "$CHANGED_FILES"
-            echo '```'
-            echo
-            echo "### bench: NOT RUN"
-            echo "No quiet self-hosted runner exists yet (migration plan section 7). This is not a pass."
-          } >>"$GITHUB_STEP_SUMMARY"
+        run: python3 scripts/ci_classify.py report
 
   # The shard matrix comes from the plan. The fan-in matrix selects OSes by event.
   # Policy: Owned shard gates and verification engines
@@ -1180,48 +1137,9 @@ jobs:
       - name: Build standalone
         id: build
         if: ${{ !cancelled() && steps.plan.outputs.scenarios == 'true' && steps.workspace.outcome == 'success' }}
-        working-directory: forks/pi
-        run: |
-          npm ci --ignore-scripts
-          # Same frozen data as forks.yml, never the live model fetch.
-          version=$(node -p 'require("./packages/ai/package.json").version')
-          mkdir -p "$RUNNER_TEMP/model-data"
-          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP/model-data"
-          tar -xzf "$RUNNER_TEMP/model-data/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP/model-data"
-          rm -rf packages/ai/src/providers/data
-          cp -R "$RUNNER_TEMP/model-data/package/dist/providers/data" packages/ai/src/providers/data
-          # Observe Bun's compile argv/module graph without changing core sources or build flags.
-          PYTHONPATH=../../tests/integration ../../tests/integration/.venv/bin/python -m harness.standalone_diagnostics \
-            prepare-build --directory "$RUNNER_TEMP/pi-build-evidence"
-          set -o pipefail
-          evidence="$RUNNER_TEMP/pi-build-evidence"
-          # One function, so both builds run the identical wrapped command; the wrapper overwrites its evidence.
-          build_standalone() {
-            PATH="$evidence/bin:$PATH" \
-              ./scripts/build-binaries.sh --skip-install --offline-model-data \
-              --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone" 2>&1 | tee "$evidence/build.log"
-          }
-          # Park the first build's evidence and executable under first/ so failures are labelled correctly.
-          keep_first_build() {
-            mkdir -p "$evidence/first"
-            for name in build.log compile-command.json module-graph.json; do
-              if [ -e "$evidence/$name" ]; then mv "$evidence/$name" "$evidence/first/$name"; fi
-            done
-            if [ -f "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" ]; then
-              mv "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
-            fi
-          }
-          build_standalone || { keep_first_build; exit 1; }
-          # Rebuild the same inputs at the same output path: Bun must emit identical bytes (#72).
-          keep_first_build
-          build_standalone
-          # Evidence at the root now describes the second build, i.e. the executable exported as PI_BIN.
-          cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"
-          PYTHONPATH=../../tests/integration ../../tests/integration/.venv/bin/python -m harness.standalone_diagnostics \
-            verify-reproducible --first "$RUNNER_TEMP/pi-first-build" \
-            --second "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" \
-            --digest-out ../../tests/integration/artifacts/standalone-pi.sha256
-          echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: tests/integration/.venv/bin/python scripts/ci_standalone.py "$PLATFORM"
       - name: Scan standalone build failure evidence
         id: build_failure
         if: ${{ !cancelled() && steps.build.outcome == 'failure' }}

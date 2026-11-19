@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -25,6 +26,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import ci_classify
 import ci_paths
 import merge_pr_checks
 
@@ -509,8 +511,7 @@ def test_other_pool_routed_macos_jobs_skip_prs() -> None:
     assert "if" not in helper["windows-helper"]
     assert set(smoke) == {"pi-macos", "pi-linux"}
     report = next(step for step in jobs()["classify"]["steps"] if step.get("name") == "Report classification")
-    assert 'if [ "$GITHUB_EVENT_NAME" = pull_request ]; then' in report["run"]
-    assert "macOS PR skip:" in report["run"]
+    assert report["run"] == "python3 scripts/ci_classify.py report"
 
 
 def test_standalone_uploads_cannot_collide_between_stack_cells() -> None:
@@ -661,13 +662,7 @@ def test_dispatch_classifies_only_frozen_main_candidates(
         return subprocess.check_output([git, *args], cwd=repo, env=env, text=True).strip()
 
     (repo / "scripts").mkdir()
-    shutil.copy(ROOT / "scripts/ci_paths.py", repo / "scripts/ci_paths.py")
-    shutil.copy(ROOT / "scripts/runner_pools.py", repo / "scripts/runner_pools.py")
-    # The plan splits `owned` by the checkout's npm workspaces.
-    shutil.copy(ROOT / "package.json", repo / "package.json")
-    for workspace in ci_paths.npm_workspaces(ROOT):
-        (repo / workspace).mkdir(parents=True)
-        shutil.copy(ROOT / workspace / "package.json", repo / workspace / "package.json")
+    (repo / "scripts/ci_classify.py").symlink_to(ROOT / "scripts/ci_classify.py")
     command("init", "--quiet", "--template=", "-b", "main")
     commits = {}
     for name in ("old", "tip"):
@@ -720,11 +715,55 @@ def test_dispatch_classifies_only_frozen_main_candidates(
             assert "requires main or an exact frozen candidate ref" in result.stderr
 
 
-def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
+@pytest.mark.parametrize("disable", ["", "UNTRUSTED", "PI_POOLS_DISABLED"])
+def test_workflow_classify_preserves_pool_admission_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, disable: str
+) -> None:
+    """Route a docs-independent push only when its live census admits a fresh pool.
+
+    Parameters:
+        tmp_path (Path): Disposable output file.
+        monkeypatch (pytest.MonkeyPatch): Isolate GitHub inputs and replace the live census.
+        disable (str): Trust boundary or kill switch to exercise, if any.
+    """
+    output = tmp_path / "output"
+    for key, value in {
+        "EVENT": "push",
+        "BASE": "HEAD~1",
+        "HEAD": "HEAD",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_RUN_ID": "42",
+        "GITHUB_RUN_ATTEMPT": "3",
+        "GITHUB_REPOSITORY": "fixture/runner",
+        "PI_LINUX_HEARTBEAT": f"{int(time.time())}:2",
+        "PI_MACOS_HEARTBEAT": "",
+        "UNTRUSTED": "true" if disable == "UNTRUSTED" else "",
+        "PI_POOLS_DISABLED": "true" if disable == "PI_POOLS_DISABLED" else "",
+    }.items():
+        monkeypatch.setenv(key, value)
+    calls: list[tuple[dict[str, int], str, int, int]] = []
+
+    def live_capacity(capacity: dict[str, int], repo: str, run: int, attempt: int) -> dict[str, int]:
+        """Record the live admission request and admit exactly the fresh pools it considered."""
+        calls.append((capacity, repo, run, attempt))
+        return capacity
+
+    monkeypatch.setattr(ci_paths, "changed_paths", lambda *_: ("scripts/ci_paths.py",))
+    monkeypatch.setattr(ci_paths, "live_capacity", live_capacity)
+    assert ci_classify.classify() == 0
+    assert calls == [({} if disable else {"pi-linux": 2}, "fixture/runner", 42, 3)]
+    plan = json.loads(next(line[5:] for line in output.read_text().splitlines() if line.startswith("plan=")))
+    shards = {entry["shard"]: entry["runner"] for entry in plan["owned (ubuntu-24.04)"]["shards"]}
+    assert shards["ts"] == ("ubuntu-24.04" if disable else "pi-linux")
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push"])
+def test_classify_summary_discloses_bench_and_pr_skips(tmp_path: Path, event: str) -> None:
     """Run the real classify report and keep the NOT RUN disclosure without a job.
 
     Parameters:
         tmp_path (Path): Disposable output directory.
+        event (str): GitHub event driving the macOS PR omission notice.
     """
     assert "bench" not in jobs()
     step = next(step for step in jobs()["classify"]["steps"] if step.get("name") == "Report classification")
@@ -733,10 +772,12 @@ def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
     summary = tmp_path / "summary"
     result = subprocess.run(
         ["/bin/bash", "-e", str(script)],
+        cwd=ROOT,
         env=os.environ
         | {
+            "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}",
             "DOCS_ONLY": "false",
-            "WSL_INPUTS": "true",
+            "GITHUB_EVENT_NAME": event,
             "STACK_INPUTS": "false",
             "CHANGED_FILES": "a.txt",
             "GITHUB_STEP_SUMMARY": str(summary),
@@ -747,8 +788,11 @@ def test_bench_notice_moved_into_classify_summary(tmp_path: Path) -> None:
     )
     assert "::notice title=bench not run::" in result.stdout
     assert "stack-inputs=false" in result.stdout
-    assert "### bench: NOT RUN" in summary.read_text()
-    assert "This is not a pass." in summary.read_text()
+    text = summary.read_text()
+    assert "### bench: NOT RUN" in text
+    assert "This is not a pass." in text
+    assert "Changed files:\n```text\na.txt\n```" in text
+    assert ("macOS PR skip: macOS cells are not in the PR matrix." in text) == (event == "pull_request")
 
 
 def test_every_planned_gate_has_a_step_that_survives_other_gate_failures() -> None:
