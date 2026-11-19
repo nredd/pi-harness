@@ -122,7 +122,7 @@ import {
 } from "./mention.ts";
 import { runMentionClone } from "./mention-clone.ts";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.ts";
-import { explainModel, modelConfigurationWarnings } from "./model-explanation.ts";
+import { explainModel, modelConfigurationWarnings, safeRef } from "./model-explanation.ts";
 import { type ModelFallback, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.ts";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.ts";
 import {
@@ -2930,9 +2930,16 @@ Terse command-style prompts produce shallow, generic work.
 				const note = [modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
 				return note ? `${note}\n\n` : "";
 			};
+			const definitionRef = safeRef(customConfig?.model?.trim());
 			const fallbackNoteFor = (rec: AgentRecord | undefined): string => {
 				// No record means a schedule or quota park, reselected at fire time: no identity claim.
-				const modelNote = [modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
+				const shadowNote =
+					rec?.modelSelection?.source === "agentModels:*" &&
+					definitionRef.startsWith("@") &&
+					definitionRef !== rec.modelSelection.requested?.trim()
+						? `Note: agentModels["*"] overrides definition model ${definitionRef}.`
+						: "";
+				const modelNote = [shadowNote, modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
 				return typeNote + (modelNote ? `${modelNote}\n\n` : "");
 			};
 			const detailBase = {

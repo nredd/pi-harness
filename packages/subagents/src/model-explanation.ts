@@ -4,7 +4,7 @@ import { hasModelConfigurationError, modelInputBinding, modelInputs, selectModel
 import { getModelResolution } from "./model-tiers.ts";
 
 /** Only model references, not commands, endpoints, diagnostics or model overlays, reach the UI. */
-function safeRef(value: string | undefined): string {
+export function safeRef(value: string | undefined): string {
 	return value && /^@?[a-zA-Z0-9][a-zA-Z0-9._/@-]*$/.test(value) && !value.includes("//")
 		? value
 		: value === undefined

@@ -10,12 +10,15 @@ import * as runner from "../src/agent-runner.ts";
 import { registerAgents } from "../src/agent-types.ts";
 import { loadCustomAgents } from "../src/custom-agents.ts";
 import { createSubagentsExtension } from "../src/index.ts";
+import { explainModel } from "../src/model-explanation.ts";
 import { setAgentModels, setModelAliases } from "../src/model-resolver.ts";
 import { setScopeModelsEnabled } from "../src/model-scope.ts";
 import { setModelTiers } from "../src/model-tiers.ts";
 import { createNestedSubagentTools } from "../src/nested-tools.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
+import type { AgentRecord } from "../src/types.ts";
+import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
 import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./fixtures/boot-extension.ts";
 
@@ -138,6 +141,7 @@ beforeEach(async () => {
 		const session = {
 			model: options.model,
 			dispose: vi.fn(),
+			subscribe: () => () => {},
 			sessionManager: { getSessionFile: () => sessionFile },
 		} as unknown as AgentSession;
 		options.onSessionCreated?.(session);
@@ -412,6 +416,154 @@ it.each([ref("claude-5-5-sonnet"), "router/default"])(
 		expect(notices.join("\n")).not.toContain("fixture-not-a-secret");
 	},
 );
+
+const disclosures = [
+	{
+		name: "unmapped",
+		definition: "@unmapped",
+		note: "Note: model tier @unmapped is unmapped; inheriting the parent model.",
+		settings: "Exact binding: unmapped.",
+		flag: "[@unmapped unmapped]",
+		selected: "parent",
+		tierKind: "unmapped",
+	},
+	{
+		name: "mapped",
+		definition: "@mapped",
+		note: "Model: @mapped -> selection-path/typed (static)",
+		settings: "Exact binding: static selection-path/typed",
+		flag: "[@mapped]",
+		selected: "typed",
+		tierKind: "static",
+	},
+	{
+		name: "unavailable",
+		definition: "@unavailable",
+		note: "Note: model tier @unavailable is unavailable; inheriting the parent model.",
+		settings: "Exact binding: static selection-path/absent",
+		flag: "[@unavailable unavailable]",
+		selected: "parent",
+		tierKind: "unavailable",
+	},
+	{
+		name: "wildcard",
+		definition: "@mapped",
+		overrides: { "*": ref("wildcard") },
+		note: "Resolved model: selection-path/wildcard.",
+		shadow: 'Note: agentModels["*"] overrides definition model @mapped.',
+		settings: "Shadowed definition: @mapped",
+		selected: "wildcard",
+	},
+	{
+		name: "explicit parameter",
+		definition: "@mapped",
+		overrides: { "*": ref("wildcard") },
+		param: ref("explicit"),
+		note: "Resolved model: selection-path/explicit.",
+		settings: "Shadowed agentModels:*: selection-path/wildcard",
+		selected: "explicit",
+	},
+];
+
+it.each(disclosures)("discloses $name across Agent results, notice, transcript, fleet and settings", async (sample) => {
+	writeFileSync(
+		join(sandbox.dir, ".pi", "agents", "scout.md"),
+		`---\ndescription: scout\ntools: read\nmodel: "${sample.definition}"\noutput_transcript: true\n---\nScout.`,
+	);
+	await startSession(boot.lifecycle, true, context);
+	setAgentModels(sample.overrides);
+	setModelTiers({ mapped: [ref("typed")], unavailable: [ref("absent")] }, {});
+	const run = (description: string, background: boolean) =>
+		boot.tools
+			.get("Agent")
+			.execute(
+				description,
+				{ subagent_type: "scout", description, prompt: "go", model: sample.param, run_in_background: background },
+				undefined,
+				undefined,
+				context,
+			);
+	const expectResult = (text: string, status: string) => {
+		expect(text).toContain(`${sample.note}\n\n${status}`);
+		if (sample.shadow) expect(text).toContain(sample.shadow);
+		else expect(text).not.toContain("overrides definition model");
+	};
+
+	const start = await run("background", true);
+	expectResult(start.content[0].text, "Agent started in background.");
+	await flush();
+	clock.advance(200);
+	const notice = vi
+		.mocked(boot.pi.sendMessage)
+		.mock.calls.find(([message]: [{ customType: string }]) => message.customType === "subagent-notification");
+	expect(notice?.[0].content).toContain(`<model-note>${sample.note.replace("->", "-&gt;")}</model-note>`);
+
+	const transcript = /^Output file: (.+)$/m.exec(start.content[0].text)?.[1];
+	if (!transcript) throw new Error("Agent start did not report a transcript");
+	const entries = readFileSync(transcript, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	const tierEntries = entries.filter((entry) => entry.type === "model-tier");
+	if (sample.tierKind) {
+		expect(tierEntries).toEqual([
+			expect.objectContaining({ note: sample.note, modelTier: expect.objectContaining({ kind: sample.tierKind }) }),
+		]);
+	} else {
+		expect(tierEntries).toEqual([]);
+		expect(entries.some((entry) => entry.type === "model-fallback")).toBe(false);
+	}
+
+	const extensionRegistry: { getRecord(id: string): AgentRecord | undefined } = Reflect.get(
+		globalThis,
+		Symbol.for("pi-subagents:manager"),
+	);
+	const record = extensionRegistry.getRecord(start.details.agentId);
+	if (!record) throw new Error("Agent start did not leave a record");
+	const fleet = new FleetList(
+		{ listAgents: () => [record] } as unknown as AgentManager,
+		new Map(),
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		() => true,
+		undefined,
+		clock,
+	);
+	const setWidget = vi.fn<FleetUICtx["setWidget"]>();
+	fleet.setUICtx({ setWidget, onTerminalInput: () => () => {} } as unknown as FleetUICtx);
+	fleet.update();
+	fleet.toggleCollapse();
+	const widget = setWidget.mock.lastCall?.[1];
+	if (typeof widget !== "function") throw new Error("No fleet widget");
+	const rows = widget({ terminal: { columns: 120, rows: 40 }, requestRender: () => {} }, {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as Parameters<typeof widget>[1]).render(120);
+	const row = rows.find((line) => line.includes("background"));
+	expect(row).toContain(sample.selected);
+	if (sample.flag) expect(row).toContain(sample.flag);
+	else expect(row).not.toMatch(/\[@|\[fallback/);
+
+	const completed = await run("foreground", false);
+	expectResult(completed.content[0].text, "Agent completed");
+	vi.mocked(runner.runAgent).mockRejectedValueOnce(new Error("fixture failure"));
+	const failed = await run("failed", false);
+	expectResult(failed.content[0].text, "Agent failed: fixture failure");
+
+	const preview = explainModel({
+		agentType: "scout",
+		definitionModel: sample.definition,
+		paramModel: sample.param,
+		parentModel: parent,
+		registry,
+		cwd: sandbox.dir,
+	});
+	expect(preview.text).toContain(sample.settings);
+	expect(preview.text).toContain(`Selected: ${ref(sample.selected)}.`);
+});
 
 it("reserves the concurrency slot before awaiting tier admission", async () => {
 	setModelTiers({ cheap: [ref("typed")] }, {});
