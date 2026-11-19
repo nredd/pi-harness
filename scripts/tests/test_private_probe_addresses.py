@@ -77,10 +77,6 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
     "packages/subagents/tests/output-file-path.test.ts": frozenset({"user"}),
     "packages/subagents/tests/output-file.test.ts": frozenset({"foo", "user"}),
     "packages/subagents/tests/transcript-root-hardening.test.ts": frozenset({"u"}),
-    # Synthetic private addresses the WSL2 smoke harness feeds through the script under test.
-    "scripts/tests/test_wsl2_workflow.py": frozenset(
-        {ip(172, 20, 0, 1), ip(172, 20, 0, 2), ip(172, 20, 0, 9)}
-    ),
 }
 # Machine-generated dependency locks are not authored text.
 LOCKFILE = re.compile(r"(?:^|/)(?:package-lock\.json|[^/]*\.lock)$")
@@ -234,7 +230,6 @@ def test_scope_covers_whole_tree_but_not_forks_locks_or_generated() -> None:
         ".github/workflows/runner-smoke.yml",
         "scripts/wsl2_smoke.sh",
         "scripts/tests/test_private_probe_addresses.py",
-        "scripts/tests/test_wsl2_workflow.py",
     ):
         assert expected in paths
     assert any(p.startswith("packages/") for p in paths)
