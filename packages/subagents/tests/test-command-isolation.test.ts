@@ -15,7 +15,7 @@ it("live smoke and benchmarks sandbox temp without replacing the operator home",
 	expect(manifest.scripts["test:e2e"]).toBe(
 		"node ../../scripts/run-vitest.ts node --keep-home scenarios --reporter=verbose",
 	);
-	expect(manifest.scripts.bench).toBe("node ../../scripts/run-vitest.ts node --keep-home bench");
+	expect(manifest.scripts.bench).toBe("node ../../scripts/run-vitest.ts node --keep-home bench --run");
 	expect(manifest.scripts["bench:ab"]).toBe("node tests/fixtures/ab.mjs");
 	expect(manifest).not.toHaveProperty("type");
 });

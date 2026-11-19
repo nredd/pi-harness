@@ -20,7 +20,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
 
-PROVENANCE = report.Provenance("example/repo", "a" * 40, "b" * 40, 1, 1)
+PROVENANCE = report.Provenance(
+    "example/repo",
+    None,
+    "b" * 40,
+    1,
+    1,
+    "push",
+    "example/repo/.github/workflows/ci.yml@refs/heads/main",
+)
 HOSTILE = ["\u202e", "\u2028", "\u200b", "\ufeff", "\ud800", "\x7f", "\x85", "\x00", "\ue000"]
 
 
@@ -237,11 +245,14 @@ def test_one_bad_host_degrades_only_that_host(tmp_path: Path) -> None:
     good = tmp_path / "coverage-ubuntu-24.04" / "coverage" / "summary.json"
     good.parent.mkdir(parents=True)
     good.write_text(json.dumps(summary_document()))
+    good.with_name("provenance.json").write_text(
+        json.dumps(PROVENANCE.record("owned", "coverage-ubuntu-24.04"))
+    )
     (tmp_path / "coverage-macos-14.zip").write_text("not a zip")
     bad = tmp_path / "coverage-wsl2" / "coverage" / "summary.json"
     bad.parent.mkdir(parents=True)
     bad.write_text('{"x":1,"' + "k" * 1000 + '":1,"' + "k" * 1000 + '":2}')
-    cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest)}
+    cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest, PROVENANCE)}
     assert cells["ubuntu-24.04"].summary is not None
     for host in ("macos-14", "wsl2"):
         assert cells[host].summary is None
@@ -267,15 +278,15 @@ def test_unreadable_artifact_does_not_publish_runner_paths(tmp_path: Path) -> No
         AssertionError: An absolute filesystem path leaks.
     """
     manifest = tmp_path / "plan.json"
-    manifest.write_text(json.dumps({"wsl2": plan_document()}))
-    artifact = tmp_path / "coverage-wsl2.zip"
+    manifest.write_text(json.dumps({"ubuntu-24.04": plan_document()}))
+    artifact = tmp_path / "coverage-ubuntu-24.04.zip"
     stored_zip(artifact, b"{}")
     artifact.chmod(0)
     try:
         with pytest.raises(PermissionError):
             artifact.read_bytes()
-        cells = report.load_evidence(tmp_path, manifest)
-        assert cells[0].reason == "PermissionError: coverage-wsl2.zip"
+        cells = report.load_evidence(tmp_path, manifest, PROVENANCE)
+        assert cells[0].reason == "PermissionError: coverage-ubuntu-24.04.zip"
         assert str(tmp_path) not in report.render_markdown(cells, PROVENANCE)
     finally:
         artifact.chmod(0o600)
@@ -294,15 +305,18 @@ def test_inconsistent_artifact_degrades_host_not_report(tmp_path: Path) -> None:
         AssertionError: The boundary contract regresses.
     """
     manifest = tmp_path / "plan.json"
-    manifest.write_text(json.dumps({"macos-14": plan_document(), "wsl2": plan_document()}))
+    manifest.write_text(json.dumps({host: plan_document() for host in ("macos-14", "ubuntu-24.04")}))
     for host, document in (
         ("macos-14", summary_document()),
-        ("wsl2", summary_document(name="other/primary")),
+        ("ubuntu-24.04", summary_document(name="other/primary")),
     ):
         path = tmp_path / f"coverage-{host}" / "coverage" / "summary.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps(document))
-    cells = report.load_evidence(tmp_path, manifest)
+        path.with_name("provenance.json").write_text(
+            json.dumps(PROVENANCE.record("owned", f"coverage-{host}"))
+        )
+    cells = report.load_evidence(tmp_path, manifest, PROVENANCE)
     assert [cell.state for cell in cells] == ["unavailable", "unavailable"]
     assert all(cell.summary is None and cell.reason.startswith("Available evidence") for cell in cells)
 
@@ -322,7 +336,7 @@ def test_bad_manifest_still_fails_the_report(tmp_path: Path) -> None:
     manifest = tmp_path / "plan.json"
     manifest.write_text(json.dumps({"wsl2": plan_document() | {"signals": {"pkg/primary": {}}}}))
     with pytest.raises(ValueError, match=r"^Expected bounded text without control or format characters$"):
-        report.load_evidence(tmp_path, manifest)
+        report.load_evidence(tmp_path, manifest, PROVENANCE)
 
 
 def test_partial_rows_note_survives_a_full_signal_table() -> None:
@@ -512,6 +526,9 @@ def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> 
     good = tmp_path / "coverage-ubuntu-24.04" / "coverage" / "summary.json"
     good.parent.mkdir(parents=True)
     good.write_text(json.dumps(summary_document()))
+    good.with_name("provenance.json").write_text(
+        json.dumps(PROVENANCE.record("owned", "coverage-ubuntu-24.04"))
+    )
     bad = tmp_path / "coverage-macos-14.zip"
     if damage == "lzma":
         with zipfile.ZipFile(bad, "w", compression=zipfile.ZIP_LZMA) as archive:
@@ -542,8 +559,10 @@ def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> 
                 str(manifest),
                 "--repository",
                 "example/repo",
-                "--head-sha",
-                "a" * 40,
+                "--event-name",
+                "push",
+                "--workflow-ref",
+                "example/repo/.github/workflows/ci.yml@refs/heads/main",
                 "--tested-sha",
                 "b" * 40,
                 "--run-id",
@@ -559,7 +578,7 @@ def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> 
     assert "macOS enforced signals: unavailable" in output.read_text()
     with pytest.raises((ValueError, OSError)):
         report.read_summary(bad)
-    cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest)}
+    cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest, PROVENANCE)}
     assert cells["macos-14"].summary is None
     assert cells["macos-14"].state == "unavailable"
     assert 0 < len(cells["macos-14"].reason) <= report.MAX_REASON

@@ -916,6 +916,10 @@ Use `model: "@cheap"` in an agent, `agentModels`, `Agent({ model: "@cheap" })`, 
 
 Bindings live ONLY in global `~/.pi/agent/subagents.json` or the `subagents` object of an owner-only `enterprise.local.json`. Project tier definitions and resolution policies are ignored with a warning. Keys match `^[a-z0-9][a-z0-9._-]*$` and are case sensitive. Each nonempty list contains either exactly one registered `router/<profile>`, or only exact physical `provider/id` members. No mixtures, nested tiers, fuzzy entries or implicit neighbouring tiers. Exact model IDs may contain revision markers such as `@20240620`; a bare `@other-tier` binding entry is still rejected. Invalid bindings are dropped with a warning; references to them are `unmapped`.
 
+Run `/agents propose-tiers` in an interactive session to list registered `router/*` profiles and preview a `modelTiers` map. It suggests only exact, case-sensitive matches for `cheap`, `deep`, `default`, `frontier` and `review`. A missing profile is left unmapped; arbitrary profile names are listed but never substituted. Registration is not a check of credentials, quota or the health of a profile's members.
+
+The command reads only trusted global settings and the owner-only `enterprise.local.json` overlay. Project-level `modelTiers` is ignored. It proposes nothing when a trusted `modelTiers` map already exists, even `{}`, and skips `cheap` if it would shadow the legacy Explore compatibility alias. You can still bind `cheap` by hand; an explicit binding takes precedence over the alias. Review the JSON and, only if you approve, copy the `modelTiers` field into your trusted global configuration yourself. The command never writes settings or changes routing. Without a UI it returns silently, without reading settings or listing profiles.
+
 Routed personal setup (configure the router profiles separately):
 
 ```json
@@ -2378,7 +2382,7 @@ Formatting and linting use the root `biome.json`. Four scoped rules retain the f
 
 `npm run typecheck` includes all TypeScript tests and fixtures with unchecked indexed access and erasable syntax enforced. The JavaScript build entry opts into TypeScript checking too. Indexed fixture lookups make their existing setup/bounds assumptions explicit; malformed-input probes retain their original runtime inputs. The recording hook map deliberately erases SDK event signatures because it stores every hook and wiring probes pass only the fields that hook reads. Real-host suites retain the complete SDK boundary.
 
-`npm run bench` runs Vitest benchmarks through the shared temp sandbox without replacing the operator home; append `-- --run` for a bounded, non-watch run. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. `npm run bench:ab -- <ref>` retains its existing command through the moved `tests/fixtures/ab.mjs`; its existing baseline-comparison machinery is not redesigned here. The inherited `bench:ab` script-name layout waiver is retained to preserve that entry point; all structural package waivers are removed.
+`npm run bench` runs Vitest benchmarks once through the shared temp sandbox without replacing the operator home. For interactive watch mode, run `node ../../scripts/run-vitest.ts node --keep-home bench --watch` from this package directory and press `q` to quit cleanly. Appending `-- --watch` to the npm script does not override its `--run`. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. `npm run bench:ab -- <ref>` retains its existing command through the moved `tests/fixtures/ab.mjs`; its existing baseline-comparison machinery is not redesigned here. The inherited `bench:ab` script-name layout waiver is retained to preserve that entry point; all structural package waivers are removed.
 
 `prepublishOnly` is removed because publishing is owned by the monorepo release workflow, not a package-local shortcut: `scripts/release_descriptors.py` runs this workspace's `check`, and `scripts/npm_release.py` packs once and exercises those bytes through stock Pi before `.github/workflows/publish.yml` publishes the verified tarball. `prepack` still builds local tarballs. Use the release workflow, not direct `npm publish`, for publication.
 
@@ -2428,7 +2432,7 @@ For iteration from `packages/subagents`:
 ```sh
 node ../../scripts/run-vitest.ts node tests/tool-description-mode.test.ts
 npm run test:e2e
-npm run bench -- --run
+npm run bench
 npm run bench:ab -- origin/main
 ```
 
