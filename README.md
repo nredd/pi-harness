@@ -49,7 +49,8 @@ make help                    # every target
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
 - `check-changelog-fragments` and explicit `fold-changelog` use the managed `tests/integration` uv project;
-  folding edits source fragments only, never publishes or releases
+  folding edits source fragments only, never publishes or releases. Edits to enrolled packages'
+  `CHANGELOG.md` files run the scripts gate, including fragment validation, rather than bypassing CI as docs-only
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
 - `install-owned` also runs `install-lint-tools`: checksum-pinned ShellCheck `0.11.0`, actionlint

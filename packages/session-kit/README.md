@@ -912,3 +912,18 @@ owning process and detached group cleanup. Do not replace these with passing moc
 The stats CLI rebuild test writes to per-test temporary output, never shared `dist/`.
 Packed CLI tests disable lifecycle scripts and launch Node explicitly, including under Bun;
 byte-identical rebuilds verify the declared standalone Node artifact, not Bun's entry resolver.
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits any pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging.
+
+The #932 migration moves no historical bullets: `0.12.0` already released the
+previous `[Unreleased]` entries. The released changelog is unchanged.

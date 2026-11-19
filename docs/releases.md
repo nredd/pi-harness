@@ -30,26 +30,41 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 
 ## Changelog fragments
 
-Only `packages/subagents` uses fragments so far; its README defines the closed filename and
-one-bullet grammar. Add a fragment for new changes rather than editing the shared Unreleased
-block. `make check-changelog-fragments` is read-only and part of `make check-scripts`.
+`packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler}` use fragments;
+the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the unchanged
+closed filename and one-bullet grammar. `preset` stays unenrolled because its changelog
+is being edited for release prep. `subscription-router` and `computer-use` are also not enrolled. Add a fragment for new changes
+rather than editing the shared Unreleased block. `make check-changelog-fragments` is read-only
+and part of `make check-scripts`.
 `make fold-changelog` is an explicit source-maintenance command, never an automatic release step.
-It appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
-Security order and orders new bullets numerically by issue within each category. Existing entries, warning text,
-links and released sections remain byte-for-byte intact; repeated legacy category headings
-remain, with additions going into the last matching category. The partial historical migration
-and its exact retained entries are recorded in the package README. No other package is migrated.
+Of the five newly enrolled packages, only `todo` and `session-kit` ship `CHANGELOG.md`;
+none packs `changes/`. A release cut from `main` without folding ships a changelog missing
+its pending fragments. Run `make fold-changelog` during release prep and commit the result
+before tagging. `todo` currently has six pending fragments: #292, #414, #444, #448, #522 and #918.
 
-The folder validates all inputs before mutation, serializes cooperating folds with
-`packages/subagents/.changelog-fold.lock`, writes and fsyncs a same-directory temporary file,
+The fold appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
+Security order and orders new bullets numerically by issue within each category. Existing
+entries, warning text, links and released sections remain byte-for-byte intact, including unbracketed release headings.
+Only the five newly enrolled packages permit uncategorized bullets, wrapped bullets and prose
+as legacy source, not new fragment syntax. An unrecognized `## ` heading inside `[Unreleased]`
+blocks the fold. `subagents` retains its strict validation;
+repeated legacy category headings remain, with additions going into the last matching category.
+Each package README records its partial historical migration and retained entries. Missing issue
+links, wrapped entries and repeated issue/category groups are retained rather than rewritten or
+given invented attribution.
+
+The folder validates every enrolled package before mutation (missing package directories fail
+closed), then serializes each package's cooperating folds with `packages/<package>/.changelog-fold.lock`,
+revalidates that package, writes and fsyncs a same-directory temporary file,
 then atomically replaces the changelog before deleting fragments. A write/replacement failure
 leaves fragments intact. If deletion fails or the process is interrupted after replacement,
 retry: an exact bullet already in its category is consumed without reinsertion. A conflicting
 category or duplicate bullet fails closed. Check the diff before committing. On a killed process,
 verify no fold is still running before manually removing its stale lock directory and retrying.
-The lock is never stolen automatically. This protects normal checkout maintenance, not hostile
-concurrent filesystem mutation or whole-tree power-loss durability. No version, tag, pin,
-publication or activation is implied by a fold.
+The lock is never stolen automatically. Folds are restart-safe per package, not a whole-checkout
+transaction: a later filesystem failure can leave earlier packages folded. This protects normal
+checkout maintenance, not hostile concurrent filesystem mutation or whole-tree power-loss
+durability. No version, tag, pin, publication or activation is implied by a fold.
 
 ## Root override gate
 

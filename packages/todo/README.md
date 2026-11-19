@@ -909,3 +909,22 @@ reason to weaken result-history assertions.
 ## Package layout
 
 Runtime code and locales live under `src/`; tests mirror it under `tests/`, with injected-home fixtures under `tests/fixtures/`. The `rpiv-test-utils` alias still resolves the licensed session/theme fixtures in `tests/fixtures/upstream/`; Pi API/context doubles use `@nredd/pi-test-lib/pi`. Upstream updates are manual ports. The root Biome override preserves the existing upstream non-null assertions, generic test-tool doubles, and control-character sanitization regexes; this layout change does not redesign their types or behavior.
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging. This migration leaves six
+pending fragments: #292, #414, #444, #448, #522 and #918.
+
+The #932 migration preserves 24 historical bullets: 6 exact bullets move to fragments
+and 18 remain in `CHANGELOG.md`. The two `586.fixed` bullets share one issue/category and remain; other retained bullets lack the required issue link.
+Five of the six moved bullets keep their original categories. Only #448 moves from
+Added to Fixed by judgement. The single ungrouped bullet stays in `CHANGELOG.md`.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

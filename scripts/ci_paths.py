@@ -52,6 +52,13 @@ TESTED_DOCUMENTATION = frozenset(
         "packages/preset/README.md",
         "packages/session-kit/README.md",
         "packages/todo/README.md",
+        # Enrolled changelogs are inputs to `check-changelog-fragments`, even without fragment edits.
+        "packages/subagents/CHANGELOG.md",
+        "packages/session-kit/CHANGELOG.md",
+        "packages/dev-tools/CHANGELOG.md",
+        "packages/todo/CHANGELOG.md",
+        "packages/plan-mode/CHANGELOG.md",
+        "packages/resource-sampler/CHANGELOG.md",
     }
 )
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
@@ -437,8 +444,8 @@ def is_documentation_path(path: str) -> bool:
 def changes_package_doc_presence(repo: Path, paths: tuple[str, ...], base: str, head: str) -> bool:
     """Return whether a changed `packages/<name>/README.md` or `CHANGELOG.md` was added or deleted.
 
-    A package doc edit is docs-only, but adding or deleting one changes which required files a package
-    has, which `scripts/package_layout.py` gates, so that diff must run `check-scripts`.
+    An untested package doc edit is docs-only, but adding or deleting one changes which required files a
+    package has, which `scripts/package_layout.py` gates, so that diff must run `check-scripts`.
 
     Parameters:
         repo (Path): Existing Git working tree.
