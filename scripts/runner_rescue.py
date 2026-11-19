@@ -51,7 +51,7 @@ RERUN_BACKOFF_S = 10
 POLL_S = 5
 RERUN_EVENTS = frozenset({"pull_request", "push", "workflow_dispatch"})
 POOL_LABELS = {pool.label: name for name, pool in POOLS.items()}
-HOSTED_POOLS = {"ubuntu-24.04": "pi-linux", "xcode-27": "pi-macos", "windows-2025": "pi-wsl2"}
+HOSTED_POOLS = {"ubuntu-24.04": "pi-linux", "xcode-27": "pi-macos"}
 
 
 def parse_time(stamp: str) -> float:

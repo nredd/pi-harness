@@ -77,7 +77,7 @@ per-OS uncovered statements.
 It fails closed. With `target.statements` set, an enforced Istanbul/V8 signal needs the `json-summary`
 reporter and a cap (`Missing statement cap`); a cap without a readable, non-empty summary, or a summary
 with no statements, fails (`Statement producer missing`); an LCOV source with no summary entry fails
-(`Statements missing for source`). The CI shard and fan-in artifacts and the WSL capture carry
+(`Statements missing for source`). The CI shard and fan-in artifacts carry
 `coverage-summary.json` beside `lcov.info`.
 Carve-outs: coverage.py signals (statements are its lines, so no counter) and report-only
 `goal: excluded` signals carry no statement cap. Session-kit now emits real Istanbul statements.
@@ -109,7 +109,7 @@ Python measures branches: `PY_GATE` in the `Makefile` passes `--cov-branch`, so 
 producers emit `BRDA` rows with `branch = true` (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
 `test_real_coveragepy_branch_report_parses` runs real coverage.py to pin that shape.
 
-Caps are per OS, from hosted artifacts (WSL folded into `linux` as the max). A cap is never a max over runs: a branch
+Caps are per OS, from hosted artifacts. A cap is never a max over runs: a branch
 whose coverage changed between runs on an unchanged tree gets a deterministic test first. #429 found three,
 each reached only by the real host: `formatMetric`'s non-`available` arm and `rankProcesses`'s pid
 tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child()`'s already-exited arm in
@@ -120,11 +120,7 @@ tests now pin all three. Caps are references, not waivers: they never rise, and 
 zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
-percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
-on WSL2 and the cell is explicitly **Linux-like, enforced**: its Ubuntu fan-in accounts the reports
-against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwin` for the darwin ones (each from the plan's `coverage_os`). Native Windows coverage is not measured. WSL contract scenarios
-remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
-`coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
+percentages or platform averages. The macOS fan-in selects the Darwin floors from the plan. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. With `enforce_target: true`, the target
 overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
 use their explicit per-OS caps, not that target override. Enforced Bun signals have zero uncovered
@@ -396,7 +392,7 @@ classification preserves measurement despite the conventional fixture-directory 
 `npm run test:async --workspace @nredd/pi-computer-use` runs retained real-process
 `async.test.mjs` checks, real preload marker-write refusal in `async-observer.test.mjs`,
 and deterministic `async-safety.test.mjs` boundary tests with one worker, emitting `packages/computer-use/coverage/async/lcov.info`. The package's
-`check` runs it on macOS, Ubuntu and WSL2, and existing artifact globs collect it.
+`check` runs it on macOS and Ubuntu, and existing artifact globs collect it.
 Missing selected-host reports fail accounting, never become zero counters. Its
 verification-only goal/signal is report-only, while Vitest independently enforces
 100% lines/functions/branches/statements for this exact file. Runtime caps are unchanged.
@@ -441,7 +437,7 @@ signal (#757) links every shipped Swift source into a headless instrumented bina
 It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
 `computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.
 Regions are not branches or statements; no `BRDA` is fabricated. Missing selected-host reports
-fail closed; Linux/WSL2 explicitly report NOT RUN. The owner permits narrow thin live
+fail closed; Linux explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
 or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures its executable JS/TS runtime/producer inventory with Istanbul,
@@ -488,10 +484,7 @@ consume the integer counters emitted by `account`, not the package, signal, OS o
 `producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
 file with no executable lines; for any other producer a bare record is a truncated report and fails. The same
 `coverage.py` dialect covers what `branch = true` writes (#387): a module without functions carries no `FNF`/`FNH`,
-read as zero functions, and `BRDA` names each branch by its destination (`jump to line 12`) instead of a number. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
-pytest (`.github/workflows/ci.yml`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
-`skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
-a skipped host.
+read as zero functions, and `BRDA` names each branch by its destination (`jump to line 12`) instead of a number. Ubuntu and macOS run the Python producers. The ratchet rejects adding a skipped host.
 
 The owner retired the historical operator-driven harness comparison and its recorded runs in #1014.
 Its CI dependency existed to probe native Codex sandbox isolation without model calls, but made
@@ -526,8 +519,7 @@ closed fixture PATH: selection normalization and Git's `usr/bin` alternate, miss
 shadowing Bash, failed path conversion, missing `pwsh`, literal argv, exit status and preservation
 of existing MSYS exclusions. Its `pwsh` is an argv/environment recorder, not PowerShell execution.
 These are behavioral controls, not instrumented shell coverage or proof of real MSYS conversion;
-PowerShell/WSL runtime execution is NOT RUN by this local test. Real Windows-hosted owned/contracts
-cells remain necessary. No shell producer, inventory or budget changes are implied.
+PowerShell/WSL runtime execution is NOT RUN by this local test and is no longer a CI target. No shell producer, inventory or budget changes are implied.
 `computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory.
 Makefiles (extensionless, no shebang) and YAML, including workflow and action inline `run:` steps, are inert by decision and not inventoried: measuring them is the open #695 owner decision. `test_makefiles_and_yaml_are_inert_by_decision_until_695` pins the exact tracked set (3 Makefiles, every `.github/**/*.yml` at the root and under `packages/computer-use` and `packages/subagents`), so a new one is a deliberate choice. Each file must be in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files (including pytest `conftest.py` and Swift `*_tests.swift`) are out of scope; arbitrary new implementation files
@@ -660,10 +652,8 @@ diff (no policy files are modified, and measurement mode is explicitly **not a g
 ```sh
 gh run download <run-id> -R nredd/pi-harness -n coverage-ubuntu-24.04 -D /tmp/cov-linux
 gh run download <run-id> -R nredd/pi-harness -n coverage-macos-14 -D /tmp/cov-darwin
-gh run download <run-id> -R nredd/pi-harness -n coverage-wsl2 -D /tmp/cov-wsl2
 uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json
 uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure --os darwin --reports-root /tmp/cov-darwin --summary /tmp/measured-darwin.json
-uv run --locked --project tests/integration python scripts/coverage_accounting.py --measure --os linux --reports-root /tmp/cov-wsl2 --summary /tmp/measured-wsl2.json
 ```
 
 Use a checkout matching the artifact's production source and inventory. `--reports-root` reads the
@@ -676,15 +666,7 @@ Replay the artifact as a gate by dropping `--measure` and adding `--base origin/
 `measurement_only` is then false. Missing/inconsistent artifacts fail in either mode.
 
 Compare **two independent hosted runs on different commits**, per package/signal/runner.
-Validate WSL2 independently with `--os linux` and the same enforced floors as native Ubuntu;
-a complete WSL artifact cannot substitute for a missing native Linux or macOS artifact. Any
-WSL excess fails the owned gate: investigate/test the path, never widen a zero floor or call
-the WSL cell report-only. Guest-to-host export mirrors only declared LCOV paths and the summary,
-clears stale host reports, and precedes the Windows-hosted artifact action. Do not retry
-until green or widen beyond observed counts. Investigate changed counters; fix nondeterminism or
-retain the maximum actually observed per counter with a documented cause and follow-up issue.
-Never average platforms or combine their maxima. Once the policy is on main, the base ratchet still
-forbids raising it; measurement mode is diagnostic, not a bypass.
+
 
 The initial Linux `session-kit/primary` floor is the **TRANSITIONAL observed maximum** of 110
 uncovered lines / 32 functions across hosted runs `40441614924` (110/31) and `40452767971`
@@ -707,7 +689,7 @@ to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)).
 `todo` branch caps are 0 on primary and Bun since #414: tests for every reachable branch, and
 deletion of defaults and fallbacks no caller could reach (`planTitle`'s heading fallback, the bullet
 content-indent default, `withTrailingSpacer`'s empty guard, the `settledAt` default in agent retry
-matching, `isValidCollapseKeySpec`'s `?? ""`). Measured on darwin; hosted CI confirms linux and WSL2.
+matching, `isValidCollapseKeySpec`'s `?? ""`). Measured on darwin; hosted CI confirms Linux.
 
 `plan-mode` branch caps are 0 on primary and Bun since #407: tests for every reachable branch in the
 menus, settings, export, question and launch code, and deletion of the guards and defaults no caller
@@ -718,7 +700,7 @@ re-checks). The handler-level pre-checks and the `value ?? ""` export default st
 Kit contract, so `package-menu-contract.test.ts` drives them by adapter fault injection. The
 post-await `isCurrent` guard in the active-implementation Settings handler duplicates Kit's own
 check, and `planFromCompletionDetails`' `normalized.ok` ternary yields `undefined` either way; their
-tests cover the branch but cannot fail without it. Measured on darwin; hosted CI confirms linux and WSL2.
+tests cover the branch but cannot fail without it. Measured on darwin; hosted CI confirms Linux.
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
@@ -768,4 +750,3 @@ reports correctly fail rather than pretending full coverage. Do not reuse stale 
 to claim a clean gate.
 
 Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
-The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](../.github/workflows/ci.yml) for platform boundaries.
