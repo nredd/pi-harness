@@ -55,7 +55,7 @@ class Replay(checks.GitHub):
         self.data = json.loads(FIXTURE.read_text())
         # The historical capture already carries every currently required job name.
         present = {job["name"] for job in self.data["new_jobs"]}
-        assert checks.EXPECTED_MATRIX <= present
+        assert present >= checks.EXPECTED_MATRIX
         self.old_run = self.data["runs"][1]
         self.commands: list[tuple[str, ...]] = []
         self.binary = "/fixture/gh"
