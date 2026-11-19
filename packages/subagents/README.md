@@ -918,7 +918,7 @@ Bindings live ONLY in global `~/.pi/agent/subagents.json` or the `subagents` obj
 
 Run `/agents propose-tiers` in an interactive session to list registered `router/*` profiles and preview a `modelTiers` map. It suggests only exact, case-sensitive matches for `cheap`, `deep`, `default`, `frontier` and `review`. A missing profile is left unmapped; arbitrary profile names are listed but never substituted. Registration is not a check of credentials, quota or the health of a profile's members.
 
-The command proposes nothing when a trusted `modelTiers` map already exists, even `{}`, and skips `cheap` if it would shadow the legacy Explore compatibility alias. Review the JSON and, only if you approve, copy the `modelTiers` field into your trusted global configuration yourself. The command never writes settings or changes routing.
+The command reads only trusted global settings and the owner-only `enterprise.local.json` overlay. Project-level `modelTiers` is ignored. It proposes nothing when a trusted `modelTiers` map already exists, even `{}`, and skips `cheap` if it would shadow the legacy Explore compatibility alias. You can still bind `cheap` by hand; an explicit binding takes precedence over the alias. Review the JSON and, only if you approve, copy the `modelTiers` field into your trusted global configuration yourself. The command never writes settings or changes routing. Without a UI it returns silently, without reading settings or listing profiles.
 
 Routed personal setup (configure the router profiles separately):
 
