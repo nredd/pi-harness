@@ -1,9 +1,9 @@
 /** Scheduler, schedule store and schedule menu branches: real stores, owned clock, stub manager/pi/ctx. */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.ts";
 import { getAgentConfig, NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
@@ -19,8 +19,8 @@ let dir: string;
 let registry: ModelRegistry;
 const schedulers: SubagentScheduler[] = [];
 
-beforeEach(async () => {
-	dir = mkdtempSync(join(tmpdir(), "branch-scheduler-"));
+beforeEach(async ({ onTestFinished }) => {
+	dir = makeTestTempDir("branch-scheduler-", onTestFinished);
 	const runtime = await ModelRuntime.create({
 		authPath: join(dir, "auth.json"),
 		modelsPath: null,
@@ -53,7 +53,6 @@ afterEach(() => {
 	setModelTiers(undefined, undefined);
 	vi.restoreAllMocks();
 	vi.useRealTimers();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 /** `pi.events` that records schedule events and lets a test answer router admission by hand. */

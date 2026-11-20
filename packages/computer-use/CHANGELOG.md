@@ -37,6 +37,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- `desktop_screenshot` now excludes blocked apps that are running with only off-screen windows from the capture; an app that launches after the inventory is fetched is still not excluded (#688).
 - Fail the Windows GUI fixture and native-helper job when an interactive desktop is unavailable, including session 0. Remove headless success handling; retain separate mixed-DPI/negative-monitor `NOT RUN` evidence. Keep the kernel-abandonment fixture Windows-only with a non-test entry point for portable all-target builds (#1038).
 
 - Return native Windows text mismatch evidence as `didnt`, skip password value read-back, and serialize single semantic actions with checked physical input. Replace the kernel-abandonment test's environment toggle with a separate crash fixture (#983).
