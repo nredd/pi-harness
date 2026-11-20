@@ -110,6 +110,8 @@ def timestamp(value: object) -> datetime:
 class Snapshot:
     """Validated snapshot metadata and the package-level evidence needed for deltas."""
 
+    sha: str
+    run_id: int
     order: tuple[int, int]
     measured_at: datetime
     evidence: tuple[Evidence, ...]
@@ -136,12 +138,12 @@ class Snapshot:
             or data["repository"] != repository
         ):
             raise ValueError("Invalid coverage snapshot identity")
-        git_sha(data["sha"])
-        positive_id(data["run"])
         cells = object_value(data["hosts"])
         if cells.keys() != COVERAGE_HOSTS.keys():
             raise ValueError("Unexpected snapshot hosts")
         return cls(
+            git_sha(data["sha"]),
+            positive_id(data["run"]),
             (positive_id(data["number"]), positive_id(data["attempt"])),
             timestamp(data["measured_at"]),
             tuple(snapshot_cell(host, cell) for host, cell in cells.items()),
@@ -245,10 +247,10 @@ def read_snapshot(api: Transport, tip: str) -> Snapshot:
         ValueError: Malformed Git entry or snapshot.
     """
     tree = api.request(f"git/trees/{tip}")
-    matches = [row for row in tree["tree"] if row["path"] == FILENAME]
-    if tree["truncated"] is not False or len(matches) != 1:
-        raise ValueError("Missing or ambiguous snapshot tree entry")
-    entry = matches[0]
+    entries = tree["tree"]
+    if tree["truncated"] is not False or len(entries) != 1 or entries[0]["path"] != FILENAME:
+        raise ValueError("Expected a data-only snapshot tree with exactly one entry")
+    entry = entries[0]
     size = positive_id(entry["size"])
     if entry["mode"] != "100644" or entry["type"] != "blob" or size > MAX_BYTES:
         raise ValueError("Invalid snapshot tree entry")
@@ -264,25 +266,25 @@ def read_snapshot(api: Transport, tip: str) -> Snapshot:
     return Snapshot.parse(raw, api.repository)
 
 
-def baseline(api: Transport, now: datetime) -> tuple[Evidence, ...]:
+def baseline(api: Transport, now: datetime) -> Snapshot | None:
     """Treat an absent, expired or invalid baseline as unavailable without blocking the PR comment.
 
     Parameters:
         api (Transport): Read-only snapshot transport.
         now (datetime): Reader time in UTC.
     Returns:
-        tuple[Evidence, ...]: Fresh measurements or no baseline.
+        Snapshot | None: Fresh measurements and producing run identity, if available.
     Raises:
         None.
     """
     try:
         tip = read_tip(api)
         if tip is None:
-            return ()
+            return None
         snapshot = read_snapshot(api, tip)
     except (KeyError, OSError, TypeError, ValueError):
-        return ()
-    return snapshot.evidence if timedelta(0) <= now - snapshot.measured_at <= MAX_AGE else ()
+        return None
+    return snapshot if timedelta(0) <= now - snapshot.measured_at <= MAX_AGE else None
 
 
 def write_snapshot(

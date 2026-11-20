@@ -520,7 +520,7 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 - `sha_pinning_required: true` (every `uses:` is already a full SHA)
 - Fork PR approval: `all_external_contributors`, i.e. EVERY fork PR run waits for the owner. Never use "first-time contributors". Do NOT approve a fork PR run without reading its workflow diff: a fork can rewrite `runs-on` to a self-hosted label
 - Workflow token default `read`, `can_approve_pull_request_reviews: false`
-- No collaborators, no repo or org secrets (environments `npm`, `stack-promotion` are branch-gated), no `pull_request_target`, `workflow_run` or `issue_comment` workflows. Adding any of these with a self-hosted `runs-on` is a blocking change
+- No collaborators, no repo or org secrets (environments `npm`, `stack-promotion` are branch-gated), no `pull_request_target` or `issue_comment` workflows. The `workflow_run` exception is the hosted coverage publisher: artifacts are read as data, never executed, and only the same-repo `main`-push snapshot job gets `contents: write`. It runs reviewed default-branch code with a repository-scoped write token, like release workflows; no ref isolation is claimed (owner decision pending). The baseline is producer-reported, not independently verified. Adding any of these triggers with a self-hosted `runs-on` is a blocking change
 - Ruleset `main required checks` requires the same names the hosted cells report
 
 ### Threat model

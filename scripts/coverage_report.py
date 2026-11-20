@@ -580,7 +580,7 @@ def host_rows(cell: Evidence, main: Evidence | None) -> list[str]:
     """
     rows = [
         f"\n{HOSTS[cell.host][0]}:\n\nSignal | L | F | B | S | Enforcement / reason | "
-        "vs policy reference | vs measured main\n"
+        "vs policy reference | vs measured main (producer-reported)\n"
         "--- | --- | --- | --- | --- | --- | --- | ---"
     ]
     rows.extend(

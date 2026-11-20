@@ -248,11 +248,12 @@ class MainGitHub(pub.GitHub):
                 archive.writestr("../snapshot.json", "{}")
 
 
-def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Round-trip a two-host baseline and render independent signed deltas in the PR comment.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Scoped reader and clock overrides.
+        tmp_path (Path): Step summary output directory.
     Returns:
         None.
     Raises:
@@ -272,19 +273,50 @@ def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
         2,
     )
     assert data["measured_at"] == STAMP
-    assert {cell.host for cell in snap.baseline(api, NOW)} == set(pub.COVERAGE_HOSTS)
-    assert snap.baseline(api, NOW + snap.MAX_AGE) == ()
-    assert snap.baseline(api, NOW - timedelta(days=2)) == ()
+    baseline = snap.baseline(api, NOW)
+    assert baseline is not None
+    assert {cell.host for cell in baseline.evidence} == set(pub.COVERAGE_HOSTS)
+    assert snap.baseline(api, NOW + snap.MAX_AGE) is None
+    assert snap.baseline(api, NOW - timedelta(days=2)) is None
+    data.update(sha=BLOB, run=321)
     data["hosts"]["ubuntu-24.04"]["dev-tools/primary"]["counters"]["uncovered_lines"] = 1
     api.seed_snapshot(json.dumps(data).encode())
     pr = RecordingGitHub()
-    monkeypatch.setattr(pr.__class__, "request", lambda self, *args: api.request(*args))
+    original = RecordingGitHub.request
+
+    def request(self: RecordingGitHub, path: str, *args: Any) -> Any:
+        """Forward only snapshot reads to the branch fixture.
+
+        Parameters:
+            path (str): API route.
+            *args (Any): Optional write arguments.
+        Returns:
+            Any: Recorded response.
+        Raises:
+            HTTPError: API fixture refused the request.
+        """
+        return api.request(path, *args) if path.startswith("git/") else original(self, path, *args)
+
+    monkeypatch.setattr(RecordingGitHub, "request", request)
     monkeypatch.setattr(pub, "datetime", FixedClock)
-    body = pub.render(pr, pub.Run.parse(pr.data), 4, TESTED, POLICY)
+    summary = tmp_path / "summary"
+    pub.publish(pr, pub.Run.parse(pr.data), POLICY, summary)
+    body = pr.writes[-1][2]["body"]
+    assert summary.read_text() == body + "\n"
+    label = "Producer-reported main baseline (not independently verified):"
+    assert f"{label} `{BLOB}`" in body
+    assert f"https://github.com/{REPO}/actions/runs/321/attempts/2" in body
+    assert "vs measured main (producer-reported)" in body
+    assert body.index(pub.PR_NOTICE) < body.index("Ubuntu enforced signals:")
     row = next(line for line in body.splitlines() if line.startswith("dev&#45;tools&#47;primary |"))
     assert row.rsplit(" | ", 1)[1] == "lines -1, functions +0, branches +0, statements +0"
     assert pub.PR_NOTICE in body.splitlines()
-    assert "verified" not in "\n".join(line for line in body.splitlines() if line != pub.PR_NOTICE).casefold()
+    assert (
+        "verified"
+        not in "\n".join(
+            line for line in body.splitlines() if line != pub.PR_NOTICE and not line.startswith(label)
+        ).casefold()
+    )
 
 
 class FixedClock:
@@ -454,7 +486,8 @@ def test_invalid_snapshot_identity(field: str, value: object) -> None:
 
 
 @pytest.mark.parametrize(
-    "case", ["missing", "duplicate", "symlink", "oversized", "sha", "blob", "encoded", "decoded", "raw"]
+    "case",
+    ["missing", "sibling", "duplicate", "symlink", "oversized", "sha", "blob", "encoded", "decoded", "raw"],
 )
 def test_invalid_stored_data_is_unavailable(case: str) -> None:
     """Handle short, hostile or malformed Git responses without rendering their numbers.
@@ -471,6 +504,8 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
     entry = api.tree_entries[0]
     if case == "missing":
         api.tree_entries.clear()
+    elif case == "sibling":
+        api.tree_entries.append(entry | {"path": "coverage.svg"})
     elif case == "duplicate":
         api.tree_entries.append(entry)
     elif case == "symlink":
@@ -488,8 +523,8 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
         api.blob["content"] = "YQ==" if case == "decoded" else ""
     else:
         api.seed_snapshot(b"{bad json}")
-    assert snap.baseline(api, NOW) == ()
-    if case in {"missing", "duplicate", "symlink", "oversized", "sha"}:
+    assert snap.baseline(api, NOW) is None
+    if case in {"missing", "sibling", "duplicate", "symlink", "oversized", "sha"}:
         assert not any(path.startswith("git/blobs/") for path in api.reads)
     api.writes.clear()
     with pytest.raises(ValueError, match=r"snapshot|Git object|Cannot decode JSON"):

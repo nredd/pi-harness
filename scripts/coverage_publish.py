@@ -433,7 +433,15 @@ def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path)
         state = fetch_evidence(api, run, directory)
         write_plan(policy, manifest, state)
         evidence = load_evidence(directory, manifest, provenance)
-        main_cells = baseline(api, datetime.now(UTC)) if state == "available" else ()
+        main_baseline = baseline(api, datetime.now(UTC)) if state == "available" else None
+        if main_baseline is not None:
+            prefix += (
+                f"Producer-reported main baseline (not independently verified): `{main_baseline.sha}` "
+                f"([CI run {main_baseline.run_id}, attempt {main_baseline.order[1]}]"
+                f"(https://github.com/{api.repository}/actions/runs/{main_baseline.run_id}/"
+                f"attempts/{main_baseline.order[1]})).\n\n"
+            )
+        main_cells = () if main_baseline is None else main_baseline.evidence
         return prefix + render_markdown(evidence, provenance, main_cells, limit=MAX_MARKDOWN - len(prefix))
 
 
