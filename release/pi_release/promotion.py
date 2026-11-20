@@ -469,7 +469,7 @@ def registry_stack_runs(
 
     The artifact is the evidence: `ci.yml` uploads it only after the registry stack scenario ran,
     and its API provenance binds it to the exact run and source SHA. A skipped docs-only or
-    main-push-smoke cell cannot qualify. Job names are deliberately not consulted, so renaming a
+    reporting-only cell cannot qualify. Job names are deliberately not consulted, so renaming a
     matrix cell cannot break promotion.
 
     Parameters:

@@ -20,6 +20,7 @@ import {
 	type ExtensionContext,
 	type ExtensionFactory,
 	getSettingsListTheme,
+	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
@@ -50,12 +51,14 @@ import {
 	AgentManager,
 	describeEvicted,
 	describeEvictedResult,
+	type EvictedNote,
 	isTopLevelAgent,
 	markConsumed,
 	type OwnedPending,
 } from "./agent-manager.ts";
 import { rosterJson } from "./agent-roster.ts";
 import {
+	childSessionDir,
 	getAgentConversation,
 	getDefaultMaxTurns,
 	getGraceTurns,
@@ -188,6 +191,7 @@ import {
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
 import { savedAgentNote } from "./saved-agent-record.ts";
+import { checkSavedChild, sameSavedChild } from "./saved-child-session.ts";
 import { SubagentScheduler } from "./schedule.ts";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
@@ -277,6 +281,10 @@ import { escapeXml } from "./xml.ts";
 /** Tool execute return value for a text response. */
 function textResult(msg: string, details?: AgentDetails) {
 	return { content: [{ type: "text" as const, text: msg }], details: details as any };
+}
+
+function errorResult(msg: string) {
+	return { ...textResult(msg), isError: true };
 }
 
 /** Format an agent's lifetime token total, or "" when zero. */
@@ -997,8 +1005,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		};
 	}
 
-	/** The `subagents:record` history entry; the ONE builder, shared by live completion and the detached spool. */
+	/** The `subagents:record` history entry, shared by live runs and the detached spool. */
 	function historyRecord(record: AgentRecord): Record<string, unknown> {
+		const sessionCwd = record.session?.sessionManager?.getHeader?.()?.cwd;
 		return {
 			id: record.id,
 			type: record.type,
@@ -1008,11 +1017,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			error: record.error,
 			startedAt: record.startedAt,
 			completedAt: record.completedAt,
+			handle: record.handle,
+			alias: record.alias,
+			previousId: record.previousId,
 			...(record.outputFile ? { outputFile: record.outputFile } : {}),
-			...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+			...(record.sessionFile ? { sessionFile: record.sessionFile, sessionCwd } : {}),
 			...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
 			...(record.modelTier ? { modelTier: record.modelTier } : {}),
 		};
+	}
+
+	function savePersistedRun(record: AgentRecord) {
+		if (!isTopLevelAgent(record) || !record.sessionFile || detachedSessionFile !== undefined) return;
+		// One entry commits both the new id and its predecessor, before the next prompt.
+		pi.appendEntry("subagents:record", historyRecord(record));
 	}
 
 	/**
@@ -1176,6 +1194,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		undefined,
 		(record) => {
 			if (!isTopLevelAgent(record)) return;
+			// A live resume already has a session; a fresh spawn journals it on creation.
+			savePersistedRun(record);
 			// Agent-tool spawns refresh these surfaces in their tool handler, but RPC
 			// and scheduler spawns enter through the manager directly.
 			if (currentCtx?.hasUI) {
@@ -1276,14 +1296,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				{ deliverAs: "nextTurn" },
 			);
 		},
+		savePersistedRun,
+		savePersistedRun,
 	);
 
 	// A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
 	// that keys by handle read this manager's newer agent and the survivor as one.
-	manager.reservedHandles = () =>
-		listAllRunningDetached().flatMap(({ agent }) =>
-			[agent.record.handle, agent.record.alias].filter((h): h is string => !!h),
-		);
+	manager.reservedHandles = (excludeId) =>
+		listAllRunningDetached()
+			.filter(({ agent }) => agent.record.id !== excludeId)
+			.flatMap(({ agent }) => [agent.record.handle, agent.record.alias].filter((h): h is string => !!h));
 
 	// Expose manager via Symbol.for() global registry for cross-package access.
 	// Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -1375,6 +1397,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
 	};
 
+	const liveAgentById = (id: string) =>
+		manager.getRecord(id) ?? listAllRunningDetached().find(({ agent }) => agent.record.id === id)?.agent.record;
+
 	/**
 	 * Resolve a tool's `agent_id` as an id OR a handle, so the model addresses
 	 * agents by the same names the user types. Ids are tried first, keeping the
@@ -1443,6 +1468,25 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		}
 	}
 
+	function savedSessionChecker(ctx: ExtensionContext) {
+		const home = options.homeDir;
+		const agentDir = resolveAgentDir(home);
+		const settings = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: isProjectTrusted() });
+		const setting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.();
+		const parentFile = ctx.sessionManager.getSessionFile();
+		const directories = new Map<string, string>();
+		return (note: EvictedNote, file: string) => {
+			const cwd = note.sessionCwd ?? ctx.cwd;
+			const key = JSON.stringify([note.type, cwd]);
+			let directory = directories.get(key);
+			if (directory === undefined) {
+				directory = childSessionDir(getAgentConfig(note.type)?.sessionDir, setting, cwd, agentDir, home);
+				directories.set(key, directory);
+			}
+			return checkSavedChild(file, directory, parentFile, note.status, clock.now(), note.sessionCwd);
+		};
+	}
+
 	// Capture ctx from session_start for RPC spawn handler + start the scheduler.
 	// This also wires the RPC handlers and broadcasts readiness — on the first
 	// bound session_start, so a filtered-out activation never advertises (#142).
@@ -1506,16 +1550,38 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			deliverDetached(sessionFile);
 		}
 		// A process restart loses the manager, not the saved parent or its output files.
-		// Restore diagnostics only: never invent a running record, re-prompt a child,
-		// or mistake a restart for a TTL eviction. Live/detached records take priority.
+		// Restore diagnostics and explicit reopen targets only: never re-prompt a child
+		// or invent a running record. Live/detached records take priority.
 		const saved = new Map<string, NonNullable<ReturnType<typeof savedAgentNote>>>();
 		for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
 			if (entry.type !== "custom" || entry.customType !== "subagents:record") continue;
 			const note = savedAgentNote(entry.data);
-			if (note) saved.set(note.id, note);
+			if (note) {
+				// A successor first appears after its predecessor, on the same transcript.
+				// Never create an edge from an update to an already seen id (or a cycle).
+				const previous = saved.get(note.previousId ?? "");
+				if (previous && !saved.has(note.id) && sameSavedChild(previous.sessionFile, note.sessionFile)) {
+					manager.linkSuccessor(previous.id, note.id);
+				}
+				saved.set(note.id, note);
+			}
 		}
+		let checkSaved: ReturnType<typeof savedSessionChecker> | undefined;
 		for (const note of saved.values()) {
-			if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
+			if (liveAgentById(note.id) || manager.getEvictedNote(note.id)) continue;
+			let checked: ReturnType<typeof checkSavedChild> | undefined;
+			if (manager.latestId(note.id) === note.id && note.sessionFile) {
+				checkSaved ??= savedSessionChecker(ctx);
+				checked = checkSaved(note, note.sessionFile);
+			}
+			manager.rememberEvicted({
+				...note,
+				reopenRefusal: checked && "refusal" in checked ? checked.refusal : undefined,
+				possiblyRunning: checked?.recent,
+			});
+			// A recent, owned transcript still holds its names. Recheck the write
+			// age at dispatch so the user can retry without restarting the parent.
+			if (checked && "file" in checked) manager.rememberTombstone({ ...note, sessionFile: checked.file });
 		}
 		// Retention (#900), off the startup path: whatever this session's records and
 		// eviction notes (or its fork source) still point at is touched and exempted.
@@ -2232,6 +2298,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		prompt: string,
 		opts: { maxTurns?: number } = {},
 	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
+		const saved = manager.getEvictedNote(entry.id);
+		if (saved?.fromSavedSession) {
+			const checked = savedSessionChecker(ctx)(saved, saved.sessionFile!);
+			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
+			entry = { ...entry, sessionFile: checked.file };
+		}
 		// Checked here rather than left to SessionManager.open: that runs inside
 		// runAgent, whose rejection lands on the record as an agent error, not in
 		// the catch below. A `/new` in another pi window or a manual delete makes
@@ -2755,7 +2827,7 @@ Terse command-style prompts produce shallow, generic work.
 			resume: Type.Optional(
 				Type.String({
 					description:
-						"Optional agent ID to resume from. Continues from previous context. Resumes detached like any other spawn; pass run_in_background: false to block and get the result inline. The resumed run gets a fresh max_turns budget. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run. An evicted agent's conversation is reopened from disk, background only, under a NEW Agent ID: use that id from then on (the old one also resolves to it).",
+						"Optional agent ID to resume from. Continues from previous context. Resumes detached like any other spawn; pass run_in_background: false to block and get the result inline. The resumed run gets a fresh max_turns budget. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run. A saved conversation without a live record (after eviction or process restart) is reopened from disk, background only, under a NEW Agent ID: use that id from then on (the old one also resolves to it).",
 				}),
 			),
 			isolated: Type.Optional(
@@ -3066,7 +3138,7 @@ Terse command-style prompts produce shallow, generic work.
 				const latest = manager.latestId(params.resume);
 				const continued =
 					latest === params.resume ? "" : `Agent ${params.resume} continues as ${latest}; use that id from now on.\n`;
-				const existing = manager.getRecord(latest);
+				const existing = liveAgentById(latest);
 				if (!existing) {
 					// Evicted by the retention sweep, but a persisted conversation is
 					// still on disk: reopen it, as `@handle` does.
@@ -3074,21 +3146,21 @@ Terse command-style prompts produce shallow, generic work.
 					if (!entry) {
 						// Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
 						const note = manager.getEvictedNote(latest);
-						const gone = note?.fromSavedSession
-							? "only historical metadata is available; reopen the recorded session manually."
-							: note?.tombstoneBoundSession
-								? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.`
-								: note?.nameTaken
-									? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+						const gone = note?.tombstoneBoundSession
+							? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.`
+							: note?.nameTaken
+								? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+								: note?.fromSavedSession
+									? `only historical metadata is available; ${note.reopenRefusal ?? "reopen the recorded session manually."}`
 									: "no saved session is left to reopen.";
 						const why = note
 							? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}`
 							: agentNotFound(latest);
-						return textResult(`${continued}${why}`);
+						return errorResult(`${continued}${why}`);
 					}
 					// The reopen is a fresh detached spawn: nothing can block on it here.
 					if (!runInBackground) {
-						return textResult(
+						return errorResult(
 							`${continued}Agent "${latest}" was evicted; its conversation reopens only in the background, under a new Agent ID. ` +
 								"Call Agent again with this resume and run_in_background: true.",
 						);
@@ -3096,7 +3168,7 @@ Terse command-style prompts produce shallow, generic work.
 					const reopened = await reopenEvicted(ctx, entry, params.prompt, {
 						maxTurns: resolveTurnCap(params.max_turns, getAgentConfig(entry.type)?.maxTurns),
 					});
-					if (!reopened.ok) return textResult(`${continued}${couldNotResume(`agent "${latest}"`, reopened.failure)}`);
+					if (!reopened.ok) return errorResult(`${continued}${couldNotResume(`agent "${latest}"`, reopened.failure)}`);
 					// No `.output` line: like every non-tool spawn it writes none, and
 					// the session file it reopened is the full transcript.
 					return textResult(
@@ -3109,10 +3181,10 @@ Terse command-style prompts produce shallow, generic work.
 					);
 				}
 				if (!isTopLevelAgent(existing)) {
-					return textResult(`Agent not found: "${params.resume}". It may have been cleaned up.`);
+					return errorResult(`Agent not found: "${params.resume}". It may have been cleaned up.`);
 				}
 				if (!existing.session) {
-					return textResult(`${continued}Agent "${existing.id}" has no active session to resume.`);
+					return errorResult(`${continued}Agent "${existing.id}" has no active session to resume.`);
 				}
 				// Not `effectiveMaxTurns`: that was resolved for `subagent_type`, which
 				// a resume ignores, so it may describe another agent.
@@ -3129,7 +3201,7 @@ Terse command-style prompts produce shallow, generic work.
 				// run's abort controller); say why here, where the model can act on it,
 				// instead of letting it read as a generic failure.
 				if (existing.status === "running" || existing.status === "queued") {
-					return textResult(
+					return errorResult(
 						`${continued}Agent "${existing.id}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
 							`Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
 					);
@@ -3144,7 +3216,7 @@ Terse command-style prompts produce shallow, generic work.
 						toolCallId,
 					});
 					if (!record) {
-						return textResult(`Failed to resume agent "${params.resume}".`);
+						return errorResult(`Failed to resume agent "${params.resume}".`);
 					}
 
 					const isQueued = record.status === "queued";
@@ -3197,7 +3269,7 @@ Terse command-style prompts produce shallow, generic work.
 					fleet.onAgentFinished(existing.id);
 				}
 				if (!record) {
-					return textResult(`Failed to resume agent "${params.resume}".`);
+					return errorResult(`Failed to resume agent "${params.resume}".`);
 				}
 				// A failed resume surfaces the error, plus any partial output THIS
 				// resume produced (never the previous turn's answer, #144).
@@ -4087,8 +4159,13 @@ Terse command-style prompts produce shallow, generic work.
 				),
 			}),
 			execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
-				const record = resolveAgentRef(params.agent_id);
-				if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id, !record));
+				const latest = manager.latestId(params.agent_id);
+				const record = liveAgentById(latest) ?? resolveAgentRef(latest);
+				if (!record) {
+					const note = manager.getEvictedNote(latest);
+					return note ? textResult(agentNotFound(latest, true)) : errorResult(agentNotFound(latest));
+				}
+				if (!isTopLevelAgent(record)) return errorResult(agentNotFound(latest));
 
 				// Wait for completion if requested. Cancellation stops only this tool
 				// call; the background agent keeps running and remains unconsumed so its
@@ -4164,7 +4241,7 @@ Terse command-style prompts produce shallow, generic work.
 				"Send a message to an agent. A running agent is interrupted after its current tool execution and the message is injected into its conversation, " +
 				"allowing you to redirect its work mid-run. A queued agent gets the message when it starts. A finished agent is resumed in the background " +
 				"with its full history and the message as its next prompt, exactly like Agent's resume; you will be notified when it completes. " +
-				"A stopped agent is not resumed. To end an agent's run, use stop_subagent: a steer is read only after its current tool call, and the agent may ignore it.",
+				"A saved conversation can also reopen after a process restart. A live stopped record is not resumed. To end an agent's run, use stop_subagent: a steer is read only after its current tool call, and the agent may ignore it.",
 			promptSnippet: "Send a message to a background agent: steer it mid-run, or resume it once finished",
 			parameters: Type.Object({
 				agent_id: Type.String({
@@ -4179,16 +4256,16 @@ Terse command-style prompts produce shallow, generic work.
 				// An evicted id that was reopened answers as the record it continues under (#330).
 				const latest = manager.latestId(params.agent_id);
 				const record = resolveAgentRef(latest);
-				if (record && !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+				if (record && !isTopLevelAgent(record)) return errorResult(agentNotFound(params.agent_id));
 				if (record?.status !== "running" && record?.status !== "queued") {
 					// Finished: continue it, as Claude Code's SendMessage does. An evicted
 					// record is known only by its note; Agent's resume reopens its session
 					// from disk or explains why it cannot.
 					const finished = record ?? manager.getEvictedNote(latest);
-					if (!finished) return textResult(agentNotFound(params.agent_id));
+					if (!finished) return errorResult(agentNotFound(params.agent_id));
 					const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
 					if (finished.status === "stopped" && !historical) {
-						return textResult(
+						return errorResult(
 							`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`,
 						);
 					}
@@ -4210,7 +4287,7 @@ Terse command-style prompts produce shallow, generic work.
 					);
 				}
 				// Running or queued under no Plan policy: a steer from a planning parent would drive edits.
-				if (planSteerBlocked(record, pi.events)) return textResult(planSteerRefusal(record.id));
+				if (planSteerBlocked(record, pi.events)) return errorResult(planSteerRefusal(record.id));
 				if (!record.session) {
 					// Queued for a concurrency slot, or running with its session still
 					// being built: either way the manager flushes `pendingSteers` into the
@@ -4245,7 +4322,7 @@ Terse command-style prompts produce shallow, generic work.
 							`Current state: ${stateParts.join(" · ")}`,
 					);
 				} catch (err) {
-					return textResult(`Failed to steer agent: ${errorMessage(err)}`);
+					return errorResult(`Failed to steer agent: ${errorMessage(err)}`);
 				}
 			},
 		}),

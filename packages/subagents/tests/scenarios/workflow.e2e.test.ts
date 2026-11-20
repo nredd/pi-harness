@@ -18,13 +18,13 @@
  * a scripted `SubagentWorkflow` call a real model has no reason to emit.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxText, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { createCodemodeExtension } from "@earendil-works/pi-coding-agent";
 import { text } from "@nredd/pi-test-lib/faux";
-import { afterEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { encodeCwd, transcriptRoot } from "../../src/output-file.ts";
 import { readJournal } from "../../src/workflow/journal.ts";
 import { workflowConcurrency } from "../../src/workflow/runtime.ts";
@@ -40,7 +40,7 @@ import { runPrintMode, toolCallsNamed, toolResultsNamed } from "../fixtures/prin
  * and the parent model has nothing to call.
  */
 function workflowProject(): string {
-	const dir = mkdtempSync(join(tmpdir(), "subagents-wf-e2e-"));
+	const dir = makeTestTempDir("subagents-wf-e2e-", onTestFinished);
 	mkdirSync(join(dir, ".pi"), { recursive: true });
 	writeFileSync(join(dir, ".pi", "subagents.json"), JSON.stringify({ workflowsEnabled: true }));
 	return dir;
@@ -399,26 +399,17 @@ const LIVE_SETTLE_TIMEOUT = 150_000;
 const entriesFor = (cwd: string) => journalsFor(cwd).flatMap((path) => readJournal(path));
 
 describe.runIf(LIVE)("Workflow end to end (live LLM, opt-in)", () => {
-	const dirs: string[] = [];
 	let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
 
 	afterEach(async () => {
 		await run?.dispose?.();
 		run = undefined;
-		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
-
-	/** A project with workflows on, registered for cleanup. */
-	const liveProject = () => {
-		const dir = workflowProject();
-		dirs.push(dir);
-		return dir;
-	};
 
 	it(
 		"a real model runs a saved workflow by name, and its agent reaches a real session",
 		async () => {
-			const cwd = liveProject();
+			const cwd = workflowProject();
 			mkdirSync(join(cwd, ".pi", "workflows"), { recursive: true });
 			writeFileSync(
 				join(cwd, ".pi", "workflows", "live-smoke.js"),
@@ -473,7 +464,7 @@ describe.runIf(LIVE)("Workflow end to end (live LLM, opt-in)", () => {
 				"return results;",
 			].join("\n");
 
-			const cwd = liveProject();
+			const cwd = workflowProject();
 			run = await runPrintMode({
 				prompt: [
 					"Call the SubagentWorkflow tool once, passing EXACTLY the following script as the",
@@ -525,7 +516,7 @@ describe.runIf(LIVE)("Workflow end to end (live LLM, opt-in)", () => {
 				"return picked.fruit;",
 			].join("\n");
 
-			const cwd = liveProject();
+			const cwd = workflowProject();
 			run = await runPrintMode({
 				prompt: [
 					"Call the SubagentWorkflow tool once, passing EXACTLY the following script as the",

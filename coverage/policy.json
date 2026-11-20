@@ -6,6 +6,23 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_apt.sh", "reason": "Delete retired WSL apt setup after Forks switched to the shared helper (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_dns_diagnostics.sh", "reason": "Delete diagnostics used only by the retired WSL apt setup (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/install_wsl_owned_tools.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_capture.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_exec.py", "replacement": "scripts/ci_process.py", "reason": "Preserve measured Linux gh bootstrap process helpers after WSL CI removal (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_run.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_setup.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_watchdog_fixture.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/install_wsl_owned_tools.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_bounded.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_capture.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_host.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_run.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_setup.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_shell.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_watchdog.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_watchdog_fixture.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Retire upstream-sync metadata validation (#895, #860); all runtime behavior suites remain, including the ordinary EPERM regression. No runtime source or uncovered budget is removed." },
     { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Retire the sync mutation runner (#895, #860); each applicable case already invokes an ordinary behavior regression which remains. The EPERM group-quiescence guard remains in async-safety.test.mjs; no runtime source or uncovered budget is removed." },
     { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Retire automated upstream comparison (#895, #860), upstream pulls are manual. The layout gate now denies retired sync signatures even under renamed commands and files; no runtime source or uncovered budget is removed." },
@@ -90,7 +107,6 @@
     { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." },
     { "package": "inprocess", "signal": "owned", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
     { "package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
-    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_cleanup.sh", "reason": "Relative to origin/main 06ceb029: deleted. Its cleanup is folded into `scripts/wsl2_capture.py` (`cleanup`), measured under python-scripts (#695 slice 3); the `shell-scripts` inventory cannot name a `.py` replacement. `wsl2_capture.sh` stays as an exec bootstrap and remains owned." },
     { "package": "preset", "signal": "owned", "path": "packages/preset/extensions/expanded-footer.ts", "replacement": "packages/preset/src/index.ts", "reason": "Move the preset entry into src (#876); unchanged behavior and zero uncovered budgets." },
     { "package": "preset", "signal": "bun", "path": "packages/preset/extensions/expanded-footer.ts", "replacement": "packages/preset/src/index.ts", "reason": "Preserve the Bun signal for the moved preset entry (#876)." },
     { "package": "preset", "signal": "owned", "path": "packages/preset/lib/footer-cache.ts", "replacement": "packages/preset/src/footer-cache.ts", "reason": "Move the footer cache helper into src (#876); unchanged behavior and zero uncovered budgets." },
@@ -304,7 +320,7 @@
         { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." }
       ],
       "status": "measured",
-      "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS, Ubuntu and WSL/Linux Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829); WSL is Linux, not native Windows. The strict named facade leaves its executable targets owned.",
+      "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS and Ubuntu Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829). The strict named facade leaves its executable targets owned.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -365,7 +381,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Branch cap 0 on primary and bun: measured on darwin locally (#414); linux and WSL2 to be confirmed by hosted CI",
+      "note": "Branch cap 0 on primary and bun: measured on darwin locally (#414); Linux to be confirmed by hosted CI",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -398,12 +414,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): uncovered L/F/regions 1339/152/2472 before this slice and 1106/150/2028 after it. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows and WSL remain unmeasured by this signal.",
+      "note": "Pinned Linux ARM64 measurement (#696): Wayland portal cursor-mode probing reduced uncovered L/F/regions from 1094/148/2014 to 1059/145/1968. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 1106, "functions": 150 } },
+          "max_uncovered": { "linux": { "lines": 1059, "functions": 145 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
@@ -441,7 +457,7 @@
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 3672, "functions": 695, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 3654, "functions": 694, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "#757 establishes the full-source baseline for #645 deterministic S1-S5 closures; no all-native coverage claim.",
@@ -457,7 +473,7 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS and Ubuntu each measured zero uncovered lines, functions, branches and statements.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -475,12 +491,12 @@
     },
     "shell-scripts": {
       "root": "scripts",
-      "owned": ["*.sh", "*.ps1"],
+      "owned": ["*.sh"],
       "exclusions": [],
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner has not chosen how to measure shell and PowerShell (port to Python vs kcov/Pester): https://github.com/nredd/pi-harness/issues/695. Inventory stays visible, with no coverage claim.",
-      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh, wsl2_run.sh and wsl2_capture.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py`, `scripts/wsl2_run.py` and `scripts/wsl2_capture.py` (shared plumbing in `scripts/wsl2_exec.py`; the former `wsl2_cleanup.sh` is folded into the capture) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
+      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
       "signals": {}
     },
     "runtime-build-tooling": {
