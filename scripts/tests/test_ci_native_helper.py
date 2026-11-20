@@ -22,8 +22,7 @@ BUILD_PREFIX = (
     b"source=0123456789abcdef0123456789abcdef01234567\n"
     b"target=x86_64-pc-windows-msvc\n"
     b"rust_requested=1.97.1\n"
-    b"protocol=4\n"
-    b"capability=fail-closed-live-target-v1\n"
+    + f"protocol={ci_native_helper.PROTOCOL}\ncapability={ci_native_helper.CAPABILITY}\n".encode("ascii")
 )
 
 
@@ -127,21 +126,36 @@ def test_missing_build_and_fixture_emit_only_build_status(runner: tuple[Path, Pa
 def test_windows_workflow_routes_bootstrap_failures_to_receipt_only() -> None:
     """Run fallback on either bootstrap failure without clearing the job failure."""
     steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["windows-helper"]["steps"]
-    _, setup, bootstrap, install, build, fixture, stage, receipt, upload = steps
-    assert setup["id"] == "setup_uv"
+    steps_by_key = {step.get("id") or step.get("name"): (index, step) for index, step in enumerate(steps)}
+    ordered_keys = (
+        "Check out Windows helper source",
+        "setup_uv",
+        "bootstrap_python",
+        "Install pinned native toolchain",
+        "Link helper and execute real Windows crate tests",
+        "Exercise only disposable native fixture windows",
+        "Stage source-bound executable without publishing or installing",
+        "Record Windows helper bootstrap failure",
+        "Upload Windows helper evidence",
+    )
+    missing = [key for key in ordered_keys if key not in steps_by_key]
+    assert not missing, f"Missing Windows helper steps: {missing}"
+    positions = [steps_by_key[key][0] for key in ordered_keys]
+    assert positions == sorted(positions), f"Windows helper steps must run in this order: {ordered_keys}"
+    checkout, setup, bootstrap, install, build, fixture, stage, receipt, upload = (
+        steps_by_key[key][1] for key in ordered_keys
+    )
+    assert checkout["uses"].startswith("actions/checkout@")
     assert setup["uses"].startswith("astral-sh/setup-uv@")
-    assert bootstrap["id"] == "bootstrap_python"
     launch = "uv run --no-project --python (Get-Content .python-version) python "
     assert bootstrap["run"] == launch + "--version"
-    for step in (setup, bootstrap, install, build, fixture):
+    for step in (checkout, setup, bootstrap, install, build, fixture):
         assert "if" not in step
         assert "continue-on-error" not in step
     assert stage["if"] == "${{ always() && steps.bootstrap_python.outcome == 'success' }}"
     assert stage["run"].startswith(launch + "scripts/ci_native_helper.py ")
-    assert receipt["if"] == (
-        "${{ always() && (steps.setup_uv.outcome == 'failure'"
-        " || steps.bootstrap_python.outcome == 'failure') }}"
-    )
+    # Complementary conditions: failure, skipped and cancelled all select only the receipt.
+    assert receipt["if"] == "${{ always() && steps.bootstrap_python.outcome != 'success' }}"
     assert receipt["shell"] == "pwsh"
     assert upload["uses"].startswith("actions/upload-artifact@")
     assert upload["if"] == "always()"

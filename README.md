@@ -491,8 +491,9 @@ The macOS `native-helper.yml` build can use `pi-macos` through shared admission,
 as the hosted fallback (only on attempt 1). It has not passed on the pool image; a started failure fails its
 check. Cron rescue reads every repo run: a stranded pool `build` is rescued only once all unfinished jobs of
 its run are unstarted (e.g. `windows-helper` finished), and the whole run is then cancelled and re-run.
-If `windows-helper` cannot bootstrap `uv` or the pinned Python interpreter, the job fails and
-uploads only `build.txt` with `staging=BOOTSTRAP_FAILED`, `executable=NOT_BUILT`, and `fixture=NOT_REACHED`.
+If `windows-helper` cannot bootstrap the pinned Python interpreter through `uv` (including when
+an earlier step fails and skips bootstrap), it attempts to upload only `build.txt` with
+`staging=BOOTSTRAP_FAILED`, `executable=NOT_BUILT`, and `fixture=NOT_REACHED`.
 The macOS `scripts` shard stays hosted (`HOSTED_ONLY_CELLS`), DEPARTING from the original issue scope, because
 core provenance verification in `make install-owned` needs `GH_TOKEN` and the pool has none. Follow-up: make
 that verification work without a token, then drop the denylist. The installer stays hosted for its read-only
@@ -526,6 +527,58 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 ### Smoke
 
 `runner-smoke.yml` is `workflow_dispatch` only. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Host-specific extra targets go in the repository variable `SMOKE_EXTRA_TARGETS` (space-separated `host:port`, appended to the neutral targets in both loops; the job prints a note when it is empty and fails on any entry that is not `host:port`) and the home directory to probe in `SMOKE_OWNER_HOME` (the macOS home probe is skipped with a note when unset and fails when the path is not a directory). Set both privately, never in the repository. `scripts/tests/test_private_probe_addresses.py` enforces this across every tracked file except `forks/`, lockfiles and generated build output (`dist/` and `*.map`). Any RFC1918, CGNAT (`100.64/10`) or link-local address, tailnet-style hostname (`*.ts.net`, `*.tailscale.net`) or ULA/link-local IPv6 address (also zero-padded octets and IPv4-mapped IPv6 forms), and any path rooted at a `Users` or `home` directory whose next segment is not `<user>`, `$USER` or `runner`, fails unless it is one of the neutral probe targets allowlisted in that test. Fixture files that carry synthetic values (e.g. made-up home names or private-range test addresses) are scanned too: their exact values are listed per file in `FIXTURE_VALUES`, and a stale entry fails the test.
+
+### Throttled synthetic PTY experiment
+
+`tests/integration/scenarios/bench/test_throttled_pty.py` is a separate POSIX experiment
+(#977). It reuses the generated 2,000-message
+session, faux provider, installed fixture homes and latency probe. No existing multisession
+threshold, history or baseline changes. From `tests/integration`, run serially on an admitted
+quiet runner with explicit `PI_BIN` and `--stack`:
+
+```sh
+uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/local.json -n 0 --log-cli-level=INFO
+```
+
+- Each 1/4/8-child fleet has an uncapped control and a **65,536 bytes/s aggregate cap**, not a
+  per-child allowance. One rotating 1,024-byte quantum services ready PTYs; elapsed monotonic
+  time paces reads without catch-up bursts. Startup drains uncapped, then each measured window
+  lasts six seconds. Readiness is bounded at 60 seconds; input writes at one second; teardown
+  kills owned groups before reaping their leaders and closes all masters, including partial
+  startup and cancellation. Output tails are bounded at 64 KiB per child. During the capped
+  drain, each tick sends input serially: `send()` may block up to one second per child, so
+  the eight-child run includes driver-side input delay.
+- Calibration first runs a real fast synchronous writer with and without the same cap. It
+  refuses absent writes, a writer heartbeat older than 0.5 seconds at the window end, low
+  uncapped throughput, failure to deliver the capped rate, or no observed increase in completed
+  write duration. Retain the raw calibration JSON, not just a
+  claimed cap. A hung writer, exited child, failed probe startup, missing terminal output or
+  insufficient input-to-paint samples in measured windows fails the experiment. Probe windows
+  must be contiguous (2 ms timestamp-rounding tolerance), with start/end coverage within one
+  second; a recent final heartbeat cannot hide an omitted interior interval. Missing measured
+  windows fail all cells except the capped eight-child cell, which reports `NOT RUN`.
+- The report separates actual delivered bytes/s from probe write volume, event-loop lag,
+  synchronous write duration and raw input-to-paint samples. Input-to-paint is stdin receipt
+  to the *next write invocation*, not terminal display or the rendering of that exact input.
+  Node may buffer asynchronous stdout writes: a short or zero `max_block_ms` does NOT establish
+  absence of pressure, a drained queue, or responsive terminal painting. Only the calibrated
+  synchronous writer establishes this driver's backpressure; compare paired controls before
+  attributing any Pi observation to rendering, runtime or polling.
+- An initial 16,384 bytes/s aggregate trial passed the one-child pair but the four-child
+  capped cell was refused for missing probe heartbeats. That is a failed observation, not a
+  zero-latency result. The 65,536 bytes/s condition measures a less severe terminal link;
+  it does not replace or relax any existing performance ceiling.
+- A synthetic Node/Pi trial on macOS completed both 1/4-child conditions and the uncapped
+  8-child condition. Capped eight-child latency is `NOT RUN`: the attempt delivered output but
+  lacked measured probe windows. Pytest warns without failing this cell, and the suite report
+  records the reason and throughput with no latency metrics, not even zeros. Raw records remain
+  in the cell's `throttled-pty.json`. Missing measured windows cannot distinguish a hung Pi
+  from a late-starting probe. An exited child or stalled input still fails the experiment;
+  the cell report keeps the partial delivery and probe records collected before the failure.
+  #1096 tracks the complete eight-child measurement without raising the aggregate cap.
+- Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
+  baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider
+  claim is made. The driver uses the standard library plus the repo's own process-group helper.
 
 ### Remaining
 

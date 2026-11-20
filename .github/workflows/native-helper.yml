@@ -84,7 +84,8 @@ jobs:
       RUSTUP_TOOLCHAIN: '1.97.1'
       HELPER_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out Windows helper source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -129,6 +130,8 @@ jobs:
             'PASS' | Set-Content -Encoding ascii native-fixture-status.txt
             'Native GUI fixture: PASS against only its own disposable windows.' >> $env:GITHUB_STEP_SUMMARY
           }
+      # Stage and upload the full payload only on bootstrap_python success. Otherwise
+      # (including skipped or cancelled bootstrap), write and upload only the receipt.
       - name: Stage source-bound executable without publishing or installing
         if: ${{ always() && steps.bootstrap_python.outcome == 'success' }}
         shell: pwsh
@@ -137,7 +140,7 @@ jobs:
           --executable "packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/windows-bridge.exe"
           --artifact-dir native-helper-artifact
       - name: Record Windows helper bootstrap failure
-        if: ${{ always() && (steps.setup_uv.outcome == 'failure' || steps.bootstrap_python.outcome == 'failure') }}
+        if: ${{ always() && steps.bootstrap_python.outcome != 'success' }}
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force native-helper-artifact | Out-Null
@@ -152,7 +155,8 @@ jobs:
             'staging=BOOTSTRAP_FAILED'
           ) -join "`n"
           Set-Content -LiteralPath native-helper-artifact/build.txt -Encoding ascii -NoNewline -Value "$receipt`r`n"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Upload Windows helper evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: windows-helper-native-${{ github.event.pull_request.head.sha || github.sha }}
