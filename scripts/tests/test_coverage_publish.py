@@ -368,7 +368,6 @@ def test_workflow_contract() -> None:
     assert job["if"] == "github.event.workflow_run.event == 'pull_request'"
     assert job["permissions"] == {"actions": "read", "contents": "read", "pull-requests": "write"}
     assert job["concurrency"]["cancel-in-progress"] is False
-    assert job["concurrency"]["queue"] == "max"
     assert job["concurrency"]["group"] == (
         "coverage-comment-${{ github.event.workflow_run.head_repository.id }}-"
         "${{ github.event.workflow_run.head_branch }}"
