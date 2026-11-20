@@ -4,8 +4,8 @@ import type { CpuInfo } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeTestTempDir } from "../../../tests/lib/src/temp-dir.ts";
 import { Budget, command, darwinHostMemory, linuxProcesses, pressure } from "../src/collect.js";
 import {
 	cpuSnapshot,
