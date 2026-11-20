@@ -25,7 +25,7 @@ from coverage_provenance_record import Provenance
 DIRECTORY = Path(__file__).parent / "fixtures/coverage-report"
 HEAD = "a8622f3551585ac84f9edc840bf684f86cd9e43b"
 # host -> (signals, original file rows, enforced signals), from the original artifacts of run 44104072624.
-REAL = {"ubuntu-24.04": (36, 735, 34), "macos-14": (37, 744, 35), "wsl2": (32, 663, 31)}
+REAL = {"ubuntu-24.04": (36, 735, 34), "macos-14": (37, 744, 35)}
 
 
 def test_provenance_sidecar_matches_constants_and_fixtures() -> None:
@@ -45,6 +45,7 @@ def test_provenance_sidecar_matches_constants_and_fixtures() -> None:
     sidecar = json.loads((DIRECTORY / "provenance.json").read_text())
     assert sidecar["run_id"] == 44104072624
     assert sidecar["head_and_tested_sha"] == HEAD
+    assert sidecar["artifacts"].keys() == REAL.keys()
     for host, (signals, rows, _) in REAL.items():
         entry = sidecar["artifacts"][host]
         assert (entry["original_signals"], entry["original_file_rows"]) == (signals, rows)
@@ -75,9 +76,7 @@ def test_real_fan_in_counts(host: str) -> None:
     summary = report.Summary.parse(raw)
     assert len(summary.packages) == signals
     assert summary.errors == ()
-    uncovered_rows = [f for f in summary.files if any(u for _, _, u in f.counters.values)]
-    # The original WSL artifact has no uncovered file row at all; the other two keep real ones.
-    assert bool(uncovered_rows) is (host != "wsl2")
+    assert any(u for f in summary.files for _, _, u in f.counters.values)
     declaration = {
         "state": "available",
         "signals": {

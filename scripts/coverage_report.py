@@ -5,7 +5,7 @@ extracted, or an already-unpacked `coverage/summary.json`) and prints determinis
 per-OS SVG badges. It runs no tests, accounting, network or Git calls and writes only explicit outputs.
 
 Plan JSON, supplied by the trusted caller and never derived from the artifact: a mapping of
-`ubuntu-24.04` | `macos-14` | `wsl2` to `{state, signals}`. `state` is `available`, `unavailable`,
+`ubuntu-24.04` | `macos-14` to `{state, signals}`. `state` is `available`, `unavailable`,
 `pending` or `NOT RUN`. `signals` maps `package/signal` to `{enforcement: enforced|report-only, reason,
 semantics, state: planned|NOT RUN, source_root}`. `semantics` names the producer and counter meaning, so
 `vs measured main` is computed only when it matches. The caller must authenticate repository, SHAs, run,
@@ -59,7 +59,7 @@ MAX_MARKDOWN = 60_000
 MAX_COUNT = 10**12
 MAX_REASON = 200
 COUNTERS = ("lines", "functions", "branches", "statements")
-HOSTS = {"ubuntu-24.04": ("Ubuntu", "linux"), "macos-14": ("macOS", "darwin"), "wsl2": ("WSL", "linux")}
+HOSTS = {"ubuntu-24.04": ("Ubuntu", "linux"), "macos-14": ("macOS", "darwin")}
 
 
 def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[str, object]:

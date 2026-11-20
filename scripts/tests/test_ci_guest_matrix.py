@@ -1532,7 +1532,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         if path != WORKFLOW:
             # A control-test workflow may name the action in its path filter without invoking guest setup.
             assert "uses: ./.github/actions/setup-ci-wsl" not in path.read_text()
-            assert "wsl2_run.sh" not in path.read_text()
+            assert "scripts/wsl2_" not in path.read_text()
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:

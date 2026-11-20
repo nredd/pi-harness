@@ -195,7 +195,7 @@ def test_inherited_powershell_refusal(repository: Path, origin: str) -> None:
         (
             "job",
             "${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && "
-            "format('bash \"{0}/scripts/wsl2_host.sh\" {{0}}', github.workspace) || 'bash -e {0}' }}",
+            "format('bash \"{0}/scripts/fixture.sh\" {{0}}', github.workspace) || 'bash -e {0}' }}",
         ),
     ],
 )
@@ -230,7 +230,7 @@ def test_expression_default_malformed_bash_refusal(repository: Path, origin: str
     [
         ("workflow", "${{ true && 'bash' || 'bash -e {0}' }}"),
         ("job", "${{ !false && 'bash' || 'bash' }}"),
-        ("job", "${{ format('bash \"{0}/scripts/wsl2_host.sh\" {{0}}', github.workspace) || 'bash' }}"),
+        ("job", "${{ format('bash \"{0}/scripts/fixture.sh\" {{0}}', github.workspace) || 'bash' }}"),
         ("step", "${{ 'push' == 'it''s a test' && 'bash' || '/bin/bash -e {0}' }}"),
     ],
 )

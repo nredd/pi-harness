@@ -228,7 +228,7 @@ def test_zip_cannot_take_provenance_from_unpacked_artifact(tmp_path: Path) -> No
     ("event", "host", "state"),
     [
         ("pull_request", "macos-14", "unavailable"),
-        ("push", "wsl2", "unavailable"),
+        ("push", "wsl2", "invalid host"),
         ("workflow_dispatch", "macos-14", "available"),
     ],
 )
@@ -270,6 +270,12 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
         archive.writestr("coverage/summary.json", json.dumps(summary))
         job = producer_job(host, shard=False) if host in COVERAGE_HOSTS else "owned-ubuntu"
         archive.writestr("coverage/provenance.json", json.dumps(run.record(job, cell)))
+    if state == "invalid host":
+        with pytest.raises(ValueError, match=r"^No coverage producer for this host and event$"):
+            report.read_host_summary(tmp_path, host, run)
+        with pytest.raises(ValueError, match=r"^Invalid evidence host$"):
+            report.load_evidence(tmp_path, manifest, run)
+        return
     evidence = report.load_evidence(tmp_path, manifest, run)[0]
     assert evidence.state == state, evidence.reason
     if state == "unavailable":
