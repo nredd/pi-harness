@@ -282,6 +282,7 @@ async function loadMinimalBuilder(entries?: Record<string, string>, root = packa
 }
 
 test("default output stays inside an isolated builder fixture", async () => {
+	// This fixture supplies its own package root and has no workspace imports to resolve.
 	const root = makeTestTempDir("pi-plan-mode-build-test-", onTestFinished);
 	await mkdir(join(root, "src"));
 	await writeFile(join(root, "src", "index.ts"), "export const fixture = true;\n");
