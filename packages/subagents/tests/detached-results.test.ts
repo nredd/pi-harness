@@ -223,10 +223,12 @@ describe("AgentManager.rememberTombstone", () => {
 		manager.rememberTombstone(entry("c", "kept", "kept-alias"));
 		expect(manager.listTombstones().map((t) => t.id)).toEqual(["c"]);
 
-		manager.reservedHandles = () => ["busy"];
+		manager.reservedHandles = (excludeId) => (excludeId === "owner" ? [] : ["busy"]);
 		manager.rememberTombstone(entry("e", "busy"));
 		manager.rememberTombstone(entry("f", "x", "busy"));
 		expect(manager.listTombstones().map((t) => t.id)).toEqual(["c"]);
+		manager.rememberTombstone(entry("owner", "busy"));
+		expect(manager.listTombstones().map((t) => t.id)).toEqual(["c", "owner"]);
 	});
 
 	it("marks the note of an entry it could not keep, and keeps the rest for the session", () => {
