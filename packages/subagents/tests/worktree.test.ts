@@ -11,7 +11,6 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -956,7 +955,7 @@ describe("cleanupWorktree — nested repositories git refuses to remove", {
 	}
 
 	it("finds a leftover submodule git dir when the main repository path is non-ASCII", async () => {
-		const accentRepo = join(tmpdir(), `pi-wt-\u00e9-${process.pid}-${Date.now()}`);
+		const accentRepo = join(makeTestTempDir("pi-wt-accent-", onTestFinished), "pi-wt-\u00e9");
 		renameSync(repoDir, accentRepo);
 		repoDir = accentRepo;
 		run(repoDir, "submodule", "add", subDir, "sub");

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import type * as NodeUrl from "node:url";
 import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -93,7 +92,7 @@ test("builds from a canonical fixture root when the temporary parent is a symlin
 	await symlink(target, alias, "dir");
 	const previousRoot = fixture.root;
 	try {
-		fixture.root = await realpath(makeTestTempDir(relative(tmpdir(), join(alias, "fixture-")), onTestFinished));
+		fixture.root = await realpath(makeTestTempDir("fixture-", onTestFinished, { baseDir: alias }));
 		assert.equal(fixture.root.startsWith(`${target}/`), true);
 		await mkdir(join(fixture.root, "src"));
 		await writeFile(join(fixture.root, "src/index.ts"), 'export const load = () => import("./lazy.js");\n');
