@@ -144,6 +144,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force native-helper-artifact | Out-Null
+          # Keep this self-contained after checkout failure. Tests pin all shared fields against Python staging.
           $receipt = @(
             "source=$env:HELPER_SOURCE_SHA"
             'target=x86_64-pc-windows-msvc'

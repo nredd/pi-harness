@@ -152,6 +152,7 @@ def test_windows_workflow_routes_bootstrap_failures_to_receipt_only() -> None:
     for step in (checkout, setup, bootstrap, install, build, fixture):
         assert "if" not in step
         assert "continue-on-error" not in step
+    # Exact-string pins intentionally detect changes to the workflow routing contract.
     assert stage["if"] == "${{ always() && steps.bootstrap_python.outcome == 'success' }}"
     assert stage["run"].startswith(launch + "scripts/ci_native_helper.py ")
     # Complementary conditions: failure, skipped and cancelled all select only the receipt.
@@ -166,11 +167,14 @@ def test_windows_workflow_routes_bootstrap_failures_to_receipt_only() -> None:
     )
 
 
-def test_bootstrap_failure_script_writes_receipt_without_uv(tmp_path: Path) -> None:
+def test_bootstrap_failure_script_writes_receipt_without_uv(
+    tmp_path: Path, runner: tuple[Path, Path]
+) -> None:
     """Execute the actual fallback block with neither uv nor Python on PATH.
 
     Parameters:
         tmp_path (Path): Disposable workspace with no build outputs.
+        runner (tuple[Path, Path]): Missing executable and normal staging directory.
     """
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["windows-helper"]
@@ -194,6 +198,9 @@ def test_bootstrap_failure_script_writes_receipt_without_uv(tmp_path: Path) -> N
 
     artifact_dir = tmp_path / "native-helper-artifact"
     assert {path.name for path in artifact_dir.iterdir()} == {"build.txt"}
+    executable, normal_dir = runner
+    ci_native_helper.stage(executable, normal_dir, SOURCE_SHA)
+    normal_receipt = (normal_dir / "build.txt").read_bytes()
     assert (artifact_dir / "build.txt").read_bytes() == (
-        BUILD_PREFIX + b"executable=NOT_BUILT\nfixture=NOT_REACHED\nstaging=BOOTSTRAP_FAILED\r\n"
+        normal_receipt.removesuffix(b"\r\n") + b"\nstaging=BOOTSTRAP_FAILED\r\n"
     )
