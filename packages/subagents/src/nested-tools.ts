@@ -296,10 +296,13 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 						true,
 					);
 				}
-				// Frontmatter authoritative, as on the spawn path; the manager falls
-				// back to the limit the child was spawned with, then the default.
+				// The lower of the request (else the limit the child was spawned with)
+				// and the definition cap, as on the top-level resume path.
 				const resumed = await context.manager.resume(params.resume, params.prompt, signal, {
-					maxTurns: resolveTurnCap(params.max_turns, getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns),
+					maxTurns: resolveTurnCap(
+						params.max_turns ?? existing.invocation?.maxTurns,
+						getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns,
+					),
 				});
 				return resumed
 					? textResult(formatRecord(resumed, "inline"), resumed.status === "error")

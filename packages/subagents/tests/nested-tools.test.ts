@@ -531,6 +531,31 @@ describe("child-safe nested Agent tools", () => {
 		);
 	});
 
+	it("resumes a nested child at the cap it was spawned with when the call omits max_turns", async () => {
+		const [agent] = tools(["Explore"]);
+		await execute(agent, {
+			subagent_type: "Explore",
+			description: "find files",
+			prompt: "Find them",
+			max_turns: 3,
+		});
+		records.get("child-1")!.invocation = { maxTurns: 3 };
+
+		await execute(agent, {
+			resume: "child-1",
+			subagent_type: "Explore",
+			description: "continue",
+			prompt: "Continue",
+		});
+
+		expect(manager.resume).toHaveBeenCalledWith(
+			"child-1",
+			"Continue",
+			undefined,
+			expect.objectContaining({ maxTurns: 3 }),
+		);
+	});
+
 	it("refuses to resume a child that is still running, naming why", async () => {
 		const [agent] = tools(["scout"]);
 		await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });

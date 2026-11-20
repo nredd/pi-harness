@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveAgentInvocationConfig, resolveCwdParam } from "../src/invocation-config.ts";
+import { resolveAgentInvocationConfig, resolveCwdParam, resolveTurnCap } from "../src/invocation-config.ts";
 import type { AgentConfig } from "../src/types.ts";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -181,5 +181,23 @@ describe("resolveCwdParam", () => {
 
 	it("does not expand ~user (only the caller's own home)", () => {
 		expect(resolveCwdParam("~bob/x", "/session")).toBe("/session/~bob/x");
+	});
+});
+
+describe("resolveTurnCap", () => {
+	it.each([
+		[undefined, undefined, undefined],
+		[undefined, 12, 12],
+		[40, 12, 12],
+		[3, 12, 3],
+		[5, undefined, 5],
+		[5, 0, 5],
+		[0, 12, 12],
+		[0, undefined, 0],
+		[Number.NaN, 12, 12],
+		[Number.POSITIVE_INFINITY, 12, 12],
+		[Number.POSITIVE_INFINITY, undefined, undefined],
+	])("lets the lower of caller %s and definition %s win: %s", (caller, definition, expected) => {
+		expect(resolveTurnCap(caller, definition)).toBe(expected);
 	});
 });
