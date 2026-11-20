@@ -78,6 +78,7 @@ from faux_provider import (
     ToolStep,
     models_json,
 )
+from timeout_scale import scaled_timeout
 
 # `integration` is not an installed package (`package = false`), so the shared owned-group policy is
 # imported from the source tree. Module-level, so every importer (`npm_release.py` in `publish.yml`,
@@ -1870,7 +1871,7 @@ def run(
     *,
     env: dict[str, str],
     cwd: Path,
-    timeout: int,
+    timeout: float,
     check: bool = True,
     own_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
@@ -1880,7 +1881,7 @@ def run(
         cmd (Sequence[str | Path]): Argument vector; `cmd[0]` must be absolute.
         env (dict[str, str]): Complete child environment.
         cwd (Path): Working directory.
-        timeout (int): Seconds before the child is killed.
+        timeout (float): Seconds before the child is killed.
         check (bool): Raise `ContractError` on a nonzero exit.
         own_group (bool): Run through `run_own_group`, so a Python-level timeout or
             `KeyboardInterrupt` kills the child's whole process group while its leader is
@@ -1920,7 +1921,7 @@ def run(
 
 
 def run_own_group(
-    argv: list[str], *, env: dict[str, str], cwd: Path, timeout: int
+    argv: list[str], *, env: dict[str, str], cwd: Path, timeout: float
 ) -> subprocess.CompletedProcess[str]:
     """Run `argv` as the leader of a new session; on timeout or interruption kill its whole group.
 
@@ -1939,7 +1940,7 @@ def run_own_group(
         argv (list[str]): Argument vector; `argv[0]` is absolute.
         env (dict[str, str]): Complete child environment.
         cwd (Path): Working directory.
-        timeout (int): Seconds before the group is killed.
+        timeout (float): Seconds before the group is killed.
 
     Returns:
         subprocess.CompletedProcess[str]: Captured text output.
@@ -2038,7 +2039,7 @@ def ensure_stock_pi(prefix: Path, sandbox: Sandbox) -> Path:
             [sandbox.tools.npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", prefix],
             env=sandbox.env() | REGISTRY_ENV,
             cwd=prefix,
-            timeout=NPM_TIMEOUT_S,
+            timeout=scaled_timeout(NPM_TIMEOUT_S),
         )
     verify_stock_pi(prefix, pi_bin, sandbox)
     return pi_bin
@@ -2127,6 +2128,7 @@ def pack(
     Raises:
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
+    timeout = scaled_timeout(NPM_TIMEOUT_S)
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
     # Reject omitted existing contract files before expensive builds. Absent generated outputs
     # are checked only against the real post-build tarball, never required by this preflight.
@@ -2134,7 +2136,7 @@ def pack(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--dry-run"],
         env=sandbox.env(),
         cwd=package_dir,
-        timeout=NPM_TIMEOUT_S,
+        timeout=timeout,
     )
     preview_files = {item.path for item in parse_pack_report(preview.stdout, contract).files}
     omitted = [
@@ -2153,13 +2155,13 @@ def pack(
         [sandbox.tools.npm, "run", "build", "--if-present"],
         env=sandbox.env(),
         cwd=package_dir,
-        timeout=NPM_TIMEOUT_S,
+        timeout=timeout,
     )
     done = run(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--pack-destination", dest],
         env=sandbox.env(),
         cwd=package_dir,
-        timeout=NPM_TIMEOUT_S,
+        timeout=timeout,
     )
     report = parse_pack_report(done.stdout, contract)
     path = dest / report.filename
@@ -3241,7 +3243,7 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         ],
         env=env,
         cwd=project,
-        timeout=NPM_TIMEOUT_S,
+        timeout=scaled_timeout(NPM_TIMEOUT_S),
     )
     installed = project / "node_modules" / artifact.contract.name
     top = sorted(p.name for p in (project / "node_modules").iterdir() if p.name not in NPM_MODULE_METADATA)
@@ -3679,7 +3681,7 @@ def published_sampler_dist(sandbox: Sandbox, cwd: Path) -> PublishedDist:
         [sandbox.tools.npm, "view", spec, "dist", "--json"],
         env=sandbox.env() | REGISTRY_ENV,
         cwd=cwd,
-        timeout=NPM_TIMEOUT_S,
+        timeout=scaled_timeout(NPM_TIMEOUT_S),
     )
     try:
         return PublishedDist.model_validate_json(done.stdout)
