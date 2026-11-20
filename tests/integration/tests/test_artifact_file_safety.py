@@ -113,7 +113,7 @@ def test_scan_cli_accepts_only_wholly_safe_files(tmp_path: Path, caplog: pytest.
 
 
 def test_scan_cli_runs_as_module(tmp_path: Path) -> None:
-    """Exercise the exact `python -m pi_release.credentials` entry `scripts/wsl2_capture.sh` invokes."""
+    """Exercise the `python -m pi_release.credentials` entry point on artifact files."""
     planted = tmp_path / "planted.txt"
     planted.write_text("Authorization: Bearer synthetic-value\n")
     command = [sys.executable, "-m", "pi_release.credentials", str(planted)]
