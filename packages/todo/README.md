@@ -132,8 +132,8 @@ background agent is armed. It asks the parent to run `todo list` and reconcile a
 A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
 
-When a parent works without any visible todos (deleted todos do not count), the next
-completed run about to settle nudges it after
+In an interactive TUI session, when a parent works without any visible todos
+(deleted todos do not count), the next completed run about to settle nudges it after
 `emptyAfterToolCalls` calls (default 10) or one successful `Agent` call. The hidden
 `rpiv-todo-empty-reminder` asks it to track remaining multi-step work, not to make up
 tasks after a simple request. Pure conversation, child agents and Plan mode never
@@ -141,7 +141,9 @@ trigger it. Any `todo` call resets the work count. The nudge requires fresh tool
 a new human prompt after the last nudge, and `emptyReminderCooldownSettles` completed
 settles outside Plan mode (default 10) between nudges. Continuation boundaries and
 aborted or failed runs do not count toward the cooldown. On resume or `/reload`, a
-restored nudge waits for new human input and starts a fresh cooldown.
+restored nudge waits for new human input and starts a fresh cooldown. The hidden
+marker is persisted bookkeeping visible in `/tree` and in JSON/RPC `entry_appended`
+events when emitted.
 
 ### Session switches and survivors
 

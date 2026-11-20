@@ -17,6 +17,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	SessionBoundaryDraft,
+	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentRunState,
@@ -413,6 +414,8 @@ export function formatInProgressNotice(
  *   changed that session's list.
  */
 export interface PlanSessionHooks {
+	/** Track tool completions synchronously, before refreshing the overlay. */
+	toolFinished(event: ToolExecutionEndEvent, ctx: ExtensionContext): void;
 	/**
 	 * Call from `session_start` after replay: binds the session and applies a pending approval.
 	 * `resumed` is true only for a process `startup`: `/new`, `/resume`, `/fork` and `/reload` detach live agents instead, so no owner is provably lost.
@@ -421,6 +424,7 @@ export interface PlanSessionHooks {
 		sessionId: string,
 		resumed: boolean,
 		branch: ReturnType<ExtensionContext["sessionManager"]["getBranch"]>,
+		mode: ExtensionContext["mode"],
 	): Promise<void>;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
@@ -491,10 +495,6 @@ export function registerPlanHooks(
 	const emptyConfig = getEmptyReminderConfig(options.homeDir);
 	const emptyEnabled = emptyConfig.toolCalls > 0 && !isChildActivation();
 	const emptyTrackers = new Map<string, ReturnType<typeof trackEmptyReminder>>();
-	pi.on("tool_execution_end", (event, ctx) => {
-		const id = sid(ctx);
-		emptyTrackers.get(id)?.toolFinished(event, hasEmptyList(getState(id)) && !isPlanning(ctx, []));
-	});
 
 	const onSettle: SettleHandler = (event, ctx) => {
 		const messages = event.context.contextMessages;
@@ -589,9 +589,13 @@ export function registerPlanHooks(
 	});
 
 	return {
-		async sessionStarted(sessionId, resumed, branch) {
+		toolFinished(event, ctx) {
+			const id = sid(ctx);
+			emptyTrackers.get(id)?.toolFinished(event, hasEmptyList(getState(id)) && !isPlanning(ctx, []));
+		},
+		async sessionStarted(sessionId, resumed, branch, mode) {
 			live.add(sessionId);
-			if (emptyEnabled) {
+			if (emptyEnabled && mode === "tui") {
 				// A persisted user message could be an extension prompt; only a live
 				// human input event can safely rearm after restoring a reminder.
 				const previouslyReminded = branch.some(

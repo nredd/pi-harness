@@ -167,7 +167,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			| ((e: unknown, ctx: unknown) => Promise<void>)
 			| undefined;
 		const toolEnd = captured.handlers.get("tool_execution_end")?.[0] as
-			| ((event: { toolName: string; isError: boolean }) => Promise<void>)
+			| ((event: { toolName: string; isError: boolean }, ctx: ReturnType<typeof createTodoCtx>) => Promise<void>)
 			| undefined;
 		const tool = captured.tools.get("todo");
 		return { captured, start, shutdown, toolEnd, tool };
@@ -188,7 +188,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			parentCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, parentCtx);
 
 		// Overlay registered a widget on the parent ui and renders the parent slot.
 		expect(widgetSpy(parentCtx)).toHaveBeenCalled();
@@ -208,7 +208,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			parentCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, parentCtx);
 
 		// Child session_start — distinct sid, hasUI true. Gate skips it.
 		await start?.({}, childCtx);
@@ -233,7 +233,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			parentCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, parentCtx);
 
 		// Child starts (skipped by the gate) and runs its own todo.
 		await start?.({}, childCtx);
@@ -244,7 +244,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			childCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, childCtx);
 
 		// Child slot holds the child task; the overlay (foreground = parent) shows parent's.
 		expect(getState(CHILD).tasks.map((t) => t.subject)).toEqual(["child task"]);
@@ -264,7 +264,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			parentCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, parentCtx);
 
 		// Child shuts down — distinct sid; the teardown gate skips it.
 		await shutdown?.({}, childCtx);
@@ -337,7 +337,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			parentCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, parentCtx);
 
 		await shutdown?.({}, parentCtx);
 
@@ -364,7 +364,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 			undefined as never,
 			parentCtx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, parentCtx);
 
 		// The dispose throw propagates (genuine errors are not swallowed), but the
 		// finally guarantees the foreground pointer is cleared and the slot evicted —

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it, vi } from "vitest";
 import { EMPTY_REMINDER_MARKER } from "../../src/plan/hooks.ts";
 import { EMPTY_REMINDER_MESSAGE_TYPE } from "../../src/tool/types.ts";
@@ -22,15 +22,19 @@ async function setup({
 	cooldown = 2,
 	child = false,
 	branch = [],
+	mode = "tui",
+	reason = "startup",
 }: {
 	calls?: number;
 	cooldown?: number;
 	child?: boolean;
 	branch?: SessionEntry[];
+	mode?: ExtensionContext["mode"];
+	reason?: SessionStartEvent["reason"];
 } = {}) {
 	mkdirSync(dirname(config), { recursive: true });
 	writeFileSync(config, JSON.stringify({ emptyAfterToolCalls: calls, emptyReminderCooldownSettles: cooldown }));
-	const ctx = createTodoCtx({ sessionId: "s1", branch });
+	const ctx = createTodoCtx({ sessionId: "s1", branch, mode });
 	const { pi, captured } = createTodoPi();
 	const register = () => registerTodo(pi, undefined, { homeDir: TEST_HOME });
 	if (child) {
@@ -44,7 +48,7 @@ async function setup({
 		for (const handler of captured.handlers.get(name) ?? []) result = await handler(event, context);
 		return result;
 	};
-	await emit("session_start", { reason: "startup" });
+	await emit("session_start", { reason });
 	return {
 		emit,
 		tool: (toolName = "read", isError = false, context = ctx) =>
@@ -215,22 +219,48 @@ it.each([{ child: true }, { calls: 0 }])("suppresses the nudge with %j", async (
 	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 });
 
-it("restores the prompt budget and isolates and evicts session work", async () => {
-	const { tool, settle, input, emit } = await setup({
-		calls: 1,
-		branch: [{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" }],
-	});
+it.each(["rpc", "json", "print"] as const)("suppresses both empty-list triggers in %s", async (mode) => {
+	const { tool, settle, emit } = await setup({ calls: 2, mode });
 	await tool("Agent");
 	expect(await settle()).toBeUndefined();
-	await emit("agent_settled", { aborted: false });
+	await tool();
+	await tool();
+	expect(await settle()).toBeUndefined();
+	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
+});
+
+it("counts a read that completes while the todo overlay refresh is pending", async () => {
+	const { tool, settle, callTodo } = await setup({ calls: 1 });
+	await callTodo({ action: "list" });
+	const todoCompletion = tool("todo");
+	const readCompletion = tool("read");
+	await Promise.all([todoCompletion, readCompletion]);
+	expect(await settle()).toEqual(reminder);
+});
+
+it.each(["resume", "reload"] as const)("restores the prompt budget on %s after cooldown expires", async (reason) => {
+	const { tool, settle, input, emit } = await setup({
+		calls: 1,
+		cooldown: 2,
+		reason,
+		branch: [{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" }],
+	});
+	for (let i = 0; i < 3; i++) {
+		await tool("Agent");
+		expect(await settle()).toBeUndefined();
+		await emit("agent_settled", { aborted: false });
+	}
 	await input();
-	const another = createTodoCtx({ sessionId: "s2" });
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+it("isolates and evicts session work", async () => {
+	const { tool, settle, emit } = await setup({ calls: 1 });
+	const another = createTodoCtx({ sessionId: "s2", mode: "tui" });
 	await emit("session_start", { reason: "new" }, another);
 	await tool("Agent");
 	expect(await settle("completed", another)).toBeUndefined();
-	expect(await settle()).toBeUndefined();
-	await emit("agent_settled", { aborted: false });
-	await tool("Agent");
 	expect(await settle()).toEqual(reminder);
 	await tool("Agent", false, another);
 	await emit("session_shutdown", {}, another);
