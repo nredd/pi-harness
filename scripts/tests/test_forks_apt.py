@@ -270,6 +270,8 @@ def test_apt_replays_after_kill_with_capture_still_open(tmp_path: Path, command_
             capture_output=True,
             check=False,
             text=True,
+            # The run takes ~11s (1s deadline + the 10s kill grace); bound it so a broken handshake fails.
+            timeout=30,
             pass_fds=(reader, writer),
             env=os.environ
             | {
