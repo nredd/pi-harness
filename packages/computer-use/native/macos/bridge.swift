@@ -26,11 +26,45 @@ private struct CGWindowOwnerSummary {
 	let name: String
 }
 
-private struct AXDescendant {
-	let element: AXUIElement
+struct AXDescendant<Element> {
+	let element: Element
 	let depth: Int
 	let insideWebArea: Bool
 	let axVisible: Bool
+}
+
+/// The AX queries needed for a bounded, breadth-first descendant walk.
+struct AXTraversalWorld<Element: AnyObject> {
+	let role: (Element) -> String
+	let childLists: (Element) -> (all: [Element], visible: [Element]?)
+	let sameElement: (Element, Element) -> Bool
+
+	func collect(startingAt root: Element, maxDepth: Int, maxNodes: Int) -> [AXDescendant<Element>] {
+		let nodeLimit = max(1, maxNodes)
+		var queue: [(Element, Int, Bool, Bool)] = [(root, 0, false, true)]
+		var seen = Set<ObjectIdentifier>()
+		var index = 0
+		var output: [AXDescendant<Element>] = []
+		while index < queue.count && output.count < nodeLimit {
+			let (element, depth, parentInsideWebArea, inheritedVisible) = queue[index]
+			index += 1
+			// Deduplicate visited handles by object identity; AX equivalence is only for visibility.
+			let identity = ObjectIdentifier(element)
+			if seen.contains(identity) { continue }
+			seen.insert(identity)
+			let elementRole = role(element)
+			let insideWebArea = parentInsideWebArea || elementRole == "AXWebArea"
+			output.append(AXDescendant(element: element, depth: depth, insideWebArea: insideWebArea, axVisible: inheritedVisible))
+			if depth >= maxDepth { continue }
+			let (childElements, visible) = childLists(element)
+			for child in childElements {
+				if queue.count >= nodeLimit { break }
+				let childVisible = inheritedVisible && (visible.map { set in set.contains { sameElement($0, child) } } ?? true)
+				queue.append((child, depth + 1, insideWebArea, childVisible))
+			}
+		}
+		return output
+	}
 }
 
 private struct WindowPairing {
@@ -3319,34 +3353,17 @@ final class Bridge {
 		collectDescendantsWithContext(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes).map(\.element)
 	}
 
-	private func collectDescendantsWithContext(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXDescendant] {
-		let nodeLimit = max(1, maxNodes)
-		var queue: [(AXUIElement, Int, Bool, Bool)] = [(root, 0, false, true)]
-		var seen = Set<ObjectIdentifier>()
-		var index = 0
-		var output: [AXDescendant] = []
-		while index < queue.count && output.count < nodeLimit {
-			let (element, depth, parentInsideWebArea, inheritedVisible) = queue[index]
-			index += 1
-			let identity = ObjectIdentifier(element)
-			if seen.contains(identity) { continue }
-			seen.insert(identity)
-			let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
-			let insideWebArea = parentInsideWebArea || role == "AXWebArea"
-			output.append(AXDescendant(element: element, depth: depth, insideWebArea: insideWebArea, axVisible: inheritedVisible))
-			if depth >= maxDepth { continue }
-			let children = axElementArray(element, attribute: kAXChildrenAttribute as CFString)
-			let visibleChildren = visibleAXChildren(element)
-			for child in children {
-				if queue.count >= nodeLimit { break }
-				let childVisible = inheritedVisible && (visibleChildren.map { set in set.contains { self.sameElement($0, child) } } ?? true)
-				queue.append((child, depth + 1, insideWebArea, childVisible))
-			}
-		}
-		return output
+	private func collectDescendantsWithContext(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXDescendant<AXUIElement>] {
+		let world = AXTraversalWorld<AXUIElement>(
+			role: { self.stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "" },
+			childLists: descendantChildLists,
+			sameElement: sameElement
+		)
+		return world.collect(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes)
 	}
 
-	private func visibleAXChildren(_ element: AXUIElement) -> [AXUIElement]? {
+	private func descendantChildLists(_ element: AXUIElement) -> (all: [AXUIElement], visible: [AXUIElement]?) {
+		let children = axElementArray(element, attribute: kAXChildrenAttribute as CFString)
 		let attributes: [CFString] = [
 			kAXVisibleChildrenAttribute as CFString,
 			kAXVisibleRowsAttribute as CFString,
@@ -3354,10 +3371,10 @@ final class Bridge {
 			kAXVisibleCellsAttribute as CFString,
 		]
 		let visible = attributes.flatMap { axElementArray(element, attribute: $0) }
-		return visible.isEmpty ? nil : visible
+		return (children, visible.isEmpty ? nil : visible)
 	}
 
-	private func insideWebAreaMap(_ descendants: [AXDescendant]) -> [ObjectIdentifier: Bool] {
+	private func insideWebAreaMap(_ descendants: [AXDescendant<AXUIElement>]) -> [ObjectIdentifier: Bool] {
 		var output: [ObjectIdentifier: Bool] = [:]
 		for descendant in descendants {
 			let key = ObjectIdentifier(descendant.element)
