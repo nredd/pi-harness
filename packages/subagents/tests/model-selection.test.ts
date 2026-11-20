@@ -1,8 +1,8 @@
 /** Selection policy through Pi's real credential-aware registry, never a resolver mock. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { explainModel, modelConfigurationWarnings } from "../src/model-explanation.ts";
 import { setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.ts";
@@ -13,8 +13,8 @@ import { loadSettings } from "../src/settings.ts";
 
 let dir: string;
 let registry: ModelRegistry;
-beforeEach(async () => {
-	dir = mkdtempSync(join(tmpdir(), "model-selection-"));
+beforeEach(async ({ onTestFinished }) => {
+	dir = makeTestTempDir("model-selection-", onTestFinished);
 	const runtime = await ModelRuntime.create({
 		authPath: join(dir, "auth.json"),
 		modelsPath: null,
@@ -51,7 +51,6 @@ afterEach(() => {
 	setScopeModelsEnabled(false);
 	setModelTiers(undefined, undefined);
 	vi.unstubAllEnvs();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 const ref = (id: string) => `selection-test/${id}`;

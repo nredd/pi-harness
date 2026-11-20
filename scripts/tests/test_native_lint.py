@@ -103,6 +103,11 @@ def test_native_malformed_refusal(repository: Path, file: str, content: str, dia
         None.
     """
     (repository / file).write_text(content)
+    if diagnostic == "MissingEndCurlyBrace" and file.startswith(".github/"):
+        # The embedded PowerShell still gets linted with no standalone scripts.
+        subprocess.check_output(
+            [GIT, "-C", str(repository), "rm", "-f", "script.ps1"], text=True, stderr=subprocess.STDOUT
+        )
     with pytest.raises(subprocess.CalledProcessError) as caught:
         native_lint.lint(repository, PREFIX)
     assert diagnostic in caught.value.output

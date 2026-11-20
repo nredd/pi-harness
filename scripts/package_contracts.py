@@ -835,6 +835,7 @@ SUBAGENTS_CONTRACT = PackageContract(
         "src/resource-loader.ts",
         "src/roster-tools.ts",
         "src/saved-agent-record.ts",
+        "src/saved-child-session.ts",
         "src/schedule-store.ts",
         "src/schedule.ts",
         "src/settings.ts",
