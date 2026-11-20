@@ -48,7 +48,7 @@ export function createRosterTools(options: {
 		defineTool({
 			name: LIST_AGENTS,
 			label: "List Agents",
-			description: "Read authorized same-root agent metadata (untrusted text); no results or messaging.",
+			description: "Read authorized sibling and direct child metadata (untrusted text); no results or messaging.",
 			parameters: Type.Object({}),
 			execute: async () => {
 				if (!runtime?.manager.roster)

@@ -154,22 +154,37 @@ it("keeps depth-2 discovery without re-enabling delegation, and filters effectiv
 	]);
 	fixture.physical("outer", "model", [
 		toolCalls(spawn("nested", { subagent_type: "worker", model: "nested/model", run_in_background: false })),
+		toolCall("list_agents", {}),
 		answer("outer done"),
 	]);
+	fixture.physical("peer", "model", [answer("peer done")]);
 	const h = await fixture.start();
 	const inspect = await observeCommands(h);
 	h.setResponses([
+		toolCalls(spawn("peer", { subagent_type: "worker", model: "peer/model", run_in_background: false })),
 		toolCalls(spawn("outer", { subagent_type: "viewer", model: "outer/model", run_in_background: false })),
 		answer("parent done"),
 	]);
 	await h.session.prompt("nested discovery");
-	const outer = required(records(h)[0]);
+	const spawned = records(h);
+	const peer = required(spawned[0]);
+	const outer = required(spawned[1]);
 	const result = text(required(outer.session).messages.find((m) => m.role === "toolResult"));
 	const rows = JSON.parse(required(result.split("\n").find((line) => line.startsWith('{"agents":'))))
 		.agents as RosterEntry[];
 	expect(rows.map((r) => r.type)).toEqual(["orchestrator", "worker"]);
+	const nested = required(rows[1]);
+	expect(nested.id).not.toBe(peer.id);
 	expect(result).toMatch(/Tool Agent (not found|is not available)/);
-	expect(await inspect("audit")).toMatchObject([{ caller: rows[1]?.id, run: rows[1]?.run, data: { count: 2 } }]);
+	expect(
+		rosterResult(outer)
+			.agents.slice(1)
+			.map((row) => row.id),
+	).toEqual([outer.id, peer.id, nested.id]);
+	expect(await inspect("audit")).toMatchObject([
+		{ caller: rows[1]?.id, run: rows[1]?.run, data: { count: 2 } },
+		{ caller: outer.id, run: outer.runId, data: { count: 4 } },
+	]);
 });
 
 it("default-off, allowlist and explicit deny remove the tool rather than merely hiding its schema", async () => {
