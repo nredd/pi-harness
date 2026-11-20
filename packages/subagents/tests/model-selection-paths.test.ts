@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { AgentManager, describeEvicted } from "../src/agent-manager.ts";
 import * as runner from "../src/agent-runner.ts";
 import { registerAgents } from "../src/agent-types.ts";
@@ -19,8 +19,8 @@ import { createNestedSubagentTools } from "../src/nested-tools.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
 import * as settings from "../src/settings.ts";
-import type { AgentRecord } from "../src/types.ts";
-import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.ts";
+import type { FleetUICtx } from "../src/ui/fleet-list.ts";
+import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../src/ui/fleet-state.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
 import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./fixtures/boot-extension.ts";
 
@@ -63,9 +63,12 @@ function bus() {
 	};
 }
 
-beforeEach(async () => {
+const it = test.extend<{ showFleetModel: boolean }>({ showFleetModel: false });
+const itWithFleetModel = it.extend<{ showFleetModel: boolean }>({ showFleetModel: true });
+
+it.beforeEach(async ({ showFleetModel }) => {
 	sandbox = hermeticDir({
-		settings: { agentMentions: "direct", backgroundByDefault: false },
+		settings: { agentMentions: "direct", backgroundByDefault: false, showModel: showFleetModel },
 		agentFiles: {
 			scout: `---\ndescription: scout\ndisplay_name: Scout Label\ntools: read\nmodel: ${ref("definition")}\n---\nScout.`,
 		},
@@ -567,30 +570,25 @@ it.each([ref("claude-5-5-sonnet"), "router/default"])(
 	},
 );
 
-function renderFleetRow(record: AgentRecord, showModel: boolean): string | undefined {
-	const fleet = new FleetList(
-		{ listAgents: () => [record] } as unknown as AgentManager,
-		new Map(),
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		undefined,
-		() => showModel,
-		undefined,
-		clock,
-	);
+async function startFleetSession() {
 	const setWidget = vi.fn<FleetUICtx["setWidget"]>();
-	fleet.setUICtx({ setWidget, onTerminalInput: () => () => {} } as unknown as FleetUICtx);
-	fleet.update();
-	fleet.toggleCollapse();
-	const widget = setWidget.mock.lastCall?.[1];
-	if (typeof widget !== "function") throw new Error("No fleet widget");
-	const rows = widget({ terminal: { columns: 120, rows: 40 }, requestRender: () => {} }, {
-		fg: (_color: string, text: string) => text,
-		bold: (text: string) => text,
-	} as Parameters<typeof widget>[1]).render(120);
-	return rows.find((line) => line.includes(record.description));
+	context.hasUI = true;
+	Object.assign(context.ui, { setWidget, onTerminalInput: () => () => {} });
+	context.sessionManager.getBranch = () => [
+		{ type: "custom", customType: FLEET_STATE_ENTRY, data: { version: FLEET_STATE_VERSION, collapsed: false } },
+	];
+	await startSession(boot.lifecycle, true, context);
+	return (description: string) => {
+		const widget = setWidget.mock.calls.findLast(([key]) => key === "fleet")?.[1];
+		if (typeof widget !== "function") throw new Error("No fleet widget");
+		const rows = widget({ terminal: { columns: 120, rows: 40 }, requestRender: () => {} }, {
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as Parameters<typeof widget>[1]).render(120);
+		const row = rows.find((line) => line.includes(description));
+		if (!row) throw new Error(`No fleet row for ${description}`);
+		return row;
+	};
 }
 
 /** The wording shared by every shadow note; negative assertions use it so a wording change cannot pass vacuously. */
@@ -644,12 +642,12 @@ const disclosures = [
 	},
 ];
 
-it.each(disclosures)("discloses $name across model-tier surfaces", async (sample) => {
+async function prepareDisclosure(sample: (typeof disclosures)[number]) {
 	writeFileSync(
 		join(sandbox.dir, ".pi", "agents", "scout.md"),
 		`---\ndescription: scout\ntools: read\nmodel: "${sample.definition}"\noutput_transcript: true\n---\nScout.`,
 	);
-	await startSession(boot.lifecycle, true, context);
+	const renderFleetRow = await startFleetSession();
 	setAgentModels(sample.overrides);
 	setModelTiers({ mapped: [ref("typed")], unavailable: [ref("absent")] }, {});
 	const run = (description: string, background: boolean) =>
@@ -662,6 +660,11 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 				undefined,
 				context,
 			);
+	return { renderFleetRow, run };
+}
+
+itWithFleetModel.each(disclosures)("discloses $name across model-tier surfaces", async (sample) => {
+	const { renderFleetRow, run } = await prepareDisclosure(sample);
 	const expectResult = (text: string, status: string) => {
 		expect(text).toContain(`${sample.note}\n\n${status}`);
 		if (sample.shadow) {
@@ -696,20 +699,10 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 		expect(entries.some((entry) => entry.type === "model-fallback")).toBe(false);
 	}
 
-	const extensionRegistry: { getRecord(id: string): AgentRecord | undefined } = Reflect.get(
-		globalThis,
-		Symbol.for("pi-subagents:manager"),
-	);
-	const record = extensionRegistry.getRecord(start.details.agentId);
-	if (!record) throw new Error("Agent start did not leave a record");
-	const row = renderFleetRow(record, true);
+	const row = renderFleetRow("background");
 	expect(row).toContain(ref(sample.selected));
-	if (sample.flag) {
-		expect(row).toContain(sample.flag);
-		const withoutModel = renderFleetRow(record, false);
-		expect(withoutModel).toContain(sample.flag);
-		expect(withoutModel).not.toContain(ref(sample.selected));
-	} else expect(row).not.toMatch(/\[@|\[fallback/);
+	if (sample.flag) expect(row).toContain(sample.flag);
+	else expect(row).not.toMatch(/\[@|\[fallback/);
 
 	const completed = await run("foreground", false);
 	expectResult(completed.content[0].text, "Agent completed");
@@ -756,6 +749,19 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 	if (sample.param) expect(preview.text).toContain("Shadowed definition: @mapped");
 	expect(preview.text).toContain(`Selected: ${ref(sample.selected)}.`);
 });
+
+it.each(disclosures.filter((sample) => sample.flag))(
+	"keeps the $name tier flag in the fleet with model display off",
+	async (sample) => {
+		const { renderFleetRow, run } = await prepareDisclosure(sample);
+		await run("background", true);
+		await flush();
+		clock.advance(200);
+		const row = renderFleetRow("background");
+		expect(row).toContain(sample.flag);
+		expect(row).not.toContain(ref(sample.selected));
+	},
+);
 
 it("reserves the concurrency slot before awaiting tier admission", async () => {
 	setModelTiers({ cheap: [ref("typed")] }, {});
