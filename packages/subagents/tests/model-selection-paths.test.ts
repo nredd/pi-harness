@@ -5,10 +5,11 @@ import { join, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, describeEvicted } from "../src/agent-manager.ts";
 import * as runner from "../src/agent-runner.ts";
 import { registerAgents } from "../src/agent-types.ts";
+import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.ts";
 import { loadCustomAgents } from "../src/custom-agents.ts";
 import { createSubagentsExtension } from "../src/index.ts";
 import { explainModel } from "../src/model-explanation.ts";
@@ -63,12 +64,16 @@ function bus() {
 	};
 }
 
-const it = test.extend<{ showFleetModel: boolean }>({ showFleetModel: false });
-const itWithFleetModel = it.extend<{ showFleetModel: boolean }>({ showFleetModel: true });
+const disclosureTest = it.extend<{ showFleetModel?: boolean }>({ showFleetModel: false });
+const disclosureWithModel = disclosureTest.extend<{ showFleetModel?: boolean }>({ showFleetModel: true });
 
-it.beforeEach(async ({ showFleetModel }) => {
+disclosureTest.beforeEach(async ({ showFleetModel }) => {
 	sandbox = hermeticDir({
-		settings: { agentMentions: "direct", backgroundByDefault: false, showModel: showFleetModel },
+		settings: {
+			agentMentions: "direct",
+			backgroundByDefault: false,
+			...(showFleetModel === undefined ? {} : { showModel: showFleetModel }),
+		},
 		agentFiles: {
 			scout: `---\ndescription: scout\ndisplay_name: Scout Label\ntools: read\nmodel: ${ref("definition")}\n---\nScout.`,
 		},
@@ -585,9 +590,11 @@ async function startFleetSession() {
 			fg: (_color: string, text: string) => text,
 			bold: (text: string) => text,
 		} as Parameters<typeof widget>[1]).render(120);
-		const row = rows.find((line) => line.includes(description));
-		if (!row) throw new Error(`No fleet row for ${description}`);
-		return row;
+		const matches = rows.filter((line) => line.includes(description));
+		if (matches.length !== 1 || !matches[0]) {
+			throw new Error(`Expected one fleet row for ${description}, found ${matches.length}`);
+		}
+		return matches[0];
 	};
 }
 
@@ -663,7 +670,13 @@ async function prepareDisclosure(sample: (typeof disclosures)[number]) {
 	return { renderFleetRow, run };
 }
 
-itWithFleetModel.each(disclosures)("discloses $name across model-tier surfaces", async (sample) => {
+// Inspect the fleet and notice after the child has settled and the outbox hold has elapsed.
+async function settleDisclosureRun() {
+	await flush();
+	clock.advance(NOTIFICATION_HOLD_MS);
+}
+
+disclosureWithModel.each(disclosures)("discloses $name across model-tier surfaces", async (sample) => {
 	const { renderFleetRow, run } = await prepareDisclosure(sample);
 	const expectResult = (text: string, status: string) => {
 		expect(text).toContain(`${sample.note}\n\n${status}`);
@@ -675,8 +688,7 @@ itWithFleetModel.each(disclosures)("discloses $name across model-tier surfaces",
 
 	const start = await run("background", true);
 	expectResult(start.content[0].text, "Agent started in background.");
-	await flush();
-	clock.advance(200);
+	await settleDisclosureRun();
 	const notice = vi
 		.mocked(boot.pi.sendMessage)
 		.mock.calls.find(([message]: [{ customType: string }]) => message.customType === "subagent-notification");
@@ -750,13 +762,12 @@ itWithFleetModel.each(disclosures)("discloses $name across model-tier surfaces",
 	expect(preview.text).toContain(`Selected: ${ref(sample.selected)}.`);
 });
 
-it.each(disclosures.filter((sample) => sample.flag))(
+disclosureTest.each(disclosures.filter((sample) => sample.flag))(
 	"keeps the $name tier flag in the fleet with model display off",
 	async (sample) => {
 		const { renderFleetRow, run } = await prepareDisclosure(sample);
 		await run("background", true);
-		await flush();
-		clock.advance(200);
+		await settleDisclosureRun();
 		const row = renderFleetRow("background");
 		expect(row).toContain(sample.flag);
 		expect(row).not.toContain(ref(sample.selected));
