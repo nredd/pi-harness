@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import subprocess
 from pathlib import Path
@@ -16,19 +17,23 @@ import pytest
 SKILL = Path(__file__).resolve().parents[2] / "packages/preset/skills/get-it-merged/SKILL.md"
 
 
+def git_env() -> dict[str, str]:
+    """Prevent ambient Git routing and global config from affecting fixtures."""
+    keys = os.environ.keys() - fnmatch.filter(os.environ, "GIT_*")
+    return {key: os.environ[key] for key in keys} | {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+
+
 def git(repo: Path, *args: str) -> str:
     """Run real Git in the named disposable repository."""
-    return subprocess.check_output(["git", "-C", str(repo), *args], text=True, timeout=30)
+    return subprocess.check_output(["git", "-C", str(repo), *args], env=git_env(), text=True, timeout=30)
 
 
 @pytest.fixture
-def linked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+def linked(tmp_path: Path) -> tuple[Path, Path]:
     """Create a branch already at its upstream tip, isolated from ambient Git config."""
-    for name in os.environ:
-        if name.startswith("GIT_"):
-            monkeypatch.delenv(name)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "--template=", "-b", "main")
@@ -47,6 +52,7 @@ def scan(worktree: Path) -> subprocess.CompletedProcess[str]:
     script = section.split("```sh\n", 1)[1].split("\n```", 1)[0]
     return subprocess.run(
         ["/bin/sh", "-c", "worktree=$1\n" + script, "sweep", str(worktree)],
+        env=git_env(),
         text=True,
         capture_output=True,
         check=False,
