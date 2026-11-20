@@ -733,6 +733,7 @@ describeMacosOnly("swiftc", () => {
 				"native/macos/agent_cursor.swift",
 				"native/macos/agent_cursor_motion.swift",
 				"native/macos/agent_cursor_tests.swift",
+				"native/macos/support_tests.swift",
 				"-o",
 				binary,
 			],

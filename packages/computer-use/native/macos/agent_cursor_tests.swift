@@ -118,10 +118,6 @@ struct AgentCursorTests {
         expect(recreatedWindow.contentView == nil, "the recreated overlay should release its view tree")
     }
 
-    private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
-        guard condition() else { fail(message) }
-    }
-
     private static func fail(_ message: String) -> Never {
         FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
         exit(1)

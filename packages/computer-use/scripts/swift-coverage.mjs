@@ -20,6 +20,7 @@ export const testSources = [
 	"native/macos/overlay_tests.swift",
 	"native/macos/ref_look_tests.swift",
 	"native/macos/request_framing_tests.swift",
+	"native/macos/support_tests.swift",
 ];
 
 function count(value) {
