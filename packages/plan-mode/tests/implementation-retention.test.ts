@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import type { ImplementationPlanRetention } from "../src/settings.ts";
 import { restorePlanModeState } from "../src/state.ts";
@@ -345,62 +345,58 @@ test("Implement menus preview each configured retention outcome before confirmat
 });
 
 test("changing Settings does not retroactively change an active implementation", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-retention-settings-"));
+	const directory = makeTestTempDir("pi-plan-retention-settings-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		const mock = createPlanPi({ activeTools: ["read", "edit"] });
-		planMode(mock.pi, {
-			settingsPath,
-			readSettings: async () => ({
-				kind: "loaded" as const,
-				settings: {
-					thinkingLevel: "inherit" as const,
-					implementationPlanRetention: "keep" as const,
-				},
-			}),
-		});
-		let openedSettings = false;
-		let changedSetting = false;
-		const context = createPlanContext({
-			hasUI: true,
-			select: async (_title: string, options: string[]) => {
-				if (options.includes("Settings")) {
-					if (openedSettings) return undefined;
-					openedSettings = true;
-					return "Settings";
-				}
-				if (changedSetting) return undefined;
-				changedSetting = true;
-				return options.find((option) => option.startsWith("Plan reinjection"));
+	const mock = createPlanPi({ activeTools: ["read", "edit"] });
+	planMode(mock.pi, {
+		settingsPath,
+		readSettings: async () => ({
+			kind: "loaded" as const,
+			settings: {
+				thinkingLevel: "inherit" as const,
+				implementationPlanRetention: "keep" as const,
 			},
-		});
-		await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
-		await mock.commands.get("plan")?.handler("start", context.ctx);
-		const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as
-			| ((...args: unknown[]) => Promise<unknown>)
-			| undefined;
-		assert.ok(complete);
-		await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
-		await mock.commands.get("plan")?.handler("implement", context.ctx);
-		assert.equal(latestState(mock).activeImplementation?.retention, "keep");
+		}),
+	});
+	let openedSettings = false;
+	let changedSetting = false;
+	const context = createPlanContext({
+		hasUI: true,
+		select: async (_title: string, options: string[]) => {
+			if (options.includes("Settings")) {
+				if (openedSettings) return undefined;
+				openedSettings = true;
+				return "Settings";
+			}
+			if (changedSetting) return undefined;
+			changedSetting = true;
+			return options.find((option) => option.startsWith("Plan reinjection"));
+		},
+	});
+	await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
+	await mock.commands.get("plan")?.handler("start", context.ctx);
+	const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as
+		| ((...args: unknown[]) => Promise<unknown>)
+		| undefined;
+	assert.ok(complete);
+	await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
+	await mock.commands.get("plan")?.handler("implement", context.ctx);
+	assert.equal(latestState(mock).activeImplementation?.retention, "keep");
 
-		await mock.commands.get("plan")?.handler("", context.ctx);
-		assert.equal(
-			(
-				JSON.parse(await readFile(settingsPath, "utf8")) as {
-					implementationPlanRetention?: string;
-				}
-			).implementationPlanRetention,
-			"clear-on-start",
-		);
-		assert.equal(latestState(mock).activeImplementation?.retention, "keep");
-		const handoff = mock.sentUserMessages.at(-1)?.content ?? "";
-		await mock.handlers.get("context")?.[0]?.({ messages: [{ role: "user", content: handoff }] }, context.ctx);
-		await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
-		assert.equal(latestState(mock).activeImplementation?.retention, "keep");
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	await mock.commands.get("plan")?.handler("", context.ctx);
+	assert.equal(
+		(
+			JSON.parse(await readFile(settingsPath, "utf8")) as {
+				implementationPlanRetention?: string;
+			}
+		).implementationPlanRetention,
+		"clear-on-start",
+	);
+	assert.equal(latestState(mock).activeImplementation?.retention, "keep");
+	const handoff = mock.sentUserMessages.at(-1)?.content ?? "";
+	await mock.handlers.get("context")?.[0]?.({ messages: [{ role: "user", content: handoff }] }, context.ctx);
+	await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
+	assert.equal(latestState(mock).activeImplementation?.retention, "keep");
 });
 
 test("restored cleanup policies re-arm safely in the replacement session", async () => {

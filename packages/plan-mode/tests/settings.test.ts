@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import {
 	awaitPlanModeSettingsWrites,
 	configuredImplementationModel,
@@ -26,17 +26,13 @@ test("Plan-mode settings validate inherit and fixed thinking levels", async () =
 	});
 	assert.equal(normalizePlanModeSettings({ thinkingLevel: "extreme" }), undefined);
 
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-test-"));
-	try {
-		const path = join(directory, "pi-plan-mode.json");
-		await writeFile(path, '{"thinkingLevel":"high"}');
-		assert.deepEqual(await readPlanModeSettings(path), {
-			kind: "loaded",
-			settings: { thinkingLevel: "high" },
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const directory = makeTestTempDir("pi-plan-mode-test-", onTestFinished);
+	const path = join(directory, "pi-plan-mode.json");
+	await writeFile(path, '{"thinkingLevel":"high"}');
+	assert.deepEqual(await readPlanModeSettings(path), {
+		kind: "loaded",
+		settings: { thinkingLevel: "high" },
+	});
 });
 
 test("Plan-mode settings ignore and preserve retired helper visibility", async () => {
@@ -46,22 +42,18 @@ test("Plan-mode settings ignore and preserve retired helper visibility", async (
 		});
 	}
 
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-visibility-test-"));
-	try {
-		const settingsPath = join(directory, "pi-plan-mode.json");
-		await writeFile(settingsPath, '{"toolVisibility":"after-first-plan"}\n');
-		await updatePlanModeSettings({ defaultPlanTools: ["read"] }, { settingsPath });
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
-			toolVisibility: "after-first-plan",
-			defaultPlanTools: ["read"],
-		});
-		assert.deepEqual(await readPlanModeSettings(settingsPath), {
-			kind: "loaded",
-			settings: { thinkingLevel: "inherit", defaultPlanTools: ["read"] },
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const directory = makeTestTempDir("pi-plan-mode-visibility-test-", onTestFinished);
+	const settingsPath = join(directory, "pi-plan-mode.json");
+	await writeFile(settingsPath, '{"toolVisibility":"after-first-plan"}\n');
+	await updatePlanModeSettings({ defaultPlanTools: ["read"] }, { settingsPath });
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+		toolVisibility: "after-first-plan",
+		defaultPlanTools: ["read"],
+	});
+	assert.deepEqual(await readPlanModeSettings(settingsPath), {
+		kind: "loaded",
+		settings: { thinkingLevel: "inherit", defaultPlanTools: ["read"] },
+	});
 });
 
 test("Plan-mode settings normalize and configure toggle shortcut keys", () => {
@@ -95,20 +87,16 @@ test("Plan-mode settings normalize default tool names strictly", async () => {
 		assert.equal(normalizePlanModeSettings({ defaultPlanTools }), undefined);
 	}
 
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-default-tools-test-"));
-	try {
-		const path = join(directory, "pi-plan-mode.json");
-		await writeFile(path, '{"defaultPlanTools":["read","bash","read"]}');
-		assert.deepEqual(await readPlanModeSettings(path), {
-			kind: "loaded",
-			settings: {
-				thinkingLevel: "inherit",
-				defaultPlanTools: ["read", "bash"],
-			},
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const directory = makeTestTempDir("pi-plan-mode-default-tools-test-", onTestFinished);
+	const path = join(directory, "pi-plan-mode.json");
+	await writeFile(path, '{"defaultPlanTools":["read","bash","read"]}');
+	assert.deepEqual(await readPlanModeSettings(path), {
+		kind: "loaded",
+		settings: {
+			thinkingLevel: "inherit",
+			defaultPlanTools: ["read", "bash"],
+		},
+	});
 });
 
 test("Plan-mode settings validate implementation retention and export defaults", () => {
@@ -240,158 +228,142 @@ test("Plan-mode settings accept arbitrary user-trusted safe subcommands", () => 
 });
 
 test("Plan-mode settings updates create only on explicit save and preserve unknown fields", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-update-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-update-", onTestFinished);
 	const settingsPath = join(directory, "nested", "pi-plan-mode.json");
-	try {
-		assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "missing" });
-		await assert.rejects(access(settingsPath));
+	assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "missing" });
+	await assert.rejects(access(settingsPath));
 
-		await updatePlanModeSettings({ thinkingLevel: "high", defaultPlanTools: ["read", "bash"] }, { settingsPath });
-		await writeFile(
-			settingsPath,
-			'{"future":{"kept":true},"thinkingLevel":"high","defaultPlanTools":["read","bash"],"safeSubcommands":{"gh":["pr merge"],"kubectl":["apply"]}}\n',
-		);
-		await updatePlanModeSettings({ thinkingLevel: "medium", defaultPlanTools: null }, { settingsPath });
+	await updatePlanModeSettings({ thinkingLevel: "high", defaultPlanTools: ["read", "bash"] }, { settingsPath });
+	await writeFile(
+		settingsPath,
+		'{"future":{"kept":true},"thinkingLevel":"high","defaultPlanTools":["read","bash"],"safeSubcommands":{"gh":["pr merge"],"kubectl":["apply"]}}\n',
+	);
+	await updatePlanModeSettings({ thinkingLevel: "medium", defaultPlanTools: null }, { settingsPath });
 
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
-			future: { kept: true },
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+		future: { kept: true },
+		thinkingLevel: "medium",
+		safeSubcommands: { gh: ["pr merge"], kubectl: ["apply"] },
+	});
+	assert.deepEqual(await readPlanModeSettings(settingsPath), {
+		kind: "loaded",
+		settings: {
 			thinkingLevel: "medium",
 			safeSubcommands: { gh: ["pr merge"], kubectl: ["apply"] },
-		});
-		assert.deepEqual(await readPlanModeSettings(settingsPath), {
-			kind: "loaded",
-			settings: {
-				thinkingLevel: "medium",
-				safeSubcommands: { gh: ["pr merge"], kubectl: ["apply"] },
-			},
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+		},
+	});
 });
 
 test("Plan-mode settings patch implementation defaults, retention, and export fields", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-new-fields-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-new-fields-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		await writeFile(settingsPath, '{"thinkingLevel":"low","future":{"kept":true},"defaultPlanExportPath":"old.md"}\n');
-		await updatePlanModeSettings(
-			{
-				implementationPlanRetention: "clear-after-first-run",
-				defaultImplementationModel: { provider: "  provider  ", modelId: "  model  " },
-				defaultImplementationThinkingLevel: "high",
-				defaultPlanExportPath: "docs/PLAN.md",
-			},
-			{ settingsPath },
-		);
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
-			thinkingLevel: "low",
-			future: { kept: true },
+	await writeFile(settingsPath, '{"thinkingLevel":"low","future":{"kept":true},"defaultPlanExportPath":"old.md"}\n');
+	await updatePlanModeSettings(
+		{
 			implementationPlanRetention: "clear-after-first-run",
-			defaultImplementationModel: { provider: "provider", modelId: "model" },
+			defaultImplementationModel: { provider: "  provider  ", modelId: "  model  " },
 			defaultImplementationThinkingLevel: "high",
 			defaultPlanExportPath: "docs/PLAN.md",
-		});
-		await updatePlanModeSettings(
-			{
-				defaultImplementationModel: null,
-				defaultImplementationThinkingLevel: null,
-				defaultPlanExportPath: null,
-			},
-			{ settingsPath },
-		);
+		},
+		{ settingsPath },
+	);
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+		thinkingLevel: "low",
+		future: { kept: true },
+		implementationPlanRetention: "clear-after-first-run",
+		defaultImplementationModel: { provider: "provider", modelId: "model" },
+		defaultImplementationThinkingLevel: "high",
+		defaultPlanExportPath: "docs/PLAN.md",
+	});
+	await updatePlanModeSettings(
+		{
+			defaultImplementationModel: null,
+			defaultImplementationThinkingLevel: null,
+			defaultPlanExportPath: null,
+		},
+		{ settingsPath },
+	);
 
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+		thinkingLevel: "low",
+		future: { kept: true },
+		implementationPlanRetention: "clear-after-first-run",
+	});
+	assert.deepEqual(await readPlanModeSettings(settingsPath), {
+		kind: "loaded",
+		settings: {
 			thinkingLevel: "low",
-			future: { kept: true },
 			implementationPlanRetention: "clear-after-first-run",
-		});
-		assert.deepEqual(await readPlanModeSettings(settingsPath), {
-			kind: "loaded",
-			settings: {
-				thinkingLevel: "low",
-				implementationPlanRetention: "clear-after-first-run",
-			},
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+		},
+	});
 });
 
 test("Plan-mode settings explicit save promotes valid legacy content without modifying it", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-promote-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-promote-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const legacySettingsPath = join(directory, "plan-mode.json");
 	const legacy =
 		'{"thinkingLevel":"low","defaultPlanTools":["read"],"implementationPlanRetention":"clear-on-start","defaultPlanExportPath":"plans/PLAN.md","future":{"kept":true}}\n';
-	try {
-		await writeFile(legacySettingsPath, legacy);
-		await updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath, legacySettingsPath });
+	await writeFile(legacySettingsPath, legacy);
+	await updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath, legacySettingsPath });
 
-		assert.equal(await readFile(legacySettingsPath, "utf8"), legacy);
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
-			thinkingLevel: "high",
-			defaultPlanTools: ["read"],
-			implementationPlanRetention: "clear-on-start",
-			defaultPlanExportPath: "plans/PLAN.md",
-			future: { kept: true },
-		});
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	assert.equal(await readFile(legacySettingsPath, "utf8"), legacy);
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+		thinkingLevel: "high",
+		defaultPlanTools: ["read"],
+		implementationPlanRetention: "clear-on-start",
+		defaultPlanExportPath: "plans/PLAN.md",
+		future: { kept: true },
+	});
 });
 
 test("Plan-mode settings refuse invalid documents and preserve atomic publication failures", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-invalid-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-invalid-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		for (const invalid of ["{mock-sensitive-token", '{"thinkingLevel":"huge"}\n']) {
-			await writeFile(settingsPath, invalid);
-			await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), (error: unknown) => {
-				assert.match(String(error), /invalid (?:JSON|settings shape)/i);
-				assert.doesNotMatch(String(error), /mock-sensitive-token/);
-				return true;
-			});
-			assert.equal(await readFile(settingsPath, "utf8"), invalid);
-		}
-
-		const invalidUtf8 = Buffer.from([0x7b, 0xff, 0x7d]);
-		await writeFile(settingsPath, invalidUtf8);
-		const invalidUtf8Result = await readPlanModeSettings(settingsPath);
-		assert.match(invalidUtf8Result.kind === "invalid" ? invalidUtf8Result.reason : "", /UTF-8/i);
-		await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), /UTF-8/i);
-		assert.deepEqual(await readFile(settingsPath), invalidUtf8);
-
-		const oversized = Buffer.alloc(64 * 1024 + 1, 0x20);
-		await writeFile(settingsPath, oversized);
-		const oversizedResult = await readPlanModeSettings(settingsPath);
-		assert.match(oversizedResult.kind === "invalid" ? oversizedResult.reason : "", /exceeds .* bytes/i);
-		await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), /exceeds .* bytes/i);
-		assert.deepEqual(await readFile(settingsPath), oversized);
-
-		await writeFile(settingsPath, '{"thinkingLevel":"low","future":true}\n');
-		const before = await readFile(settingsPath, "utf8");
-		await assert.rejects(
-			updatePlanModeSettings(
-				{ thinkingLevel: "high" },
-				{
-					settingsPath,
-					beforeRename: async () => {
-						throw new Error("publication failed");
-					},
-				},
-			),
-			/publication failed/,
-		);
-		assert.equal(await readFile(settingsPath, "utf8"), before);
-		assert.deepEqual(await readdir(directory), ["pi-plan-mode.json"]);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
+	for (const invalid of ["{mock-sensitive-token", '{"thinkingLevel":"huge"}\n']) {
+		await writeFile(settingsPath, invalid);
+		await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), (error: unknown) => {
+			assert.match(String(error), /invalid (?:JSON|settings shape)/i);
+			assert.doesNotMatch(String(error), /mock-sensitive-token/);
+			return true;
+		});
+		assert.equal(await readFile(settingsPath, "utf8"), invalid);
 	}
+
+	const invalidUtf8 = Buffer.from([0x7b, 0xff, 0x7d]);
+	await writeFile(settingsPath, invalidUtf8);
+	const invalidUtf8Result = await readPlanModeSettings(settingsPath);
+	assert.match(invalidUtf8Result.kind === "invalid" ? invalidUtf8Result.reason : "", /UTF-8/i);
+	await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), /UTF-8/i);
+	assert.deepEqual(await readFile(settingsPath), invalidUtf8);
+
+	const oversized = Buffer.alloc(64 * 1024 + 1, 0x20);
+	await writeFile(settingsPath, oversized);
+	const oversizedResult = await readPlanModeSettings(settingsPath);
+	assert.match(oversizedResult.kind === "invalid" ? oversizedResult.reason : "", /exceeds .* bytes/i);
+	await assert.rejects(updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }), /exceeds .* bytes/i);
+	assert.deepEqual(await readFile(settingsPath), oversized);
+
+	await writeFile(settingsPath, '{"thinkingLevel":"low","future":true}\n');
+	const before = await readFile(settingsPath, "utf8");
+	await assert.rejects(
+		updatePlanModeSettings(
+			{ thinkingLevel: "high" },
+			{
+				settingsPath,
+				beforeRename: async () => {
+					throw new Error("publication failed");
+				},
+			},
+		),
+		/publication failed/,
+	);
+	assert.equal(await readFile(settingsPath, "utf8"), before);
+	assert.deepEqual(await readdir(directory), ["pi-plan-mode.json"]);
 });
 
 test("Plan-mode settings serialize updates, coordinate reads, and recover after failure", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-order-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-order-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	let releaseFirst!: () => void;
 	let markFirstReached!: () => void;
@@ -452,34 +424,29 @@ test("Plan-mode settings serialize updates, coordinate reads, and recover after 
 		});
 	} finally {
 		releaseFirst();
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("Plan-mode settings abort before publication without creating the canonical file", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-abort-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-abort-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const controller = new AbortController();
-	try {
-		await assert.rejects(
-			updatePlanModeSettings(
-				{ thinkingLevel: "high" },
-				{
-					settingsPath,
-					signal: controller.signal,
-					beforeRename: async () => controller.abort(new Error("settings disposed")),
-				},
-			),
-			/settings disposed/,
-		);
-		await assert.rejects(access(settingsPath));
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	await assert.rejects(
+		updatePlanModeSettings(
+			{ thinkingLevel: "high" },
+			{
+				settingsPath,
+				signal: controller.signal,
+				beforeRename: async () => controller.abort(new Error("settings disposed")),
+			},
+		),
+		/settings disposed/,
+	);
+	await assert.rejects(access(settingsPath));
 });
 
 test("Plan-mode settings read legacy files without modifying them", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-migration-"));
+	const directory = makeTestTempDir("pi-plan-mode-migration-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -528,7 +495,6 @@ test("Plan-mode settings read legacy files without modifying them", async () => 
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
@@ -553,35 +519,27 @@ test("Plan-mode settings accept bare function keys but never modified ones", () 
 });
 
 test("Plan-mode settings refuse a malformed implementation model patch without writing", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-model-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-model-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		await assert.rejects(
-			updatePlanModeSettings({ defaultImplementationModel: { provider: "", modelId: "" } }, { settingsPath }),
-			/invalid implementation model/u,
-		);
-		await assert.rejects(access(settingsPath));
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	await assert.rejects(
+		updatePlanModeSettings({ defaultImplementationModel: { provider: "", modelId: "" } }, { settingsPath }),
+		/invalid implementation model/u,
+	);
+	await assert.rejects(access(settingsPath));
 });
 
 test("Plan-mode settings create the canonical file when neither it nor the legacy file exists", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-fresh-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-fresh-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		await updatePlanModeSettings(
-			{ thinkingLevel: "high" },
-			{ settingsPath, legacySettingsPath: join(directory, "plan-mode.json") },
-		);
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { thinkingLevel: "high" });
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	await updatePlanModeSettings(
+		{ thinkingLevel: "high" },
+		{ settingsPath, legacySettingsPath: join(directory, "plan-mode.json") },
+	);
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { thinkingLevel: "high" });
 });
 
 test("Plan-mode settings default to the agent directory for both canonical and legacy files", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-agent-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-agent-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -597,19 +555,14 @@ test("Plan-mode settings default to the agent directory for both canonical and l
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("Plan-mode settings report a directory in place of the file as invalid", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-dir-"));
-	try {
-		const result = await readPlanModeSettings(directory);
-		assert.equal(result.kind, "invalid");
-		if (process.platform !== "win32") {
-			assert.equal(result.kind === "invalid" ? result.reason : "", "settings path is not a regular file");
-		}
-	} finally {
-		await rm(directory, { recursive: true, force: true });
+	const directory = makeTestTempDir("pi-plan-mode-settings-dir-", onTestFinished);
+	const result = await readPlanModeSettings(directory);
+	assert.equal(result.kind, "invalid");
+	if (process.platform !== "win32") {
+		assert.equal(result.kind === "invalid" ? result.reason : "", "settings path is not a regular file");
 	}
 });

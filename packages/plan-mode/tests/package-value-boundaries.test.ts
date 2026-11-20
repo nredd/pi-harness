@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { keyHint, keyText, type Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import {
 	findHistoryImplementationArtifact,
 	latestAssistantStopReason,
@@ -176,56 +176,48 @@ test("message and widget components remain renderable after invalidation", () =>
 
 test("settings reject duplicate shortcut modifiers and invalid legacy settings without writing", async () => {
 	assert.equal(normalizeKeyId("ctrl+ctrl+p"), undefined);
-	const directory = await mkdtemp(join(tmpdir(), "pm-value-boundaries-"));
-	try {
-		const settingsPath = join(directory, "canonical.json");
-		const legacySettingsPath = join(directory, "legacy.json");
-		await writeFile(legacySettingsPath, "broken");
-		await assert.rejects(
-			updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath, legacySettingsPath }),
-			/legacy.json.*invalid JSON/,
-		);
-		assert.equal(await readFile(legacySettingsPath, "utf8"), "broken");
-		await assert.rejects(readFile(settingsPath), /ENOENT/);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const directory = makeTestTempDir("pm-value-boundaries-", onTestFinished);
+	const settingsPath = join(directory, "canonical.json");
+	const legacySettingsPath = join(directory, "legacy.json");
+	await writeFile(legacySettingsPath, "broken");
+	await assert.rejects(
+		updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath, legacySettingsPath }),
+		/legacy.json.*invalid JSON/,
+	);
+	assert.equal(await readFile(legacySettingsPath, "utf8"), "broken");
+	await assert.rejects(readFile(settingsPath), /ENOENT/);
 });
 
 test("export failures are visible headlessly and never overwrite or create invalid targets", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pm-export-boundaries-"));
-	try {
-		const context = createPlanContext({ cwd: directory, hasUI: false });
-		await assert.rejects(
-			exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, context.ctx),
-			/No completed plan/,
-		);
-		const interactive = createPlanContext({ cwd: directory, hasUI: true });
-		assert.equal(
-			await exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, interactive.ctx),
-			false,
-		);
-		assert.match(interactive.notifications.at(-1)?.message ?? "", /No completed plan/);
-		assert.equal(interactive.notifications.at(-1)?.level, "warning");
-		await assert.rejects(exportPlanToFile("# Plan", "x".repeat(300), directory), /ENAMETOOLONG/);
-		const state = {
-			enabled: true as const,
-			awaitingAction: true,
-			declinedPlans: 0,
-			latestPlan: "# Plan",
-			workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
-		};
-		assert.throws(() => resolvePlanExportPath("bad\0path", directory), /NUL/);
-		await writeFile(join(directory, "blocker"), "owned");
-		await assert.rejects(exportPlanToFile("# Plan", "blocker/plan.md", directory), /ENOTDIR|EEXIST/);
-		await assert.rejects(exportStoredPlan(state, "blocker/plan.md", context.ctx), /ENOTDIR|EEXIST/);
-		const aborted = new AbortController();
-		aborted.abort(new Error("cancelled by owner"));
-		await assert.rejects(exportPlanToFile("# Plan", "cancelled.md", directory, aborted.signal), /cancelled by owner/);
-		await assert.rejects(readFile(join(directory, "cancelled.md")), /ENOENT/);
-		await exportPlanToFile("# Plan", "default-current.md", directory);
-		assert.equal(await readFile(join(directory, "default-current.md"), "utf8"), "# Plan\n");
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const directory = makeTestTempDir("pm-export-boundaries-", onTestFinished);
+	const context = createPlanContext({ cwd: directory, hasUI: false });
+	await assert.rejects(
+		exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, context.ctx),
+		/No completed plan/,
+	);
+	const interactive = createPlanContext({ cwd: directory, hasUI: true });
+	assert.equal(
+		await exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, interactive.ctx),
+		false,
+	);
+	assert.match(interactive.notifications.at(-1)?.message ?? "", /No completed plan/);
+	assert.equal(interactive.notifications.at(-1)?.level, "warning");
+	await assert.rejects(exportPlanToFile("# Plan", "x".repeat(300), directory), /ENAMETOOLONG/);
+	const state = {
+		enabled: true as const,
+		awaitingAction: true,
+		declinedPlans: 0,
+		latestPlan: "# Plan",
+		workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
+	};
+	assert.throws(() => resolvePlanExportPath("bad\0path", directory), /NUL/);
+	await writeFile(join(directory, "blocker"), "owned");
+	await assert.rejects(exportPlanToFile("# Plan", "blocker/plan.md", directory), /ENOTDIR|EEXIST/);
+	await assert.rejects(exportStoredPlan(state, "blocker/plan.md", context.ctx), /ENOTDIR|EEXIST/);
+	const aborted = new AbortController();
+	aborted.abort(new Error("cancelled by owner"));
+	await assert.rejects(exportPlanToFile("# Plan", "cancelled.md", directory, aborted.signal), /cancelled by owner/);
+	await assert.rejects(readFile(join(directory, "cancelled.md")), /ENOENT/);
+	await exportPlanToFile("# Plan", "default-current.md", directory);
+	assert.equal(await readFile(join(directory, "default-current.md"), "utf8"), "# Plan\n");
 });
