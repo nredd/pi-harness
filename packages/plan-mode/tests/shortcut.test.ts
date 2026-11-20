@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	CustomEditor,
@@ -16,7 +15,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type KeyId, setKittyProtocolActive } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test, vi } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import * as settingsModule from "../src/settings.ts";
 import { createFakeSettingsWatch } from "./fixtures/settings-watch-support.ts";
@@ -46,7 +46,7 @@ async function withShortcut(
 }
 
 async function createShortcutFixture(initial: KeyId | undefined) {
-	const root = await mkdtemp(join(tmpdir(), "pi-plan-shortcut-"));
+	const root = makeTestTempDir("pi-plan-shortcut-", onTestFinished);
 	const settingsPath = join(root, "pi-plan-mode.json");
 	const tui = createTuiHarness();
 	const sessionManager = SessionManager.inMemory(root);
@@ -135,7 +135,6 @@ async function createShortcutFixture(initial: KeyId | undefined) {
 	} catch (error) {
 		await shutdown().catch(() => undefined);
 		tui.dispose();
-		await rm(root, { recursive: true, force: true });
 		throw error;
 	}
 	return {
@@ -174,7 +173,6 @@ async function createShortcutFixture(initial: KeyId | undefined) {
 		async dispose() {
 			await shutdown();
 			tui.dispose();
-			await rm(root, { recursive: true, force: true });
 		},
 	};
 }

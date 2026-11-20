@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
@@ -12,7 +11,8 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { packagePath } from "./fixtures/package-path.ts";
 import { createPlanContext } from "./fixtures/support.ts";
 
@@ -26,7 +26,7 @@ const fixtures = [
 
 for (const fixture of fixtures) {
 	test(`Pi settings enable search tools after restart, preserving ${fixture.label}`, async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-plan-availability-sdk-"));
+		const root = makeTestTempDir("pi-plan-availability-sdk-", onTestFinished);
 		const agentDir = join(root, "session-agent");
 		const processAgentDir = join(root, "process-agent");
 		const settingsPath = join(agentDir, "settings.json");
@@ -154,7 +154,6 @@ for (const fixture of fixtures) {
 				session?.dispose();
 				if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 				else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-				await rm(root, { recursive: true, force: true });
 			}
 		}
 	});

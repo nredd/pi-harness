@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test, vi } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import * as settingsModule from "../src/settings.ts";
 import { createFakeSettingsWatch } from "./fixtures/settings-watch-support.ts";
@@ -247,7 +247,7 @@ async function waitForCondition(condition: () => boolean) {
 }
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>) {
-	const agentDir = await mkdtemp(join(tmpdir(), "pi-plan-mode-default-tools-"));
+	const agentDir = makeTestTempDir("pi-plan-mode-default-tools-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
@@ -255,6 +255,5 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>) {
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(agentDir, { recursive: true, force: true });
 	}
 }

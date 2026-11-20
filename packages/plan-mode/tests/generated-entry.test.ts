@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { createPlanContext, createPlanPi } from "./fixtures/support.ts";
 
 async function emit(
@@ -14,7 +13,7 @@ async function emit(
 }
 
 test("declared generated entry preserves registration and partial lifecycle cleanup", async () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-plan-mode-generated-entry-"));
+	const root = makeTestTempDir("pi-plan-mode-generated-entry-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
 	try {
@@ -54,6 +53,5 @@ test("declared generated entry preserves registration and partial lifecycle clea
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		rmSync(root, { force: true, recursive: true });
 	}
 });

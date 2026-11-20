@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode, { completePlanArguments } from "../src/plan-mode.ts";
 import { createCustomSelectorHarness, createPlanContext, createPlanPi } from "./fixtures/support.ts";
 
@@ -23,12 +23,8 @@ async function completePlan(mock: ReturnType<typeof createPlanPi>, ctx: ReturnTy
 }
 
 async function withTempDirectory(run: (directory: string) => Promise<void>) {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-export-"));
-	try {
-		await run(directory);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const directory = makeTestTempDir("pi-plan-export-", onTestFinished);
+	await run(directory);
 }
 
 test("plan export autocomplete exposes a path-taking public route", () => {

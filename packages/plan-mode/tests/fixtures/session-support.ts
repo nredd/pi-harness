@@ -1,10 +1,10 @@
 /** Real core-session fixtures for the retired process-level Plan scenarios. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { toolCall } from "@nredd/pi-test-lib/faux";
 import { createHarness, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished } from "vitest";
 import planMode from "../../src/plan-mode.ts";
 import type { PlanModeState } from "../../src/state.ts";
 
@@ -41,7 +41,7 @@ export const planFactory: ExtensionFactory = (pi) =>
 
 /** Scratch directory kept alive across file-backed session replacement. */
 export class SessionFixture {
-	readonly root = mkdtempSync(join(tmpdir(), "plan-session-"));
+	readonly root = makeTestTempDir("plan-session-", onTestFinished);
 	readonly sessions = join(this.root, "sessions");
 	private harnesses: Harness[] = [];
 
@@ -57,10 +57,9 @@ export class SessionFixture {
 		return harness;
 	}
 
-	/** Dispose all sessions before deleting caller-owned session files. */
+	/** Dispose all sessions before the test-finished hook removes their files. */
 	cleanup(): void {
 		for (const harness of this.harnesses.reverse()) harness.cleanup();
-		rmSync(this.root, { recursive: true, force: true });
 	}
 }
 
