@@ -674,6 +674,151 @@ mod tests {
         assert!(error.message.starts_with("AT-SPI2 is unavailable: "));
     }
 
+    /// Accessible properties and edges for a small, cyclic AT-SPI tree.
+    struct TreeNode {
+        role: &'static str,
+        children: &'static [(&'static str, &'static str)],
+        has_text: bool,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl TreeNode {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            self.role
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            "fixture description"
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            self.children
+                .iter()
+                .map(|&(destination, path)| (destination, OwnedObjectPath::try_from(path).unwrap()))
+                .collect()
+        }
+
+        fn get_role_name(&self) -> &str {
+            self.role
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            if self.has_text {
+                vec![TEXT]
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    /// Record calls so a password read fails even if its result is subsequently discarded.
+    #[derive(Clone, Default)]
+    struct TreeText(std::sync::Arc<std::sync::Mutex<Vec<(i32, i32)>>>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl TreeText {
+        fn get_text(&self, start: i32, end: i32) -> &str {
+            self.0.lock().unwrap().push((start, end));
+            "fixture text"
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshots_bound_tree_traversal_and_never_read_password_text() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            const DESTINATION: &str = ":1.42";
+            const ROOT: &str = "/window";
+            const PASSWORD: &str = "/window/password";
+            const LABEL: &str = "/window/label";
+            let password_text = TreeText::default();
+            let label_text = TreeText::default();
+            let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
+            let server = zbus::connection::Builder::unix_stream(server_socket)
+                .server(zbus::Guid::generate())
+                .unwrap()
+                .p2p()
+                .serve_at(
+                    ROOT,
+                    TreeNode {
+                        role: "frame",
+                        children: &[
+                            (DESTINATION, PASSWORD),
+                            ("", LABEL),
+                            (DESTINATION, "/"),
+                            (DESTINATION, LABEL),
+                        ],
+                        has_text: false,
+                    },
+                )
+                .unwrap()
+                .serve_at(
+                    PASSWORD,
+                    TreeNode {
+                        role: "PaSsWoRd TeXt",
+                        children: &[],
+                        has_text: true,
+                    },
+                )
+                .unwrap()
+                .serve_at(PASSWORD, password_text.clone())
+                .unwrap()
+                .serve_at(
+                    LABEL,
+                    TreeNode {
+                        role: "label",
+                        children: &[(DESTINATION, ROOT)],
+                        has_text: true,
+                    },
+                )
+                .unwrap()
+                .serve_at(LABEL, label_text.clone())
+                .unwrap()
+                .build();
+            let client = zbus::connection::Builder::unix_stream(client_socket)
+                .p2p()
+                .build();
+            let (_server, connection) = tokio::try_join!(server, client).unwrap();
+            let client = AtspiClient { connection };
+            let root = AccessibleRef {
+                destination: DESTINATION.into(),
+                path: ROOT.into(),
+            };
+
+            let nodes = client.snapshot_from(&root, 10, 10).await.unwrap();
+            assert_eq!(nodes.len(), 3);
+            assert_eq!(nodes[0].accessible, root);
+            assert_eq!(nodes[0].parent, None);
+            assert_eq!(nodes[0].depth, 0);
+            assert_eq!(nodes[0].name, "frame");
+            assert_eq!(nodes[0].description, "fixture description");
+            assert_eq!(nodes[0].bounds, None);
+            assert_eq!(nodes[1].accessible.path, PASSWORD);
+            assert_eq!(nodes[2].accessible.path, LABEL);
+            for child in &nodes[1..] {
+                assert_eq!(child.parent.as_ref(), Some(&root));
+                assert_eq!(child.depth, 1);
+                assert!(child.interfaces.contains(TEXT));
+            }
+            assert!(nodes[1].is_secure);
+            assert!(nodes[1].value.is_empty());
+            assert!(!nodes[2].is_secure);
+            assert_eq!(nodes[2].value, "fixture text");
+
+            let depth_limited = client.snapshot_from(&root, 10, 0).await.unwrap();
+            assert_eq!(depth_limited.len(), 1);
+            assert_eq!(depth_limited[0].accessible, root);
+            let node_limited = client.snapshot_from(&root, 2, 10).await.unwrap();
+            assert_eq!(node_limited.len(), 2);
+            assert_eq!(node_limited[1].accessible.path, PASSWORD);
+            assert!(password_text.0.lock().unwrap().is_empty());
+            assert_eq!(*label_text.0.lock().unwrap(), [(0, -1)]);
+        })
+        .await
+        .expect("snapshot peer handshake and requests timed out");
+    }
+
     #[test]
     fn root_shape_has_cross_platform_aliases() {
         let root = RootSnapshot {
