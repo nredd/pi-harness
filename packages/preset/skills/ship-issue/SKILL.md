@@ -39,9 +39,10 @@ cwd repo.
 
 Never work in the user's checkout. One issue, one worktree.
 
-- `git -C <repo> fetch origin`. Delegated workers may only prune metadata, never sweep worktrees.
-  Run `git -C <repo> worktree prune` only after confirming all registered worktree volumes are
-  mounted; otherwise use `git -C <repo> worktree prune --dry-run` for inspection only
+- `git -C <repo> fetch --no-auto-maintenance origin` (auto-gc can prune an unmounted worktree's admin
+  dir). Workers never run `git worktree prune` or sweep worktrees. The parent
+  runs `git worktree prune` only after the `#### Prune guard` in `get-it-merged` passes; otherwise
+  only `git worktree prune --dry-run`
 - Parent: read `/skill:get-it-merged` and apply only its `### Guarded merged-worktree sweep` section
   at the end of `get-it-merged` step 4. Do not run merge or scratch cleanup when preparing a worktree
 - Branch: `<prefix>/issue-<N>`. `<prefix>` is the repo's documented branch-prefix convention
@@ -177,7 +178,7 @@ spawned by a parent for this issue. Never hand off to yourself.
   - Never remove ignored files or recursively delete contents. Keep and report directories. In the handback, claim only leftover scratch you created, with its path, type, creation hash for files and symlinks, and reason it remains. Report other changes separately; do not claim them
 - For work where no PR will ever exist (abandoned, duplicate, parked or deferred), the parent must
   pass the no-PR upstream check and every shared check in the guarded sweep from step 2. This
-  includes the ignored-status, claimed-directory and index-flag checks. Only then may the parent use a
+  includes the ignored-status, claimed-directory, index-flag and scan checks. Only then may the parent use a
   documented no-PR mode scoped to that exact checked worktree, e.g. `--no-pr --worktree <path>`.
   Run from outside it, preserve remote branches and report the helper's verdict verbatim. If any
   check is unknown or fails, or no safe scoped mode is documented, keep the worktree, report it as
