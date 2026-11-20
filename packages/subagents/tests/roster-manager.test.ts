@@ -35,6 +35,7 @@ it("binds the roster root, leaves rootSessionId semantics alone, retains it for 
 	});
 	expect(branch.record.rootSessionId).toBe("transcripts");
 	expect(branch.record.rosterRootId).toBe("root-one");
+	expect(branch.record.rosterParentRunId).toBe(record.runId);
 	expect(branch.record.runId).not.toBe(record.runId);
 	const unscoped = await manager.spawnAndWait(pi, { cwd: "/tmp", sessionManager: {} } as never, "Explore", "private", {
 		description: "no identity",
@@ -44,8 +45,10 @@ it("binds the roster root, leaves rootSessionId semantics alone, retains it for 
 	const forged = await manager.spawnAndWait(pi, context, "Explore", "x", {
 		description: "forged",
 		rosterRootId: "other",
+		rosterParentRunId: record.runId,
 	} as never);
 	expect(forged.record.rosterRootId).toBe("root-one");
+	expect(forged.record.rosterParentRunId).toBeUndefined();
 	expect(manager.roster.parent("root-one").agents.map((r) => r.id)).toContain(branch.id);
 	expect(manager.roster.parent("root-one").agents.map((r) => r.id)).not.toContain(unscoped.id);
 });
