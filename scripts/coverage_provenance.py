@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-from coverage_report import Provenance, read_record, validate_record
+from coverage_report import Provenance, producer_job, read_record, validate_record
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def attest_shards(directory: Path, run: Provenance, cell: str) -> None:
     for shard in shards:
         shard_name = shard.name.removeprefix(f"{cell}-")
         record = read_record(shard / "coverage" / f"provenance-{shard_name}.json")
-        validate_record(record, run.record("owned-shards", shard.name))
+        validate_record(record, run.record(producer_job(cell, shard=True), shard.name))
 
 
 def main(argv: list[str] | None = None) -> int:

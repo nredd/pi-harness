@@ -6,6 +6,7 @@ on:
       - '.github/workflows/native-helper.yml'
       - '.github/workflows/publish.yml'
       - 'scripts/ci_paths.py'
+      - 'scripts/ci_native_helper.py'
       - 'scripts/runner_pools.py'
       - 'scripts/npm_release.py'
       - 'scripts/release_descriptors.py'
@@ -87,6 +88,9 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
       - name: Install pinned native toolchain
         shell: pwsh
         run: |
@@ -122,24 +126,10 @@ jobs:
       - name: Stage source-bound executable without publishing or installing
         if: always()
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force native-helper-artifact | Out-Null
-          $exe = 'packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/windows-bridge.exe'
-          $executableStatus = 'NOT_BUILT'
-          if (Test-Path $exe) {
-            Copy-Item $exe native-helper-artifact/windows-bridge.exe
-            $hash = (Get-FileHash native-helper-artifact/windows-bridge.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  windows-bridge.exe" | Set-Content -Encoding ascii native-helper-artifact/SHA256SUMS
-            $executableStatus = 'PRESENT'
-          }
-          $fixtureStatus = 'NOT_REACHED'
-          if (Test-Path native-fixture-status.txt) {
-            $fixtureStatus = (Get-Content -Raw native-fixture-status.txt).Trim()
-          }
-          "source=$env:HELPER_SOURCE_SHA`ntarget=x86_64-pc-windows-msvc`nrust_requested=1.97.1`nprotocol=4`ncapability=fail-closed-live-target-v1`nexecutable=$executableStatus`nfixture=$fixtureStatus" | Set-Content -Encoding ascii native-helper-artifact/build.txt
-          foreach ($log in @('native-fixture.log', 'native-compiler.log', 'native-fixture-status.txt')) {
-            if (Test-Path $log) { Copy-Item $log native-helper-artifact/ }
-          }
+        run: >-
+          uv run --no-project --python (Get-Content .python-version) python scripts/ci_native_helper.py --source-sha "$env:HELPER_SOURCE_SHA"
+          --executable "packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/windows-bridge.exe"
+          --artifact-dir native-helper-artifact
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

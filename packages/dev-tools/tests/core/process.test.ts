@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { run } from "../../src/core/process.ts";
 
@@ -234,17 +235,33 @@ describe("run", () => {
 		}, 10_000);
 
 		it("leaves no group member behind once run() returns", async () => {
-			const r = await run({
+			const ac = new AbortController();
+			let pids: RegExpMatchArray | null = null;
+			const pending = run({
 				cmd: "sh",
-				args: ["-c", "trap '' TERM; sleep 30 & echo $$ $!; wait"],
-				timeoutMs: 300,
+				args: [fileURLToPath(new URL("../fixtures/process-group.sh", import.meta.url))],
+				signal: ac.signal,
+				onStderrLine: (line) => {
+					pids ??= line.match(/^([1-9]\d*) ([1-9]\d*)$/);
+				},
 			});
-			const [leader = 0, descendant = 0] = r.stdout.trim().split(" ").map(Number);
-			expect(leader).toBeGreaterThan(0);
-			expect(descendant).toBeGreaterThan(0);
-			expect(r.timedOut).toBe(true);
-			expect(() => process.kill(-leader, 0)).toThrow(/ESRCH/);
-			expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
+			try {
+				// Don't signal the group until the fixture has started its descendant and reported both PIDs.
+				const [leader, descendant] = await vi.waitFor(
+					() => {
+						if (!pids) throw new Error("Fixture did not publish the leader and descendant PIDs");
+						return [Number(pids[1]), Number(pids[2])];
+					},
+					{ timeout: 10_000 },
+				);
+				ac.abort();
+				expect((await pending).aborted).toBe(true);
+				expect(() => process.kill(-leader, 0)).toThrow(/ESRCH/);
+				expect(() => process.kill(descendant, 0)).toThrow(/ESRCH/);
+			} finally {
+				ac.abort();
+				await pending;
+			}
 		}, 20_000);
 	});
 });

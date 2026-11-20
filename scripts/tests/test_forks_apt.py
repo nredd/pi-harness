@@ -21,7 +21,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGES = "libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep"
 AZURE = "http://azure.archive.ubuntu.com/ubuntu/"
-TIMEOUT_FIXTURE = Path(__file__).with_name("fixtures") / "wsl_timeout.py"
+TIMEOUT_FIXTURE = Path(__file__).with_name("fixtures") / "apt_timeout.py"
 
 
 @pytest.fixture
