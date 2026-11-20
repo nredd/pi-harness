@@ -297,7 +297,11 @@ describe("agent-runner final output capture", () => {
 		expect(settingsManagerCreate).toHaveBeenCalledWith("/tmp/worktree", "/mock/agent-dir", { projectTrusted: true });
 		// Same claim as before `rememberAgents` flipped the default — the effective
 		// cwd reaches the session manager — now via the persistent constructor.
-		expect(sessionManagerCreate).toHaveBeenCalledWith("/tmp/worktree", undefined, expect.anything());
+		expect(sessionManagerCreate).toHaveBeenCalledWith(
+			"/tmp/worktree",
+			"/mock/agent-dir/sessions/--tmp-worktree--",
+			expect.anything(),
+		);
 		expect(createAgentSession).toHaveBeenCalledWith(
 			expect.objectContaining({
 				cwd: "/tmp/worktree",

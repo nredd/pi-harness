@@ -76,6 +76,7 @@ Excluded scenario files (paths below are relative to `scenarios/`; the `stack` f
 | Files | Reason excluded from `stack` |
 | --- | --- |
 | `bench/test_fanout.py`, `bench/test_multisession.py`, `bench/test_render.py`, `bench/test_startup.py`, `bench/test_typed_vs_bash.py` | `F` measurements/instrumentation require a quiet runner and explicit baseline; hosted CI reports bench as not run. `test_multisession.py` carries the merged latency-probe calibration and readiness assertions, unexecuted |
+| `bench/test_throttled_pty.py` | Synthetic PTY backpressure measurement, run serially on a quiet runner. Driver and calibration behavior are tested by `make check-integration`. |
 | `tui/test_exit_evidence.py` | Synthetic real-tmux abort/timeout evidence proof, explicit developer run (`pytest scenarios/tui/test_exit_evidence.py -m tui`); no Pi or stack installation. Not a D/E product scenario. Unit artifact/byte-preservation regressions run in `make check-integration`. |
 | `candidate/test_core_compaction.py` | Candidate-core child compaction needs the built `forks/pi` Gitlink, not an installed stack; runs only in the `core (forks/pi)` job of `.github/workflows/forks.yml` (`pytest tests/integration/scenarios/candidate/test_core_compaction.py`), never in `stack` or `make check-integration` |
 | `live/test_live.py` | `G` requires explicit credentials and opt-in; never CI |
