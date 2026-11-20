@@ -974,7 +974,7 @@ Child transcripts record tier outcome and fallback entries, not a separate selec
 
 The `discloses … across model-tier surfaces` cases in `tests/model-selection-paths.test.ts` exercise live tool and renderer output with a stubbed child. The settings assertions use `explainModel`, not the menu; the menu has no per-call override.
 
-For all five cases, the inventory records these shared decisions rather than repeating them in the table:
+These decisions apply to every column of the table unless a cell says otherwise, so the table does not repeat them:
 
 - Foreground-to-background handoff (`backgroundResult`): Same `backgroundResult` as background start; handoff adds no model logic.
 - Notification view (`ui/notification-view.ts`, notice details): Projects the same tier marker as the fleet; notice text is tested separately.
@@ -995,7 +995,7 @@ For all five cases, the inventory records these shared decisions rather than rep
 | Expanded `Agent` result row (`ui/agent-row.ts`, `detailBaseFor`) | decision: Uses the tested tier note from record or result details. | decision: Uses the tested tier note from record or result details. | decision: Uses the tested tier note from record or result details. | decision: Shows model label, not shadowed configuration. | decision: Shows model label, not a literal identity note. |
 | Fresh nested `Agent` inline completion and failure (`formatRecord`) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
 | Top-level `get_subagent_result` and evicted/reaped result (`describeEvicted`) | decision: Reads retained tier/fallback only; shares the tested tier text. | decision: Reads retained tier/fallback only; shares the tested tier text. | decision: Reads retained tier/fallback only; shares the tested tier text. | decision: Does not replay what the original call overrode. | decision: Does not add a literal identity note. |
-| Quota-blocked/not-started (top-level refusal and manager startup throw) | tested: `leads the refusal with the unmapped tier note` | tested: `releases the concurrency slot on tier refusal before starting another child` (exhausted mapped tier at manager startup) | tested: `leads the refusal with the unavailable tier note` | decision: Refusal reports the blocker, not a shadowed definition. | decision: No child ran, so no literal identity claim. |
+| Quota-blocked/not-started (top-level refusal and manager startup throw) | tested: `leads the refusal with the unmapped tier note` | tested: `releases the concurrency slot on tier refusal before starting another child` (exhausted mapped tier at manager startup) | tested at the top-level refusal only: `leads the refusal with the unavailable tier note` (the manager startup throw is tested for the exhausted mapped tier, not for unavailable) | decision: Refusal reports the blocker, not a shadowed definition. | decision: No child ran, so no literal identity claim. |
 | Settings (`explainModel`, used by **Explain model**) | tested: `discloses unmapped across model-tier surfaces` | tested: `discloses mapped across model-tier surfaces` | tested: `discloses unavailable across model-tier surfaces` | tested: `discloses wildcard across model-tier surfaces` | tested: `discloses explicit parameter across model-tier surfaces` |
 
 Precedence edges:

@@ -593,6 +593,9 @@ function renderFleetRow(record: AgentRecord, showModel: boolean): string | undef
 	return rows.find((line) => line.includes(record.description));
 }
 
+/** The wording shared by every shadow note; negative assertions use it so a wording change cannot pass vacuously. */
+const SHADOW_FRAGMENT = "overrides definition model";
+
 const disclosures = [
 	{
 		name: "unmapped",
@@ -661,8 +664,10 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 			);
 	const expectResult = (text: string, status: string) => {
 		expect(text).toContain(`${sample.note}\n\n${status}`);
-		if (sample.shadow) expect(text).toContain(sample.shadow);
-		else expect(text).not.toContain("overrides definition model");
+		if (sample.shadow) {
+			expect(sample.shadow).toContain(SHADOW_FRAGMENT);
+			expect(text).toContain(sample.shadow);
+		} else expect(text).not.toContain(SHADOW_FRAGMENT);
 	};
 
 	const start = await run("background", true);
@@ -673,7 +678,7 @@ it.each(disclosures)("discloses $name across model-tier surfaces", async (sample
 		.mocked(boot.pi.sendMessage)
 		.mock.calls.find(([message]: [{ customType: string }]) => message.customType === "subagent-notification");
 	expect(notice?.[0].content).toContain(`<model-note>${sample.note.replace("->", "-&gt;")}</model-note>`);
-	expect(notice?.[0].content).not.toContain("overrides definition model");
+	expect(notice?.[0].content).not.toContain(SHADOW_FRAGMENT);
 
 	const transcript = /^Output file: (.+)$/m.exec(start.content[0].text)?.[1];
 	if (!transcript) throw new Error("Agent start did not report a transcript");
