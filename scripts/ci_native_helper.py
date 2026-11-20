@@ -33,8 +33,7 @@ def stage(executable: Path, artifact_dir: Path, source_sha: str) -> None:
     if executable.exists():
         staged = artifact_dir / EXE_NAME
         shutil.copyfile(executable, staged)
-        with staged.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        digest = hashlib.sha256(staged.read_bytes()).hexdigest()
         (artifact_dir / "SHA256SUMS").write_bytes(f"{digest}  {EXE_NAME}\r\n".encode("ascii"))
         executable_status = "PRESENT"
 
