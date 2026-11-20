@@ -1,0 +1,33 @@
+name: Publish coverage
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    name: Publish PR coverage
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: coverage-comment-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # workflow_run's github.sha is on the default branch, not the triggering run's head.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate and publish coverage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/coverage_publish.py
