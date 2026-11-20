@@ -132,6 +132,15 @@ background agent is armed. It asks the parent to run `todo list` and reconcile a
 A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
 
+When a parent works without any todos, the next completed settle nudges it after
+`emptyAfterToolCalls` calls (default 10) or one successful `Agent` call. The hidden
+`rpiv-todo-empty-reminder` asks it to track remaining multi-step work, not to make up
+tasks after a simple request. Pure conversation, child agents and Plan mode never
+trigger it. Any `todo` call resets the work count. The nudge requires fresh tool work,
+a new human prompt after the last nudge, and `emptyReminderCooldownSettles` completed
+settles outside Plan mode (default 10) between nudges. On resume or `/reload`, a
+restored nudge waits for new human input and starts a fresh cooldown.
+
 ### Session switches and survivors
 
 `/new`, `/resume`, `/fork` and `/reload` are not process restarts: pi-subagents detaches background
@@ -174,6 +183,8 @@ Optional. Create `~/.config/rpiv-todo/config.json` (or
 | `maxWidgetLines` | Content rows the overlay may use, heading included. Minimum `3`. Applies on the next repaint. Pi's tool-output expansion mode shows all tasks. | `12` |
 | `collapseKey` | Key that collapses and expands the panel, in Pi keybinding form (`alt+o`, `ctrl+shift+t`). Set `"off"` to register no shortcut. Needs `/reload` to rebind. | `"ctrl+shift+t"` |
 | `collapseOnResume` | Start the panel collapsed when a session is resumed. Set `false` to keep it expanded. Read at each session start. | `true` |
+| `emptyAfterToolCalls` | Tool calls before nudging an empty list. A successful `Agent` call bypasses the count. Set `0` to disable both triggers. | `10` |
+| `emptyReminderCooldownSettles` | Completed settles between empty-list nudges. Minimum `1`. | `10` |
 | `guidance` | Replaces the built-in instructions the extension gives the model about when and how to use the todo list. Needs `/reload`. | _(built-ins)_ |
 
 A missing or malformed file falls back to these defaults. `pi-todo` only reads
@@ -658,6 +669,13 @@ Examples: `alt+o`, `ctrl+shift+t`, `super+alt+f5`.
   run `/reload` to rebind; until you do, the old key stays active even though the
   collapsed panel's hint text (which is resolved per render) already shows the
   new one.
+
+### Empty-list reminders
+
+`emptyAfterToolCalls` and `emptyReminderCooldownSettles` both default to `10`.
+The tool count accepts nonnegative safe integers (`0` disables the reminder);
+the settle cooldown accepts positive safe integers. Invalid values fall back to
+the respective default. Run `/reload` after editing these options.
 
 ### Guidance
 

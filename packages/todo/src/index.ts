@@ -207,6 +207,13 @@ export default function (
 	};
 	// session-kit monitor lifecycle -> whether a wake is armed at a settle. Carries its own session id.
 	for (const channel of MONITOR_LIFECYCLE_EVENTS) pi.events.on(channel, (data) => applyMonitorEvent(channel, data));
+	// Reads getTodos() at render time; do NOT call replayFromBranch here
+	// (branch is stale -- message_end runs after tool_execution_end).
+	pi.on("tool_execution_end", async (event) => {
+		if (event.toolName !== TOOL_NAME || event.isError) return;
+		// The tool itself succeeded, so a transient overlay-load failure is not an extension error.
+		await refreshTodoOverlay();
+	});
 	const planHooks = registerPlanHooks(
 		pi,
 		async (sessionId) => {
@@ -283,7 +290,7 @@ export default function (
 		// session started here lands now.
 		// Only a process restart provably kills every child; /new, /resume, /fork and /reload
 		// detach live agents that pi-subagents re-announces below.
-		await planHooks.sessionStarted(id, event.reason === "startup");
+		await planHooks.sessionStarted(id, event.reason === "startup", ctx.sessionManager.getBranch());
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
 		if (!ctx.hasUI) {
@@ -358,14 +365,6 @@ export default function (
 				clearActiveRenderSession();
 			}
 		}
-	});
-
-	// Reads getTodos() at render time; do NOT call replayFromBranch here
-	// (branch is stale — message_end runs after tool_execution_end).
-	pi.on("tool_execution_end", async (event) => {
-		if (event.toolName !== TOOL_NAME || event.isError) return;
-		// The tool itself succeeded, so a transient overlay-load failure is not an extension error.
-		await refreshTodoOverlay();
 	});
 
 	// Evaluate the lazy graph after startup while Pi's boot-time dependency paths
