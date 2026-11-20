@@ -77,6 +77,11 @@ make help                    # every target
   The regex counts comments and strings as well as code (including aliased imports), but misses
   computed spellings assembled from fragments. Use `makeTestTempDir(prefix, onTestFinished)` from
   `@nredd/pi-test-lib/temp-dir` for scratch paths that should live until a test finishes.
+  It defaults to OS temp. For fixtures that must live under an existing directory, pass
+  `makeTestTempDir(prefix, onTestFinished, { baseDir })` with a prefix relative to `baseDir`.
+  Plan Mode build fixtures use the real package root only for its builder output path checks or
+  workspace module resolution. Standalone validation and self-contained builders use OS temp.
+  A killed run can leave in-package fixtures behind: they are outside the launcher's temp sandbox.
   `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
   (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
   the merge base is allowed for its initial introduction only.
