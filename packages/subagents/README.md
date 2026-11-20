@@ -528,11 +528,13 @@ allowed_subagents: code-reviewer, Explore
 ```
 
 The parameterless tool binds the caller internally and returns JSON metadata for its root
-orchestrator, itself, and its immediate siblings and direct children whose enabled types pass
-its effective `allowed_subagents` list. Top-level agents share the root orchestrator as their
-parent. Nested agents share only the parent run that spawned them, not cousins or descendants
-of their siblings. A missing, settled, or replaced parent run makes a nested caller's roster
-unavailable. No other root, process, user, payload, transcript or result is queried.
+orchestrator and the caller itself. Immediate siblings and direct children appear only if their
+enabled types pass the caller's effective `allowed_subagents` list. Standalone top-level agents
+are siblings only of other standalone top-level agents; parentless workflow workers are siblings
+only within the same workflow run. Nested agents share only the parent run that spawned them,
+not cousins or descendants of their siblings. A missing, settled, or replaced parent run makes a
+nested caller's roster unavailable. No other root, process, user, payload, transcript or result is
+queried.
 Entries contain `id`, opaque `run` (renewed on resume), `handle` (type label for unnamed nested
 children), `type`, `status` (`queued`, `running`, `finished`, `error`), and `assignment`.
 Discovery still works at the nesting depth cap; it grants no delegation, sibling steering,

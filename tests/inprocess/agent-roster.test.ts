@@ -2,18 +2,25 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { outcomes, settled, text, toolCall, toolCalls } from "@nredd/pi-test-lib/faux";
 import { createHarness, createTestUiContext, type Harness } from "@nredd/pi-test-lib/harness";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import planMode from "../../packages/plan-mode/src/plan-mode.ts";
+import { AgentManager } from "../../packages/subagents/src/agent-manager.ts";
 import type { RootAuditEvent, RosterEntry } from "../../packages/subagents/src/agent-roster.ts";
 import { createSubagentsExtension } from "../../packages/subagents/src/index.ts";
 import { PLAN_MODE_STATE_QUERY } from "../../packages/subagents/src/plan-mode-children.ts";
 import type { AgentRecord } from "../../packages/subagents/src/types.ts";
+import { createWorkflowHost } from "../../packages/subagents/src/workflow/host.ts";
+import { workflowRunId } from "../../packages/subagents/src/workflow/task.ts";
 import { answer, ScenarioSession, spawn } from "../../packages/subagents/tests/fixtures/scenario-session.ts";
 
 let fixture: ScenarioSession;
-afterEach(async () => fixture?.dispose());
+afterEach(async () => {
+	vi.restoreAllMocks();
+	await fixture?.dispose();
+});
 
 function required<T>(value: T | undefined): T {
 	assert.ok(value !== undefined);
@@ -165,6 +172,7 @@ it("keeps depth-2 discovery without re-enabling delegation, and filters effectiv
 		toolCalls(spawn("outer", { subagent_type: "viewer", model: "outer/model", run_in_background: false })),
 		answer("parent done"),
 	]);
+	const spawnAndWait = vi.spyOn(AgentManager.prototype, "spawnAndWait");
 	await h.session.prompt("nested discovery");
 	const spawned = records(h);
 	const peer = required(spawned[0]);
@@ -173,18 +181,98 @@ it("keeps depth-2 discovery without re-enabling delegation, and filters effectiv
 	const rows = JSON.parse(required(result.split("\n").find((line) => line.startsWith('{"agents":'))))
 		.agents as RosterEntry[];
 	expect(rows.map((r) => r.type)).toEqual(["orchestrator", "worker"]);
-	const nested = required(rows[1]);
-	expect(nested.id).not.toBe(peer.id);
+	const nestedCall = spawnAndWait.mock.calls.findIndex((call) => call[4].parentAgentId === outer.id);
+	const { record: nested } = await required(spawnAndWait.mock.results[nestedCall]).value;
+	const root = `root:${h.session.sessionManager.getSessionId()}`;
+	expect(rows.map((row) => row.id)).toEqual([root, nested.id]);
 	expect(result).toMatch(/Tool Agent (not found|is not available)/);
-	expect(
-		rosterResult(outer)
-			.agents.slice(1)
-			.map((row) => row.id),
-	).toEqual([outer.id, peer.id, nested.id]);
+	expect(rosterResult(outer).agents.map((row) => row.id)).toEqual([root, outer.id, peer.id, nested.id]);
 	expect(await inspect("audit")).toMatchObject([
-		{ caller: rows[1]?.id, run: rows[1]?.run, data: { count: 2 } },
+		{ caller: nested.id, run: nested.runId, data: { count: 2 } },
 		{ caller: outer.id, run: outer.runId, data: { count: 4 } },
 	]);
+});
+
+it("isolates standalone agents from workflow runs and refreshes workflow sibling discovery on every read", async () => {
+	fixture = new ScenarioSession({ outputTranscript: false });
+	agent("viewer");
+	agent("worker");
+	fixture.physical("solo", "model", [toolCall("list_agents", {}), answer("viewer done")]);
+	fixture.physical("peer", "model", [answer("other run done"), answer("same run sibling done")]);
+	let context: ExtensionContext | undefined;
+	const h = await fixture.start({
+		factories: [
+			(pi) => {
+				pi.on("session_start", (_event, ctx) => {
+					context = ctx;
+				});
+			},
+		],
+	});
+	const inspect = await observeCommands(h);
+	const ctx = required(context);
+	const rootId = ctx.sessionManager.getSessionId();
+	const root = `root:${rootId}`;
+	// Capture the extension's real manager without replacing its spawn or roster paths.
+	const listAgents = vi.spyOn(AgentManager.prototype, "listAgents");
+	await inspect("roster");
+	const manager = listAgents.mock.contexts[0];
+	listAgents.mockRestore();
+	assert.ok(manager instanceof AgentManager);
+	const host = () =>
+		createWorkflowHost({
+			pi: required(fixture.pi),
+			ctx,
+			manager,
+			homeDir: fixture.root,
+			rootSessionId: rootId,
+			workflowId: workflowRunId(),
+		});
+	const first = host();
+	const second = host();
+	const worker = async (owner: ReturnType<typeof host>, index: number, label: string, model: string) => {
+		let id: string | undefined;
+		const result = await owner.spawnAgent({
+			index,
+			agentId: label,
+			agentType: "worker",
+			label,
+			model,
+			prompt: label,
+			onResolved: ({ recordId }) => {
+				if (recordId !== undefined) id = recordId;
+			},
+		});
+		assert.ok(result.ok, result.error ?? `Workflow worker ${label} failed`);
+		return required(id);
+	};
+	let sibling: string | undefined;
+	fixture.physical("workflow", "model", [
+		toolCall("list_agents", {}),
+		async () => {
+			sibling = await worker(first, 1, "late sibling", "peer/model");
+			return toolCall("list_agents", {});
+		},
+		answer("workflow caller done"),
+	]);
+	const other = await worker(second, 0, "other workflow private", "peer/model");
+	h.setResponses([
+		toolCalls(spawn("solo", { subagent_type: "viewer", model: "solo/model", run_in_background: false })),
+		answer("root done"),
+	]);
+	await h.session.prompt("standalone discovery");
+	const solo = required(records(h)[0]);
+	const caller = await worker(first, 0, "workflow caller", "workflow/model");
+	expect.soft(rosterResult(solo).agents.map((row) => row.id)).toEqual([root, solo.id]);
+	const reads = required(required(manager.getRecord(caller)).session)
+		.messages.filter((m) => m.role === "toolResult" && m.toolName === "list_agents")
+		.map((m) => (JSON.parse(text(m)).agents as RosterEntry[]).map((row) => row.id));
+	expect(reads).toEqual([
+		[root, caller],
+		[root, caller, required(sibling)],
+	]);
+	const parentRows = (await inspect("roster")).agents as RosterEntry[];
+	expect(parentRows.map((row) => row.id).sort()).toEqual([root, other, solo.id, caller, required(sibling)].sort());
 });
 
 it("default-off, allowlist and explicit deny remove the tool rather than merely hiding its schema", async () => {

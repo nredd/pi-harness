@@ -107,14 +107,17 @@ export class AgentRoster {
 				throw new Error("Agent roster unavailable: caller has no active immediate parent run.");
 			}
 		}
-		// Top-level children (no parent record) share the root orchestrator as their parent.
+		// A workflow id identifies one run, not the workflow definition. Parentless
+		// records share a sibling group only within that run (or outside workflows).
 		return this.read(
 			caller.rosterRootId,
 			caller.id,
 			caller.runId,
 			(record) =>
 				allowed.has(record.type) &&
-				((record.parentAgentId === caller.parentAgentId && record.rosterParentRunId === caller.rosterParentRunId) ||
+				((record.parentAgentId === caller.parentAgentId &&
+					record.rosterParentRunId === caller.rosterParentRunId &&
+					(caller.parentAgentId !== undefined || record.workflowId === caller.workflowId)) ||
 					(record.parentAgentId === caller.id && record.rosterParentRunId === caller.runId)),
 		);
 	}
