@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import { normalizePlanModeSettings } from "../src/settings.ts";
 import { findBlockedCommandSegment, isSafeCommand, isSafePowerShellCommand } from "../src/tool-policy.ts";
@@ -232,7 +233,7 @@ test("trustedDirectories are validated and applied from the global settings in t
 		assert.equal(normalizePlanModeSettings({ trustedDirectories: invalid }), undefined, JSON.stringify(invalid));
 	}
 
-	const agentDir = await mkdtemp(join(tmpdir(), "pi-plan-mode-trusted-"));
+	const agentDir = makeTestTempDir("pi-plan-mode-trusted-", onTestFinished);
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
@@ -255,6 +256,5 @@ test("trustedDirectories are validated and applied from the global settings in t
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
-		await rm(agentDir, { recursive: true, force: true });
 	}
 });

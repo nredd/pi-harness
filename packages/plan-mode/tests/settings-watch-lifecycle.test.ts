@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test, vi } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import * as settings from "../src/settings.ts";
 import { createPlanContext, createPlanPi } from "./fixtures/support.ts";
@@ -25,7 +25,7 @@ vi.mock("node:fs", async (original) => ({
 
 /** Exercise the real debounce and error callbacks with an explicitly ready watch boundary. */
 test("watch bursts cancel older reloads and watcher errors cancel pending work", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "plan-watch-lifecycle-"));
+	const directory = makeTestTempDir("plan-watch-lifecycle-", onTestFinished);
 	const settingsPath = join(directory, "settings.json");
 	const watcher = new EventEmitter();
 	let closed = 0;
@@ -75,17 +75,17 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
 		await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
 		assert.equal(closed, 1, "shutdown must not close an already stopped watcher twice");
 	} finally {
+		await Promise.allSettled(reads);
 		vi.useRealTimers();
 		readSpy.mockRestore();
 		watchFixture.callback = undefined;
 		watchFixture.watcher = undefined;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
 /** Directory watchers also report sibling files and, on some platforms, no file name at all. */
 test("watch events for other files or without a file name never reload settings", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "plan-watch-siblings-"));
+	const directory = makeTestTempDir("plan-watch-siblings-", onTestFinished);
 	const settingsPath = join(directory, "settings.json");
 	watchFixture.watcher = Object.assign(new EventEmitter(), { close: () => undefined });
 	const readSpy = vi.spyOn(settings, "readPlanModeSettings");
@@ -109,10 +109,11 @@ test("watch events for other files or without a file name never reload settings"
 		await vi.advanceTimersByTimeAsync(expectedDebounceWindowMs);
 		assert.equal(readSpy.mock.calls.length, startupReads + 1, "an event for the settings file still reloads");
 	} finally {
+		// The debounce callback starts an async read without awaiting it.
+		await Promise.allSettled(readSpy.mock.results.map(({ value }) => value));
 		vi.useRealTimers();
 		readSpy.mockRestore();
 		watchFixture.callback = undefined;
 		watchFixture.watcher = undefined;
-		await rm(directory, { recursive: true, force: true });
 	}
 });

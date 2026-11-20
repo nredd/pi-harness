@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import { readPlanModeSettings } from "../src/settings.ts";
 import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./fixtures/support.ts";
@@ -215,28 +215,24 @@ test("Plan Settings uses live active tools registered after session start", asyn
 });
 
 test("persisted Settings become the baseline for the next Plan workflow", async () => {
-	const agentDir = await mkdtemp(join(tmpdir(), "pi-plan-mode-launch-settings-"));
+	const agentDir = makeTestTempDir("pi-plan-mode-launch-settings-", onTestFinished);
 	const settingsPath = join(agentDir, "pi-plan-mode.json");
-	try {
-		await writeFile(settingsPath, '{"thinkingLevel":"off"}\n');
-		const mock = createPlanPi({
-			activeTools: STABLE_TOOLS,
-			allTools: [builtinTool("read"), builtinTool("write")],
-			thinkingLevel: "low",
-		});
-		planMode(mock.pi, {
-			readSettings: () => readPlanModeSettings(settingsPath),
-			settingsPath,
-		});
-		const context = createPlanContext();
-		await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
+	await writeFile(settingsPath, '{"thinkingLevel":"off"}\n');
+	const mock = createPlanPi({
+		activeTools: STABLE_TOOLS,
+		allTools: [builtinTool("read"), builtinTool("write")],
+		thinkingLevel: "low",
+	});
+	planMode(mock.pi, {
+		readSettings: () => readPlanModeSettings(settingsPath),
+		settingsPath,
+	});
+	const context = createPlanContext();
+	await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
 
-		assert.equal(mock.thinkingLevel, "low", "loading defaults must not apply a workflow yet");
-		await mock.commands.get("plan")?.handler("start", context.ctx);
-		assert.equal(mock.thinkingLevel, "off");
-	} finally {
-		await rm(agentDir, { recursive: true, force: true });
-	}
+	assert.equal(mock.thinkingLevel, "low", "loading defaults must not apply a workflow yet");
+	await mock.commands.get("plan")?.handler("start", context.ctx);
+	assert.equal(mock.thinkingLevel, "off");
 });
 
 test("the launch menu starts Plan mode only after explicit confirmation", async () => {

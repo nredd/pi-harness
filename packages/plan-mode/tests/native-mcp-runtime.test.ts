@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
@@ -15,13 +14,14 @@ import {
 	SettingsManager,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { packagePath } from "./fixtures/package-path.ts";
 
 const fauxSpecifier = "@earendil-works/pi-ai/providers/faux";
 
 test("native MCP calls use Plan's opt-in policy through the real nested tool pipeline", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-plan-native-mcp-"));
+	const root = makeTestTempDir("pi-plan-native-mcp-", onTestFinished);
 	const agentDir = join(root, "agent");
 	const callLog = join(root, "calls.log");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -180,7 +180,6 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
 			session?.dispose();
 			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-			await rm(root, { recursive: true, force: true });
 		}
 	}
 });

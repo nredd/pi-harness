@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./fixtures/support.ts";
 
@@ -250,7 +250,7 @@ test("session reload removes stale or invalid safe subcommand policy", async () 
 });
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>) {
-	const agentDir = await mkdtemp(join(tmpdir(), "pi-plan-mode-safe-subcommands-"));
+	const agentDir = makeTestTempDir("pi-plan-mode-safe-subcommands-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
@@ -258,6 +258,5 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>) {
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(agentDir, { recursive: true, force: true });
 	}
 }

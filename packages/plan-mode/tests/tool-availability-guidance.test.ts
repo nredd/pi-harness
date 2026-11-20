@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { showPlanLaunchMenu } from "../src/plan-launch-menu.ts";
 import planMode from "../src/plan-mode.ts";
 import { showPlanModeSettings } from "../src/settings-menu.ts";
@@ -84,7 +84,7 @@ test("active tools stay selectable and inactive custom overrides do not get buil
 });
 
 test("Settings guidance is bounded, sanitized, and display-only with remapped keys", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-guidance-"));
+	const directory = makeTestTempDir("pi-plan-guidance-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const styles: { role: string; text: string }[] = [];
@@ -142,7 +142,6 @@ test("Settings guidance is bounded, sanitized, and display-only with remapped ke
 		tui.dispose();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 	const display = frames.join("\n");
 	assert.match(display, /grep — inactive in Pi/);
@@ -212,7 +211,7 @@ test("launch picker sanitizes metadata before search while retaining colliding r
 
 for (const route of ["settings", "tools"]) {
 	test(`RPC /plan ${route} distinguishes active, inactive, blocked, and pending without activation`, async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-plan-guidance-rpc-"));
+		const directory = makeTestTempDir("pi-plan-guidance-rpc-", onTestFinished);
 		const settingsPath = join(directory, "pi-plan-mode.json");
 		const retained = ["grep", "custom", "pending\u001b[31m"];
 		const original = JSON.stringify({ defaultPlanTools: retained, unknown: { keep: true } });
@@ -248,7 +247,6 @@ for (const route of ["settings", "tools"]) {
 			assert.equal(await readFile(settingsPath, "utf8"), original);
 		} finally {
 			await mock.handlers.get("session_shutdown")?.[0]?.({}, context.ctx);
-			await rm(directory, { recursive: true, force: true });
 		}
 	});
 }
