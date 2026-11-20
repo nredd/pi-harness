@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from typing import TYPE_CHECKING
 
 import pytest
@@ -31,6 +32,12 @@ def test_throttled_pty_fleet(sandbox: Sandbox, template_home: Path) -> None:
     LOGGER.info(f"Synthetic PTY calibration: {json.dumps(result['calibration'])}")
     for count in (1, 4, 8):
         for cap in (None, AGGREGATE_CAP):
-            result["cells"].append(run_cell(sandbox.root / f"pty-{count}-{cap}", template_home, count, cap))
+            cell = run_cell(sandbox.root / f"pty-{count}-{cap}", template_home, count, cap)
+            result["cells"].append(cell)
             out.write_text(json.dumps(result, indent=2))
+            if cell.get("status") == "NOT RUN":
+                warnings.warn(
+                    pytest.PytestWarning(f"Capped eight-child latency NOT RUN: {cell.get('reason')}"),
+                    stacklevel=1,
+                )
     LOGGER.info(f"Synthetic PTY observations: '{out}'\n{json.dumps(result)}")

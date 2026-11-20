@@ -30,6 +30,9 @@ LOGGER = logging.getLogger(__name__)
 AGGREGATE_CAP = 65536
 WINDOW_S = 6.0
 KEY_INTERVAL_S = 0.15
+COVERAGE_TOLERANCE_MS = 1000
+ROUNDING_TOLERANCE_MS = 2
+MIN_PAINT_SAMPLES = 4
 WRITER = dedent("""\
     import json, os, sys, time
     out = sys.argv[1]
@@ -213,16 +216,16 @@ def probe_metrics(outs: list[Path], since_ms: float, until_ms: float) -> ProbeMe
                 not math.isfinite(r["window_s"]) or r["window_s"] <= 0 or not math.isfinite(r["t"])
                 for r in windows
             )
-            or windows[0]["t"] - windows[0]["window_s"] * 1000 > since_ms + 1000
-            or windows[-1]["t"] < until_ms - 1000
+            or windows[0]["t"] - windows[0]["window_s"] * 1000 > since_ms + COVERAGE_TOLERANCE_MS
+            or windows[-1]["t"] < until_ms - COVERAGE_TOLERANCE_MS
             or any(
-                abs(right["t"] - right["window_s"] * 1000 - left["t"]) > 2
+                abs(right["t"] - right["window_s"] * 1000 - left["t"]) > ROUNDING_TOLERANCE_MS
                 for left, right in pairwise(windows)
             )
         ):
             raise MissingMeasuredWindows("Missing measured latency windows")
         reading = summarize(windows)
-        if reading.bytes_per_s <= 0 or len(reading.input_to_paint_ms) < 4:
+        if reading.bytes_per_s <= 0 or len(reading.input_to_paint_ms) < MIN_PAINT_SAMPLES:
             raise RuntimeError("Missing measured terminal writes or input-to-paint samples")
         readings.append(reading)
         starts.append(records[0])
@@ -300,7 +303,6 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
         }
         observations: RawCell = {**delivered, "raw_probes": [read_records(out) for out in outs]}
         report = root / "throttled-pty.json"
-        report.write_text(json.dumps(observations, indent=2))
         try:
             if not all(delivery.delivered):
                 raise RuntimeError("A measured PTY delivered no output")
@@ -309,10 +311,10 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
             observations["failure"] = str(error)
             if count == 8 and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
                 observations["status"] = "NOT RUN"
-                report.write_text(json.dumps(observations, indent=2))
                 LOGGER.warning(f"Capped eight-child latency NOT RUN: {error}; raw observations at '{report}'")
                 return {**delivered, "status": "NOT RUN", "reason": str(error)}
-            report.write_text(json.dumps(observations, indent=2))
-            LOGGER.error(f"Refused synthetic PTY observations: {json.dumps(observations)}")
+            LOGGER.error(f"Refused synthetic PTY observations: {error}; raw observations at '{report}'")
             raise
+        finally:
+            report.write_text(json.dumps(observations, indent=2))
     return {**delivered, "probe": metrics}

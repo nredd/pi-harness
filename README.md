@@ -565,8 +565,9 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   it does not replace or relax any existing performance ceiling.
 - A synthetic Node/Pi trial on macOS completed both 1/4-child conditions and the uncapped
   8-child condition. Capped eight-child latency is `NOT RUN`: the attempt delivered output but
-  lacked measured probe windows. The suite report records the reason and throughput, with no
-  latency metrics, not even zeros. Raw records remain in the cell's `throttled-pty.json`.
+  lacked measured probe windows. Pytest warns without failing this cell, and the suite report
+  records the reason and throughput with no latency metrics, not even zeros. Raw records remain
+  in the cell's `throttled-pty.json`.
   #1096 tracks the complete eight-child measurement without raising the aggregate cap.
 - Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
   baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider

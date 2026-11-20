@@ -11,14 +11,17 @@ import sys
 import time
 from pathlib import Path
 from textwrap import dedent
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from harness import pty_bench
 from harness.pty_bench import calibrate, probe_metrics, run_cell
-from harness.pty_driver import Child, Drain
+from harness.pty_driver import Child, Drain, PtyFleet
 from harness.sandbox import build_sandbox
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def records() -> list[dict[str, Any]]:
@@ -284,19 +287,37 @@ def test_real_writer_stalling_after_initial_progress_is_refused(
     """An alive writer can supply valid output and then hang; that is not calibration."""
     writer = dedent("""\
         import json, os, sys, time
-        started = time.monotonic()
-        maximum = 0.0
-        writes = 0
-        while time.monotonic() - started < 1.2:
-            before = time.monotonic()
-            os.write(1, b'x' * 4096)
-            maximum = max(maximum, (time.monotonic() - before) * 1000)
-            writes += 1
-            with open(sys.argv[1], 'w') as out:
-                json.dump({'writes': writes, 'max_write_ms': maximum,
-                           'last_write_s': time.monotonic()}, out)
+        before = time.monotonic()
+        os.write(1, b'x')
+        finished = time.monotonic()
+        pending = sys.argv[1] + '.pending'
+        with open(pending, 'w') as out:
+            json.dump({'writes': 1, 'max_write_ms': (finished - before) * 1000,
+                       'last_write_s': finished}, out)
+        os.replace(pending, sys.argv[1])
         time.sleep(30)
         """)
+
+    class ReadyFleet(PtyFleet):
+        """Wait for the real writer's last heartbeat before starting calibration."""
+
+        def drain(
+            self,
+            duration_s: float,
+            *,
+            bytes_per_s: float | None = None,
+            tick: Callable[[PtyFleet], None] | None = None,
+        ) -> Drain:
+            # Wait without consuming the first byte: calibration must see real delivery.
+            report = tmp_path / f"writer-{bytes_per_s}.json"
+            deadline = time.monotonic() + 5
+            while not report.is_file():
+                if time.monotonic() >= deadline:
+                    pytest.fail("Stall fixture did not publish its heartbeat")
+                time.sleep(0.01)
+            return super().drain(duration_s, bytes_per_s=bytes_per_s, tick=tick)
+
     monkeypatch.setattr(pty_bench, "WRITER", writer)
+    monkeypatch.setattr(pty_bench, "PtyFleet", ReadyFleet)
     with pytest.raises(RuntimeError, match="writer stalled"):
         calibrate(tmp_path)

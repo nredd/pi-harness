@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from harness import pty_driver
-from harness.pty_driver import Child, PtyFleet
+from harness.pty_driver import CHUNK, Child, PtyFleet
 
 
 def child(tmp_path: Path, code: str) -> Child:
@@ -28,11 +28,13 @@ def test_aggregate_cap_and_fairness(tmp_path: Path) -> None:
     """One aggregate budget, not a separate budget for each child."""
     spec = child(tmp_path, "import os\nwhile True: os.write(1, b'x'*4096)")
     with PtyFleet([spec] * 4) as fleet:
-        sample = fleet.drain(0.4, bytes_per_s=16000)
+        fleet.wait_for(b"x", timeout_s=5)
+        sample = fleet.drain(1.0, bytes_per_s=16000)
         assert 0 < sum(sample.delivered) <= sample.elapsed_s * 16000 + 1
         assert all(count > 0 for count in sample.delivered)
         assert sample.bytes_per_s > 0
-        assert max(sample.delivered) - min(sample.delivered) <= 1024
+        # Allow for a partial rotation and short PTY reads.
+        assert max(sample.delivered) - min(sample.delivered) <= 2 * CHUNK
     assert all(proc.poll() is not None for proc in fleet.children)
     for fd in fleet.masters:
         with pytest.raises(OSError, match="Bad file descriptor"):
