@@ -186,7 +186,7 @@ import {
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
 import { savedAgentNote } from "./saved-agent-record.ts";
-import { checkSavedChild } from "./saved-child-session.ts";
+import { checkSavedChild, sameSavedChild } from "./saved-child-session.ts";
 import { SubagentScheduler } from "./schedule.ts";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
@@ -1462,24 +1462,23 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		}
 	}
 
-	function checkSavedSession(ctx: ExtensionContext, note: EvictedNote, file: string) {
+	function savedSessionChecker(ctx: ExtensionContext) {
 		const home = options.homeDir;
 		const agentDir = resolveAgentDir(home);
 		const settings = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: isProjectTrusted() });
-		return checkSavedChild(
-			file,
-			childSessionDir(
-				getAgentConfig(note.type)?.sessionDir,
-				process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.(),
-				note.sessionCwd ?? ctx.cwd,
-				agentDir,
-				home,
-			),
-			ctx.sessionManager.getSessionFile(),
-			note.status,
-			clock.now(),
-			note.sessionCwd,
-		);
+		const setting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.();
+		const parentFile = ctx.sessionManager.getSessionFile();
+		const directories = new Map<string, string>();
+		return (note: EvictedNote, file: string) => {
+			const cwd = note.sessionCwd ?? ctx.cwd;
+			const key = JSON.stringify([note.type, cwd]);
+			let directory = directories.get(key);
+			if (directory === undefined) {
+				directory = childSessionDir(getAgentConfig(note.type)?.sessionDir, setting, cwd, agentDir, home);
+				directories.set(key, directory);
+			}
+			return checkSavedChild(file, directory, parentFile, note.status, clock.now(), note.sessionCwd);
+		};
 	}
 
 	// Capture ctx from session_start for RPC spawn handler + start the scheduler.
@@ -1555,18 +1554,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				// A successor first appears after its predecessor, on the same transcript.
 				// Never create an edge from an update to an already seen id (or a cycle).
 				const previous = saved.get(note.previousId ?? "");
-				if (previous && note.sessionFile && previous.sessionFile === note.sessionFile && !saved.has(note.id)) {
+				if (previous && !saved.has(note.id) && sameSavedChild(previous.sessionFile, note.sessionFile)) {
 					manager.linkSuccessor(previous.id, note.id);
 				}
 				saved.set(note.id, note);
 			}
 		}
+		let checkSaved: ReturnType<typeof savedSessionChecker> | undefined;
 		for (const note of saved.values()) {
 			if (liveAgentById(note.id) || manager.getEvictedNote(note.id)) continue;
-			const checked =
-				manager.latestId(note.id) === note.id && note.sessionFile
-					? checkSavedSession(ctx, note, note.sessionFile)
-					: undefined;
+			let checked: ReturnType<typeof checkSavedChild> | undefined;
+			if (manager.latestId(note.id) === note.id && note.sessionFile) {
+				checkSaved ??= savedSessionChecker(ctx);
+				checked = checkSaved(note, note.sessionFile);
+			}
 			manager.rememberEvicted({
 				...note,
 				reopenRefusal: checked && "refusal" in checked ? checked.refusal : undefined,
@@ -2291,7 +2292,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
 		const saved = manager.getEvictedNote(entry.id);
 		if (saved?.fromSavedSession) {
-			const checked = checkSavedSession(ctx, saved, saved.sessionFile!);
+			const checked = savedSessionChecker(ctx)(saved, saved.sessionFile!);
 			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
 			entry = { ...entry, sessionFile: checked.file };
 		}

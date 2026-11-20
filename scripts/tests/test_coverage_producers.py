@@ -85,8 +85,8 @@ def assert_bounded_apt(script: str) -> None:
             assert f"-o {option}" in call
 
 
-def test_apt_steps_skip_present_tools_and_are_bounded() -> None:
-    """Assert tmux and fork apt steps skip when installed and carry bounds (#655).
+def test_tmux_apt_steps_skip_present_tools_and_are_bounded() -> None:
+    """Assert tmux apt steps skip when installed and carry bounds (#655).
 
     Parameters:
         None.
@@ -96,21 +96,11 @@ def test_apt_steps_skip_present_tools_and_are_bounded() -> None:
         AssertionError: An apt step can stall for the whole job budget.
     """
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    for name in ("owned-shards", "stack"):
+    for name in ("owned-shards-ubuntu", "stack"):
         step = step_named(ci["jobs"][name]["steps"], "Install tmux (Linux)")
         assert step["timeout-minutes"] == 5
         assert "command -v tmux" in step["run"]
         assert_bounded_apt(step["run"])
-    forks = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
-    deps = next(
-        step
-        for job in forks["jobs"].values()
-        for step in job["steps"]
-        if step.get("name", "").startswith("System dependencies")
-    )
-    assert deps["timeout-minutes"] == 5
-    assert "dpkg -s" in deps["run"]
-    assert_bounded_apt(deps["run"])
 
 
 def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> None:
@@ -242,7 +232,7 @@ def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         OSError: The workflow cannot be read.
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    return jobs["owned-shards"]["steps"], jobs["owned"]["steps"]
+    return jobs["owned-shards-ubuntu"]["steps"], jobs["owned-ubuntu"]["steps"]
 
 
 def step_named(steps: list[dict[str, Any]], prefix: str) -> dict[str, Any]:
@@ -349,7 +339,7 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     assert install_step["with"]["tool"] == "ripgrep@14.1.1,fd-find@10.5.0"
     assert install_step["env"]["BINSTALL_DISABLE_STRATEGIES"] == "compile"
     assert "run" not in install_step
-    apt = (ROOT / "scripts/wsl2_apt.sh").read_text()
+    apt = (ROOT / "scripts/forks_apt.sh").read_text()
     packages = apt.split("packages=(", 1)[1].splitlines()[0].rstrip(")").split()
     assert {"ripgrep", "fd-find"}.issubset(packages)
     assert "rg --version" in owned

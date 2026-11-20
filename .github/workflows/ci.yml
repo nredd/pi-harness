@@ -94,7 +94,7 @@ jobs:
   # - Not a queue-time SLA: five-minute cron delay, running siblings and the three-runs-per-tick limit can extend a wait
   # - Draining: a pool that is draining, or whose runners keep failing to start (three in a row, e.g. a 403 or rate limit on the JIT mint), writes `<epoch>:drain`, and is treated as down by both `classify` (no new cells) and the rescue (it moves a cell queued on it after the usual 5 minutes, without waiting for the beat to go stale), because a queued job on a pool that starts nothing would otherwise wait for the whole drain. The writer announces `drain` the moment it is told to stop, retries a failed write after 5 s, writes nothing before its first successful poll, and stops beating when it cannot read the queue. A draining host never kills a runner younger than 90 s, since the API may not list its job yet. Residual: a run already at its third attempt is not rescued, so a cell queued on a pool that then drains waits out the drain (up to the 50 minute job cap)
   # - `classify` ranks the cells this run executes in full by their measured hosted duration (`CELL_SECONDS`, from the clean `main` run 41914882314; the macOS `check-ts` shards are estimates from run 42799667706, #660) and gives the longest to each pool while it has free slots; the rest stay hosted. A cell is eligible only if it is listed, at least `MIN_HEAVY_S` (240 s) long, not in `HOSTED_ONLY_CELLS` (one shared `_routable` check) and not a bypass or setup-only cell. A self-hosted job pays ~25 s to clone and boot a VM plus a few seconds to register, so shorter cells lose. The table plus `HOSTED_ONLY_CELLS` decide CI cell routing; `native-helper.yml` has its own route job on the same admission. Only `owned shard (macos-14, ts)` and `owned shard (ubuntu-24.04, ts)` had passed on a pool before they were listed; the other macOS cells were enabled on request. The `scripts` shard has a hosted timing (1420 s) but no pool-image pass. It DEPARTS from the original issue scope (route it to the pool) and stays hosted: `make install-owned` verifies core provenance with `GH_TOKEN` and the pool has none. Follow-up: make provenance verification work without a token, then drop `HOSTED_ONLY_CELLS`. Unset or dead beats reproduce the all-hosted plan
-  # - The plan carries the choice: an `owned` shard's `runner` in its matrix entry, and a `contracts` or `stack` cell's top-level `runner`, which `runs-on` reads (`plan[cell].runner || matrix.runner`; a bypass cell stays on `ubuntu-24.04`)
+  # - macOS routing applies only to non-PR events. The plan carries the choice: an `owned` shard's `runner` in its matrix entry, and a `contracts` or `stack` cell's top-level `runner`, which `runs-on` reads (`plan[cell].runner || matrix.runner`; a bypass cell stays on `ubuntu-24.04`)
   # - Kill switch: any non-empty repo variable `PI_POOLS_DISABLED` plans every cell hosted and makes the rescue treat every pool as down. Use it when a pool beats but cannot run jobs
   # - A fork PR never gets a pool: `classify` passes `--no-pools`. This is not the security boundary (a fork edits its own workflow; fork-PR approval for every outside contributor and the ephemeral, network-isolated runners are), it just keeps honest runs honest. The beat variables are readable by fork workflows, which only shows liveness
   #
@@ -113,7 +113,6 @@ jobs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       stack_inputs: ${{ steps.classify.outputs.stack_inputs }}
       plan: ${{ steps.classify.outputs.plan }}
-      owned_shards: ${{ steps.classify.outputs.owned_shards }}
       changed_files: ${{ steps.classify.outputs.changed_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -275,22 +274,22 @@ jobs:
   # outlast the two resamples still report the producer's reason (or leave a lost baseline's entries `warming`). Both source consumers now pin published sampler `0.2.1`, whose names-only `/proc` enumeration removes
   # newer incident's final unavailable collection is established, not its underlying syscall failure.
   #
-  # Hosted Ubuntu apt steps (#655): `Install tmux (Linux)` (both sites) and the `forks.yml` system dependencies skip apt when the runner image already has the tools (`command -v tmux`, `dpkg -s` for the dev libraries). Otherwise they run with `timeout-minutes: 5` and `-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120`, so a stalled mirror or held dpkg lock fails that step fast instead of burning the 30 minute job budget (runs `42756722827` and `42763778363` were cancelled inside apt). Not a flake to rerun: a step that hits the 5 minute bound is a real failure to investigate. `Install reviewer read dependencies` installs prebuilt `ripgrep` and `fd-find` release binaries with `taiki-e/install-action` on both Ubuntu and macOS, so an apt mirror outage (2026-11-11: every Linux owned shard timed out in apt) cannot block the Linux matrix.
+  # Hosted Ubuntu tmux steps (#655): `Install tmux (Linux)` (both sites) skips apt when the runner image already has `tmux`. Otherwise it runs with `timeout-minutes: 5` and `-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120`, so a stalled mirror or held dpkg lock fails that step fast instead of burning the 30 minute job budget (runs `42756722827` and `42763778363` were cancelled inside apt). Not a flake to rerun: a step that hits the 5 minute bound is a real failure to investigate. `Install reviewer read dependencies` installs prebuilt `ripgrep` and `fd-find` release binaries with `taiki-e/install-action` on both Ubuntu and macOS, so an apt mirror outage (2026-11-11: every Linux owned shard timed out in apt) cannot block the Linux matrix.
 
-  owned-shards:
-    if: ${{ needs.classify.outputs.owned_shards != '' && needs.classify.outputs.owned_shards != '[]' }}
-    name: owned shard (${{ matrix.os }}, ${{ matrix.shard }})
+  owned-shards-ubuntu:
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run }}
+    name: &owned-shard-name owned shard (${{ matrix.os }}, ${{ matrix.shard }})
     needs: classify
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.classify.outputs.owned_shards) }}
-    runs-on: ${{ matrix.runner }}
-    defaults:
+        include: ${{ fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].shards }}
+    runs-on: &owned-shard-runner ${{ matrix.runner }}
+    defaults: &owned-shard-defaults
       run:
         shell: bash -e {0}
-    timeout-minutes: 30
-    steps:
+    timeout-minutes: &owned-shard-timeout 30
+    steps: &owned-shard-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -444,6 +443,19 @@ jobs:
             scripts/coverage/**/coverage-summary.json
           if-no-files-found: ignore
 
+  owned-shards-macos:
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (macos-14)'].run }}
+    name: *owned-shard-name
+    needs: classify
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.classify.outputs.plan)['owned (macos-14)'].shards }}
+    runs-on: *owned-shard-runner
+    defaults: *owned-shard-defaults
+    timeout-minutes: *owned-shard-timeout
+    steps: *owned-shard-steps
+
   # Policy: Native Windows Rust evidence
   # `computer-use Rust (windows-x64)` separately uses hosted `windows-2025`, pinned Rust/LLVM and
   # cargo-llvm-cov versions above, and two build jobs. It checks a native x64 MSVC compiler, formatting,
@@ -459,7 +471,7 @@ jobs:
   # No token, profile/cache state or tool-injection variables are admitted by that correction.
   # It uploads source-bound metadata
   # and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
-  # job and refuses any non-success outcome when computer-use is selected. This preserves the twelve
+  # job and refuses any non-success outcome when computer-use is selected.
   # Windows native coverage is report-only, not a borrowed Ubuntu accounting signal or a claim of
   # live desktop behavior; absent branches/statements stay unmeasured.
 
@@ -613,21 +625,20 @@ jobs:
   # No job or required-check name changes. Definition, exclusions, receipts and ratcheting:
   # [here](../../docs/coverage.md).
 
-  owned:
+  owned-ubuntu:
     if: ${{ !cancelled() }}
-    name: owned (${{ matrix.os }})
-    needs: [classify, owned-shards, computer-use-windows]
+    name: &owned-name owned (${{ matrix.os }})
+    needs: [classify, owned-shards-ubuntu, computer-use-windows]
     strategy:
-      fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["ubuntu-24.04","macos-14"]') }}
+        os: [ubuntu-24.04]
     env:
-      SHARDS_RESULT: ${{ needs.owned-shards.result }}
-      WINDOWS_REQUIRED: ${{ matrix.os == 'ubuntu-24.04' && contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+      SHARDS_RESULT: ${{ needs.owned-shards-ubuntu.result }}
+      WINDOWS_REQUIRED: ${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
       WINDOWS_RESULT: ${{ needs.computer-use-windows.result }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
+    timeout-minutes: &owned-timeout 15
+    steps: &owned-steps
       # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
       # checkout below runs only when the plan says the cell runs.
       - name: Check out the local actions
@@ -756,6 +767,19 @@ jobs:
           for manifest in packages/*/package.json; do
             node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no declared Bun suite yet`)' "./$manifest"
           done
+
+  owned-macos:
+    if: ${{ github.event_name != 'pull_request' && !cancelled() }}
+    name: *owned-name
+    needs: [classify, owned-shards-macos]
+    strategy:
+      matrix:
+        os: [macos-14]
+    env:
+      SHARDS_RESULT: ${{ needs.owned-shards-macos.result }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: *owned-timeout
+    steps: *owned-steps
 
   # Policy: Packed contracts and independent sampler evidence
   # `scripts/package_contracts.py` owns packed-file validation, including the `--packed-files-only`

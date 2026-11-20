@@ -601,11 +601,10 @@ def shard_plans(
     return tuple(plans)
 
 
-def pr_bypass(os_name: str, result: ChangeClassification, event: str) -> CellPlan | None:
+def pr_bypass(result: ChangeClassification, event: str) -> CellPlan | None:
     """Return the PR bypass shared by runnable owned, contracts and stack cells.
 
     Parameters:
-        os_name (str): Matrix OS name.
         result (ChangeClassification): Diff classification.
         event (str): Triggering event name.
 
@@ -614,7 +613,7 @@ def pr_bypass(os_name: str, result: ChangeClassification, event: str) -> CellPla
     """
     if event != EVENT_PULL_REQUEST:
         return None
-    if os_name == "ubuntu-24.04" and result.docs_only:
+    if result.docs_only:
         return skipped(NOT_RUN["docs_only"])
     return None
 
@@ -638,7 +637,7 @@ def native_plan(
     Returns:
         CellPlan: Whether the cell runs and, for `owned`, which gates on which shards.
     """
-    if bypass := pr_bypass(os_name, result, event):
+    if bypass := pr_bypass(result, event):
         return bypass
     if job != "owned":
         return CellPlan(run=True, scenarios=True, gates=(), reason="")
@@ -655,11 +654,10 @@ def native_plan(
     )
 
 
-def stack_plan(os_name: str, stack: str, result: ChangeClassification, event: str) -> CellPlan:
+def stack_plan(stack: str, result: ChangeClassification, event: str) -> CellPlan:
     """Plan a `stack` cell.
 
     Parameters:
-        os_name (str): Matrix `os` value.
         stack (str): Matrix `stack` value.
         result (ChangeClassification): Diff classification.
         event (str): Triggering event name.
@@ -667,7 +665,7 @@ def stack_plan(os_name: str, stack: str, result: ChangeClassification, event: st
     Returns:
         CellPlan: Whether the cell runs and whether its scenario steps run.
     """
-    if bypass := pr_bypass(os_name, result, event):
+    if bypass := pr_bypass(result, event):
         return bypass
     if event == EVENT_PULL_REQUEST and stack == "personal" and not result.inputs["stack_inputs"]:
         return CellPlan(run=True, scenarios=False, gates=(), reason=NOT_RUN["personal_without_inputs"])
@@ -758,7 +756,7 @@ def plan_cells(
         cells[f"owned ({os_name})"] = native_plan("owned", os_name, result, event, workspaces)
         cells[f"contracts ({os_name})"] = native_plan("contracts", os_name, result, event, workspaces)
         for stack in STACKS[os_name]:
-            cells[f"stack ({os_name}, {stack})"] = stack_plan(os_name, stack, result, event)
+            cells[f"stack ({os_name}, {stack})"] = stack_plan(stack, result, event)
     if title_problem:
         blocked = CellPlan(run=False, scenarios=False, gates=(), reason=title_problem, blocked=True)
         return dict.fromkeys(cells, blocked)
@@ -784,8 +782,6 @@ def write_github_output(path: Path, result: ChangeClassification, cells: Mapping
         for name, value in result.inputs.items():
             output.write(f"{name}={str(value).lower()}\n")
         output.write(f"plan={json.dumps(plan, sort_keys=True, separators=(',', ':'))}\n")
-        shards = [shard.to_output() for cell in cells.values() for shard in cell.shards]
-        output.write(f"owned_shards={json.dumps(shards, separators=(',', ':'))}\n")
         output.write(f"changed_files<<{delimiter}\n{changed}\n{delimiter}\n")
 
 

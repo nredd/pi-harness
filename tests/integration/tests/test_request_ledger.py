@@ -19,9 +19,9 @@ def test_exact_bytes_and_unknown_owner() -> None:
     ledger = request_ledger(raw)
     assert ledger["request_bytes"] == len(raw.encode())
     buckets = ledger["buckets"]
-    assert buckets["system:rules"] == 17
-    assert buckets["shared"] == 3
-    assert buckets["tool:read:owner:unknown"] == 15
+    assert buckets["system:rules"] == len(b"<rules>ok</rules>")
+    assert buckets["shared"] == len("π!".encode())
+    assert buckets["tool:read:owner:unknown"] == len(b'{"name":"read"}')
     assert sum(buckets.values()) == len(raw.encode())
     assert ledger == request_ledger(raw)
 
@@ -74,7 +74,7 @@ def test_messages_cache_markers_hash_and_comparisons() -> None:
     ledger = request_ledger(raw, owners={"read": "builtin"}, previous=raw, parent='{"model":"other"}')
     assert sum(ledger["buckets"].values()) == len(raw.encode())
     assert ledger["common_prefix_previous_bytes"] == len(raw.encode())
-    assert ledger["common_prefix_parent_bytes"] == 9
+    assert ledger["common_prefix_parent_bytes"] == len(b'{"model":')
     assert ledger["tool_array_sha256"] == "9c1884186834e8d0bc914b66d146685a8dfdfa57fc68c58a86dae612a7fe40a0"
     assert [marker["bytes_through_block"] for marker in ledger["cache_markers"]] == [
         raw.index('], "messages"'),
@@ -110,17 +110,19 @@ def test_sdk_transcript_charges_native_blocks() -> None:
     assert ledger["measurement"] == "utf8_sdk_context_bytes"
     assert ledger["cache_markers"] == []
     assert ledger["request_bytes"] == len(raw.encode())
-    assert ledger["buckets"] == {
-        "system:tag": 12,
-        "system:named": 2,
-        "tool:read:owner:builtin": 15,
-        "tool:other:owner:unknown": 16,
-        "tool_call_args:read": 2,
-        "tool_result:read": 29,
-        "extension:fixture": 2,
-        "thinking": 6,
-        "shared": 48,
-        "serialization_overhead": 358,
+    payload_bytes = {
+        "system:tag": len(b"<tag>x</tag>"),
+        "system:named": len("é".encode()),
+        "tool:read:owner:builtin": len(b'{"name":"read"}'),
+        "tool:other:owner:unknown": len(b'{"name":"other"}'),
+        "tool_call_args:read": len(b"{}"),
+        "tool_result:read": len(b'[{"type":"text","text":"ok"}]'),
+        "extension:fixture": len(b"hi"),
+        "thinking": len(b'"h"') + len(b'"s"'),
+        "shared": len("π".encode()) + len(b'{"type":"image","data":"x","cache_control":{}}'),
+    }
+    assert ledger["buckets"] == payload_bytes | {
+        "serialization_overhead": len(raw.encode()) - sum(payload_bytes.values()),
     }
     assert (
         ledger["tool_array_sha256"]
@@ -145,11 +147,13 @@ def test_sdk_transcript_sanitizes_labels_and_omits_removed_section() -> None:
         '"toolsAdded":[{"name":"bad name"}]}]}'
     )
     buckets = request_ledger(raw, sdk=True)["buckets"]
-    assert buckets == {
-        "serialization_overhead": 100,
+    payload_bytes = {
         "shared": 0,
-        "system:unsafe-9c262781c6b0": 2,
-        "tool:unsafe-9c262781c6b0:owner:unknown": 19,
+        "system:unsafe-9c262781c6b0": len("é".encode()),
+        "tool:unsafe-9c262781c6b0:owner:unknown": len(b'{"name":"bad name"}'),
+    }
+    assert buckets == payload_bytes | {
+        "serialization_overhead": len(raw.encode()) - sum(payload_bytes.values()),
     }
 
 

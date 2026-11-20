@@ -237,7 +237,9 @@ export interface EvictedNote {
 	evictedAfterMin: number;
 	/** The diagnostic came from the saved parent, not a retention sweep. */
 	fromSavedSession?: true;
+	/** Reason startup could not safely reopen a saved child, when available. */
 	reopenRefusal?: string;
+	/** The saved running child had a recent transcript write at bind time. */
 	possiblyRunning?: true;
 	/** The `.output` transcript when one was written, else the session file. */
 	transcript?: string;
@@ -298,7 +300,7 @@ export function describeEvicted(note: EvictedNote): string {
 			? "interrupted by a process restart (no live registry record)"
 			: `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
 		: `${note.status}, evicted after ${note.evictedAfterMin} min`;
-	const caution = note.possiblyRunning ? `; ${note.reopenRefusal}` : "";
+	const caution = note.possiblyRunning && note.reopenRefusal ? `; ${note.reopenRefusal}` : "";
 	return `Agent "${note.id}" (${note.description}) ${state}${where}${caution}${fallback}`;
 }
 

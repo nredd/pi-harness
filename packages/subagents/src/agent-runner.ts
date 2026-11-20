@@ -1007,7 +1007,7 @@ function resolveConfiguredSessionDir(
 	return resolve(cwd, sessionDir);
 }
 
-/** Match the host's default cwd encoding and the child's configured directory. */
+/** Always pass an explicit directory for restart path validation, mirroring the host's default cwd encoding. */
 export function childSessionDir(
 	configured: string | undefined,
 	setting: string | undefined,

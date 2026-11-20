@@ -1,8 +1,12 @@
 /** Saved history is diagnostic data, not a live record or a request to run a child. */
 
-import { describe, expect, it } from "vitest";
+import { writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { describeEvicted, describeEvictedResult } from "../src/agent-manager.ts";
 import { savedAgentNote } from "../src/saved-agent-record.ts";
+import { checkSavedChild, sameSavedChild } from "../src/saved-child-session.ts";
 
 const base = { id: "synthetic-child", type: "general-purpose", description: "synthetic job", status: "completed" };
 
@@ -36,6 +40,13 @@ describe("saved agent lookup notes", () => {
 		},
 	);
 
+	it("does not append undefined when a possibly running note lacks a refusal", () => {
+		const note = savedAgentNote({ ...base, status: "running" })!;
+		expect(describeEvicted({ ...note, possiblyRunning: true })).toBe(
+			`Agent "${base.id}" (${base.description}) last recorded status: running, recovered from saved parent session (no live registry record)`,
+		);
+	});
+
 	it("prefers the recorded output path and falls back to a saved child session", () => {
 		expect(
 			savedAgentNote({ ...base, outputFile: "/synthetic/child.output", sessionFile: "/synthetic/child.jsonl" })
@@ -68,5 +79,35 @@ describe("saved agent lookup notes", () => {
 		);
 		expect(describeEvictedResult(savedAgentNote({ ...base, status: "stopped", error: "  " })!)).toBeUndefined();
 		expect(savedAgentNote({ ...base, result: 5, error: {} })).not.toHaveProperty("result");
+	});
+});
+
+describe("saved child transcript identity", () => {
+	it("keeps exact links to missing transcripts but rejects mismatches and path traversal aliases", () => {
+		const root = makeTestTempDir("saved-child-", onTestFinished);
+		const one = join(root, "one.jsonl");
+		const two = join(root, "two.jsonl");
+		expect(sameSavedChild(undefined, one)).toBe(false);
+		expect(sameSavedChild(one, undefined)).toBe(false);
+		expect(sameSavedChild(one, one)).toBe(true);
+		expect(sameSavedChild(one, two)).toBe(false);
+		writeFileSync(one, "");
+		writeFileSync(two, "");
+		expect(sameSavedChild(one, two)).toBe(false);
+		const traversal = `${root}/../${basename(root)}/one.jsonl`;
+		expect(sameSavedChild(traversal, one)).toBe(false);
+		expect(sameSavedChild(one, traversal)).toBe(false);
+	});
+
+	it("names the missing parent path, whether it comes from the header or current session", () => {
+		const root = makeTestTempDir("saved-child-", onTestFinished);
+		const file = join(root, "child.jsonl");
+		const recorded = join(root, "recorded.jsonl");
+		const current = join(root, "current.jsonl");
+		writeFileSync(file, `${JSON.stringify({ type: "session", parentSession: recorded })}\n`);
+		const check = () => checkSavedChild(file, root, current, "completed", 0);
+		expect(check()).toEqual({ refusal: `parent session is missing or unreadable: ${recorded}` });
+		writeFileSync(recorded, "");
+		expect(check()).toEqual({ refusal: `parent session is missing or unreadable: ${current}` });
 	});
 });

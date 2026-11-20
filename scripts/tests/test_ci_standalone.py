@@ -74,7 +74,9 @@ pass=first
 [[ ! -d "$RUNNER_TEMP/pi-build-evidence/first" ]] || pass=second
 printf '%s\\n' "build $pass" >&2
 [[ "$CASE" != fail-first ]] || exit 36
-printf '%s\\n' "$*" > "$RUNNER_TEMP/pi-build-evidence/compile-command.json"
+if [[ "$CASE" != "missing-$pass" ]]; then
+    printf '%s\\n' "$*" > "$RUNNER_TEMP/pi-build-evidence/compile-command.json"
+fi
 printf '%s\\n' graph > "$RUNNER_TEMP/pi-build-evidence/module-graph.json"
 /bin/mkdir -p "$6/$4"
 printf '%s\\n' executable > "$6/$4/pi"
@@ -95,7 +97,16 @@ fi
 
 
 @pytest.mark.parametrize(
-    ("case", "status"), [("ok", 0), ("fail-first", 36), ("fail-second", 37), ("argv", 1), ("bytes", 1)]
+    ("case", "status"),
+    [
+        ("ok", 0),
+        ("fail-first", 36),
+        ("fail-second", 37),
+        ("argv", 1),
+        ("bytes", 1),
+        ("missing-first", 1),
+        ("missing-second", 1),
+    ],
 )
 def test_standalone_publishes_only_two_equivalent_builds(
     tmp_path: Path, runner: dict[str, str], case: str, status: int
@@ -138,12 +149,68 @@ def test_standalone_publishes_only_two_equivalent_builds(
         assert (first / "module-graph.json").read_text() == "graph\n"
         assert (tmp_path / "pi-first-build").read_text() == "executable\n"
         assert (evidence / "build.log").read_text() == "build second\n"
+        assert (first / "compile-command.json").is_file() == (case != "missing-first")
+        assert (evidence / "compile-command.json").is_file() == (case != "missing-second")
+    if case.startswith("missing-"):
+        command = (first if case == "missing-first" else evidence) / "compile-command.json"
+        assert result.stderr == f"Missing standalone compile command evidence: '{command}'\n"
     if case == "ok":
         assert exported.read_text() == f"PI_BIN={exe}\n"
         assert digest.read_text() == f"{hashlib.sha256(exe.read_bytes()).hexdigest()}  pi\n"
     else:
         assert not exported.exists()
         assert not digest.exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "detail"),
+    [
+        ([], "the following arguments are required: platform"),
+        ([PLATFORM, "extra"], "unrecognized arguments: extra"),
+    ],
+)
+def test_standalone_requires_one_platform(tmp_path: Path, argv: list[str], detail: str) -> None:
+    """Reject an invalid invocation before reading build configuration.
+
+    Parameters:
+        tmp_path (Path): Empty runner directory.
+        argv (list[str]): Invalid command arguments.
+        detail (str): Expected usage diagnostic.
+    """
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/ci_standalone.py"), *argv],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "usage: ci_standalone.py" in result.stderr
+    assert detail in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_standalone_reports_missing_stdout_pipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Surface a build process without a readable stdout pipe as an explicit error.
+
+    Parameters:
+        tmp_path (Path): Disposable build and evidence directory.
+        monkeypatch (pytest.MonkeyPatch): Redirect build stdout away from the pipe.
+    """
+    (tmp_path / "scripts").mkdir()
+    executable(tmp_path / "scripts/build-binaries.sh", "printf 'build output\\n'\n")
+    popen = subprocess.Popen
+
+    def spawn_without_pipe(
+        cmd: list[str], *, cwd: Path, env: dict[str, str], stdout: int, stderr: int
+    ) -> subprocess.Popen[bytes]:
+        """Start the build without the requested stdout pipe."""
+        assert stdout == subprocess.PIPE
+        return popen(cmd, cwd=cwd, env=env, stdout=subprocess.DEVNULL, stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "Popen", spawn_without_pipe)
+    with pytest.raises(RuntimeError, match=r"^Standalone build stdout pipe was not opened$"):
+        ci_standalone.build(tmp_path, tmp_path, PLATFORM, tmp_path / "output")
 
 
 def test_standalone_cannot_start_without_npm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	realpathSync,
 	statSync,
 	symlinkSync,
 	unlinkSync,
@@ -11,11 +12,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as agentRunner from "../src/agent-runner.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
 let fixture: ScenarioSession;
@@ -28,6 +30,74 @@ function agentId(receipt: string | undefined): string {
 afterEach(async () => {
 	await fixture?.dispose();
 	Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+});
+
+it("reopens the newest id after two restarts through a symlinked child directory", { timeout: 30_000 }, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const sessionDir = join(fixture.agentDir, "sessions");
+	const target = join(fixture.root, "child-sessions");
+	mkdirSync(target);
+	symlinkSync(target, sessionDir, "dir");
+	fixture.physical("kid", "child", [answer("ORIGINAL"), answer("FIRST RESUME"), answer("SECOND RESUME")]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const parentPath = parent.getSessionFile()!;
+	let host = await fixture.start({ harness: { sessionManager: parent } });
+	const run = async (resume?: string) => {
+		host.setResponses([toolCalls(spawn("continue child", { resume })), answer("CHECKED")]);
+		await host.session.prompt("run child");
+		const receipt = outcomes(host, "Agent").at(-1);
+		expect(receipt?.isError, receipt?.text).toBe(false);
+		const record = fixture.record(agentId(receipt?.text));
+		await record.promise;
+		await host.session.waitForIdle();
+		return record;
+	};
+	const restart = async () => {
+		host.cleanup();
+		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		host = await fixture.start({ harness: { sessionManager: SessionManager.open(parentPath) } });
+	};
+	const first = await run();
+	expect(first.sessionFile).toContain(`${sessionDir}/`);
+	await restart();
+	const second = await run(first.id);
+	expect(second.sessionFile).toContain(`${realpathSync(target)}/`);
+	await restart();
+	const third = await run(second.id);
+	expect(third.result).toBe("SECOND RESUME");
+	host.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: first.id } }), answer("CHECKED")]);
+	await host.session.prompt("look up the original id");
+	expect(outcomes(host, "get_subagent_result").at(-1)?.text).toContain(`Agent: ${third.id}`);
+});
+
+it("loads host settings once when restoring 200 saved rows across different child directories", async () => {
+	fixture = new ScenarioSession();
+	const start = async (rows: number) => {
+		const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+		for (let i = 0; i < rows; i++) {
+			parent.appendCustomEntry("subagents:record", {
+				id: `child-${i}`,
+				type: i % 2 === 0 ? "general-purpose" : "explore",
+				description: "Saved child",
+				status: "completed",
+				sessionCwd: join(fixture.cwd, `dir-${i % 3}`),
+				sessionFile: join(fixture.root, `missing-${i}.jsonl`),
+			});
+		}
+		const settings = vi.spyOn(SettingsManager, "create");
+		const directory = vi.spyOn(agentRunner, "childSessionDir");
+		try {
+			const host = await fixture.start({ harness: { sessionManager: parent } });
+			host.cleanup();
+			return { settings: settings.mock.calls.length, directories: directory.mock.calls.length };
+		} finally {
+			settings.mockRestore();
+			directory.mockRestore();
+			Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		}
+	};
+	const baseline = await start(0);
+	expect(await start(200)).toEqual({ settings: baseline.settings + 1, directories: 6 });
 });
 
 it("reports unknown ids as errors to the model and to a nested tools caller", async () => {

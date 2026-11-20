@@ -9,6 +9,23 @@ type SavedChildCheck =
 	| { refusal: string; recent?: never }
 	| { file: string; refusal: string; recent: true };
 
+function validChildPath(file: string): boolean {
+	return isAbsolute(file) && !file.split(/[\\/]/).includes("..");
+}
+
+/** A reopen can journal the canonical spelling of a predecessor's symlinked transcript. */
+export function sameSavedChild(previous: string | undefined, next: string | undefined): boolean {
+	if (!previous || !next) return false;
+	// Keep exact links even when the transcript has since disappeared.
+	if (previous === next) return true;
+	if (!validChildPath(previous) || !validChildPath(next)) return false;
+	try {
+		return realpathSync(previous) === realpathSync(next);
+	} catch {
+		return false;
+	}
+}
+
 /** Check the saved file without opening a writable SessionManager on untrusted history. */
 export function checkSavedChild(
 	file: string,
@@ -18,7 +35,7 @@ export function checkSavedChild(
 	now: number,
 	savedCwd?: string,
 ): SavedChildCheck {
-	if (!isAbsolute(file) || file.split(/[\\/]/).includes("..")) {
+	if (!validChildPath(file)) {
 		return { refusal: `invalid child session path: ${file}` };
 	}
 	try {
@@ -40,13 +57,15 @@ export function checkSavedChild(
 		} finally {
 			closeSync(fd);
 		}
-		if (
-			!parentFile ||
-			header?.type !== "session" ||
-			!header.parentSession ||
-			realpathSync(header.parentSession) !== realpathSync(parentFile)
-		) {
-			return { refusal: `child session does not belong to this parent: ${file}` };
+		const wrongParent = { refusal: `child session does not belong to this parent: ${file}` };
+		if (!parentFile || header?.type !== "session" || !header.parentSession) return wrongParent;
+		let parentPath = header.parentSession;
+		try {
+			const recordedParent = realpathSync(parentPath);
+			parentPath = parentFile;
+			if (recordedParent !== realpathSync(parentPath)) return wrongParent;
+		} catch {
+			return { refusal: `parent session is missing or unreadable: ${parentPath}` };
 		}
 		if (savedCwd !== undefined && header.cwd !== savedCwd) {
 			return { refusal: `child session does not match its saved working directory: ${file}` };
