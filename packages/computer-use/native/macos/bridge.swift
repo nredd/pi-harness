@@ -28,7 +28,12 @@ private struct CGWindowOwnerSummary {
 
 /// Hash consistent with `CFEqual` on AX handles, so equivalent fresh handles share a bucket.
 func axEquivalenceHash(_ element: AXUIElement) -> Int {
-	Int(CFHash(element))
+	bucketKey(CFHash(element))
+}
+
+/// Total `UInt` -> `Int` mapping; `Int(hash)` would trap for hashes with the top bit set.
+func bucketKey(_ hash: UInt) -> Int {
+	Int(bitPattern: hash)
 }
 
 struct AXDescendant<Element> {

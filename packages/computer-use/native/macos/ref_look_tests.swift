@@ -111,6 +111,9 @@ func runRefLookAssertions() {
   check(
     axEquivalenceHash(element) == axEquivalenceHash(equivalent),
     "equivalent AX handles share an equivalence hash")
+  check(
+    bucketKey(UInt.max) == -1 && bucketKey(UInt(Int.max) + 1) == Int.min && bucketKey(0) == 0,
+    "bucket keys map hashes with the top bit set without trapping")
   check(!CFEqual(element, distinct), "different owned fixture PID produces an unequal AX handle")
   let store = AXRefStore(unownedCapacity: 2)
   let window = store.storeWindow(element)
