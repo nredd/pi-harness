@@ -16,7 +16,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.error import HTTPError
 
-from coverage_provenance_record import COVERAGE_HOSTS, SHA, decode_json, object_value, text_value
+from coverage_provenance_record import (
+    COVERAGE_HOSTS,
+    SEMANTICS_FIELD,
+    SHA,
+    counter_semantics,
+    decode_json,
+    object_value,
+    text_value,
+)
 from coverage_report import COUNTERS, HOSTS, Counters, Evidence, Signal, Summary
 
 REF = "refs/heads/coverage-data"
@@ -162,7 +170,11 @@ def snapshot_cell(host: str, value: object) -> Evidence:
         ValueError: Invalid counters or signal.
     """
     signals, packages = [], {}
-    for name, raw in object_value(value).items():
+    payload = object_value(value)
+    fingerprint = counter_semantics(payload)
+    if fingerprint is None or payload.keys() != {SEMANTICS_FIELD, "signals"}:
+        raise ValueError("Missing snapshot counter semantics or signals")
+    for name, raw in object_value(payload["signals"]).items():
         entry = object_value(raw)
         if entry.keys() != {"enforcement", "state", "semantics", "counters"}:
             raise ValueError("Unexpected snapshot signal fields")
@@ -180,7 +192,10 @@ def snapshot_cell(host: str, value: object) -> Evidence:
     if not packages:
         raise ValueError("Empty snapshot host")
     return Evidence(
-        host, "available", tuple(signals), Summary(HOSTS[host][1], False, packages, {}, (), {}, ())
+        host,
+        "available",
+        tuple(signals),
+        Summary(HOSTS[host][1], False, packages, {}, (), {}, (), counter_semantics=fingerprint),
     )
 
 
@@ -210,7 +225,9 @@ def encode_cell(cell: Evidence) -> dict[str, object]:
                 for key, value in ((metric, total), (f"uncovered_{metric}", uncovered))
             },
         }
-    return projection
+    # Omit an absent stamp so the stored schema rejects legacy main evidence explicitly.
+    semantics = {} if summary.counter_semantics is None else {SEMANTICS_FIELD: summary.counter_semantics}
+    return semantics | {"signals": projection}
 
 
 def read_tip(api: Transport) -> str | None:

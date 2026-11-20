@@ -573,7 +573,7 @@ Its tests are `scripts/tests/test_coverage_*.py`, one file per behavior (`lcov`,
 boundary), sharing `scripts/tests/coverage_fixtures.py`. A test imports fixtures from there, never
 from another test file.
 
-The hosted `workflow_run` coverage publisher reads artifacts as data, never executes them, and only the same-repo `main`-push snapshot job gets `contents: write`. It runs reviewed default-branch code with a repository-scoped write token, like release workflows; no ref isolation is claimed (owner decision pending). The baseline is producer-reported, not independently verified.
+The hosted `workflow_run` coverage publisher reads artifacts as data, never executes them, and only the same-repo `main`-push snapshot job gets `contents: write`. It runs reviewed default-branch code with a repository-scoped write token, like release workflows; no ref isolation is claimed (owner decision pending). The baseline is producer-reported, not independently verified. Both the PR comment and step summary name its tested SHA and CI attempt. Numeric deltas require matching producer fingerprints in the summary and provenance, plus equal OS, signal, writer and supported counters. The versioned fingerprint covers committed policy, CI, measurement scripts, build/test configuration and toolchain locks from the tested checkout. Missing or differing semantics are `not comparable`; the fingerprint is producer-reported too.
 
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is

@@ -24,7 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_publish as pub
-from coverage_provenance_record import Provenance, producer_job
+from coverage_provenance_record import SEMANTICS_FIELD, Provenance, producer_job
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).parent / "fixtures/coverage-report/coverage-ubuntu-24.04.json"
@@ -34,6 +34,8 @@ HEAD = "a" * 40
 TESTED = "b" * 40
 POLICY = ROOT / "coverage/policy.json"
 UPLOAD = "Preserve independent coverage reports and summary"
+ARTIFACT = pub.ARTIFACT.format(host="ubuntu-24.04")
+FINGERPRINT = "e" * 64
 STAMP = "2026-11-20T04:50:01Z"
 
 
@@ -74,6 +76,7 @@ class RecordingGitHub(pub.GitHub):
     jobs: list[Any]
     artifacts: list[Any]
     record: dict[str, object] | None
+    fingerprint: str | None
 
     def __init__(self) -> None:
         """Seed one current attempt, PR and artifact.
@@ -111,7 +114,7 @@ class RecordingGitHub(pub.GitHub):
         ]
         self.artifacts = [
             {
-                "name": pub.ARTIFACT,
+                "name": ARTIFACT,
                 "id": 8,
                 "size_in_bytes": 9900,
                 "expired": False,
@@ -121,7 +124,8 @@ class RecordingGitHub(pub.GitHub):
         run = Provenance(
             REPO, HEAD, TESTED, 123, 2, "pull_request", f"{REPO}/{pub.WORKFLOW}@refs/pull/4/merge"
         )
-        self.record = dict(run.record(producer_job("ubuntu-24.04", shard=False), pub.ARTIFACT))
+        self.record = dict(run.record(producer_job("ubuntu-24.04", shard=False), ARTIFACT))
+        self.fingerprint = None
 
     def request(self, path: str, method: str = "GET", body: dict[str, str] | None = None) -> Any:
         """Return resource data and apply sticky writes to the recording store.
@@ -186,9 +190,11 @@ class RecordingGitHub(pub.GitHub):
         """
         assert artifact_id == 8
         with ZipFile(destination, "w") as archive:
-            archive.write(FIXTURE, "coverage/summary.json")
+            summary = json.loads(FIXTURE.read_text())
+            semantics = {} if self.fingerprint is None else {SEMANTICS_FIELD: self.fingerprint}
+            archive.writestr("coverage/summary.json", json.dumps(summary | semantics))
             if self.record is not None:
-                archive.writestr("coverage/provenance.json", json.dumps(self.record))
+                archive.writestr("coverage/provenance.json", json.dumps(self.record | semantics))
 
 
 @pytest.mark.parametrize("repository", [FORK, REPO])
@@ -393,6 +399,23 @@ def test_artifact_attempt_filter(case: str, tmp_path: Path) -> None:
     assert not list(tmp_path.iterdir())
 
 
+def test_skipped_job_retains_notice() -> None:
+    """Keep the PR-controlled-numbers notice ahead of the skipped headline.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The skipped render loses its notice.
+    """
+    api = RecordingGitHub()
+    api.jobs[0]["steps"][1]["conclusion"] = "skipped"
+    body = pub.render(api, pub.Run.parse(api.data), 4, TESTED, POLICY)
+    assert "Ubuntu enforced signals: NOT RUN" in body
+    assert body.index(pub.PR_NOTICE) < body.index("Ubuntu enforced signals:")
+
+
 def test_artifact_transport_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Gracefully handle expiry between listing and download.
 
@@ -515,10 +538,16 @@ def test_ci_producer_display_names() -> None:
     Raises:
         AssertionError: A producer name changed without updating the publisher.
     """
-    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["owned-ubuntu"]
-    assert job["name"].replace("${{ matrix.os }}", "ubuntu-24.04") == pub.OWNED_JOB
-    names = {step.get("name") for step in job["steps"]}
-    assert {pub.PLAN_STEP, pub.UPLOAD_STEP} <= names
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    for host, (producer, _) in pub.COVERAGE_HOSTS.items():
+        job = jobs[producer]
+        assert job["name"].replace("${{ matrix.os }}", host) == pub.OWNED_JOB.format(host=host)
+        steps = {step.get("name"): step for step in job["steps"]}
+        assert pub.PLAN_STEP in steps
+        assert steps[pub.UPLOAD_STEP]["with"]["name"].replace(
+            "${{ matrix.os }}", host
+        ) == pub.ARTIFACT.format(host=host)
+        assert "--summary coverage/summary.json" in steps["Record fan-in coverage provenance"]["run"]
 
 
 def test_workflow_contract() -> None:
@@ -539,6 +568,7 @@ def test_workflow_contract() -> None:
     assert set(workflow["jobs"]) == {"comment", "snapshot"}
     snapshot = workflow["jobs"]["snapshot"]
     assert snapshot["permissions"] == {"actions": "read", "contents": "write"}
+    assert snapshot["runs-on"] == job["runs-on"] == "ubuntu-24.04"
     assert snapshot["concurrency"] == {"group": "coverage-main-snapshot", "cancel-in-progress": False}
     assert snapshot["if"].split(" && ") == [
         "github.ref == 'refs/heads/main'",

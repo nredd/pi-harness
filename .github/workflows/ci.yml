@@ -702,7 +702,7 @@ jobs:
           rm -f coverage/provenance.json
           if [ "$DOWNLOAD_OUTCOME" = success ] && [ "$MERGE_OUTCOME" = success ] && [ -f coverage/summary.json ]; then
             python3 scripts/coverage_provenance.py --cell "$COVERAGE_CELL" \
-              --shards "$RUNNER_TEMP/shard-coverage" --output coverage/provenance.json
+              --shards "$RUNNER_TEMP/shard-coverage" --summary coverage/summary.json --output coverage/provenance.json
           fi
       - name: Preserve independent coverage reports and summary
         if: always() && steps.plan.outputs.run == 'true'

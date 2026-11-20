@@ -43,6 +43,7 @@ from coverage_provenance_record import (
     PROVENANCE_MEMBER,
     Provenance,
     ProvenanceRecord,
+    counter_semantics,
     decode_json,
     decode_record,
     object_value,
@@ -82,7 +83,7 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
         with path.open("rb") as stream:
             summary = decode_json(stream.read(MAX_JSON_BYTES + 1))
         if expected is not None:
-            validate_record(read_record(path.with_name("provenance.json")), expected)
+            validate_summary_record(summary, read_record(path.with_name("provenance.json")), expected)
         return summary
     try:
         with zipfile.ZipFile(path) as archive:
@@ -117,7 +118,9 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
                 if receipt.file_size > MAX_PROVENANCE_BYTES:
                     raise ValueError("Coverage provenance byte limit exceeded")
                 with archive.open(receipt) as stream:
-                    validate_record(decode_record(stream.read(MAX_PROVENANCE_BYTES + 1)), expected)
+                    validate_summary_record(
+                        summary, decode_record(stream.read(MAX_PROVENANCE_BYTES + 1)), expected
+                    )
             return summary
     except (
         zipfile.BadZipFile,
@@ -131,6 +134,27 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
         OverflowError,
     ) as error:
         raise ValueError(f"Cannot read artifact ZIP: '{error}'") from error
+
+
+def validate_summary_record(
+    summary: dict[str, object],
+    record: dict[str, object],
+    expected: ProvenanceRecord,
+) -> None:
+    """Require the summary and matching provenance to agree on semantics.
+
+    Parameters:
+        summary (dict[str, object]): Decoded producer summary.
+        record (dict[str, object]): Decoded provenance sidecar.
+        expected (ProvenanceRecord): Independently sourced identity.
+    Returns:
+        None: Both records agree, including for legacy artifacts without semantics.
+    Raises:
+        ValueError: Identity or semantics disagree.
+    """
+    validate_record(record, expected)
+    if counter_semantics(summary) != counter_semantics(record):
+        raise ValueError("Summary and provenance counter semantics disagree")
 
 
 @dataclass(frozen=True)
@@ -250,6 +274,7 @@ class Summary:
     not_measured: dict[str, str]
     errors: tuple[str, ...]
     trimmed_from: int | None = None
+    counter_semantics: str | None = None
 
     @classmethod
     def parse(cls, obj: dict[str, object]) -> Summary:
@@ -310,6 +335,7 @@ class Summary:
             {text_value(k): text_value(v) for k, v in object_value(obj.get("not_measured")).items()},
             tuple(text_value(value) for value in raw_errors),
             trimmed,
+            counter_semantics(obj),
         )
 
 
@@ -478,8 +504,12 @@ def measured_delta(current: Evidence, baseline: Evidence | None, signal: Signal)
         or previous.state != "planned"
     ):
         return "unavailable"
-    if tuple(n for n, _, _ in before.values) != tuple(n for n, _, _ in after.values):
-        return "incompatible counters"
+    if (
+        current.summary.counter_semantics is None
+        or current.summary.counter_semantics != baseline.summary.counter_semantics
+        or tuple(n for n, _, _ in before.values) != tuple(n for n, _, _ in after.values)
+    ):
+        return "not comparable"
     return ", ".join(
         f"{name} {new - old:+d}"
         for (name, _, new), (_, _, old) in zip(after.values, before.values, strict=True)

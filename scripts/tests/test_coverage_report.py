@@ -20,7 +20,14 @@ from coverage_report_fixtures import document, plan
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
-from coverage_provenance_record import MAX_JSON_BYTES, Provenance, decode_json, object_value, text_value
+from coverage_provenance_record import (
+    MAX_JSON_BYTES,
+    SEMANTICS_FIELD,
+    Provenance,
+    decode_json,
+    object_value,
+    text_value,
+)
 
 PROVENANCE = Provenance(
     "example/repository",
@@ -45,7 +52,9 @@ def cell() -> report.Evidence:
     Raises:
         None.
     """
-    return report.Evidence.parse("ubuntu-24.04", plan(), report.Summary.parse(document()))
+    return report.Evidence.parse(
+        "ubuntu-24.04", plan(), report.Summary.parse(document() | {SEMANTICS_FIELD: "a" * 64})
+    )
 
 
 def test_numeric_rendering_and_independent_deltas() -> None:
@@ -171,17 +180,16 @@ def test_main_delta_compatibility_added_removed_and_missing() -> None:
         report.measured_delta(current, replace(current, plan=(replace(signal, semantics="other"),)), signal)
         == "incompatible"
     )
+    assert current.summary is not None
     changed = replace(
-        report.Summary.parse(document()),
+        current.summary,
         packages={signal.name: report.Counters.parse({"lines": 11, "uncovered_lines": 3})},
     )
-    assert (
-        report.measured_delta(current, replace(current, summary=changed), signal) == "incompatible counters"
-    )
+    assert report.measured_delta(current, replace(current, summary=changed), signal) == "not comparable"
     missing = replace(report.Summary.parse(document()), packages={})
     assert report.measured_delta(current, replace(current, summary=missing), signal) == "unavailable"
     before = replace(
-        report.Summary.parse(document()),
+        current.summary,
         packages={
             signal.name: report.Counters.parse(
                 {"lines": 11, "uncovered_lines": 3, "functions": 0, "uncovered_functions": 0}

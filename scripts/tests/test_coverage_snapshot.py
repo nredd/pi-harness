@@ -18,12 +18,12 @@ from zipfile import ZipFile
 
 import pytest
 from test_coverage_publish import (
+    FINGERPRINT,
     FIXTURE,
     HEAD,
     POLICY,
     REPO,
     STAMP,
-    TESTED,
     UPLOAD,
     RecordingGitHub,
     run_data,
@@ -31,7 +31,7 @@ from test_coverage_publish import (
 
 import coverage_publish as pub
 import coverage_snapshot as snap
-from coverage_provenance_record import Provenance, producer_job
+from coverage_provenance_record import SEMANTICS_FIELD, Provenance, producer_job
 
 NOW = datetime(2026, 11, 21, tzinfo=UTC)
 TIP = "c" * 40
@@ -238,22 +238,36 @@ class MainGitHub(pub.GitHub):
             "push",
             f"{REPO}/{pub.WORKFLOW}@refs/heads/main",
         )
+        semantics = {} if self.archive == "legacy" else {SEMANTICS_FIELD: FINGERPRINT}
+        receipt_semantics = {
+            "mismatch": {SEMANTICS_FIELD: "f" * 64},
+            "malformed": {SEMANTICS_FIELD: "invalid"},
+        }.get(self.archive, semantics)
         with ZipFile(destination, "w") as archive:
-            archive.writestr("coverage/summary.json", json.dumps(summary))
+            archive.writestr("coverage/summary.json", json.dumps(summary | semantics))
             archive.writestr(
                 "coverage/provenance.json",
-                json.dumps(provenance.record(producer_job(host, shard=False), f"coverage-{host}")),
+                json.dumps(
+                    dict(provenance.record(producer_job(host, shard=False), f"coverage-{host}"))
+                    | receipt_semantics
+                ),
             )
             if self.archive == "path":
                 archive.writestr("../snapshot.json", "{}")
 
 
-def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("fingerprint", [FINGERPRINT, "f" * 64, None])
+def test_publish_and_consume_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fingerprint: str | None,
+) -> None:
     """Round-trip a two-host baseline and render independent signed deltas in the PR comment.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Scoped reader and clock overrides.
         tmp_path (Path): Step summary output directory.
+        fingerprint (str | None): PR evidence semantics.
     Returns:
         None.
     Raises:
@@ -279,9 +293,10 @@ def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert snap.baseline(api, NOW + snap.MAX_AGE) is None
     assert snap.baseline(api, NOW - timedelta(days=2)) is None
     data.update(sha=BLOB, run=321)
-    data["hosts"]["ubuntu-24.04"]["dev-tools/primary"]["counters"]["uncovered_lines"] = 1
+    data["hosts"]["ubuntu-24.04"]["signals"]["dev-tools/primary"]["counters"]["uncovered_lines"] = 1
     api.seed_snapshot(json.dumps(data).encode())
     pr = RecordingGitHub()
+    pr.fingerprint = fingerprint
     original = RecordingGitHub.request
 
     def request(self: RecordingGitHub, path: str, *args: Any) -> Any:
@@ -309,7 +324,12 @@ def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert "vs measured main (producer-reported)" in body
     assert body.index(pub.PR_NOTICE) < body.index("Ubuntu enforced signals:")
     row = next(line for line in body.splitlines() if line.startswith("dev&#45;tools&#47;primary |"))
-    assert row.rsplit(" | ", 1)[1] == "lines -1, functions +0, branches +0, statements +0"
+    expected = (
+        "lines -1, functions +0, branches +0, statements +0"
+        if fingerprint == FINGERPRINT
+        else "not comparable"
+    )
+    assert row.rsplit(" | ", 1)[1] == expected
     assert pub.PR_NOTICE in body.splitlines()
     assert (
         "verified"
@@ -372,7 +392,20 @@ def test_untrusted_trigger_fails_before_io(override: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize(
-    "case", ["owner", "size", "wrong-name", "ambiguous", "path", "attempt", "policy", "changed"]
+    "case",
+    [
+        "owner",
+        "size",
+        "wrong-name",
+        "ambiguous",
+        "path",
+        "attempt",
+        "policy",
+        "changed",
+        "legacy",
+        "mismatch",
+        "malformed",
+    ],
 )
 def test_invalid_evidence_never_writes(case: str) -> None:
     """Fail closed on incomplete, incorrectly bound or malformed producer evidence.
@@ -401,7 +434,7 @@ def test_invalid_evidence_never_writes(case: str) -> None:
         api.data["run_attempt"] = 3
     else:
         api.archive = case
-    with pytest.raises(ValueError, match=r"Main |main coverage|tested policy"):
+    with pytest.raises(ValueError, match=r"Main |main coverage|tested policy|snapshot counter semantics"):
         pub.publish_snapshot(api, trigger, NOW)
     assert not api.writes
     if case in {"owner", "size", "wrong-name", "ambiguous"}:
@@ -558,7 +591,9 @@ def test_invalid_snapshot_counters(entry: dict[str, Any]) -> None:
         "counters": {"lines": 1, "uncovered_lines": 1},
     }
     with pytest.raises(ValueError, match="snapshot"):
-        snap.snapshot_cell("ubuntu-24.04", {"p/primary": value | entry})
+        snap.snapshot_cell(
+            "ubuntu-24.04", {SEMANTICS_FIELD: FINGERPRINT, "signals": {"p/primary": value | entry}}
+        )
 
 
 def test_empty_host_and_unexpected_ref() -> None:
@@ -572,7 +607,7 @@ def test_empty_host_and_unexpected_ref() -> None:
         None.
     """
     with pytest.raises(ValueError, match="Empty snapshot host"):
-        snap.snapshot_cell("ubuntu-24.04", {})
+        snap.snapshot_cell("ubuntu-24.04", {SEMANTICS_FIELD: FINGERPRINT, "signals": {}})
     api = MainGitHub()
     api.ref.update(ref=snap.REF + "-unexpected", object={"type": "commit", "sha": TIP})
     with pytest.raises(ValueError, match="Unexpected coverage data ref"):

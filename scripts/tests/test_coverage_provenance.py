@@ -331,7 +331,10 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_h
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     fixture_git(checkout, "-c", "init.templateDir=", "init", "--quiet")
-    fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "--allow-empty", "-m", "Producer commit")
+    cfg = checkout / "vitest.config.ts"
+    cfg.write_text("export default { test: { coverage: { provider: 'v8' } } }\n")
+    fixture_git(checkout, "add", cfg.name)
+    fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "-m", "Producer commit")
     tested_sha = fixture_git(checkout, "rev-parse", "HEAD").strip()
     fixture_git(checkout, "update-ref", "refs/heads/HEAD", tested_sha)
     fixture_git(checkout, "config", "core.warnAmbiguousRefs", "true")
@@ -341,24 +344,38 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_h
     env = git_env()
     assert env["GIT_CONFIG_GLOBAL"] == os.devnull
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts/coverage_provenance.py"),
-            "--cell",
-            CELL,
-            "--output",
-            str(output),
-        ],
-        cwd=checkout,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "refname 'HEAD' is ambiguous" in result.stderr
-    assert json.loads(output.read_text()) == RECORD | {"tested_sha": tested_sha}
+    summary = checkout / "summary.json"
+    summary.write_text('{"packages":{}}\n')
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts/coverage_provenance.py"),
+        "--cell",
+        CELL,
+        "--output",
+        str(output),
+        "--summary",
+        str(summary),
+    ]
+    stamped = []
+    for name, content in [("src.ts", "first"), ("src.ts", "second"), (cfg.name, "other provider")]:
+        (checkout / name).write_text(content)
+        fixture_git(checkout, "add", name)
+        fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "-m", "Change input")
+        tested_sha = fixture_git(checkout, "-c", "core.warnAmbiguousRefs=false", "rev-parse", "HEAD").strip()
+        result = subprocess.run(
+            cmd, cwd=checkout, env=env, capture_output=True, text=True, check=False, timeout=30
+        )
+        assert result.returncode == 0, result.stderr
+        assert "refname 'HEAD' is ambiguous" in result.stderr
+        payload = json.loads(summary.read_text())
+        fingerprint = payload[producer.SEMANTICS_FIELD]
+        assert payload == {"packages": {}, producer.SEMANTICS_FIELD: fingerprint}
+        assert json.loads(output.read_text()) == RECORD | {
+            "tested_sha": tested_sha,
+            producer.SEMANTICS_FIELD: fingerprint,
+        }
+        stamped.append(fingerprint)
+    assert stamped[0] == stamped[1] != stamped[2]
     assert fixture_git(caller, "rev-parse", "HEAD").strip() == caller_sha
     assert fixture_git(caller, "show-ref", "--heads") == caller_refs
 
@@ -411,6 +428,29 @@ def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
     assert producer.main(["--cell", CELL, "--output", str(output)]) == 1
     assert not output.exists()
     assert message in caplog.text
+
+
+@pytest.mark.parametrize("failure", ["no-git", "git-failed", "no-inputs"])
+def test_unavailable_fingerprint(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    """Do not generate a compatibility fingerprint without instrumentation evidence.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Scoped subprocess overrides.
+        failure (str): Missing instrumentation case.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Invalid evidence generated a stamp.
+    """
+    monkeypatch.setattr(producer.shutil, "which", lambda _: None if failure == "no-git" else "/git")
+    git = Mock(return_value=b"100644 blob deadbeef\tscripts/tests/fixture.py\0")
+    if failure == "git-failed":
+        git.side_effect = subprocess.TimeoutExpired("git", 30)
+    monkeypatch.setattr(producer.subprocess, "check_output", git)
+    with pytest.raises(
+        (FileNotFoundError, ValueError), match=r"locate `git`|coverage instrumentation inputs"
+    ):
+        producer.semantics_fingerprint(RUN.tested_sha)
 
 
 def test_ci_wires_receipts_to_existing_uploads() -> None:

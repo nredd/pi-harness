@@ -53,9 +53,9 @@ from coverage_snapshot import (
 LOGGER = logging.getLogger(__name__)
 API = "https://api.github.com"
 WORKFLOW = ".github/workflows/ci.yml"
-ARTIFACT = "coverage-ubuntu-24.04"
+ARTIFACT = "coverage-{host}"
 # Display names from ci.yml:630, :650 and :734; keep the publisher contract test in sync.
-OWNED_JOB = "owned (ubuntu-24.04)"
+OWNED_JOB = "owned ({host})"
 PLAN_STEP = "Report execution plan"
 UPLOAD_STEP = "Preserve independent coverage reports and summary"
 MARKER = "<!-- pi-harness:coverage:v1 -->"
@@ -297,7 +297,7 @@ def fetch_evidence(
     full producer sidecar. Artefacts from another attempt are never a fallback.
     """
     jobs = api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
-    owned = [job for job in jobs if job["name"] == f"owned ({host})"]
+    owned = [job for job in jobs if job["name"] == OWNED_JOB.format(host=host)]
     if len(owned) != 1:
         return "unavailable"
     job = owned[0]
@@ -317,7 +317,7 @@ def fetch_evidence(
     ):
         return "unavailable"
     start, end = timestamp(upload["started_at"]), timestamp(upload["completed_at"])
-    artifact = f"coverage-{host}"
+    artifact = ARTIFACT.format(host=host)
     candidates = [
         row
         for row in api.pages(f"actions/runs/{run.id}/artifacts", "artifacts")
