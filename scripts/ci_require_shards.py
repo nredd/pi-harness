@@ -1,4 +1,4 @@
-"""Require the planned owned shards to succeed before CI collects their coverage.
+"""Give the required-check verdict for a fan-in cell's planned owned shards.
 
 References:
 - https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#needs-context

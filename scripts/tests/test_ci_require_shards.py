@@ -56,6 +56,21 @@ def test_bash_parity(shards_result: str, windows_result: str, windows_required: 
     assert execute([sys.executable, str(SCRIPT)], env) == execute(BASH_ORACLE, env)
 
 
+@pytest.mark.parametrize("shards_result", [None, "success", "weird"])
+@pytest.mark.parametrize("windows_result", [None, "weird"])
+@pytest.mark.parametrize("windows_required", ["true", "false"])
+def test_bash_parity_for_unset_and_unknown_results(
+    shards_result: str | None, windows_result: str | None, windows_required: str
+) -> None:
+    """Keep parity when a result is unset or an unknown nonempty string."""
+    env = {"CELL": "owned (ubuntu-24.04)", "WINDOWS_REQUIRED": windows_required}
+    if shards_result is not None:
+        env["SHARDS_RESULT"] = shards_result
+    if windows_result is not None:
+        env["WINDOWS_RESULT"] = windows_result
+    assert execute([sys.executable, str(SCRIPT)], env) == execute(BASH_ORACLE, env)
+
+
 def test_macos_does_not_need_a_windows_result() -> None:
     """Accept the shared step's macOS inputs, which omit `WINDOWS_RESULT`."""
     env = {"CELL": "owned (macos-14)", "SHARDS_RESULT": "success", "WINDOWS_REQUIRED": "false"}
