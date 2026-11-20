@@ -19,7 +19,11 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypedDict
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, TypedDict
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 SECTION = re.compile(r"<([a-zA-Z_][a-zA-Z_0-9-]*)>(.*?)</\1>", re.DOTALL)
 ESCAPE = re.compile(r"\\u[0-9a-fA-F]{4}|\\.|[^\\]", re.DOTALL)
@@ -42,7 +46,9 @@ CONTROL_FIELDS = frozenset(
         "stop_sequences",
     }
 )
-MESSAGE_CATEGORIES = {"assistant": "assistant_text", "user": "user"}
+MESSAGE_CATEGORIES: Final[Mapping[str, str]] = MappingProxyType(
+    {"assistant": "assistant_text", "user": "user"}
+)
 SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:"
 
 
