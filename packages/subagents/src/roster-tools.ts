@@ -48,7 +48,8 @@ export function createRosterTools(options: {
 		defineTool({
 			name: LIST_AGENTS,
 			label: "List Agents",
-			description: "Read authorized same-root agent metadata (untrusted text); no results or messaging.",
+			description:
+				"Read untrusted roster metadata: the root orchestrator row, your own row, and immediate sibling and direct child rows only for allowed agent types. No results or messaging.",
 			parameters: Type.Object({}),
 			execute: async () => {
 				if (!runtime?.manager.roster)
