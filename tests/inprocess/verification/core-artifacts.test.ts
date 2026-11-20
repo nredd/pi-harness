@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { describe, expect, it, onTestFinished } from "vitest";
 import {
 	diffInstalled,
 	npmCacheDirs,
@@ -39,16 +39,11 @@ function tarball(entries: Entry[], trailer = true): Buffer {
 	return gzipSync(Buffer.concat(parts));
 }
 
-const roots: string[] = [];
 function temp(): string {
 	// Realpath once: macOS tmpdir() is under the /var -> /private/var symlink, and require.resolve returns the realpath (#902).
-	const dir = realpathSync(mkdtempSync(join(tmpdir(), "core-artifacts-")));
-	roots.push(dir);
+	const dir = realpathSync(makeTestTempDir("core-artifacts-", onTestFinished));
 	return dir;
 }
-afterEach(() => {
-	for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function install(root: string, files: Record<string, string>): string {
 	for (const [path, body] of Object.entries(files)) {

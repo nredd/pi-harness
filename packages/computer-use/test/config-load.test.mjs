@@ -1,10 +1,11 @@
 // `src/config.ts` file, env and `blocked_apps` loading: every boolean spelling, bad shapes and missing files (nredd/pi-harness#703, Refs #645).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeFs from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as nodeFs from "node:fs";
-import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import {
 	ALWAYS_BLOCKED_BUNDLE_IDS,
 	DEFAULT_BLOCKED_APPS,
@@ -47,7 +48,7 @@ beforeEach(() => {
 	saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 	for (const key of ENV_KEYS) delete process.env[key];
 	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-	root = mkdtempSync(path.join(os.tmpdir(), "cu-config-"));
+	root = makeTestTempDir("cu-config-", onTestFinished);
 	mkdirSync(cwd(), { recursive: true });
 	process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
 });
@@ -59,7 +60,6 @@ afterEach(() => {
 	}
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	rmSync(root, { recursive: true, force: true });
 	loadComputerUseConfig(path.join(os.tmpdir(), "cu-config-reset"));
 });
 

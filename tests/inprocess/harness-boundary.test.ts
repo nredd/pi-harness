@@ -1,11 +1,11 @@
 /** Native graph controls for the public-SDK stack fixture: guard and scenarios live in `tests/fixtures/native-*.mjs`. */
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { runTree } from "@nredd/pi-test-lib/run-tree";
-import { expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished } from "vitest";
 
 /** Same bound as `runtime-surface.test.ts`: a loaded runner must not time out a healthy child. */
 const CHILD_TIMEOUT_MS = 30_000;
@@ -34,7 +34,7 @@ interface Receipt {
  *   Promise<Receipt>: the child's JSON receipt.
  */
 async function run(executable: string, script: string, args: string[] = []): Promise<Receipt> {
-	const root = mkdtempSync(join(tmpdir(), "stack-headless-process-"));
+	const root = makeTestTempDir("stack-headless-process-", onTestFinished);
 	const home = join(root, "home");
 	const temp = join(root, "tmp");
 	mkdirSync(home);
@@ -63,7 +63,6 @@ async function run(executable: string, script: string, args: string[] = []): Pro
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		return JSON.parse(result.stdout) as Receipt;
 	} finally {
-		rmSync(root, { recursive: true, force: true });
 		expect(existsSync(root)).toBe(false);
 	}
 }

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, onTestFinished, test } from "vitest";
 import stackResourcesProbe from "./stack-resources.ts";
 
 type Handler = (event: unknown, ctx: { cwd: string; isProjectTrusted(): boolean }) => Promise<void>;
@@ -13,7 +13,7 @@ const saved = new Map(ENV.map((name) => [name, process.env[name]]));
 let root = "";
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "stack-resources-probe-"));
+	root = makeTestTempDir("stack-resources-probe-", onTestFinished);
 	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
 	delete process.env.PI_OFFLINE;
 });
@@ -23,7 +23,6 @@ afterEach(() => {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
 	}
-	rmSync(root, { recursive: true, force: true });
 });
 
 /** Write `files` (path relative to `root` -> content) into the disposable tree. */

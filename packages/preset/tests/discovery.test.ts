@@ -3,7 +3,7 @@
 // agent directory and project, so nothing under the real `~/.pi` is read or written.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -20,7 +20,8 @@ import {
 	resetPackageState,
 	setPackageAgentsGate,
 } from "@nredd/pi-subagents/src/package-resources.ts";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { manifest, pkgRoot } from "./fixtures/package.ts";
 
 const SKILLS = ["code-review", "coding-like-redd", "get-it-merged", "ship-issue"];
@@ -66,7 +67,7 @@ interface Sandbox {
  * Results never depend on (or touch) the real user's resources, auth, or process state.
  */
 async function withSandbox<T>(fn: (box: Sandbox) => Promise<T>): Promise<T> {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-preset-discovery-")));
+	const root = realpathSync(makeTestTempDir("pi-preset-discovery-", onTestFinished));
 	const home = join(root, "home");
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "project");
@@ -98,7 +99,6 @@ async function withSandbox<T>(fn: (box: Sandbox) => Promise<T>): Promise<T> {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
 		}
-		rmSync(root, { recursive: true, force: true });
 	}
 }
 

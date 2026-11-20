@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, RegisteredCommand } from "@earendil-works/pi-coding-agent";
-import { afterEach, test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, onTestFinished, test } from "vitest";
 import harnessProbe, { collector } from "./render.ts";
 
 test("a Node `--expose-gc` hook is used as is, and Bun is not consulted", () => {
@@ -34,12 +34,10 @@ test("a runtime with neither hook has no collector, so the reading is flagged `g
 type Handler = RegisteredCommand["handler"];
 
 const previous = process.env.HARNESS_PROBE_OUT;
-const roots: string[] = [];
 
 afterEach(() => {
 	if (previous === undefined) delete process.env.HARNESS_PROBE_OUT;
 	else process.env.HARNESS_PROBE_OUT = previous;
-	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 /** A TUI double that counts invalidations and records each `renderNow(force)` argument. */
@@ -86,8 +84,7 @@ function harness(tui: unknown, runtime?: Parameters<typeof harnessProbe>[1]) {
 
 /** Point `HARNESS_PROBE_OUT` at a fresh private file. */
 function output(): string {
-	const root = mkdtempSync(join(tmpdir(), "render-probe-"));
-	roots.push(root);
+	const root = makeTestTempDir("render-probe-", onTestFinished);
 	const out = join(root, "probe.jsonl");
 	process.env.HARNESS_PROBE_OUT = out;
 	return out;

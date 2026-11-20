@@ -1,16 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, onTestFinished, test } from "vitest";
 
 const FAILURE_EXIT_STATUS = 1;
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 
 test("Bun runs the injected todo setup with the guard active", () => {
-	const home = realpathSync(mkdtempSync(join(tmpdir(), "pi-home-guard-control-")));
-	try {
+	const home = realpathSync(makeTestTempDir("pi-home-guard-control-", onTestFinished));
+	{
 		const config = join(home, "negative.config.mjs");
 		writeFileSync(
 			config,
@@ -40,22 +40,20 @@ export default mergeConfig(config, { test: {
 		expect(result.error).toBeUndefined();
 		expect(result.status, result.stdout + result.stderr).toBe(0);
 		expect(result.stdout + result.stderr).not.toContain("HOMEDIR GUARD");
-	} finally {
-		rmSync(home, { recursive: true, force: true });
 	}
 });
 
 test.each(["beforeEach", "afterEach"])(
 	"Bun guard rejects a mismatch at the %s boundary through a linked temp home",
 	(boundary) => {
-		const directory = mkdtempSync(join(tmpdir(), "pi-home-boundary-control-"));
+		const directory = makeTestTempDir("pi-home-boundary-control-", onTestFinished);
 		const linked = join(directory, "linked-home");
 		mkdirSync(join(directory, "home"));
 		symlinkSync(join(directory, "home"), linked, "dir");
 		// Bun/Vite's bundled config loader fails through macOS /var aliases. Exercise
 		// that path on every OS, then give the child one canonical cwd/config path.
 		const home = realpathSync(linked);
-		try {
+		{
 			const fixture = join(home, "boundary.test.ts");
 			const config = join(home, "boundary.config.mjs");
 			const mismatch = `process.env.HOME = ${JSON.stringify(join(home, "changed"))};`;
@@ -80,8 +78,6 @@ test("boundary mismatch", () => { ${boundary === "afterEach" ? mismatch : ""} })
 			expect(result.error).toBeUndefined();
 			expect(result.status).toBe(FAILURE_EXIT_STATUS);
 			expect(result.stdout + result.stderr).toMatch(/HOMEDIR GUARD: .*boundary.test.ts/);
-		} finally {
-			rmSync(directory, { recursive: true, force: true });
 		}
 	},
 );

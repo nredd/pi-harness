@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type MockInstance, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { type MockInstance, onTestFinished, test, vi } from "vitest";
 import transcriptTypes, { blockTypes, TypeTrace } from "./transcript-types.ts";
 
 // Mock the ESM boundary itself: Bun's syncBuiltinESMExports does not forward default-export spies
@@ -117,7 +117,7 @@ type Handler = (event: never, ctx: never) => unknown;
 /** Register the extension against a recording API and a private trace directory. */
 function harness(prefix: string, sessionManager?: unknown) {
 	const previous = process.env.PI_TRANSCRIPT_TYPES_DIR;
-	const root = mkdtempSync(join(tmpdir(), prefix));
+	const root = makeTestTempDir(prefix, onTestFinished);
 	const directory = join(root, "trace");
 	const handlers = new Map<string, Handler>();
 	const api = {
@@ -137,7 +137,6 @@ function harness(prefix: string, sessionManager?: unknown) {
 		emit("session_shutdown");
 		if (previous === undefined) delete process.env.PI_TRANSCRIPT_TYPES_DIR;
 		else process.env.PI_TRANSCRIPT_TYPES_DIR = previous;
-		rmSync(root, { recursive: true, force: true });
 	};
 	return { root, directory, handlers, notices, emit, register, cleanup };
 }

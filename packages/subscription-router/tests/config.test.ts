@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { CONFIG_FILE, loadConfig, parseConfig } from "../src/config.ts";
 
 describe("parseConfig", () => {
@@ -106,13 +106,8 @@ describe("parseConfig", () => {
 });
 
 describe("loadConfig", () => {
-	let dir: string | undefined;
-	afterEach(async () => {
-		if (dir) await rm(dir, { recursive: true, force: true });
-	});
-
 	it("treats a missing file as no profiles and reports invalid JSON with the path", async () => {
-		dir = await mkdtemp(join(tmpdir(), "router-config-"));
+		const dir = makeTestTempDir("router-config-", onTestFinished);
 		expect(await loadConfig(dir)).toEqual({ ok: true, profiles: [] });
 		await writeFile(join(dir, CONFIG_FILE), "{ nope");
 		const result = await loadConfig(dir);
@@ -121,7 +116,7 @@ describe("loadConfig", () => {
 	});
 
 	it("reports filesystem errors other than a missing config", async () => {
-		dir = await mkdtemp(join(tmpdir(), "router-config-"));
+		const dir = makeTestTempDir("router-config-", onTestFinished);
 		await mkdir(join(dir, CONFIG_FILE));
 		const result = await loadConfig(dir);
 		expect(result.ok).toBe(false);
@@ -129,7 +124,7 @@ describe("loadConfig", () => {
 	});
 
 	it("reports a well-formed document that fails validation with the path and the validation error", async () => {
-		dir = await mkdtemp(join(tmpdir(), "router-config-"));
+		const dir = makeTestTempDir("router-config-", onTestFinished);
 		await writeFile(join(dir, CONFIG_FILE), JSON.stringify({ profiles: { a: { chain: [] } } }));
 		expect(await loadConfig(dir)).toEqual({
 			ok: false,

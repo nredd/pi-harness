@@ -1,11 +1,11 @@
 /** Deterministic shared-ledger race: separate OS controller processes, real claims, synthetic backend only. */
 import { fork } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished } from "vitest";
 import { codexIdentity } from "../src/codex-contract.ts";
 import { CodexResets } from "../src/codex-resets.ts";
 import { ResetJournal } from "../src/reset-journal.ts";
@@ -77,7 +77,7 @@ function actor(role: "A" | "B", mode: string, root: string) {
 it.each(["identity", "cancel", "error", "unsupported", "noCredit", "nothingToReset", "crash"])(
 	"retains another process's uncertain consume after publisher %s",
 	async (mode) => {
-		const root = await mkdtemp(join(tmpdir(), "codex-cross-process-"));
+		const root = makeTestTempDir("codex-cross-process-", onTestFinished);
 		const a = actor("A", mode, root);
 		let b: ReturnType<typeof actor> | undefined;
 		try {
@@ -173,7 +173,6 @@ it.each(["identity", "cancel", "error", "unsupported", "noCredit", "nothingToRes
 		} finally {
 			await a.kill();
 			await b?.kill();
-			await rm(root, { recursive: true, force: true });
 		}
 	},
 	20_000,

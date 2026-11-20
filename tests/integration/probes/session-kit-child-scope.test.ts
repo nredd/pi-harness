@@ -1,23 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { afterEach, test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import childScopeProbe from "./session-kit-child-scope.ts";
 
 type Handler = (event: unknown, ctx: { cwd: string }) => void;
 
-const roots: string[] = [];
-
-afterEach(() => {
-	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
-
 /** Register the probe against a recording API in a private cwd. */
 function harness(sessionName: string | undefined) {
-	const cwd = mkdtempSync(join(tmpdir(), "child-scope-probe-"));
-	roots.push(cwd);
+	const cwd = makeTestTempDir("child-scope-probe-", onTestFinished);
 	const handlers = new Map<string, Handler>();
 	const tools: ToolDefinition[] = [];
 	const all = ["read", "goal_update", "monitor_start", "monitor_read", "monitor_stop"].map(

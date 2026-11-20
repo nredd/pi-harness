@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, onTestFinished, test, vi } from "vitest";
 import usageFixture from "./usage_fixture.ts";
 
 type Handler = (event: unknown, ctx: unknown) => void;
@@ -11,14 +11,13 @@ type Handler = (event: unknown, ctx: unknown) => void;
 let root = "";
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "usage-fixture-"));
+	root = makeTestTempDir("usage-fixture-", onTestFinished);
 	vi.useFakeTimers();
 });
 
 afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllEnvs();
-	rmSync(root, { recursive: true, force: true });
 });
 
 /** Register the fixture against a recording API and an in-memory event bus. */

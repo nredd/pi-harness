@@ -1,11 +1,11 @@
 // `src/index.ts` registration, `/computer-use` status and lifecycle hooks against a recording ExtensionAPI (nredd/pi-harness#703, Refs #645).
 // The host platform is a seam (`process.platform` is redefined per case) so the darwin-only arms run on every OS.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
-import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
 import { DEFAULT_BLOCKED_APPS } from "../src/config.ts";
 import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../src/index.ts";
@@ -57,7 +57,7 @@ beforeEach(() => {
 	savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 	for (const key of ENV_KEYS) delete process.env[key];
 	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-	root = mkdtempSync(path.join(os.tmpdir(), "cu-ext-"));
+	root = makeTestTempDir("cu-ext-", onTestFinished);
 	mkdirSync(path.join(root, "project"), { recursive: true });
 	process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
 	vi.clearAllMocks();
@@ -73,7 +73,6 @@ afterEach(() => {
 	for (const [key, value] of Object.entries(savedEnv)) if (value !== undefined) process.env[key] = value;
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	rmSync(root, { recursive: true, force: true });
 });
 
 describe("registration", () => {
