@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ci_native_helper
+import native_lint
 
 SCRIPT = Path(__file__).resolve().parents[1] / "ci_native_helper.py"
+WORKFLOW = SCRIPT.parents[1] / ".github/workflows/native-helper.yml"
 SOURCE_SHA = "0123456789abcdef0123456789abcdef01234567"
 BUILD_PREFIX = (
     b"source=0123456789abcdef0123456789abcdef01234567\n"
     b"target=x86_64-pc-windows-msvc\n"
     b"rust_requested=1.97.1\n"
-    b"protocol=4\n"
-    b"capability=fail-closed-live-target-v1\n"
+    + f"protocol={ci_native_helper.PROTOCOL}\ncapability={ci_native_helper.CAPABILITY}\n".encode("ascii")
 )
 
 
@@ -118,3 +121,86 @@ def test_missing_build_and_fixture_emit_only_build_status(runner: tuple[Path, Pa
     assert (
         artifact_dir / "build.txt"
     ).read_bytes() == BUILD_PREFIX + b"executable=NOT_BUILT\nfixture=NOT_REACHED\r\n"
+
+
+def test_windows_workflow_routes_bootstrap_failures_to_receipt_only() -> None:
+    """Run fallback on either bootstrap failure without clearing the job failure."""
+    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["windows-helper"]["steps"]
+    steps_by_key = {step.get("id") or step.get("name"): (index, step) for index, step in enumerate(steps)}
+    ordered_keys = (
+        "Check out Windows helper source",
+        "setup_uv",
+        "bootstrap_python",
+        "Install pinned native toolchain",
+        "Link helper and execute real Windows crate tests",
+        "Exercise only disposable native fixture windows",
+        "Stage source-bound executable without publishing or installing",
+        "Record Windows helper bootstrap failure",
+        "Upload Windows helper evidence",
+    )
+    missing = [key for key in ordered_keys if key not in steps_by_key]
+    assert not missing, f"Missing Windows helper steps: {missing}"
+    positions = [steps_by_key[key][0] for key in ordered_keys]
+    assert positions == sorted(positions), f"Windows helper steps must run in this order: {ordered_keys}"
+    checkout, setup, bootstrap, install, build, fixture, stage, receipt, upload = (
+        steps_by_key[key][1] for key in ordered_keys
+    )
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert setup["uses"].startswith("astral-sh/setup-uv@")
+    launch = "uv run --no-project --python (Get-Content .python-version) python "
+    assert bootstrap["run"] == launch + "--version"
+    for step in (checkout, setup, bootstrap, install, build, fixture):
+        assert "if" not in step
+        assert "continue-on-error" not in step
+    # Exact-string pins intentionally detect changes to the workflow routing contract.
+    assert stage["if"] == "${{ always() && steps.bootstrap_python.outcome == 'success' }}"
+    assert stage["run"].startswith(launch + "scripts/ci_native_helper.py ")
+    # Complementary conditions: failure, skipped and cancelled all select only the receipt.
+    assert receipt["if"] == "${{ always() && steps.bootstrap_python.outcome != 'success' }}"
+    assert receipt["shell"] == "pwsh"
+    assert upload["uses"].startswith("actions/upload-artifact@")
+    assert upload["if"] == "always()"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["path"] == (
+        "${{ steps.bootstrap_python.outcome == 'success' && 'native-helper-artifact/*'"
+        " || 'native-helper-artifact/build.txt' }}"
+    )
+
+
+def test_bootstrap_failure_script_writes_receipt_without_uv(
+    tmp_path: Path, runner: tuple[Path, Path]
+) -> None:
+    """Execute the actual fallback block with neither uv nor Python on PATH.
+
+    Parameters:
+        tmp_path (Path): Disposable workspace with no build outputs.
+        runner (tuple[Path, Path]): Missing executable and normal staging directory.
+    """
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    job = workflow["jobs"]["windows-helper"]
+    fallback = next(
+        step["run"] for step in job["steps"] if step.get("name") == "Record Windows helper bootstrap failure"
+    )
+    script = tmp_path / "fallback.ps1"
+    script.write_text("$ErrorActionPreference = 'Stop'\n" + fallback, encoding="utf-8")
+    pwsh = native_lint.binaries(WORKFLOW.parents[2] / ".native-lint")["pwsh"]
+    subprocess.check_output(
+        [str(pwsh), "-NoProfile", "-NonInteractive", "-File", str(script)],
+        cwd=tmp_path,
+        env={
+            "PATH": "",
+            "HOME": str(tmp_path),
+            "HELPER_SOURCE_SHA": SOURCE_SHA,
+            "RUSTUP_TOOLCHAIN": job["env"]["RUSTUP_TOOLCHAIN"],
+        },
+        stderr=subprocess.STDOUT,
+    )
+
+    artifact_dir = tmp_path / "native-helper-artifact"
+    assert {path.name for path in artifact_dir.iterdir()} == {"build.txt"}
+    executable, normal_dir = runner
+    ci_native_helper.stage(executable, normal_dir, SOURCE_SHA)
+    normal_receipt = (normal_dir / "build.txt").read_bytes()
+    assert (artifact_dir / "build.txt").read_bytes() == (
+        normal_receipt.removesuffix(b"\r\n") + b"\nstaging=BOOTSTRAP_FAILED\r\n"
+    )
