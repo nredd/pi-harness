@@ -243,11 +243,10 @@ are not branch outcomes or statements; the full-source producer retains unexecut
 `LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
 self-process/managed-child AX handles and synthetic nodes, never queries AX attributes.
 The child is reaped before assertions; a source-level guard forbids AX queries/actions.
-The bounded macOS AX descendant walk visits equivalent handles only once, so a cycle returning
-fresh handles does not repeat nodes in snapshots. The headless fixture reproduces that back edge.
 Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
-Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage or change
-runtime behavior. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
+Its AX traversal fixture returns a fresh equivalent node on the cycle's back edge, so identity-only
+dedupe fails it; the walk dedupes by AX equivalence (hash buckets, then `CFEqual`).
+Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 
 `npm test -- test/platform-linux.test.mjs --coverage.enabled=false` uses disposable protocol children, not a native desktop helper. Its closed-stdin

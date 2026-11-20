@@ -26,6 +26,11 @@ private struct CGWindowOwnerSummary {
 	let name: String
 }
 
+/// Hash consistent with `CFEqual` on AX handles, so equivalent fresh handles share a bucket.
+func axEquivalenceHash(_ element: AXUIElement) -> Int {
+	Int(CFHash(element))
+}
+
 struct AXDescendant<Element> {
 	let element: Element
 	let depth: Int
@@ -38,17 +43,25 @@ struct AXTraversalWorld<Element: AnyObject> {
 	let role: (Element) -> String
 	let childLists: (Element) -> (all: [Element], visible: [Element]?)
 	let sameElement: (Element, Element) -> Bool
+	/// Must agree with `sameElement`: equal elements hash equally. Collisions only cost comparisons.
+	let hash: (Element) -> Int
 
 	func collect(startingAt root: Element, maxDepth: Int, maxNodes: Int) -> [AXDescendant<Element>] {
 		let nodeLimit = max(1, maxNodes)
 		var queue: [(Element, Int, Bool, Bool)] = [(root, 0, false, true)]
+		// Visited elements bucketed by `hash`, so `sameElement` (CFEqual) only runs within a bucket.
+		// A linear scan of `output` was O(n^2) CFEqual calls at the 2000-5000 node budgets.
+		var seen: [Int: [Element]] = [:]
 		var index = 0
 		var output: [AXDescendant<Element>] = []
 		while index < queue.count && output.count < nodeLimit {
 			let (element, depth, parentInsideWebArea, inheritedVisible) = queue[index]
 			index += 1
-			// AX can return a fresh handle for an element already visited.
-			if output.contains(where: { sameElement($0.element, element) }) { continue }
+			// AX can return a fresh handle for an element already visited, so dedupe by equivalence.
+			// Queue slots still count queued duplicates against the node budget (rule unchanged).
+			let bucket = hash(element)
+			if seen[bucket, default: []].contains(where: { sameElement($0, element) }) { continue }
+			seen[bucket, default: []].append(element)
 			let elementRole = role(element)
 			let insideWebArea = parentInsideWebArea || elementRole == "AXWebArea"
 			output.append(AXDescendant(element: element, depth: depth, insideWebArea: insideWebArea, axVisible: inheritedVisible))
@@ -3354,7 +3367,7 @@ final class Bridge {
 		let world = AXTraversalWorld<AXUIElement>(
 			role: { self.stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "" },
 			childLists: descendantChildLists,
-			sameElement: sameElement
+			sameElement: sameElement, hash: axEquivalenceHash
 		)
 		return world.collect(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes)
 	}

@@ -20,20 +20,18 @@ private func runAXTraversalAssertions() {
   let hidden = Node("hidden")
   let label = Node("label")
   let button = Node("button")
+  // The back edge `link -> Node("web")` is a DIFFERENT object equal to `web` by `sameElement`,
+  // like the fresh handle AX returns on every call; object-identity dedupe would revisit `web`.
   let children = [
     root.name: [web, toolbar], web.name: [link, hidden], toolbar.name: [button],
-    hidden.name: [label],
+    link.name: [Node(web.name)], hidden.name: [label],
   ]
   // Visibility queries may return a different handle for the same AX element.
   let visible = [web.name: [Node(link.name)], hidden.name: [label]]
   let world = AXTraversalWorld<Node>(
     role: { $0.name == web.name ? "AXWebArea" : "AXGroup" },
-    childLists: { node in
-      // AX can return a fresh handle on every traversal of the back edge.
-      let all = node.name == link.name ? [Node(web.name)] : children[node.name] ?? []
-      return (all, visible[node.name])
-    },
-    sameElement: { $0.name == $1.name })
+    childLists: { (children[$0.name] ?? [], visible[$0.name]) },
+    sameElement: { $0.name == $1.name }, hash: { $0.name.hashValue })
 
   let all = world.collect(startingAt: root, maxDepth: 8, maxNodes: 20)
   check(
@@ -58,6 +56,15 @@ private func runAXTraversalAssertions() {
     "AX traversal counts the root against the node budget and returns the breadth-first prefix")
   let minimum = world.collect(startingAt: root, maxDepth: 8, maxNodes: 0)
   check(minimum.map(\.element.name) == ["window"], "AX traversal retains the root at zero budget")
+  // Equality, not the hash, decides: distinct elements sharing a hash are both visited.
+  let collidingWorld = AXTraversalWorld<Node>(
+    role: { _ in "AXGroup" },
+    childLists: { (children[$0.name] ?? [], nil) },
+    sameElement: { $0.name == $1.name }, hash: { _ in 0 })
+  check(
+    collidingWorld.collect(startingAt: root, maxDepth: 8, maxNodes: 20).map(\.element.name)
+      == ["window", "web", "toolbar", "link", "hidden", "button", "label"],
+    "AX traversal compares colliding hashes by equivalence and still dedupes the cycle")
   print("macos AX descendant traversal checks passed")
 }
 
@@ -101,6 +108,9 @@ func runRefLookAssertions() {
   check(
     fixture.terminationStatus == 0 && !fixture.isRunning, "isolated PID fixture exits and is reaped"
   )
+  check(
+    axEquivalenceHash(element) == axEquivalenceHash(equivalent),
+    "equivalent AX handles share an equivalence hash")
   check(!CFEqual(element, distinct), "different owned fixture PID produces an unequal AX handle")
   let store = AXRefStore(unownedCapacity: 2)
   let window = store.storeWindow(element)
