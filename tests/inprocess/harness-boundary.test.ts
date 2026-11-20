@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { runTree } from "@nredd/pi-test-lib/run-tree";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 
 /** Same bound as `runtime-surface.test.ts`: a loaded runner must not time out a healthy child. */
 const CHILD_TIMEOUT_MS = 30_000;
@@ -34,12 +34,15 @@ interface Receipt {
  *   Promise<Receipt>: the child's JSON receipt.
  */
 async function run(executable: string, script: string, args: string[] = []): Promise<Receipt> {
-	const root = makeTestTempDir("stack-headless-process-", onTestFinished);
-	const home = join(root, "home");
-	const temp = join(root, "tmp");
-	mkdirSync(home);
-	mkdirSync(temp);
+	let cleanup!: () => void;
+	const root = makeTestTempDir("stack-headless-process-", (remove) => {
+		cleanup = remove;
+	});
 	try {
+		const home = join(root, "home");
+		const temp = join(root, "tmp");
+		mkdirSync(home);
+		mkdirSync(temp);
 		const result = await runTree(
 			executable,
 			[fileURLToPath(new URL(`./tests/fixtures/${script}`, import.meta.url)), ...args],
@@ -63,6 +66,7 @@ async function run(executable: string, script: string, args: string[] = []): Pro
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		return JSON.parse(result.stdout) as Receipt;
 	} finally {
+		cleanup();
 		expect(existsSync(root)).toBe(false);
 	}
 }
