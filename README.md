@@ -542,7 +542,9 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   time paces reads without catch-up bursts. Startup drains uncapped, then each measured window
   lasts six seconds. Readiness is bounded at 60 seconds; input writes at one second; teardown
   kills owned groups before reaping their leaders and closes all masters, including partial
-  startup and cancellation. Output tails are bounded at 64 KiB per child.
+  startup and cancellation. Output tails are bounded at 64 KiB per child. During the capped
+  drain, each tick sends input serially: `send()` may block up to one second per child, so
+  the eight-child run includes driver-side input delay.
 - Calibration first runs a real fast synchronous writer with and without the same cap. It
   refuses absent writes, a writer heartbeat older than 0.5 seconds at the window end, low
   uncapped throughput, failure to deliver the capped rate, or no observed increase in completed
@@ -567,11 +569,13 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   8-child condition. Capped eight-child latency is `NOT RUN`: the attempt delivered output but
   lacked measured probe windows. Pytest warns without failing this cell, and the suite report
   records the reason and throughput with no latency metrics, not even zeros. Raw records remain
-  in the cell's `throttled-pty.json`.
+  in the cell's `throttled-pty.json`. Missing measured windows cannot distinguish a hung Pi
+  from a late-starting probe. An exited child or stalled input still fails the experiment;
+  the cell report keeps the partial delivery and probe records collected before the failure.
   #1096 tracks the complete eight-child measurement without raising the aggregate cap.
 - Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
   baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider
-  claim is made. The experiment requires only standard-library POSIX PTY operations in its driver.
+  claim is made. The driver uses the standard library plus the repo's own process-group helper.
 
 ### Remaining
 

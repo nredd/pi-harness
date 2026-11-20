@@ -14,7 +14,7 @@ import sys
 import time
 from itertools import pairwise
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from harness.fleet_load import make_sandboxes, streaming_script
 from harness.interactive import FIRST_FRAME_PATTERN
@@ -36,6 +36,7 @@ MIN_PAINT_SAMPLES = 4
 WRITER = dedent("""\
     import json, os, sys, time
     out = sys.argv[1]
+    pending = out + '.pending'
     maximum = 0.0
     writes = 0
     last = time.monotonic()
@@ -45,9 +46,10 @@ WRITER = dedent("""\
         maximum = max(maximum, (time.monotonic() - started) * 1000)
         writes += 1
         if time.monotonic() - last >= 0.1:
-            with open(out, 'w') as report:
+            with open(pending, 'w') as report:
                 json.dump({'max_write_ms': maximum, 'writes': writes,
                            'last_write_s': time.monotonic()}, report)
+            os.replace(pending, out)
             last = time.monotonic()
     """)
 
@@ -108,12 +110,17 @@ class CellDelivery(TypedDict):
     delivered_bytes_per_s: float
 
 
-class RawCell(CellDelivery):
+class CellOutcome(TypedDict, total=False):
+    """Failure details, absent for a measured cell."""
+
+    failure: str
+    status: Literal["NOT RUN"]
+
+
+class RawCell(CellDelivery, CellOutcome):
     """Retained driver/probe evidence, also when the cell is refused."""
 
     raw_probes: list[list[dict[str, Any]]]
-    failure: NotRequired[str]
-    status: NotRequired[Literal["NOT RUN"]]
 
 
 class Cell(CellDelivery):
@@ -127,6 +134,13 @@ class NotRunCell(CellDelivery):
 
     status: Literal["NOT RUN"]
     reason: str
+
+
+class FleetReport(TypedDict):
+    """Calibration and interactive outcomes in the overall benchmark report."""
+
+    calibration: list[CalibrationEntry]
+    cells: list[Cell | NotRunCell]
 
 
 def _delivery_record(sample: Drain) -> DeliveryRecord:
@@ -165,7 +179,10 @@ def calibrate(root: Path) -> list[CalibrationEntry]:
             finished_s = time.monotonic()
         if not report.is_file() or not all(sample.delivered):
             raise RuntimeError("Calibration writer produced no completed write observations")
-        record: WriterRecord = json.loads(report.read_text())
+        try:
+            record: WriterRecord = json.loads(report.read_text())
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Calibration writer observations are missing") from error
         if record["writes"] <= 0 or record["max_write_ms"] <= 0:
             raise RuntimeError("Calibration writer observations are missing")
         if not math.isfinite(record["last_write_s"]) or not 0 <= finished_s - record["last_write_s"] <= 0.5:
@@ -277,44 +294,65 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
             )
         )
     with PtyFleet(specs) as fleet:
-        # Match the existing launcher's first-frame footer seam. Raw PTY bytes
-        # contain styling inside transcript text; they are not a tmux screen capture.
-        fleet.wait_for(FIRST_FRAME_PATTERN.replace(r"\b", "").encode())
-        fleet.drain(1.0)
-        since_ms = time.time() * 1000
+        return _measure_cell(fleet, outs, root / "throttled-pty.json", cap)
+
+
+def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | None) -> Cell | NotRunCell:
+    """Measure a ready fleet and retain the evidence if measurement is interrupted."""
+    count = len(outs)
+    # Match the existing launcher's first-frame footer seam. Raw PTY bytes
+    # contain styling inside transcript text; they are not a tmux screen capture.
+    fleet.wait_for(FIRST_FRAME_PATTERN.replace(r"\b", "").encode())
+    fleet.drain(1.0)
+    since_ms = time.time() * 1000
+    next_key = 0.0
+
+    def type_keys(active: PtyFleet) -> None:
+        """Inject spaced input into every editor during the measured drain."""
+        nonlocal next_key
+        if time.monotonic() >= next_key:
+            for index in range(count):
+                active.send(index, b"x")
+            next_key = time.monotonic() + KEY_INTERVAL_S
+
+    before = tuple(fleet.counts)
+    started_ns = time.monotonic_ns()
+    delivery: Drain | None = None
+    outcome: CellOutcome = {}
+    try:
         for index in range(count):
             fleet.send(index, b"go\r")
         next_key = time.monotonic() + KEY_INTERVAL_S
-
-        def type_keys(active: PtyFleet) -> None:
-            """Inject spaced input into every editor during the measured drain."""
-            nonlocal next_key
-            if time.monotonic() >= next_key:
-                for index in range(count):
-                    active.send(index, b"x")
-                next_key = time.monotonic() + KEY_INTERVAL_S
-
         delivery = fleet.drain(WINDOW_S, bytes_per_s=cap, tick=type_keys)
+        if not all(delivery.delivered):
+            raise RuntimeError("A measured PTY delivered no output")
+        metrics = probe_metrics(outs, since_ms, time.time() * 1000)
+    except (RuntimeError, OSError) as error:
+        outcome["failure"] = str(error)
+        if count == 8 and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
+            outcome["status"] = "NOT RUN"
+            LOGGER.warning(f"Capped eight-child latency NOT RUN: {error}; raw observations at '{report}'")
+        else:
+            LOGGER.error(f"Refused synthetic PTY observations: {error}; raw observations at '{report}'")
+            raise
+    finally:
+        if delivery is None:
+            delivery = Drain(
+                tuple(after - prior for after, prior in zip(fleet.counts, before, strict=True)),
+                max(1, time.monotonic_ns() - started_ns) / 1_000_000_000,
+            )
         delivered: CellDelivery = {
             "count": count,
             "aggregate_cap": cap,
             "delivery": _delivery_record(delivery),
             "delivered_bytes_per_s": delivery.bytes_per_s,
         }
-        observations: RawCell = {**delivered, "raw_probes": [read_records(out) for out in outs]}
-        report = root / "throttled-pty.json"
-        try:
-            if not all(delivery.delivered):
-                raise RuntimeError("A measured PTY delivered no output")
-            metrics = probe_metrics(outs, since_ms, time.time() * 1000)
-        except RuntimeError as error:
-            observations["failure"] = str(error)
-            if count == 8 and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
-                observations["status"] = "NOT RUN"
-                LOGGER.warning(f"Capped eight-child latency NOT RUN: {error}; raw observations at '{report}'")
-                return {**delivered, "status": "NOT RUN", "reason": str(error)}
-            LOGGER.error(f"Refused synthetic PTY observations: {error}; raw observations at '{report}'")
-            raise
-        finally:
-            report.write_text(json.dumps(observations, indent=2))
+        observations: RawCell = {
+            **delivered,
+            **outcome,
+            "raw_probes": [read_records(out) for out in outs],
+        }
+        report.write_text(json.dumps(observations, indent=2))
+    if "failure" in outcome:
+        return {**delivered, "status": "NOT RUN", "reason": outcome["failure"]}
     return {**delivered, "probe": metrics}
