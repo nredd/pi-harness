@@ -4155,7 +4155,11 @@ Terse command-style prompts produce shallow, generic work.
 				const record = liveAgentById(latest) ?? resolveAgentRef(latest);
 				if (!record) {
 					const note = manager.getEvictedNote(latest);
-					return note ? textResult(agentNotFound(latest, true)) : errorResult(agentNotFound(latest));
+					if (!note) return errorResult(agentNotFound(latest));
+					const diagnostic = agentNotFound(latest, true);
+					if (note.fromSavedSession && (note.status === "running" || note.reopenRefusal))
+						return errorResult(diagnostic);
+					return textResult(diagnostic);
 				}
 				if (!isTopLevelAgent(record)) return errorResult(agentNotFound(latest));
 

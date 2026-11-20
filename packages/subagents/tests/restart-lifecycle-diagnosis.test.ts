@@ -281,7 +281,7 @@ it.each([
 		expect(child.state.callCount).toBe(chain ? 2 : 1);
 		await call(reopened, get(first));
 		const diagnostic = outcomes(reopened, "get_subagent_result").at(-1);
-		expect(diagnostic?.isError).toBe(false);
+		expect(diagnostic?.isError).toBe(true);
 		expect(diagnostic?.text).toContain(`Agent "${id}"`);
 		expect(diagnostic?.text).toContain(
 			mode === "recent" ? "may still be running in another process" : "interrupted by a process restart",
@@ -400,6 +400,7 @@ it.each([false, true])("checks fork ownership with a live survivor: %s", { timeo
 		const refused = outcomes(next, "Agent")[0];
 		expect(refused?.isError).toBe(true);
 		expect(refused?.text).toContain(live ? "is still running" : "does not belong to this parent");
+		expect(lookup?.isError).toBe(!live);
 		expect(lookup?.text).toContain(live ? "Status: running" : "last recorded status: completed");
 		expect(lookup?.text).not.toContain("interrupted");
 		expect(refused?.text).not.toContain("now belongs to another agent");
@@ -444,6 +445,7 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 	writeFileSync(unowned, '{"type":"session"}\n');
 	symlinkSync(outside, link);
 	const entries = [
+		["missing", join(dirname(file), "missing.jsonl"), "missing or unreadable"],
 		["forged", outside, "outside its configured directory"],
 		["symlink", link, "outside its configured directory"],
 		["dotdot", `${dirname(file)}/../${basename(dirname(file))}/${basename(file)}`, "invalid child session path"],
@@ -467,7 +469,54 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 		});
 	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	h.cleanup();
-	const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	const next = await fixture.start({
+		harness: { sessionManager: SessionManager.open(parentFile) },
+		factories: [
+			(pi) =>
+				pi.registerTool({
+					name: "settled_probe",
+					label: "Settled probe",
+					description: "Check codemode-style result settlement",
+					parameters: { type: "object", properties: {} },
+					execute: async (_id, _params, _signal, _update, ctx) => {
+						const ids = [record.id, ...entries.map(([id]) => id)];
+						const settled = await Promise.allSettled(
+							ids.map(async (id) => {
+								const result = await ctx.executeTool("get_subagent_result", { agent_id: id });
+								if (result.isError) throw new Error(`Lookup failed for ${id}`);
+							}),
+						);
+						return {
+							content: [{ type: "text", text: JSON.stringify(settled.map(({ status }) => status)) }],
+							details: undefined,
+						};
+					},
+				}),
+		],
+	});
+	next.session.setActiveToolsByName([...next.session.getActiveToolNames(), "settled_probe"]);
+	next.setResponses([
+		toolCalls(
+			{ name: "get_subagent_result", args: { agent_id: record.id } },
+			...entries.map(([id]) => ({ name: "get_subagent_result", args: { agent_id: id } })),
+			{ name: "settled_probe", args: {} },
+		),
+		answer("CHECKED LOOKUPS"),
+	]);
+	await next.session.prompt("look up completed and unavailable children");
+	const lookups = outcomes(next, "get_subagent_result");
+	expect(lookups[0]).toMatchObject({
+		isError: false,
+		text: expect.stringContaining("last recorded status: completed, recovered from saved parent session"),
+	});
+	expect(lookups[0]?.text).toContain("\n\nDONE");
+	for (const [id, path] of entries) {
+		const lookup = lookups.find((result) => result.text.startsWith(`Agent "${id}"`));
+		expect(lookup).toMatchObject({ isError: true, text: expect.stringContaining(`transcript: ${path}`) });
+	}
+	expect(outcomes(next, "settled_probe")[0]?.text).toBe(
+		JSON.stringify(["fulfilled", ...entries.map(() => "rejected")]),
+	);
 	next.setResponses([toolCalls(...entries.map(([resume]) => spawn("forged resume", { resume }))), answer("CHECKED")]);
 	await next.session.prompt("refuse forged paths");
 	for (const [id, path, reason] of entries) {
