@@ -46,7 +46,7 @@ from coverage_provenance_record import (
     decode_json,
     decode_record,
     object_value,
-    producer_job,
+    producer_job_for_cell,
     read_record,
     text_value,
     validate_record,
@@ -798,7 +798,7 @@ def read_host_summary(directory: Path, host: str, provenance: Provenance) -> Sum
         path = coverage / "summary.json"
     if not path.exists() and not path.is_symlink():
         return None
-    expected = provenance.record(producer_job(host, shard=False), cell)
+    expected = provenance.record(producer_job_for_cell(cell, shard=False), cell)
     return Summary.parse(read_summary(path, expected))
 
 

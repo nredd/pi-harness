@@ -73,6 +73,20 @@ def producer_job(host: str, *, shard: bool) -> ProducerJob:
     return COVERAGE_HOSTS[host][1 if shard else 0]
 
 
+def producer_job_for_cell(cell: str, *, shard: bool) -> ProducerJob:
+    """Resolve a fan-in artifact name to its fan-in or shard job.
+
+    Parameters:
+        cell (str): The fan-in artifact name, e.g. `coverage-ubuntu-24.04`.
+        shard (bool): Whether to select the shard job instead of the fan-in.
+    Returns:
+        ProducerJob: The job key used in CI.
+    Raises:
+        KeyError: The artifact host has no coverage producer.
+    """
+    return producer_job(cell.removeprefix("coverage-"), shard=shard)
+
+
 def object_value(value: object) -> dict[str, object]:
     """Require a JSON object with string keys.
 

@@ -27,6 +27,7 @@ put the why in the commit.
 - `tests/integration/`: the remaining former `integration/` Python harness, scenarios, probes,
   providers, goldens, historical baselines and all retained unit tests. See [here](tests/integration/README.md)
 - `scripts/`: CI classification, coverage accounting, package contracts and release tooling
+  - `coverage_provenance_record.py`: shared sidecar schema, producer job keys and strict JSON decoding.
   - `coverage_report.py`: local-only Markdown/SVG renderer for trusted plans and downloaded evidence.
     Malformed artifacts (including corrupt LZMA streams) degrade only their host; filesystem failures
     expose only error types and basenames. File totals validate in one pass. Explicit partial-row
@@ -34,7 +35,10 @@ put the why in the commit.
     For `coverage-<os>`, the renderer requires `coverage/provenance.json` beside `coverage/summary.json`
     in the same ZIP or unpacked directory. The producer records run ID, attempt, job key, matrix cell
     (the declared artifact name), checkout SHA read directly from Git, PR head SHA (null outside PRs),
-    event and workflow ref. Non-PR reports show `head: n/a` separately from the tested SHA. Swift
+    event and workflow ref using `coverage_provenance_record.py`. The producer CLI
+    (`coverage_provenance.py`) no longer takes `--tested-sha`: it deletes a stale sidecar first,
+    reads the checkout SHA from Git stdout, and refuses unknown job keys. Non-PR reports show
+    `head: n/a` separately from the tested SHA. Swift
     and native Windows keep their independent diagnostic uploads without a presentation sidecar.
     The fan-in stamps the summary only when all downloaded shards match its run,
     attempt and checkout; a partial rerun that reuses older shards can retain reports without a stamp.

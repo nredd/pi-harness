@@ -12,6 +12,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -26,6 +27,7 @@ from coverage_provenance_record import (
     Provenance,
     ProvenanceRecord,
     producer_job,
+    producer_job_for_cell,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -295,7 +297,7 @@ def test_unpacked_provenance_must_stay_in_its_artifact(tmp_path: Path, link: str
 
 
 def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run the workflow's entry point with distinct tested and PR head commits.
+    """Stamp the actual checkout even when Git warns on stderr.
 
     Parameters:
         tmp_path (Path): Artifact directory.
@@ -309,10 +311,32 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("GITHUB_SHA", "c" * 40)
     git = shutil.which("git")
     assert git is not None
-    tested_sha = subprocess.check_output([git, "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    subprocess.run([git, "-c", "init.templateDir=", "init", "--quiet", str(tmp_path)], check=True)
+    subprocess.run(
+        [
+            git,
+            "-c",
+            "user.name=Coverage Test",
+            "-c",
+            "user.email=coverage@example.test",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "Create checkout fixture",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    tested_sha = subprocess.check_output([git, "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+    subprocess.run([git, "update-ref", "refs/heads/HEAD", tested_sha], cwd=tmp_path, check=True)
+    subprocess.run([git, "config", "core.warnAmbiguousRefs", "true"], cwd=tmp_path, check=True)
+    monkeypatch.setenv("LC_ALL", "C")
     assert tested_sha not in {RUN.head_sha, "c" * 40}
     output = tmp_path / "provenance.json"
-    subprocess.run(
+    result = subprocess.run(
         [
             sys.executable,
             str(ROOT / "scripts/coverage_provenance.py"),
@@ -321,41 +345,64 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
             "--output",
             str(output),
         ],
-        check=True,
-        cwd=ROOT,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    assert result.returncode == 0, result.stderr
+    assert "refname 'HEAD' is ambiguous" in result.stderr
     assert json.loads(output.read_text()) == RECORD | {"tested_sha": tested_sha}
 
 
-@pytest.mark.parametrize("failure", ["git-missing", "no-head", "unknown-job"])
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("git-missing", "Cannot locate `git`"),
+        ("git-failed", "Cannot resolve checkout `HEAD`: Git exited with code 128"),
+        ("non-sha", "Expected a single 40-character checkout SHA on Git stdout"),
+        ("extra-line", "Expected a single 40-character checkout SHA on Git stdout"),
+        ("unknown-job", "Unknown coverage producer job"),
+    ],
+)
 def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+    message: str,
 ) -> None:
     """Do not retain earlier provenance when the producer cannot record its own identity.
 
     Parameters:
         tmp_path (Path): Isolated producer workspace.
         monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+        caplog (pytest.LogCaptureFixture): Captured producer diagnostics.
         failure (str): Invalid checkout or job identity.
+        message (str): Expected failure message.
     Returns:
         None: No stale sidecar survives a failed write.
     Raises:
         AssertionError: The producer accepts invalid identity or leaves an old sidecar.
     """
     set_run_env(monkeypatch, "owned-ubuntu")
-    git = shutil.which("git")
-    assert git is not None
-    subprocess.run([git, "init", "--quiet", str(tmp_path)], check=True)
-    monkeypatch.chdir(tmp_path)
-    if failure == "git-missing":
-        monkeypatch.setattr(producer.shutil, "which", lambda _: None)
-    elif failure == "unknown-job":
-        monkeypatch.setattr(producer, "checkout_sha", lambda: RUN.tested_sha)
+    monkeypatch.setattr(producer.shutil, "which", lambda _: None if failure == "git-missing" else "/git")
+    if failure == "git-failed":
+        response = Mock(side_effect=subprocess.CalledProcessError(128, "git", output=RUN.tested_sha))
+    else:
+        response = Mock(
+            return_value={"non-sha": "not a sha\n", "extra-line": f"{RUN.tested_sha}\n\n"}.get(
+                failure, f"{RUN.tested_sha}\n"
+            )
+        )
+    monkeypatch.setattr(producer.subprocess, "check_output", response)
+    if failure == "unknown-job":
         monkeypatch.setenv("GITHUB_JOB", "not-a-coverage-producer")
     output = tmp_path / "provenance.json"
     output.write_text(json.dumps(RECORD))
     assert producer.main(["--cell", CELL, "--output", str(output)]) == 1
     assert not output.exists()
+    assert message in caplog.text
 
 
 def test_ci_wires_receipts_to_existing_uploads() -> None:
@@ -432,3 +479,19 @@ def test_expected_producer_jobs_exist_in_the_workflow(host: str) -> None:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     assert producer_job(host, shard=False) in jobs
     assert producer_job(host, shard=True) in jobs
+
+
+def test_producer_job_for_cell_lookup() -> None:
+    """Resolve only artifact hosts with a known producer job.
+
+    Parameters:
+        None.
+    Returns:
+        None: Both known jobs resolve and unknown hosts raise `KeyError`.
+    Raises:
+        AssertionError: A job is misidentified or an unknown host is accepted.
+    """
+    assert producer_job_for_cell("coverage-ubuntu-24.04", shard=False) == "owned-ubuntu"
+    assert producer_job_for_cell("coverage-macos-14", shard=True) == "owned-shards-macos"
+    with pytest.raises(KeyError, match="wsl2"):
+        producer_job_for_cell("coverage-wsl2", shard=False)
