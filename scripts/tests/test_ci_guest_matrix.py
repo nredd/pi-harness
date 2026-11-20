@@ -1044,24 +1044,21 @@ def test_every_job_reports_through_the_one_shared_action() -> None:
         sparse = next(step for step in steps if step.get("name") == "Check out the local actions")
         assert steps.index(sparse) < steps.index(plan)
         assert sparse["with"]["sparse-checkout"] == ".github/actions"
+        assert {"ref", "repository"}.isdisjoint(sparse["with"])
 
 
-def test_report_plan_sparse_checkout_and_uv_precede_the_reporter() -> None:
-    """Keep the reporter runnable even when the job never gets to a full checkout."""
+def test_report_plan_runs_with_system_python_after_only_sparse_checkout() -> None:
+    """Keep the reporter runnable without a full checkout or interpreter download."""
     action = yaml.safe_load(REPORT_PLAN.read_text())
-    checkout, uv, report = action["runs"]["steps"]
+    checkout, report = action["runs"]["steps"]
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"] == {
         "persist-credentials": False,
         "sparse-checkout-cone-mode": False,
-        "sparse-checkout": "/.github/actions/\n/.python-version\n/scripts/ci_report_plan.py\n",
+        "sparse-checkout": "/.github/actions/\n/scripts/ci_report_plan.py\n",
     }
-    assert uv["uses"].startswith("astral-sh/setup-uv@")
-    assert uv["with"]["enable-cache"] is False
     assert report["id"] == "report"
-    assert report["run"].startswith(
-        'uv run --no-project --python "$(<.python-version)" python scripts/ci_report_plan.py '
-    )
+    assert report["run"].startswith("python3 scripts/ci_report_plan.py ")
     assert "\n" not in report["run"]
     assert {name: data["value"] for name, data in action["outputs"].items()} == {
         name: f"${{{{ steps.report.outputs.{name} }}}}" for name in ("run", "scenarios", "gates")

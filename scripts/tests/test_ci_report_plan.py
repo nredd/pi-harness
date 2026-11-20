@@ -41,6 +41,14 @@ SCRIPT = Path(ci_report_plan.__file__).resolve()
             id="blocked-before-invalid-run",
         ),
         pytest.param(
+            {"blocked": "true", "reason": "-n"},
+            1,
+            "",
+            "::error title=cell blocked::-n\n",
+            "### cell: blocked\n-n\n",
+            id="echo-option-is-literal",
+        ),
+        pytest.param(
             {"run": "True"},
             1,
             "",

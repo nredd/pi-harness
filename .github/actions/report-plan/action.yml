@@ -26,20 +26,15 @@ outputs:
 runs:
   using: composite
   steps:
-    # The callers initially check out only local actions. Fetch the reporter and Python pin
-    # at the same workflow commit without materializing the rest of the tree for skipped cells.
+    # The callers initially check out only local actions with no ref override. The same
+    # default checkout uses the event ref/SHA (the merge commit on pull_request).
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         sparse-checkout-cone-mode: false
         sparse-checkout: |
           /.github/actions/
-          /.python-version
           /scripts/ci_report_plan.py
-    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-      with:
-        version: '0.13.1'
-        enable-cache: false
     - id: report
       shell: bash -e {0}
       env:
@@ -52,7 +47,7 @@ runs:
         BLOCKED: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].blocked }}
         CHANGED_FILES: ${{ inputs.changed_files }}
       run: >-
-        uv run --no-project --python "$(<.python-version)" python scripts/ci_report_plan.py
+        python3 scripts/ci_report_plan.py
         --cell="$CELL" --classify-result="$CLASSIFY_RESULT" --run="$RUN"
         --scenarios="$SCENARIOS" --gates="$GATES" --reason="$REASON"
         --blocked="$BLOCKED" --changed-files="$CHANGED_FILES"

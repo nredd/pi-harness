@@ -1,5 +1,10 @@
 """Report one cell's classified CI decision without re-planning it.
 
+If checkout fails, this script never writes the initial `run=false`. The
+composite fails, and consumers only run for `steps.plan.outputs.run == 'true'`,
+so the empty output cannot authorize work. Reasons are literal text, including
+`-n`, `-e` and `-E`, which Bash `echo` treated as options.
+
 References:
 - https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
 """
