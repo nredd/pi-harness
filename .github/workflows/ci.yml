@@ -73,6 +73,11 @@ jobs:
   # A missing plan or invalid squash subject fails those checks. The personal stack runs setup only
   # on PRs without stack inputs. Main pushes and full dispatches run both OSes; only the frozen
   # dispatch also runs the Gitlink gate and qualifies for release evidence.
+  # Only macOS execution jobs share a per-cell concurrency group across main pushes. GitHub keeps
+  # only one pending job per group and replaces older pending jobs; that is intentional here.
+  # Group by cell, not runner, so changes in pool routing do not prevent supersession. Non-push
+  # groups include the run and attempt so dispatch evidence cannot be displaced by a push or
+  # another dispatch. Ubuntu execution and reporting jobs have no job-level concurrency.
 
   # Policy: Self-hosted routing policy
   # ## Self-hosted pools
@@ -438,6 +443,9 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.classify.outputs.plan)['owned (macos-14)'].shards }}
+    concurrency:
+      group: ${{ github.workflow }}-owned-shards-macos-${{ matrix.os }}-${{ matrix.shard }}-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     runs-on: *owned-shard-runner
     defaults: *owned-shard-defaults
     timeout-minutes: *owned-shard-timeout
@@ -742,7 +750,11 @@ jobs:
           done
 
   owned-macos:
-    if: ${{ github.event_name != 'pull_request' && !cancelled() }}
+    # Report neither a failure nor NOT RUN for cancelled push shards. A failed plan or dispatch
+    # still goes through the shared fail-closed reporter.
+    if: >-
+      ${{ github.event_name != 'pull_request' && !cancelled()
+      && !(github.event_name == 'push' && needs.classify.result == 'success' && needs.owned-shards-macos.result == 'cancelled') }}
     name: *owned-name
     needs: [classify, owned-shards-macos]
     strategy:
@@ -767,21 +779,21 @@ jobs:
 
   contracts:
     if: ${{ !cancelled() }}
-    name: contracts (${{ matrix.os }})
+    name: &contracts-name contracts (${{ matrix.os }})
     needs: classify
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["ubuntu-24.04","macos-14"]') }}
+        os: [ubuntu-24.04]
     # A cell the plan does not run (NOT RUN, or blocked, or no plan at all) reports from a cheap Ubuntu job and holds
     # no macOS or Windows slot.
     # A running cell the plan hands to a self-hosted pool carries its `runner`; otherwise the matrix's hosted one.
-    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].runner || (matrix.os == 'macos-14' && 'xcode-27' || 'ubuntu-24.04') }}
-    defaults:
+    runs-on: &contracts-runner ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].runner || (matrix.os == 'macos-14' && 'xcode-27' || 'ubuntu-24.04') }}
+    defaults: &contracts-defaults
       run:
         shell: bash -e {0}
-    timeout-minutes: 30
-    steps:
+    timeout-minutes: &contracts-timeout 30
+    steps: &contracts-steps
       # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
       # checkout below runs only when the plan says the cell runs.
       - name: Check out the local actions
@@ -833,6 +845,22 @@ jobs:
           name: contract-reports-${{ matrix.os }}
           path: ${{ runner.temp }}/*contracts*.json
           if-no-files-found: ignore
+
+  contracts-macos:
+    if: ${{ github.event_name != 'pull_request' && !cancelled() }}
+    name: *contracts-name
+    needs: classify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]
+    concurrency:
+      group: ${{ github.workflow }}-contracts-macos-${{ matrix.os }}-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    runs-on: *contracts-runner
+    defaults: *contracts-defaults
+    timeout-minutes: *contracts-timeout
+    steps: *contracts-steps
 
   release-core:
     if: github.event_name == 'workflow_dispatch'
@@ -1085,18 +1113,20 @@ jobs:
 
   stack:
     if: ${{ !cancelled() }}
-    name: stack (${{ matrix.os }}, ${{ matrix.stack }})
+    name: &stack-name stack (${{ matrix.os }}, ${{ matrix.stack }})
     needs: classify
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-24.04","stack":"personal","runner":"ubuntu-24.04","platform":"linux-x64"},{"os":"ubuntu-24.04","stack":"local","runner":"ubuntu-24.04","platform":"linux-x64"}]' || '[{"os":"ubuntu-24.04","stack":"personal","runner":"ubuntu-24.04","platform":"linux-x64"},{"os":"ubuntu-24.04","stack":"local","runner":"ubuntu-24.04","platform":"linux-x64"},{"os":"macos-14","stack":"local","runner":"xcode-27","platform":"darwin-arm64"}]') }}
-    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].runner || matrix.runner }}
-    defaults:
+        include:
+          - {os: ubuntu-24.04, stack: personal, runner: ubuntu-24.04, platform: linux-x64}
+          - {os: ubuntu-24.04, stack: local, runner: ubuntu-24.04, platform: linux-x64}
+    runs-on: &stack-runner ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].runner || matrix.runner }}
+    defaults: &stack-defaults
       run:
         shell: bash -e {0}
-    timeout-minutes: 40
-    steps:
+    timeout-minutes: &stack-timeout 40
+    steps: &stack-steps
       # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
       # checkout below runs only when the plan says the cell runs.
       - name: Check out the local actions
@@ -1268,3 +1298,20 @@ jobs:
           name: standalone-${{ matrix.platform }}-${{ matrix.stack }}
           path: tests/integration/artifacts/
           if-no-files-found: ignore
+
+  stack-macos:
+    if: ${{ github.event_name != 'pull_request' && !cancelled() }}
+    name: *stack-name
+    needs: classify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-14, stack: local, runner: xcode-27, platform: darwin-arm64}
+    concurrency:
+      group: ${{ github.workflow }}-stack-macos-${{ matrix.os }}-${{ matrix.stack }}-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
+    runs-on: *stack-runner
+    defaults: *stack-defaults
+    timeout-minutes: *stack-timeout
+    steps: *stack-steps

@@ -174,7 +174,7 @@ Required checks on `main`, four contexts:
 - `stack (ubuntu-24.04, personal)`
 - `stack (ubuntu-24.04, local)`
 
-Docs-only PRs still report the four Ubuntu checks without running their gates. macOS is not required and runs only on main pushes and eligible dispatches. Its owned shards report through a separate fan-in, so their queue and result do not affect `owned (ubuntu-24.04)`.
+Docs-only PRs still report the four Ubuntu checks without running their gates. macOS is not required and runs only on `main` pushes and full dispatches. Overlapping `main` pushes supersede running and older pending macOS jobs per cell, regardless of runner routing; GitHub keeps one pending job per group. Ubuntu jobs still run for every push. The separate macOS owned fan-in skips cancelled push shards rather than reporting them as failed or NOT RUN. Full dispatch jobs use separate groups per run attempt; promotion still requires the full executed evidence.
 
 ### Review and merge evidence
 
