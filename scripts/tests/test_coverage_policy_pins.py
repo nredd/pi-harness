@@ -627,6 +627,7 @@ INERT_BY_DECISION = {
     ".github/actions/report-plan/action.yml",
     ".github/actions/setup-ci-tools/action.yml",
     ".github/workflows/ci.yml",
+    ".github/workflows/coverage-publish.yml",
     ".github/workflows/forks.yml",
     ".github/workflows/installer.yml",
     ".github/workflows/native-helper.yml",
