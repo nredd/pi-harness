@@ -75,6 +75,7 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
 		await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
 		assert.equal(closed, 1, "shutdown must not close an already stopped watcher twice");
 	} finally {
+		// A failed assertion can leave reads in flight. Drain them before test cleanup deletes the fixture.
 		await Promise.allSettled(reads);
 		vi.useRealTimers();
 		readSpy.mockRestore();

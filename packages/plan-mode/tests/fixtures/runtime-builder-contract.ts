@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { onTestFinished, test } from "vitest";
@@ -43,9 +42,12 @@ interface RuntimeBuilderContractOptions {
 	entries?: Record<string, string>;
 }
 
-/** Keep outputs under the real package root for builder path checks and module resolution. */
+/**
+ * Use the real package root only for fixtures that need its builder output path checks or
+ * workspace module resolution. Standalone validation and self-contained builders use OS temp.
+ */
 export function makePackageBuildTempDir(packageRoot: string, prefix: string): string {
-	return makeTestTempDir(relative(tmpdir(), join(packageRoot, prefix)), onTestFinished);
+	return makeTestTempDir(prefix, onTestFinished, { baseDir: packageRoot });
 }
 
 export function registerRuntimeBuilderContract(options: RuntimeBuilderContractOptions) {
