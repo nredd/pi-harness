@@ -323,15 +323,28 @@ def test_ci_wires_receipts_to_existing_uploads() -> None:
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     for job, kind, cell, receipt in (
-        ("owned", "fan-in", "coverage-${{ matrix.os }}", "coverage/provenance.json"),
+        ("owned-ubuntu", "fan-in", "coverage-${{ matrix.os }}", "coverage/provenance.json"),
+        ("owned-macos", "fan-in", "coverage-${{ matrix.os }}", "coverage/provenance.json"),
         (
-            "owned-shards",
+            "owned-shards-ubuntu",
             "shard",
             "coverage-${{ matrix.os }}-${{ matrix.shard }}",
             "coverage/provenance-${{ matrix.shard }}.json",
         ),
         (
-            "owned-shards",
+            "owned-shards-macos",
+            "shard",
+            "coverage-${{ matrix.os }}-${{ matrix.shard }}",
+            "coverage/provenance-${{ matrix.shard }}.json",
+        ),
+        (
+            "owned-shards-ubuntu",
+            "Swift",
+            "computer-use-swift-${{ matrix.os }}",
+            "packages/computer-use/coverage/swift/",
+        ),
+        (
+            "owned-shards-macos",
             "Swift",
             "computer-use-swift-${{ matrix.os }}",
             "packages/computer-use/coverage/swift/",
