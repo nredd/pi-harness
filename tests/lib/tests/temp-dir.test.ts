@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { CLEANUP_RETRY_OPTIONS, makeTestTempDir } from "../src/temp-dir.ts";
 
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -43,6 +43,18 @@ test("creates and cleans a fixture directly under an explicit base directory", (
 	for (const cleanup of cleanups) cleanup();
 	expect(readdirSync(baseDir)).toEqual([]);
 });
+
+test.each(["../escape-", "nested/../../escape-", join(tmpdir(), "absolute-")])(
+	"refuses a prefix that leaves an explicit base directory: %s",
+	(prefix) => {
+		const baseDir = makeTestTempDir("pi-test-lib-", onTestFinished);
+		const register = vi.fn();
+		expect(() => makeTestTempDir(prefix, register, { baseDir })).toThrow(/stay inside baseDir/u);
+		expect(register).not.toHaveBeenCalled();
+		expect(readdirSync(baseDir)).toEqual([]);
+		expect(readdirSync(dirname(baseDir)).filter((name) => name.startsWith("escape-"))).toEqual([]);
+	},
+);
 
 test("removes the directory if its cleanup cannot be registered", ({ onTestFinished }) => {
 	const parent = makeTestTempDir("pi-test-lib-", onTestFinished);
