@@ -2,7 +2,17 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { join, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -448,7 +458,11 @@ describe("/agents tier proposals", () => {
 
 	const tiers = { default: ["router/default"] };
 	const member = '"modelTiers": {"default":["router/default"]}';
+	const spacedValue = `{"keep": "${" ".repeat(200_000)}"`;
+	const unusualKeys = String.raw`{"repeat": 1, "repeat": 2, "\"}{": 3`;
 	it.each([
+		["long string of spaces", `${spacedValue}  }\n`, `${spacedValue},${member}  }\n`],
+		["duplicate keys and an escaped quote and braces in a key", `${unusualKeys}}`, `${unusualKeys},${member}}`],
 		["empty compact object", "{}", `{${member}}`],
 		["empty spaced object", "{ }", `{ ${member} }`],
 		["empty multiline object", "{\n}\n", `{\n  ${member}\n}\n`],
@@ -476,6 +490,54 @@ describe("/agents tier proposals", () => {
 		);
 		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("run /agents apply-tiers again"), "warning");
 		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+	});
+
+	it("refuses to redirect an approved save through a retargeted agent-directory symlink", async () => {
+		const a = join(agentDir(), "a");
+		const b = join(agentDir(), "b");
+		const current = join(agentDir(), "current");
+		const source = '{"keep":1}\n';
+		for (const dir of [a, b]) {
+			mkdirSync(dir);
+			writeFileSync(join(dir, "subagents.json"), source);
+		}
+		symlinkSync(a, current, "junction");
+		const original = agentDir();
+		process.env.PI_CODING_AGENT_DIR = current;
+		try {
+			const { confirm, notify } = await apply(
+				vi.fn(async () => {
+					unlinkSync(current);
+					symlinkSync(b, current, "junction");
+					return true;
+				}),
+			);
+			expect(confirm).toHaveBeenCalledOnce();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("settings directory changed"), "warning");
+			for (const dir of [a, b]) {
+				expect(readdirSync(dir)).toEqual(["subagents.json"]);
+				expect(readFileSync(join(dir, "subagents.json"), "utf8")).toBe(source);
+			}
+		} finally {
+			process.env.PI_CODING_AGENT_DIR = original;
+		}
+	});
+
+	it("refuses a replaced file even when its mode and bytes match the proposal", async () => {
+		const source = '{"keep":1}\n';
+		const replacement = `${globalSettings()}.replacement`;
+		writeFileSync(globalSettings(), source);
+		writeFileSync(replacement, source);
+		const replacedInode = lstatSync(replacement, { bigint: true }).ino;
+		const { notify } = await apply(
+			vi.fn(async () => {
+				renameSync(replacement, globalSettings());
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("settings file was replaced"), "warning");
+		expect(readFileSync(globalSettings(), "utf8")).toBe(source);
+		expect(lstatSync(globalSettings(), { bigint: true }).ino).toBe(replacedInode);
 	});
 
 	it("preserves edits made at the replacement boundary and cleans up its lock", async () => {
@@ -559,29 +621,92 @@ describe("/agents tier proposals", () => {
 			return;
 		}
 		const server = createServer();
-		server.listen(globalSettings());
-		await once(server, "listening");
+		const cwd = process.cwd();
+		// A relative bind keeps the socket address below sun_path's limit even
+		// when the isolated runner nests this hermetic agent directory deeply.
+		process.chdir(agentDir());
 		try {
-			expect(lstatSync(globalSettings()).isSocket()).toBe(true);
-			await expectNonregularRefused();
+			server.listen("subagents.json");
+			await once(server, "listening");
+			try {
+				expect(lstatSync(globalSettings()).isSocket()).toBe(true);
+				await expectNonregularRefused();
+			} finally {
+				const closed = once(server, "close");
+				server.close();
+				await closed;
+			}
 		} finally {
-			server.close();
-			await once(server, "close");
+			process.chdir(cwd);
 		}
 	});
 
-	it("refuses to replace a read-only global settings file", async () => {
+	async function expectNoWriteAccess() {
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("No write access"), "error");
+		expect(snapshot(agentDir())).toEqual(before);
+	}
+
+	it("refuses to replace a read-only 0444 global settings file", async () => {
 		writeFileSync(globalSettings(), "{}\n");
 		chmodSync(globalSettings(), 0o444);
 		try {
-			const { confirm, notify } = await apply();
-			expect(confirm).not.toHaveBeenCalled();
-			expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("read-only"), "error");
-			expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
-			expect(lstatSync(globalSettings()).mode & 0o222).toBe(0);
+			await expectNoWriteAccess();
 		} finally {
 			chmodSync(globalSettings(), 0o600);
 		}
+	});
+
+	it("refuses a 0464 file owned by the caller (0444 on Windows)", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
+		try {
+			await expectNoWriteAccess();
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("refuses a macOS ACL write deny (0464 mode deny on other Unix hosts)", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		try {
+			if (process.platform === "darwin") {
+				const owner = execFileSync("id", ["-un"], { encoding: "utf8" }).trim();
+				execFileSync("chmod", ["+a", `${owner} deny write`, globalSettings()]);
+			} else {
+				chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
+			}
+			await expectNoWriteAccess();
+		} finally {
+			if (process.platform === "darwin") execFileSync("chmod", ["-N", globalSettings()]);
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("rechecks access at the replacement boundary", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		try {
+			await expect(
+				settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+					chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
+				}),
+			).rejects.toThrow(/No write access/);
+			expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("preserves the original mode on replacement", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), 0o640);
+		const mode = lstatSync(globalSettings()).mode & 0o777;
+		await apply();
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+		expect(lstatSync(globalSettings()).mode & 0o777).toBe(mode);
 	});
 
 	it.each(["global", "enterprise"])("the writer refuses to save over an existing %s tier field", async (layer) => {
