@@ -243,6 +243,14 @@ def test_apt_replays_after_kill_with_capture_still_open(tmp_path: Path, command_
     tee.write_text(f'#!/bin/sh\nexec {command} "$@"\n')
     tee.chmod(0o755)
 
+    apt = tmp_path / "apt-get"
+    holder = shlex.join([sys.executable, str(TIMEOUT_FIXTURE), "hold-capture"])
+    apt.write_text(
+        '#!/bin/bash\nset -eu\ntrap "" TERM\nprintf "apt stdout\\n"\nprintf "apt stderr\\n" >&2\n'
+        f'{holder}\neval "exec $APT_FIXTURE_READY_FD>&-"\nexec /bin/sleep 86400\n'
+    )
+    apt.chmod(0o755)
+
     # Let tee try to drain only after the deadline has killed apt. A pipe then
     # reports would-block if the holder is still alive, rather than hanging.
     reader, writer = os.pipe()
@@ -257,9 +265,7 @@ def test_apt_replays_after_kill_with_capture_still_open(tmp_path: Path, command_
                 str(ROOT / "scripts/ubuntu_apt.sh"),
                 str(log),
                 str(capture),
-                sys.executable,
-                str(TIMEOUT_FIXTURE),
-                "hang-with-capture",
+                str(apt),
             ],
             capture_output=True,
             check=False,
@@ -277,13 +283,10 @@ def test_apt_replays_after_kill_with_capture_still_open(tmp_path: Path, command_
     finally:
         os.close(reader)
         os.close(writer)
-        if pid_file.is_file():
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        with contextlib.suppress(FileNotFoundError, ProcessLookupError):
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
     assert result.returncode == 137, result.stderr
-    assert result.stderr.splitlines() == [
-        f"ubuntu-apt: TIMEOUT: install exceeded 1s: {sys.executable} {TIMEOUT_FIXTURE} hang-with-capture"
-    ]
+    assert result.stderr.splitlines() == [f"ubuntu-apt: TIMEOUT: install exceeded 1s: {apt}"]
     assert result.stdout == log.read_text() == "apt stdout\napt stderr\n"
 
 

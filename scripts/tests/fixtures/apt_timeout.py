@@ -14,29 +14,18 @@ import sys
 from pathlib import Path
 
 
-def hang_with_capture() -> None:
-    """Leave a grandchild outside the timeout group holding apt's stdout and stderr."""
-    ready = int(os.environ["APT_FIXTURE_READY_FD"])
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    os.write(sys.stdout.fileno(), b"apt stdout\n")
-    os.write(sys.stderr.fileno(), b"apt stderr\n")
-    if os.fork() == 0:
-        os.setsid()
-        Path(os.environ["APT_FIXTURE_CHILD_PID"]).write_text(str(os.getpid()))
-        os.write(ready, b"1")
-        os.close(ready)
-        signal.pause()
-        os._exit(0)
-    os.close(ready)
-    signal.pause()
+def hold_capture() -> None:
+    """Start a detached holder of the hung command's stdout and stderr."""
+    holder = subprocess.Popen(["/bin/sleep", "86400"], start_new_session=True)
+    Path(os.environ["APT_FIXTURE_CHILD_PID"]).write_text(str(holder.pid))
 
 
-def replay() -> None:
+def replay() -> int:
     """Run real tee after timeout, surfacing a would-block read instead of hanging pytest."""
     gate = int(os.environ["APT_FIXTURE_REPLAY_FD"])
     assert os.read(gate, 1) == b"1"
     os.set_blocking(sys.stdin.fileno(), False)
-    os.execv("/usr/bin/tee", ["tee", *sys.argv[2:]])
+    return subprocess.call(["/usr/bin/tee", *sys.argv[2:]])
 
 
 def start_command() -> subprocess.Popen[bytes]:
@@ -55,8 +44,8 @@ def start_command() -> subprocess.Popen[bytes]:
             )
         finally:
             os.close(writer)
-        # EOF also releases the wait if the command failed before forking.
-        os.read(reader, 1)
+        # Only the command inherits the writer. It closes it after setup, or on failure.
+        assert os.read(reader, 1) == b""
     finally:
         os.close(reader)
     return process
@@ -87,12 +76,11 @@ def main() -> int:
         return 124
 
 
-if sys.argv[1] == "hang-with-capture":
-    hang_with_capture()
+if sys.argv[1] == "hold-capture":
+    hold_capture()
     sys.exit(0)
 if sys.argv[1] == "replay":
-    replay()
-    sys.exit(0)
+    sys.exit(replay())
 try:
     status = main()
 finally:
