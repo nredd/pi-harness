@@ -213,6 +213,7 @@ export default function (
 			if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
 		},
 		requeryOtherSurvivors,
+		{ homeDir: options.homeDir },
 	);
 
 	// Collapse/expand hotkey for the todo overlay. The key is resolved once at
