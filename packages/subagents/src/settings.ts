@@ -3,17 +3,24 @@
 // - Project: <cwd>/.pi/subagents.json — written by /agents → Settings; overrides global on load
 
 import {
+	chmodSync,
+	closeSync,
+	constants,
 	existsSync,
+	fstatSync,
 	linkSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	openSync,
 	readFileSync,
 	renameSync,
 	rmSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { NO_FALLBACK } from "./agent-types.ts";
 import { readEnterpriseLocalManifest } from "./enterprise-local.ts";
 import { errorMessage } from "./error-message.ts";
@@ -756,36 +763,134 @@ export function loadSettings(cwd: string = process.cwd(), homeDir?: string): Sub
 
 /** Global settings with the enterprise manifest over them: the layer a project file cannot touch. */
 export function loadTrustedSettings(homeDir?: string): SubagentsSettings {
-	const enterprise = readEnterpriseLocalManifest(homeDir)?.subagents;
-	const enterpriseSettings = enterprise === undefined ? {} : sanitize(enterprise);
-	return { ...readSettingsFile(globalPath(homeDir)), ...enterpriseSettings };
+	return withEnterpriseSettings(readSettingsFile(globalPath(homeDir)), homeDir);
 }
 
-/** Persist confirmed tiers only; keep the raw settings so unrelated keys survive. */
-export function saveProposedModelTiers(modelTiers: Record<string, string[]>, homeDir?: string): void {
-	const path = globalPath(homeDir);
-	const target = lstatSync(path, { throwIfNoEntry: false });
-	if (target && !target.isFile()) throw new Error("Expected a regular global settings file");
-	const raw: unknown = target ? JSON.parse(readFileSync(path, "utf-8")) : {};
-	if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.hasOwn(raw, "modelTiers")) {
-		throw new Error("Expected a global settings object without modelTiers");
-	}
-	const overlay = readEnterpriseLocalManifest(homeDir)?.subagents;
-	if (overlay && Object.hasOwn(overlay, "modelTiers")) throw new Error("Enterprise modelTiers already exists");
+function withEnterpriseSettings(global: SubagentsSettings, homeDir?: string): SubagentsSettings {
+	const enterprise = readEnterpriseLocalManifest(homeDir)?.subagents;
+	return { ...global, ...(enterprise === undefined ? {} : sanitize(enterprise)) };
+}
 
+type TierSettingsSnapshot = { bytes: Buffer; mode: number } | undefined;
+
+/** A target problem whose message is safe to show in the UI. */
+export class TierSettingsTargetError extends Error {}
+
+/** Do not open special files, or follow a symlink in the final path component. */
+function readTierSettingsSnapshot(path: string, apply: boolean): TierSettingsSnapshot {
+	const target = lstatSync(path, { throwIfNoEntry: false });
+	if (!target) return undefined;
+	if (!target.isFile()) throw new TierSettingsTargetError("Expected a regular global settings file");
+	// The path may have changed since lstat. Nonblocking open prevents a
+	// replacement FIFO from hanging the command before we can check the fd.
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+	try {
+		const opened = fstatSync(fd);
+		if (!opened.isFile() || opened.dev !== target.dev || opened.ino !== target.ino) {
+			throw new TierSettingsChangedError();
+		}
+		if (apply && (opened.mode & 0o222) === 0) throw new TierSettingsTargetError("Global settings file is read-only");
+		return { bytes: readFileSync(fd), mode: opened.mode & 0o777 };
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function tierSettingsSource(snapshot: TierSettingsSnapshot): string {
+	// Reject invalid UTF-8 rather than normalizing undecodable bytes on write.
+	return snapshot ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(snapshot.bytes) : "{}\n";
+}
+
+function parseTierSettings(source: string): Record<string, unknown> {
+	const raw: unknown = JSON.parse(source);
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Expected a global settings object");
+	return raw as Record<string, unknown>;
+}
+
+/** Compute a proposal from exactly the validated bytes used for the replacement check. */
+export function loadTierProposalSettings(apply: boolean, homeDir?: string) {
+	const snapshot = readTierSettingsSnapshot(globalPath(homeDir), apply);
+	const settings = withEnterpriseSettings(sanitize(parseTierSettings(tierSettingsSource(snapshot))), homeDir);
+	return { settings, snapshot };
+}
+
+export class TierSettingsChangedError extends Error {
+	constructor(reason = "Global settings changed.") {
+		super(`${reason} Nothing was saved; run /agents apply-tiers again to review the proposal.`);
+	}
+}
+
+function insertModelTiers(source: string, modelTiers: Record<string, string[]>): string {
+	// After JSON validation, the outer braces and the last non-whitespace
+	// character inside them give us an insertion point without walking values.
+	const start = source.indexOf("{") + 1;
+	const inside = source.slice(start, source.lastIndexOf("}"));
+	const whitespace = /^[ \t\r\n]*/.exec(inside)?.[0] ?? "";
+	const end = inside.replace(/[ \t\r\n]+$/, "").length;
+	const member = `"modelTiers": ${JSON.stringify(modelTiers)}`;
+	const multiline = /(?:\r\n|\n|\r)[ \t]*$/.exec(whitespace)?.[0];
+	const prefix = end ? `,${multiline ?? (whitespace ? " " : "")}` : multiline ? `${multiline}  ` : whitespace;
+	return `${source.slice(0, start + end)}${prefix}${member}${source.slice(start + end)}`;
+}
+
+async function acquireTierSettingsLock(path: string): Promise<number> {
+	const deadline = performance.now() + 1_000;
+	for (;;) {
+		try {
+			return openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			const remaining = deadline - performance.now();
+			if (remaining <= 0) break;
+			await delay(Math.min(25, remaining));
+			if (performance.now() >= deadline) break;
+		}
+	}
+	throw new TierSettingsTargetError("Another tier save holds the global settings lock");
+}
+
+/** Persist only the confirmed member, refusing to replace a changed snapshot. */
+export async function saveProposedModelTiers(
+	modelTiers: Record<string, string[]>,
+	expected: TierSettingsSnapshot,
+	homeDir?: string,
+	beforeReplace?: () => void,
+): Promise<void> {
+	const path = globalPath(homeDir);
+	const source = tierSettingsSource(expected);
+	if (Object.hasOwn(parseTierSettings(source), "modelTiers")) throw new Error("Global modelTiers already exists");
 	const dir = dirname(path);
 	mkdirSync(dir, { recursive: true });
-	const tempDir = mkdtempSync(join(dir, ".subagents-tiers-"));
+	const lock = `${path}.lock`;
+	const fd = await acquireTierSettingsLock(lock);
 	try {
-		const temp = join(tempDir, "subagents.json");
-		writeFileSync(temp, `${JSON.stringify({ ...raw, modelTiers }, null, 2)}\n`, {
-			mode: target ? target.mode & 0o777 : 0o600,
-		});
-		// For a new file, do not replace one created by another process meanwhile.
-		if (target) renameSync(temp, path);
-		else linkSync(temp, path);
+		const overlay = readEnterpriseLocalManifest(homeDir)?.subagents;
+		if (overlay && Object.hasOwn(overlay, "modelTiers")) {
+			throw new TierSettingsChangedError("Enterprise modelTiers already exists.");
+		}
+		const tempDir = mkdtempSync(join(dir, ".subagents-tiers-"));
+		try {
+			const temp = join(tempDir, "subagents.json");
+			writeFileSync(temp, insertModelTiers(source, modelTiers), { mode: 0o600 });
+			if (expected) chmodSync(temp, expected.mode);
+			beforeReplace?.();
+			const current = readTierSettingsSnapshot(path, true);
+			if (expected ? current?.mode !== expected.mode || !expected.bytes.equals(current.bytes) : current) {
+				throw new TierSettingsChangedError();
+			}
+			// Non-cooperating editors can still race this check and rename.
+			// For a new file even that window cannot overwrite a concurrent creation.
+			if (expected) renameSync(temp, path);
+			else linkSync(temp, path);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	} finally {
-		rmSync(tempDir, { recursive: true, force: true });
+		try {
+			closeSync(fd);
+		} finally {
+			unlinkSync(lock);
+		}
 	}
 }
 

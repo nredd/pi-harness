@@ -764,6 +764,8 @@ Stop a running or queued background agent, like Claude Code's `TaskStop`. A stee
 | Command | Description |
 |---------|-------------|
 | `/agents` | Interactive agent management menu — agent types, running agents, scheduled jobs, workflow runs, settings |
+| `/agents propose-tiers` | Preview exact [model tier](#model-tiers) bindings from registered router profiles; never writes settings |
+| `/agents apply-tiers` | Review and confirm saving proposed [model tier](#model-tiers) bindings to global settings |
 
 `/agents → Workflows` (shown only when [workflows](#persistent-settings) are on) opens a framed two-pane inspector over a run, with two levels of depth:
 
@@ -920,7 +922,11 @@ Bindings live ONLY in global `~/.pi/agent/subagents.json` or the `subagents` obj
 
 Run `/agents propose-tiers` in an interactive session to list registered `router/*` profiles with valid tier names and preview a `modelTiers` map. It suggests only exact, case-sensitive matches for `cheap`, `deep`, `default`, `frontier` and `review`. Other valid tier names, such as `frontier-extra`, are listed but not proposed. Invalid tier names, such as `Deep`, are omitted. A missing profile is left unmapped. Registration is not a check of credentials, quota or the health of a profile's members.
 
-The command reads only trusted global settings and the owner-only `enterprise.local.json` overlay. Project-level `modelTiers` is ignored. It proposes nothing when a trusted `modelTiers` map already exists, even `{}`, and skips `cheap` if it would shadow the legacy Explore compatibility alias. You can still bind `cheap` by hand; an explicit binding takes precedence over the alias. The preview never writes settings or changes routing. Run `/agents apply-tiers` to review the current proposal and explicitly confirm saving it to global `subagents.json`. It adds only the approved `modelTiers` field, preserves unrelated settings, and never writes project settings or the enterprise overlay. Declining, an empty proposal, or a proposal that changes during confirmation leaves settings untouched. The apply command refuses to replace a nonregular or malformed global settings file or any pre-existing `modelTiers` field. Restart Pi to pick up the saved bindings. Without a UI both commands return silently, without reading settings or listing profiles.
+These [commands](#commands) read only trusted global settings and the owner-only `enterprise.local.json` overlay. Project-level `modelTiers` is ignored. They propose nothing when a trusted `modelTiers` map already exists, even `{}`, and skip `cheap` if it would shadow the legacy Explore compatibility alias. You can still bind `cheap` by hand; an explicit binding takes precedence over the alias.
+
+Run `/agents apply-tiers` to review the current proposal and explicitly confirm saving it. The command inserts only `modelTiers` into global `subagents.json`, leaving every existing byte intact. It never writes project settings or the enterprise overlay. Declining, an empty proposal, or a stale proposal writes nothing. Apply refuses malformed JSON, nonregular paths (including symlinks), read-only files, and any pre-existing `modelTiers` field. Restart Pi to use the saved bindings. Without a UI both commands return silently.
+
+Limits: Apply commands cooperate through the adjacent `subagents.json.lock`. If the lock stays busy or the file bytes change since the proposal, apply aborts; re-run it to review the current settings. A crash can leave a lock file; remove it only after verifying no apply is running. Editors that ignore this lock can still change an existing file between the final byte comparison and atomic replacement. Don't edit `subagents.json` while applying tiers.
 
 Routed personal setup (configure the router profiles separately):
 

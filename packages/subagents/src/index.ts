@@ -199,10 +199,12 @@ import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
 	applyAndEmitLoaded,
 	loadSettings,
-	loadTrustedSettings,
+	loadTierProposalSettings,
 	type SubagentsSettings,
 	saveAndEmitChanged,
 	saveProposedModelTiers,
+	TierSettingsChangedError,
+	TierSettingsTargetError,
 	type ToolDescriptionMode,
 } from "./settings.ts";
 import { hostStartupErrorClass } from "./startup-error.ts";
@@ -5728,16 +5730,22 @@ Write the file using the write tool. Only write the file, nothing else.`;
 	async function presentTierProposal(ctx: ExtensionCommandContext, apply: boolean): Promise<void> {
 		if (!ctx.hasUI) return;
 		const load = () => {
-			const { modelTiers, modelAliases } = loadTrustedSettings(options.homeDir);
-			return proposeModelTiers(ctx.modelRegistry.getAll(), modelTiers, modelAliases);
+			const { settings, snapshot } = loadTierProposalSettings(apply, options.homeDir);
+			const proposal = proposeModelTiers(ctx.modelRegistry.getAll(), settings.modelTiers, settings.modelAliases);
+			return { proposal, snapshot };
 		};
-		let proposal: ReturnType<typeof load>;
+		let initial: ReturnType<typeof load>;
 		try {
-			proposal = load();
-		} catch {
-			ctx.ui.notify("Could not read trusted settings or registered router profiles for the tier proposal.", "error");
+			initial = load();
+		} catch (error) {
+			const reason = error instanceof TierSettingsTargetError ? ` ${error.message}.` : "";
+			ctx.ui.notify(
+				`Could not read trusted settings or registered router profiles for the tier proposal.${reason}`,
+				"error",
+			);
 			return;
 		}
+		const { proposal, snapshot } = initial;
 		if (!apply || !proposal.modelTiers) {
 			ctx.ui.notify(proposal.preview, "info");
 			return;
@@ -5745,21 +5753,23 @@ Write the file using the write tool. Only write the file, nothing else.`;
 		const approved = JSON.stringify(proposal.modelTiers);
 		try {
 			if (!(await ctx.ui.confirm("Save proposed modelTiers?", `Add ${approved} to global subagents.json?`))) return;
-			// Settings and registrations may have changed while the owner was deciding.
-			if (JSON.stringify(load().modelTiers) !== approved) {
-				ctx.ui.notify(
-					"The tier proposal changed. Nothing was saved; run /agents apply-tiers again to review it.",
-					"warning",
-				);
+			await saveProposedModelTiers(proposal.modelTiers, snapshot, options.homeDir, () => {
+				// Check again after confirmation and any wait for the write lock.
+				if (JSON.stringify(load().proposal.modelTiers) !== approved) {
+					throw new TierSettingsChangedError("The tier proposal changed.");
+				}
+			});
+			ctx.ui.notify("Saved modelTiers to global subagents.json. Restart Pi to use the new bindings.", "info");
+		} catch (error) {
+			if (error instanceof TierSettingsChangedError) {
+				ctx.ui.notify(error.message, "warning");
 				return;
 			}
-			saveProposedModelTiers(proposal.modelTiers, options.homeDir);
-			ctx.ui.notify("Saved modelTiers to global subagents.json. Restart Pi to use the new bindings.", "info");
-		} catch {
-			ctx.ui.notify(
-				"Could not save modelTiers to global subagents.json. Check the trusted configuration and file permissions.",
-				"error",
-			);
+			const reason =
+				error instanceof TierSettingsTargetError
+					? ` ${error.message}.`
+					: " Check the trusted configuration and file permissions.";
+			ctx.ui.notify(`Could not save modelTiers.${reason} Run /agents apply-tiers again.`, "error");
 		}
 	}
 

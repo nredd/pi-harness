@@ -1,6 +1,9 @@
 /** Actual entry paths + manager, real Pi registry/resolver; only child execution is stubbed. */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -179,9 +182,9 @@ describe("/agents tier proposals", () => {
 		readdirSync(root, { recursive: true, withFileTypes: true })
 			.map((entry) => {
 				const path = join(entry.parentPath, entry.name);
-				const digest = entry.isDirectory()
-					? "directory"
-					: createHash("sha256").update(readFileSync(path)).digest("hex");
+				const digest = entry.isFile()
+					? createHash("sha256").update(readFileSync(path)).digest("hex")
+					: String(lstatSync(path).mode);
 				return `${relative(root, path)}: ${digest}`;
 			})
 			.sort();
@@ -210,7 +213,7 @@ describe("/agents tier proposals", () => {
 	}
 
 	it("returns headless without reading settings or profiles or emitting output", async () => {
-		const load = vi.spyOn(settings, "loadTrustedSettings");
+		const load = vi.spyOn(settings, "loadTierProposalSettings");
 		const list = vi.spyOn(registry, "getAll");
 		try {
 			expect(await runProposal(false)).not.toHaveBeenCalled();
@@ -223,7 +226,7 @@ describe("/agents tier proposals", () => {
 	});
 
 	it("reports a throwing trusted settings read to the UI without exposing the raw error", async () => {
-		const load = vi.spyOn(settings, "loadTrustedSettings").mockImplementationOnce(() => {
+		const load = vi.spyOn(settings, "loadTierProposalSettings").mockImplementationOnce(() => {
 			throw new Error("synthetic private read failure");
 		});
 		try {
@@ -393,7 +396,8 @@ describe("/agents tier proposals", () => {
 	});
 
 	it.each(["global", "enterprise"])("does not request approval over an explicit %s map", async (layer) => {
-		const config = { modelTiers: layer === "global" ? { cheap: ["selection-path/definition"] } : {} };
+		// `router/default` is registered but must not replace this explicit binding.
+		const config = { modelTiers: layer === "global" ? { default: ["selection-path/definition"] } : {} };
 		if (layer === "global") writeFileSync(globalSettings(), JSON.stringify(config));
 		else writeFileSync(enterpriseSettings(), JSON.stringify({ version: 1, subagents: config }), { mode: 0o600 });
 		const before = snapshot(agentDir());
@@ -442,28 +446,151 @@ describe("/agents tier proposals", () => {
 		expect(snapshot(agentDir())).toEqual(before);
 	});
 
-	it.each(["not JSON", "null", "42", "[]"])("refuses to replace invalid global config: %s", async (raw) => {
-		writeFileSync(globalSettings(), raw);
+	const tiers = { default: ["router/default"] };
+	const member = '"modelTiers": {"default":["router/default"]}';
+	it.each([
+		["empty compact object", "{}", `{${member}}`],
+		["empty spaced object", "{ }", `{ ${member} }`],
+		["empty multiline object", "{\n}\n", `{\n  ${member}\n}\n`],
+		["compact object with a member", '{"keep": 1}', `{"keep": 1,${member}}`],
+		["literal 9007199254740993", ' { "keep": 9007199254740993 }\n', ` { "keep": 9007199254740993, ${member} }\n`],
+		[
+			"nested object with CRLF and tabs",
+			'{\r\n\t"nested": {"list": [{"brace": "}𝄞"}]},\r\n\t"escaped": "\\u0061"\r\n}\r\n',
+			`{\r\n\t"nested": {"list": [{"brace": "}𝄞"}]},\r\n\t"escaped": "\\u0061",\r\n\t${member}\r\n}\r\n`,
+		],
+	])("inserts only modelTiers: %s", async (_name, source, expected) => {
+		writeFileSync(globalSettings(), source);
+		await apply();
+		expect(readFileSync(globalSettings())).toEqual(Buffer.from(expected));
+	});
+
+	it("aborts if even whitespace in the approved snapshot changes during confirmation", async () => {
+		writeFileSync(globalSettings(), '{"keep":1}\n');
+		const edited = '{"keep":1} \n';
+		const { notify } = await apply(
+			vi.fn(async () => {
+				writeFileSync(globalSettings(), edited);
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("run /agents apply-tiers again"), "warning");
+		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+	});
+
+	it("preserves edits made at the replacement boundary and cleans up its lock", async () => {
+		writeFileSync(globalSettings(), '{"keep":1}\n');
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const edited = '{"keep":2}\n';
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				expect(lstatSync(`${globalSettings()}.lock`).isFile()).toBe(true);
+				writeFileSync(globalSettings(), edited);
+			}),
+		).rejects.toThrow(/run \/agents apply-tiers again/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+		expect(readdirSync(agentDir())).not.toContain("subagents.json.lock");
+		expect(readdirSync(agentDir()).some((name) => name.startsWith(".subagents-tiers-"))).toBe(false);
+	});
+
+	it("serializes two cooperating saves from the same snapshot", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const results = await Promise.allSettled([
+			settings.saveProposedModelTiers(tiers, approved),
+			settings.saveProposedModelTiers({ review: ["router/review"] }, approved),
+		]);
+		expect(results[0]).toEqual({ status: "fulfilled", value: undefined });
+		expect(results[1]).toMatchObject({ status: "rejected", reason: expect.any(settings.TierSettingsChangedError) });
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+	});
+
+	it("fails closed when the lock is held and leaves it alone", async () => {
+		writeFileSync(`${globalSettings()}.lock`, "held");
 		const before = snapshot(agentDir());
 		const { notify } = await apply();
-		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Could not save modelTiers"), "error");
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("holds the global settings lock"), "error");
 		expect(snapshot(agentDir())).toEqual(before);
 	});
 
-	it("refuses to replace a nonregular global settings path", async () => {
-		mkdirSync(globalSettings());
+	it.each(["not JSON", "null", "42", "[]", Buffer.from([0x7b, 0xff, 0x7d])])(
+		"refuses to replace invalid global config: %s",
+		async (raw) => {
+			writeFileSync(globalSettings(), raw);
+			const before = snapshot(agentDir());
+			const { confirm, notify } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(
+				"Could not read trusted settings or registered router profiles for the tier proposal.",
+				"error",
+			);
+			expect(snapshot(agentDir())).toEqual(before);
+		},
+	);
+
+	async function expectNonregularRefused() {
 		const before = snapshot(agentDir());
-		const { notify } = await apply();
-		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Could not save modelTiers"), "error");
+		const { confirm, notify } = await apply();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(
+			expect.stringContaining("Expected a regular global settings file"),
+			"error",
+		);
 		expect(snapshot(agentDir())).toEqual(before);
+	}
+
+	it("refuses a directory or symlink to a directory before reading", async () => {
+		const directory = `${globalSettings()}.directory`;
+		mkdirSync(directory);
+		symlinkSync(directory, globalSettings(), "junction");
+		await expectNonregularRefused();
 	});
 
-	it.each(["global", "enterprise"])("the writer refuses to save over an existing %s tier field", (layer) => {
+	it("refuses a nonregular target before reading", async () => {
+		if (process.platform === "win32") mkdirSync(globalSettings());
+		else execFileSync("mkfifo", [globalSettings()]);
+		await expectNonregularRefused();
+	});
+
+	it("refuses a Unix socket before reading (directory on Windows)", async () => {
+		if (process.platform === "win32") {
+			mkdirSync(globalSettings());
+			await expectNonregularRefused();
+			return;
+		}
+		const server = createServer();
+		server.listen(globalSettings());
+		await once(server, "listening");
+		try {
+			expect(lstatSync(globalSettings()).isSocket()).toBe(true);
+			await expectNonregularRefused();
+		} finally {
+			server.close();
+			await once(server, "close");
+		}
+	});
+
+	it("refuses to replace a read-only global settings file", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), 0o444);
+		try {
+			const { confirm, notify } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("read-only"), "error");
+			expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+			expect(lstatSync(globalSettings()).mode & 0o222).toBe(0);
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it.each(["global", "enterprise"])("the writer refuses to save over an existing %s tier field", async (layer) => {
 		const config = { modelTiers: null };
 		if (layer === "global") writeFileSync(globalSettings(), JSON.stringify(config));
 		else writeFileSync(enterpriseSettings(), JSON.stringify({ version: 1, subagents: config }), { mode: 0o600 });
 		const before = snapshot(agentDir());
-		expect(() => settings.saveProposedModelTiers({ default: ["router/default"] })).toThrow(/modelTiers/);
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/modelTiers/);
 		expect(snapshot(agentDir())).toEqual(before);
 	});
 });
