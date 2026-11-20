@@ -644,7 +644,9 @@ jobs:
       - name: Check out the local actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            scripts
           persist-credentials: false
       - id: plan
         name: Report execution plan
@@ -814,7 +816,9 @@ jobs:
       - name: Check out the local actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            scripts
           persist-credentials: false
       - id: plan
         name: Report execution plan
@@ -1127,7 +1131,9 @@ jobs:
       - name: Check out the local actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            scripts
           persist-credentials: false
       - id: plan
         name: Report execution plan

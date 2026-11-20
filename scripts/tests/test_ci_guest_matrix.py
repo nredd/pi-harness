@@ -1043,20 +1043,14 @@ def test_every_job_reports_through_the_one_shared_action() -> None:
         steps = cfg[name]["steps"]
         sparse = next(step for step in steps if step.get("name") == "Check out the local actions")
         assert steps.index(sparse) < steps.index(plan)
-        assert sparse["with"]["sparse-checkout"] == ".github/actions"
+        assert sparse["with"]["sparse-checkout"] == ".github/actions\nscripts\n"
         assert {"ref", "repository"}.isdisjoint(sparse["with"])
 
 
-def test_report_plan_runs_with_system_python_after_only_sparse_checkout() -> None:
-    """Keep the reporter runnable without a full checkout or interpreter download."""
+def test_report_plan_runs_with_system_python_and_no_nested_checkout() -> None:
+    """Keep the reporter a single `python3` step: a nested sparse checkout would leak into the full one."""
     action = yaml.safe_load(REPORT_PLAN.read_text())
-    checkout, report = action["runs"]["steps"]
-    assert checkout["uses"].startswith("actions/checkout@")
-    assert checkout["with"] == {
-        "persist-credentials": False,
-        "sparse-checkout-cone-mode": False,
-        "sparse-checkout": "/.github/actions/\n/scripts/ci_report_plan.py\n",
-    }
+    (report,) = action["runs"]["steps"]
     assert report["id"] == "report"
     assert report["run"].startswith("python3 scripts/ci_report_plan.py ")
     assert "\n" not in report["run"]

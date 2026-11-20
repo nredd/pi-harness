@@ -60,6 +60,14 @@ SCRIPT = Path(ci_report_plan.__file__).resolve()
             {}, 0, "run=true\nscenarios=true\ngates=check-ts check-scripts\n", "cell will run\n", "", id="run"
         ),
         pytest.param(
+            {"run": "false", "scenarios": "false", "gates": "", "reason": "-n", "changed-files": ""},
+            0,
+            "run=false\nscenarios=false\ngates=\n",
+            "::notice title=cell NOT RUN::-n\n",
+            "### cell NOT RUN\n-n This is not a pass.\n```text\n\n```\n",
+            id="skip-echo-option-is-literal",
+        ),
+        pytest.param(
             {"scenarios": "false", "gates": "", "reason": "Scenarios not selected"},
             0,
             "run=true\nscenarios=false\ngates=\n",

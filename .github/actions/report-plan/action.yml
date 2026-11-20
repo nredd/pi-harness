@@ -26,15 +26,8 @@ outputs:
 runs:
   using: composite
   steps:
-    # The callers initially check out only local actions with no ref override. The same
-    # default checkout uses the event ref/SHA (the merge commit on pull_request).
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        persist-credentials: false
-        sparse-checkout-cone-mode: false
-        sparse-checkout: |
-          /.github/actions/
-          /scripts/ci_report_plan.py
+    # No checkout here: a nested non-cone sparse checkout leaks into the job's later full checkout and leaves
+    # the tree sparse (found by hosted CI). Callers' sparse checkout must include `scripts`.
     - id: report
       shell: bash -e {0}
       env:
