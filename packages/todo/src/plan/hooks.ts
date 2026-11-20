@@ -27,6 +27,7 @@ import {
 	ownerKey,
 	ownerLabel,
 } from "../agents.ts";
+import { getStaleAfterSettles } from "../config.ts";
 import { monitorsByTodo } from "../monitors.ts";
 import type { TaskState } from "../state/state.ts";
 import { commitState, getState, sid } from "../state/store.ts";
@@ -51,8 +52,7 @@ export const HELD_REMINDER_MARKER =
 	"[rpiv-todo] Todos were held with nothing armed to wake you when this run tried to finish.";
 
 const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
-const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
-const STALE_AFTER_SETTLES = 10;
+export const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
 
 function hasOpenTodos(state: TaskState): boolean {
 	return state.tasks.some((task) => task.status === "pending" || task.status === "in_progress");
@@ -417,6 +417,7 @@ export function registerPlanHooks(
 	onStateChange: (sessionId: string) => Promise<void>,
 	/** Called at every settle: re-ask where other sessions' survivors stand before classifying. */
 	refreshSurvivors: (sessionId: string) => void,
+	options: { homeDir?: string },
 ): PlanSessionHooks {
 	// Sessions this extension instance is bound to. An approval for another
 	// session (a child, a stale emitter) waits until that session starts here.
@@ -494,9 +495,10 @@ export function registerPlanHooks(
 		}
 		// Age only completed settles that would otherwise stop, independent of any armed wake.
 		if (!hasOpenTodos(state)) return undefined;
-		const age = Math.min((staleAge.get(state) ?? 0) + 1, STALE_AFTER_SETTLES);
+		const threshold = getStaleAfterSettles(options.homeDir);
+		const age = Math.min((staleAge.get(state) ?? 0) + 1, threshold);
 		staleAge.set(state, age);
-		if (age < STALE_AFTER_SETTLES || staleReminded.has(id)) return undefined;
+		if (age < threshold || staleReminded.has(id)) return undefined;
 		staleReminded.add(id);
 		return reminderDraft(event, STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER, {});
 	};

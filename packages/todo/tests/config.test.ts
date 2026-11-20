@@ -5,16 +5,19 @@ import {
 	COLLAPSE_KEY_OFF,
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
+	DEFAULT_STALE_AFTER_SETTLES,
 	isValidCollapseKeySpec,
 	resolveCollapseKey as readCollapseKey,
 	getCollapseOnResume as readCollapseOnResume,
 	loadConfig as readConfig,
 	getMaxWidgetLines as readMaxWidgetLines,
+	getStaleAfterSettles as readStaleAfterSettles,
 } from "../src/config.ts";
 import { TEST_HOME } from "./fixtures/setup.ts";
 
 const getCollapseOnResume = () => readCollapseOnResume(TEST_HOME);
 const getMaxWidgetLines = (homeDir = TEST_HOME) => readMaxWidgetLines(homeDir);
+const getStaleAfterSettles = () => readStaleAfterSettles(TEST_HOME);
 const loadConfig = () => readConfig(TEST_HOME);
 const resolveCollapseKey = () => readCollapseKey(TEST_HOME);
 
@@ -203,5 +206,19 @@ describe("XDG_CONFIG_HOME tilde expansion", () => {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, "config.json"), JSON.stringify({ maxWidgetLines: 31 }), "utf-8");
 		expect(readConfig(TEST_HOME).maxWidgetLines).toBe(31);
+	});
+});
+
+describe("getStaleAfterSettles", () => {
+	it("returns the default without a config", () => {
+		expect(getStaleAfterSettles()).toBe(DEFAULT_STALE_AFTER_SETTLES);
+	});
+	it("reads a positive integer", () => {
+		writeConfigFile(JSON.stringify({ staleAfterSettles: 4 }));
+		expect(getStaleAfterSettles()).toBe(4);
+	});
+	it.each([0, -1, 2.5, "3", null])("falls back to the default for %j", (value) => {
+		writeConfigFile(JSON.stringify({ staleAfterSettles: value }));
+		expect(getStaleAfterSettles()).toBe(DEFAULT_STALE_AFTER_SETTLES);
 	});
 });

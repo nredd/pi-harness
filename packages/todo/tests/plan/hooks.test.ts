@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ import {
 } from "../../src/tool/types.ts";
 import { renderTodoResult } from "../../src/view/format.ts";
 import registerTodo from "../fixtures/home-fixtures.ts";
+import { TEST_HOME } from "../fixtures/setup.ts";
 import { createTodoCtx, createTodoPi } from "../fixtures/todo-host.ts";
 
 const PLAN = `# Add widgets
@@ -61,9 +62,13 @@ function setup() {
 			}),
 		},
 	} as never);
-	registerTodo(pi, async () => {
-		throw new Error("overlay must not load in headless tests");
-	});
+	registerTodo(
+		pi,
+		async () => {
+			throw new Error("overlay must not load in headless tests");
+		},
+		{ homeDir: TEST_HOME },
+	);
 	const handler = (name: string) => {
 		const found = captured.handlers.get(name)?.[0];
 		if (!found) throw new Error(`${name} not registered`);
@@ -632,6 +637,21 @@ describe("settling with nothing armed to wake the parent", () => {
 		const armWorker = () => {
 			applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", wakesParent: true });
 		};
+
+		it("reads the stale threshold from the injected config home", async () => {
+			const path = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, JSON.stringify({ staleAfterSettles: 3 }));
+			try {
+				const { handler, ctx } = await start(tasks({ id: 1 }));
+				armWorker();
+				const settle = () => handler("agent_before_settle")(settleEvent([user, assistant] as unknown[]), ctx);
+				await expectQuiet(settle, 2);
+				expect(await settle()).toMatchObject({ entries: [{ customType, display: false }] });
+			} finally {
+				rmSync(path, { force: true });
+			}
+		});
 
 		it("nudges at the threshold with an armed worker and rearms only on human input", async () => {
 			const { handler, ctx, call } = await start(tasks({ id: 1 }));
