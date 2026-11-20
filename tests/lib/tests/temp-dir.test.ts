@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
-import { expect, test, vi } from "vitest";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { CLEANUP_RETRY_OPTIONS, makeTestTempDir } from "../src/temp-dir.ts";
 
 vi.mock(import("node:fs"), async (importOriginal) => {
@@ -16,6 +17,7 @@ test("registers recursive cleanup for each directory and tolerates repeated clea
 	};
 	const first = makeTestTempDir("pi-test-lib-", register);
 	const second = makeTestTempDir("pi-test-lib-", register);
+	expect(first).toBe(join(tmpdir(), basename(first)));
 	expect(first).not.toBe(second);
 	writeFileSync(join(first, "fixture.txt"), "fixture");
 	expect(cleanups).toHaveLength(2);
@@ -26,14 +28,46 @@ test("registers recursive cleanup for each directory and tolerates repeated clea
 	expect(existsSync(second)).toBe(false);
 });
 
+test("creates and cleans a fixture directly under an explicit base directory", ({ onTestFinished }) => {
+	const baseDir = makeTestTempDir("pi-test-lib-", onTestFinished);
+	const cleanups: (() => void)[] = [];
+	const register = (cleanup: () => void) => {
+		cleanups.push(cleanup);
+		onTestFinished(cleanup);
+	};
+	const child = makeTestTempDir("child-", register, { baseDir });
+	expect(dirname(child)).toBe(baseDir);
+	expect(basename(child)).toMatch(/^child-/u);
+	writeFileSync(join(child, "fixture.txt"), "fixture");
+	expect(cleanups).toHaveLength(1);
+	for (const cleanup of cleanups) cleanup();
+	expect(readdirSync(baseDir)).toEqual([]);
+});
+
+test.each(["../escape-", "nested/../../escape-", join(tmpdir(), "absolute-")])(
+	"refuses a prefix that leaves an explicit base directory: %s",
+	(prefix) => {
+		const baseDir = makeTestTempDir("pi-test-lib-", onTestFinished);
+		const register = vi.fn();
+		expect(() => makeTestTempDir(prefix, register, { baseDir })).toThrow(/stay inside baseDir/u);
+		expect(register).not.toHaveBeenCalled();
+		expect(readdirSync(baseDir)).toEqual([]);
+		expect(readdirSync(dirname(baseDir)).filter((name) => name.startsWith("escape-"))).toEqual([]);
+	},
+);
+
 test("removes the directory if its cleanup cannot be registered", ({ onTestFinished }) => {
 	const parent = makeTestTempDir("pi-test-lib-", onTestFinished);
 	const error = new Error("no active test");
 	expect(() =>
-		makeTestTempDir(join(basename(parent), "child-"), () => {
-			expect(readdirSync(parent)).toHaveLength(1);
-			throw error;
-		}),
+		makeTestTempDir(
+			"child-",
+			() => {
+				expect(readdirSync(parent)).toHaveLength(1);
+				throw error;
+			},
+			{ baseDir: parent },
+		),
 	).toThrow(error);
 	expect(readdirSync(parent)).toEqual([]);
 });
