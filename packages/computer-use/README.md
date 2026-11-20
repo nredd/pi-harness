@@ -362,7 +362,8 @@ Both tools exist on macOS only, serialize behind one lock, and refuse when `head
 
 `desktop_screenshot` captures a full display (cursor included, `display` 0 is main) and states the
 image-to-point mapping. The display capture excludes blocked apps from the ScreenCaptureKit inventory,
-including apps whose windows are off-screen when the inventory is fetched. `desktop_input` posts
+including apps whose windows are off-screen when the inventory is fetched. An app that launches after
+the fetch is not excluded from that capture. `desktop_input` posts
 physical HID input in global points: `moveMouse`,
 `click`, `scroll`, `drag`, `typeText`, `keypress`. It moves the real cursor and types into whatever has
 focus, so verify with a screenshot. Input goes to the *frontmost app*: raising a window
