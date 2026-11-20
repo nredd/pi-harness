@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml
 
+from timeout_scale import scaled_timeout
+
 LOGGER = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("native_lint_tools.json")
@@ -68,8 +70,10 @@ def run(argv: list[str], cwd: Path) -> str:
         str: Combined output, also logged.
     Raises:
         OSError: The tool is missing or cannot execute.
-        subprocess.SubprocessError: Execution fails or exceeds five minutes.
+        ValueError: The timeout multiplier is invalid.
+        subprocess.SubprocessError: Execution fails or exceeds its deadline.
     """
+    timeout = scaled_timeout(300)
     with tempfile.TemporaryDirectory() as home:
         env = os.environ | {
             "HOME": home,
@@ -79,7 +83,7 @@ def run(argv: list[str], cwd: Path) -> str:
             "POWERSHELL_TELEMETRY_OPTOUT": "1",
         }
         result = subprocess.check_output(
-            argv, cwd=cwd, env=env, text=True, stderr=subprocess.STDOUT, timeout=300
+            argv, cwd=cwd, env=env, text=True, stderr=subprocess.STDOUT, timeout=timeout
         )
     if "ls-files" not in argv:
         LOGGER.info(result.strip())
