@@ -755,6 +755,8 @@ def test_empty_host_and_unexpected_ref() -> None:
     """
     with pytest.raises(ValueError, match="Empty snapshot host"):
         snap.snapshot_cell("ubuntu-24.04", {SEMANTICS_FIELD: FINGERPRINT, "signals": {}})
+    with pytest.raises(ValueError, match="Unexpected snapshot host fields"):
+        snap.snapshot_cell("ubuntu-24.04", {SEMANTICS_FIELD: FINGERPRINT, "signals": {}, "extra": True})
     api = MainGitHub()
     api.ref.update(ref=snap.REF + "-unexpected", object={"type": "commit", "sha": TIP})
     with pytest.raises(ValueError, match="Unexpected coverage data ref"):
