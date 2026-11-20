@@ -7,7 +7,7 @@ cross-pane supervisor or persistent cron is installed. Closing Pi stops active w
 - [Install and configure](#install-and-config)
 - [Goals and loops](#goal-and-loop), [monitors](#monitor) and [process recovery limits](#monitor-process-and-matching-limits)
 - [Diff](#diff), [stats](#stats), [portable export/import](#offline-stats-and-portable-snapshots)
-- [Titles and rules](#titles-and-rules), [child restrictions](#subagents-and-verification)
+- [Titles and rules](#titles-and-rules), [unavailable tools](#unavailable-tools), [child restrictions](#subagents-and-verification)
 - [Resource dashboard](#mon-resource-dashboard), [development](#development)
 
 Published as `@nredd/pi-session-kit` under MIT. Versions from `0.4.0` use signed package
@@ -32,10 +32,6 @@ These exercise real TERM-resistant descendant processes, leader exit with closed
 ## Standalone use
 
 The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
-
-On Pi hosts with `tool_not_found`, unavailable-tool errors suggest `search_tools` if the
-tool is deferred. The hint also appears for unknown names; it does not confirm that any
-particular name is deferred. Other tool errors are unchanged.
 
 Persisted goal state follows the active session branch; restored goals remain paused.
 
@@ -319,6 +315,13 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   edit inform subsequent work, not the edit already performed. The agent directory is resolved on
   each tool result, like title aliases and stats, so a later `PI_CODING_AGENT_DIR` change applies
   to the next result.
+
+## Unavailable tools
+
+On Pi hosts with `tool_not_found`, unavailable-tool errors suggest `search_tools` only
+when it is active in the current session. The hint never claims that the missing name
+is deferred. If `search_tools` is inactive or is itself the missing tool, Pi keeps its
+default error. Other tool errors are unchanged.
 
 ## Subagents and verification
 

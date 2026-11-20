@@ -3,6 +3,7 @@
  * state in session entries (or per-session files) so concurrent pi processes never see each other.
  */
 
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { resolveAgentDir } from "./agent-dir.ts";
 import type { Clock } from "./clock.ts";
@@ -48,9 +49,16 @@ const MODULES: Record<Feature, Register> = {
 /** Create the real kit without requiring a machine-local agent configuration. */
 export function createSessionKit(options: SessionKitOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
-		pi.on("tool_not_found", ({ toolName }) => ({
-			message: `Tool ${toolName} not found. If it is a deferred tool, call search_tools to load it.`,
-		}));
+		pi.on("tool_not_found", ({ toolName }) => {
+			// Keep the host default when the search hint cannot help.
+			if (typeof toolName !== "string" || toolName === "search_tools" || !pi.getActiveTools().includes("search_tools"))
+				return;
+			const characters = [...stripVTControlCharacters(toolName).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "")];
+			const name = characters.length > 64 ? `${characters.slice(0, 61).join("")}...` : characters.join("");
+			return {
+				message: `Tool ${JSON.stringify(name)} not found. If it is a deferred tool, call search_tools to load it.`,
+			};
+		});
 		const config = options.config ?? loadConfig(configPath(resolveAgentDir(options)));
 		for (const [feature, register] of Object.entries(MODULES) as [Feature, Register][]) {
 			if (config.features[feature]) register(pi, config, options);
