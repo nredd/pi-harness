@@ -37,6 +37,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Prevent cyclic macOS AX descendants from repeating in snapshots when macOS returns fresh handles for the same element (nredd/pi-harness#1123).
 - `desktop_screenshot` now excludes blocked apps that are running with only off-screen windows from the capture; an app that launches after the inventory is fetched is still not excluded (#688).
 - Fail the Windows GUI fixture and native-helper job when an interactive desktop is unavailable, including session 0. Remove headless success handling; retain separate mixed-DPI/negative-monitor `NOT RUN` evidence. Keep the kernel-abandonment fixture Windows-only with a non-test entry point for portable all-target builds (#1038).
 

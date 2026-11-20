@@ -22,19 +22,23 @@ private func runAXTraversalAssertions() {
   let button = Node("button")
   let children = [
     root.name: [web, toolbar], web.name: [link, hidden], toolbar.name: [button],
-    link.name: [web], hidden.name: [label],
+    hidden.name: [label],
   ]
   // Visibility queries may return a different handle for the same AX element.
   let visible = [web.name: [Node(link.name)], hidden.name: [label]]
   let world = AXTraversalWorld<Node>(
-    role: { $0 === web ? "AXWebArea" : "AXGroup" },
-    childLists: { (children[$0.name] ?? [], visible[$0.name]) },
+    role: { $0.name == web.name ? "AXWebArea" : "AXGroup" },
+    childLists: { node in
+      // AX can return a fresh handle on every traversal of the back edge.
+      let all = node.name == link.name ? [Node(web.name)] : children[node.name] ?? []
+      return (all, visible[node.name])
+    },
     sameElement: { $0.name == $1.name })
 
   let all = world.collect(startingAt: root, maxDepth: 8, maxNodes: 20)
   check(
     all.map(\.element.name) == ["window", "web", "toolbar", "link", "hidden", "button", "label"],
-    "AX traversal is breadth-first in sibling order and visits a cyclic handle only once")
+    "AX traversal is breadth-first in sibling order and visits equivalent cyclic handles only once")
   check(all.map(\.depth) == [0, 1, 1, 2, 2, 2, 3], "AX traversal reports depth from the root")
 
   check(

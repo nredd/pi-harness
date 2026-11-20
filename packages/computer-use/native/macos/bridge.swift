@@ -42,16 +42,13 @@ struct AXTraversalWorld<Element: AnyObject> {
 	func collect(startingAt root: Element, maxDepth: Int, maxNodes: Int) -> [AXDescendant<Element>] {
 		let nodeLimit = max(1, maxNodes)
 		var queue: [(Element, Int, Bool, Bool)] = [(root, 0, false, true)]
-		var seen = Set<ObjectIdentifier>()
 		var index = 0
 		var output: [AXDescendant<Element>] = []
 		while index < queue.count && output.count < nodeLimit {
 			let (element, depth, parentInsideWebArea, inheritedVisible) = queue[index]
 			index += 1
-			// Deduplicate visited handles by object identity; AX equivalence is only for visibility.
-			let identity = ObjectIdentifier(element)
-			if seen.contains(identity) { continue }
-			seen.insert(identity)
+			// AX can return a fresh handle for an element already visited.
+			if output.contains(where: { sameElement($0.element, element) }) { continue }
 			let elementRole = role(element)
 			let insideWebArea = parentInsideWebArea || elementRole == "AXWebArea"
 			output.append(AXDescendant(element: element, depth: depth, insideWebArea: insideWebArea, axVisible: inheritedVisible))

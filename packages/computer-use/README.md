@@ -243,6 +243,8 @@ are not branch outcomes or statements; the full-source producer retains unexecut
 `LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
 self-process/managed-child AX handles and synthetic nodes, never queries AX attributes.
 The child is reaped before assertions; a source-level guard forbids AX queries/actions.
+The bounded macOS AX descendant walk visits equivalent handles only once, so a cycle returning
+fresh handles does not repeat nodes in snapshots. The headless fixture reproduces that back edge.
 Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage or change
 runtime behavior. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
