@@ -1,13 +1,6 @@
 import AppKit
 import QuartzCore
 
-private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
-    guard condition() else {
-        FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
-        exit(1)
-    }
-}
-
 private final class GlowWindow: ActivityGlowWindow {
     private(set) var events: [String] = []
 
