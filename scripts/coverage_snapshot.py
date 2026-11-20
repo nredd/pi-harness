@@ -32,16 +32,42 @@ class Transport(Protocol):
 
     @property
     def repository(self) -> str:
-        """Return the repository this transport addresses."""
+        """Return the repository this transport addresses.
+
+        Parameters:
+            None.
+        Returns:
+            str: Repository name.
+        Raises:
+            None.
+        """
         ...
 
     def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
-        """Send a bounded repository request."""
+        """Send a bounded repository request.
+
+        Parameters:
+            path (str): Repository-relative route.
+            method (str): HTTP verb.
+            body (dict[str, Any] | None): Optional JSON payload.
+        Returns:
+            Any: Decoded response.
+        Raises:
+            OSError: GitHub request failed.
+        """
         ...
 
 
 def git_sha(value: object) -> str:
-    """Validate a Git object name before placing it in a route or write payload."""
+    """Validate a Git object name before placing it in a route or write payload.
+
+    Parameters:
+        value (object): Candidate Git object name.
+    Returns:
+        str: Lowercase SHA.
+    Raises:
+        ValueError: Invalid SHA.
+    """
     sha = text_value(value)
     if not SHA.fullmatch(sha):
         raise ValueError("Invalid Git object name")
@@ -49,14 +75,30 @@ def git_sha(value: object) -> str:
 
 
 def positive_id(value: object) -> int:
-    """Require a positive bounded GitHub identifier or ordinal, never a boolean."""
+    """Require a positive bounded GitHub identifier or ordinal, never a boolean.
+
+    Parameters:
+        value (object): Candidate identifier.
+    Returns:
+        int: Positive bounded integer.
+    Raises:
+        ValueError: Invalid identifier.
+    """
     if type(value) is not int or not 0 < value < 10**20:
         raise ValueError("Invalid GitHub identifier")
     return value
 
 
 def timestamp(value: object) -> datetime:
-    """Decode GitHub's canonical UTC timestamp, at second resolution."""
+    """Decode GitHub's canonical UTC timestamp, at second resolution.
+
+    Parameters:
+        value (object): Candidate timestamp.
+    Returns:
+        datetime: Measurement time in UTC.
+    Raises:
+        ValueError: Invalid timestamp.
+    """
     text = text_value(value)
     when = datetime.fromisoformat(text)
     if when.isoformat(timespec="seconds").replace("+00:00", "Z") != text or when.tzinfo != UTC:
@@ -74,7 +116,16 @@ class Snapshot:
 
     @classmethod
     def parse(cls, raw: bytes, repository: str) -> Snapshot:
-        """Validate bounded data before using it for either ordering or deltas."""
+        """Validate bounded data before using it for either ordering or deltas.
+
+        Parameters:
+            raw (bytes): Stored JSON bytes.
+            repository (str): Expected repository.
+        Returns:
+            Snapshot: Validated identity and measurements.
+        Raises:
+            ValueError: Malformed snapshot.
+        """
         if len(raw) > MAX_BYTES:
             raise ValueError("Coverage snapshot exceeds byte limit")
         data = decode_json(raw)
@@ -98,7 +149,16 @@ class Snapshot:
 
 
 def snapshot_cell(host: str, value: object) -> Evidence:
-    """Decode counters and producer semantics without accepting paths, reasons or links."""
+    """Decode counters and producer semantics without accepting paths, reasons or links.
+
+    Parameters:
+        host (str): Snapshot host label.
+        value (object): Stored host counters and plan.
+    Returns:
+        Evidence: Parsed package-level evidence.
+    Raises:
+        ValueError: Invalid counters or signal.
+    """
     signals, packages = [], {}
     for name, raw in object_value(value).items():
         entry = object_value(raw)
@@ -123,7 +183,15 @@ def snapshot_cell(host: str, value: object) -> Evidence:
 
 
 def encode_cell(cell: Evidence) -> dict[str, object]:
-    """Project only planned signals and measured package counters onto the snapshot."""
+    """Project only planned signals and measured package counters onto the snapshot.
+
+    Parameters:
+        cell (Evidence): Validated main host evidence.
+    Returns:
+        dict[str, object]: Signal plan and counters.
+    Raises:
+        ValueError: Evidence was incomplete.
+    """
     summary = cell.summary
     if summary is None or summary.errors or summary.measurement_only or summary.trimmed_from is not None:
         raise ValueError("Incomplete main coverage evidence")
@@ -144,7 +212,15 @@ def encode_cell(cell: Evidence) -> dict[str, object]:
 
 
 def read_tip(api: Transport) -> str | None:
-    """Read the exact data ref; only a missing ref permits initialization."""
+    """Read the exact data ref; only a missing ref permits initialization.
+
+    Parameters:
+        api (Transport): Repository transport.
+    Returns:
+        str | None: Fixed ref tip, if it exists.
+    Raises:
+        ValueError: Unexpected ref or tip.
+    """
     try:
         ref = api.request(REF_API)
     except HTTPError as error:
@@ -158,7 +234,16 @@ def read_tip(api: Transport) -> str | None:
 
 
 def read_snapshot(api: Transport, tip: str) -> Snapshot:
-    """Read a fixed regular file at the pinned data commit, never a checked-out tree."""
+    """Read a fixed regular file at the pinned data commit, never a checked-out tree.
+
+    Parameters:
+        api (Transport): Repository transport.
+        tip (str): Validated snapshot commit SHA.
+    Returns:
+        Snapshot: Parsed data from the pinned tip.
+    Raises:
+        ValueError: Malformed Git entry or snapshot.
+    """
     tree = api.request(f"git/trees/{tip}")
     matches = [row for row in tree["tree"] if row["path"] == FILENAME]
     if tree["truncated"] is not False or len(matches) != 1:
@@ -180,7 +265,16 @@ def read_snapshot(api: Transport, tip: str) -> Snapshot:
 
 
 def baseline(api: Transport, now: datetime) -> tuple[Evidence, ...]:
-    """Treat an absent, expired or invalid baseline as unavailable without blocking the PR comment."""
+    """Treat an absent, expired or invalid baseline as unavailable without blocking the PR comment.
+
+    Parameters:
+        api (Transport): Read-only snapshot transport.
+        now (datetime): Reader time in UTC.
+    Returns:
+        tuple[Evidence, ...]: Fresh measurements or no baseline.
+    Raises:
+        None.
+    """
     try:
         tip = read_tip(api)
         if tip is None:
@@ -197,7 +291,18 @@ def write_snapshot(
     payload: dict[str, Any],
     still_current: Callable[[], bool],
 ) -> None:
-    """Commit only data, then advance the ref without force or create it exactly once."""
+    """Commit only data, then advance the ref without force or create it exactly once.
+
+    Parameters:
+        api (Transport): Snapshot writer transport.
+        tip (str | None): Previously observed ref tip.
+        payload (dict[str, Any]): Candidate snapshot JSON.
+        still_current (Callable[[], bool]): Recheck run identity immediately before mutating the ref.
+    Returns:
+        None.
+    Raises:
+        ValueError: Invalid snapshot or changed attempt.
+    """
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     Snapshot.parse(raw.encode(), api.repository)
     tree = api.request(

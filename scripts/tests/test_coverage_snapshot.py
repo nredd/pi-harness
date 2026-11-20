@@ -40,7 +40,16 @@ TREE = "e" * 40
 
 
 def http_error(path: str, code: int) -> HTTPError:
-    """Return a synthetic GitHub error with no network connection."""
+    """Return a synthetic GitHub error with no network connection.
+
+    Parameters:
+        path (str): Request route.
+        code (int): HTTP status.
+    Returns:
+        HTTPError: Recorded failure.
+    Raises:
+        None.
+    """
     return HTTPError(path, code, "Recording transport", Message(), None)
 
 
@@ -61,7 +70,15 @@ class MainGitHub(pub.GitHub):
     policy: dict[str, Any]
 
     def __init__(self) -> None:
-        """Seed a completed main attempt with independent retained OS fixtures."""
+        """Seed a completed main attempt with independent retained OS fixtures.
+
+        Parameters:
+            None.
+        Returns:
+            None.
+        Raises:
+            None.
+        """
         super().__init__(REPO, "synthetic-token")
         self.data = run_data(
             event="push",
@@ -107,7 +124,15 @@ class MainGitHub(pub.GitHub):
             )
 
     def seed_snapshot(self, raw: bytes) -> None:
-        """Put a data-only snapshot at an existing tip."""
+        """Put a data-only snapshot at an existing tip.
+
+        Parameters:
+            raw (bytes): Snapshot JSON.
+        Returns:
+            None.
+        Raises:
+            None.
+        """
         self.ref.update(ref=snap.REF, object={"type": "commit", "sha": TIP})
         self.tree_entries[:] = [
             {"path": snap.FILENAME, "sha": BLOB, "size": len(raw), "type": "blob", "mode": "100644"}
@@ -115,7 +140,17 @@ class MainGitHub(pub.GitHub):
         self.blob.update(sha=BLOB, size=len(raw), encoding="base64", content=base64.encodebytes(raw).decode())
 
     def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
-        """Check exact routes, retain the proposed tree and simulate competing writers."""
+        """Check exact routes, retain the proposed tree and simulate competing writers.
+
+        Parameters:
+            path (str): API route.
+            method (str): HTTP verb.
+            body (dict[str, Any] | None): Write payload.
+        Returns:
+            Any: Recorded response.
+        Raises:
+            HTTPError: Missing ref or competing update.
+        """
         if method == "GET":
             if path == snap.REF_API:
                 if not self.ref:
@@ -146,14 +181,32 @@ class MainGitHub(pub.GitHub):
         return {}
 
     def pages(self, path: str, key: str | None = None, **params: str) -> list[Any]:
-        """Provide only the triggering execution's jobs and artifacts."""
+        """Provide only the triggering execution's jobs and artifacts.
+
+        Parameters:
+            path (str): API route.
+            key (str | None): Response envelope key.
+        Returns:
+            list[Any]: Recorded jobs or artifacts.
+        Raises:
+            None.
+        """
         return {
             ("actions/runs/123/attempts/2/jobs", "jobs"): self.jobs,
             ("actions/runs/123/artifacts", "artifacts"): self.artifacts,
         }[(path, str(key))]
 
     def download(self, artifact_id: int, destination: Path) -> None:
-        """Wrap real counters in a synthetic main provenance fixture archive, with optional corruption."""
+        """Wrap real counters in a synthetic main provenance fixture archive, with optional corruption.
+
+        Parameters:
+            artifact_id (int): Download identifier.
+            destination (Path): Private ZIP path.
+        Returns:
+            None.
+        Raises:
+            None.
+        """
         self.downloads.append(artifact_id)
         host = tuple(pub.COVERAGE_HOSTS)[artifact_id - 1]
         assert destination.name == f"coverage-{host}.zip"
@@ -194,7 +247,15 @@ class MainGitHub(pub.GitHub):
 
 
 def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Round-trip a two-host baseline and render independent signed deltas in the PR comment."""
+    """Round-trip a two-host baseline and render independent signed deltas in the PR comment.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Scoped reader and clock overrides.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     pub.publish_snapshot(api, api.data, NOW)
     assert api.downloads == [1, 2]
@@ -226,7 +287,15 @@ class FixedClock:
 
     @staticmethod
     def now(tz: object) -> datetime:
-        """Return the fixed test time."""
+        """Return the fixed test time.
+
+        Parameters:
+            tz (object): Requested timezone.
+        Returns:
+            datetime: Fixed UTC time.
+        Raises:
+            None.
+        """
         assert tz == UTC
         return NOW
 
@@ -249,7 +318,15 @@ class FixedClock:
     ],
 )
 def test_untrusted_trigger_fails_before_io(override: dict[str, Any]) -> None:
-    """Reject everything except a successful same-repository CI push to main."""
+    """Reject everything except a successful same-repository CI push to main.
+
+    Parameters:
+        override (dict[str, Any]): Trigger fields to replace.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     with pytest.raises(ValueError, match=r"CI run|main push|retention window|GitHub timestamp"):
         pub.publish_snapshot(api, api.data | override, NOW)
@@ -261,7 +338,15 @@ def test_untrusted_trigger_fails_before_io(override: dict[str, Any]) -> None:
     "case", ["owner", "size", "wrong-name", "ambiguous", "path", "attempt", "policy", "changed"]
 )
 def test_invalid_evidence_never_writes(case: str) -> None:
-    """Fail closed on incomplete, incorrectly bound or malformed producer evidence."""
+    """Fail closed on incomplete, incorrectly bound or malformed producer evidence.
+
+    Parameters:
+        case (str): Broken evidence case.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     trigger = copy.deepcopy(api.data)
     artifact = api.artifacts[0]
@@ -288,7 +373,15 @@ def test_invalid_evidence_never_writes(case: str) -> None:
 
 @pytest.mark.parametrize("order", [(6, 9), (7, 1), (7, 2), (7, 3), (8, 1)])
 def test_only_newer_executions_advance_tip(order: tuple[int, int]) -> None:
-    """Compare run number before attempt, not SHA, ID or clock time, even at an expired tip."""
+    """Compare run number before attempt, not SHA, ID or clock time, even at an expired tip.
+
+    Parameters:
+        order (tuple[int, int]): Prior run number and attempt.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     pub.publish_snapshot(api, api.data, NOW)
     old = json.loads(api.raw) | {
@@ -308,7 +401,15 @@ def test_only_newer_executions_advance_tip(order: tuple[int, int]) -> None:
 
 @pytest.mark.parametrize("race", ["ref", "attempt"])
 def test_race_cannot_move_ref(race: str) -> None:
-    """Reject concurrent ref creation and attempts that change after producing the commit."""
+    """Reject concurrent ref creation and attempts that change after producing the commit.
+
+    Parameters:
+        race (str): Concurrent change to simulate.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     api.race = race
     with pytest.raises((HTTPError, ValueError), match=r"Recording transport|changed during publication"):
@@ -331,7 +432,16 @@ def test_race_cannot_move_ref(race: str) -> None:
     ],
 )
 def test_invalid_snapshot_identity(field: str, value: object) -> None:
-    """Reject malformed or cross-repository stored identity."""
+    """Reject malformed or cross-repository stored identity.
+
+    Parameters:
+        field (str): Identity field to change.
+        value (object): Invalid replacement.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     pub.publish_snapshot(api, api.data, NOW)
     with pytest.raises(ValueError, match=r"Invalid |Unexpected snapshot hosts|Cannot decode JSON"):
@@ -342,7 +452,15 @@ def test_invalid_snapshot_identity(field: str, value: object) -> None:
     "case", ["missing", "duplicate", "symlink", "oversized", "sha", "blob", "encoded", "decoded", "raw"]
 )
 def test_invalid_stored_data_is_unavailable(case: str) -> None:
-    """Handle short, hostile or malformed Git responses without rendering their numbers."""
+    """Handle short, hostile or malformed Git responses without rendering their numbers.
+
+    Parameters:
+        case (str): Invalid stored response case.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     pub.publish_snapshot(api, api.data, NOW)
     entry = api.tree_entries[0]
@@ -382,7 +500,15 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
     ],
 )
 def test_invalid_snapshot_counters(entry: dict[str, Any]) -> None:
-    """Do not let cached counters bypass typed, planned-signal validation."""
+    """Do not let cached counters bypass typed, planned-signal validation.
+
+    Parameters:
+        entry (dict[str, Any]): Invalid signal fields.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     value = {
         "enforcement": "enforced",
         "state": "planned",
@@ -394,7 +520,15 @@ def test_invalid_snapshot_counters(entry: dict[str, Any]) -> None:
 
 
 def test_empty_host_and_unexpected_ref() -> None:
-    """Reject snapshots with no measurements and prefix matches from the ref endpoint."""
+    """Reject snapshots with no measurements and prefix matches from the ref endpoint.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     with pytest.raises(ValueError, match="Empty snapshot host"):
         snap.snapshot_cell("ubuntu-24.04", {})
     api = MainGitHub()
@@ -404,7 +538,16 @@ def test_empty_host_and_unexpected_ref() -> None:
 
 
 def test_snapshot_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Use the snapshot entry point only when explicitly selected by the job."""
+    """Use the snapshot entry point only when explicitly selected by the job.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Scoped CLI environment.
+        tmp_path (Path): Private event directory.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
     api = MainGitHub()
     event = tmp_path / "event"
     event.write_text(json.dumps({"workflow_run": api.data}))

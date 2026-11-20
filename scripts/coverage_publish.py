@@ -367,7 +367,17 @@ def write_plan(policy: Path, destination: Path, state: str) -> None:
 
 
 def host_plan(policy: dict[str, object], host: str, state: str) -> dict[str, object]:
-    """Build one OS plan using policy from the selected trusted revision."""
+    """Build one OS plan using policy from the selected trusted revision.
+
+    Parameters:
+        policy (dict[str, object]): Tested revision policy.
+        host (str): Coverage artifact host.
+        state (str): Measurement availability.
+    Returns:
+        dict[str, object]: Trusted renderer plan for the host.
+    Raises:
+        None.
+    """
     os_name = HOSTS[host][1]
     signals = {}
     for name, raw_package in object_value(policy["packages"]).items():
@@ -473,7 +483,16 @@ def publish(api: GitHub, run: Run, policy: Path, summary: Path) -> None:
 
 
 def main_run(api: GitHub, data: Any) -> tuple[Run, int, str]:
-    """Require a successful, same-repository push to main, independent of artifact contents."""
+    """Require a successful, same-repository push to main, independent of artifact contents.
+
+    Parameters:
+        api (GitHub): Target repository transport.
+        data (Any): GitHub run identity metadata.
+    Returns:
+        tuple[Run, int, str]: Validated execution, repository ID and attempt start.
+    Raises:
+        ValueError: Not an eligible main run.
+    """
     run = Run.parse(data, "push")
     repo_id = positive_id(data["repository"]["id"])
     if (
@@ -490,7 +509,17 @@ def main_run(api: GitHub, data: Any) -> tuple[Run, int, str]:
 
 
 def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
-    """Record complete measurements from a completed main attempt, never a PR or dispatch."""
+    """Record complete measurements from a completed main attempt, never a PR or dispatch.
+
+    Parameters:
+        api (GitHub): Snapshot writer transport.
+        trigger (Any): Completed workflow-run metadata.
+        now (datetime): Publisher time in UTC.
+    Returns:
+        None.
+    Raises:
+        ValueError: Execution, producer evidence or previous snapshot was invalid.
+    """
     identity = main_run(api, trigger)
     run, repo_id, started = identity
     if not timedelta(0) <= now - timestamp(started) <= MAX_AGE:
