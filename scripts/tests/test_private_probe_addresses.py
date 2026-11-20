@@ -45,15 +45,14 @@ SENSITIVE = tuple(
     )
 )
 
-# Neutral probe targets: boundary addresses of each range, the Tailscale DNS address, the cloud metadata
-# address, and the generic default-router example used as the `scripts/wsl2_smoke.sh` default.
+# Neutral probe targets: boundary addresses of each range, the Tailscale DNS address and the cloud metadata
+# address.
 ALLOWED = frozenset(
     ipaddress.ip_address(a)
     for a in (
         "10.0.0.1",
         "172.16.0.1",
         "192.168.0.1",
-        "192.168.1.1",
         "192.168.255.254",
         "100.64.0.1",
         "100.100.100.100",
@@ -148,10 +147,8 @@ LINUX_HOME = "/home" + "/"
     ("text", "bad"),
     [
         (f"{ip(10, 0, 0, 1)} {ip(172, 16, 0, 1)} {ip(192, 168, 0, 1)} {ip(192, 168, 255, 254)}", False),
-        (
-            f"{ip(100, 64, 0, 1)} {ip(100, 100, 100, 100)} {ip(169, 254, 169, 254)} {ip(192, 168, 1, 1)}",
-            False,
-        ),
+        (f"{ip(100, 64, 0, 1)} {ip(100, 100, 100, 100)} {ip(169, 254, 169, 254)}", False),
+        (ip(192, 168, 1, 1), True),
         (ip(10, 0, 0, 2), True),
         (f"host is {ip(192, 168, 7, 9)}.", True),
         (ip(192, 168, 7, 9) + ".5", False),
@@ -228,7 +225,7 @@ def test_scope_covers_whole_tree_but_not_forks_locks_or_generated() -> None:
     for expected in (
         "README.md",
         ".github/workflows/runner-smoke.yml",
-        "scripts/wsl2_smoke.sh",
+        "scripts/ubuntu_apt.sh",
         "scripts/tests/test_private_probe_addresses.py",
     ):
         assert expected in paths

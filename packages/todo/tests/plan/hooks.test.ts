@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ import {
 } from "../../src/tool/types.ts";
 import { renderTodoResult } from "../../src/view/format.ts";
 import registerTodo from "../fixtures/home-fixtures.ts";
+import { TEST_HOME } from "../fixtures/setup.ts";
 import { createTodoCtx, createTodoPi } from "../fixtures/todo-host.ts";
 
 const PLAN = `# Add widgets
@@ -61,9 +62,13 @@ function setup() {
 			}),
 		},
 	} as never);
-	registerTodo(pi, async () => {
-		throw new Error("overlay must not load in headless tests");
-	});
+	registerTodo(
+		pi,
+		async () => {
+			throw new Error("overlay must not load in headless tests");
+		},
+		{ homeDir: TEST_HOME },
+	);
 	const handler = (name: string) => {
 		const found = captured.handlers.get(name)?.[0];
 		if (!found) throw new Error(`${name} not registered`);
@@ -622,6 +627,97 @@ describe("settling with nothing armed to wake the parent", () => {
 		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "other-worker", wakesParent: true });
 		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
 		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
+	});
+
+	describe("stale open lists", () => {
+		const customType = "rpiv-todo-stale-reminder";
+		const expectQuiet = async (settle: () => unknown, count: number) => {
+			for (let i = 0; i < count; i++) expect(await settle()).toBeUndefined();
+		};
+		const armWorker = () => {
+			applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", wakesParent: true });
+		};
+
+		it("reads the stale threshold from the injected config home", async () => {
+			const path = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, JSON.stringify({ staleAfterSettles: 3 }));
+			try {
+				const { handler, ctx } = await start(tasks({ id: 1 }));
+				armWorker();
+				const settle = () => handler("agent_before_settle")(settleEvent([user, assistant] as unknown[]), ctx);
+				await expectQuiet(settle, 2);
+				expect(await settle()).toMatchObject({ entries: [{ customType, display: false }] });
+			} finally {
+				rmSync(path, { force: true });
+			}
+		});
+
+		it("nudges at the threshold with an armed worker and rearms only on human input", async () => {
+			const { handler, ctx, call } = await start(tasks({ id: 1 }));
+			armWorker();
+			const settle = (messages = [user, assistant] as unknown[]) =>
+				handler("agent_before_settle")(settleEvent(messages), ctx);
+			await expectQuiet(settle, 9);
+			const result = (await settle()) as { entries: Array<{ content: string }>; continue: boolean };
+			expect(result).toMatchObject({
+				continue: true,
+				entries: [{ type: "custom_message", customType, display: false }],
+			});
+			const marker = { role: "custom", customType, content: result.entries[0].content };
+			const messages = [user, assistant, marker];
+			const expanded = await handler("context")({ messages }, ctx);
+			expect(expanded).toMatchObject({
+				messages: [user, assistant, { customType, content: expect.stringContaining("action `list`") }],
+			});
+			expect(marker.content).not.toContain("action `list`");
+			expect(await handler("context")({ messages: [...messages, assistant] }, ctx)).toBeUndefined();
+			await expectQuiet(() => settle([...messages, assistant]), 10);
+			await handler("input")({ source: "extension" }, ctx);
+			expect(await settle([...messages, user, assistant])).toBeUndefined();
+			await handler("input")({ source: "interactive" }, ctx);
+			expect(await settle([...messages, user, assistant])).toMatchObject({ entries: [{ customType }] });
+			await call(ctx, { action: "clear" });
+			expect(await handler("context")({ messages }, ctx)).toBeUndefined();
+		});
+
+		it("resets age on a successful write, but not on a read or rejected write", async () => {
+			const { handler, ctx, call } = await start(tasks({ id: 1 }));
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 9);
+			await call(ctx, { action: "create", subject: "pending follow-up" });
+			await expectQuiet(settle, 9);
+			await call(ctx, { action: "list" });
+			expect(text(await call(ctx, { action: "update", id: 2, status: "completed" }))).toMatch(/^Error:/);
+			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			await call(ctx, { action: "update", id: 1, status: "completed", evidence: "verified" });
+			await expectQuiet(settle, 10);
+			await handler("session_shutdown")({ reason: "quit" }, ctx);
+			await handler("session_start")({ reason: "new" }, ctx);
+			armWorker();
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+		});
+
+		it("ignores closed lists and does not age in Plan mode or on an aborted settle", async () => {
+			const { handler, ctx, call } = await start(tasks());
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 10);
+			await call(ctx, {
+				ops: [
+					{ action: "create", subject: "closed work" },
+					{ action: "delete", id: 1 },
+				],
+			});
+			await expectQuiet(settle, 10);
+			await call(ctx, { action: "create", subject: "open work" });
+			const planning = { role: "custom", customType: "plan-mode-transition", details: { version: 1, mode: "plan" } };
+			await expectQuiet(() => handler("agent_before_settle")(settleEvent([planning, user, assistant]), ctx), 10);
+			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant], "aborted"), ctx), 10);
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+		});
 	});
 
 	describe("monitors linked to a todo", () => {

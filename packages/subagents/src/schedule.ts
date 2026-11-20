@@ -22,6 +22,7 @@ import type { AgentManager } from "./agent-manager.ts";
 import { normalizeMaxTurns } from "./agent-runner.ts";
 import { getAgentConfig, resolveSpawnType } from "./agent-types.ts";
 import { type Clock, realClock, type TimerHandle } from "./clock.ts";
+import { resolveTurnCap } from "./invocation-config.ts";
 import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.ts";
 import {
 	checkAdmission,
@@ -682,13 +683,14 @@ export class SubagentScheduler {
 			// fire-time failure.
 			const dispatch = resolveSpawnType(job.subagent_type);
 			if (!dispatch.ok) throw new Error(dispatch.message);
+			const maxTurns = resolveTurnCap(job.max_turns, getAgentConfig(dispatch.type)?.maxTurns);
 			agentId = manager.spawn(pi, ctx, dispatch.type, job.prompt, {
 				description: job.description,
 				isBackground: true,
 				bypassQueue: true,
 				model: selection.model,
 				modelSelection: selection,
-				maxTurns: job.max_turns,
+				maxTurns,
 				isolated: job.isolated,
 				thinkingLevel: job.thinking,
 				isolation: job.isolation,
@@ -701,7 +703,7 @@ export class SubagentScheduler {
 					thinking: job.thinking,
 					// Normalized like the Agent tool's own snapshot: `0` means unlimited,
 					// and rendering it as "max turns: 0" would read as a limit of none.
-					maxTurns: normalizeMaxTurns(job.max_turns),
+					maxTurns: normalizeMaxTurns(maxTurns),
 					isolated: job.isolated,
 					runInBackground: true,
 					isolation: job.isolation,

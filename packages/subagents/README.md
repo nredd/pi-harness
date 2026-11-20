@@ -412,11 +412,11 @@ and naming conventions. Breadth changes what it looks for, not the turn budget.
 `Explore` is prompted to give `path:line` findings in at most 300 words unless asked
 for more, and mark unfinished searches or truncated reports `INCOMPLETE`.
 
-In the `Agent` tool, built-in `Explore` uses its own cap: caller `max_turns` values
-of `1`, `3`, `40` and `99` all resolve to `12`. The project `defaultMaxTurns` is a
-fallback, so even a default of `9` does not lower the agent's cap. Scheduled jobs
-and `subagents:rpc:spawn` still use an explicit turn ceiling (`max_turns` for jobs,
-`maxTurns` for RPC) ahead of the agent's cap.
+The lower of the caller and definition turn caps wins for the `Agent` tool,
+scheduled jobs (resolved when they fire), and `subagents:rpc:spawn` (`options.maxTurns`).
+For built-in `Explore`, requesting `40` still gives `12`, while requesting `3` gives `3`.
+An explicit `0` means unlimited but cannot override a finite cap. The project
+`defaultMaxTurns` is only a fallback when neither side specifies a cap.
 
 Turn 12 steers `Explore` to wrap up. The default five grace turns allow up to 17
 ordinary turns, followed, if needed, by one tool-free final-report turn (18 total).
@@ -504,7 +504,7 @@ All fields are optional — sensible defaults for everything.
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
-Frontmatter is authoritative for `max_turns`, `inherit_context`, `run_in_background`, `isolated`, and `isolation`. An agent file's `model` and `thinking` are portable defaults: an explicit `Agent({ model, thinking })` selection overrides either for that run. With no explicit thinking level, the definition wins; if it has none either, no level is passed and pi picks one at session creation (the per-model setting, else `defaultThinkingLevel`, clamped to the model), which does not follow the parent's live level. Only the `@mention` clone path starts from the parent's `ctx.thinkingLevel`. Model selection additionally follows the [`agentModels`](#per-agent-models) precedence. Other `Agent` tool parameters only fill fields the agent config leaves unspecified. Other spawn paths differ per field:
+Frontmatter is authoritative for `inherit_context`, `run_in_background`, `isolated`, and `isolation`. An agent file's `model` and `thinking` are portable defaults: an explicit `Agent({ model, thinking })` selection overrides either for that run. With no explicit thinking level, the definition wins; if it has none either, no level is passed and pi picks one at session creation (the per-model setting, else `defaultThinkingLevel`, clamped to the model), which does not follow the parent's live level. Only the `@mention` clone path starts from the parent's `ctx.thinkingLevel`. Model selection additionally follows the [`agentModels`](#per-agent-models) precedence. Other `Agent` tool parameters only fill fields the agent config leaves unspecified. Other spawn paths differ per field:
 
 - `isolated` holds on every spawn path, including `@handle` mentions, workflows and [cross-extension RPC](#driving-subagents-from-another-extension).
 - `isolation` holds on every path except workflows: as in Claude Code, only the script's `agent()` option decides there.
@@ -679,9 +679,9 @@ Launch a sub-agent.
 | `subagent_type` | string | yes | Agent type (built-in or custom) |
 | `model` | string | no | Model — `provider/modelId`, [machine-local alias](#machine-local-model-aliases), or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
-| `max_turns` | number | no | Soft turn cap. The agent definition takes precedence; if neither is set, the project default applies. |
+| `max_turns` | number | no | Soft turn cap. The lower of this value and the definition cap wins; if neither is set, the project default applies. |
 | `run_in_background` | boolean | no | Defaults to `true`; `false` blocks and returns the result inline, until [`ctrl+b`](#sending-a-foreground-agent-to-the-background) hands it to the background |
-| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and this call's `max_turns` applied unless the agent definition sets one. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
+| `resume` | string | no | Agent ID to resume a previous session. The resumed run gets a fresh `max_turns` budget; its existing model and thinking level remain in effect, so this call's `model` and `thinking` are ignored. An evicted agent whose session was persisted ([`rememberAgents`](#persistent-settings)) is reopened from disk like `@handle`, under a NEW agent id with the model selected anew and the lower of this call's `max_turns` and the agent definition's cap applied. It runs only in the background: with `run_in_background: false` the call is refused and says so. The old id keeps resolving to the newest id of that conversation, so a second resume while it runs is answered with that id and status instead of reopening the file twice, and the chain survives the new record's own eviction. The result names the reopened session file, which is the transcript; no `.output` file is written for it |
 | `isolated` | boolean | no | No extension/MCP tools |
 | `isolation` | `"off"` \| `"worktree"` | no | `worktree` runs in an isolated git worktree; `off` (the default) does not. Absent from the schema entirely when `worktreeIsolation: false` |
 | `cwd` | string | no | Working directory for the agent: absolute, `~/`-prefixed, or relative to the session cwd. Default: the session cwd. With `isolation: "worktree"`, the worktree comes from the repo containing it; see [Worktree Isolation](#worktree-isolation). Not combinable with `schedule` |
@@ -841,7 +841,7 @@ Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 3. Hard abort only after the grace period
 4. Whenever a limit fired and the agent did not end on a finished answer (text, no pending tool call), one more tool-less turn asks for the full final report. The steer is only a request: an agent deep in a tool loop ignores it, and without that turn the result was whatever it narrated before the abort ("Now let me check the tests..."). That turn is tool-free even when another extension re-activates its tools from `before_agent_start` (e.g. pi-deferred-context-engine): the loadout is pinned empty for the turn, any call that still gets through is refused, and the turn is stopped if it calls a tool or runs past one turn
 
-A resumed agent gets a fresh budget: `max_turns` is counted from the resume prompt, resolved as for a spawn -- the agent file's `max_turns`, else the resume call's, else the limit the agent was spawned with, else the default. The same bounded, tool-free final report applies on resume. A caller stop, including one arriving while an aborted batch drains, never launches that report.
+A resumed agent gets a fresh budget: `max_turns` is counted from the resume prompt, capped by the lower of the agent definition and the resume call (or original invocation if the call omits it), with the project default as a fallback. The same bounded, tool-free final report applies on resume. A caller stop, including one arriving while an aborted batch drains, never launches that report.
 
 | Status | Meaning | Icon |
 |--------|---------|------|
@@ -2181,7 +2181,7 @@ Start with the [channel examples](#cross-extension-rpc) and [event table](#event
 | `description` | string | What the agent is doing. Shown in the widget, FleetView and the completion notification |
 | `name` | string | A memorable second handle (`@auth-audit`). Slugged, never validated — anything unusable degrades rather than failing the spawn |
 | `model` | `Model`, `"@tier"` **or** `"provider/modelId"` | Strings are validated at the RPC boundary against `ctx.modelRegistry`; the shared spawn selector retains the raw request and stores its outcome on the record. `null` means no explicit override: `agentModels[type]`, `agentModels["*"]`, definition, then parent apply. Only explicit non-tier strings retain fuzzy matching; tiers and alias members resolve exactly, independently of `enabledModels` — see [Model tiers](#model-tiers) |
-| `maxTurns` | number | Turn ceiling for the run |
+| `maxTurns` | number | Turn ceiling for the run; the lower of this and the agent definition's cap applies, so it can tighten but never loosen it. `0` means unlimited only when the definition sets no cap |
 | `isolated` | boolean | Strips extensions, skills and nested tools. Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. **Not** a git worktree — see the trap table below |
 | `inheritContext` | boolean | Fork the parent conversation into the child. Only this option decides — an agent file's `inherit_context:` does not apply to RPC spawns |
 | `thinkingLevel` | ThinkingLevel | Overrides the agent definition's thinking default for this run; clamped to what the resolved model supports |

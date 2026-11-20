@@ -28,7 +28,7 @@ vi.mock("../src/output-file.ts", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { createOutputFilePath, ensureOutputFile, streamToOutputFile, writeInitialEntry } from "../src/output-file.ts";
-import { bootPi } from "./fixtures/boot-extension.ts";
+import { bootPi, startSession } from "./fixtures/boot-extension.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
 
 function makeCtx(cwd: string) {
@@ -118,6 +118,95 @@ describe("Agent tool — background resume wiring", () => {
 		await new Promise((r) => setTimeout(r, 0));
 		return id;
 	}
+
+	it.each([
+		[40, 12],
+		[3, 3],
+	])("dispatches an Agent Explore spawn with requested cap %i at cap %i", async (requested, cap) => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const ctx = makeCtx(cwd);
+		try {
+			await tools.get("Agent").execute(
+				"spawn",
+				{
+					prompt: "search",
+					description: "search",
+					subagent_type: "Explore",
+					run_in_background: false,
+					max_turns: requested,
+				},
+				undefined,
+				undefined,
+				ctx,
+			);
+			expect(runAgent).toHaveBeenCalledWith(ctx, "Explore", "search", expect.objectContaining({ maxTurns: cap }));
+		} finally {
+			await lifecycle.get("session_shutdown")?.({}, ctx);
+		}
+	});
+
+	it.each([
+		[40, 12],
+		[3, 3],
+		[0, 12],
+		[Number.NaN, 12],
+	])("dispatches an RPC Explore spawn with requested cap %i at cap %i", async (requested, cap) => {
+		const { pi, bus, lifecycle, emitted } = bootPi({}, { deliverEvents: true });
+		subagentsExtension(pi);
+		await startSession(lifecycle, false);
+		try {
+			bus.emit("subagents:rpc:spawn", {
+				requestId: "cap-test",
+				type: "Explore",
+				prompt: "search",
+				options: { maxTurns: requested },
+			});
+			await vi.waitFor(() =>
+				expect(emitted).toContainEqual({
+					event: "subagents:rpc:spawn:reply:cap-test",
+					payload: expect.objectContaining({ data: { id: expect.any(String) } }),
+				}),
+			);
+			expect(runAgent).toHaveBeenCalledWith(
+				expect.anything(),
+				"Explore",
+				"search",
+				expect.objectContaining({ maxTurns: cap }),
+			);
+		} finally {
+			await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+		}
+	});
+
+	it.each([
+		[40, 12],
+		[3, 3],
+	])("resumes live Explore with requested cap %i at cap %i", async (requested, cap) => {
+		const { pi, tools, lifecycle } = bootPi();
+		subagentsExtension(pi);
+		const ctx = makeCtx(cwd);
+		try {
+			const id = await spawnSettled(tools, ctx, "Explore");
+			await tools.get("Agent").execute(
+				"resume",
+				{
+					prompt: "continue",
+					description: "continue",
+					subagent_type: "general-purpose",
+					resume: id,
+					run_in_background: false,
+					max_turns: requested,
+				},
+				undefined,
+				undefined,
+				ctx,
+			);
+			expect(resumeAgent).toHaveBeenCalledWith(session, "continue", expect.objectContaining({ maxTurns: cap }));
+		} finally {
+			await lifecycle.get("session_shutdown")?.({}, ctx);
+		}
+	});
 
 	// A background spawn deliberately omits the tool-call signal — that signal
 	// aborts when the parent turn is interrupted (user Esc), which must not reach

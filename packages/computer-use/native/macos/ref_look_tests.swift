@@ -1,6 +1,62 @@
 import ApplicationServices
 import Foundation
 
+private func runAXTraversalAssertions() {
+  final class Node {
+    let name: String
+    init(_ name: String) { self.name = name }
+  }
+  func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() {
+      print("FAIL: \(message)")
+      exit(1)
+    }
+  }
+
+  let root = Node("window")
+  let web = Node("web")
+  let toolbar = Node("toolbar")
+  let link = Node("link")
+  let hidden = Node("hidden")
+  let label = Node("label")
+  let button = Node("button")
+  let children = [
+    root.name: [web, toolbar], web.name: [link, hidden], toolbar.name: [button],
+    link.name: [web], hidden.name: [label],
+  ]
+  // Visibility queries may return a different handle for the same AX element.
+  let visible = [web.name: [Node(link.name)], hidden.name: [label]]
+  let world = AXTraversalWorld<Node>(
+    role: { $0 === web ? "AXWebArea" : "AXGroup" },
+    childLists: { (children[$0.name] ?? [], visible[$0.name]) },
+    sameElement: { $0.name == $1.name })
+
+  let all = world.collect(startingAt: root, maxDepth: 8, maxNodes: 20)
+  check(
+    all.map(\.element.name) == ["window", "web", "toolbar", "link", "hidden", "button", "label"],
+    "AX traversal is breadth-first in sibling order and visits a cyclic handle only once")
+  check(all.map(\.depth) == [0, 1, 1, 2, 2, 2, 3], "AX traversal reports depth from the root")
+
+  check(
+    all.filter(\.insideWebArea).map(\.element.name) == ["web", "link", "hidden", "label"],
+    "AX traversal marks the web area and its descendants, not sibling branches")
+  check(
+    all.filter(\.axVisible).map(\.element.name) == ["window", "web", "toolbar", "link", "button"],
+    "AX visibility uses handle equivalence, defaults to visible when unknown, and cannot override a hidden ancestor")
+
+  let shallow = world.collect(startingAt: root, maxDepth: 1, maxNodes: 20)
+  check(
+    shallow.map(\.element.name) == ["window", "web", "toolbar"],
+    "AX traversal includes nodes at the depth limit but not their children")
+  let capped = world.collect(startingAt: root, maxDepth: 8, maxNodes: 4)
+  check(
+    capped.map(\.element.name) == ["window", "web", "toolbar", "link"],
+    "AX traversal counts the root against the node budget and returns the breadth-first prefix")
+  let minimum = world.collect(startingAt: root, maxDepth: 8, maxNodes: 0)
+  check(minimum.map(\.element.name) == ["window"], "AX traversal retains the root at zero budget")
+  print("macos AX descendant traversal checks passed")
+}
+
 /// Assert ref ownership and wire payloads against production types, without AX attribute queries.
 func runRefLookAssertions() {
   func check(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -213,4 +269,5 @@ func runRefLookAssertions() {
     (sibling.payload()["scrollExtent"] as? [String: Int]) == [:],
     "present empty scroll extent is not treated as absent")
   print("macos ref ownership and look serialization checks passed")
+  runAXTraversalAssertions()
 }
