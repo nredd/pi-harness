@@ -340,6 +340,17 @@ func itemsWithBlockedBundleId<T>(_ items: [T], blocked: [String], bundleId: (T) 
 	items.filter { isBlockedBundleId(bundleId($0), blocked: blocked) }
 }
 
+/// Use one inventory for both display selection and app exclusions, including apps with off-screen windows.
+func displayCaptureContent<Content, App>(
+	blocked: [String],
+	fetch: (_ excludeDesktopWindows: Bool, _ onScreenWindowsOnly: Bool) async throws -> Content,
+	applications: KeyPath<Content, [App]>,
+	bundleId: (App) -> String?
+) async throws -> (Content, [App]) {
+	let content = try await fetch(false, false)
+	return (content, itemsWithBlockedBundleId(content[keyPath: applications], blocked: blocked, bundleId: bundleId))
+}
+
 /// The blocked pid that keyboard input would reach: the frontmost app's, or the system-wide focused app's (a
 /// non-activating panel of a blocked app can hold key focus while another app is frontmost). nil when neither
 /// resolves to a blocked pid; an unknown focused app falls back to the frontmost check alone.
@@ -3634,7 +3645,7 @@ final class Bridge {
 		let task = Task {
 			defer { semaphore.signal() }
 			do {
-				let shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+				let (shareable, excluded) = try await displayCaptureContent(blocked: blocked, fetch: SCShareableContent.excludingDesktopWindows(_:onScreenWindowsOnly:), applications: \.applications) { $0.bundleIdentifier }
 				let mainId = CGMainDisplayID()
 				let displays = shareable.displays.sorted { left, right in
 					if (left.displayID == mainId) != (right.displayID == mainId) { return left.displayID == mainId }
@@ -3650,7 +3661,6 @@ final class Bridge {
 				config.height = max(1, Int((display.frame.height * scale).rounded()))
 				config.showsCursor = true
 				// Blocked apps' windows are excluded from the capture itself, so their pixels never leave the helper.
-				let excluded = itemsWithBlockedBundleId(shareable.applications, blocked: blocked) { $0.bundleIdentifier }
 				let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
 				let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
 				let infos = displays.enumerated().map { offset, item -> [String: Any] in
