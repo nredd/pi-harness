@@ -88,23 +88,60 @@ it("nudges for a successful Agent call, but not a failed one or an unfinished ru
 	expect(await settle()).toEqual(reminder);
 });
 
-it("requires fresh work, human input and the configured cooldown between nudges", async () => {
-	const { tool, settle, input } = await setup({ calls: 1, cooldown: 3 });
+it("requires fresh work, human input and actual settles between nudges", async () => {
+	const { tool, settle, input, emit } = await setup({ calls: 1, cooldown: 3 });
 	await tool();
 	expect(await settle()).toEqual(reminder);
+	await settle();
+	await emit("agent_settled", { aborted: false });
 	await input();
-	await tool("Agent");
+	for (let i = 0; i < 4; i++) {
+		await tool("Agent");
+		expect(await settle()).toBeUndefined(); // Another handler continues this run.
+	}
+	await emit("agent_settled", { aborted: false });
+	await tool();
 	expect(await settle()).toBeUndefined();
-	expect(await settle()).toBeUndefined();
+	await emit("agent_settled", { aborted: false });
 	await tool();
 	expect(await settle()).toEqual(reminder);
 	await input("extension");
 	for (let i = 0; i < 4; i++) {
 		await tool("Agent");
 		expect(await settle()).toBeUndefined();
+		await emit("agent_settled", { aborted: false });
 	}
 	await input("rpc");
 	expect(await settle()).toBeUndefined();
+	await tool();
+	expect(await settle()).toEqual(reminder);
+});
+
+it("does not age cooldown after aborted, failed or Plan runs", async () => {
+	const branch: SessionEntry[] = [];
+	const { tool, settle, input, emit } = await setup({ calls: 1, cooldown: 1, branch });
+	await tool();
+	expect(await settle()).toEqual(reminder);
+	await settle();
+	await emit("agent_settled", { aborted: true });
+	await input();
+	await settle("error");
+	await emit("agent_settled", { aborted: false });
+	await tool();
+	expect(await settle()).toBeUndefined();
+	branch.push({
+		type: "custom",
+		customType: "plan-mode-state",
+		id: "plan",
+		parentId: null,
+		timestamp: "",
+		data: { enabled: true },
+	});
+	await emit("agent_settled", { aborted: false });
+	branch.pop();
+	await tool();
+	expect(await settle()).toBeUndefined();
+	await emit("agent_settled", { aborted: false });
 	await tool();
 	expect(await settle()).toEqual(reminder);
 });
@@ -123,8 +160,26 @@ it("resets work on todo activity and skips nonempty lists, including completed t
 	for (let i = 0; i < 2; i++) {
 		await tool("Agent");
 		expect(await settle()).toBeUndefined();
+		await emit("agent_settled", { aborted: false });
 	}
+	await tool("Agent");
+	expect(await settle()).toBeUndefined();
 	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
+});
+
+it("nudges and expands the marker after the last visible todo is deleted", async () => {
+	const { tool, settle, callTodo, emit } = await setup({ calls: 2 });
+	await callTodo({ action: "create", subject: "Tracked work" });
+	await tool("todo");
+	await callTodo({ action: "delete", id: 1 });
+	await tool("todo");
+	await tool();
+	expect(await settle()).toBeUndefined();
+	await tool();
+	expect(await settle()).toEqual(reminder);
+	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toEqual({
+		messages: [{ role: "custom", ...marker, content: expect.stringContaining("use `todo`") }],
+	});
 });
 
 it("pauses counting, settling and context expansion in Plan mode", async () => {
@@ -162,11 +217,15 @@ it("restores the prompt budget and isolates and evicts session work", async () =
 	});
 	await tool("Agent");
 	expect(await settle()).toBeUndefined();
+	await emit("agent_settled", { aborted: false });
 	await input();
 	const another = createTodoCtx({ sessionId: "s2" });
 	await emit("session_start", { reason: "new" }, another);
 	await tool("Agent");
 	expect(await settle("completed", another)).toBeUndefined();
+	expect(await settle()).toBeUndefined();
+	await emit("agent_settled", { aborted: false });
+	await tool("Agent");
 	expect(await settle()).toEqual(reminder);
 	await tool("Agent", false, another);
 	await emit("session_shutdown", {}, another);

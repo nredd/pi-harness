@@ -17,6 +17,7 @@ export function trackEmptyReminder(config: ReturnType<typeof getEmptyReminderCon
 	let calls = 0;
 	let spawned = false;
 	let worked = false;
+	let completedBoundary = false;
 	let reminded = previouslyReminded;
 	let remainingSettles = previouslyReminded ? config.cooldownSettles : 0;
 
@@ -41,12 +42,18 @@ export function trackEmptyReminder(config: ReturnType<typeof getEmptyReminderCon
 			reminded = false;
 			worked = false;
 		},
-		settle(completed: boolean, planning: boolean, empty: boolean): boolean {
+		// A completed boundary can still continue. Only the terminal signal ages the cooldown.
+		settled(aborted: boolean, planning: boolean) {
+			if (completedBoundary && !aborted && !planning) remainingSettles = Math.max(0, remainingSettles - 1);
+			completedBoundary = false;
+			worked = false;
+		},
+		beforeSettle(completed: boolean, planning: boolean, empty: boolean): boolean {
+			completedBoundary = completed && !planning;
 			const hadWork = worked;
 			worked = false;
 			if (!empty) resetWork();
-			if (!completed || planning) return false;
-			remainingSettles = Math.max(0, remainingSettles - 1);
+			if (!completedBoundary) return false;
 			if (!empty || !hadWork || reminded || remainingSettles > 0 || (!spawned && calls < config.toolCalls)) {
 				return false;
 			}

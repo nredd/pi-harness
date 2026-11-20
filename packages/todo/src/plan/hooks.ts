@@ -30,6 +30,7 @@ import {
 } from "../agents.ts";
 import { getEmptyReminderConfig, getStaleAfterSettles } from "../config.ts";
 import { monitorsByTodo } from "../monitors.ts";
+import { selectVisibleTasks } from "../state/selectors.ts";
 import type { TaskState } from "../state/state.ts";
 import { commitState, getState, sid } from "../state/store.ts";
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
@@ -58,6 +59,10 @@ const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
 export const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
 
 export const EMPTY_REMINDER_MARKER = "[rpiv-todo] Autonomous work continued without a todo list.";
+
+function hasEmptyList(state: TaskState): boolean {
+	return selectVisibleTasks(state).length === 0;
+}
 
 function hasOpenTodos(state: TaskState): boolean {
 	return state.tasks.some((task) => task.status === "pending" || task.status === "in_progress");
@@ -488,7 +493,7 @@ export function registerPlanHooks(
 	const emptyTrackers = new Map<string, ReturnType<typeof trackEmptyReminder>>();
 	pi.on("tool_execution_end", (event, ctx) => {
 		const id = sid(ctx);
-		emptyTrackers.get(id)?.toolFinished(event, getState(id).tasks.length === 0 && !isPlanning(ctx, []));
+		emptyTrackers.get(id)?.toolFinished(event, hasEmptyList(getState(id)) && !isPlanning(ctx, []));
 	});
 
 	const onSettle: SettleHandler = (event, ctx) => {
@@ -498,7 +503,7 @@ export function registerPlanHooks(
 		const id = sid(ctx);
 		if (completed && !planning) refreshSurvivors(id);
 		const state = getState(id);
-		if (emptyTrackers.get(id)?.settle(completed, planning, state.tasks.length === 0)) {
+		if (emptyTrackers.get(id)?.beforeSettle(completed, planning, hasEmptyList(state))) {
 			return reminderDraft(event, EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER, {});
 		}
 		if (!completed || planning) return undefined;
@@ -541,9 +546,11 @@ export function registerPlanHooks(
 		staleReminded.delete(id);
 		emptyTrackers.get(id)?.humanInput();
 	});
-	pi.on("agent_settled", (_event, ctx) => {
-		if (isPlanning(ctx, [])) return;
+	pi.on("agent_settled", (event, ctx) => {
+		const planning = isPlanning(ctx, []);
 		const id = sid(ctx);
+		emptyTrackers.get(id)?.settled(event.aborted, planning);
+		if (planning) return;
 		refreshSurvivors(id);
 		const notice = formatInProgressNotice(getState(id), agentLookup(id), settleFacts(id));
 		if (notice?.level === "info") {
@@ -572,7 +579,7 @@ export function registerPlanHooks(
 			content =
 				"The open todo list has not changed for several settles. Run `todo` with action `list` and reconcile it with what actually happened. Complete only with evidence, defer with a reason, and leave work that is still running open.";
 		} else if (isReminder(last, EMPTY_REMINDER_MESSAGE_TYPE)) {
-			if (!emptyTrackers.has(id) || state.tasks.length !== 0) return undefined;
+			if (!emptyTrackers.has(id) || !hasEmptyList(state)) return undefined;
 			content =
 				"You have been working without a todo list. If this work has multiple steps, use `todo` to record what is still open before continuing. Do not create tasks for a simple request that is already done.";
 		} else return undefined;
