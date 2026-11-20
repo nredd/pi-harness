@@ -16,11 +16,16 @@ interface TodoConfig {
 	collapseKey?: string;
 	/** Start the panel collapsed when a session is resumed. Default `true`; only `false` disables. */
 	collapseOnResume?: boolean;
+	/** Completed settles with an unchanged open list before the hidden stale-list reminder. Default 10. */
+	staleAfterSettles?: number;
 }
 
 /** Default content-row budget when the config is missing/invalid — the prior
  *  hardcoded value, preserved as the fallback. */
 export const DEFAULT_MAX_WIDGET_LINES = 12;
+
+/** Default completed settles with an unchanged open list before the stale-list reminder. */
+export const DEFAULT_STALE_AFTER_SETTLES = 10;
 
 /** Key spec for the overlay collapse/expand shortcut, e.g. `"ctrl+shift+t"` or `"alt+o"`. */
 export type CollapseKeySpec = string;
@@ -57,6 +62,15 @@ function resolveConfigDir(xdgConfigHome: string | undefined, homeDir: string): s
 /** Whether a resumed session starts with the panel collapsed. Read fresh per session start. */
 export function getCollapseOnResume(homeDir?: string): boolean {
 	return loadConfig(homeDir).collapseOnResume !== false;
+}
+
+/** Settles before the stale-list reminder, read fresh at every settle (no `/reload`). A value that
+ *  is not a positive integer falls back to the default. */
+export function getStaleAfterSettles(homeDir?: string): number {
+	const settles = loadConfig(homeDir).staleAfterSettles;
+	return typeof settles === "number" && Number.isInteger(settles) && settles >= 1
+		? settles
+		: DEFAULT_STALE_AFTER_SETTLES;
 }
 
 /** Content-row budget for the overlay, read fresh on every call (per-render —
