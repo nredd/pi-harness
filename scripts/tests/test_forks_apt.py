@@ -7,8 +7,10 @@ References:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -26,7 +28,7 @@ TIMEOUT_FIXTURE = Path(__file__).with_name("fixtures") / "apt_timeout.py"
 
 @pytest.fixture
 def command_path(tmp_path: Path) -> str:
-    """Install the deadline fixture ahead of any host tools.
+    """Expose only the script's required tools, excluding any host timeout.
 
     Parameters:
         tmp_path (Path): Disposable command directory.
@@ -38,7 +40,11 @@ def command_path(tmp_path: Path) -> str:
     command = shlex.join([sys.executable, str(TIMEOUT_FIXTURE)])
     timeout.write_text(f'#!/bin/sh\nexec {command} "$@"\n')
     timeout.chmod(0o755)
-    return f"{tmp_path}{os.pathsep}{os.environ['PATH']}"
+    for name in ("dirname", "env", "grep", "mktemp", "rm", "sed", "tee"):
+        command_path = shutil.which(name, path=os.defpath)
+        assert command_path is not None
+        (tmp_path / name).symlink_to(command_path)
+    return str(tmp_path)
 
 
 def test_forks_apt_step_runs_unconditionally_with_budget_for_fallback() -> None:
@@ -221,6 +227,71 @@ def test_forks_apt_retries_only_mirror_work_and_replays_output(
     assert sources.read_text() == original
 
 
+def test_apt_replays_after_kill_with_capture_still_open(tmp_path: Path, command_path: str) -> None:
+    """Replay both streams without waiting for EOF from a surviving writer.
+
+    Parameters:
+        tmp_path (Path): Disposable files and executable shims.
+        command_path (str): PATH with the deadline fixture.
+    """
+    pid_file = tmp_path / "holder.pid"
+    log = tmp_path / "apt.log"
+    capture = tmp_path / "apt-output"
+    tee = tmp_path / "tee"
+    tee.unlink()
+    command = shlex.join([sys.executable, str(TIMEOUT_FIXTURE), "replay"])
+    tee.write_text(f'#!/bin/sh\nexec {command} "$@"\n')
+    tee.chmod(0o755)
+
+    apt = tmp_path / "apt-get"
+    holder = shlex.join([sys.executable, str(TIMEOUT_FIXTURE), "hold-capture"])
+    apt.write_text(
+        '#!/bin/bash\nset -eu\ntrap "" TERM\nprintf "apt stdout\\n"\nprintf "apt stderr\\n" >&2\n'
+        f'{holder}\neval "exec $APT_FIXTURE_READY_FD>&-"\nexec /bin/sleep 86400\n'
+    )
+    apt.chmod(0o755)
+
+    # Let tee try to drain only after the deadline has killed apt. A pipe then
+    # reports would-block if the holder is still alive, rather than hanging.
+    reader, writer = os.pipe()
+    try:
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                'set -o pipefail; source "$1"; apt_log=$2; apt_capture=$3; shift 3; '
+                'apt_bounded install 1 "$@"',
+                "bash",
+                str(ROOT / "scripts/ubuntu_apt.sh"),
+                str(log),
+                str(capture),
+                str(apt),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            # The run takes ~11s (1s deadline + the 10s kill grace); bound it so a broken handshake fails.
+            timeout=30,
+            pass_fds=(reader, writer),
+            env=os.environ
+            | {
+                "PATH": command_path,
+                "APT_FIXTURE_CHILD_PID": str(pid_file),
+                "APT_FIXTURE_REPLAY_FD": str(reader),
+                "APT_FIXTURE_SIGNAL_FD": str(writer),
+            },
+        )
+        os.kill(int(pid_file.read_text()), 0)
+    finally:
+        os.close(reader)
+        os.close(writer)
+        with contextlib.suppress(FileNotFoundError, ProcessLookupError):
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+    assert result.returncode == 137, result.stderr
+    assert result.stderr.splitlines() == [f"ubuntu-apt: TIMEOUT: install exceeded 1s: {apt}"]
+    assert result.stdout == log.read_text() == "apt stdout\napt stderr\n"
+
+
 @pytest.mark.parametrize(
     ("mode", "diagnostic"),
     [
@@ -253,6 +324,7 @@ def test_forks_apt_reports_setup_and_log_io_failures(
     if mode == "write-failed":
         (scratch / "ubuntu.sources").mkdir(parents=True)
         mktemp = tmp_path / "mktemp"
+        mktemp.unlink()
         mktemp.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_SCRATCH"\n')
         mktemp.chmod(0o755)
     apt = tmp_path / "apt-get"
