@@ -577,9 +577,11 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   records the reason and throughput, not latency metrics. Missing measured windows cannot
   distinguish a hung Pi from a late-starting probe. #1096 tracks the complete eight-child
   measurement without raising the aggregate cap.
-- The cumulative `throttled-pty.json` is replaced atomically after calibration and each
-  completed cell. Readiness, warm-up, or measurement failures still fail the experiment,
-  with any partial delivery and raw probe records in the cell's `throttled-pty.json`.
+- Cumulative and per-cell `throttled-pty.json` reports flush and `fsync` a same-directory
+  `.pending` file before atomically replacing the previous snapshot. A write or replace
+  exception removes the pending file. The directory is not synced, so replacement is not
+  guaranteed to survive power loss. Readiness, warm-up, or measurement failures still fail
+  the experiment, with any partial delivery and raw probe records in the cell report.
   If readiness or warm-up fails, that delivery is startup output, not a measured window.
 - Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
   baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider

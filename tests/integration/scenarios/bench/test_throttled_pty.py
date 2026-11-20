@@ -16,10 +16,10 @@ import pytest
 from harness.pty_bench import (
     AGGREGATE_CAP,
     FLEET_SIZES,
+    NOT_RUN,
     NOT_RUN_LABEL,
-    CellStatus,
     calibrate,
-    publish_fleet_report,
+    publish_report,
     run_cell,
 )
 
@@ -37,14 +37,14 @@ def test_throttled_pty_fleet(sandbox: Sandbox, template_home: Path) -> None:
     """Calibrate real writer pressure and record paired 1/4/8 interactive Pi cells."""
     result: FleetReport = {"calibration": calibrate(sandbox.root / "calibration"), "cells": []}
     out = sandbox.root / "throttled-pty.json"
-    publish_fleet_report(out, result)
+    publish_report(out, result)
     LOGGER.info(f"Synthetic PTY calibration: {json.dumps(result['calibration'])}")
     for count in FLEET_SIZES:
         for cap in (None, AGGREGATE_CAP):
             cell = run_cell(sandbox.root / f"pty-{count}-{cap}", template_home, count, cap)
             result["cells"].append(cell)
-            publish_fleet_report(out, result)
-            if cell.get("status") == CellStatus.NOT_RUN:
+            publish_report(out, result)
+            if cell.get("status") == NOT_RUN:
                 warnings.warn(
                     pytest.PytestWarning(f"{NOT_RUN_LABEL}: {cell.get('reason')}"),
                     stacklevel=1,

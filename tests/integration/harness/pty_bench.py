@@ -10,12 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import sys
 import time
-from enum import StrEnum
 from itertools import pairwise
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 from harness.fleet_load import make_sandboxes, streaming_script
 from harness.interactive import FIRST_FRAME_PATTERN
@@ -36,10 +36,13 @@ KEY_INTERVAL_S = 0.15
 COVERAGE_TOLERANCE_MS = 1000
 ROUNDING_TOLERANCE_MS = 2
 MIN_PAINT_SAMPLES = 4
-WRITER = dedent("""\
+PENDING_SUFFIX = ".pending"
+NOT_RUN: Final = "NOT RUN"
+NOT_RUN_LABEL = f"Capped eight-child latency {NOT_RUN}"
+WRITER = dedent(f"""\
     import json, os, sys, time
     out = sys.argv[1]
-    pending = out + '.pending'
+    pending = out + {PENDING_SUFFIX!r}
     maximum = 0.0
     writes = 0
     last = time.monotonic()
@@ -50,8 +53,8 @@ WRITER = dedent("""\
         writes += 1
         if time.monotonic() - last >= 0.1:
             with open(pending, 'w') as report:
-                json.dump({'max_write_ms': maximum, 'writes': writes,
-                           'last_write_s': time.monotonic()}, report)
+                json.dump({{'max_write_ms': maximum, 'writes': writes,
+                           'last_write_s': time.monotonic()}}, report)
             os.replace(pending, out)
             last = time.monotonic()
     """)
@@ -113,20 +116,14 @@ class CellDelivery(TypedDict):
     delivered_bytes_per_s: float
 
 
-class CellStatus(StrEnum):
-    """Explicitly unmeasured bench outcomes."""
-
-    NOT_RUN = "NOT RUN"
-
-
-NOT_RUN_LABEL = f"Capped eight-child latency {CellStatus.NOT_RUN}"
+type NotRunStatus = Literal["NOT RUN"]
 
 
 class CellOutcome(TypedDict, total=False):
     """Failure details, absent for a measured cell."""
 
     failure: str
-    status: Literal[CellStatus.NOT_RUN]
+    status: NotRunStatus
 
 
 class RawCell(CellDelivery, CellOutcome):
@@ -144,7 +141,7 @@ class Cell(CellDelivery):
 class NotRunCell(CellDelivery):
     """A capped eight-child attempt with delivery but no accepted probe metrics."""
 
-    status: Literal[CellStatus.NOT_RUN]
+    status: NotRunStatus
     reason: str
 
 
@@ -155,16 +152,23 @@ class FleetReport(TypedDict):
     cells: list[Cell | NotRunCell]
 
 
-def publish_fleet_report(path: Path, report: FleetReport) -> None:
-    """Publish a complete fleet snapshot without truncating the previous one.
+def publish_report(path: Path, report: FleetReport | RawCell) -> None:
+    """Sync a complete snapshot before replacing the old one atomically.
 
     Parameters:
         path (Path): destination in the private benchmark directory.
-        report (FleetReport): calibration and all completed cell outcomes.
+        report (FleetReport | RawCell): cumulative or per-cell benchmark evidence.
     """
-    pending = path.with_suffix(path.suffix + ".pending")
-    pending.write_text(json.dumps(report, indent=2))
-    pending.replace(path)
+    pending = path.with_name(path.name + PENDING_SUFFIX)
+    try:
+        with pending.open("w", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        pending.replace(path)
+    except BaseException:
+        pending.unlink(missing_ok=True)
+        raise
 
 
 def _delivery_record(sample: Drain) -> DeliveryRecord:
@@ -353,7 +357,7 @@ def _record_cell(
         **outcome,
         "raw_probes": [read_records(out) for out in outs],
     }
-    report.write_text(json.dumps(observations, indent=2))
+    publish_report(report, observations)
     return delivered
 
 
@@ -377,7 +381,7 @@ def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | No
     except (RuntimeError, OSError) as error:
         outcome["failure"] = str(error)
         if len(outs) == LARGEST_FLEET and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
-            outcome["status"] = CellStatus.NOT_RUN
+            outcome["status"] = NOT_RUN
             LOGGER.warning(f"{NOT_RUN_LABEL}: {error}; raw observations at '{report}'")
         else:
             LOGGER.error(f"Refused synthetic PTY observations: {error}; raw observations at '{report}'")
@@ -390,5 +394,5 @@ def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | No
             )
         delivered = _record_cell(outs, report, cap, delivery, outcome)
     if "failure" in outcome:
-        return {**delivered, "status": CellStatus.NOT_RUN, "reason": outcome["failure"]}
+        return {**delivered, "status": NOT_RUN, "reason": outcome["failure"]}
     return {**delivered, "probe": metrics}

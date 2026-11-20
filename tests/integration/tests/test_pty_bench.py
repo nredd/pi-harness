@@ -18,13 +18,14 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from harness import pty_bench
-from harness.pty_bench import calibrate, probe_metrics, run_cell
+from harness.pty_bench import AGGREGATE_CAP, LARGEST_FLEET, PENDING_SUFFIX, calibrate, probe_metrics, run_cell
 from harness.pty_driver import Child, Drain, PtyFleet
 from harness.sandbox import build_sandbox
 from scenarios.bench import test_throttled_pty as scenario
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import TextIO
 
 
 def records() -> list[dict[str, Any]]:
@@ -134,14 +135,14 @@ class RecordingFleet:
     ("count", "cap", "delivered_bytes", "probe_rows", "fault", "expected_failure", "not_run"),
     [
         (4, None, 100, 2, None, "", False),
-        (8, 65536, 100, 2, None, "", False),
-        (8, 65536, 0, 2, None, "delivered no output", False),
-        (8, 65536, 100, 0, None, "did not start", False),
-        (8, 65536, 100, 2, RuntimeError("PTY child exited"), "PTY child exited", False),
-        (8, 65536, 100, 2, TimeoutError("PTY input stalled"), "PTY input stalled", False),
-        (8, 65536, 100, 1, None, "Missing measured latency windows", True),
-        (8, None, 100, 1, None, "Missing measured latency windows", False),
-        (4, 65536, 100, 1, None, "Missing measured latency windows", False),
+        (LARGEST_FLEET, AGGREGATE_CAP, 100, 2, None, "", False),
+        (LARGEST_FLEET, AGGREGATE_CAP, 0, 2, None, "delivered no output", False),
+        (LARGEST_FLEET, AGGREGATE_CAP, 100, 0, None, "did not start", False),
+        (LARGEST_FLEET, AGGREGATE_CAP, 100, 2, RuntimeError("PTY child exited"), "PTY child exited", False),
+        (LARGEST_FLEET, AGGREGATE_CAP, 100, 2, TimeoutError("PTY input stalled"), "PTY input stalled", False),
+        (LARGEST_FLEET, AGGREGATE_CAP, 100, 1, None, "Missing measured latency windows", True),
+        (LARGEST_FLEET, None, 100, 1, None, "Missing measured latency windows", False),
+        (4, AGGREGATE_CAP, 100, 1, None, "Missing measured latency windows", False),
     ],
 )
 def test_cell_reports_latency_only_with_measured_windows(
@@ -270,15 +271,15 @@ def test_cell_retains_startup_failure(
     monkeypatch.setattr(pty_bench, "time", SimpleNamespace(monotonic_ns=lambda: next(ticks)))
     root = tmp_path / "cell"
     with pytest.raises(error_type, match=message):
-        run_cell(root, template.home, 8, 65536)
+        run_cell(root, template.home, LARGEST_FLEET, AGGREGATE_CAP)
     raw = json.loads((root / "throttled-pty.json").read_text())
     assert raw == {
-        "count": 8,
-        "aggregate_cap": 65536,
+        "count": LARGEST_FLEET,
+        "aggregate_cap": AGGREGATE_CAP,
         "failure": message,
-        "delivery": {"delivered": [delivered, *([0] * 7)], "elapsed_s": 1.0},
+        "delivery": {"delivered": [delivered, *([0] * (LARGEST_FLEET - 1))], "elapsed_s": 1.0},
         "delivered_bytes_per_s": delivered,
-        "raw_probes": [[{"kind": "start", "tui": True}]] * 8,
+        "raw_probes": [[{"kind": "start", "tui": True}]] * LARGEST_FLEET,
     }
 
 
@@ -342,7 +343,7 @@ def test_calibration_requires_distinguishing_controls(
     else:
         result = calibrate(tmp_path)
         assert result[0]["cap"] is None
-        assert result[1]["cap"] == 65536
+        assert result[1]["cap"] == AGGREGATE_CAP
 
 
 @pytest.mark.parametrize(
@@ -395,7 +396,7 @@ def test_writer_preserves_heartbeat_when_interrupted_mid_write(tmp_path: Path) -
     )
     assert result.returncode == 42
     assert json.loads(report.read_text())["writes"] > 0
-    (interrupted,) = (path for path in tmp_path.iterdir() if path != report)
+    interrupted = report.with_name(report.name + PENDING_SUFFIX)
     assert interrupted.read_text() == '{"writes":'
 
 
@@ -404,7 +405,7 @@ def test_scenario_warns_without_failing_not_run_cell(tmp_path: Path, monkeypatch
     box = build_sandbox(tmp_path / "scenario")
 
     def cell(_root: Path, _home: Path, count: int, cap: int | None) -> dict[str, object]:
-        if count == 8 and cap == pty_bench.AGGREGATE_CAP:
+        if count == LARGEST_FLEET and cap == AGGREGATE_CAP:
             return {"status": "NOT RUN", "reason": "Missing measured latency windows"}
         return {"count": count, "aggregate_cap": cap, "probe": {}}
 
@@ -424,22 +425,68 @@ def test_scenario_keeps_last_complete_report_on_interrupted_write(
     """Interrupt the second cell publication after writing a partial JSON prefix."""
     box = build_sandbox(tmp_path / "scenario")
     out = box.root / "throttled-pty.json"
-    write_text = Path.write_text
+    pending = out.with_name(out.name + PENDING_SUFFIX)
+    dump = json.dump
     first_cell = {"count": 1, "aggregate_cap": None, "probe": {}}
 
-    def interrupt(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+    def interrupt(data: pty_bench.FleetReport, stream: TextIO, *, indent: int) -> None:
         """Write an incomplete second-cell snapshot before simulating an interruption."""
-        if len(json.loads(data)["cells"]) == 2:
-            write_text(path, '{"calibration":', *args, **kwargs)
+        if len(data["cells"]) == 2:
+            stream.write('{"calibration":')
             raise OSError("interrupted fleet report publication")
-        return write_text(path, data, *args, **kwargs)
+        dump(data, stream, indent=indent)
 
     monkeypatch.setattr(scenario, "calibrate", lambda _root: [])
     monkeypatch.setattr(scenario, "run_cell", lambda *_args: first_cell)
-    monkeypatch.setattr(Path, "write_text", interrupt)
+    monkeypatch.setattr(pty_bench.json, "dump", interrupt)
     with pytest.raises(OSError, match="interrupted fleet report publication"):
         scenario.test_throttled_pty_fleet(box, box.home)
     assert json.loads(out.read_text()) == {"calibration": [], "cells": [first_cell]}
+    assert not pending.exists()
+
+
+@pytest.mark.parametrize("replace_fails", [False, True])
+def test_cell_flushes_and_syncs_evidence_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replace_fails: bool
+) -> None:
+    """Check publication order and preserve the old cell report on a replace error."""
+    out = tmp_path / "throttled-pty.json"
+    pending = out.with_name(out.name + PENDING_SUFFIX)
+    previous = {"failure": "previous cell"}
+    out.write_text(json.dumps(previous))
+    calls: list[str] = []
+    replace = Path.replace
+
+    def sync(_fd: int) -> None:
+        """The new evidence must be fully flushed while the old snapshot is visible."""
+        assert json.loads(pending.read_text())["failure"] == "startup timeout"
+        assert json.loads(out.read_text()) == previous
+        calls.append("fsync")
+
+    def replace_report(source: Path, dest: Path) -> Path:
+        """Record the rename or inject an error without touching the destination."""
+        assert source == pending
+        assert dest == out
+        calls.append("replace")
+        if replace_fails:
+            raise OSError("report replace failed")
+        return replace(source, dest)
+
+    monkeypatch.setattr(pty_bench.os, "fsync", sync)
+    monkeypatch.setattr(Path, "replace", replace_report)
+    if replace_fails:
+        with pytest.raises(OSError, match=r"^report replace failed$"):
+            pty_bench._record_cell(
+                [tmp_path / "probe.jsonl"], out, None, Drain((0,), 1), {"failure": "startup timeout"}
+            )
+        assert json.loads(out.read_text()) == previous
+    else:
+        pty_bench._record_cell(
+            [tmp_path / "probe.jsonl"], out, None, Drain((0,), 1), {"failure": "startup timeout"}
+        )
+        assert json.loads(out.read_text())["failure"] == "startup timeout"
+    assert calls == ["fsync", "replace"]
+    assert not pending.exists()
 
 
 def test_real_writer_stalling_after_initial_progress_is_refused(
@@ -447,15 +494,15 @@ def test_real_writer_stalling_after_initial_progress_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An alive writer can supply valid output and then hang; that is not calibration."""
-    writer = dedent("""\
+    writer = dedent(f"""\
         import json, os, sys, time
         before = time.monotonic()
         os.write(1, b'x')
         finished = time.monotonic()
-        pending = sys.argv[1] + '.pending'
+        pending = sys.argv[1] + {PENDING_SUFFIX!r}
         with open(pending, 'w') as out:
-            json.dump({'writes': 1, 'max_write_ms': (finished - before) * 1000,
-                       'last_write_s': finished}, out)
+            json.dump({{'writes': 1, 'max_write_ms': (finished - before) * 1000,
+                       'last_write_s': finished}}, out)
         os.replace(pending, sys.argv[1])
         time.sleep(30)
         """)
