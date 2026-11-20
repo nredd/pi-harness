@@ -12,6 +12,7 @@
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_capture.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_exec.py", "replacement": "scripts/ci_process.py", "reason": "Preserve measured Linux gh bootstrap process helpers after WSL CI removal (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_run.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_smoke.py", "reason": "Delete the orphaned WSL2 smoke tool; no workflow or release path calls it after #1081 (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_setup.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "python-scripts", "signal": "owned", "path": "scripts/wsl2_watchdog_fixture.py", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/install_wsl_owned_tools.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
@@ -21,6 +22,7 @@
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_run.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_setup.sh", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_shell.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_smoke.sh", "reason": "Delete the orphaned WSL2 smoke wrapper with its Python tool (#1084)." },
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_watchdog.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_watchdog_fixture.ps1", "reason": "Delete unused WSL CI tooling after #1081 (#1084)." },
     { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Retire upstream-sync metadata validation (#895, #860); all runtime behavior suites remain, including the ordinary EPERM regression. No runtime source or uncovered budget is removed." },
@@ -414,12 +416,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): AT-SPI address discovery reduced uncovered L/F/regions from 1106/150/2028 to 1094/148/2014. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
+      "note": "Pinned Linux ARM64 measurement (#696): Wayland portal cursor-mode probing reduced uncovered L/F/regions from 1094/148/2014 to 1059/145/1968. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 1094, "functions": 148 } },
+          "max_uncovered": { "linux": { "lines": 1059, "functions": 145 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
@@ -457,7 +459,7 @@
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 3672, "functions": 695, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 3654, "functions": 694, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "#757 establishes the full-source baseline for #645 deterministic S1-S5 closures; no all-native coverage claim.",

@@ -508,17 +508,44 @@ describe("child-safe nested Agent tools", () => {
 		expect(text).not.toContain("STOPPED BY THE USER");
 	});
 
-	// #368 — a nested resume carries the caller's turn budget like a spawn does.
-	it("passes max_turns through on a nested resume", async () => {
-		const [agent] = tools(["scout"]);
-		await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
+	it.each([
+		[40, 12],
+		[3, 3],
+	])("resumes nested Explore with requested cap %i at cap %i", async (requested, cap) => {
+		const [agent] = tools(["Explore"]);
+		await execute(agent, { subagent_type: "Explore", description: "find files", prompt: "Find them" });
 
 		await execute(agent, {
 			resume: "child-1",
-			subagent_type: "scout",
+			subagent_type: "Explore",
 			description: "continue",
 			prompt: "Continue",
+			max_turns: requested,
+		});
+
+		expect(manager.resume).toHaveBeenCalledWith(
+			"child-1",
+			"Continue",
+			undefined,
+			expect.objectContaining({ maxTurns: cap }),
+		);
+	});
+
+	it("resumes a nested child at the cap it was spawned with when the call omits max_turns", async () => {
+		const [agent] = tools(["Explore"]);
+		await execute(agent, {
+			subagent_type: "Explore",
+			description: "find files",
+			prompt: "Find them",
 			max_turns: 3,
+		});
+		records.get("child-1")!.invocation = { maxTurns: 3 };
+
+		await execute(agent, {
+			resume: "child-1",
+			subagent_type: "Explore",
+			description: "continue",
+			prompt: "Continue",
 		});
 
 		expect(manager.resume).toHaveBeenCalledWith(

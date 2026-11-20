@@ -434,9 +434,7 @@ describe("mentioning an agent that has never run", () => {
 		expect(uiCtx.ui.notify).toHaveBeenCalledWith("Started @explore", "info");
 	});
 
-	it("leaves model, thinking and max turns to the agent's own config", async () => {
-		// runAgent resolves all three from the config when the spawn omits them,
-		// so passing anything here would override frontmatter the user wrote.
+	it("uses the Explore definition cap without supplying model or thinking overrides", async () => {
 		const { lifecycle } = bootDirect();
 		heldRun(fakeSession());
 
@@ -445,7 +443,7 @@ describe("mentioning an agent that has never run", () => {
 		const opts = vi.mocked(runAgent).mock.calls[0]![3] as any;
 		expect(opts.model).toBeUndefined();
 		expect(opts.thinkingLevel).toBeUndefined();
-		expect(opts.maxTurns).toBeUndefined();
+		expect(opts.maxTurns).toBe(12);
 	});
 
 	it.each([
@@ -1400,7 +1398,10 @@ describe("resuming an evicted agent by name", () => {
 			);
 		});
 
-		it("keeps the built-in Explore cap when reopening despite caller max_turns", async () => {
+		it.each([
+			[40, 12],
+			[3, 3],
+		])("reopens Explore with requested cap %i at cap %i", async (requested, cap) => {
 			const { tools } = boot();
 			finishedRun(fakeSession());
 			const id = await spawnBackground(tools);
@@ -1409,13 +1410,13 @@ describe("resuming an evicted agent by name", () => {
 			vi.mocked(runAgent).mockClear();
 			heldRun(fakeSession());
 
-			await resume(tools, id, { max_turns: 3 });
+			await resume(tools, id, { max_turns: requested });
 
 			expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
 				expect.anything(),
 				"Explore",
 				"anything else?",
-				expect.objectContaining({ resumeSessionFile: sessionPath(), maxTurns: 12 }),
+				expect.objectContaining({ resumeSessionFile: sessionPath(), maxTurns: cap }),
 			);
 		});
 
