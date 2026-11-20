@@ -47,7 +47,9 @@ def linked(tmp_path: Path) -> tuple[Path, Path]:
     return repo, worktree
 
 
-def block(heading: str, path: str | None = None, **variables: str) -> subprocess.CompletedProcess[str]:
+def block(
+    heading: str, path: str | None = None, mutate: tuple[str, str] | None = None, **variables: str
+) -> subprocess.CompletedProcess[str]:
     """Run the shell block shipped under `heading` in the skill, with its documented variables set."""
     text = SKILL.read_text(encoding="utf-8")
     marker = f"#### {heading}\n"
@@ -55,8 +57,12 @@ def block(heading: str, path: str | None = None, **variables: str) -> subprocess
     fence = text.split(marker, 1)[1].split("```sh\n", 1)
     assert len(fence) == 2, f"no `sh` block under `{heading}`"
     assert "\n```" in fence[1], f"unterminated `sh` block under `{heading}`"
+    script = fence[1].split("\n```", 1)[0]
+    if mutate:
+        assert mutate[0] in script, f"`{mutate[0]}` not in the `{heading}` block"
+        script = script.replace(*mutate)
     return subprocess.run(
-        ["/bin/sh", "-c", fence[1].split("\n```", 1)[0]],
+        ["/bin/sh", "-c", script],
         env=git_env() | ({"PATH": path} if path else {}) | variables,
         text=True,
         capture_output=True,
@@ -220,33 +226,61 @@ def test_guard_rejects_unreadable_dot_git_without_a_prunable_record(linked: tupl
     assert "keep:" in guard.stderr
 
 
-def stub_gh(tmp_path: Path, payload: dict[str, object]) -> str:
-    """Create a `gh` that prints `payload` and return a PATH that finds it first."""
+FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state"
+PR_FIELDS = FIELDS.split(",")
+
+
+def stub_gh(tmp_path: Path, script: str) -> str:
+    """Install a `gh` running `script` and return a PATH that finds it first."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     stub = bin_dir / "gh"
-    stub.write_text(f"#!/bin/sh\ncat <<'JSON'\n{json.dumps(payload)}\nJSON\n")
+    stub.write_text(f"#!/bin/sh\n{script}\n")
     stub.chmod(0o755)
     return f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
+def strict_gh(payload: dict[str, object]) -> str:
+    """A `gh` that prints `payload` only when called with `--repo acme/widgets` and every PR field."""
+    return f"""repo= fields= prev=
+for arg; do
+  [ "$prev" = --repo ] && repo=$arg
+  [ "$prev" = --json ] && fields=$arg
+  prev=$arg
+done
+[ "$repo" = acme/widgets ] || {{ echo "bad --repo: $repo" >&2; exit 2; }}
+for need in {" ".join(PR_FIELDS)}; do
+  case ",$fields," in *",$need,"*) ;; *) echo "missing --json field $need" >&2; exit 2 ;; esac
+done
+cat <<'JSON'
+{json.dumps(payload)}
+JSON"""
+
+
 def identity(
-    tmp_path: Path, linked: tuple[Path, Path], **overrides: object
+    tmp_path: Path,
+    linked: tuple[Path, Path],
+    *,
+    url: str = "https://github.com/acme/widgets.git",
+    mutate: tuple[str, str] | None = None,
+    script: str | None = None,
+    overrides: dict[str, object] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the shipped identity block for a worktree whose branch is `merged` from `acme/widgets`."""
     repo, worktree = linked
-    git(repo, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+    git(repo, "remote", "add", "origin", url)
     payload: dict[str, object] = {
         "state": "MERGED",
         "headRefName": "merged",
         "headRefOid": git(worktree, "rev-parse", "HEAD").strip(),
         "headRepository": {"name": "widgets"},
         "headRepositoryOwner": {"login": "acme"},
-    } | overrides
+    } | (overrides or {})
     payload = {key: value for key, value in payload.items() if value is not None}
     return block(
         "PR identity check",
-        path=stub_gh(tmp_path, payload),
+        path=stub_gh(tmp_path, script or strict_gh(payload)),
+        mutate=mutate,
         pr="7",
         base_repo="acme/widgets",
         worktree=str(worktree),
@@ -254,9 +288,18 @@ def identity(
     )
 
 
-def test_matching_pr_identity_proceeds(tmp_path: Path, linked: tuple[Path, Path]) -> None:
-    """A merged PR from this branch, owner, repository and commit passes."""
-    result = identity(tmp_path, linked)
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/acme/widgets.git",
+        "git@github.com:acme/widgets.git",
+        "ssh://git@github.com:22/acme/widgets",
+    ],
+    ids=["https", "scp", "ssh-port"],
+)
+def test_matching_pr_identity_proceeds(tmp_path: Path, linked: tuple[Path, Path], url: str) -> None:
+    """A merged PR from this branch, host, owner, repository and commit passes."""
+    result = identity(tmp_path, linked, url=url)
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
@@ -279,27 +322,35 @@ def test_mismatched_or_missing_pr_identity_keeps(
     tmp_path: Path, linked: tuple[Path, Path], override: dict[str, object]
 ) -> None:
     """Any wrong or absent identity field keeps the worktree."""
-    result = identity(tmp_path, linked, **override)
+    result = identity(tmp_path, linked, overrides=override)
     assert result.returncode != 0
     assert "keep: PR identity mismatch" in result.stderr
     assert linked[1].is_dir()
 
 
+def test_push_remote_on_another_host_keeps(tmp_path: Path, linked: tuple[Path, Path]) -> None:
+    """Same owner and repository on a different host is a different repository."""
+    result = identity(tmp_path, linked, url="https://git.example.invalid/acme/widgets.git")
+    assert result.returncode != 0
+    assert "keep: PR identity mismatch" in result.stderr
+    assert "git.example.invalid" in result.stderr
+
+
+@pytest.mark.parametrize("field", PR_FIELDS)
+def test_dropping_a_shipped_json_field_is_caught(
+    tmp_path: Path, linked: tuple[Path, Path], field: str
+) -> None:
+    """A `--json` list missing a field fails the strict `gh`, so the original defect cannot return."""
+    kept = ",".join(name for name in PR_FIELDS if name != field)
+    result = identity(tmp_path, linked, mutate=(f'"{FIELDS}"', f'"{kept}"'))
+    assert result.returncode != 0
+    assert f"missing --json field {field}" in result.stderr
+
+
 def test_gh_failure_keeps(tmp_path: Path, linked: tuple[Path, Path]) -> None:
     """A failing `gh` is unknown, never a pass."""
-    repo, worktree = linked
-    git(repo, "remote", "add", "origin", "git@github.com:acme/widgets.git")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "gh").write_text("#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n")
-    (bin_dir / "gh").chmod(0o755)
-    result = block(
-        "PR identity check",
-        path=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        pr="7",
-        base_repo="acme/widgets",
-        worktree=str(worktree),
-        remote="origin",
+    result = identity(
+        tmp_path, linked, url="git@github.com:acme/widgets.git", script="echo 'HTTP 502' >&2\nexit 1"
     )
     assert result.returncode != 0
     assert "keep: gh failed" in result.stderr
@@ -323,3 +374,49 @@ def test_prunable_record_alone_keeps(linked: tuple[Path, Path]) -> None:
     guard = prune_guard(repo)
     assert guard.returncode != 0
     assert "keep: Git reports" in guard.stderr
+
+
+def test_hidden_worktree_with_empty_admin_gitdir_is_kept(linked: tuple[Path, Path]) -> None:
+    """`git worktree list` omits a worktree whose admin `gitdir` is empty, but prune still deletes it."""
+    repo, worktree = linked
+    git(worktree, "update-ref", "refs/worktree/x", "HEAD")
+    (admin,) = (repo / ".git/worktrees").iterdir()
+    assert (admin / "refs/worktree/x").is_file()
+    (admin / "gitdir").write_bytes(b"")
+    assert (worktree / ".git").is_file()
+
+    listing = git(repo, "worktree", "list", "--porcelain", "-z")
+    assert "linked worktree" not in listing
+    dry = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "prune", "--dry-run", "--verbose"],
+        env=git_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "Removing worktrees/linked-worktree: invalid gitdir file" in dry.stdout + dry.stderr
+
+    # The previous guard looked only at the list: nothing prunable, every listed `.git` present.
+    assert "prunable" not in listing
+    assert all(
+        Path(line.removeprefix("worktree ")).exists()
+        for line in listing.split("\0")
+        if line.startswith("worktree ")
+    )
+    guard = prune_guard(repo)
+    assert guard.returncode != 0
+    assert "keep:" in guard.stderr
+    assert admin.is_dir()
+
+    git(repo, "worktree", "prune")
+    assert not admin.exists()
+
+
+def test_dot_git_file_pointing_at_another_admin_dir_is_kept(linked: tuple[Path, Path]) -> None:
+    """Keep when the worktree's `.git` file names a different admin dir than the one registered for it."""
+    repo, worktree = linked
+    (worktree / ".git").write_text(f"gitdir: {repo}/.git/worktrees/other\n", encoding="utf-8")
+    assert git(repo, "worktree", "list", "--porcelain", "-z").count("prunable") == 0
+    guard = prune_guard(repo)
+    assert guard.returncode != 0
+    assert "no matching `.git` file" in guard.stderr

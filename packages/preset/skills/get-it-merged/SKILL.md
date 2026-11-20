@@ -123,21 +123,27 @@ no-PR cleanup. Check each candidate before removal:
     `core.ignoreStat` worktrees until the operator deliberately makes the full status visible
   - Verify branch and PR identity and preserve extra commits on a separate ref before addressing a
     HEAD mismatch. For no-PR work, restore or verify the upstream. Resolve any live ownership or
-    borrowed-object hold without discarding data. Rerun the full guard; confirmation never overrides a failed check
+    borrowed-object hold without discarding data. Rerun all three blocks (the ref, reflog and filter
+    scan, the PR identity check and the prune guard). A failed check is never overridden, except that
+    the operator may waive a hold caused only by the scan's `filter` output through the manual flow in
+    that scan's section
 
 #### PR identity check
 
-Set `pr`, `base_repo` (`<owner>/<repo>`), `worktree` and `remote` (the branch's push remote). Empty
-output and exit 0 pass this check only. Missing or mismatched fields keep the worktree.
+Set `pr`, `base_repo` (`<owner>/<repo>`, or `<host>/<owner>/<repo>` off github.com), `worktree` and
+`remote` (the branch's push remote). Empty output and exit 0 pass this check only. Missing or
+mismatched fields, or a push remote on a different host, keep the worktree.
 
 ```sh
 python3 - "$pr" "$base_repo" "$worktree" "$remote" <<'PY'
 import json
+import os
 import re
 import subprocess
 import sys
 
 pr, base_repo, worktree, remote = sys.argv[1:]
+SOURCE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 
 def out(*cmd: str) -> str:
@@ -153,11 +159,20 @@ info = json.loads(out("gh", "pr", "view", pr, "--repo", base_repo, "--json", fie
 branch = out("git", "-C", worktree, "symbolic-ref", "--short", "HEAD")
 head = out("git", "-C", worktree, "rev-parse", "HEAD")
 url = out("git", "-C", worktree, "remote", "get-url", "--push", remote)
-source = re.search(r"([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
+source = SOURCE.match(url)
+parts = base_repo.split("/")
+host = parts[0] if len(parts) == 3 else os.environ.get("GH_HOST", "github.com")
 repo = info.get("headRepository") or {}
 owner = info.get("headRepositoryOwner") or {}
-want = ("MERGED", branch, owner.get("login"), repo.get("name"), head)
-got = (info.get("state"), info.get("headRefName"), source and source[1], source and source[2], info.get("headRefOid"))
+want = ("MERGED", branch, owner.get("login"), repo.get("name"), head, host)
+got = (
+    info.get("state"),
+    info.get("headRefName"),
+    source and source[2],
+    source and source[3],
+    info.get("headRefOid"),
+    source and source[1],
+)
 if None in want or not source or want != got:
     sys.exit(f"keep: PR identity mismatch: PR {want!r} != local {got!r}")
 PY
@@ -167,8 +182,10 @@ PY
 
 Only the parent runs this, before any `git worktree prune`; workers never prune. Set `repo`. Empty
 output and exit 0 allow the prune. Anything else means only `git worktree prune --dry-run` is
-allowed: a registered worktree whose `.git` is unreachable (unmounted volume, recreated empty
-directory, deleted `.git` file) is pruned together with its reflog and worktree-local refs.
+allowed. Prune deletes a worktree's admin dir, with its `HEAD` reflog and worktree-local refs, when
+its directory or `.git` file is gone (unmounted volume, recreated empty directory) and also when
+the admin `gitdir` file is empty or missing, which `git worktree list` hides. So the guard checks
+the list, every admin dir, and what prune itself would remove.
 
 ```sh
 python3 - "$repo" <<'PY'
@@ -176,22 +193,47 @@ import os
 import subprocess
 import sys
 
-done = subprocess.run(
-    ["git", "-C", sys.argv[1], "worktree", "list", "--porcelain", "-z"],
-    capture_output=True,
-    check=False,
-)
-if done.returncode or done.stderr:
-    sys.exit(f"keep: worktree list failed (exit {done.returncode}): {done.stderr!r}")
-for record in done.stdout.split(b"\0\0"):
+repo = sys.argv[1]
+
+
+def git(*args: str) -> bytes:
+    """Run Git in `repo`; failure or any diagnostic means keep."""
+    done = subprocess.run(["git", "-C", repo, *args], capture_output=True, check=False)
+    if done.returncode or done.stderr:
+        sys.exit(f"keep: git {args[0]} failed (exit {done.returncode}): {done.stderr!r}")
+    return done.stdout
+
+
+def read(path: bytes) -> bytes:
+    """Return a file's stripped bytes, or empty when unreadable."""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read().strip()
+    except OSError:
+        return b""
+
+
+for record in git("worktree", "list", "--porcelain", "-z").split(b"\0\0"):
     fields = [field for field in record.split(b"\0") if field]
-    if not fields:
-        continue
-    path = fields[0].removeprefix(b"worktree ")
     if any(field.startswith(b"prunable") for field in fields):
-        sys.exit(f"keep: Git reports {path!r} prunable")
-    if b"bare" not in fields and not os.path.exists(os.path.join(path, b".git")):
-        sys.exit(f"keep: {path!r} has no reachable `.git`")
+        sys.exit(f"keep: Git reports {fields[0]!r} prunable")
+
+common = os.fsencode(os.path.join(repo, git("rev-parse", "--git-common-dir").decode().strip()))
+admin_root = os.path.join(common, b"worktrees")
+for name in sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else []:
+    admin = os.path.join(admin_root, name)
+    dotgit = os.path.join(admin, read(os.path.join(admin, b"gitdir")))
+    target = read(dotgit).removeprefix(b"gitdir:").strip()
+    if not read(os.path.join(admin, b"gitdir")) or os.path.realpath(
+        os.path.join(os.path.dirname(dotgit), target)
+    ) != os.path.realpath(admin):
+        sys.exit(f"keep: admin dir {admin!r} has no matching `.git` file")
+
+dry = subprocess.run(
+    ["git", "-C", repo, "worktree", "prune", "--dry-run", "--verbose"], capture_output=True, check=False
+)
+if dry.returncode or dry.stdout.strip() or dry.stderr.strip():
+    sys.exit(f"keep: `git worktree prune` would remove or failed: {dry.stdout!r} {dry.stderr!r}")
 PY
 ```
 
@@ -201,8 +243,11 @@ Set `worktree` to the candidate's exact path. The scan is read-only and is the o
 rules: worktree-local refs, `HEAD` reflog commits outside `git rev-list --all`, and tracked `filter`
 attributes. Empty output and exit 0 pass **only** these checks. Any `keep:` output means keep and
 report it. A clean filter can map different on-disk bytes to the index blob, so empty status is not
-proof; only the operator can confirm that the reported paths are disposable or backed up. Rerun the
-scan and every other guard afterwards. Paths stay NUL-delimited.
+proof. The scan keeps printing `keep` for as long as a `filter` attribute exists, so an agent can
+never proceed on it. Operator-run manual flow, never automated: the operator reads the printed
+paths, confirms those raw files are disposable or backed up, and removes that exact worktree by hand
+from outside it with `git -C <repo> worktree remove <worktree>` (no `--force`). Paths stay
+NUL-delimited.
 
 ```sh
 python3 - "$worktree" <<'PY'
