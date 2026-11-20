@@ -36,6 +36,7 @@ import { buildParentContext, extractText } from "./context.ts";
 import { DEFAULT_AGENTS } from "./default-agents.ts";
 import { detectEnv } from "./env.ts";
 import { normalizeHomePath, resolveAgentDir } from "./home-paths.ts";
+import { resolveTurnCap } from "./invocation-config.ts";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.ts";
 import type { ModelCallEvent } from "./model-call.ts";
 import type { ModelFallback } from "./model-resolver.ts";
@@ -458,16 +459,11 @@ export function setDefaultMaxTurns(n: number | undefined): void {
 }
 
 /**
- * The turn limit a run of `type` will actually enforce: an explicit value if the
- * caller supplied one, else the agent's own `max_turns`, else the project
- * default. `undefined` = unlimited.
- *
- * Exported because the widget's turn counter (`↻3≤20`) has to predict this
- * before the run starts, and a second copy of the expression would drift from
- * the one below that enforces it.
+ * The turn limit a run of `type` will actually enforce: the tighter caller and
+ * agent caps, or the project default if neither sets one. `undefined` = unlimited.
  */
 export function resolveEffectiveMaxTurns(type: string, explicit?: number): number | undefined {
-	return normalizeMaxTurns(explicit ?? getAgentConfig(type)?.maxTurns ?? defaultMaxTurns);
+	return normalizeMaxTurns(resolveTurnCap(explicit, getAgentConfig(type)?.maxTurns) ?? defaultMaxTurns);
 }
 
 /**
@@ -1639,9 +1635,8 @@ export async function runAgent(
 
 /**
  * Send a new prompt to an existing session (resume). A fresh run of the same
- * agent: the turn limit is resolved as `runAgent` resolves it — an explicit
- * `maxTurns`, else the agent type's own `max_turns`, else the project default
- * — and counted from this prompt (#368).
+ * agent: the turn limit is resolved as `runAgent` resolves it and counted from
+ * this prompt (#368).
  */
 export async function resumeAgent(
 	session: AgentSession,

@@ -14,7 +14,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveEffectiveMaxTurns } from "../src/agent-runner.ts";
 import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { ScheduleStore } from "../src/schedule-store.ts";
@@ -1135,21 +1134,25 @@ describe("SubagentScheduler — fire path", () => {
 		});
 	});
 
-	it("pins current scheduled Explore precedence pending alignment with Agent", () => {
+	it.each([
+		[40, 12],
+		[3, 3],
+		[0, 12],
+	])("fires Explore with requested cap %i at cap %i", (requested, cap) => {
 		scheduler.addJob({
 			name: "scout",
 			description: "search",
 			schedule: "1s",
 			subagent_type: "Explore",
 			prompt: "search",
-			max_turns: 40,
+			max_turns: requested,
 		});
 
 		vi.advanceTimersByTime(1_000);
 		const [, , type, , options] = manager.spawn.mock.calls[0];
 		expect(type).toBe("Explore");
-		expect(resolveEffectiveMaxTurns(type)).toBe(12);
-		expect(resolveEffectiveMaxTurns(type, options.maxTurns)).toBe(40);
+		expect(options.maxTurns).toBe(cap);
+		expect(options.invocation.maxTurns).toBe(cap);
 	});
 
 	it("fire normalizes an unlimited turn budget out of the snapshot", () => {

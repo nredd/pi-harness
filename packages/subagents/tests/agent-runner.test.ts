@@ -2992,10 +2992,6 @@ describe("agent-runner ext: tool selectors", () => {
 	});
 });
 
-// The limit a run will enforce, resolved before the run starts. The widget's
-// turn counter has to predict it for agents spawned outside the Agent tool
-// (mentions, cross-extension RPC), and a second copy of the expression there
-// would drift from the one runAgent enforces — so both call this.
 describe("resolveEffectiveMaxTurns", () => {
 	let prevDefault: number | undefined;
 
@@ -3031,11 +3027,18 @@ describe("resolveEffectiveMaxTurns", () => {
 		expect(resolveEffectiveMaxTurns("test-agent")).toBeUndefined();
 	});
 
-	it("treats an explicit 0 as unlimited rather than as 'no opinion'", () => {
-		// Not the same as omitting it: 0 is how a caller says "no limit", and
-		// falling through to the default would impose one it asked not to have.
+	it("keeps a finite definition cap even when a caller requests unlimited", () => {
 		setDefaultMaxTurns(20);
+		expect(resolveEffectiveMaxTurns("test-agent", 0)).toBe(7);
+		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig());
 		expect(resolveEffectiveMaxTurns("test-agent", 0)).toBeUndefined();
+	});
+
+	it("lets a caller tighten an explicitly unlimited definition", () => {
+		setDefaultMaxTurns(20);
+		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig({ maxTurns: 0 }));
+		expect(resolveEffectiveMaxTurns("test-agent", 3)).toBe(3);
+		expect(resolveEffectiveMaxTurns("test-agent")).toBeUndefined();
 	});
 });
 
@@ -3063,8 +3066,10 @@ describe("agent-runner turn limits", () => {
 	 * Run an agent whose prompt fires `turns` synthetic turn_end events before it
 	 * produces its final message — the same events a real session emits.
 	 */
-	async function runWithTurns(turns: number, options: Record<string, unknown> = {}) {
-		vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
+	async function runWithTurns(turns: number, options: Record<string, unknown> = {}, definition?: number) {
+		const config = makeAgentConfig({ maxTurns: definition });
+		vi.mocked(getAgentConfig).mockReturnValueOnce(config);
+		if (definition !== undefined) vi.mocked(getAgentConfig).mockReturnValueOnce(config);
 		const { session, listeners } = createSession("OK");
 		session.prompt.mockImplementation(async () => {
 			for (let i = 0; i < turns; i++) {
@@ -3076,6 +3081,18 @@ describe("agent-runner turn limits", () => {
 		const result = await runAgent(ctx, "Explore", "go", { pi, ...options });
 		return { session, result };
 	}
+
+	it.each([
+		[40, 12],
+		[3, 3],
+	])("steers at the tighter cap: requested %i, enforced %i", async (maxTurns, cap) => {
+		setGraceTurns(5);
+		const below = await runWithTurns(cap - 1, { maxTurns }, 12);
+		expect(below.result.steered).toBe(false);
+		const at = await runWithTurns(cap, { maxTurns }, 12);
+		expect(at.result.steered).toBe(true);
+		expect(at.session.steer.mock.calls[0]![0]).toContain("turn limit");
+	});
 
 	it("does not steer or abort below the limit", async () => {
 		const { session, result } = await runWithTurns(3, { maxTurns: 5 });

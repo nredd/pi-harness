@@ -18,7 +18,7 @@ import {
 } from "./agent-types.ts";
 import { loadCustomAgents } from "./custom-agents.ts";
 import { errorMessage } from "./error-message.ts";
-import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.ts";
+import { isolationParam, resolveAgentInvocationConfig, resolveTurnCap } from "./invocation-config.ts";
 import {
 	type ModelSelection,
 	modelIdentityNote,
@@ -299,7 +299,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 				// Frontmatter authoritative, as on the spawn path; the manager falls
 				// back to the limit the child was spawned with, then the default.
 				const resumed = await context.manager.resume(params.resume, params.prompt, signal, {
-					maxTurns: getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns ?? params.max_turns,
+					maxTurns: resolveTurnCap(params.max_turns, getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns),
 				});
 				return resumed
 					? textResult(formatRecord(resumed, "inline"), resumed.status === "error")

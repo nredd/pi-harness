@@ -44,7 +44,7 @@ describe("resolveAgentInvocationConfig", () => {
 		);
 
 		expect(resolved.thinking).toBe("minimal");
-		expect(resolved.maxTurns).toBe(42);
+		expect(resolved.maxTurns).toBe(1);
 		expect(resolved.inheritContext).toBe(false);
 		expect(resolved.runInBackground).toBe(false);
 		expect(resolved.isolated).toBe(false);

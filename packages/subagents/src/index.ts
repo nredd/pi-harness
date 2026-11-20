@@ -61,7 +61,6 @@ import {
 	getGraceTurns,
 	getRememberAgents,
 	normalizeMaxTurns,
-	resolveEffectiveMaxTurns,
 	SUBAGENT_TOOL_NAMES,
 	setDefaultMaxTurns,
 	setGraceTurns,
@@ -111,7 +110,13 @@ import {
 } from "./events.ts";
 import { GroupJoinManager } from "./group-join.ts";
 import { resolveAgentDir } from "./home-paths.ts";
-import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam } from "./invocation-config.ts";
+import {
+	cwdParam,
+	isolationParam,
+	resolveAgentInvocationConfig,
+	resolveCwdParam,
+	resolveTurnCap,
+} from "./invocation-config.ts";
 import {
 	describeMention,
 	handleBase,
@@ -1321,14 +1326,15 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// built with `undefined` renders `↻3` where the Agent tool renders `↻3≤20`.
 		// Like the tool's own, it is a prediction — editing the agent file mid-run
 		// leaves the displayed ceiling stale.
+		const maxTurns = resolveTurnCap(options?.maxTurns, getAgentConfig(dispatch.type)?.maxTurns);
 		const { state, callbacks } = createActivityTracker(
-			resolveEffectiveMaxTurns(dispatch.type, options?.maxTurns),
+			normalizeMaxTurns(maxTurns ?? getDefaultMaxTurns()),
 			undefined,
 			clock,
 		);
 		// Repaints are left to the manager's `onStart` callback, which already starts
 		// the widget/fleet timers for agents that enter this way.
-		const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { ...options, ...callbacks });
+		const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { ...options, maxTurns, ...callbacks });
 		agentActivity.set(id, state);
 		return id;
 	};
@@ -2178,14 +2184,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
 	/**
 	 * The turn budget for resuming `record`, from its OWN type — resume ignores
-	 * `subagent_type`. Same precedence as a spawn, frontmatter authoritative:
-	 * the agent file's `max_turns`, else the call's, else the limit the agent
-	 * was spawned with, else the default (#368).
+	 * `subagent_type`. Use the tighter of its definition and the requested
+	 * (or original invocation) cap, falling back to the project default (#368).
 	 */
 	function resumeTurnLimit(record: AgentRecord, explicit?: number): number | undefined {
 		// Preserve 0 until the runner resolves it: normalizing it here would turn
 		// an explicit unlimited budget into "unspecified" and restore the spawn cap.
-		return getAgentConfig(record.type)?.maxTurns ?? explicit ?? record.invocation?.maxTurns ?? getDefaultMaxTurns();
+		return (
+			resolveTurnCap(explicit ?? record.invocation?.maxTurns, getAgentConfig(record.type)?.maxTurns) ??
+			getDefaultMaxTurns()
+		);
 	}
 
 	/** Why `reopenEvicted` did not reopen; `type-unavailable` keeps the tombstone, `session-gone` drops it. */
@@ -2734,7 +2742,7 @@ Terse command-style prompts produce shallow, generic work.
 			max_turns: Type.Optional(
 				Type.Number({
 					description:
-						"Soft turn cap before asking the agent to wrap up. The agent's own max_turns (built-in or agent definition) takes precedence over this value. If neither is set, the project default applies.",
+						"Soft turn cap before asking the agent to wrap up. The lower of this value and the agent definition's max_turns wins. If neither is set, the project default applies.",
 					minimum: 1,
 				}),
 			),
@@ -3035,7 +3043,7 @@ Terse command-style prompts produce shallow, generic work.
 						prompt: params.prompt as string,
 						model: selection?.requested?.startsWith("@") ? selection.requested : (params.model as string | undefined),
 						thinking: thinking,
-						max_turns: effectiveMaxTurns,
+						max_turns: params.max_turns,
 						isolated: isolated,
 						isolation: isolation,
 					});
@@ -3086,7 +3094,7 @@ Terse command-style prompts produce shallow, generic work.
 						);
 					}
 					const reopened = await reopenEvicted(ctx, entry, params.prompt, {
-						maxTurns: getAgentConfig(entry.type)?.maxTurns ?? params.max_turns,
+						maxTurns: resolveTurnCap(params.max_turns, getAgentConfig(entry.type)?.maxTurns),
 					});
 					if (!reopened.ok) return textResult(`${continued}${couldNotResume(`agent "${latest}"`, reopened.failure)}`);
 					// No `.output` line: like every non-tool spawn it writes none, and
@@ -3267,7 +3275,7 @@ Terse command-style prompts produce shallow, generic work.
 					// selection must still apply agentModels and aliases.
 					model: selection?.requested?.startsWith("@") ? selection.requested : params.model,
 					thinking,
-					max_turns: effectiveMaxTurns,
+					max_turns: params.max_turns,
 					isolated,
 					isolation,
 					quotaParked: true,
@@ -3302,7 +3310,7 @@ Terse command-style prompts produce shallow, generic work.
 					description: params.description,
 					name: params.name as string | undefined,
 					model,
-					maxTurns: effectiveMaxTurns,
+					maxTurns: resolvedConfig.maxTurns,
 					isolated,
 					inheritContext,
 					thinkingLevel: thinking,
@@ -3459,7 +3467,7 @@ Terse command-style prompts produce shallow, generic work.
 							description: params.description,
 							name: params.name as string | undefined,
 							model,
-							maxTurns: effectiveMaxTurns,
+							maxTurns: resolvedConfig.maxTurns,
 							isolated,
 							inheritContext,
 							thinkingLevel: thinking,

@@ -600,9 +600,9 @@ interface ResumeOptions {
 	 */
 	isBackground?: boolean;
 	/**
-	 * Explicit turn limit for the resumed run: this, else the limit the agent
-	 * was spawned with, else its type's own `max_turns`, else the default —
-	 * counted afresh from the resume prompt (#368).
+	 * Caller limit for the resumed run, falling back to the original invocation.
+	 * The runner also applies the agent definition's ceiling and counts turns
+	 * afresh from the resume prompt (#368).
 	 */
 	maxTurns?: number;
 	/** Called on streaming text and model-call changes during this resume. */
