@@ -38,7 +38,15 @@ STAMP = "2026-11-20T04:50:01Z"
 
 
 def run_data(**overrides: Any) -> dict[str, Any]:
-    """Build GitHub's fork run metadata with its empty PR array."""
+    """Build GitHub's fork run metadata with its empty PR array.
+
+    Parameters:
+        **overrides (Any): Input to the test fixture.
+    Returns:
+        dict[str, Any]: Test fixture result.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     return {
         "id": 123,
         "run_number": 7,
@@ -68,7 +76,15 @@ class RecordingGitHub(pub.GitHub):
     record: dict[str, object] | None
 
     def __init__(self) -> None:
-        """Seed one current attempt, PR and artifact."""
+        """Seed one current attempt, PR and artifact.
+
+        Parameters:
+            None.
+        Returns:
+            None: Contract holds.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         super().__init__(REPO, "synthetic-token")
         self.data = run_data()
         self.peers = [self.data, run_data(id=222, run_number=6)]
@@ -107,7 +123,17 @@ class RecordingGitHub(pub.GitHub):
         ).record(producer_job(pub.ARTIFACT, shard=False), pub.ARTIFACT)
 
     def request(self, path: str, method: str = "GET", body: dict[str, str] | None = None) -> Any:
-        """Return resource data and apply sticky writes to the recording store."""
+        """Return resource data and apply sticky writes to the recording store.
+
+        Parameters:
+            path (str): Requested route.
+            method (str): Input to the test fixture.
+            body (dict[str, str] | None): Input to the test fixture.
+        Returns:
+            Any: Test fixture result.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         if body is not None:
             self.writes.append((path, method, body))
             current = {"id": 17, "user": {"id": pub.BOT_ID}, "body": body["body"]}
@@ -120,7 +146,17 @@ class RecordingGitHub(pub.GitHub):
         return self.data
 
     def pages(self, path: str, key: str | None = None, **params: str) -> list[Any]:
-        """Verify the publisher scopes every census to the expected resource."""
+        """Verify the publisher scopes every census to the expected resource.
+
+        Parameters:
+            path (str): Requested route.
+            key (str | None): Input to the test fixture.
+            **params (str): Input to the test fixture.
+        Returns:
+            list[Any]: Test fixture result.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         if path == "pulls":
             assert params == {"head": "contributor:topic/fix", "state": "open"}
             return self.pulls
@@ -134,7 +170,16 @@ class RecordingGitHub(pub.GitHub):
         }[path]
 
     def download(self, artifact_id: int, destination: Path) -> None:
-        """Package real fixture counts with the synthetic attempt metadata."""
+        """Package real fixture counts with the synthetic attempt metadata.
+
+        Parameters:
+            artifact_id (int): Input to the test fixture.
+            destination (Path): Input to the test fixture.
+        Returns:
+            None: Contract holds.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         assert artifact_id == 8
         with ZipFile(destination, "w") as archive:
             archive.write(FIXTURE, "coverage/summary.json")
@@ -143,7 +188,15 @@ class RecordingGitHub(pub.GitHub):
 
 
 def test_sticky_fork_comment_and_retry(tmp_path: Path) -> None:
-    """Post once, then PATCH the bot's comment, never a user's copied marker."""
+    """Post once, then PATCH the bot's comment, never a user's copied marker.
+
+    Parameters:
+        tmp_path (Path): Isolated test directory.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     api.comments.append({"id": 10, "user": {"id": 99}, "body": pub.MARKER + "\ncopy"})
     run = pub.Run.parse(api.data)
@@ -179,7 +232,15 @@ def test_sticky_fork_comment_and_retry(tmp_path: Path) -> None:
     ],
 )
 def test_pr_identity(case: str) -> None:
-    """Reject mismatched PR identity; missing merge identity never passes as tested SHA."""
+    """Reject mismatched PR identity; missing merge identity never passes as tested SHA.
+
+    Parameters:
+        case (str): Scenario under test.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     pr = api.pulls[0]
     if case == "ambiguous":
@@ -214,13 +275,29 @@ def test_pr_identity(case: str) -> None:
     ],
 )
 def test_invalid_run(mutation: dict[str, Any]) -> None:
-    """Reject malformed identity instead of constructing API paths or links from it."""
+    """Reject malformed identity instead of constructing API paths or links from it.
+
+    Parameters:
+        mutation (dict[str, Any]): Input to the test fixture.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     with pytest.raises(ValueError, match=r"CI run|run identity"):
         pub.Run.parse(run_data(**mutation))
 
 
 def test_latest_run_order() -> None:
-    """Queued runs and reruns supersede older attempts regardless of completion order."""
+    """Queued runs and reruns supersede older attempts regardless of completion order.
+
+    Parameters:
+        None.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     run = pub.Run.parse(api.data)
     api.peers.extend([run_data(head_repository=None), run_data(head_repository={"full_name": REPO})])
@@ -254,7 +331,16 @@ def test_latest_run_order() -> None:
     ],
 )
 def test_artifact_attempt_filter(case: str, tmp_path: Path) -> None:
-    """Missing, displaced and oversized archives cannot produce numeric evidence."""
+    """Missing, displaced and oversized archives cannot produce numeric evidence.
+
+    Parameters:
+        case (str): Scenario under test.
+        tmp_path (Path): Isolated test directory.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     job = api.jobs[0]
     upload = job["steps"][1]
@@ -282,7 +368,7 @@ def test_artifact_attempt_filter(case: str, tmp_path: Path) -> None:
         row["created_at"] = "2026-11-19T00:00:00Z"
     elif case == "oversize":
         row["size_in_bytes"] = pub.MAX_ARCHIVE_BYTES + 1
-    elif case == "duplicate-artifact":
+    else:
         api.artifacts.append(row)
     expected = "NOT RUN" if case == "skipped" else "unavailable"
     assert pub.fetch_evidence(api, pub.Run.parse(api.data), tmp_path) == expected
@@ -290,20 +376,45 @@ def test_artifact_attempt_filter(case: str, tmp_path: Path) -> None:
 
 
 def test_artifact_transport_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Gracefully handle expiry between listing and download."""
+    """Gracefully handle expiry between listing and download.
+
+    Parameters:
+        tmp_path (Path): Isolated test directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     monkeypatch.setattr(RecordingGitHub, "download", unavailable_download)
     assert pub.fetch_evidence(api, pub.Run.parse(api.data), tmp_path) == "unavailable"
 
 
 def unavailable_download(*args: object) -> None:
-    """Simulate expiry between listing and download."""
+    """Simulate expiry between listing and download.
+
+    Parameters:
+        *args (object): Input to the test fixture.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     raise OSError("signed download expired")
 
 
 @pytest.mark.parametrize("case", ["old-attempt", "different-tested-sha", "missing-record", "no-merge-sha"])
 def test_artifact_sidecar_fails_closed(case: str) -> None:
-    """An acceptable upload timestamp is not provenance."""
+    """An acceptable upload timestamp is not provenance.
+
+    Parameters:
+        case (str): Scenario under test.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     assert api.record is not None
     if case == "old-attempt":
@@ -321,7 +432,17 @@ def test_artifact_sidecar_fails_closed(case: str) -> None:
     "case", ["old-sticky", "bad-marker", "duplicates", "new-head", "new-run", "no-pr", "stale-start"]
 )
 def test_no_unsafe_comment_write(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Recheck freshness at the write boundary and refuse ambiguous sticky identity."""
+    """Recheck freshness at the write boundary and refuse ambiguous sticky identity.
+
+    Parameters:
+        case (str): Scenario under test.
+        tmp_path (Path): Isolated test directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     api = RecordingGitHub()
     comment = {"id": 17, "user": {"id": pub.BOT_ID}, "body": pub.MARKER + "\n<!-- ci:8:1 -->"}
     api.comments.append(comment)
@@ -338,7 +459,15 @@ def test_no_unsafe_comment_write(case: str, tmp_path: Path, monkeypatch: pytest.
         render = pub.render
 
         def race(*args: Any) -> str:
-            """Advance a PR or run while the publisher builds its report."""
+            """Advance a PR or run while the publisher builds its report.
+
+            Parameters:
+                *args (Any): Input to the test fixture.
+            Returns:
+                str: Test fixture result.
+            Raises:
+                AssertionError: An expected contract does not hold.
+            """
             if case == "new-head":
                 api.pulls[0]["head"]["sha"] = TESTED
             else:
@@ -358,7 +487,15 @@ def test_no_unsafe_comment_write(case: str, tmp_path: Path, monkeypatch: pytest.
 
 
 def test_workflow_contract() -> None:
-    """Pin the only credential, checkout, trigger, writer and permission boundaries."""
+    """Pin the only credential, checkout, trigger, writer and permission boundaries.
+
+    Parameters:
+        None.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     text = (ROOT / ".github/workflows/coverage-publish.yml").read_text()
     workflow = yaml.safe_load(text)
     assert workflow[True] == {"workflow_run": {"workflows": ["CI"], "types": ["completed"]}}
@@ -383,13 +520,31 @@ def test_workflow_contract() -> None:
 
 @pytest.mark.parametrize("case", ["ok", "long"])
 def test_api_request(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exercise real Request binding, the read cap and disabled redirects."""
+    """Exercise real Request binding, the read cap and disabled redirects.
+
+    Parameters:
+        case (str): Scenario under test.
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
 
     class Open:
         """Capture a GitHub API request."""
 
         def open(self, req: Any, *, timeout: int) -> io.BytesIO:
-            """Record token use only against the API host."""
+            """Record token use only against the API host.
+
+            Parameters:
+                req (Any): Request under test.
+                timeout (int): Network timeout in seconds.
+            Returns:
+                io.BytesIO: Test fixture result.
+            Raises:
+                AssertionError: An expected contract does not hold.
+            """
             assert req.full_url == f"{pub.API}/repos/{REPO}/issues/4/comments"
             assert req.get_header("Authorization") == "Bearer token"
             assert req.get_method() == "POST"
@@ -410,10 +565,28 @@ def test_api_request(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("case", ["array", "envelope", "short", "bad", "overflow"])
 def test_pagination(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """End at an actual final page, reject malformed or over-budget census data."""
+    """End at an actual final page, reject malformed or over-budget census data.
+
+    Parameters:
+        case (str): Scenario under test.
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
 
     def request(self: pub.GitHub, path: str) -> Any:
-        """Return two recording pages or an invalid census."""
+        """Return two recording pages or an invalid census.
+
+        Parameters:
+            self (pub.GitHub): Input to the test fixture.
+            path (str): Requested route.
+        Returns:
+            Any: Test fixture result.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         query = parse_qs(urlsplit(path).query)
         assert query["head"] == ["user:a&b"]
         assert query["per_page"] == ["100"]
@@ -439,7 +612,17 @@ def test_pagination(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
     "case", ["ok", "too-big", "io-error", "status", "insecure", "no-host", "userinfo", "no-redirect"]
 )
 def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stream a signed URL without the repository token, bounded and never redirected."""
+    """Stream a signed URL without the repository token, bounded and never redirected.
+
+    Parameters:
+        case (str): Scenario under test.
+        tmp_path (Path): Isolated test directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     url = {
         "insecure": "http://artifact.example/a",
         "no-host": "https:/a",
@@ -447,7 +630,16 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
     }.get(case, "https://artifact.example/a")
 
     def request(self: pub.GitHub, path: str) -> None:
-        """Simulate GitHub's signed redirect response."""
+        """Simulate GitHub's signed redirect response.
+
+        Parameters:
+            self (pub.GitHub): Input to the test fixture.
+            path (str): Requested route.
+        Returns:
+            None: Contract holds.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         assert path == "actions/artifacts/8/zip"
         if case != "no-redirect":
             headers = Message()
@@ -455,10 +647,28 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
             raise HTTPError("api", 301 if case == "status" else 302, "redirect", headers, None)
 
     class Open:
-        """Record the actual anonymous request and serve archive bytes."""
+        """Record the actual anonymous request and serve archive bytes.
+
+        Parameters:
+            self (pub.GitHub): Input to the test fixture.
+            path (str): Requested route.
+        Returns:
+            None: Contract holds.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
 
         def open(self, target: str, *, timeout: int) -> io.BytesIO:
-            """Assert no authorization headers reach the anonymous host."""
+            """Assert no authorization headers reach the anonymous host.
+
+            Parameters:
+                target (str): Input to the test fixture.
+                timeout (int): Network timeout in seconds.
+            Returns:
+                io.BytesIO: Test fixture result.
+            Raises:
+                AssertionError: An expected contract does not hold.
+            """
             assert target == url
             assert timeout == 30
             if case == "io-error":
@@ -481,7 +691,17 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.parametrize("case", ["ok", "http", "invalid"])
 def test_cli(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Use event-file identity and report errors without emitting authentication material."""
+    """Use event-file identity and report errors without emitting authentication material.
+
+    Parameters:
+        case (str): Scenario under test.
+        tmp_path (Path): Isolated test directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     event = tmp_path / "event.json"
     event.write_text(json.dumps({"workflow_run": run_data(), "repository": {"default_branch": "main"}}))
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
@@ -491,7 +711,18 @@ def test_cli(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
 
     def publish(api: pub.GitHub, run: pub.Run, policy: Path, output: Path) -> None:
-        """Verify trusted paths and the write failure exit code."""
+        """Verify trusted paths and the write failure exit code.
+
+        Parameters:
+            api (pub.GitHub): Recording API transport.
+            run (pub.Run): Triggering execution.
+            policy (Path): Policy path.
+            output (Path): Summary path.
+        Returns:
+            None: Contract holds.
+        Raises:
+            AssertionError: An expected contract does not hold.
+        """
         assert (api.repository, run.id, policy, output) == (
             REPO,
             123,
@@ -506,7 +737,15 @@ def test_cli(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Use a failing executable invocation to verify the CLI exit status."""
+    """Use a failing executable invocation to verify the CLI exit status.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Scoped test overrides.
+    Returns:
+        None: Contract holds.
+    Raises:
+        AssertionError: An expected contract does not hold.
+    """
     monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
     with pytest.raises(SystemExit, match="1"):
         runpy.run_path(str(ROOT / "scripts/coverage_publish.py"), run_name="__main__")
