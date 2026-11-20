@@ -283,6 +283,19 @@ def read_record(path: Path) -> dict[str, object]:
         return decode_record(stream.read(MAX_PROVENANCE_BYTES + 1))
 
 
+def producer_job(cell: str, *, shard: bool) -> str:
+    """Name the workflow job that writes a coverage artifact for a cell, one job per OS.
+
+    Parameters:
+        cell (str): Coverage artifact name such as `coverage-ubuntu-24.04` or `coverage-macos-14-ts`.
+        shard (bool): Whether the cell is a shard artifact and not the fan-in.
+    Returns:
+        str: `owned-shards-<os>` for a shard, else `owned-<os>`.
+    """
+    host = cell.removeprefix("coverage-").split("-", 1)[0]
+    return f"owned-shards-{host}" if shard else f"owned-{host}"
+
+
 def validate_record(record: dict[str, object], expected: dict[str, object]) -> None:
     """Require exact fields, JSON types and values, with no identity inferred from artifact metadata.
 
@@ -1027,7 +1040,7 @@ def read_host_summary(directory: Path, host: str, provenance: Provenance) -> Sum
         path = coverage / "summary.json"
     if not path.exists() and not path.is_symlink():
         return None
-    expected = provenance.record("owned", cell)
+    expected = provenance.record(producer_job(cell, shard=False), cell)
     return Summary.parse(read_summary(path, expected))
 
 
