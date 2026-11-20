@@ -5,6 +5,7 @@ import Carbon.HIToolbox
 
 /// Exercise native policy and ref bookkeeping without live AX reads or event delivery.
 func runPureAssertions() {
+
     var failures = 0
     func check(_ ok: Bool, _ name: String) { if !ok { failures += 1; print("FAIL: \(name)") } }
 
@@ -194,76 +195,77 @@ func runPureAssertions() {
         let shifted = character == "A" || character == "Z"
         check(stroke?.key == character.lowercased() && stroke?.shift == shifted,
               "US alphanumeric mapping preserves the key and shift: \(character)")
-}
-for character in [".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`"] {
-    let stroke = usLayoutKeyStroke(for: character)
-    check(stroke?.key == character && stroke?.shift == false,
-          "US punctuation remains unshifted: \(character)")
-}
-for (character, key) in [(" ", "space"), ("_", "-"), ("+", "="), (":", ";"),
-                         ("\"", "'"), ("?", "/"), ("<", ","), (">", ".")] {
-    let stroke = usLayoutKeyStroke(for: character)
-    check(stroke?.key == key && stroke?.shift == (character != " "),
-          "US symbolic mapping preserves the key and shift: \(character)")
-}
-check(usLayoutKeyStroke(for: "").map { _ in true } == nil, "empty text has no physical US key")
-check(selectionOutcome(requested: (2, 3), readBack: (2, 4)) == "didnt",
-      "selection length mismatch fails even when the location agrees")
+    }
+    for character in [".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`"] {
+        let stroke = usLayoutKeyStroke(for: character)
+        check(stroke?.key == character && stroke?.shift == false,
+              "US punctuation remains unshifted: \(character)")
+    }
+    for (character, key) in [(" ", "space"), ("_", "-"), ("+", "="), (":", ";"),
+                             ("\"", "'"), ("?", "/"), ("<", ","), (">", ".")] {
+        let stroke = usLayoutKeyStroke(for: character)
+        check(stroke?.key == key && stroke?.shift == (character != " "),
+              "US symbolic mapping preserves the key and shift: \(character)")
+    }
+    check(usLayoutKeyStroke(for: "").map { _ in true } == nil, "empty text has no physical US key")
+    check(selectionOutcome(requested: (2, 3), readBack: (2, 4)) == "didnt",
+          "selection length mismatch fails even when the location agrees")
 
-// Keyboard layout gate for physical key strokes (upstream #113)
-check(usLayoutKeyStroke(for: ":").map { $0.key == ";" && $0.shift } == true, "colon is shifted semicolon on the US layout")
-check(usLayoutKeyStroke(for: "Q").map { $0.key == "q" && $0.shift } == true, "uppercase letter is shifted")
-check(usLayoutKeyStroke(for: "æ") == nil && usLayoutKeyStroke(for: "ab") == nil, "no US key for non-ASCII or multi-character text")
-check(physicalKeyStrokeTypes(":", isKeyboardLayout: true, layoutProduces: ":"), "matching layout output allows the physical key")
-check(!physicalKeyStrokeTypes(":", isKeyboardLayout: true, layoutProduces: "Æ"), "layout that types another character falls back")
-check(!physicalKeyStrokeTypes("'", isKeyboardLayout: true, layoutProduces: nil), "dead key falls back")
-check(!physicalKeyStrokeTypes("a", isKeyboardLayout: false, layoutProduces: "a"), "input method falls back even when the layout matches")
+    // Keyboard layout gate for physical key strokes (upstream #113)
+    check(usLayoutKeyStroke(for: ":").map { $0.key == ";" && $0.shift } == true, "colon is shifted semicolon on the US layout")
+    check(usLayoutKeyStroke(for: "Q").map { $0.key == "q" && $0.shift } == true, "uppercase letter is shifted")
+    check(usLayoutKeyStroke(for: "æ") == nil && usLayoutKeyStroke(for: "ab") == nil, "no US key for non-ASCII or multi-character text")
+    check(physicalKeyStrokeTypes(":", isKeyboardLayout: true, layoutProduces: ":"), "matching layout output allows the physical key")
+    check(!physicalKeyStrokeTypes(":", isKeyboardLayout: true, layoutProduces: "Æ"), "layout that types another character falls back")
+    check(!physicalKeyStrokeTypes("'", isKeyboardLayout: true, layoutProduces: nil), "dead key falls back")
+    check(!physicalKeyStrokeTypes("a", isKeyboardLayout: false, layoutProduces: "a"), "input method falls back even when the layout matches")
 
-// Scroll bar fallback (upstream #114)
-func near(_ value: Double?, _ expected: Double) -> Bool { value.map { abs($0 - expected) < 0.001 } ?? false }
-check(near(scrollBarTargetValue(current: 0, delta: 600, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 600.0 / 795.0), "content size maps points to the scroll bar range")
-check(near(scrollBarTargetValue(current: 0.5, delta: 2_000, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 1), "large delta clamps to the end")
-check(near(scrollBarTargetValue(current: 0.5, delta: -2_000, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 0), "negative delta clamps to the start")
-check(near(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 500, contentLength: nil, thumbLength: 250, trackLength: 500), 0.2), "thumb ratio estimates the content length")
-check(scrollBarTargetValue(current: 1, delta: 100, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "bar at the end can't scroll further")
-check(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 579, contentLength: 579, thumbLength: nil, trackLength: nil) == nil, "content that fits has nothing to scroll")
-check(scrollBarTargetValue(current: 0, delta: 0, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "zero delta does nothing")
+    // Scroll bar fallback (upstream #114)
+    func near(_ value: Double?, _ expected: Double) -> Bool { value.map { abs($0 - expected) < 0.001 } ?? false }
+    check(near(scrollBarTargetValue(current: 0, delta: 600, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 600.0 / 795.0), "content size maps points to the scroll bar range")
+    check(near(scrollBarTargetValue(current: 0.5, delta: 2_000, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 1), "large delta clamps to the end")
+    check(near(scrollBarTargetValue(current: 0.5, delta: -2_000, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 0), "negative delta clamps to the start")
+    check(near(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 500, contentLength: nil, thumbLength: 250, trackLength: 500), 0.2), "thumb ratio estimates the content length")
+    check(scrollBarTargetValue(current: 1, delta: 100, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "bar at the end can't scroll further")
+    check(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 579, contentLength: 579, thumbLength: nil, trackLength: nil) == nil, "content that fits has nothing to scroll")
+    check(scrollBarTargetValue(current: 0, delta: 0, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "zero delta does nothing")
 
-// Scroll bar write scope and per-axis delivery
-check(scrollBarWriteAllowed(depthFromStart: 0, hitTestResolvesToArea: false), "the scroll area itself may be written")
-check(scrollBarWriteAllowed(depthFromStart: 1, hitTestResolvesToArea: false), "a direct child of the scroll area may be written")
-check(!scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: false), "a deeper ref in an inner scroller must fall through to the wheel")
-check(scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: true), "a hit test resolving to the same area allows the write")
-let bothMoved = remainingScroll(requestedX: 5, requestedY: 7, x: .moved, y: .moved)
-check(bothMoved.x == 0 && bothMoved.y == 0, "both axes moved leaves nothing to deliver")
-let onlyYMoved = remainingScroll(requestedX: 5, requestedY: 7, x: .notWritten, y: .moved)
-check(onlyYMoved.x == 5 && onlyYMoved.y == 0, "an unwritten horizontal axis stays requested")
-let onlyXMoved = remainingScroll(requestedX: 5, requestedY: 0, x: .moved, y: .notWritten)
-check(onlyXMoved.x == 0 && onlyXMoved.y == 0, "an axis never requested stays zero")
-let lateWrite = remainingScroll(requestedX: 5, requestedY: 7, x: .unconfirmed, y: .unconfirmed)
-check(lateWrite.x == 0 && lateWrite.y == 0, "an accepted but unconfirmed write is delivered, not carried to the wheel")
-check(scrollWritesConfirmed(x: .moved, y: .notWritten), "confirmed and unwritten axes leave the write confirmed")
-check(!scrollWritesConfirmed(x: .moved, y: .unconfirmed), "an unconfirmed axis makes the outcome unknown")
+    // Scroll bar write scope and per-axis delivery
+    check(scrollBarWriteAllowed(depthFromStart: 0, hitTestResolvesToArea: false), "the scroll area itself may be written")
+    check(scrollBarWriteAllowed(depthFromStart: 1, hitTestResolvesToArea: false), "a direct child of the scroll area may be written")
+    check(!scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: false), "a deeper ref in an inner scroller must fall through to the wheel")
+    check(scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: true), "a hit test resolving to the same area allows the write")
+    let bothMoved = remainingScroll(requestedX: 5, requestedY: 7, x: .moved, y: .moved)
+    check(bothMoved.x == 0 && bothMoved.y == 0, "both axes moved leaves nothing to deliver")
+    let onlyYMoved = remainingScroll(requestedX: 5, requestedY: 7, x: .notWritten, y: .moved)
+    check(onlyYMoved.x == 5 && onlyYMoved.y == 0, "an unwritten horizontal axis stays requested")
+    let onlyXMoved = remainingScroll(requestedX: 5, requestedY: 0, x: .moved, y: .notWritten)
+    check(onlyXMoved.x == 0 && onlyXMoved.y == 0, "an axis never requested stays zero")
+    let lateWrite = remainingScroll(requestedX: 5, requestedY: 7, x: .unconfirmed, y: .unconfirmed)
+    check(lateWrite.x == 0 && lateWrite.y == 0, "an accepted but unconfirmed write is delivered, not carried to the wheel")
+    check(scrollWritesConfirmed(x: .moved, y: .notWritten), "confirmed and unwritten axes leave the write confirmed")
+    check(!scrollWritesConfirmed(x: .moved, y: .unconfirmed), "an unconfirmed axis makes the outcome unknown")
 
-// Wheel counts follow the AX/scroll-bar convention on both axes (#650)
-let wheelRight = scrollWheelCounts(deltaX: 200, deltaY: 0)
-check(wheelRight.wheel2 == -200 && wheelRight.wheel1 == 0, "positive scrollX posts a negative wheel2 so the view scrolls right")
-let wheelLeft = scrollWheelCounts(deltaX: -200, deltaY: 0)
-check(wheelLeft.wheel2 == 200, "negative scrollX posts a positive wheel2 so the view scrolls left")
-let wheelDown = scrollWheelCounts(deltaX: 0, deltaY: 200)
-check(wheelDown.wheel1 == -200 && wheelDown.wheel2 == 0, "positive scrollY posts a negative wheel1 so the view scrolls down")
-let wheelUp = scrollWheelCounts(deltaX: 0, deltaY: -200)
-check(wheelUp.wheel1 == 200, "negative scrollY posts a positive wheel1 so the view scrolls up")
-let wheelExtreme = scrollWheelCounts(deltaX: Int(Int32.min), deltaY: Int.min)
-check(wheelExtreme.wheel2 == Int32.max && wheelExtreme.wheel1 == Int32.max, "extreme negative deltas clamp instead of trapping")
-let wheelHuge = scrollWheelCounts(deltaX: Int.max, deltaY: Int.max)
-check(wheelHuge.wheel2 == -Int32.max && wheelHuge.wheel1 == -Int32.max, "extreme positive deltas clamp instead of trapping")
+    // Wheel counts follow the AX/scroll-bar convention on both axes (#650)
+    let wheelRight = scrollWheelCounts(deltaX: 200, deltaY: 0)
+    check(wheelRight.wheel2 == -200 && wheelRight.wheel1 == 0, "positive scrollX posts a negative wheel2 so the view scrolls right")
+    let wheelLeft = scrollWheelCounts(deltaX: -200, deltaY: 0)
+    check(wheelLeft.wheel2 == 200, "negative scrollX posts a positive wheel2 so the view scrolls left")
+    let wheelDown = scrollWheelCounts(deltaX: 0, deltaY: 200)
+    check(wheelDown.wheel1 == -200 && wheelDown.wheel2 == 0, "positive scrollY posts a negative wheel1 so the view scrolls down")
+    let wheelUp = scrollWheelCounts(deltaX: 0, deltaY: -200)
+    check(wheelUp.wheel1 == 200, "negative scrollY posts a positive wheel1 so the view scrolls up")
+    let wheelExtreme = scrollWheelCounts(deltaX: Int(Int32.min), deltaY: Int.min)
+    check(wheelExtreme.wheel2 == Int32.max && wheelExtreme.wheel1 == Int32.max, "extreme negative deltas clamp instead of trapping")
+    let wheelHuge = scrollWheelCounts(deltaX: Int.max, deltaY: Int.max)
+    check(wheelHuge.wheel2 == -Int32.max && wheelHuge.wheel1 == -Int32.max, "extreme positive deltas clamp instead of trapping")
 
-if failures > 0 { exit(1) }
-print("macos native pure checks passed")
+    if failures > 0 { exit(1) }
+    print("macos native pure checks passed")
 }
 /// Translate installed keyboard-layout data without posting a key or activating an app.
 func runKeyboardAssertions() {
+
     var failures = 0
     var checked = 0
     func check(_ ok: Bool, _ name: String) { if !ok { failures += 1; print("FAIL: \(name)") } }
@@ -272,75 +274,75 @@ func runKeyboardAssertions() {
         let filter = [kTISPropertyInputSourceID as String: id] as CFDictionary
         guard let list = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource] else { return nil }
         return list.first
-}
-func layoutData(_ id: String) -> Data? {
-	guard let source = installedSource(id), let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
-	return Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue() as Data
-}
-// US virtual key codes, as used by Bridge.keyCode.
-let semicolon: UInt16 = 41, slash: UInt16 = 44, minus: UInt16 = 27, keyA: UInt16 = 0, digit1: UInt16 = 18
+    }
+    func layoutData(_ id: String) -> Data? {
+        guard let source = installedSource(id), let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        return Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue() as Data
+    }
+    // US virtual key codes, as used by Bridge.keyCode.
+    let semicolon: UInt16 = 41, slash: UInt16 = 44, minus: UInt16 = 27, keyA: UInt16 = 0, digit1: UInt16 = 18
 
-if let us = layoutData("com.apple.keylayout.US") {
-	checked += 1
-	check(keyboardLayoutCharacter(layoutData: us, keyCode: semicolon, shift: true) == ":", "US shift+semicolon types a colon")
-	check(keyboardLayoutCharacter(layoutData: us, keyCode: slash, shift: false) == "/", "US slash types a slash")
-	check(keyboardLayoutCharacter(layoutData: us, keyCode: keyA, shift: true) == "A", "US shift+a types A")
-}
-let keyV: UInt16 = 9
-/// These layouts ship with macOS: a missing one fails the suite instead of silently skipping its checks.
-func requiredLayout(_ id: String) -> Data {
-	guard let data = layoutData(id) else { print("FAIL: required keyboard layout \(id) is not installed"); exit(1) }
-	checked += 1
-	return data
-}
-check(pasteKeyCode(layoutData: nil) == nil, "an unreadable layout has no paste key")
-if let us = layoutData("com.apple.keylayout.US") {
-	checked += 1
-	check(pasteKeyCode(layoutData: us) == keyV, "US cmd+v is key code 9")
-	check(layoutCommandKeyCode(producing: "~", layoutData: us) == nil, "a character no key produces has no command key code")
-}
-do {
-	let dvorak = requiredLayout("com.apple.keylayout.Dvorak")
-	let typed = (0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: dvorak, keyCode: $0, shift: false) == "v" }
-	check(typed != nil && typed != keyV, "plain Dvorak types v on another key than ANSI key code 9")
-	check(pasteKeyCode(layoutData: dvorak) == typed, "plain Dvorak cmd+v follows the layout: the Dvorak v key")
-}
-do {
-	let dvorakQwerty = requiredLayout("com.apple.keylayout.DVORAK-QWERTYCMD")
-	check(keyboardLayoutCharacter(layoutData: dvorakQwerty, keyCode: 47, modifierState: commandModifierState) == ".", "Dvorak-QWERTY command map keeps QWERTY: key 47 is a period")
-	check(pasteKeyCode(layoutData: dvorakQwerty) == keyV, "Dvorak - QWERTY Command pastes with key code 9, not the Dvorak v key")
-}
-for id in ["com.apple.keylayout.Russian", "com.apple.keylayout.Ukrainian", "com.apple.keylayout.Greek", "com.apple.keylayout.Hebrew", "com.apple.keylayout.Arabic"] {
-	let required = id.hasSuffix("Russian") || id.hasSuffix("Ukrainian")
-	if let layout = required ? requiredLayout(id) : layoutData(id) {
-		if !required { checked += 1 }
-		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, shift: false) != "v", "\(id) types no v on key 9")
-		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, modifierState: commandModifierState) == "v", "\(id) command map yields v on key 9")
-		check(pasteKeyCode(layoutData: layout) == keyV, "\(id) pastes with key code 9, it is not refused")
-	}
-}
-if let danish = layoutData("com.apple.keylayout.Danish") {
-	checked += 1
-	check(keyboardLayoutCharacter(layoutData: danish, keyCode: semicolon, shift: true) != ":", "Danish shift+semicolon is not a colon")
-	check(keyboardLayoutCharacter(layoutData: danish, keyCode: slash, shift: false) != "/", "Danish slash key is not a slash")
-	check(keyboardLayoutCharacter(layoutData: danish, keyCode: minus, shift: false) != "-", "Danish minus key is not a minus")
-	check(keyboardLayoutCharacter(layoutData: danish, keyCode: keyA, shift: false) == "a", "Danish letters still type directly")
-}
-if let french = layoutData("com.apple.keylayout.French") {
-	checked += 1
-	check(keyboardLayoutCharacter(layoutData: french, keyCode: keyA, shift: false) != "a", "AZERTY a key types q")
-	check(keyboardLayoutCharacter(layoutData: french, keyCode: digit1, shift: false) != "1", "AZERTY digits need Shift")
-}
-if let pinyin = installedSource("com.apple.inputmethod.SCIM.ITABC"), let type = TISGetInputSourceProperty(pinyin, kTISPropertyInputSourceType) {
-	checked += 1
-	check((Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String) != (kTISTypeKeyboardLayout as String), "Pinyin is an input method, not a keyboard layout")
-}
-let active = currentKeyboardInputSource()
-check(active.layoutData != nil, "active keyboard layout data is readable")
+    if let us = layoutData("com.apple.keylayout.US") {
+        checked += 1
+        check(keyboardLayoutCharacter(layoutData: us, keyCode: semicolon, shift: true) == ":", "US shift+semicolon types a colon")
+        check(keyboardLayoutCharacter(layoutData: us, keyCode: slash, shift: false) == "/", "US slash types a slash")
+        check(keyboardLayoutCharacter(layoutData: us, keyCode: keyA, shift: true) == "A", "US shift+a types A")
+    }
+    let keyV: UInt16 = 9
+    /// These layouts ship with macOS: a missing one fails the suite instead of silently skipping its checks.
+    func requiredLayout(_ id: String) -> Data {
+        guard let data = layoutData(id) else { print("FAIL: required keyboard layout \(id) is not installed"); exit(1) }
+        checked += 1
+        return data
+    }
+    check(pasteKeyCode(layoutData: nil) == nil, "an unreadable layout has no paste key")
+    if let us = layoutData("com.apple.keylayout.US") {
+        checked += 1
+        check(pasteKeyCode(layoutData: us) == keyV, "US cmd+v is key code 9")
+        check(layoutCommandKeyCode(producing: "~", layoutData: us) == nil, "a character no key produces has no command key code")
+    }
+    do {
+        let dvorak = requiredLayout("com.apple.keylayout.Dvorak")
+        let typed = (0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: dvorak, keyCode: $0, shift: false) == "v" }
+        check(typed != nil && typed != keyV, "plain Dvorak types v on another key than ANSI key code 9")
+        check(pasteKeyCode(layoutData: dvorak) == typed, "plain Dvorak cmd+v follows the layout: the Dvorak v key")
+    }
+    do {
+        let dvorakQwerty = requiredLayout("com.apple.keylayout.DVORAK-QWERTYCMD")
+        check(keyboardLayoutCharacter(layoutData: dvorakQwerty, keyCode: 47, modifierState: commandModifierState) == ".", "Dvorak-QWERTY command map keeps QWERTY: key 47 is a period")
+        check(pasteKeyCode(layoutData: dvorakQwerty) == keyV, "Dvorak - QWERTY Command pastes with key code 9, not the Dvorak v key")
+    }
+    for id in ["com.apple.keylayout.Russian", "com.apple.keylayout.Ukrainian", "com.apple.keylayout.Greek", "com.apple.keylayout.Hebrew", "com.apple.keylayout.Arabic"] {
+        let required = id.hasSuffix("Russian") || id.hasSuffix("Ukrainian")
+        if let layout = required ? requiredLayout(id) : layoutData(id) {
+            if !required { checked += 1 }
+            check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, shift: false) != "v", "\(id) types no v on key 9")
+            check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, modifierState: commandModifierState) == "v", "\(id) command map yields v on key 9")
+            check(pasteKeyCode(layoutData: layout) == keyV, "\(id) pastes with key code 9, it is not refused")
+        }
+    }
+    if let danish = layoutData("com.apple.keylayout.Danish") {
+        checked += 1
+        check(keyboardLayoutCharacter(layoutData: danish, keyCode: semicolon, shift: true) != ":", "Danish shift+semicolon is not a colon")
+        check(keyboardLayoutCharacter(layoutData: danish, keyCode: slash, shift: false) != "/", "Danish slash key is not a slash")
+        check(keyboardLayoutCharacter(layoutData: danish, keyCode: minus, shift: false) != "-", "Danish minus key is not a minus")
+        check(keyboardLayoutCharacter(layoutData: danish, keyCode: keyA, shift: false) == "a", "Danish letters still type directly")
+    }
+    if let french = layoutData("com.apple.keylayout.French") {
+        checked += 1
+        check(keyboardLayoutCharacter(layoutData: french, keyCode: keyA, shift: false) != "a", "AZERTY a key types q")
+        check(keyboardLayoutCharacter(layoutData: french, keyCode: digit1, shift: false) != "1", "AZERTY digits need Shift")
+    }
+    if let pinyin = installedSource("com.apple.inputmethod.SCIM.ITABC"), let type = TISGetInputSourceProperty(pinyin, kTISPropertyInputSourceType) {
+        checked += 1
+        check((Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String) != (kTISTypeKeyboardLayout as String), "Pinyin is an input method, not a keyboard layout")
+    }
+    let active = currentKeyboardInputSource()
+    check(active.layoutData != nil, "active keyboard layout data is readable")
 
-if failures > 0 { exit(1) }
-if checked == 0 { print("FAIL: no reference keyboard layouts installed"); exit(1) }
-print("macos keyboard layout checks passed (\(checked) reference sources)")
+    if failures > 0 { exit(1) }
+    if checked == 0 { print("FAIL: no reference keyboard layouts installed"); exit(1) }
+    print("macos keyboard layout checks passed (\(checked) reference sources)")
 }
 @main
 struct HeadlessTests {
