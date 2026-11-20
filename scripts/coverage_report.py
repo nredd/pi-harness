@@ -24,168 +24,50 @@ from __future__ import annotations
 
 import argparse
 import html
-import json
 import logging
 import lzma
-import math
-import re
 import stat
 import struct
 import sys
-import unicodedata
 import zipfile
 import zlib
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+from coverage_provenance_record import (
+    CI_EVENTS,
+    COVERAGE_HOSTS,
+    MAX_JSON_BYTES,
+    MAX_PROVENANCE_BYTES,
+    PROVENANCE_MEMBER,
+    Provenance,
+    ProvenanceRecord,
+    decode_json,
+    decode_record,
+    object_value,
+    producer_job_for_cell,
+    read_record,
+    text_value,
+    validate_record,
+)
+
 LOGGER = logging.getLogger(__name__)
-MAX_JSON_BYTES = 4 * 1024 * 1024
-MAX_PROVENANCE_BYTES = 4096
-PROVENANCE_MEMBER = "coverage/provenance.json"
-COVERAGE_HOSTS = {"ubuntu-24.04", "macos-14"}
-CI_EVENTS = {"pull_request", "push", "workflow_dispatch"}
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_MARKDOWN = 60_000
 MAX_COUNT = 10**12
-MAX_INT_DIGITS = 20
 MAX_REASON = 200
-FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
 COUNTERS = ("lines", "functions", "branches", "statements")
 HOSTS = {"ubuntu-24.04": ("Ubuntu", "linux"), "macos-14": ("macOS", "darwin"), "wsl2": ("WSL", "linux")}
-SHA = re.compile(r"[0-9a-f]{40}\Z")
-SAFE_REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
-def object_value(value: object) -> dict[str, object]:
-    """Require a JSON object with string keys.
-
-    Parameters:
-        value (object): Decoded JSON value.
-    Returns:
-        dict[str, object]: Validated object.
-    Raises:
-        ValueError: The value is not an object.
-    """
-    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
-        raise ValueError("Expected a JSON object")
-    return value
-
-
-def text_value(value: object) -> str:
-    """Require bounded text without control, format, separator, private or surrogate characters.
-
-    Parameters:
-        value (object): Untrusted JSON value.
-    Returns:
-        str: Validated text.
-    Raises:
-        ValueError: Text is malformed or too large.
-    """
-    if (
-        not isinstance(value, str)
-        or len(value) > 8192
-        or any(unicodedata.category(c) in FORBIDDEN_CATEGORIES for c in value)
-    ):
-        raise ValueError("Expected bounded text without control or format characters")
-    return value
-
-
-def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    """Reject duplicate JSON keys instead of silently accepting the last.
-
-    Parameters:
-        pairs (list[tuple[str, object]]): Object entries from the JSON decoder.
-    Returns:
-        dict[str, object]: Unique entries.
-    Raises:
-        ValueError: A key occurs more than once.
-    """
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"Duplicate JSON key: '{key}'")
-        result[key] = value
-    return result
-
-
-def reject_constant(token: str) -> object:
-    """Refuse the non-finite tokens Python's JSON decoder accepts by default.
-
-    Parameters:
-        token (str): `NaN`, `Infinity` or `-Infinity`.
-    Returns:
-        object: Never returns.
-    Raises:
-        ValueError: Always.
-    """
-    raise ValueError(f"Non-finite JSON number: '{token}'")
-
-
-def parse_int(token: str) -> int:
-    """Parse a JSON integer with our own length bound, before `int()` and any interpreter limit.
-
-    Parameters:
-        token (str): Decimal integer token.
-    Returns:
-        int: The value.
-    Raises:
-        ValueError: The literal is longer than `MAX_INT_DIGITS` characters.
-    """
-    if len(token) > MAX_INT_DIGITS:
-        raise ValueError("Integer literal too long")
-    return int(token)
-
-
-def parse_float(token: str) -> float:
-    """Parse a JSON float, refusing overflow to infinity.
-
-    Parameters:
-        token (str): Decimal float token.
-    Returns:
-        float: Finite value.
-    Raises:
-        ValueError: The value is not finite.
-    """
-    value = float(token)
-    if not math.isfinite(value):
-        raise ValueError(f"Non-finite JSON number: '{token}'")
-    return value
-
-
-def decode_json(data: bytes) -> dict[str, object]:
-    """Decode bounded JSON with no duplicate keys.
-
-    Parameters:
-        data (bytes): UTF-8 JSON document.
-    Returns:
-        dict[str, object]: Decoded object.
-    Raises:
-        ValueError: Encoding, size or JSON structure is invalid.
-    """
-    if len(data) > MAX_JSON_BYTES:
-        raise ValueError("JSON byte limit exceeded")
-    try:
-        return object_value(
-            json.loads(
-                data,
-                object_pairs_hook=unique_object,
-                parse_constant=reject_constant,
-                parse_float=parse_float,
-                parse_int=parse_int,
-            )
-        )
-    except (ValueError, RecursionError) as error:
-        raise ValueError(f"Cannot decode JSON: '{error}'") from error
-
-
-def read_summary(path: Path, expected: dict[str, object] | None = None) -> dict[str, object]:
+def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[str, object]:
     """Read a bounded summary or ZIP without extracting any archive member.
 
     Parameters:
         path (Path): JSON summary or complete downloaded artifact ZIP.
-        expected (dict[str, object] | None): If supplied, require this artifact provenance.
+        expected (ProvenanceRecord | None): If supplied, require this artifact provenance.
     Returns:
         dict[str, object]: Decoded accounting summary.
     Raises:
@@ -249,68 +131,6 @@ def read_summary(path: Path, expected: dict[str, object] | None = None) -> dict[
         OverflowError,
     ) as error:
         raise ValueError(f"Cannot read artifact ZIP: '{error}'") from error
-
-
-def decode_record(data: bytes) -> dict[str, object]:
-    """Read small producer records through the same strict JSON boundary as summaries.
-
-    Parameters:
-        data (bytes): Untrusted producer record.
-    Returns:
-        dict[str, object]: Decoded record.
-    Raises:
-        ValueError: The record is too large or malformed.
-    """
-    if len(data) > MAX_PROVENANCE_BYTES:
-        raise ValueError("Coverage provenance byte limit exceeded")
-    return decode_json(data)
-
-
-def read_record(path: Path) -> dict[str, object]:
-    """Read a bounded regular sidecar from an already-unpacked artifact.
-
-    Parameters:
-        path (Path): Exact sidecar location.
-    Returns:
-        dict[str, object]: Decoded record.
-    Raises:
-        ValueError: The sidecar is missing, unsafe or malformed.
-        OSError: The sidecar cannot be read.
-    """
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("Missing or non-regular coverage provenance")
-    with path.open("rb") as stream:
-        return decode_record(stream.read(MAX_PROVENANCE_BYTES + 1))
-
-
-def producer_job(cell: str, *, shard: bool) -> str:
-    """Name the workflow job that writes a coverage artifact for a cell, one job per OS.
-
-    Parameters:
-        cell (str): Coverage artifact name such as `coverage-ubuntu-24.04` or `coverage-macos-14-ts`.
-        shard (bool): Whether the cell is a shard artifact and not the fan-in.
-    Returns:
-        str: `owned-shards-<os>` for a shard, else `owned-<os>`.
-    """
-    host = cell.removeprefix("coverage-").split("-", 1)[0]
-    return f"owned-shards-{host}" if shard else f"owned-{host}"
-
-
-def validate_record(record: dict[str, object], expected: dict[str, object]) -> None:
-    """Require exact fields, JSON types and values, with no identity inferred from artifact metadata.
-
-    Parameters:
-        record (dict[str, object]): Untrusted producer record.
-        expected (dict[str, object]): Record built from trusted run and producer identities.
-    Returns:
-        None: All fields agree.
-    Raises:
-        ValueError: The record lacks a field, has a wrong type or disagrees with the trusted identity.
-    """
-    if record.keys() != expected.keys() or any(
-        type(record[key]) is not type(value) or record[key] != value for key, value in expected.items()
-    ):
-        raise ValueError("Coverage provenance does not match the expected run and producer")
 
 
 @dataclass(frozen=True)
@@ -883,7 +703,7 @@ def render_markdown(
         raise ValueError("Invalid Markdown limit or duplicate OS")
     ordered = sorted(evidence, key=lambda e: e.host)
     blocks = [
-        provenance.markdown(),
+        provenance_markdown(provenance),
         "\n".join(headline(e) for e in ordered),
         "L/F/B/S = lines/functions/branches/statements. Cells: covered/total (uncovered). "
         "Unsupported: not measured; zero denominator: N/A. Signals are never averaged. "
@@ -914,84 +734,22 @@ def render_markdown(
     return assemble(blocks, kept_rows, kept_files, footer)
 
 
-@dataclass(frozen=True)
-class Provenance:
-    """Authenticated run identity, never accepted from accounting artifacts."""
+def provenance_markdown(provenance: Provenance) -> str:
+    """Render explicit repository, head, tested checkout, run and attempt.
 
-    repository: str
-    head_sha: str | None
-    tested_sha: str
-    run_id: int
-    attempt: int
-    event_name: str
-    workflow_ref: str
+    Returns:
+        str: Run identity without artifact-supplied URLs.
 
-    def __post_init__(self) -> None:
-        """Reject malformed caller-provided provenance.
+    Parameters:
+        provenance (Provenance): Trusted run identity.
 
-        Raises:
-            ValueError: Repository, SHA, run or attempt is invalid.
-
-        Parameters:
-            None.
-
-        Returns:
-            None: The boundary contract is satisfied.
-        """
-        if (
-            not SAFE_REPOSITORY.fullmatch(self.repository)
-            or (self.head_sha is not None and not SHA.fullmatch(self.head_sha))
-            or (self.event_name == "pull_request") != (self.head_sha is not None)
-            or self.event_name not in CI_EVENTS
-            or not text_value(self.workflow_ref).startswith(
-                f"{self.repository}/.github/workflows/ci.yml@refs/"
-            )
-            or not SHA.fullmatch(self.tested_sha)
-            or type(self.run_id) is not int
-            or self.run_id <= 0
-            or type(self.attempt) is not int
-            or self.attempt <= 0
-        ):
-            raise ValueError("Invalid run provenance")
-
-    def record(self, job: str, cell: str) -> dict[str, object]:
-        """Build the identity that a single coverage producer must write.
-
-        Parameters:
-            job (str): GitHub job key, shared across cells of a matrix.
-            cell (str): CI matrix cell, identified by its declared artifact name.
-        Returns:
-            dict[str, object]: Exact sidecar schema, including a null PR head outside PR events.
-        Raises:
-            None.
-        """
-        return {
-            "run_id": self.run_id,
-            "run_attempt": self.attempt,
-            "job": job,
-            "cell": cell,
-            "tested_sha": self.tested_sha,
-            "pr_head_sha": self.head_sha,
-            "event_name": self.event_name,
-            "workflow_ref": self.workflow_ref,
-        }
-
-    def markdown(self) -> str:
-        """Render explicit repository, head, tested checkout, run and attempt.
-
-        Returns:
-            str: Run identity without artifact-supplied URLs.
-
-        Parameters:
-            None.
-
-        Raises:
-            None.
-        """
-        return (
-            f"Repository: {escape(self.repository)}; head: {self.head_sha or self.tested_sha}; "
-            f"tested: {self.tested_sha}; run: {self.run_id}; attempt: {self.attempt}."
-        )
+    Raises:
+        None.
+    """
+    return (
+        f"Repository: {escape(provenance.repository)}; head: {provenance.head_sha or 'n/a'}; "
+        f"tested: {provenance.tested_sha}; run: {provenance.run_id}; attempt: {provenance.attempt}."
+    )
 
 
 def render_badge(evidence: Evidence) -> str:
@@ -1040,7 +798,7 @@ def read_host_summary(directory: Path, host: str, provenance: Provenance) -> Sum
         path = coverage / "summary.json"
     if not path.exists() and not path.is_symlink():
         return None
-    expected = provenance.record(producer_job(cell, shard=False), cell)
+    expected = provenance.record(producer_job_for_cell(cell, shard=False), cell)
     return Summary.parse(read_summary(path, expected))
 
 

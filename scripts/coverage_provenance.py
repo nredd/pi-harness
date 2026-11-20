@@ -11,10 +11,19 @@ import argparse
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
-from coverage_report import Provenance, producer_job, read_record, validate_record
+from coverage_provenance_record import (
+    SHA,
+    Provenance,
+    is_producer_job,
+    producer_job_for_cell,
+    read_record,
+    validate_record,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +47,37 @@ def attest_shards(directory: Path, run: Provenance, cell: str) -> None:
     for shard in shards:
         shard_name = shard.name.removeprefix(f"{cell}-")
         record = read_record(shard / "coverage" / f"provenance-{shard_name}.json")
-        validate_record(record, run.record(producer_job(cell, shard=True), shard.name))
+        job = producer_job_for_cell(cell, shard=True)
+        validate_record(record, run.record(job, shard.name))
+
+
+def checkout_sha() -> str:
+    """Read the checked-out commit from the producer working directory.
+
+    Parameters:
+        None.
+    Returns:
+        str: Commit SHA reported by Git, to be validated by `Provenance`.
+    Raises:
+        FileNotFoundError: Git is unavailable.
+        ValueError: Git failed to resolve `HEAD` or did not return a single commit SHA.
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise FileNotFoundError("Cannot locate `git`")
+    try:
+        # Leave stderr on the job log so warnings do not contaminate the SHA.
+        stdout = subprocess.check_output(
+            [str(Path(git).resolve()), "rev-parse", "--verify", "HEAD"], text=True
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f"Cannot resolve checkout `HEAD`: Git exited with code {error.returncode}"
+        ) from error
+    sha = stdout.removesuffix("\n")
+    if not SHA.fullmatch(sha):
+        raise ValueError("Expected a single 40-character checkout SHA on Git stdout")
+    return sha
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,21 +92,23 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--tested-sha", required=True)
     parser.add_argument("--cell", required=True)
     parser.add_argument("--shards", type=Path)
     args = parser.parse_args(argv)
     try:
+        args.output.unlink(missing_ok=True)
         run = Provenance(
             os.environ["GITHUB_REPOSITORY"],
             os.environ.get("COVERAGE_PR_HEAD_SHA") or None,
-            args.tested_sha,
+            checkout_sha(),
             int(os.environ["GITHUB_RUN_ID"]),
             int(os.environ["GITHUB_RUN_ATTEMPT"]),
             os.environ["GITHUB_EVENT_NAME"],
             os.environ["GITHUB_WORKFLOW_REF"],
         )
         job = os.environ["GITHUB_JOB"]
+        if not is_producer_job(job):
+            raise ValueError(f"Unknown coverage producer job: '{job}'")
         if args.shards is not None:
             attest_shards(args.shards, run, args.cell)
         args.output.parent.mkdir(parents=True, exist_ok=True)
