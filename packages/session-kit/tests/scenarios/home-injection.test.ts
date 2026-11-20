@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { defaultConfig, type KitConfig } from "../../src/config.ts";
 import { createSessionKit } from "../../src/index.ts";
 import { assistantLine } from "../fixtures/stats/fixtures.ts";
 
@@ -91,6 +92,32 @@ it.each([
 	homes.push(home);
 	const current = probe();
 	createSessionKit({ homeDir: home })(current.pi as never);
+	expect([...current.handlers.keys()]).toEqual(handlers);
+	expect(current.commands).toEqual(new Map());
+});
+
+it.each([
+	["omitted", {}, ["tool_not_found"]],
+	["false", { unavailableToolHint: false }, []],
+	["non-boolean", { unavailableToolHint: 0 }, ["tool_not_found"]],
+] as const)("factory loads the injected SDK config with the hint flag %s", (_label, hint, handlers) => {
+	const config = {
+		monitor: defaultConfig().monitor,
+		features: {
+			titles: false,
+			rules: false,
+			goal: false,
+			loop: false,
+			monitor: false,
+			diff: false,
+			stats: false,
+			mon: false,
+			...hint,
+		},
+	};
+	const current = probe();
+	// Exercise legacy or untyped callers at the SDK boundary.
+	createSessionKit({ config: config as KitConfig })(current.pi as never);
 	expect([...current.handlers.keys()]).toEqual(handlers);
 	expect(current.commands).toEqual(new Map());
 });

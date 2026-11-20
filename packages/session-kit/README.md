@@ -324,7 +324,8 @@ when it is active in the current session. The hint defaults on; set `unavailable
 to `false` to disable it. The hint never claims that the missing name is deferred. Pi keeps
 its default error when the hint is disabled, `search_tools` is inactive or itself missing,
 or the name is empty or would change when terminal escapes and control characters are removed.
-Other tool errors are unchanged.
+Other tool errors are unchanged. SDK configs passed to `createSessionKit` also default the hint
+on when `config.features.unavailableToolHint` is missing or not a boolean.
 
 ## Subagents and verification
 

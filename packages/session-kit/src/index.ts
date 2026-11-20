@@ -82,7 +82,9 @@ export function createSessionKit(options: SessionKitOptions = {}): ExtensionFact
 	return (pi: ExtensionAPI): void => {
 		const config = options.config ?? loadConfig(configPath(resolveAgentDir(options)));
 		for (const [feature, register] of Object.entries(MODULES) as [Feature, Register][]) {
-			if (config.features[feature]) register(pi, config, options);
+			const enabled = config.features[feature];
+			// Older SDK configs omit the hint flag; only an explicit false opts out.
+			if (feature === "unavailableToolHint" ? enabled !== false : enabled) register(pi, config, options);
 		}
 	};
 }
