@@ -33,6 +33,10 @@ These exercise real TERM-resistant descendant processes, leader exit with closed
 
 The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
+On Pi hosts with `tool_not_found`, unavailable-tool errors suggest `search_tools` if the
+tool is deferred. The hint also appears for unknown names; it does not confirm that any
+particular name is deferred. Other tool errors are unchanged.
+
 Persisted goal state follows the active session branch; restored goals remain paused.
 
 `/mon` opens a read-only, full-pane view of local CPU, memory, load and processes, sampled

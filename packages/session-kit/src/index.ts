@@ -48,6 +48,9 @@ const MODULES: Record<Feature, Register> = {
 /** Create the real kit without requiring a machine-local agent configuration. */
 export function createSessionKit(options: SessionKitOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI): void => {
+		pi.on("tool_not_found", ({ toolName }) => ({
+			message: `Tool ${toolName} not found. If it is a deferred tool, call search_tools to load it.`,
+		}));
 		const config = options.config ?? loadConfig(configPath(resolveAgentDir(options)));
 		for (const [feature, register] of Object.entries(MODULES) as [Feature, Register][]) {
 			if (config.features[feature]) register(pi, config, options);
