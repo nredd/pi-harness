@@ -383,6 +383,8 @@ export interface AgentRecord {
 	 * children, otherwise the spawning session's id. Unrelated to `rootSessionId`.
 	 */
 	rosterRootId?: string;
+	/** Roster-only binding to the immediate parent run that spawned this nested record. */
+	rosterParentRunId?: string;
 	/** Opaque identity of the current run, renewed on every accepted resume. */
 	runId?: string;
 }

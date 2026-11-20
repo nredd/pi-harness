@@ -925,6 +925,7 @@ export class AgentManager {
 		options = { ...options, model: selection.model, modelSelection: selection };
 
 		const id = randomUUID().slice(0, 17);
+		const rosterParent = options.parentAgentId === undefined ? undefined : this.agents.get(options.parentAgentId);
 		const abortController = new AbortController();
 		const record: AgentRecord = {
 			id,
@@ -977,9 +978,8 @@ export class AgentManager {
 			// Roster membership only; `rootSessionId` keeps its transcript-directory meaning.
 			// A nested child takes its root ONLY from its parent record (fail closed when unknown).
 			rosterRootId:
-				options.parentAgentId !== undefined
-					? this.agents.get(options.parentAgentId)?.rosterRootId
-					: ctx.sessionManager?.getSessionId?.(),
+				options.parentAgentId !== undefined ? rosterParent?.rosterRootId : ctx.sessionManager?.getSessionId?.(),
+			rosterParentRunId: rosterParent?.runId,
 			runId: randomUUID(),
 		};
 		this.decidePlanGate(record, () => queryPlanPolicy(pi.events));
