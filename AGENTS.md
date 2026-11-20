@@ -52,6 +52,7 @@ candidate, but changed selected inputs do.
 - PR CI has four required Ubuntu names: `owned`, `contracts` and both `stack` cells. It has no macOS placeholders or WSL2 jobs. See `macOS PR skip` in the CI job summary.
 - Full macOS CI runs on `main` pushes and `workflow_dispatch`, including frozen release verification.
 - To test a PR head before merge, run `make check` on macOS. Dispatch `CI` for the full matrix on `main` or an eligible frozen release candidate, not an arbitrary PR ref.
+- Each owned fan-in waits for its own OS shards; only the Ubuntu fan-in also checks the native Windows producer.
 - Fix macOS failures on `main` forward. No auto-revert; do not block other PRs on red macOS `main`.
 
 # Mandatory PR review
