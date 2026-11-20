@@ -132,7 +132,8 @@ no-PR cleanup. Check each candidate before removal:
 
 Set `pr`, `base_repo` (`<owner>/<repo>`, or `<host>/<owner>/<repo>` off github.com), `worktree` and
 `remote` (the branch's push remote). Empty output and exit 0 pass this check only. Missing or
-mismatched fields, or a push remote on a different host, keep the worktree.
+mismatched fields keep the worktree. The push remote must match both the expected host and the host
+in the PR URL returned by `gh`.
 
 ```sh
 python3 - "$pr" "$base_repo" "$worktree" "$remote" <<'PY'
@@ -141,24 +142,25 @@ import os
 import re
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 pr, base_repo, worktree, remote = sys.argv[1:]
 SOURCE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 
-def out(*cmd: str) -> str:
+def out(*cmd: str, data: bytes | None = None) -> bytes:
     """Run a command; any failure or diagnostic means keep."""
-    done = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    done = subprocess.run(cmd, input=data, capture_output=True, check=False)
     if done.returncode or done.stderr:
         sys.exit(f"keep: {cmd[0]} failed (exit {done.returncode}): {done.stderr!r}")
-    return done.stdout.strip()
+    return done.stdout
 
 
-fields = "headRefName,headRepository,headRepositoryOwner,headRefOid,state"
+fields = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
 info = json.loads(out("gh", "pr", "view", pr, "--repo", base_repo, "--json", fields))
-branch = out("git", "-C", worktree, "symbolic-ref", "--short", "HEAD")
-head = out("git", "-C", worktree, "rev-parse", "HEAD")
-url = out("git", "-C", worktree, "remote", "get-url", "--push", remote)
+branch = out("git", "-C", worktree, "symbolic-ref", "--short", "HEAD").decode().strip()
+head = out("git", "-C", worktree, "rev-parse", "HEAD").decode().strip()
+url = out("git", "-C", worktree, "remote", "get-url", "--push", remote).decode().strip()
 source = SOURCE.match(url)
 parts = base_repo.split("/")
 host = parts[0] if len(parts) == 3 else os.environ.get("GH_HOST", "github.com")
@@ -175,6 +177,16 @@ got = (
 )
 if None in want or not source or want != got:
     sys.exit(f"keep: PR identity mismatch: PR {want!r} != local {got!r}")
+pr_url = info.get("url")
+if not isinstance(pr_url, str):
+    sys.exit("keep: missing or invalid PR URL")
+try:
+    parsed = urlsplit(pr_url)
+    pr_host = parsed.hostname
+except ValueError:
+    sys.exit("keep: invalid PR URL")
+if parsed.scheme not in ("https", "http") or pr_host != source[1].lower():
+    sys.exit(f"keep: PR URL host mismatch: PR {pr_host!r} != push remote {source[1]!r}")
 PY
 ```
 
@@ -198,12 +210,17 @@ import sys
 repo = sys.argv[1]
 
 
-def git(*args: str) -> bytes:
-    """Run Git in `repo`; failure or any diagnostic means keep."""
-    done = subprocess.run(["git", "-C", repo, *args], capture_output=True, check=False)
+def out(*cmd: str, data: bytes | None = None) -> bytes:
+    """Run a command; any failure or diagnostic means keep."""
+    done = subprocess.run(cmd, input=data, capture_output=True, check=False)
     if done.returncode or done.stderr:
-        sys.exit(f"keep: git {args[0]} failed (exit {done.returncode}): {done.stderr!r}")
+        sys.exit(f"keep: {cmd[0]} failed (exit {done.returncode}): {done.stderr!r}")
     return done.stdout
+
+
+def git(*args: str, data: bytes | None = None) -> bytes:
+    """Run Git against the path passed by the shell block."""
+    return out("git", "-C", sys.argv[1], *args, data=data)
 
 
 def read(path: bytes) -> bytes:
@@ -232,11 +249,9 @@ for name in sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else []:
     ) != os.path.realpath(admin):
         sys.exit(f"keep: admin dir {admin!r} has no matching `.git` file")
 
-dry = subprocess.run(
-    ["git", "-C", repo, "worktree", "prune", "--dry-run", "--verbose"], capture_output=True, check=False
-)
-if dry.returncode or dry.stdout.strip() or dry.stderr.strip():
-    sys.exit(f"keep: `git worktree prune` would remove or failed: {dry.stdout!r} {dry.stderr!r}")
+dry = git("worktree", "prune", "--dry-run", "--verbose")
+if dry:
+    sys.exit(f"keep: `git worktree prune` reported: {dry!r}")
 PY
 ```
 
@@ -245,7 +260,8 @@ PY
 Set `worktree` to the candidate's exact path. The scan is read-only and is the only list of these
 rules: worktree-local refs, `HEAD` reflog commits outside `git rev-list --all`, an in-progress
 `am`, rebase, merge, cherry-pick, revert or bisect in its admin dir, and tracked `filter`
-attributes. Empty output and exit 0 pass **only** these checks. Any `keep:` output means keep and
+attributes. Only `ENOENT` counts as a missing operation marker; other stat errors keep the
+worktree. Empty output and exit 0 pass **only** these checks. Any `keep:` output means keep and
 report it. Paths stay NUL-delimited.
 
 Operator notes, never automated:
@@ -260,19 +276,23 @@ Operator notes, never automated:
 
 ```sh
 python3 - "$worktree" <<'PY'
+import errno
 import os
 import subprocess
 import sys
 
 
-def git(*args: str, data: bytes = b"") -> bytes:
-    """Read Git output, treating failed or warned scans as unknown."""
-    result = subprocess.run(
-        ["git", "-C", sys.argv[1], *args], input=data, capture_output=True, check=False
-    )
-    if result.returncode or result.stderr:
-        sys.exit(f"keep: git {args[0]} (exit {result.returncode}): {result.stderr!r}")
-    return result.stdout
+def out(*cmd: str, data: bytes | None = None) -> bytes:
+    """Run a command; any failure or diagnostic means keep."""
+    done = subprocess.run(cmd, input=data, capture_output=True, check=False)
+    if done.returncode or done.stderr:
+        sys.exit(f"keep: {cmd[0]} failed (exit {done.returncode}): {done.stderr!r}")
+    return done.stdout
+
+
+def git(*args: str, data: bytes | None = None) -> bytes:
+    """Run Git against the path passed by the shell block."""
+    return out("git", "-C", sys.argv[1], *args, data=data)
 
 
 local_refs = git("for-each-ref", "--format=%(refname)", "refs/worktree", "refs/bisect", "refs/rewritten")
@@ -280,9 +300,16 @@ if local_refs:
     sys.exit(f"keep: worktree-local refs: {local_refs!r}")
 
 git_dir = git("rev-parse", "--absolute-git-dir").strip()
-for name in ("rebase-apply", "rebase-merge", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"):
-    if os.path.lexists(os.path.join(git_dir, os.fsencode(name))):
-        sys.exit(f"keep: in-progress operation `{name}` in {git_dir!r}")
+operations = ("rebase-apply", "rebase-merge", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG")
+for name in operations:
+    marker = os.path.join(git_dir, os.fsencode(name))
+    try:
+        os.stat(marker, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            continue
+        sys.exit(f"keep: cannot stat in-progress operation marker {marker!r}: {exc}")
+    sys.exit(f"keep: in-progress operation `{name}` in {git_dir!r}")
 
 git("reflog", "exists", "HEAD")
 reflog = set(git("reflog", "show", "--format=%H", "HEAD").splitlines())
