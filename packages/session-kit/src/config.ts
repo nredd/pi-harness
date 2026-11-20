@@ -9,7 +9,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentDir } from "./agent-dir.ts";
 
-export const FEATURES = ["titles", "rules", "goal", "loop", "monitor", "diff", "stats", "mon"] as const;
+export const FEATURES = [
+	"titles",
+	"rules",
+	"goal",
+	"loop",
+	"monitor",
+	"diff",
+	"stats",
+	"mon",
+	"unavailableToolHint",
+] as const;
 export type Feature = (typeof FEATURES)[number];
 
 export interface KitConfig {
