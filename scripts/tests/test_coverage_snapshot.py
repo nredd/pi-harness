@@ -1,0 +1,424 @@
+"""Exercise main snapshot publication and the sticky reader with a recording API.
+
+References:
+    https://github.com/nredd/pi-harness/issues/1001
+"""
+
+from __future__ import annotations
+
+import base64
+import copy
+import json
+from datetime import UTC, datetime, timedelta
+from email.message import Message
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError
+from zipfile import ZipFile
+
+import pytest
+from test_coverage_publish import (
+    FIXTURE,
+    HEAD,
+    POLICY,
+    REPO,
+    STAMP,
+    TESTED,
+    UPLOAD,
+    RecordingGitHub,
+    run_data,
+)
+
+import coverage_publish as pub
+import coverage_snapshot as snap
+from coverage_provenance_record import Provenance, producer_job
+
+NOW = datetime(2026, 11, 21, tzinfo=UTC)
+TIP = "c" * 40
+BLOB = "d" * 40
+TREE = "e" * 40
+
+
+def http_error(path: str, code: int) -> HTTPError:
+    """Return a synthetic GitHub error with no network connection."""
+    return HTTPError(path, code, "Recording transport", Message(), None)
+
+
+class MainGitHub(pub.GitHub):
+    """Simulate GitHub jobs, archives and atomic ref updates without making remote writes."""
+
+    data: dict[str, Any]
+    jobs: list[dict[str, Any]]
+    artifacts: list[dict[str, Any]]
+    writes: list[tuple[str, str, Any]]
+    downloads: list[int]
+    raw: bytes
+    race: str
+    archive: str
+    tree_entries: list[dict[str, Any]]
+    blob: dict[str, Any]
+    ref: dict[str, Any]
+    policy: dict[str, Any]
+
+    def __init__(self) -> None:
+        """Seed a completed main attempt with independent retained OS fixtures."""
+        super().__init__(REPO, "synthetic-token")
+        self.data = run_data(
+            event="push",
+            head_branch="main",
+            repository={"id": 92, "full_name": REPO},
+            head_repository={"id": 92, "full_name": REPO},
+            run_started_at=STAMP,
+        )
+        self.jobs, self.artifacts, self.writes, self.downloads = [], [], [], []
+        self.raw, self.race, self.archive = b"", "", ""
+        self.tree_entries, self.blob, self.ref = [], {}, {}
+        self.policy = {
+            "path": "coverage/policy.json",
+            "type": "file",
+            "encoding": "base64",
+            "content": base64.b64encode(POLICY.read_bytes()).decode(),
+        }
+        for number, host in enumerate(pub.COVERAGE_HOSTS, start=1):
+            self.jobs.append(
+                {
+                    "name": f"owned ({host})",
+                    "conclusion": "success",
+                    "steps": [
+                        {"name": UPLOAD, "conclusion": "success", "started_at": STAMP, "completed_at": STAMP},
+                    ],
+                }
+            )
+            self.artifacts.append(
+                {
+                    "name": f"coverage-{host}",
+                    "id": number,
+                    "size_in_bytes": 1000,
+                    "expired": False,
+                    "created_at": STAMP,
+                    "workflow_run": {
+                        "id": 123,
+                        "repository_id": 92,
+                        "head_repository_id": 92,
+                        "head_branch": "main",
+                        "head_sha": HEAD,
+                    },
+                }
+            )
+
+    def seed_snapshot(self, raw: bytes) -> None:
+        """Put a data-only snapshot at an existing tip."""
+        self.ref.update(ref=snap.REF, object={"type": "commit", "sha": TIP})
+        self.tree_entries[:] = [
+            {"path": snap.FILENAME, "sha": BLOB, "size": len(raw), "type": "blob", "mode": "100644"}
+        ]
+        self.blob.update(sha=BLOB, size=len(raw), encoding="base64", content=base64.encodebytes(raw).decode())
+
+    def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
+        """Check exact routes, retain the proposed tree and simulate competing writers."""
+        if method == "GET":
+            if path == snap.REF_API:
+                if not self.ref:
+                    raise http_error(path, 404)
+                return self.ref
+            if path == "actions/runs/123":
+                return self.data | ({"run_attempt": 3} if self.writes and self.race == "attempt" else {})
+            return {
+                f"git/trees/{TIP}": {"tree": self.tree_entries, "truncated": False},
+                f"git/blobs/{BLOB}": self.blob,
+                f"contents/coverage/policy.json?ref={HEAD}": self.policy,
+            }[path]
+        assert body is not None
+        self.writes.append((path, method, body))
+        if path == "git/trees":
+            (entry,) = body["tree"]
+            assert entry.keys() == {"path", "type", "mode", "content"}
+            assert (entry["path"], entry["type"], entry["mode"]) == (snap.FILENAME, "blob", "100644")
+            self.raw = entry["content"].encode()
+            return {"sha": TREE}
+        if path == "git/commits":
+            assert body["tree"] == TREE
+            return {"sha": HEAD}
+        if self.race == "ref":
+            assert body.get("force") is not True
+            raise http_error(path, 422)
+        self.seed_snapshot(self.raw)
+        return {}
+
+    def pages(self, path: str, key: str | None = None, **params: str) -> list[Any]:
+        """Provide only the triggering execution's jobs and artifacts."""
+        return {
+            ("actions/runs/123/attempts/2/jobs", "jobs"): self.jobs,
+            ("actions/runs/123/artifacts", "artifacts"): self.artifacts,
+        }[(path, str(key))]
+
+    def download(self, artifact_id: int, destination: Path) -> None:
+        """Wrap real counters in a synthetic main provenance fixture archive, with optional corruption."""
+        self.downloads.append(artifact_id)
+        host = tuple(pub.COVERAGE_HOSTS)[artifact_id - 1]
+        assert destination.name == f"coverage-{host}.zip"
+        fixture = FIXTURE.with_name(f"coverage-{host}.json")
+        summary = json.loads(fixture.read_text())
+        summary.pop("rows_trimmed", None)
+        # The historical macOS fixture predates removal of the benchmark package.
+        summary["packages"].pop("python-benchmarks/primary", None)
+        summary["signals"].pop("python-benchmarks/primary", None)
+        # The retained figures intentionally omit file rows. Keep them self-consistent for live-shaped replay.
+        summary["files"] = [
+            dict(
+                counters,
+                package=name.split("/")[0],
+                signal=name.split("/")[1],
+                file="src/example",
+                os=summary["os"],
+            )
+            for name, counters in summary["packages"].items()
+        ]
+        provenance = Provenance(
+            REPO,
+            None,
+            HEAD,
+            123,
+            1 if self.archive == "attempt" else 2,
+            "push",
+            f"{REPO}/{pub.WORKFLOW}@refs/heads/main",
+        )
+        with ZipFile(destination, "w") as archive:
+            archive.writestr("coverage/summary.json", json.dumps(summary))
+            archive.writestr(
+                "coverage/provenance.json",
+                json.dumps(provenance.record(producer_job(host, shard=False), f"coverage-{host}")),
+            )
+            if self.archive == "path":
+                archive.writestr("../snapshot.json", "{}")
+
+
+def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Round-trip a two-host baseline and render independent signed deltas in the PR comment."""
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    assert api.downloads == [1, 2]
+    assert api.writes[1][2]["parents"] == []
+    assert api.writes[-1] == ("git/refs", "POST", {"ref": snap.REF, "sha": HEAD})
+    data = json.loads(api.raw)
+    assert (data["repository"], data["sha"], data["run"], data["number"], data["attempt"]) == (
+        REPO,
+        HEAD,
+        123,
+        7,
+        2,
+    )
+    assert data["measured_at"] == STAMP
+    assert {cell.host for cell in snap.baseline(api, NOW)} == set(pub.COVERAGE_HOSTS)
+    assert snap.baseline(api, NOW + snap.MAX_AGE) == ()
+    assert snap.baseline(api, NOW - timedelta(days=2)) == ()
+    pr = RecordingGitHub()
+    monkeypatch.setattr(pr.__class__, "request", lambda self, *args: api.request(*args))
+    monkeypatch.setattr(pub, "datetime", FixedClock)
+    body = pub.render(pr, pub.Run.parse(pr.data), 4, TESTED, POLICY)
+    assert "lines +0, functions +0" in body
+    assert pub.PR_NOTICE in body.splitlines()
+    assert "verified" not in "\n".join(line for line in body.splitlines() if line != pub.PR_NOTICE).casefold()
+
+
+class FixedClock:
+    """Freeze baseline freshness for the existing PR renderer."""
+
+    @staticmethod
+    def now(tz: object) -> datetime:
+        """Return the fixed test time."""
+        assert tz == UTC
+        return NOW
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"event": "pull_request"},
+        {"event": "workflow_dispatch"},
+        {"path": ".github/workflows/other.yml"},
+        {"head_branch": "topic"},
+        {"head_repository": {"id": 1, "full_name": REPO}},
+        {"head_repository": {"id": 92, "full_name": "fork/pi-harness"}},
+        {"repository": {"id": 92, "full_name": "fork/pi-harness"}},
+        {"status": "queued"},
+        {"conclusion": "cancelled"},
+        {"pull_requests": [{"number": 42}]},
+        {"run_started_at": "2026-01-01T00:00:00Z"},
+        {"run_started_at": "2026-11-20T04:50:01+00:00"},
+    ],
+)
+def test_untrusted_trigger_fails_before_io(override: dict[str, Any]) -> None:
+    """Reject everything except a successful same-repository CI push to main."""
+    api = MainGitHub()
+    with pytest.raises(ValueError, match=r"CI run|main push|retention window|GitHub timestamp"):
+        pub.publish_snapshot(api, api.data | override, NOW)
+    assert not api.downloads
+    assert not api.writes
+
+
+@pytest.mark.parametrize(
+    "case", ["owner", "size", "wrong-name", "ambiguous", "path", "attempt", "policy", "changed"]
+)
+def test_invalid_evidence_never_writes(case: str) -> None:
+    """Fail closed on incomplete, incorrectly bound or malformed producer evidence."""
+    api = MainGitHub()
+    trigger = copy.deepcopy(api.data)
+    artifact = api.artifacts[0]
+    if case == "owner":
+        artifact["workflow_run"]["head_repository_id"] = 42
+    elif case == "size":
+        artifact["size_in_bytes"] = pub.MAX_ARCHIVE_BYTES + 1
+    elif case == "wrong-name":
+        artifact["name"] += "-ts"
+    elif case == "ambiguous":
+        api.artifacts.append(artifact | {"id": 34})
+    elif case == "policy":
+        api.policy["type"] = "symlink"
+    elif case == "changed":
+        api.data["run_attempt"] = 3
+    else:
+        api.archive = case
+    with pytest.raises(ValueError, match=r"Main |main coverage|tested policy"):
+        pub.publish_snapshot(api, trigger, NOW)
+    assert not api.writes
+    if case in {"owner", "size", "wrong-name", "ambiguous"}:
+        assert artifact["id"] not in api.downloads
+
+
+@pytest.mark.parametrize("order", [(6, 9), (7, 1), (7, 2), (7, 3), (8, 1)])
+def test_only_newer_executions_advance_tip(order: tuple[int, int]) -> None:
+    """Compare run number before attempt, not SHA, ID or clock time, even at an expired tip."""
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    old = json.loads(api.raw) | {
+        "number": order[0],
+        "attempt": order[1],
+        "measured_at": "2026-01-01T00:00:00Z",
+    }
+    api.seed_snapshot(json.dumps(old).encode())
+    api.writes.clear()
+    pub.publish_snapshot(api, api.data, NOW)
+    if order < (7, 2):
+        assert api.writes[1][2]["parents"] == [TIP]
+        assert api.writes[-1] == ("git/refs/heads/coverage-data", "PATCH", {"sha": HEAD, "force": False})
+    else:
+        assert not api.writes
+
+
+@pytest.mark.parametrize("race", ["ref", "attempt"])
+def test_race_cannot_move_ref(race: str) -> None:
+    """Reject concurrent ref creation and attempts that change after producing the commit."""
+    api = MainGitHub()
+    api.race = race
+    with pytest.raises((HTTPError, ValueError), match=r"Recording transport|changed during publication"):
+        pub.publish_snapshot(api, api.data, NOW)
+    assert not api.ref
+    if race == "attempt":
+        assert [path for path, _, _ in api.writes] == ["git/trees", "git/commits"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", True),
+        ("repository", "fork/pi-harness"),
+        ("sha", "../main"),
+        ("run", 0),
+        ("number", True),
+        ("attempt", 10**20),
+        ("hosts", {}),
+    ],
+)
+def test_invalid_snapshot_identity(field: str, value: object) -> None:
+    """Reject malformed or cross-repository stored identity."""
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    with pytest.raises(ValueError, match=r"Invalid |Unexpected snapshot hosts|Cannot decode JSON"):
+        snap.Snapshot.parse(json.dumps(json.loads(api.raw) | {field: value}).encode(), REPO)
+
+
+@pytest.mark.parametrize(
+    "case", ["missing", "duplicate", "symlink", "oversized", "sha", "blob", "encoded", "decoded", "raw"]
+)
+def test_invalid_stored_data_is_unavailable(case: str) -> None:
+    """Handle short, hostile or malformed Git responses without rendering their numbers."""
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    entry = api.tree_entries[0]
+    if case == "missing":
+        api.tree_entries.clear()
+    elif case == "duplicate":
+        api.tree_entries.append(entry)
+    elif case == "symlink":
+        entry["mode"] = "120000"
+    elif case == "oversized":
+        entry["size"] = snap.MAX_BYTES + 1
+        with pytest.raises(ValueError, match="byte limit"):
+            snap.Snapshot.parse(b"x" * (snap.MAX_BYTES + 1), REPO)
+    elif case == "sha":
+        entry["sha"] = "../blob"
+    elif case == "blob":
+        api.blob["encoding"] = "utf-8"
+    elif case in {"encoded", "decoded"}:
+        entry["size"] = api.blob["size"] = 2
+        api.blob["content"] = "YQ==" if case == "decoded" else ""
+    else:
+        api.seed_snapshot(b"{bad json}")
+    assert snap.baseline(api, NOW) == ()
+    api.writes.clear()
+    with pytest.raises(ValueError, match=r"snapshot|Git object|Cannot decode JSON"):
+        pub.publish_snapshot(api, api.data, NOW)
+    assert not api.writes
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"state": "NOT RUN"},
+        {"counters": {}},
+        {"counters": {"invented": 1}},
+        {"source_root": "foo"},
+    ],
+)
+def test_invalid_snapshot_counters(entry: dict[str, Any]) -> None:
+    """Do not let cached counters bypass typed, planned-signal validation."""
+    value = {
+        "enforcement": "enforced",
+        "state": "planned",
+        "semantics": "lcov",
+        "counters": {"lines": 1, "uncovered_lines": 1},
+    }
+    with pytest.raises(ValueError, match="snapshot"):
+        snap.snapshot_cell("ubuntu-24.04", {"p/primary": value | entry})
+
+
+def test_empty_host_and_unexpected_ref() -> None:
+    """Reject snapshots with no measurements and prefix matches from the ref endpoint."""
+    with pytest.raises(ValueError, match="Empty snapshot host"):
+        snap.snapshot_cell("ubuntu-24.04", {})
+    api = MainGitHub()
+    api.ref.update(ref=snap.REF + "-unexpected", object={"type": "commit", "sha": TIP})
+    with pytest.raises(ValueError, match="Unexpected coverage data ref"):
+        snap.read_tip(api)
+
+
+def test_snapshot_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Use the snapshot entry point only when explicitly selected by the job."""
+    api = MainGitHub()
+    event = tmp_path / "event"
+    event.write_text(json.dumps({"workflow_run": api.data}))
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("GH_TOKEN", "synthetic-token")
+    monkeypatch.setenv("COVERAGE_SNAPSHOT", "1")
+    monkeypatch.setattr(pub, "GitHub", lambda *_: api)
+    monkeypatch.setattr(pub, "datetime", FixedClock)
+    assert pub.main() == 0
+    assert api.ref["ref"] == snap.REF
+    api.ref.clear()
+    monkeypatch.setattr(
+        api.__class__, "request", lambda self, path: (_ for _ in ()).throw(http_error(path, 403))
+    )
+    assert pub.main() == 1
+    assert not api.ref

@@ -143,6 +143,8 @@ class RecordingGitHub(pub.GitHub):
             else:
                 self.comments[-1] = current
             return current
+        if path == "git/ref/heads/coverage-data":
+            raise HTTPError(path, 404, "Missing branch", Message(), None)
         assert path == "actions/runs/123"
         return self.data
 
@@ -442,6 +444,7 @@ def test_artifact_sidecar_fails_closed(case: str) -> None:
     body = pub.render(api, pub.Run.parse(api.data), 4, None if case == "no-merge-sha" else TESTED, POLICY)
     assert "Ubuntu enforced signals: unavailable" in body
     assert "zero uncovered" not in body
+    assert pub.PR_NOTICE in body.splitlines()
 
 
 @pytest.mark.parametrize(
@@ -533,7 +536,20 @@ def test_workflow_contract() -> None:
     assert workflow[True] == {"workflow_run": {"workflows": ["CI"], "types": ["completed"]}}
     assert workflow["permissions"] == {}
     job = workflow["jobs"]["comment"]
-    assert set(workflow["jobs"]) == {"comment"}
+    assert set(workflow["jobs"]) == {"comment", "snapshot"}
+    snapshot = workflow["jobs"]["snapshot"]
+    assert snapshot["permissions"] == {"actions": "read", "contents": "write"}
+    assert snapshot["concurrency"] == {"group": "coverage-main-snapshot", "cancel-in-progress": False}
+    assert snapshot["if"].split(" && ") == [
+        "github.ref == 'refs/heads/main'",
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_branch == 'main'",
+        "github.event.workflow_run.head_repository.id == github.event.repository.id",
+        "github.event.workflow_run.conclusion == 'success'",
+    ]
+    assert snapshot["steps"][0] == job["steps"][0]
+    assert snapshot["steps"][1]["env"] == job["steps"][1]["env"] | {"COVERAGE_SNAPSHOT": "1"}
+    assert snapshot["steps"][1]["run"] == job["steps"][1]["run"]
     assert job["if"] == "github.event.workflow_run.event == 'pull_request'"
     assert job["permissions"] == {"actions": "read", "contents": "read", "pull-requests": "write"}
     assert job["concurrency"]["cancel-in-progress"] is False

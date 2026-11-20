@@ -8,12 +8,14 @@ References:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -21,8 +23,32 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from coverage_provenance_record import SAFE_REPOSITORY, SHA, Provenance, object_value
-from coverage_report import MAX_ARCHIVE_BYTES, MAX_MARKDOWN, load_evidence, read_summary, render_markdown
+from coverage_provenance_record import (
+    COVERAGE_HOSTS,
+    SAFE_REPOSITORY,
+    SHA,
+    Provenance,
+    decode_json,
+    object_value,
+)
+from coverage_report import (
+    HOSTS,
+    MAX_ARCHIVE_BYTES,
+    MAX_MARKDOWN,
+    load_evidence,
+    read_summary,
+    render_markdown,
+)
+from coverage_snapshot import (
+    MAX_AGE,
+    baseline,
+    encode_cell,
+    positive_id,
+    read_snapshot,
+    read_tip,
+    timestamp,
+    write_snapshot,
+)
 
 LOGGER = logging.getLogger(__name__)
 API = "https://api.github.com"
@@ -57,13 +83,13 @@ class GitHub:
     repository: str
     token: str
 
-    def request(self, path: str, method: str = "GET", body: dict[str, str] | None = None) -> Any:
+    def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
         """Read a bounded repository API response or surface its HTTP error.
 
         Parameters:
             path (str): Repository-relative API route.
             method (str): HTTP method.
-            body (dict[str, str] | None): Optional JSON write payload.
+            body (dict[str, Any] | None): Optional JSON write payload.
         Returns:
             Any: Decoded response.
         Raises:
@@ -162,18 +188,19 @@ class Run:
     prs: tuple[int, ...]
 
     @classmethod
-    def parse(cls, data: Any) -> Run:
-        """Validate run identity and reject non-PR CI workflows.
+    def parse(cls, data: Any, event: str = "pull_request") -> Run:
+        """Validate run identity for the selected CI event.
 
         Parameters:
             data (Any): GitHub workflow run record.
+            event (str): Expected trigger type.
         Returns:
             Run: Independently sourced run identity.
         Raises:
             ValueError: Run identity is invalid.
         """
-        if data["event"] != "pull_request" or data["path"] != WORKFLOW:
-            raise ValueError("Not a pull request CI run")
+        if data["event"] != event or data["path"] != WORKFLOW:
+            raise ValueError("Unexpected CI run workflow or event")
         numbers = tuple(data[key] for key in ("id", "run_number", "run_attempt", "workflow_id"))
         fork = data["head_repository"]["full_name"]
         if (
@@ -257,14 +284,20 @@ def is_latest(api: GitHub, run: Run) -> bool:
     return run in peers and max(peer.order for peer in peers) == run.order
 
 
-def fetch_evidence(api: GitHub, run: Run, directory: Path) -> str:
+def fetch_evidence(
+    api: GitHub,
+    run: Run,
+    directory: Path,
+    host: str = "ubuntu-24.04",
+    repository_id: int | None = None,
+) -> str:
     """Determine NOT RUN from the attempt job, or download its unique bounded artifact.
 
     Upload time is only an extra ownership check; the renderer must still validate the
     full producer sidecar. Artefacts from another attempt are never a fallback.
     """
     jobs = api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
-    owned = [job for job in jobs if job["name"] == OWNED_JOB]
+    owned = [job for job in jobs if job["name"] == f"owned ({host})"]
     if len(owned) != 1:
         return "unavailable"
     job = owned[0]
@@ -283,16 +316,32 @@ def fetch_evidence(api: GitHub, run: Run, directory: Path) -> str:
         or not upload.get("completed_at")
     ):
         return "unavailable"
-    start, end = upload["started_at"], upload["completed_at"]
+    start, end = timestamp(upload["started_at"]), timestamp(upload["completed_at"])
+    artifact = f"coverage-{host}"
     candidates = [
         row
         for row in api.pages(f"actions/runs/{run.id}/artifacts", "artifacts")
-        if row["name"] == ARTIFACT and not row["expired"] and start <= row["created_at"] <= end
+        if row["name"] == artifact
+        and row["expired"] is False
+        and start <= timestamp(row["created_at"]) <= end
     ]
-    if len(candidates) != 1 or not 0 < candidates[0]["size_in_bytes"] <= MAX_ARCHIVE_BYTES:
+    if len(candidates) != 1 or positive_id(candidates[0]["size_in_bytes"]) > MAX_ARCHIVE_BYTES:
         return "unavailable"
+    row = candidates[0]
+    if repository_id is not None and (
+        job["conclusion"] != "success"
+        or row["workflow_run"]
+        != {
+            "id": run.id,
+            "repository_id": repository_id,
+            "head_repository_id": repository_id,
+            "head_branch": "main",
+            "head_sha": run.head,
+        }
+    ):
+        raise ValueError("Main coverage artifact does not belong to its producer")
     try:
-        api.download(candidates[0]["id"], directory / f"{ARTIFACT}.zip")
+        api.download(positive_id(row["id"]), directory / f"{artifact}.zip")
     except (OSError, ValueError):
         # Signed URLs can expire and downloads can race artifact deletion. Never log the URL.
         LOGGER.warning("Coverage artifact download unavailable")
@@ -312,11 +361,19 @@ def write_plan(policy: Path, destination: Path, state: str) -> None:
     Raises:
         OSError: Input or manifest could not be accessed.
     """
+    destination.write_text(
+        json.dumps({"ubuntu-24.04": host_plan(read_summary(policy), "ubuntu-24.04", state)})
+    )
+
+
+def host_plan(policy: dict[str, object], host: str, state: str) -> dict[str, object]:
+    """Build one OS plan using policy from the selected trusted revision."""
+    os_name = HOSTS[host][1]
     signals = {}
-    for name, raw_package in object_value(read_summary(policy)["packages"]).items():
+    for name, raw_package in object_value(policy["packages"]).items():
         package: Any = raw_package
         for label, signal in package.get("signals", {}).items():
-            skipped = "linux" in (*signal.get("skip_hosts", []), *signal.get("skip_os", []))
+            skipped = os_name in (*signal.get("skip_hosts", []), *signal.get("skip_os", []))
             signals[f"{name}/{label}"] = {
                 "enforcement": signal.get("enforcement", "enforced"),
                 "reason": signal.get("reason", ""),
@@ -324,7 +381,7 @@ def write_plan(policy: Path, destination: Path, state: str) -> None:
                 "state": "NOT RUN" if skipped else "planned",
                 "source_root": "" if package["root"] == "." else package["root"],
             }
-    destination.write_text(json.dumps({"ubuntu-24.04": {"state": state, "signals": signals}}))
+    return {"state": state, "signals": signals}
 
 
 def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path) -> str:
@@ -366,7 +423,8 @@ def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path)
         state = fetch_evidence(api, run, directory)
         write_plan(policy, manifest, state)
         evidence = load_evidence(directory, manifest, provenance)
-        return prefix + render_markdown(evidence, provenance, limit=MAX_MARKDOWN - len(prefix))
+        main_cells = baseline(api, datetime.now(UTC)) if state == "available" else ()
+        return prefix + render_markdown(evidence, provenance, main_cells, limit=MAX_MARKDOWN - len(prefix))
 
 
 def publish(api: GitHub, run: Run, policy: Path, summary: Path) -> None:
@@ -414,6 +472,78 @@ def publish(api: GitHub, run: Run, policy: Path, summary: Path) -> None:
         api.request(comments, "POST", {"body": body})
 
 
+def main_run(api: GitHub, data: Any) -> tuple[Run, int, str]:
+    """Require a successful, same-repository push to main, independent of artifact contents."""
+    run = Run.parse(data, "push")
+    repo_id = positive_id(data["repository"]["id"])
+    if (
+        run.branch != "main"
+        or run.fork != api.repository
+        or run.prs
+        or data["repository"]["full_name"] != api.repository
+        or positive_id(data["head_repository"]["id"]) != repo_id
+        or run.status != "completed"
+        or run.conclusion != "success"
+    ):
+        raise ValueError("Not a successful same-repository main push")
+    return run, repo_id, data["run_started_at"]
+
+
+def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
+    """Record complete measurements from a completed main attempt, never a PR or dispatch."""
+    identity = main_run(api, trigger)
+    run, repo_id, started = identity
+    if not timedelta(0) <= now - timestamp(started) <= MAX_AGE:
+        raise ValueError("Main coverage attempt is outside its retention window")
+    tip = read_tip(api)
+    if tip is not None and read_snapshot(api, tip).order >= run.order:
+        LOGGER.info("Snapshot is already at this or a newer execution")
+        return
+    route = f"actions/runs/{run.id}"
+    if main_run(api, api.request(route)) != identity:
+        raise ValueError("Main attempt changed before publication")
+    policy_file = api.request(f"contents/coverage/policy.json?ref={run.head}")
+    if (
+        policy_file["path"] != "coverage/policy.json"
+        or policy_file["type"] != "file"
+        or policy_file["encoding"] != "base64"
+    ):
+        raise ValueError("Unexpected tested policy file")
+    policy = decode_json(base64.b64decode(policy_file["content"].replace("\n", ""), validate=True))
+    provenance = Provenance(
+        api.repository,
+        None,
+        run.head,
+        run.id,
+        run.attempt,
+        "push",
+        f"{api.repository}/{WORKFLOW}@refs/heads/main",
+    )
+    with TemporaryDirectory() as temp:
+        directory = Path(temp)
+        manifest = directory / "plan.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    host: host_plan(policy, host, fetch_evidence(api, run, directory, host, repo_id))
+                    for host in COVERAGE_HOSTS
+                }
+            )
+        )
+        cells = load_evidence(directory, manifest, provenance)
+    payload = {
+        "schema": 1,
+        "repository": api.repository,
+        "sha": run.head,
+        "run": run.id,
+        "number": run.number,
+        "attempt": run.attempt,
+        "measured_at": started,
+        "hosts": {cell.host: encode_cell(cell) for cell in cells},
+    }
+    write_snapshot(api, tip, payload, lambda: main_run(api, api.request(route)) == identity)
+
+
 def main() -> int:
     """Read the trusted workflow event and fail visibly without leaking API URLs or tokens.
 
@@ -430,12 +560,15 @@ def main() -> int:
         if not SAFE_REPOSITORY.fullmatch(repository):
             raise ValueError("Invalid target repository")
         api = GitHub(repository, os.environ["GH_TOKEN"])
-        publish(
-            api,
-            Run.parse(event["workflow_run"]),
-            Path("coverage/policy.json"),
-            Path(os.environ["GITHUB_STEP_SUMMARY"]),
-        )
+        if os.environ.get("COVERAGE_SNAPSHOT") == "1":
+            publish_snapshot(api, event["workflow_run"], datetime.now(UTC))
+        else:
+            publish(
+                api,
+                Run.parse(event["workflow_run"]),
+                Path("coverage/policy.json"),
+                Path(os.environ["GITHUB_STEP_SUMMARY"]),
+            )
     except HTTPError as error:
         LOGGER.error(f"Coverage publication failed: GitHub HTTP {error.code}")
         return 1
