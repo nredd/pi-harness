@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock homedir so the legacy ~/.pi/agent-memory fallback can be exercised
@@ -21,8 +21,8 @@ describe("resolveMemoryDir user-scope legacy fallback", () => {
 	let agentDir: string;
 	let originalEnv: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-mem-legacy-test-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-mem-legacy-test-", onTestFinished);
 		fakeHome = join(tmpDir, "home");
 		agentDir = join(tmpDir, "agent-dir");
 		mkdirSync(fakeHome, { recursive: true });
@@ -34,7 +34,6 @@ describe("resolveMemoryDir user-scope legacy fallback", () => {
 	afterEach(() => {
 		if (originalEnv == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalEnv;
-		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
 	it("uses the agent dir location when no legacy memory exists", () => {

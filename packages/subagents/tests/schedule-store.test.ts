@@ -5,10 +5,10 @@
  * load/save, parse-error self-heal, stale-lock recovery.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { isProcessRunning, resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
 import type { ScheduledSubagent } from "../src/types.ts";
 
@@ -32,12 +32,8 @@ function makeJob(overrides: Partial<ScheduledSubagent> = {}): ScheduledSubagent 
 describe("ScheduleStore", () => {
 	let tmp: string;
 
-	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "schedule-store-test-"));
-	});
-
-	afterEach(() => {
-		rmSync(tmp, { recursive: true, force: true });
+	beforeEach(({ onTestFinished }) => {
+		tmp = makeTestTempDir("schedule-store-test-", onTestFinished);
 	});
 
 	it("resolveStorePath produces session-scoped path under .pi/subagent-schedules/", () => {
@@ -215,31 +211,23 @@ describe("run claims", () => {
 	} as const;
 
 	it("refuses a fire at or after the job's deadline", () => {
-		const dir = mkdtempSync(join(tmpdir(), "claim-"));
-		try {
-			const store = new ScheduleStore(join(dir, "s.json"));
-			store.add({ ...base, until: "2020-01-01T00:01:00.000Z" });
-			const until = Date.parse("2020-01-01T00:01:00.000Z");
-			expect(store.claim("j", owner, until, { at: until, schedule: "1m" })).toBeUndefined();
-			expect(store.claim("j", owner, until - 1, { at: until, schedule: "1m" })?.job.lastStatus).toBe("running");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		const dir = makeTestTempDir("claim-", onTestFinished);
+		const store = new ScheduleStore(join(dir, "s.json"));
+		store.add({ ...base, until: "2020-01-01T00:01:00.000Z" });
+		const until = Date.parse("2020-01-01T00:01:00.000Z");
+		expect(store.claim("j", owner, until, { at: until, schedule: "1m" })).toBeUndefined();
+		expect(store.claim("j", owner, until - 1, { at: until, schedule: "1m" })?.job.lastStatus).toBe("running");
 	});
 
 	it("renews only the caller's own lease", () => {
-		const dir = mkdtempSync(join(tmpdir(), "claim-"));
-		try {
-			const store = new ScheduleStore(join(dir, "s.json"));
-			store.add({ ...base, runOwner: { pid: process.pid + 1, leaseUntil: 5 } });
-			store.renewLease("j", { pid: process.pid, leaseUntil: 99 });
-			expect(store.get("j")?.runOwner?.leaseUntil).toBe(5);
-			store.renewLease("missing", owner);
-			store.add({ ...base, id: "k", runOwner: { pid: process.pid, leaseUntil: 5 } });
-			store.renewLease("k", { pid: process.pid, leaseUntil: 99 });
-			expect(store.get("k")?.runOwner?.leaseUntil).toBe(99);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		const dir = makeTestTempDir("claim-", onTestFinished);
+		const store = new ScheduleStore(join(dir, "s.json"));
+		store.add({ ...base, runOwner: { pid: process.pid + 1, leaseUntil: 5 } });
+		store.renewLease("j", { pid: process.pid, leaseUntil: 99 });
+		expect(store.get("j")?.runOwner?.leaseUntil).toBe(5);
+		store.renewLease("missing", owner);
+		store.add({ ...base, id: "k", runOwner: { pid: process.pid, leaseUntil: 5 } });
+		store.renewLease("k", { pid: process.pid, leaseUntil: 99 });
+		expect(store.get("k")?.runOwner?.leaseUntil).toBe(99);
 	});
 });

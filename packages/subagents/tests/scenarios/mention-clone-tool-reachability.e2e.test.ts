@@ -26,9 +26,6 @@
  * No network/LLM: a faux provider satisfies session construction, and the
  * assertion is on the constructed tool set rather than on a model turn.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
 	type Context,
 	fauxAssistantMessage,
@@ -37,6 +34,7 @@ import {
 	getCurrentTools,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,14 +66,13 @@ describe("mention clone tool reachability against real pi-mono", () => {
 	let cwd: string;
 	let faux: ReturnType<typeof registerFauxProvider>;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		sessions.length = 0;
-		cwd = mkdtempSync(join(tmpdir(), "subagents-mention-clone-"));
+		cwd = makeTestTempDir("subagents-mention-clone-", onTestFinished);
 		faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 	});
 	afterEach(() => {
 		faux.unregister();
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	it("the clone's Agent tool is live on the real session, and it is the only one", async () => {

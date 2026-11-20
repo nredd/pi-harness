@@ -11,9 +11,9 @@
  * Uses very short timings (100–300ms) so the test stays fast.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Clock, realClock } from "../../src/clock.ts";
 import { SubagentScheduler } from "../../src/schedule.ts";
@@ -99,8 +99,8 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 	let scheduler: SubagentScheduler;
 	let isoAfter: (ms: number) => string;
 
-	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "schedule-e2e-"));
+	beforeEach(({ onTestFinished }) => {
+		tmp = makeTestTempDir("schedule-e2e-", onTestFinished);
 		store = new ScheduleStore(join(tmp, "schedules.json"));
 		const pinned = pinnedClock();
 		isoAfter = pinned.isoAfter;
@@ -109,7 +109,6 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
 	afterEach(() => {
 		scheduler.stop();
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	it("one-shot job: real setTimeout fires, agent runs, store reflects success", async () => {

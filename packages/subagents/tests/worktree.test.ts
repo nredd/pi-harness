@@ -3,7 +3,6 @@ import {
 	chmodSync,
 	existsSync,
 	mkdirSync,
-	mkdtempSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
@@ -15,7 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	cleanupWorktree,
 	createWorktree as createUntrackedWorktree,
@@ -131,7 +131,7 @@ function failingPi(
  * Helper: create a temporary git repo with an initial commit.
  */
 function initGitRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-wt-test-"));
+	const dir = makeTestTempDir("pi-wt-test-", onTestFinished);
 	execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
 	execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "pipe" });
 	execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "pipe" });
@@ -190,7 +190,7 @@ describe("worktree", () => {
 		// old single message ("not a git repo, no commits yet, or `git worktree
 		// add` failed") left the caller guessing which directory and which of three.
 		it("throws naming the directory for a non-git directory", async () => {
-			const nonGit = mkdtempSync(join(tmpdir(), "pi-wt-nongit-"));
+			const nonGit = makeTestTempDir("pi-wt-nongit-", onTestFinished);
 			try {
 				const err = await createWorktree(pi, nonGit, "test-id-2").catch((e) => e);
 				expect(err).toBeInstanceOf(WorktreeError);
@@ -201,7 +201,7 @@ describe("worktree", () => {
 		});
 
 		it("throws naming the repo for a git repo with no commits", async () => {
-			const emptyRepo = mkdtempSync(join(tmpdir(), "pi-wt-empty-"));
+			const emptyRepo = makeTestTempDir("pi-wt-empty-", onTestFinished);
 			try {
 				execFileSync("git", ["init"], { cwd: emptyRepo, stdio: "pipe" });
 				mkdirSync(join(emptyRepo, "sub"));
@@ -582,7 +582,7 @@ describe("worktree", () => {
 		});
 
 		it("does not reject on non-git directory", async () => {
-			const nonGit = mkdtempSync(join(tmpdir(), "pi-wt-nongit-"));
+			const nonGit = makeTestTempDir("pi-wt-nongit-", onTestFinished);
 			try {
 				await expect(pruneWorktrees(pi, nonGit)).resolves.toBeUndefined();
 			} finally {

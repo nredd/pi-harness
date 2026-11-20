@@ -5,11 +5,11 @@
  * faux model; the trust answer comes from the host session through
  * `ctx.isProjectTrusted()`, the same path a real `--no-approve` run takes.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentCall, type FauxReply, type PrintModeRun, runPrintMode } from "../fixtures/print-mode-runner.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -24,13 +24,12 @@ describe("project agent trust, real session (faux model)", () => {
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
-		if (cwd) rmSync(cwd, { recursive: true, force: true });
 		cwd = undefined;
 	});
 
 	/** Run a parent that spawns `Explore` and return the child's serialized transcript. */
 	async function childTranscript(projectTrusted: boolean): Promise<string | undefined> {
-		cwd = mkdtempSync(join(tmpdir(), "project-agent-trust-e2e-"));
+		cwd = makeTestTempDir("project-agent-trust-e2e-", onTestFinished);
 		const dir = join(cwd, ".pi", "agents");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -62,7 +61,7 @@ describe("project agent trust, real session (faux model)", () => {
 
 	/** The `Agent` tool as the provider saw it on the FIRST turn, project-only agent included or not. */
 	async function firstTurnAgentTool(projectTrusted: boolean): Promise<string> {
-		cwd = mkdtempSync(join(tmpdir(), "project-agent-trust-e2e-"));
+		cwd = makeTestTempDir("project-agent-trust-e2e-", onTestFinished);
 		const dir = join(cwd, ".pi", "agents");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, "rogue-only.md"), "---\ndescription: ROGUE-ADVERTISED\ntools: read\n---\nBody.\n");

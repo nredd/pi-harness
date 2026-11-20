@@ -1,8 +1,7 @@
 /** Real registry controls for versioned fuzzy inputs; no provider requests. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveModel, setModelAliases, setModelScopeProvider } from "../src/model-resolver.ts";
 
@@ -38,14 +37,13 @@ async function makeRegistry(
 	return result;
 }
 
-beforeEach(async () => {
-	root = mkdtempSync(join(tmpdir(), "model-version-"));
+beforeEach(async ({ onTestFinished }) => {
+	root = makeTestTempDir("model-version-", onTestFinished);
 	registry = await makeRegistry(ids);
 });
 afterEach(() => {
 	setModelAliases(undefined);
 	setModelScopeProvider(undefined);
-	rmSync(root, { recursive: true, force: true });
 });
 
 describe("versioned fuzzy resolution", () => {

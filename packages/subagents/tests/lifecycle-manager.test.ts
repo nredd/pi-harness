@@ -1,11 +1,11 @@
 /** Manager callbacks, resumed-turn ownership and eviction through public APIs. */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AgentManager, markConsumed } from "../src/agent-manager.ts";
 import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { streamToOutputFile } from "../src/output-file.ts";
@@ -19,21 +19,18 @@ const pi = {} as ExtensionAPI;
 const ctx = { cwd: "/tmp" } as ExtensionContext;
 const session = { dispose: vi.fn() } as unknown as AgentSession;
 const managers: AgentManager[] = [];
-const transcriptRoots: string[] = [];
 beforeEach(() => {
 	vi.mocked(runAgent).mockReset().mockResolvedValue({ responseText: "spawn", session, aborted: false, steered: false });
 	vi.mocked(resumeAgent).mockReset();
 });
 afterEach(async () => {
 	for (const manager of managers.splice(0)) await manager.dispose();
-	for (const root of transcriptRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 	vi.restoreAllMocks();
 });
 
 /** Match the typed record callback installed by the extension, with a real final flush. */
 function transcriptCleanup(id: string) {
-	const root = mkdtempSync(join(tmpdir(), "lifecycle-cleanup-"));
-	transcriptRoots.push(root);
+	const root = makeTestTempDir("lifecycle-cleanup-", onTestFinished);
 	const path = join(root, "child.output");
 	const unsubscribe = vi.fn();
 	const child = {
@@ -332,44 +329,40 @@ describe("resumed-turn lifecycle", () => {
 
 describe("workflow host lifecycle", () => {
 	it("reports retained model provenance before resume and resolves an explicit nested script file", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "lifecycle-host-"));
+		const dir = makeTestTempDir("lifecycle-host-", onTestFinished);
 		const f = managerWithClock((record) => {
 			record.modelFallback = { input: "expired-pin", used: "p/model" };
 		});
 		const host = createWorkflowHost({ pi, ctx, manager: f.manager, homeDir: dir });
-		try {
-			const source = 'export const meta = {name: "nested", description: "d"};';
-			const path = join(dir, "nested.js");
-			writeFileSync(path, source);
-			expect(await host.loadWorkflow?.({ scriptPath: path })).toEqual({ ok: true, script: source, path });
-			const initial = await host.spawnAgent({
-				agentId: "runtime-id",
-				index: 0,
-				prompt: "p",
-				label: "child",
-				agentType: "general-purpose",
-			});
-			expect(initial.text).toContain('configured model "expired-pin" did not resolve');
-			vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed", aborted: false, steered: false });
-			const onResolved = vi.fn();
-			const resumed = await host.resumeAgent?.("runtime-id", "again", onResolved);
-			expect(onResolved).toHaveBeenCalledWith(
-				expect.objectContaining({ recordId: expect.any(String), modelNote: expect.stringContaining("expired-pin") }),
-			);
-			expect(resumed).toMatchObject({
-				ok: true,
-				text: expect.stringContaining("resumed"),
-				modelNote: expect.stringContaining("expired-pin"),
-			});
-			const id = f.manager.listAgents()[0]!.id;
-			f.manager.clearCompleted();
-			expect(await host.resumeAgent?.("runtime-id", "too late")).toEqual({
-				ok: false,
-				error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.`,
-			});
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		const source = 'export const meta = {name: "nested", description: "d"};';
+		const path = join(dir, "nested.js");
+		writeFileSync(path, source);
+		expect(await host.loadWorkflow?.({ scriptPath: path })).toEqual({ ok: true, script: source, path });
+		const initial = await host.spawnAgent({
+			agentId: "runtime-id",
+			index: 0,
+			prompt: "p",
+			label: "child",
+			agentType: "general-purpose",
+		});
+		expect(initial.text).toContain('configured model "expired-pin" did not resolve');
+		vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed", aborted: false, steered: false });
+		const onResolved = vi.fn();
+		const resumed = await host.resumeAgent?.("runtime-id", "again", onResolved);
+		expect(onResolved).toHaveBeenCalledWith(
+			expect.objectContaining({ recordId: expect.any(String), modelNote: expect.stringContaining("expired-pin") }),
+		);
+		expect(resumed).toMatchObject({
+			ok: true,
+			text: expect.stringContaining("resumed"),
+			modelNote: expect.stringContaining("expired-pin"),
+		});
+		const id = f.manager.listAgents()[0]!.id;
+		f.manager.clearCompleted();
+		expect(await host.resumeAgent?.("runtime-id", "too late")).toEqual({
+			ok: false,
+			error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.`,
+		});
 	});
 });
 

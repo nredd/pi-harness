@@ -3,11 +3,9 @@
  * `runAgent` on a faux model with a hand-written policy. The same gate under the real pi-plan-mode runs in
  * `tests/inprocess/plan-mode-children.test.ts` (#867).
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.ts";
 import type { PlanGate } from "../src/plan-mode-children.ts";
 import type { AgentConfig } from "../src/types.ts";
@@ -31,11 +29,10 @@ describe("the child's Plan gate (#437)", () => {
 	let faux: ReturnType<typeof registerFauxProvider> | undefined;
 	afterEach(() => {
 		faux?.unregister();
-		if (cwd) rmSync(cwd, { recursive: true, force: true });
 	});
 
 	it("vetoes model calls and nested executeTool calls, reads the gate per call, and briefs the child", async () => {
-		cwd = mkdtempSync(join(tmpdir(), "plan-gate-"));
+		cwd = makeTestTempDir("plan-gate-", onTestFinished);
 		faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 		registerAgents(
 			new Map([

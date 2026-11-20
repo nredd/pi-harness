@@ -8,13 +8,13 @@
  * A separate static-import fixture checks shared state across module copies.
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { transformSync } from "esbuild";
 import { build } from "vite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 // TypeScript 7 ships no JS compiler API, so the fixture source is stripped with esbuild instead.
 const transpile = (source: string): string => transformSync(source, { loader: "ts", format: "esm" }).code;
@@ -299,7 +299,7 @@ describe("process budget across managers", () => {
 	});
 
 	it("settles an old manager to wake a genuine reloaded manager's waiter", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "manager-reload-"));
+		const dir = makeTestTempDir("manager-reload-", onTestFinished);
 		try {
 			// Bundle the real manager's import closure once, natively, and write it
 			// as two ESM identities. The LLM runner is scripted, as in the manager
@@ -352,7 +352,7 @@ describe("process budget across managers", () => {
 		// process. Static imports in the fixture give distinct module instances,
 		// not two references to one cached module, without keeping a source fork.
 		// Real managers' admission/release wiring is exercised by the tests above.
-		const dir = mkdtempSync(join(tmpdir(), "budget-reload-"));
+		const dir = makeTestTempDir("budget-reload-", onTestFinished);
 		try {
 			const source = readFileSync(new URL("../src/process-budget.ts", import.meta.url), "utf8");
 			const outputText = transpile(source);
@@ -830,7 +830,7 @@ describe("process budget lease release", () => {
 		setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
 		const m = newManager();
 		const blocker = bg(m);
-		const dir = mkdtempSync(join(tmpdir(), "budget-cwd-"));
+		const dir = makeTestTempDir("budget-cwd-", onTestFinished);
 		const doomed = bg(m, { cwd: dir });
 		const next = bg(m);
 		await flush();
@@ -849,7 +849,7 @@ describe("process budget lease release", () => {
 		}, 10);
 		managers.push(m);
 		const blocker = bg(m);
-		const dir = mkdtempSync(join(tmpdir(), "budget-cwd-"));
+		const dir = makeTestTempDir("budget-cwd-", onTestFinished);
 		const doomed = bg(m, { cwd: dir });
 		const next = bg(m);
 		await flush();

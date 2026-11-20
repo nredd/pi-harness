@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	applyAndEmitLoaded,
@@ -28,9 +29,9 @@ describe("settings persistence", () => {
 	const globalFile = () => join(globalDir, "subagents.json");
 	const projectFile = () => join(projectDir, ".pi", "subagents.json");
 
-	beforeEach(() => {
-		globalDir = mkdtempSync(join(tmpdir(), "pi-settings-global-"));
-		projectDir = mkdtempSync(join(tmpdir(), "pi-settings-project-"));
+	beforeEach(({ onTestFinished }) => {
+		globalDir = makeTestTempDir("pi-settings-global-", onTestFinished);
+		projectDir = makeTestTempDir("pi-settings-project-", onTestFinished);
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = globalDir;
 	});
@@ -38,8 +39,6 @@ describe("settings persistence", () => {
 	afterEach(() => {
 		if (originalAgentDirEnv == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
-		rmSync(globalDir, { recursive: true, force: true });
-		rmSync(projectDir, { recursive: true, force: true });
 	});
 
 	function writeGlobal(obj: unknown) {

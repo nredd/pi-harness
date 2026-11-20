@@ -13,9 +13,9 @@
  * real session_shutdown handler — under a hermetic agent dir so the built-in
  * `general-purpose` type resolves everywhere.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GroupJoinManager } from "../src/group-join.ts";
@@ -41,12 +41,12 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
 	let prevCwd: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// Hermetic cwd + global dir, scheduling off, so session_start doesn't spin a
 		// scheduler or touch the dev's filesystem — same isolation as #108's wiring
 		// tests, and it makes the built-in general-purpose type resolve.
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-256-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-256-agentdir-"));
+		tmpDir = makeTestTempDir("pi-256-", onTestFinished);
+		agentDir = makeTestTempDir("pi-256-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -59,8 +59,6 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 

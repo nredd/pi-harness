@@ -26,10 +26,9 @@
  * where Pi predates the migration. There we DYNAMICALLY import Pi and skip
  * cleanly; a static `import { ModelRuntime }` would be a link-time error.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, describe, expect, it, onTestFinished } from "vitest";
 
 // Dynamic, so this file LOADS on pre-migration Pi (a static `import { ModelRuntime }`
 // would be a link-time error there — 0.80.6 doesn't export it).
@@ -48,16 +47,12 @@ interface ModelRuntimeLike {
 	registerProvider(id: string, config: Record<string, unknown>): void;
 }
 
-const tmpDirs: string[] = [];
-afterAll(() => {
-	for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
-});
+afterAll(() => {});
 
 describe.skipIf(!MIGRATED)("PR #152 reach: real ModelRegistry exposes .runtime (Pi >= 0.80.8)", () => {
 	it("ctx.modelRegistry.runtime is reachable and IS the runtime it wraps", async () => {
 		// A real, configured runtime — as an extension leaves it after registerProvider.
-		const dir = mkdtempSync(join(tmpdir(), "iso-prov-"));
-		tmpDirs.push(dir);
+		const dir = makeTestTempDir("iso-prov-", onTestFinished);
 		const runtime = await RT.create({
 			authPath: join(dir, "auth.json"),
 			modelsPath: join(dir, "models.json"),

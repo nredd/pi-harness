@@ -1,9 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDiff, loadStat, runGit, TOTAL_BYTES, untrackedPatch } from "../../src/diff/git.ts";
 
@@ -21,14 +21,13 @@ class Child extends EventEmitter {
 }
 
 let root: string;
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "psk-git-boundaries-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("psk-git-boundaries-", onTestFinished);
 });
 afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.mocked(spawn).mockReset();
-	rmSync(root, { recursive: true, force: true });
 });
 
 /** Complete one subprocess response on the microtask queue, after runGit installs its listeners. */

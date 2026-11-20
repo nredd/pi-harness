@@ -41,9 +41,7 @@
  * what you register in `beforeRun` and which `subagent_type` the `Agent` call
  * names. See `test/subagents-print-mode-e2e.test.ts` for usage.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+
 import { fileURLToPath } from "node:url";
 import {
 	type AssistantMessage,
@@ -67,6 +65,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { fauxModelBackend } from "./faux-model-backend.ts";
 import { getModel, registerFauxProvider } from "./pi-ai.ts";
 
@@ -265,8 +264,9 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 	const timeoutMs = options.timeoutMs ?? 30_000;
 
 	// --- working dir (own it only if we created it) ---
-	const ownsCwd = options.cwd == null;
-	const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "subagents-print-"));
+	const cleanups: (() => void)[] = [];
+	const registerCleanup = (cleanup: () => void) => cleanups.push(cleanup);
+	const cwd = options.cwd ?? makeTestTempDir("subagents-print-", registerCleanup);
 
 	// chdir into cwd: the extension discovers project custom agents from process.cwd()
 	// (not ctx.cwd), and re-reads them on every Agent invocation — so a custom agent
@@ -277,10 +277,8 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 
 	// --- isolate global discovery so the dev env can't bleed in ---
 	const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-	let hermeticDir: string | undefined;
 	if (isolateGlobals) {
-		hermeticDir = mkdtempSync(join(tmpdir(), "subagents-print-home-"));
-		process.env.PI_CODING_AGENT_DIR = hermeticDir;
+		process.env.PI_CODING_AGENT_DIR = makeTestTempDir("subagents-print-home-", registerCleanup);
 	}
 
 	// --- model backend ---
@@ -453,9 +451,8 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 		if (isolateGlobals) {
 			if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-			if (hermeticDir) rmSync(hermeticDir, { recursive: true, force: true });
 		}
-		if (ownsCwd) rmSync(cwd, { recursive: true, force: true });
+		for (const cleanup of cleanups.reverse()) cleanup();
 	};
 
 	// --- drive the turn under a wall-clock guard ---

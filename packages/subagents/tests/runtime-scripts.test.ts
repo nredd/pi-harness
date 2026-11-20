@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type * as NodeUrl from "node:url";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, onTestFinished, test, vi } from "vitest";
 import type * as RuntimeBuilder from "../scripts/build-runtime.mjs";
 
 // Redirect only the scripts' package-root discovery. The actual source modules, shared builder,
@@ -27,20 +28,19 @@ const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const originalArgv = [...process.argv];
 const originalExitCode = process.exitCode;
 
-beforeEach(async () => {
+beforeEach(async ({ onTestFinished }) => {
 	vi.resetModules();
-	fixture.root = await realpath(await mkdtemp(join(tmpdir(), "subagents-runtime-scripts-")));
+	fixture.root = await realpath(makeTestTempDir("subagents-runtime-scripts-", onTestFinished));
 	await mkdir(join(fixture.root, "src"));
 	await writeFile(join(fixture.root, "src/index.ts"), 'export const load = () => import("./lazy.js");\n');
 	await writeFile(join(fixture.root, "src/lazy.ts"), 'export const value = "fixture";\n');
 	process.exitCode = undefined;
 });
 
-afterEach(async () => {
+afterEach(() => {
 	process.argv = [...originalArgv];
 	process.exitCode = originalExitCode;
 	vi.restoreAllMocks();
-	await rm(fixture.root, { force: true, recursive: true });
 });
 
 /** Snapshot bytes and directory names, including hashed lazy chunks and their source maps. */
@@ -93,7 +93,7 @@ test("builds from a canonical fixture root when the temporary parent is a symlin
 	await symlink(target, alias, "dir");
 	const previousRoot = fixture.root;
 	try {
-		fixture.root = await realpath(await mkdtemp(join(alias, "fixture-")));
+		fixture.root = await realpath(makeTestTempDir(relative(tmpdir(), join(alias, "fixture-")), onTestFinished));
 		assert.equal(fixture.root.startsWith(`${target}/`), true);
 		await mkdir(join(fixture.root, "src"));
 		await writeFile(join(fixture.root, "src/index.ts"), 'export const load = () => import("./lazy.js");\n');

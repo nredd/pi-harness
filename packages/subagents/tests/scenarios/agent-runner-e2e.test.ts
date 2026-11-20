@@ -23,11 +23,11 @@
  * provider registers in a different `pi-ai` module instance than the one
  * pi-coding-agent streams through, which is brittle and orthogonal to gating.)
  */
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { extensionCanonicalName } from "../../src/agent-runner.ts";
 import { registerAgents } from "../../src/agent-types.ts";
 import { DEFAULT_AGENTS } from "../../src/default-agents.ts";
@@ -59,15 +59,14 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 	let cwd: string;
 	let faux: ReturnType<typeof registerFauxProvider>;
 
-	beforeEach(() => {
-		cwd = mkdtempSync(join(tmpdir(), "subagents-e2e-"));
+	beforeEach(({ onTestFinished }) => {
+		cwd = makeTestTempDir("subagents-e2e-", onTestFinished);
 		// Only used as a valid Model object for createAgentSession; we never rely
 		// on it actually streaming (we assert on the pre-prompt gated tool set).
 		faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 	});
 	afterEach(() => {
 		faux.unregister();
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	/**
@@ -145,7 +144,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 	it("does not initialize a second subagents extension in an SDK child", async () => {
 		const originalCwd = cwd;
 		const hermetic = hermeticDir();
-		const homeDir = realpathSync(mkdtempSync(join(tmpdir(), "subagents-e2e-home-")));
+		const homeDir = realpathSync(makeTestTempDir("subagents-e2e-home-", onTestFinished));
 		cwd = hermetic.dir;
 		const agentDir = process.env.PI_CODING_AGENT_DIR;
 		if (!agentDir) throw new Error("hermeticDir must define PI_CODING_AGENT_DIR");
@@ -161,14 +160,13 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 		} finally {
 			cwd = originalCwd;
 			hermetic.restore();
-			rmSync(homeDir, { recursive: true, force: true });
 		}
 	});
 
 	it("keeps the subagents extension inert when an SDK child session is reloaded (#548)", async () => {
 		const originalCwd = cwd;
 		const hermetic = hermeticDir();
-		const homeDir = realpathSync(mkdtempSync(join(tmpdir(), "subagents-e2e-home-")));
+		const homeDir = realpathSync(makeTestTempDir("subagents-e2e-home-", onTestFinished));
 		cwd = hermetic.dir;
 		const agentDir = process.env.PI_CODING_AGENT_DIR;
 		if (!agentDir) throw new Error("hermeticDir must define PI_CODING_AGENT_DIR");
@@ -190,7 +188,6 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 		} finally {
 			cwd = originalCwd;
 			hermetic.restore();
-			rmSync(homeDir, { recursive: true, force: true });
 		}
 	});
 
@@ -215,7 +212,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 			// fixture is discoverable under the exact settings the default uses.
 			const originalCwd = cwd;
 			const hermetic = hermeticDir();
-			const homeDir = realpathSync(mkdtempSync(join(tmpdir(), "subagents-e2e-home-")));
+			const homeDir = realpathSync(makeTestTempDir("subagents-e2e-home-", onTestFinished));
 			cwd = hermetic.dir;
 			const agentDir = process.env.PI_CODING_AGENT_DIR;
 			if (!agentDir) throw new Error("hermeticDir must define PI_CODING_AGENT_DIR");
@@ -245,7 +242,6 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 			} finally {
 				cwd = originalCwd;
 				hermetic.restore();
-				rmSync(homeDir, { recursive: true, force: true });
 			}
 		},
 	);
@@ -307,7 +303,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 	describe.skipIf(process.platform === "win32")("pi built-ins and project trust", () => {
 		/** Run `fn` against an empty pi agent dir, so no real global config takes part. */
 		async function withEmptyAgentDir<T>(fn: () => Promise<T>): Promise<T> {
-			const agentDir = mkdtempSync(join(tmpdir(), "subagents-e2e-agent-"));
+			const agentDir = makeTestTempDir("subagents-e2e-agent-", onTestFinished);
 			const prev = process.env.PI_CODING_AGENT_DIR;
 			process.env.PI_CODING_AGENT_DIR = agentDir;
 			try {
@@ -315,7 +311,6 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 			} finally {
 				if (prev === undefined) delete process.env.PI_CODING_AGENT_DIR;
 				else process.env.PI_CODING_AGENT_DIR = prev;
-				rmSync(agentDir, { recursive: true, force: true });
 			}
 		}
 
@@ -376,14 +371,10 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 		it("a spawn sent into another directory never runs that directory's .pi/mcp.json", async () => {
 			// The parent project (`cwd`) is trusted; the target is not part of it. Trust
 			// covers the parent's project, so the target's config must not execute (#96).
-			const target = mkdtempSync(join(tmpdir(), "subagents-e2e-target-"));
-			try {
-				const marker = writeMcpConfig(target);
-				await withEmptyAgentDir(() => activeToolsFor({ extensions: true }, true, { cwd: target, configCwd: cwd }));
-				expect(await started(marker)).toBe(false);
-			} finally {
-				rmSync(target, { recursive: true, force: true });
-			}
+			const target = makeTestTempDir("subagents-e2e-target-", onTestFinished);
+			const marker = writeMcpConfig(target);
+			await withEmptyAgentDir(() => activeToolsFor({ extensions: true }, true, { cwd: target, configCwd: cwd }));
+			expect(await started(marker)).toBe(false);
 		});
 
 		it("a trusted project's .pi/extensions load in the subagent", async () => {
@@ -403,15 +394,11 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
 			// Only the session's view of its cwd is untrusted; the loader keeps the
 			// parent project's trust, so the parent's toolbox goes with the worker.
 			writeProjectExtension(cwd, "project_tool");
-			const target = mkdtempSync(join(tmpdir(), "subagents-e2e-target-"));
-			try {
-				const active = await withEmptyAgentDir(() =>
-					activeToolsFor({ extensions: true }, true, { cwd: target, configCwd: cwd }),
-				);
-				expect(active).toContain("project_tool");
-			} finally {
-				rmSync(target, { recursive: true, force: true });
-			}
+			const target = makeTestTempDir("subagents-e2e-target-", onTestFinished);
+			const active = await withEmptyAgentDir(() =>
+				activeToolsFor({ extensions: true }, true, { cwd: target, configCwd: cwd }),
+			);
+			expect(active).toContain("project_tool");
 		});
 
 		it("starting pi with --no-mcp keeps the built-in MCP out of the subagent", async () => {

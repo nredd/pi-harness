@@ -1,9 +1,8 @@
 /** Scheduler timer/admission failures with a real store and private model registry. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.ts";
 import { setModelTiers } from "../src/model-tiers.ts";
@@ -13,8 +12,8 @@ import { ScheduleStore } from "../src/schedule-store.ts";
 let dir: string;
 let scheduler: SubagentScheduler;
 let registry: ModelRegistry;
-beforeEach(async () => {
-	dir = mkdtempSync(join(tmpdir(), "lifecycle-scheduler-"));
+beforeEach(async ({ onTestFinished }) => {
+	dir = makeTestTempDir("lifecycle-scheduler-", onTestFinished);
 	const runtime = await ModelRuntime.create({
 		authPath: join(dir, "auth.json"),
 		modelsPath: null,
@@ -43,7 +42,6 @@ afterEach(() => {
 	setModelTiers(undefined, undefined);
 	vi.restoreAllMocks();
 	vi.useRealTimers();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 function setup() {

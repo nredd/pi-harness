@@ -15,7 +15,6 @@ import {
 	chmodSync,
 	existsSync,
 	mkdirSync,
-	mkdtempSync,
 	realpathSync,
 	rmSync,
 	statSync,
@@ -23,8 +22,8 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir as realTmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakeTmp = vi.hoisted(() => ({ dir: "" }));
@@ -79,10 +78,10 @@ function unwritableState(dir: string): string {
 describe("createOutputFilePath (temp fallback when the state dir is unwritable)", () => {
 	let root: string;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// realpath: macOS resolves /var → /private/var, and the module joins the
 		// raw tmpdir() value, so comparisons must use the same form.
-		fakeTmp.dir = realpathSync(mkdtempSync(join(realTmpdir(), "pi-outpath-")));
+		fakeTmp.dir = realpathSync(makeTestTempDir("pi-outpath-", onTestFinished));
 		root = join(fakeTmp.dir, `pi-subagents-${UID}`);
 		process.env.XDG_STATE_HOME = unwritableState(fakeTmp.dir);
 	});
@@ -91,7 +90,6 @@ describe("createOutputFilePath (temp fallback when the state dir is unwritable)"
 		chmodFault.error = undefined;
 		readdirFault.match = undefined;
 		fakeHome.dir = "";
-		rmSync(fakeTmp.dir, { recursive: true, force: true });
 		fakeTmp.dir = "";
 	});
 
@@ -170,8 +168,8 @@ describe("createOutputFilePath (temp fallback when the state dir is unwritable)"
 describe("transcriptRoot (#900)", () => {
 	let state: string;
 
-	beforeEach(() => {
-		fakeTmp.dir = realpathSync(mkdtempSync(join(realTmpdir(), "pi-outpath-")));
+	beforeEach(({ onTestFinished }) => {
+		fakeTmp.dir = realpathSync(makeTestTempDir("pi-outpath-", onTestFinished));
 		state = join(fakeTmp.dir, "state");
 		process.env.XDG_STATE_HOME = state;
 	});
@@ -180,7 +178,6 @@ describe("transcriptRoot (#900)", () => {
 		chmodFault.error = undefined;
 		readdirFault.match = undefined;
 		fakeHome.dir = "";
-		rmSync(fakeTmp.dir, { recursive: true, force: true });
 		fakeTmp.dir = "";
 	});
 
@@ -235,8 +232,8 @@ describe("pruneStaleTranscripts (#900)", () => {
 		return dir;
 	}
 
-	beforeEach(() => {
-		fakeTmp.dir = realpathSync(mkdtempSync(join(realTmpdir(), "pi-outpath-")));
+	beforeEach(({ onTestFinished }) => {
+		fakeTmp.dir = realpathSync(makeTestTempDir("pi-outpath-", onTestFinished));
 		process.env.XDG_STATE_HOME = join(fakeTmp.dir, "state");
 		root = transcriptRoot();
 	});
@@ -245,7 +242,6 @@ describe("pruneStaleTranscripts (#900)", () => {
 		chmodFault.error = undefined;
 		readdirFault.match = undefined;
 		fakeHome.dir = "";
-		rmSync(fakeTmp.dir, { recursive: true, force: true });
 		fakeTmp.dir = "";
 	});
 

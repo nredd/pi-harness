@@ -15,9 +15,9 @@
  * a mock ExtensionAPI and assert the timing: nothing is wired at factory time;
  * everything is wired (once) on session_start.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -66,11 +66,11 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
 	let prevCwd: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// Hermetic cwd + global dir with scheduling off, so session_start doesn't
 		// spin a scheduler or touch the dev's filesystem — isolates the RPC wiring.
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-142-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-142-agentdir-"));
+		tmpDir = makeTestTempDir("pi-142-", onTestFinished);
+		agentDir = makeTestTempDir("pi-142-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -83,8 +83,6 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 
@@ -308,9 +306,9 @@ describe("issue #526: RPC spawn signal aborts while queued", () => {
 	let prevCwd: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-526-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-526-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-526-", onTestFinished);
+		agentDir = makeTestTempDir("pi-526-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -326,8 +324,6 @@ describe("issue #526: RPC spawn signal aborts while queued", () => {
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 

@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { writeFile as asyncWriteFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { afterEach, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { dedupCalls, opaqueId } from "../../src/stats/load.ts";
 import {
 	decodeShard,
@@ -30,13 +30,8 @@ vi.mock("node:zlib", async (original) => {
 	return { ...actual, gzipSync: vi.fn(actual.gzipSync) };
 });
 
-const roots: string[] = [];
-afterEach(() => {
-	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
 it("publishes compact gzip and bounds repeated historical exports to new data", async () => {
-	const root = mkdtempSync(join(tmpdir(), "stats-v3-"));
-	roots.push(root);
+	const root = makeTestTempDir("stats-v3-", onTestFinished);
 	const agent = join(root, "agent");
 	const out = join(root, "out");
 	const ms = Date.parse("2026-01-02T12:00:00Z");
@@ -257,8 +252,7 @@ it("bounds expanded canonical bytes and rejects conflicting sealed metadata", ()
 });
 
 it("prunes superseded active generations, ignores unrelated files and retains last-good on corrupt gzip", async () => {
-	const root = mkdtempSync(join(tmpdir(), "stats-v3-active-"));
-	roots.push(root);
+	const root = makeTestTempDir("stats-v3-active-", onTestFinished);
 	const agent = join(root, "agent");
 	const out = join(root, "out");
 	const viewer = join(root, "viewer");
@@ -331,8 +325,7 @@ it("rejects noncanonical legacy bytes and duplicate quota rows without weakening
 });
 
 it("does not publish a manifest on write failure or oversized compressed bytes", async () => {
-	const root = mkdtempSync(join(tmpdir(), "stats-v3-failure-"));
-	roots.push(root);
+	const root = makeTestTempDir("stats-v3-failure-", onTestFinished);
 	const agent = join(root, "agent");
 	const out = join(root, "out");
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
@@ -365,8 +358,7 @@ it("does not publish a manifest on write failure or oversized compressed bytes",
 });
 
 it("accepts independently compressed canonical JSON and authenticates cached producer bytes", async () => {
-	const root = mkdtempSync(join(tmpdir(), "stats-v3-gzip-"));
-	roots.push(root);
+	const root = makeTestTempDir("stats-v3-gzip-", onTestFinished);
 	const agent = join(root, "agent");
 	const out = join(root, "out");
 	const viewer = join(root, "viewer");
@@ -434,8 +426,7 @@ it("accepts independently compressed canonical JSON and authenticates cached pro
 });
 
 it("authenticates legacy cached shard bytes without requiring a v3 wire array", async () => {
-	const root = mkdtempSync(join(tmpdir(), "stats-v2-cache-"));
-	roots.push(root);
+	const root = makeTestTempDir("stats-v2-cache-", onTestFinished);
 	const { snapshot, shard } = fixture();
 	const legacy = {
 		...shard,

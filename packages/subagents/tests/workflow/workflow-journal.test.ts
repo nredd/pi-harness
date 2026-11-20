@@ -11,10 +11,10 @@
  * prove that everything from there on is spawned for real.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { appendJournal, journalKey, readJournal, type WorkflowJournalEntry } from "../../src/workflow/journal.ts";
 import { runWorkflow, type WorkflowSpawnRequest, type WorkflowSpawnResult } from "../../src/workflow/runtime.ts";
@@ -78,11 +78,8 @@ describe("journalKey", () => {
 
 describe("journal files", () => {
 	let dir: string;
-	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "wf-journal-"));
-	});
-	afterEach(() => {
-		rmSync(dir, { recursive: true, force: true });
+	beforeEach(({ onTestFinished }) => {
+		dir = makeTestTempDir("wf-journal-", onTestFinished);
 	});
 
 	it("round-trips appended entries in position order", () => {

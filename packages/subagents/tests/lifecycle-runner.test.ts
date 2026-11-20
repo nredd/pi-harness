@@ -1,6 +1,4 @@
 /** Real child construction with a scripted faux provider and explicit private roots. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
@@ -11,6 +9,7 @@ import {
 	ModelRegistry,
 	ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRememberAgents } from "../src/agent-runner.ts";
 import { registerAgents } from "../src/agent-types.ts";
@@ -22,8 +21,8 @@ let root: string;
 let faux: ReturnType<typeof registerFauxProvider>;
 let session: AgentSession | undefined;
 let registry: ModelRegistry;
-beforeEach(async () => {
-	root = mkdtempSync(join(tmpdir(), "lifecycle-runner-"));
+beforeEach(async ({ onTestFinished }) => {
+	root = makeTestTempDir("lifecycle-runner-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
 	setRememberAgents(false);
 	faux = registerFauxProvider({
@@ -58,7 +57,6 @@ afterEach(() => {
 	registerAgents(new Map());
 	setRememberAgents(true);
 	vi.unstubAllEnvs();
-	rmSync(root, { recursive: true, force: true });
 });
 
 /** The real SDK consumes this same provider model; no ambient auth or settings. */

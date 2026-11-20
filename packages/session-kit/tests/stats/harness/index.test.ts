@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { accountHash } from "../../../src/stats/harness/common.ts";
 import {
@@ -26,12 +26,11 @@ import { seedHarnessHome } from "../../fixtures/stats/harness/home.ts";
 
 const SALT = "0123456789abcdef0123456789abcdef";
 let home: string;
-beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "psk-harness-"));
+beforeEach(({ onTestFinished }) => {
+	home = makeTestTempDir("psk-harness-", onTestFinished);
 });
 afterEach(() => {
 	vi.unstubAllEnvs();
-	rmSync(home, { recursive: true, force: true });
 });
 
 /** Every file under `dir` with its bytes and mtime. */

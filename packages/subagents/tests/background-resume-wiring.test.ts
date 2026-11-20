@@ -5,9 +5,9 @@
  * pins down is what the TOOL hands the manager, which is where a detached
  * resume can quietly diverge from a detached spawn.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -65,9 +65,9 @@ describe("Agent tool — background resume wiring", () => {
 	/** The session the spawned agent ends up holding — prior turns already in it. */
 	let session: any;
 
-	beforeEach(() => {
-		cwd = mkdtempSync(join(tmpdir(), "pi-bg-resume-cwd-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-bg-resume-agent-"));
+	beforeEach(({ onTestFinished }) => {
+		cwd = makeTestTempDir("pi-bg-resume-cwd-", onTestFinished);
+		agentDir = makeTestTempDir("pi-bg-resume-agent-", onTestFinished);
 		previousCwd = process.cwd();
 		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -98,8 +98,6 @@ describe("Agent tool — background resume wiring", () => {
 		process.chdir(previousCwd);
 		if (previousAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		rmSync(cwd, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.clearAllMocks();
 	});
 
