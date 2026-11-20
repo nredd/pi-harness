@@ -7,8 +7,9 @@
  * definition `model:` that resolves. Nothing here replaces model selection, so
  * bypassing the shared selector's configured precedence fails these tests.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.ts";
@@ -159,60 +160,77 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 
 	describe("scheduler job without a stored model", () => {
 		let tmp: string;
+		let transcript: string;
+		let clock: FakeClock;
 		let scheduler: SubagentScheduler;
 		let mgr: AgentManager;
 
 		beforeEach(({ onTestFinished }) => {
 			tmp = makeTestTempDir("config-model-real-sched-", onTestFinished);
-			scheduler = new SubagentScheduler();
-			mgr = new AgentManager();
+			clock = new FakeClock();
+			scheduler = new SubagentScheduler({ clock });
+			transcript = join(tmp, "job.output");
+			mgr = new AgentManager(undefined, undefined, (record) => {
+				// The bare scheduler fixture doesn't attach an output file like the tool does.
+				writeFileSync(transcript, "");
+				record.outputFile = transcript;
+			});
 		});
 
 		afterEach(() => {
 			scheduler.stop();
 		});
 
-		async function fire(model?: string, refused = false) {
+		function fire(model?: string) {
 			registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
 			const pi = {
 				events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
 				exec: async () => ({ code: 1, stdout: "", stderr: "" }),
 			} as any;
 			scheduler.start(pi, ctxFor(faux.getModel()), mgr, new ScheduleStore(join(tmp, "s.json")));
+			// Keep the one-shot in the future until the store write and timer arming finish.
+			const delay = 1_000;
 			scheduler.addJob({
 				name: "job",
 				description: "job",
-				schedule: new Date(Date.now() + 50).toISOString(),
+				schedule: new Date(clock.now() + delay).toISOString(),
 				subagent_type: "scout",
 				prompt: "go",
 				...(model ? { model } : {}),
 			});
-			if (refused) {
-				await vi.waitFor(() => expect(scheduler.list()[0]!.lastStatus).toBe("error"), { timeout: 3000 });
-				return undefined;
-			}
-			await vi.waitFor(() => expect(mgr.listAgents()).toHaveLength(1), { timeout: 3000 });
-			const record = mgr.listAgents()[0]!;
-			await vi.waitFor(() => expect(record.modelFallback).toBeDefined(), { timeout: 5000 });
-			return record;
+			clock.advance(delay);
 		}
 
 		it("honors the override over a resolving definition model", async () => {
 			writeScout(parentRef());
 			setAgentModels({ scout: "claude-haiku-4-5" });
 
-			const record = await fire();
+			fire();
 
-			expect(modelFallbackNote(record!.modelFallback)).toBe(NOTE());
+			const agents = mgr.listAgents();
+			expect(agents).toHaveLength(1);
+			// The agent is registered at dispatch, but the notice is written at session startup.
+			await vi.waitFor(
+				() => {
+					const notices = readFileSync(transcript, "utf8")
+						.split("\n")
+						.filter(Boolean)
+						.map((line) => JSON.parse(line))
+						.filter((entry) => entry.type === "model-fallback");
+					expect(notices).toEqual([expect.objectContaining({ agentId: agents[0]!.id, note: NOTE() })]);
+				},
+				{ timeout: 15_000 },
+			);
+			// Let the scheduler persist completion before the temp store is removed.
+			await vi.waitFor(() => expect(scheduler.list()[0]!.runCount).toBe(1), { timeout: 10_000 });
 		});
 
-		it("refuses the explicit stored input rather than trying a failing override after it", async () => {
+		it("refuses the explicit stored input rather than trying a failing override after it", () => {
 			writeScout(parentRef());
 			setAgentModels({ scout: "claude-haiku-4-5" });
 
-			const record = await fire("claude-opus-4-6", true);
+			fire("claude-opus-4-6");
 
-			expect(record).toBeUndefined();
 			expect(mgr.listAgents()).toEqual([]);
 			expect(scheduler.list()[0]!.lastStatus).toBe("error");
 		});
