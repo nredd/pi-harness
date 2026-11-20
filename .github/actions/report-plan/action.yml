@@ -26,6 +26,8 @@ outputs:
 runs:
   using: composite
   steps:
+    # No checkout here: a nested non-cone sparse checkout leaks into the job's later full checkout and leaves
+    # the tree sparse (found by hosted CI). Callers' sparse checkout must include `scripts`.
     - id: report
       shell: bash -e {0}
       env:
@@ -37,44 +39,8 @@ runs:
         REASON: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].reason }}
         BLOCKED: ${{ fromJSON(inputs.plan || '{}')[inputs.cell].blocked }}
         CHANGED_FILES: ${{ inputs.changed_files }}
-      run: |
-        # Decisions live in scripts/ci_paths.py; this only reports them and fails closed. A job that needs
-        # `classify` runs even when classify failed, because a skipped job satisfies a required check.
-        echo "run=false" >>"$GITHUB_OUTPUT"
-        if [ "$CLASSIFY_RESULT" != success ]; then
-          echo "::error title=$CELL has no plan::classify finished with '$CLASSIFY_RESULT', so no cell may report a pass"
-          echo "### $CELL: no plan (classify $CLASSIFY_RESULT)" >>"$GITHUB_STEP_SUMMARY"
-          exit 1
-        fi
-        if [ "$BLOCKED" = true ]; then
-          echo "::error title=$CELL blocked::$REASON"
-          {
-            echo "### $CELL: blocked"
-            echo "$REASON"
-          } >>"$GITHUB_STEP_SUMMARY"
-          exit 1
-        fi
-        if [ "$RUN" != true ] && [ "$RUN" != false ]; then
-          echo "::error title=$CELL has no plan::classify published no run decision for this cell"
-          exit 1
-        fi
-        {
-          echo "run=$RUN"
-          echo "scenarios=$SCENARIOS"
-          echo "gates=$GATES"
-        } >>"$GITHUB_OUTPUT"
-        if [ -z "$REASON" ]; then
-          echo "$CELL will run"
-          exit 0
-        fi
-        if [ "$RUN" = true ]; then title="$CELL scenarios NOT RUN"; else title="$CELL NOT RUN"; fi
-        echo "::notice title=$title::$REASON"
-        {
-          echo "### $title"
-          echo "$REASON This is not a pass."
-          if [ "$RUN" = false ]; then
-            echo '```text'
-            printf '%s\n' "$CHANGED_FILES"
-            echo '```'
-          fi
-        } >>"$GITHUB_STEP_SUMMARY"
+      run: >-
+        python3 scripts/ci_report_plan.py
+        --cell="$CELL" --classify-result="$CLASSIFY_RESULT" --run="$RUN"
+        --scenarios="$SCENARIOS" --gates="$GATES" --reason="$REASON"
+        --blocked="$BLOCKED" --changed-files="$CHANGED_FILES"

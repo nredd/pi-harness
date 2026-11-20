@@ -246,7 +246,7 @@ def report_step() -> dict[str, Any]:
     Returns:
         dict[str, Any]: The composite action's `report` step.
     """
-    return yaml.safe_load(REPORT_PLAN.read_text())["runs"]["steps"][0]
+    return next(step for step in yaml.safe_load(REPORT_PLAN.read_text())["runs"]["steps"] if "run" in step)
 
 
 def run_plan(
@@ -280,6 +280,7 @@ def run_plan(
     summary.write_text("")
     result = subprocess.run(
         ["/bin/bash", "-e", str(script)],
+        cwd=ROOT,
         env=os.environ | env | {"GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)},
         capture_output=True,
         text=True,
@@ -966,17 +967,29 @@ def test_a_cell_missing_from_a_successful_plan_fails_instead_of_passing_vacuousl
     step = report_step()
     script = tmp_path / "plan.sh"
     script.write_text(step["run"])
-    env = os.environ | {
-        "CELL": "owned (macos-14)",
-        "CLASSIFY_RESULT": "success",
-        "GITHUB_OUTPUT": str(tmp_path / "out"),
-        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
-    }
+    env = (
+        os.environ
+        | {
+            key: render(
+                value,
+                {
+                    "inputs.plan": "{}",
+                    "inputs.cell": "owned (macos-14)",
+                    "inputs.classify_result": "success",
+                    "inputs.changed_files": "",
+                },
+            )
+            for key, value in step["env"].items()
+        }
+        | {"GITHUB_OUTPUT": str(tmp_path / "out"), "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}
+    )
     result = subprocess.run(
-        ["/bin/bash", "-e", str(script)], env=env, capture_output=True, text=True, check=False
+        ["/bin/bash", "-e", str(script)], cwd=ROOT, env=env, capture_output=True, text=True, check=False
     )
     assert result.returncode == 1
     assert "::error title=owned (macos-14) has no plan::" in result.stdout
+    assert (tmp_path / "out").read_text() == "run=false\n"
+    assert not (tmp_path / "summary").exists()
 
 
 @pytest.mark.parametrize(
@@ -1022,7 +1035,7 @@ def test_every_job_reports_through_the_one_shared_action() -> None:
         assert plans[job]["with"]["cell"] == "${{ format('owned ({0})', matrix.os) }}"
     action = yaml.safe_load(REPORT_PLAN.read_text())
     assert action["runs"]["using"] == "composite"
-    assert action["runs"]["steps"][0]["shell"] == "bash -e {0}"
+    assert report_step()["shell"] == "bash -e {0}"
     for key in ("DOCS_ONLY", "STACK_INPUTS", "matrix."):
         assert key not in REPORT_PLAN.read_text()
     # The local action needs a checkout first; the sparse one precedes the plan, the full one follows it.
@@ -1030,7 +1043,20 @@ def test_every_job_reports_through_the_one_shared_action() -> None:
         steps = cfg[name]["steps"]
         sparse = next(step for step in steps if step.get("name") == "Check out the local actions")
         assert steps.index(sparse) < steps.index(plan)
-        assert sparse["with"]["sparse-checkout"] == ".github/actions"
+        assert sparse["with"]["sparse-checkout"] == ".github/actions\nscripts\n"
+        assert {"ref", "repository"}.isdisjoint(sparse["with"])
+
+
+def test_report_plan_runs_with_system_python_and_no_nested_checkout() -> None:
+    """Keep the reporter a single `python3` step: a nested sparse checkout would leak into the full one."""
+    action = yaml.safe_load(REPORT_PLAN.read_text())
+    (report,) = action["runs"]["steps"]
+    assert report["id"] == "report"
+    assert report["run"].startswith("python3 scripts/ci_report_plan.py ")
+    assert "\n" not in report["run"]
+    assert {name: data["value"] for name, data in action["outputs"].items()} == {
+        name: f"${{{{ steps.report.outputs.{name} }}}}" for name in ("run", "scenarios", "gates")
+    }
 
 
 def test_classify_step_threads_the_pr_title_into_the_plan(tmp_path: Path) -> None:
