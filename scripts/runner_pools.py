@@ -71,8 +71,6 @@ class Pool:
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
     "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 1, run_cap=1),
-    # One ARM64 WSL2 slot and strict: nothing else can run that guest, and the hosted x64 `windows-2025`
-    # cell keeps the required check names green whenever the pool is down or busy.
 }
 
 # Matrix OS to the pool that can run it.
@@ -101,8 +99,6 @@ CELL_SECONDS: dict[CellKey, int] = {
     ("owned", "macos-14", "python"): 462,
     ("contracts", "macos-14", ""): 331,
     ("owned", "ubuntu-24.04", "ts"): 428,
-    # UNMEASURED best estimates for the ARM64 WSL2 pool (#736): a pooled cell skips the ~3.5 min guest setup
-    # but runs on a laptop VM capped at 4 cores. Replace with measured seconds after the first green jobs.
 }
 MIN_HEAVY_S = 240
 # `make install-owned` needs authenticated core provenance verification for the current pin.
