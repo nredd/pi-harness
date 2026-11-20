@@ -70,7 +70,8 @@ Optional `~/.pi/agent/pi-session-kit.json` (respects `PI_CODING_AGENT_DIR`):
   "monitor": { "enabled": true, "collapseKey": "ctrl+shift+m", "maxWidgetLines": 12 },
   "diff": { "enabled": true },
   "stats": { "enabled": true },
-  "mon": { "enabled": true }
+  "mon": { "enabled": true },
+  "unavailableToolHint": { "enabled": true }
 }
 ```
 
@@ -319,9 +320,11 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
 ## Unavailable tools
 
 On Pi hosts with `tool_not_found`, unavailable-tool errors suggest `search_tools` only
-when it is active in the current session. The hint never claims that the missing name
-is deferred. If `search_tools` is inactive or is itself the missing tool, Pi keeps its
-default error. Other tool errors are unchanged.
+when it is active in the current session. The hint defaults on; set `unavailableToolHint.enabled`
+to `false` to disable it. The hint never claims that the missing name is deferred. Pi keeps
+its default error when the hint is disabled, `search_tools` is inactive or itself missing,
+or the name is empty or would change when terminal escapes and control characters are removed.
+Other tool errors are unchanged.
 
 ## Subagents and verification
 

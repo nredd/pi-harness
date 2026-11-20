@@ -24,9 +24,9 @@ const registerSearch: ExtensionFactory = (pi) => {
 const fallback = (name: string) =>
 	`Tool ${name} is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile`;
 
-async function startWithSearch(allowedToolNames = ["search_tools"]) {
+async function startWithSearch(allowedToolNames = ["search_tools"], hintEnabled = true) {
 	fixture = new ScenarioFixture();
-	const config = configFor();
+	const config = hintEnabled ? configFor("unavailableToolHint") : configFor();
 	return fixture.start(config, {
 		allowedToolNames,
 		extensionFactories: [createSessionKit({ config }), registerSearch],
@@ -43,15 +43,26 @@ async function expectToolError(harness: Awaited<ReturnType<ScenarioFixture["star
 
 it.each([
 	["unknown_tool", 'Tool "unknown_tool" not found. If it is a deferred tool, call search_tools to load it.'],
-	[
-		"line\n\x1b[31mred\x1b[0m\x00\u2028\u202e",
-		'Tool "linered" not found. If it is a deferred tool, call search_tools to load it.',
-	],
 	["x".repeat(500), `Tool "${"x".repeat(61)}..." not found. If it is a deferred tool, call search_tools to load it.`],
 ])("gives a conditional hint and safely displays %j when search_tools is active", async (name, expected) => {
 	const harness = await startWithSearch();
 	expect(harness.session.getActiveToolNames()).toContain("search_tools");
 	await expectToolError(harness, name, expected);
+});
+
+it.each(["", "\u200b\x00", "read\u200b", "line\n\x1b[31mred\x1b[0m\x00\u2028\u202e"])(
+	"keeps the host default for an empty or altered name %j even with active search",
+	async (name) => {
+		const harness = await startWithSearch();
+		expect(harness.session.getActiveToolNames()).toContain("search_tools");
+		await expectToolError(harness, name, fallback(name));
+	},
+);
+
+it("keeps the host default when the hint is disabled even with active search", async () => {
+	const harness = await startWithSearch(["search_tools"], false);
+	expect(harness.session.getActiveToolNames()).toContain("search_tools");
+	await expectToolError(harness, "unknown_tool", fallback("unknown_tool"));
 });
 
 it("keeps the host default when the session allowlist excludes search_tools", async () => {
@@ -85,7 +96,7 @@ it.each<unknown>(["search_tools", undefined, 42])(
 
 it("preserves errors from a tool that was found and executed", async () => {
 	fixture = new ScenarioFixture();
-	const config = configFor();
+	const config = configFor("unavailableToolHint");
 	const harness = await fixture.start(config, {
 		extensionFactories: [
 			createSessionKit({ config }),

@@ -40,7 +40,12 @@ function probe(): Probe {
 	};
 }
 
-function homeWith(feature: string): { home: string; agent: string } {
+function homeWith(
+	feature: string,
+	hintConfig: { unavailableToolHint?: { enabled: boolean } } = {
+		unavailableToolHint: { enabled: false },
+	},
+): { home: string; agent: string } {
 	const home = mkdtempSync(join(tmpdir(), "pi-session-kit-injected-home-"));
 	const agent = join(home, ".pi", "agent");
 	mkdirSync(agent, { recursive: true });
@@ -55,6 +60,7 @@ function homeWith(feature: string): { home: string; agent: string } {
 			diff: { enabled: false },
 			stats: { enabled: feature === "stats" },
 			mon: { enabled: false },
+			...hintConfig,
 		}),
 	);
 	return { home, agent };
@@ -77,12 +83,15 @@ afterEach(() => {
 	for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-it("factory loads its config from the injected home", () => {
-	const { home } = homeWith("none");
+it.each([
+	["disabled", { unavailableToolHint: { enabled: false } }, []],
+	["omitted", {}, ["tool_not_found"]],
+] as const)("factory loads its config from the injected home with the hint %s", (_label, hint, handlers) => {
+	const { home } = homeWith("none", hint);
 	homes.push(home);
 	const current = probe();
 	createSessionKit({ homeDir: home })(current.pi as never);
-	expect([...current.handlers.keys()]).toEqual(["tool_not_found"]);
+	expect([...current.handlers.keys()]).toEqual(handlers);
 	expect(current.commands).toEqual(new Map());
 });
 
