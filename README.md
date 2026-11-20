@@ -167,9 +167,7 @@ Required checks on `main`, four contexts:
 - `stack (ubuntu-24.04, personal)`
 - `stack (ubuntu-24.04, local)`
 
-Dropping a cell from a matrix would leave its context pending forever, which is why the cells that no longer test anything stay as bypass cells.
-
-The `macos-14` in these names is a stable check context, not the OS version: GitHub retired that image, so the hosted cells run on `xcode-27` (macOS 27, GitHub names new images after the Xcode major) via `matrix.runner`. Renaming them would need a ruleset change.
+Docs-only PRs still report the four Ubuntu checks without running their gates. macOS is not required and runs only on main pushes and eligible dispatches. Its owned shards report through a separate fan-in, so their queue and result do not affect `owned (ubuntu-24.04)`.
 
 ### Review and merge evidence
 
@@ -266,8 +264,8 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   the released host. The fork gate's non-rewriting
   check mirrors the entire selected core script, including worktree readiness and the binary-release
   and fork-audit type checks; only Biome's `--write` is removed
-- The Forks system dependency step always installs the upstream packages. It shares Ubuntu mirror
-  selection with WSL2: try Azure first, then the Ubuntu archive if the index or package download
+- The Forks system dependency step always installs the upstream packages. It tries the Ubuntu mirrors in
+  turn: Azure first, then the Ubuntu archive if the index or package download
   fails. Each apt command has its own deadline inside the five-minute step and prints its captured
   output on completion or timeout. The script writes a scratch sources file, points apt's
   `Dir::Etc::sourcelist` at it, and disables list cleanup so the runner's configured sources and
@@ -525,7 +523,7 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 
 ### Smoke
 
-`runner-smoke.yml` is `workflow_dispatch` only. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Host-specific extra targets go in the repository variable `SMOKE_EXTRA_TARGETS` (space-separated `host:port`, appended to the neutral targets in both loops; the job prints a note when it is empty and fails on any entry that is not `host:port`) and the home directory to probe in `SMOKE_OWNER_HOME` (the macOS home probe is skipped with a note when unset and fails when the path is not a directory). Set both privately, never in the repository. `scripts/tests/test_private_probe_addresses.py` enforces this across every tracked file except `forks/`, lockfiles and generated build output (`dist/` and `*.map`). Any RFC1918, CGNAT (`100.64/10`) or link-local address, tailnet-style hostname (`*.ts.net`, `*.tailscale.net`) or ULA/link-local IPv6 address (also zero-padded octets and IPv4-mapped IPv6 forms), and any path rooted at a `Users` or `home` directory whose next segment is not `<user>`, `$USER` or `runner`, fails unless it is one of the neutral probe targets allowlisted in that test. Fixture files that carry synthetic values (e.g. made-up home names or private-range test addresses) are scanned too: their exact values are listed per file in `FIXTURE_VALUES`, and a stale entry fails the test. `pi-wsl2` runs `scripts/wsl2_smoke.sh`, which also checks non-root, no sudo, aarch64, IPv6 off, no `/mnt/c`, an explicitly disabled interop and automount policy, no Windows path or `.exe` on `PATH`, no drvfs/9p mounts and closed loopback ports. The host's address and the dev environment's address and ports come from the runner's environment (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository. The same script is the first step of every `pi-wsl2` cell in `ci.yml`.
+`runner-smoke.yml` is `workflow_dispatch` only. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Host-specific extra targets go in the repository variable `SMOKE_EXTRA_TARGETS` (space-separated `host:port`, appended to the neutral targets in both loops; the job prints a note when it is empty and fails on any entry that is not `host:port`) and the home directory to probe in `SMOKE_OWNER_HOME` (the macOS home probe is skipped with a note when unset and fails when the path is not a directory). Set both privately, never in the repository. `scripts/tests/test_private_probe_addresses.py` enforces this across every tracked file except `forks/`, lockfiles and generated build output (`dist/` and `*.map`). Any RFC1918, CGNAT (`100.64/10`) or link-local address, tailnet-style hostname (`*.ts.net`, `*.tailscale.net`) or ULA/link-local IPv6 address (also zero-padded octets and IPv4-mapped IPv6 forms), and any path rooted at a `Users` or `home` directory whose next segment is not `<user>`, `$USER` or `runner`, fails unless it is one of the neutral probe targets allowlisted in that test. Fixture files that carry synthetic values (e.g. made-up home names or private-range test addresses) are scanned too: their exact values are listed per file in `FIXTURE_VALUES`, and a stale entry fails the test.
 
 ### Remaining
 

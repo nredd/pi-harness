@@ -24,20 +24,6 @@ UPDATE_ARGS=(update --error-on=any)
 INSTALL_ARGS=(install --yes)
 INSTALL_PREFIX=(env DEBIAN_FRONTEND=noninteractive)
 
-rewrite_sources() {
-  local original=$1 selected=$2 mirror=$3 source=$4
-  # GitHub's Noble image can point both stanzas at its on-disk mirror list.
-  local ubuntu_uri='(https?://(azure\.archive|archive|security|us-east-2\.ec2\.archive)\.ubuntu\.com/ubuntu/?|mirror\+file:/etc/apt/apt-mirrors\.txt)'
-  if ! printf '%s\n' "$original" | grep -Eq "^URIs:[[:blank:]].*$ubuntu_uri([[:blank:]]|$)"; then
-    printf '%s: no supported Ubuntu mirror URI in %s\n' "$apt_label" "$source" >&2
-    return 1
-  fi
-  # A pipeline keeps a failed `> "$selected"` redirection inside a subshell on every bash.
-  if ! printf '%s\n' "$original" | sed -E "/^URIs:/ s#${ubuntu_uri}([[:blank:]]|$)#${mirror}/\3#g" > "$selected"; then
-    printf '%s: could not write apt sources: %s\n' "$apt_label" "$selected" >&2
-    return 1
-  fi
-}
-apt_fetch_from_mirror "$sources" "$selected" rewrite_sources "$update_seconds" "$download_seconds" "${apt[@]}"
+apt_fetch_from_mirror "$sources" "$selected" "$update_seconds" "$download_seconds" "${apt[@]}"
 # Do not retry dpkg failures on another mirror. Everything needed is already in the archives.
 apt_bounded "apt-get install ($apt_mirror)" "$install_seconds" "${INSTALL_PREFIX[@]}" "${apt[@]}" "${INSTALL_ARGS[@]}" --no-download "${packages[@]}"
