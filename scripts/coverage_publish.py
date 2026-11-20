@@ -37,9 +37,18 @@ LOGGER = logging.getLogger(__name__)
 API = "https://api.github.com"
 WORKFLOW = ".github/workflows/ci.yml"
 ARTIFACT = "coverage-ubuntu-24.04"
+# Display names from ci.yml:630, :650 and :734; keep the publisher contract test in sync.
+OWNED_JOB = "owned (ubuntu-24.04)"
+PLAN_STEP = "Report execution plan"
+UPLOAD_STEP = "Preserve independent coverage reports and summary"
 MARKER = "<!-- pi-harness:coverage:v1 -->"
 ORDER = re.compile(r"<!-- ci:([1-9][0-9]{0,19}):([1-9][0-9]{0,19}) -->")
-BOT_ID = 41898282  # github-actions[bot]
+BOT_ID = 41898282  # github-actions[bot] user ID from GET /users/github-actions%5Bbot%5D.
+MAX_METADATA_BYTES = 8 * 1024 * 1024
+PR_NOTICE = (
+    "Coverage numbers come from this PR's own CI run (PR-controlled code) and are not independently "
+    "verified. Required checks, not this comment, are the merge gate."
+)
 SCHEDULE = "macOS: NOT RUN (main/dispatch only). WSL2: no longer scheduled."
 
 
@@ -82,8 +91,8 @@ class GitHub:
             method=method,
         )
         with build_opener(NoRedirect()).open(req, timeout=30) as response:
-            raw = response.read(MAX_ARCHIVE_BYTES + 1)
-        if len(raw) > MAX_ARCHIVE_BYTES:
+            raw = response.read(MAX_METADATA_BYTES + 1)
+        if len(raw) > MAX_METADATA_BYTES:
             raise ValueError("GitHub response exceeds size limit")
         return json.loads(raw)
 
@@ -264,13 +273,13 @@ def fetch_evidence(api: GitHub, run: Run, directory: Path) -> str:
     full producer sidecar. Artefacts from another attempt are never a fallback.
     """
     jobs = api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
-    owned = [job for job in jobs if job["name"] == "owned (ubuntu-24.04)"]
+    owned = [job for job in jobs if job["name"] == OWNED_JOB]
     if len(owned) != 1:
         return "unavailable"
     job = owned[0]
     steps = {step["name"]: step for step in job["steps"]}
-    plan = steps.get("Report execution plan", {})
-    upload = steps.get("Preserve independent coverage reports and summary", {})
+    plan = steps.get(PLAN_STEP, {})
+    upload = steps.get(UPLOAD_STEP, {})
     if (
         job["conclusion"] == "success"
         and plan.get("conclusion") == "success"
@@ -328,7 +337,7 @@ def write_plan(policy: Path, destination: Path, state: str) -> None:
 
 
 def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path) -> str:
-    """Render authenticated measurement, otherwise explicit unavailable state.
+    """Render PR-reported measurements after sidecar consistency checks, or show unavailable.
 
     Parameters:
         api (GitHub): Repository-scoped transport.
@@ -344,7 +353,7 @@ def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path)
     prefix = (
         f"{MARKER}\n<!-- ci:{run.number}:{run.attempt} -->\nCoverage for PR #{number} "
         f"([CI run {run.id}, attempt {run.attempt}](https://github.com/{api.repository}/actions/runs/"
-        f"{run.id}/attempts/{run.attempt}); CI status: {run.conclusion}).\n\n{SCHEDULE}\n\n"
+        f"{run.id}/attempts/{run.attempt}); CI status: {run.conclusion}).\n\n{PR_NOTICE}\n\n{SCHEDULE}\n\n"
     )
     if tested is None:
         return (

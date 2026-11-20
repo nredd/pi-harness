@@ -41,9 +41,9 @@ def run_data(**overrides: Any) -> dict[str, Any]:
     """Build GitHub's fork run metadata with its empty PR array.
 
     Parameters:
-        **overrides (Any): Input to the test fixture.
+        **overrides (Any): Fields replacing the default run metadata.
     Returns:
-        dict[str, Any]: Test fixture result.
+        dict[str, Any]: GitHub run metadata with the requested overrides.
     Raises:
         AssertionError: An expected contract does not hold.
     """
@@ -127,10 +127,10 @@ class RecordingGitHub(pub.GitHub):
 
         Parameters:
             path (str): Requested route.
-            method (str): Input to the test fixture.
-            body (dict[str, str] | None): Input to the test fixture.
+            method (str): Expected HTTP verb.
+            body (dict[str, str] | None): Comment payload, if writing.
         Returns:
-            Any: Test fixture result.
+            Any: Recorded comment or current run metadata.
         Raises:
             AssertionError: An expected contract does not hold.
         """
@@ -150,15 +150,16 @@ class RecordingGitHub(pub.GitHub):
 
         Parameters:
             path (str): Requested route.
-            key (str | None): Input to the test fixture.
-            **params (str): Input to the test fixture.
+            key (str | None): Optional list envelope key.
+            **params (str): Expected API query filters.
         Returns:
-            list[Any]: Test fixture result.
+            list[Any]: Rows for the requested GitHub collection.
         Raises:
             AssertionError: An expected contract does not hold.
         """
         if path == "pulls":
-            assert params == {"head": "contributor:topic/fix", "state": "open"}
+            owner = self.data["head_repository"]["full_name"].split("/")[0]
+            assert params == {"head": f"{owner}:topic/fix", "state": "open"}
             return self.pulls
         if path == "actions/workflows/12/runs":
             assert params == {"event": "pull_request", "branch": "topic/fix", "head_sha": HEAD}
@@ -173,8 +174,8 @@ class RecordingGitHub(pub.GitHub):
         """Package real fixture counts with the synthetic attempt metadata.
 
         Parameters:
-            artifact_id (int): Input to the test fixture.
-            destination (Path): Input to the test fixture.
+            artifact_id (int): Expected artifact ID from the listing.
+            destination (Path): ZIP path the renderer will read.
         Returns:
             None: Contract holds.
         Raises:
@@ -187,17 +188,21 @@ class RecordingGitHub(pub.GitHub):
                 archive.writestr("coverage/provenance.json", json.dumps(self.record))
 
 
-def test_sticky_fork_comment_and_retry(tmp_path: Path) -> None:
-    """Post once, then PATCH the bot's comment, never a user's copied marker.
+@pytest.mark.parametrize("repository", [FORK, REPO])
+def test_sticky_comment_and_retry(tmp_path: Path, repository: str) -> None:
+    """Label PR-controlled numbers on both fork and same-repo comment writes.
 
     Parameters:
         tmp_path (Path): Isolated test directory.
+        repository (str): PR source repository.
     Returns:
         None: Contract holds.
     Raises:
         AssertionError: An expected contract does not hold.
     """
     api = RecordingGitHub()
+    api.data["head_repository"]["full_name"] = repository
+    api.pulls[0]["head"]["repo"]["full_name"] = repository
     api.comments.append({"id": 10, "user": {"id": 99}, "body": pub.MARKER + "\ncopy"})
     run = pub.Run.parse(api.data)
     summary = tmp_path / "summary"
@@ -210,6 +215,16 @@ def test_sticky_fork_comment_and_retry(tmp_path: Path) -> None:
     ]
     body = api.comments[-1]["body"]
     assert "Ubuntu enforced signals: 34/34 zero uncovered (measured counters only)" in body
+    assert (
+        "Coverage numbers come from this PR's own CI run (PR-controlled code) and are not independently "
+        "verified. Required checks, not this comment, are the merge gate."
+    ) in body.splitlines()
+    headings = [
+        line
+        for line in body.splitlines()
+        if line.startswith(("#", "Coverage for PR", "Ubuntu enforced signals:"))
+    ]
+    assert not any("verified" in line.casefold() for line in headings)
     assert pub.SCHEDULE in body
     assert f"tested: {TESTED}" in body
     assert len(body) <= 60_000
@@ -278,7 +293,7 @@ def test_invalid_run(mutation: dict[str, Any]) -> None:
     """Reject malformed identity instead of constructing API paths or links from it.
 
     Parameters:
-        mutation (dict[str, Any]): Input to the test fixture.
+        mutation (dict[str, Any]): GitHub fields to corrupt.
     Returns:
         None: Contract holds.
     Raises:
@@ -395,7 +410,7 @@ def unavailable_download(*args: object) -> None:
     """Simulate expiry between listing and download.
 
     Parameters:
-        *args (object): Input to the test fixture.
+        *args (object): Download or render arguments supplied by the caller.
     Returns:
         None: Contract holds.
     Raises:
@@ -462,9 +477,9 @@ def test_no_unsafe_comment_write(case: str, tmp_path: Path, monkeypatch: pytest.
             """Advance a PR or run while the publisher builds its report.
 
             Parameters:
-                *args (Any): Input to the test fixture.
+                *args (Any): Download or render arguments supplied by the caller.
             Returns:
-                str: Test fixture result.
+                str: Coverage comment rendered after the simulated race.
             Raises:
                 AssertionError: An expected contract does not hold.
             """
@@ -484,6 +499,22 @@ def test_no_unsafe_comment_write(case: str, tmp_path: Path, monkeypatch: pytest.
         pub.publish(api, run, POLICY, summary)
     assert not api.writes
     assert not summary.exists()
+
+
+def test_ci_producer_display_names() -> None:
+    """Keep publisher lookups aligned with the Ubuntu producer's display names.
+
+    Parameters:
+        None.
+    Returns:
+        None: GitHub job and step names match the publisher's lookups.
+    Raises:
+        AssertionError: A producer name changed without updating the publisher.
+    """
+    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["owned-ubuntu"]
+    assert job["name"].replace("${{ matrix.os }}", "ubuntu-24.04") == pub.OWNED_JOB
+    names = {step.get("name") for step in job["steps"]}
+    assert {pub.PLAN_STEP, pub.UPLOAD_STEP} <= names
 
 
 def test_workflow_contract() -> None:
@@ -513,6 +544,7 @@ def test_workflow_contract() -> None:
     assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     assert checkout["with"] == {"ref": "${{ github.sha }}", "persist-credentials": False}
     assert publish["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert publish["shell"] == "bash -e {0}"
     assert publish["run"] == "python3 -B scripts/coverage_publish.py"
     assert "secrets" not in text
     assert "pull_request_target" not in text
@@ -541,7 +573,7 @@ def test_api_request(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
                 req (Any): Request under test.
                 timeout (int): Network timeout in seconds.
             Returns:
-                io.BytesIO: Test fixture result.
+                io.BytesIO: JSON response bytes.
             Raises:
                 AssertionError: An expected contract does not hold.
             """
@@ -556,7 +588,7 @@ def test_api_request(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
     assert pub.NoRedirect().redirect_request() is None
     client = pub.GitHub(REPO, "token")
     if case == "long":
-        monkeypatch.setattr(pub, "MAX_ARCHIVE_BYTES", 1)
+        monkeypatch.setattr(pub, "MAX_METADATA_BYTES", 1)
         with pytest.raises(ValueError, match="size limit"):
             client.request("issues/4/comments", "POST", {"body": "message"})
     else:
@@ -580,10 +612,10 @@ def test_pagination(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
         """Return two recording pages or an invalid census.
 
         Parameters:
-            self (pub.GitHub): Input to the test fixture.
-            path (str): Requested route.
+            self (pub.GitHub): Client issuing the paginated request.
+            path (str): Collection route with page filters.
         Returns:
-            Any: Test fixture result.
+            Any: Simulated GitHub collection response.
         Raises:
             AssertionError: An expected contract does not hold.
         """
@@ -633,8 +665,8 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
         """Simulate GitHub's signed redirect response.
 
         Parameters:
-            self (pub.GitHub): Input to the test fixture.
-            path (str): Requested route.
+            self (pub.GitHub): Client requesting the download.
+            path (str): Artifact zip route.
         Returns:
             None: Contract holds.
         Raises:
@@ -647,25 +679,16 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
             raise HTTPError("api", 301 if case == "status" else 302, "redirect", headers, None)
 
     class Open:
-        """Record the actual anonymous request and serve archive bytes.
-
-        Parameters:
-            self (pub.GitHub): Input to the test fixture.
-            path (str): Requested route.
-        Returns:
-            None: Contract holds.
-        Raises:
-            AssertionError: An expected contract does not hold.
-        """
+        """Record the anonymous request and serve archive bytes."""
 
         def open(self, target: str, *, timeout: int) -> io.BytesIO:
             """Assert no authorization headers reach the anonymous host.
 
             Parameters:
-                target (str): Input to the test fixture.
+                target (str): Anonymous storage URL.
                 timeout (int): Network timeout in seconds.
             Returns:
-                io.BytesIO: Test fixture result.
+                io.BytesIO: Mock archive response bytes.
             Raises:
                 AssertionError: An expected contract does not hold.
             """

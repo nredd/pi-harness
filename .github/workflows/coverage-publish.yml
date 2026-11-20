@@ -26,7 +26,8 @@ jobs:
           # workflow_run's github.sha is on the default branch, not the triggering run's head.
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Validate and publish coverage
+      - name: Check run provenance and publish coverage
+        shell: bash -e {0}
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/coverage_publish.py

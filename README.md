@@ -150,7 +150,7 @@ make help                    # every target
 - Shared tool and cache setup: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml).
 - Other workflow policy: [installer](.github/workflows/installer.yml), [core forks](.github/workflows/forks.yml),
   [publishing](.github/workflows/publish.yml), [runner rescue](.github/workflows/runner-rescue.yml). Review policy stays [here](#review-and-merge-evidence); flakes follow the comments in `ci.yml`
-- [Publish coverage](.github/workflows/coverage-publish.yml) updates one comment per PR from the current CI attempt's validated Ubuntu artifact, including fork PRs. Missing or mismatched provenance is `unavailable`; macOS is not run on PRs and WSL2 is no longer scheduled. The publisher is not a required check.
+- [Publish coverage](.github/workflows/coverage-publish.yml) updates one comment per PR, including forks. It checks the Ubuntu artifact's sidecar for run and SHA consistency, not whether the PR-reported numbers are correct. Missing or mismatched provenance is `unavailable`; macOS is not run on PRs and WSL2 is no longer scheduled. Required checks, not the comment, gate merges.
 - Owned packages publish through `publish.yml` from a signed tag; core ships through
   `nredd/tap/pi-coding-agent`. Procedure: [releases](docs/releases.md)
 - `promote-stack.yml` attests a gated `main` commit as `stack/<sha>`:
