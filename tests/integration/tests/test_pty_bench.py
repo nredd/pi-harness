@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -99,88 +100,116 @@ def test_cell_refuses_unsupported_inputs(tmp_path: Path, count: int, cap: int | 
         run_cell(tmp_path / "cell", tmp_path / "missing", count, cap)
 
 
+class RecordingFleet:
+    """Record input and startup output without a subprocess or real clock."""
+
+    def __init__(self, specs: list[Child]) -> None:
+        self.specs = specs
+        self.counts = [0] * len(specs)
+        self.sent: list[tuple[int, bytes]] = []
+
+    def __enter__(self) -> RecordingFleet:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
+
+    def wait_for(self, marker: bytes) -> None:
+        assert marker == b"main"
+        for spec in self.specs:
+            save(Path(spec.env["PI_LATENCY_PROBE"]), records()[:1])
+        self.counts[0] += 50
+
+    def send(self, index: int, data: bytes) -> None:
+        self.sent.append((index, data))
+
+    def warm_up(self, duration_s: float) -> Drain:
+        """Account for startup output before the measurement snapshot."""
+        assert duration_s == 1.0
+        self.counts[0] += 10
+        return Drain((10, *([0] * (len(self.specs) - 1))), duration_s)
+
+
 @pytest.mark.parametrize(
-    ("count", "cap", "failure"),
+    ("count", "cap", "delivered_bytes", "probe_rows", "fault", "expected_failure", "not_run"),
     [
-        (4, None, ""),
-        (8, pty_bench.AGGREGATE_CAP, ""),
-        (8, pty_bench.AGGREGATE_CAP, "delivered no output"),
-        (8, pty_bench.AGGREGATE_CAP, "not-started"),
-        (8, pty_bench.AGGREGATE_CAP, "PTY child exited"),
-        (8, pty_bench.AGGREGATE_CAP, "PTY input stalled"),
-        (8, pty_bench.AGGREGATE_CAP, "Missing measured latency windows"),
-        (8, None, "Missing measured latency windows"),
-        (4, pty_bench.AGGREGATE_CAP, "Missing measured latency windows"),
+        (4, None, 100, 2, None, "", False),
+        (8, 65536, 100, 2, None, "", False),
+        (8, 65536, 0, 2, None, "delivered no output", False),
+        (8, 65536, 100, 0, None, "did not start", False),
+        (8, 65536, 100, 2, RuntimeError("PTY child exited"), "PTY child exited", False),
+        (8, 65536, 100, 2, TimeoutError("PTY input stalled"), "PTY input stalled", False),
+        (8, 65536, 100, 1, None, "Missing measured latency windows", True),
+        (8, None, 100, 1, None, "Missing measured latency windows", False),
+        (4, 65536, 100, 1, None, "Missing measured latency windows", False),
     ],
 )
 def test_cell_reports_latency_only_with_measured_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
     count: int,
     cap: int | None,
-    failure: str,
+    delivered_bytes: int,
+    probe_rows: int,
+    fault: RuntimeError | OSError | None,
+    expected_failure: str,
+    not_run: bool,
 ) -> None:
     """Only missing measured windows in the capped eight-child cell yield NOT RUN."""
     template = build_sandbox(tmp_path / "template")
     monkeypatch.setenv("PI_BIN", sys.executable)
-    sent: list[tuple[int, bytes]] = []
     cell_root = tmp_path / "cell"
+    clock = 0.0
+    fleets: list[RecordingFleet] = []
+    monkeypatch.setattr(
+        pty_bench,
+        "time",
+        SimpleNamespace(
+            time=lambda: 1 + clock, monotonic=lambda: clock, monotonic_ns=lambda: int(clock * 1e9)
+        ),
+    )
 
-    class Fleet:
-        """Recording boundary double; real interactive execution is a separate requirement."""
+    class MeasuredFleet(RecordingFleet):
+        """Replay the chosen delivery, probe data and interruption independently."""
 
         def __init__(self, specs: list[Child]) -> None:
-            self.specs = specs
-            self.counts = [50] * count
+            super().__init__(specs)
+            fleets.append(self)
             assert len(specs) == count
-            assert all(Path(spec.env["HOME"]).is_relative_to(tmp_path / "cell") for spec in specs)
+            assert all(Path(spec.env["HOME"]).is_relative_to(cell_root) for spec in specs)
             assert all("HARNESS_SCRIPT" in spec.env for spec in specs)
 
-        def __enter__(self) -> Fleet:
-            return self
+        def drain(
+            self,
+            duration_s: float,
+            *,
+            bytes_per_s: float | None = None,
+            tick: Callable[[RecordingFleet], None] | None = None,
+        ) -> Drain:
+            nonlocal clock
+            if tick is None:
+                return self.warm_up(duration_s)
+            assert bytes_per_s == cap
+            tick(self)
+            clock = 1.0
+            tick(self)
+            for spec in self.specs:
+                save(Path(spec.env["PI_LATENCY_PROBE"]), records()[:probe_rows])
+            if fault is not None:
+                self.counts[0] += 73
+                raise fault
+            return Drain((delivered_bytes,) * count, duration_s)
 
-        def __exit__(self, *_exc: object) -> None:
-            pass
-
-        def wait_for(self, marker: bytes) -> None:
-            assert marker == b"main"
-
-        def send(self, index: int, data: bytes) -> None:
-            sent.append((index, data))
-
-        def drain(self, duration: float, **kwargs: Any) -> Drain:
-            if "tick" in kwargs:
-                kwargs["tick"](self)
-                time.sleep(0.16)
-                kwargs["tick"](self)
-                assert kwargs["bytes_per_s"] == cap
-                for spec in self.specs:
-                    data = records()
-                    data[1]["t"] = time.time() * 1000
-                    data[1]["window_s"] = 0.01
-                    if failure == "Missing measured latency windows":
-                        data.pop()
-                    elif failure == "not-started":
-                        data.clear()
-                    save(Path(spec.env["PI_LATENCY_PROBE"]), data)
-                if failure in ("PTY child exited", "PTY input stalled"):
-                    self.counts[0] += 73
-                    error = TimeoutError if failure == "PTY input stalled" else RuntimeError
-                    raise error(failure)
-            return Drain((0 if failure == "delivered no output" else 100,) * count, duration)
-
-    monkeypatch.setattr(pty_bench, "PtyFleet", Fleet)
-    not_run = count == 8 and cap is not None and failure == "Missing measured latency windows"
-    if failure and not not_run:
-        match = "did not start" if failure == "not-started" else failure
-        error = TimeoutError if failure == "PTY input stalled" else RuntimeError
-        with pytest.raises(error, match=match):
+    monkeypatch.setattr(pty_bench, "PtyFleet", MeasuredFleet)
+    if expected_failure and not not_run:
+        with pytest.raises(type(fault) if fault is not None else RuntimeError, match=expected_failure):
             run_cell(cell_root, template.home, count, cap)
         raw = json.loads((cell_root / "throttled-pty.json").read_text())
-        assert match in raw["failure"]
+        assert expected_failure in raw["failure"]
         assert "status" not in raw
         assert "probe" not in raw
-        if failure in ("PTY child exited", "PTY input stalled"):
+        if fault is not None:
             assert raw["delivery"]["delivered"] == [73, *([0] * (count - 1))]
             assert raw["delivered_bytes_per_s"] > 0
             assert all(child_records[0]["kind"] == "start" for child_records in raw["raw_probes"])
@@ -192,91 +221,128 @@ def test_cell_reports_latency_only_with_measured_windows(
         raw = json.loads((cell_root / "throttled-pty.json").read_text())
         if not_run:
             assert result.get("status") == raw["status"] == "NOT RUN"
-            assert result.get("reason") == raw["failure"] == failure
+            assert result.get("reason") == raw["failure"] == expected_failure
             assert "probe" not in result
             assert raw["raw_probes"] == [[{"kind": "start", "tui": True}]] * count
         else:
             assert "probe" in result
             assert "status" not in result
-    assert sent == [(i, b"go\r") for i in range(count)] + [(i, b"x") for i in range(count)]
+    assert fleets[0].sent == [(i, b"go\r") for i in range(count)] + [(i, b"x") for i in range(count)]
+
+
+class ReadinessTimeoutFleet(RecordingFleet):
+    """Time out after collecting startup output and the probe start record."""
+
+    def wait_for(self, marker: bytes) -> None:
+        super().wait_for(marker)
+        raise TimeoutError("PTY startup marker missing")
+
+
+class WarmupExitFleet(RecordingFleet):
+    """Exit after passing readiness and delivering some warm-up output."""
+
+    def drain(self, duration_s: float) -> Drain:
+        self.warm_up(duration_s)
+        raise RuntimeError("PTY child exited during warm-up")
 
 
 @pytest.mark.parametrize(
-    "failure",
+    ("fleet_type", "error_type", "message", "delivered"),
     [
-        "none",
-        "missing",
-        "empty",
-        "partial",
-        "zero-output",
-        "zero-writes",
-        "zero-block",
-        "slow-control",
-        "slow-cap",
-        "fast-cap",
-        "no-pressure",
-        "stale-progress",
-        "nonfinite-progress",
+        (ReadinessTimeoutFleet, TimeoutError, "PTY startup marker missing", 50),
+        (WarmupExitFleet, RuntimeError, "PTY child exited during warm-up", 60),
+    ],
+)
+def test_cell_retains_startup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fleet_type: type[RecordingFleet],
+    error_type: type[Exception],
+    message: str,
+    delivered: int,
+) -> None:
+    """Startup failures stay hard failures and retain the evidence collected so far."""
+    template = build_sandbox(tmp_path / "template")
+    monkeypatch.setenv("PI_BIN", sys.executable)
+    monkeypatch.setattr(pty_bench, "PtyFleet", fleet_type)
+    ticks = iter((1_000_000_000, 2_000_000_000))
+    monkeypatch.setattr(pty_bench, "time", SimpleNamespace(monotonic_ns=lambda: next(ticks)))
+    root = tmp_path / "cell"
+    with pytest.raises(error_type, match=message):
+        run_cell(root, template.home, 8, 65536)
+    raw = json.loads((root / "throttled-pty.json").read_text())
+    assert raw == {
+        "count": 8,
+        "aggregate_cap": 65536,
+        "failure": message,
+        "delivery": {"delivered": [delivered, *([0] * 7)], "elapsed_s": 1.0},
+        "delivered_bytes_per_s": delivered,
+        "raw_probes": [[{"kind": "start", "tui": True}]] * 8,
+    }
+
+
+@pytest.mark.parametrize(
+    ("rates", "payload", "expected_failure"),
+    [
+        pytest.param((200000, 50000), {}, "", id="valid"),
+        pytest.param((200000, 50000), None, "produced no completed", id="missing"),
+        pytest.param((200000, 50000), "", "^Calibration writer observations are missing$", id="empty"),
+        pytest.param(
+            (200000, 50000), '{"writes":', "^Calibration writer observations are missing$", id="partial"
+        ),
+        pytest.param((0, 50000), {}, "produced no completed", id="zero-output"),
+        pytest.param((200000, 50000), {"writes": 0}, "observations are missing", id="zero-writes"),
+        pytest.param((200000, 50000), {"max_write_ms": 0}, "observations are missing", id="zero-block"),
+        pytest.param((1000, 50000), {}, "control did not exceed", id="slow-control"),
+        pytest.param((200000, 1), {}, "did not demonstrate", id="slow-cap"),
+        pytest.param((200000, 100000), {}, "did not demonstrate", id="fast-cap"),
+        pytest.param((200000, 50000), {"max_write_ms": 1}, "did not distinguish", id="no-pressure"),
+        pytest.param((200000, 50000), {"last_write_s": 9}, "writer stalled", id="stale-progress"),
+        pytest.param(
+            (200000, 50000), {"last_write_s": float("nan")}, "writer stalled", id="nonfinite-progress"
+        ),
     ],
 )
 def test_calibration_requires_distinguishing_controls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    failure: str,
+    rates: tuple[int, int],
+    payload: dict[str, float] | str | None,
+    expected_failure: str,
 ) -> None:
     """A requested cap alone, silent writer or low control is never a calibration success."""
 
-    class Fleet:
+    class CalibrationFleet:
         """Deterministic delivery/report boundary for each deliberate refusal."""
 
         def __init__(self, specs: list[Child]) -> None:
             self.report = Path(specs[0].argv[-1])
 
-        def __enter__(self) -> Fleet:
+        def __enter__(self) -> CalibrationFleet:
             return self
 
         def __exit__(self, *_exc: object) -> None:
             pass
 
         def drain(self, _duration: float, *, bytes_per_s: int | None) -> Drain:
-            cap = bytes_per_s is not None
-            rate = 50000 if cap else 200000
-            if failure == "slow-control" and not cap:
-                rate = 1000
-            elif failure == "slow-cap" and cap:
-                rate = 1
-            elif failure == "fast-cap" and cap:
-                rate = 100000
-            record = {"writes": 100, "max_write_ms": 100 if cap else 1, "last_write_s": time.monotonic()}
-            if failure == "stale-progress":
-                record["last_write_s"] -= 1.2
-            elif failure == "nonfinite-progress":
-                record["last_write_s"] = float("nan")
-            if failure == "zero-writes":
-                record["writes"] = 0
-            elif failure == "zero-block":
-                record["max_write_ms"] = 0
-            elif failure == "no-pressure":
-                record["max_write_ms"] = 1
-            if failure == "empty":
-                self.report.write_text("")
-            elif failure == "partial":
-                self.report.write_text('{"writes":')
-            elif failure != "missing":
+            capped = bytes_per_s is not None
+            if isinstance(payload, dict):
+                record = {"writes": 100, "max_write_ms": 100 if capped else 1, "last_write_s": 10} | payload
                 self.report.write_text(json.dumps(record))
-            return Drain((0 if failure == "zero-output" else rate,), 1)
+            elif payload is not None:
+                self.report.write_text(payload)
+            return Drain((rates[capped],), 1)
 
-    monkeypatch.setattr(pty_bench, "PtyFleet", Fleet)
-    if failure == "none":
+    monkeypatch.setattr(pty_bench, "PtyFleet", CalibrationFleet)
+    monkeypatch.setattr(pty_bench, "time", SimpleNamespace(monotonic=lambda: 10))
+    if expected_failure:
+        with pytest.raises(RuntimeError, match=expected_failure):
+            calibrate(tmp_path)
+    else:
         result = calibrate(tmp_path)
         assert result[0]["cap"] is None
         assert result[1]["cap"] == 65536
-    elif failure in ("empty", "partial"):
-        with pytest.raises(RuntimeError, match=r"^Calibration writer observations are missing$"):
-            calibrate(tmp_path)
-    else:
-        with pytest.raises(RuntimeError):
-            calibrate(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -329,7 +395,8 @@ def test_writer_preserves_heartbeat_when_interrupted_mid_write(tmp_path: Path) -
     )
     assert result.returncode == 42
     assert json.loads(report.read_text())["writes"] > 0
-    assert (tmp_path / "heartbeat.json.pending").read_text() == '{"writes":'
+    (interrupted,) = (path for path in tmp_path.iterdir() if path != report)
+    assert interrupted.read_text() == '{"writes":'
 
 
 def test_scenario_warns_without_failing_not_run_cell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -349,6 +416,30 @@ def test_scenario_warns_without_failing_not_run_cell(tmp_path: Path, monkeypatch
     recorded = json.loads((box.root / "throttled-pty.json").read_text())["cells"]
     assert len(recorded) == 6
     assert recorded[-1] == {"status": "NOT RUN", "reason": "Missing measured latency windows"}
+
+
+def test_scenario_keeps_last_complete_report_on_interrupted_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Interrupt the second cell publication after writing a partial JSON prefix."""
+    box = build_sandbox(tmp_path / "scenario")
+    out = box.root / "throttled-pty.json"
+    write_text = Path.write_text
+    first_cell = {"count": 1, "aggregate_cap": None, "probe": {}}
+
+    def interrupt(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        """Write an incomplete second-cell snapshot before simulating an interruption."""
+        if len(json.loads(data)["cells"]) == 2:
+            write_text(path, '{"calibration":', *args, **kwargs)
+            raise OSError("interrupted fleet report publication")
+        return write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(scenario, "calibrate", lambda _root: [])
+    monkeypatch.setattr(scenario, "run_cell", lambda *_args: first_cell)
+    monkeypatch.setattr(Path, "write_text", interrupt)
+    with pytest.raises(OSError, match="interrupted fleet report publication"):
+        scenario.test_throttled_pty_fleet(box, box.home)
+    assert json.loads(out.read_text()) == {"calibration": [], "cells": [first_cell]}
 
 
 def test_real_writer_stalling_after_initial_progress_is_refused(

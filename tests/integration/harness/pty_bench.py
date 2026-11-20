@@ -12,6 +12,7 @@ import logging
 import math
 import sys
 import time
+from enum import StrEnum
 from itertools import pairwise
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 AGGREGATE_CAP = 65536
+LARGEST_FLEET = 8
+FLEET_SIZES = (1, 4, LARGEST_FLEET)
 WINDOW_S = 6.0
 KEY_INTERVAL_S = 0.15
 COVERAGE_TOLERANCE_MS = 1000
@@ -55,7 +58,7 @@ WRITER = dedent("""\
 
 
 class DeliveryRecord(TypedDict):
-    """Actual driver delivery, excluding startup."""
+    """Actual driver delivery for the measured window or a failed startup."""
 
     delivered: tuple[int, ...]
     elapsed_s: float
@@ -110,11 +113,20 @@ class CellDelivery(TypedDict):
     delivered_bytes_per_s: float
 
 
+class CellStatus(StrEnum):
+    """Explicitly unmeasured bench outcomes."""
+
+    NOT_RUN = "NOT RUN"
+
+
+NOT_RUN_LABEL = f"Capped eight-child latency {CellStatus.NOT_RUN}"
+
+
 class CellOutcome(TypedDict, total=False):
     """Failure details, absent for a measured cell."""
 
     failure: str
-    status: Literal["NOT RUN"]
+    status: Literal[CellStatus.NOT_RUN]
 
 
 class RawCell(CellDelivery, CellOutcome):
@@ -132,7 +144,7 @@ class Cell(CellDelivery):
 class NotRunCell(CellDelivery):
     """A capped eight-child attempt with delivery but no accepted probe metrics."""
 
-    status: Literal["NOT RUN"]
+    status: Literal[CellStatus.NOT_RUN]
     reason: str
 
 
@@ -141,6 +153,18 @@ class FleetReport(TypedDict):
 
     calibration: list[CalibrationEntry]
     cells: list[Cell | NotRunCell]
+
+
+def publish_fleet_report(path: Path, report: FleetReport) -> None:
+    """Publish a complete fleet snapshot without truncating the previous one.
+
+    Parameters:
+        path (Path): destination in the private benchmark directory.
+        report (FleetReport): calibration and all completed cell outcomes.
+    """
+    pending = path.with_suffix(path.suffix + ".pending")
+    pending.write_text(json.dumps(report, indent=2))
+    pending.replace(path)
 
 
 def _delivery_record(sample: Drain) -> DeliveryRecord:
@@ -266,7 +290,7 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
         Cell | NotRunCell: throughput and probe observations, or explicit NOT RUN for the
             capped eight-child cell with missing measured windows. Neither is idle-host acceptance.
     """
-    if count not in (1, 4, 8) or cap not in (None, AGGREGATE_CAP):
+    if count not in FLEET_SIZES or cap not in (None, AGGREGATE_CAP):
         raise ValueError("Use fleet sizes 1/4/8 and the documented aggregate cap or control")
     boxes = make_sandboxes(root, template_home, count, shared=True)
     session = root / "2k.jsonl"
@@ -297,15 +321,11 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
         return _measure_cell(fleet, outs, root / "throttled-pty.json", cap)
 
 
-def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | None) -> Cell | NotRunCell:
-    """Measure a ready fleet and retain the evidence if measurement is interrupted."""
-    count = len(outs)
-    # Match the existing launcher's first-frame footer seam. Raw PTY bytes
-    # contain styling inside transcript text; they are not a tmux screen capture.
-    fleet.wait_for(FIRST_FRAME_PATTERN.replace(r"\b", "").encode())
-    fleet.drain(1.0)
-    since_ms = time.time() * 1000
-    next_key = 0.0
+def _drive_cell(fleet: PtyFleet, count: int, cap: int | None) -> Drain:
+    """Submit one prompt per child, then inject spaced input during the measured drain."""
+    for index in range(count):
+        fleet.send(index, b"go\r")
+    next_key = time.monotonic() + KEY_INTERVAL_S
 
     def type_keys(active: PtyFleet) -> None:
         """Inject spaced input into every editor during the measured drain."""
@@ -315,23 +335,50 @@ def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | No
                 active.send(index, b"x")
             next_key = time.monotonic() + KEY_INTERVAL_S
 
+    return fleet.drain(WINDOW_S, bytes_per_s=cap, tick=type_keys)
+
+
+def _record_cell(
+    outs: list[Path], report: Path, cap: int | None, delivery: Drain, outcome: CellOutcome
+) -> CellDelivery:
+    """Save raw probe records and driver delivery independently of latency reduction."""
+    delivered: CellDelivery = {
+        "count": len(outs),
+        "aggregate_cap": cap,
+        "delivery": _delivery_record(delivery),
+        "delivered_bytes_per_s": delivery.bytes_per_s,
+    }
+    observations: RawCell = {
+        **delivered,
+        **outcome,
+        "raw_probes": [read_records(out) for out in outs],
+    }
+    report.write_text(json.dumps(observations, indent=2))
+    return delivered
+
+
+def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | None) -> Cell | NotRunCell:
+    """Keep startup or measured evidence before returning or re-raising a refusal."""
     before = tuple(fleet.counts)
     started_ns = time.monotonic_ns()
     delivery: Drain | None = None
     outcome: CellOutcome = {}
     try:
-        for index in range(count):
-            fleet.send(index, b"go\r")
-        next_key = time.monotonic() + KEY_INTERVAL_S
-        delivery = fleet.drain(WINDOW_S, bytes_per_s=cap, tick=type_keys)
+        # Match the first-frame footer seam: PTY bytes are not a tmux screen capture.
+        fleet.wait_for(FIRST_FRAME_PATTERN.replace(r"\b", "").encode())
+        fleet.drain(1.0)
+        since_ms = time.time() * 1000
+        before = tuple(fleet.counts)
+        started_ns = time.monotonic_ns()
+        delivery = _drive_cell(fleet, len(outs), cap)
         if not all(delivery.delivered):
             raise RuntimeError("A measured PTY delivered no output")
         metrics = probe_metrics(outs, since_ms, time.time() * 1000)
     except (RuntimeError, OSError) as error:
         outcome["failure"] = str(error)
-        if count == 8 and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
-            outcome["status"] = "NOT RUN"
-            LOGGER.warning(f"Capped eight-child latency NOT RUN: {error}; raw observations at '{report}'")
+        if len(outs) == LARGEST_FLEET and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
+            outcome["status"] = CellStatus.NOT_RUN
+            LOGGER.warning(f"{NOT_RUN_LABEL}: {error}; raw observations at '{report}'")
         else:
             LOGGER.error(f"Refused synthetic PTY observations: {error}; raw observations at '{report}'")
             raise
@@ -341,18 +388,7 @@ def _measure_cell(fleet: PtyFleet, outs: list[Path], report: Path, cap: int | No
                 tuple(after - prior for after, prior in zip(fleet.counts, before, strict=True)),
                 max(1, time.monotonic_ns() - started_ns) / 1_000_000_000,
             )
-        delivered: CellDelivery = {
-            "count": count,
-            "aggregate_cap": cap,
-            "delivery": _delivery_record(delivery),
-            "delivered_bytes_per_s": delivery.bytes_per_s,
-        }
-        observations: RawCell = {
-            **delivered,
-            **outcome,
-            "raw_probes": [read_records(out) for out in outs],
-        }
-        report.write_text(json.dumps(observations, indent=2))
+        delivered = _record_cell(outs, report, cap, delivery, outcome)
     if "failure" in outcome:
-        return {**delivered, "status": "NOT RUN", "reason": outcome["failure"]}
+        return {**delivered, "status": CellStatus.NOT_RUN, "reason": outcome["failure"]}
     return {**delivered, "probe": metrics}
