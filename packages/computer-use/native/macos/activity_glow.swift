@@ -8,7 +8,7 @@ private let agentCursorBloomColor = NSColor(
 	alpha: 1
 )
 
-private final class ActivityGlowView: NSView {
+final class ActivityGlowView: NSView {
 	private let edgeWidth: CGFloat = 30
 	private let edges = (0..<4).map { _ in CAGradientLayer() }
 	private let border = CALayer()
@@ -41,9 +41,7 @@ private final class ActivityGlowView: NSView {
 		layer?.add(pulse, forKey: "computer-use-activity-pulse")
 	}
 
-	required init?(coder: NSCoder) {
-		fatalError("init(coder:) has not been implemented")
-	}
+	required init?(coder: NSCoder) { return nil }
 
 	override func layout() {
 		super.layout()
@@ -71,13 +69,28 @@ private final class ActivityGlowView: NSView {
 	}
 }
 
+/// The window operations needed by the controller, separate from display discovery and AppKit construction.
+protocol ActivityGlowWindow: AnyObject {
+	func close()
+	func orderFrontRegardless()
+	func orderOut(_ sender: Any?)
+}
+
+extension NSWindow: ActivityGlowWindow {}
+
 final class ActivityGlowController: NSObject {
 	private let stateLock = NSLock()
 	private var activeClients = Set<UUID>()
-	private var windows: [NSWindow] = []
+	private var windows: [any ActivityGlowWindow] = []
 	private var visible = false
+	private let makeWindows: () -> [any ActivityGlowWindow]
 
-	override init() {
+	convenience override init() {
+		self.init(makeWindows: { NSScreen.screens.map(Self.makeWindow) })
+	}
+
+	init(makeWindows: @escaping () -> [any ActivityGlowWindow]) {
+		self.makeWindows = makeWindows
 		super.init()
 		NotificationCenter.default.addObserver(
 			self,
@@ -121,13 +134,13 @@ final class ActivityGlowController: NSObject {
 
 	private func rebuildWindows() {
 		windows.forEach { $0.close() }
-		windows = NSScreen.screens.map(makeWindow)
+		windows = makeWindows()
 		if visible {
 			windows.forEach { $0.orderFrontRegardless() }
 		}
 	}
 
-	private func makeWindow(for screen: NSScreen) -> NSWindow {
+	private static func makeWindow(for screen: NSScreen) -> NSWindow {
 		let window = NSWindow(
 			contentRect: screen.frame,
 			styleMask: .borderless,

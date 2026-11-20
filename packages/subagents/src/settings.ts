@@ -741,11 +741,11 @@ export function loadSettings(cwd: string = process.cwd(), homeDir?: string): Sub
 			"[pi-subagents] Ignoring maxActiveSubagents/nestedSubagentReserve in project .pi/subagents.json: the process-wide budget is read from global configuration only.",
 		);
 	}
-	return { ...trustedSettings(homeDir), ...project };
+	return { ...loadTrustedSettings(homeDir), ...project };
 }
 
 /** Global settings with the enterprise manifest over them: the layer a project file cannot touch. */
-function trustedSettings(homeDir?: string): SubagentsSettings {
+export function loadTrustedSettings(homeDir?: string): SubagentsSettings {
 	const enterprise = readEnterpriseLocalManifest(homeDir)?.subagents;
 	const enterpriseSettings = enterprise === undefined ? {} : sanitize(enterprise);
 	return { ...readSettingsFile(globalPath(homeDir)), ...enterpriseSettings };
@@ -758,7 +758,7 @@ function trustedSettings(homeDir?: string): SubagentsSettings {
  * covers. A missing key means its default, so removing the cap turns it off.
  */
 export function loadBudgetPolicy(homeDir?: string): BudgetPolicy {
-	const trusted = trustedSettings(homeDir);
+	const trusted = loadTrustedSettings(homeDir);
 	return {
 		maxActive: trusted.maxActiveSubagents ?? DEFAULT_BUDGET_POLICY.maxActive,
 		nestedReserve: trusted.nestedSubagentReserve ?? DEFAULT_BUDGET_POLICY.nestedReserve,

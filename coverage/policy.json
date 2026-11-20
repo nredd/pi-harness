@@ -398,14 +398,14 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Native Ubuntu receipt 43183336941 at 793ad317354e12f696204cbdcbe5b11b4dee4433, artifact 13927707571: uncovered L/F/regions 1442/170/2625. Includes inline and separately named cfg(test) modules in src; no branch or statement producer. Windows and WSL remain unmeasured by this signal.",
+      "note": "Pinned Linux ARM64 measurement (#696): uncovered L/F/regions 1339/152/2472 before this slice and 1106/150/2028 after it. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows and WSL remain unmeasured by this signal.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 1442, "functions": 170 } },
+          "max_uncovered": { "linux": { "lines": 1106, "functions": 150 } },
           "enforcement": "report-only",
-          "reason": "Source-complete Ubuntu producer baseline (#758); runtime and inline-test attribution closure remains #696, not a native 100-percent claim.",
+          "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
           "skip_os": ["darwin"],
           "gate": "check-ts"
@@ -441,7 +441,7 @@
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 4113, "functions": 765, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 3672, "functions": 695, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "#757 establishes the full-source baseline for #645 deterministic S1-S5 closures; no all-native coverage claim.",
@@ -585,6 +585,7 @@
       "root": ".",
       "owned": [
         "scripts/check-commit-messages.mjs",
+        "scripts/check-test-tempdirs.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
@@ -656,10 +657,10 @@
     },
     "test-lib": {
       "root": "tests/lib",
-      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/isolated-home.ts", "src/model-guard.ts", "src/pi.ts", "src/resources.ts", "src/run-tree.ts", "src/sandbox.ts", "src/terminal.ts"],
+      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/isolated-home.ts", "src/model-guard.ts", "src/pi.ts", "src/resources.ts", "src/run-tree.ts", "src/sandbox.ts", "src/temp-dir.ts", "src/terminal.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, the recording ExtensionAPI and context doubles (#865), terminal constants, git and temp/agent/config-home sandboxes, home guard, the isolated-home environment shared with the Vitest launcher, a process-group runner that kills a hung child tree, the tier-only model guard (moved from `preset`, #867), and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
+      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, the recording ExtensionAPI and context doubles (#865), terminal constants, git and temp/agent/config-home sandboxes, test-owned scratch directories via makeTestTempDir (#1064), home guard, the isolated-home environment shared with the Vitest launcher, a process-group runner that kills a hung child tree, the tier-only model guard (moved from `preset`, #867), and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

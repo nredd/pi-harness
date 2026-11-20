@@ -30,7 +30,19 @@ put the why in the commit.
   - `coverage_report.py`: local-only Markdown/SVG renderer for trusted plans and downloaded evidence.
     Malformed artifacts (including corrupt LZMA streams) degrade only their host; filesystem failures
     expose only error types and basenames. File totals validate in one pass. Explicit partial-row
-    warnings remain essential state under the 60,000-character cap. No publishing or CI changes.
+    warnings remain essential state under the 60,000-character cap. No publishing.
+    For `coverage-<os>`, the renderer requires `coverage/provenance.json` beside `coverage/summary.json`
+    in the same ZIP or unpacked directory. The producer records run ID, attempt, job key, matrix cell
+    (the declared artifact name), actual `git rev-parse HEAD`, PR head SHA (null outside PRs), event
+    and workflow ref. The fan-in stamps the summary only when all downloaded shards match its run,
+    attempt and checkout; a partial rerun that reuses older shards can retain reports without a stamp.
+    Missing, malformed or mismatched records render `unavailable`, never zero. Accounting and floors
+    are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,
+    `--event-name`, `--workflow-ref` and (on PRs only) `--head-sha`; measured-main comparison also
+    requires `--baseline-identity SHA RUN ATTEMPT EVENT WORKFLOW_REF` independently of the PR inputs.
+    Fan-in evidence is Ubuntu-only on PRs; macOS is eligible on pushes and dispatches. There is no
+    WSL2 producer. Matching a record is not authentication; the caller must authenticate the run and
+    artifacts.
 - `coverage/policy.json`: enforced coverage policy
 - `releases/`: generated release manifests
 
@@ -52,7 +64,14 @@ make help                    # every target
   folding edits source fragments only, never publishes or releases. Edits to enrolled packages'
   `CHANGELOG.md` files run the scripts gate, including fragment validation, rather than bypassing CI as docs-only
 - `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
-- `check-ts` takes `WORKSPACES=<paths>`
+- `check-ts` takes `WORKSPACES=<paths>` and always checks literal `mkdtemp` and `mkdtempSync`
+  references in owned JS/TS test sources only. Python and the `forks/pi` Gitlink are not scanned.
+  The regex counts comments and strings as well as code (including aliased imports), but misses
+  computed spellings assembled from fragments. Use `makeTestTempDir(prefix, onTestFinished)` from
+  `@nredd/pi-test-lib/temp-dir` for scratch paths that should live until a test finishes.
+  `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
+  (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
+  the merge base is allowed for its initial introduction only.
 - Scripts that use `node ../../scripts/run-vitest.ts` give Vitest and its subprocesses a private
   `TMPDIR`, `TMP` and `TEMP`. The launcher removes the sandbox after the child exits, even on test
   failure. Direct Vitest and Bun invocations bypass this cleanup. `SIGINT` or `SIGTERM` delivered
@@ -245,6 +264,14 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   the released host. The fork gate's non-rewriting
   check mirrors the entire selected core script, including worktree readiness and the binary-release
   and fork-audit type checks; only Biome's `--write` is removed
+- The Forks system dependency step always installs the upstream packages. It shares Ubuntu mirror
+  selection with WSL2: try Azure first, then the Ubuntu archive if the index or package download
+  fails. Each apt command has its own deadline inside the five-minute step and prints its captured
+  output on completion or timeout. The script writes a scratch sources file, points apt's
+  `Dir::Etc::sourcelist` at it, and disables list cleanup so the runner's configured sources and
+  other repositories' indexes stay in place. An unsupported sources layout fails the step; if both
+  mirrors fail, the log names each one. The script installs the downloaded packages without another
+  network fetch.
 - The extension forks are imported workspaces, not submodules. They are not kept in sync with
   upstream; each README records where it came from
 

@@ -141,56 +141,13 @@ jobs:
           # Maintainer kill switch: any non-empty value sends every cell back to hosted runners.
           PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
           UNTRUSTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'true' || '' }}
-        run: |
-          pools=(
-            --pool-run-id "${GITHUB_RUN_ID:-0}"
-            --pool-repository "${GITHUB_REPOSITORY:-}"
-            --pool-attempt "${GITHUB_RUN_ATTEMPT:-1}"
-            --pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT"
-            --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT"
-          )
-          if [ -n "$UNTRUSTED" ] || [ -n "$PI_POOLS_DISABLED" ]; then pools+=(--no-pools); fi
-          if [ "$EVENT" = workflow_dispatch ]; then
-            # A frozen release-verification/<sha> ref can verify an older main
-            # candidate without moving it forward merely because main advanced.
-            case "$GITHUB_REF" in
-              refs/heads/main|"refs/heads/release-verification/$GITHUB_SHA") ;;
-              *) echo 'Full verification requires main or an exact frozen candidate ref' >&2; exit 1 ;;
-            esac
-            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-            # No diff to read: every input is true and every cell runs for real.
-            python3 scripts/ci_paths.py --full --event "$EVENT" --github-output "$GITHUB_OUTPUT" "${pools[@]}"
-          else
-            python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --event "$EVENT" \
-              --pr-title="$PR_TITLE" --pr-number "${PR_NUMBER:-0}" --github-output "$GITHUB_OUTPUT" "${pools[@]}"
-          fi
+        run: python3 scripts/ci_classify.py plan
       - name: Report classification
         env:
           DOCS_ONLY: ${{ steps.classify.outputs.docs_only }}
           STACK_INPUTS: ${{ steps.classify.outputs.stack_inputs }}
           CHANGED_FILES: ${{ steps.classify.outputs.changed_files }}
-        run: |
-          echo "Changed-path classification: docs-only=$DOCS_ONLY stack-inputs=$STACK_INPUTS"
-          echo "::notice title=bench not run::No quiet self-hosted runner yet; hosted runners cannot meet the bench admission policy"
-          {
-            echo "### CI path classification"
-            echo
-            echo "Docs-only: \`$DOCS_ONLY\`"
-            echo
-            echo "Stack inputs: \`$STACK_INPUTS\`"
-            echo
-            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-              echo 'macOS PR skip: macOS cells are not in the PR matrix.'
-              echo
-            fi
-            echo "Changed files:"
-            echo '```text'
-            printf '%s\n' "$CHANGED_FILES"
-            echo '```'
-            echo
-            echo "### bench: NOT RUN"
-            echo "No quiet self-hosted runner exists yet (migration plan section 7). This is not a pass."
-          } >>"$GITHUB_STEP_SUMMARY"
+        run: python3 scripts/ci_classify.py report
 
   # The shard matrix comes from the plan. The fan-in matrix selects OSes by event.
   # Policy: Owned shard gates and verification engines
@@ -318,7 +275,7 @@ jobs:
   # outlast the two resamples still report the producer's reason (or leave a lost baseline's entries `warming`). Both source consumers now pin published sampler `0.2.1`, whose names-only `/proc` enumeration removes
   # newer incident's final unavailable collection is established, not its underlying syscall failure.
   #
-  # Hosted Ubuntu apt steps (#655): `Install tmux (Linux)` (both sites) and the `forks.yml` system dependencies skip apt when the runner image already has the tools (`command -v tmux`, `dpkg -s` for the dev libraries). Otherwise they run with `timeout-minutes: 5` and `-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120`, so a stalled mirror or held dpkg lock fails that step fast instead of burning the 30 minute job budget (runs `42756722827` and `42763778363` were cancelled inside apt). Not a flake to rerun: a step that hits the 5 minute bound is a real failure to investigate. `Install reviewer read dependencies` installs prebuilt `ripgrep` and `fd-find` release binaries with `taiki-e/install-action` on both Ubuntu and macOS, so an apt mirror outage (2026-11-11: every Linux owned shard timed out in apt) cannot block the Linux matrix.
+  # Hosted Ubuntu tmux steps (#655): `Install tmux (Linux)` (both sites) skips apt when the runner image already has `tmux`. Otherwise it runs with `timeout-minutes: 5` and `-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120`, so a stalled mirror or held dpkg lock fails that step fast instead of burning the 30 minute job budget (runs `42756722827` and `42763778363` were cancelled inside apt). Not a flake to rerun: a step that hits the 5 minute bound is a real failure to investigate. `Install reviewer read dependencies` installs prebuilt `ripgrep` and `fd-find` release binaries with `taiki-e/install-action` on both Ubuntu and macOS, so an apt mirror outage (2026-11-11: every Linux owned shard timed out in apt) cannot block the Linux matrix.
 
   owned-shards:
     if: ${{ needs.classify.outputs.owned_shards != '' && needs.classify.outputs.owned_shards != '[]' }}
@@ -423,6 +380,18 @@ jobs:
         run: make check-integration
       # `macos-native-pure` compiles real shipped Swift sources once during the package gate.
       # Retain raw region/profile evidence separately; fan-in still consumes its validated LCOV.
+      - name: Record Swift coverage provenance
+        if: always() && matrix.guest == 'macos' && contains(matrix.workspaces, 'packages/computer-use')
+        continue-on-error: true
+        env:
+          COVERAGE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COVERAGE_CELL: computer-use-swift-${{ matrix.os }}
+        run: |
+          if [ -d packages/computer-use/coverage/swift ]; then
+            tested_sha=$(git rev-parse HEAD)
+            python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
+              --output packages/computer-use/coverage/swift/provenance.json
+          fi
       - name: Preserve real-source Swift coverage
         if: always() && matrix.guest == 'macos' && contains(matrix.workspaces, 'packages/computer-use')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -432,14 +401,27 @@ jobs:
           if-no-files-found: error
       # The macOS scripts shard owns scripts/python + import-audit reports; python owns release/harness,
       # probes/providers. Dynamic artifact names and downloads include both without a second list.
-      # Reports only: the fan-in accounts for the whole cell. A shard that produces no report (computer-use) uploads
-      # nothing, and the fan-in's accounting fails on any report the policy expects and no shard produced.
+      # Bind the receipt to the shard checkout, not the PR head or the artifact upload time.
+      - name: Record shard coverage provenance
+        if: always() && steps.tools.outcome == 'success'
+        continue-on-error: true
+        env:
+          COVERAGE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COVERAGE_CELL: coverage-${{ matrix.os }}-${{ matrix.shard }}
+          COVERAGE_SHARD: ${{ matrix.shard }}
+        run: |
+          tested_sha=$(git rev-parse HEAD)
+          python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
+            --output "coverage/provenance-$COVERAGE_SHARD.json"
+      # A shard can retain its receipt without measurements. The fan-in still fails if a report
+      # expected by policy is missing.
       - name: Preserve this shard's coverage reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-${{ matrix.os }}-${{ matrix.shard }}
           path: |
+            coverage/provenance-${{ matrix.shard }}.json
             packages/*/coverage/**/lcov.info
             packages/computer-use/coverage/native-linux/coverage.json
             packages/computer-use/coverage/native-linux/setup.log
@@ -543,12 +525,27 @@ jobs:
       - name: Windows build and install routing into disposable paths
         working-directory: packages/computer-use
         run: node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs test/rust-coverage.test.mjs --coverage.enabled=false
+      - name: Record Windows native coverage provenance
+        if: always()
+        continue-on-error: true
+        env:
+          COVERAGE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if (Test-Path packages/computer-use/coverage/native-windows/compiler.log) {
+            $testedSha = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            uv run --no-project --python (Get-Content .python-version) python scripts/coverage_provenance.py `
+              --tested-sha $testedSha --cell computer-use-rust-windows-x64 `
+              --output packages/computer-use/coverage/native-windows/provenance.json
+            exit $LASTEXITCODE
+          }
       - name: Preserve Windows source-bound native reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: computer-use-rust-windows-x64
           path: |
+            packages/computer-use/coverage/native-windows/provenance.json
             packages/computer-use/coverage/native-windows/compiler.log
             packages/computer-use/coverage/native-windows/coverage.json
             packages/computer-use/coverage/native-windows/*/lcov.info
@@ -673,6 +670,7 @@ jobs:
           # No `npm ci` here, so it must not save an empty npm cache.
           npm-cache: 'false'
       - name: Download the shards' coverage reports
+        id: download-coverage
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -681,6 +679,7 @@ jobs:
       # Each artifact lands in its own directory; a report path two shards both produced would let one copy
       # silently replace the other, so that fails instead.
       - name: Merge the shards' coverage reports
+        id: merge-coverage
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
         run: |
           cd "$RUNNER_TEMP/shard-coverage"
@@ -704,6 +703,23 @@ jobs:
           COVERAGE_HOST: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].guest }}
           COVERAGE_SKIPPED_GATES: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].skipped_gates }}
         run: make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST" COVERAGE_SKIPPED_GATES="$COVERAGE_SKIPPED_GATES"
+      # Keep accounting and artifact retention independent from presentation provenance. An older or
+      # partial rerun's shard can still be retained for diagnosis, but may not be presented as current.
+      - name: Record fan-in coverage provenance
+        if: always() && steps.plan.outputs.run == 'true'
+        continue-on-error: true
+        env:
+          COVERAGE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COVERAGE_CELL: coverage-${{ matrix.os }}
+          DOWNLOAD_OUTCOME: ${{ steps.download-coverage.outcome }}
+          MERGE_OUTCOME: ${{ steps.merge-coverage.outcome }}
+        run: |
+          rm -f coverage/provenance.json
+          if [ "$DOWNLOAD_OUTCOME" = success ] && [ "$MERGE_OUTCOME" = success ] && [ -f coverage/summary.json ]; then
+            tested_sha=$(git rev-parse HEAD)
+            python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
+              --shards "$RUNNER_TEMP/shard-coverage" --output coverage/provenance.json
+          fi
       - name: Preserve independent coverage reports and summary
         if: always() && steps.plan.outputs.run == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -731,6 +747,7 @@ jobs:
             scripts/coverage/**/lcov.info
             scripts/coverage/**/coverage-summary.json
             coverage/summary.json
+            coverage/provenance.json
           if-no-files-found: error
       - name: Packages without a Bun run (not run)
         if: steps.plan.outputs.run == 'true'
@@ -1180,48 +1197,9 @@ jobs:
       - name: Build standalone
         id: build
         if: ${{ !cancelled() && steps.plan.outputs.scenarios == 'true' && steps.workspace.outcome == 'success' }}
-        working-directory: forks/pi
-        run: |
-          npm ci --ignore-scripts
-          # Same frozen data as forks.yml, never the live model fetch.
-          version=$(node -p 'require("./packages/ai/package.json").version')
-          mkdir -p "$RUNNER_TEMP/model-data"
-          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP/model-data"
-          tar -xzf "$RUNNER_TEMP/model-data/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP/model-data"
-          rm -rf packages/ai/src/providers/data
-          cp -R "$RUNNER_TEMP/model-data/package/dist/providers/data" packages/ai/src/providers/data
-          # Observe Bun's compile argv/module graph without changing core sources or build flags.
-          PYTHONPATH=../../tests/integration ../../tests/integration/.venv/bin/python -m harness.standalone_diagnostics \
-            prepare-build --directory "$RUNNER_TEMP/pi-build-evidence"
-          set -o pipefail
-          evidence="$RUNNER_TEMP/pi-build-evidence"
-          # One function, so both builds run the identical wrapped command; the wrapper overwrites its evidence.
-          build_standalone() {
-            PATH="$evidence/bin:$PATH" \
-              ./scripts/build-binaries.sh --skip-install --offline-model-data \
-              --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone" 2>&1 | tee "$evidence/build.log"
-          }
-          # Park the first build's evidence and executable under first/ so failures are labelled correctly.
-          keep_first_build() {
-            mkdir -p "$evidence/first"
-            for name in build.log compile-command.json module-graph.json; do
-              if [ -e "$evidence/$name" ]; then mv "$evidence/$name" "$evidence/first/$name"; fi
-            done
-            if [ -f "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" ]; then
-              mv "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
-            fi
-          }
-          build_standalone || { keep_first_build; exit 1; }
-          # Rebuild the same inputs at the same output path: Bun must emit identical bytes (#72).
-          keep_first_build
-          build_standalone
-          # Evidence at the root now describes the second build, i.e. the executable exported as PI_BIN.
-          cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"
-          PYTHONPATH=../../tests/integration ../../tests/integration/.venv/bin/python -m harness.standalone_diagnostics \
-            verify-reproducible --first "$RUNNER_TEMP/pi-first-build" \
-            --second "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" \
-            --digest-out ../../tests/integration/artifacts/standalone-pi.sha256
-          echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: tests/integration/.venv/bin/python scripts/ci_standalone.py "$PLATFORM"
       - name: Scan standalone build failure evidence
         id: build_failure
         if: ${{ !cancelled() && steps.build.outcome == 'failure' }}

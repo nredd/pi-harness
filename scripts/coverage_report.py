@@ -9,8 +9,8 @@ Plan JSON, supplied by the trusted caller and never derived from the artifact: a
 `pending` or `NOT RUN`. `signals` maps `package/signal` to `{enforcement: enforced|report-only, reason,
 semantics, state: planned|NOT RUN, source_root}`. `semantics` names the producer and counter meaning, so
 `vs measured main` is computed only when it matches. The caller must authenticate repository, SHAs, run,
-attempt and artifact freshness first. A host whose artifact is missing or malformed degrades to
-`unavailable` with a bounded reason; the healthy hosts still render.
+attempt, workflow and artifact freshness first. Producer records must agree with that trusted identity.
+Missing, malformed or mismatched evidence degrades only its own host to `unavailable`.
 
 Implemented limits: Markdown is capped at 60,000 characters with uncovered-first file rows and omitted
 counts. No step-summary cap or changed-files ordering exists yet (slice 2/3 of #1001).
@@ -41,6 +41,10 @@ from urllib.parse import quote
 
 LOGGER = logging.getLogger(__name__)
 MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_PROVENANCE_BYTES = 4096
+PROVENANCE_MEMBER = "coverage/provenance.json"
+COVERAGE_HOSTS = {"ubuntu-24.04", "macos-14"}
+CI_EVENTS = {"pull_request", "push", "workflow_dispatch"}
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_MARKDOWN = 60_000
@@ -176,11 +180,12 @@ def decode_json(data: bytes) -> dict[str, object]:
         raise ValueError(f"Cannot decode JSON: '{error}'") from error
 
 
-def read_summary(path: Path) -> dict[str, object]:
+def read_summary(path: Path, expected: dict[str, object] | None = None) -> dict[str, object]:
     """Read a bounded summary or ZIP without extracting any archive member.
 
     Parameters:
         path (Path): JSON summary or complete downloaded artifact ZIP.
+        expected (dict[str, object] | None): If supplied, require this artifact provenance.
     Returns:
         dict[str, object]: Decoded accounting summary.
     Raises:
@@ -193,7 +198,10 @@ def read_summary(path: Path) -> dict[str, object]:
         raise ValueError("Input byte limit exceeded")
     if path.suffix != ".zip":
         with path.open("rb") as stream:
-            return decode_json(stream.read(MAX_JSON_BYTES + 1))
+            summary = decode_json(stream.read(MAX_JSON_BYTES + 1))
+        if expected is not None:
+            validate_record(read_record(path.with_name("provenance.json")), expected)
+        return summary
     try:
         with zipfile.ZipFile(path) as archive:
             members = archive.infolist()
@@ -219,7 +227,16 @@ def read_summary(path: Path) -> dict[str, object]:
             if member.file_size > MAX_JSON_BYTES or member.is_dir():
                 raise ValueError("Invalid summary member")
             with archive.open(member) as stream:
-                return decode_json(stream.read(MAX_JSON_BYTES + 1))
+                summary = decode_json(stream.read(MAX_JSON_BYTES + 1))
+            if expected is not None:
+                if PROVENANCE_MEMBER not in archive.namelist():
+                    raise ValueError("Missing coverage provenance")
+                receipt = archive.getinfo(PROVENANCE_MEMBER)
+                if receipt.file_size > MAX_PROVENANCE_BYTES:
+                    raise ValueError("Coverage provenance byte limit exceeded")
+                with archive.open(receipt) as stream:
+                    validate_record(decode_record(stream.read(MAX_PROVENANCE_BYTES + 1)), expected)
+            return summary
     except (
         zipfile.BadZipFile,
         KeyError,
@@ -232,6 +249,55 @@ def read_summary(path: Path) -> dict[str, object]:
         OverflowError,
     ) as error:
         raise ValueError(f"Cannot read artifact ZIP: '{error}'") from error
+
+
+def decode_record(data: bytes) -> dict[str, object]:
+    """Read small producer records through the same strict JSON boundary as summaries.
+
+    Parameters:
+        data (bytes): Untrusted producer record.
+    Returns:
+        dict[str, object]: Decoded record.
+    Raises:
+        ValueError: The record is too large or malformed.
+    """
+    if len(data) > MAX_PROVENANCE_BYTES:
+        raise ValueError("Coverage provenance byte limit exceeded")
+    return decode_json(data)
+
+
+def read_record(path: Path) -> dict[str, object]:
+    """Read a bounded regular sidecar from an already-unpacked artifact.
+
+    Parameters:
+        path (Path): Exact sidecar location.
+    Returns:
+        dict[str, object]: Decoded record.
+    Raises:
+        ValueError: The sidecar is missing, unsafe or malformed.
+        OSError: The sidecar cannot be read.
+    """
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Missing or non-regular coverage provenance")
+    with path.open("rb") as stream:
+        return decode_record(stream.read(MAX_PROVENANCE_BYTES + 1))
+
+
+def validate_record(record: dict[str, object], expected: dict[str, object]) -> None:
+    """Require exact fields, JSON types and values, with no identity inferred from artifact metadata.
+
+    Parameters:
+        record (dict[str, object]): Untrusted producer record.
+        expected (dict[str, object]): Record built from trusted run and producer identities.
+    Returns:
+        None: All fields agree.
+    Raises:
+        ValueError: The record lacks a field, has a wrong type or disagrees with the trusted identity.
+    """
+    if record.keys() != expected.keys() or any(
+        type(record[key]) is not type(value) or record[key] != value for key, value in expected.items()
+    ):
+        raise ValueError("Coverage provenance does not match the expected run and producer")
 
 
 @dataclass(frozen=True)
@@ -840,10 +906,12 @@ class Provenance:
     """Authenticated run identity, never accepted from accounting artifacts."""
 
     repository: str
-    head_sha: str
+    head_sha: str | None
     tested_sha: str
     run_id: int
     attempt: int
+    event_name: str
+    workflow_ref: str
 
     def __post_init__(self) -> None:
         """Reject malformed caller-provided provenance.
@@ -859,7 +927,12 @@ class Provenance:
         """
         if (
             not SAFE_REPOSITORY.fullmatch(self.repository)
-            or not SHA.fullmatch(self.head_sha)
+            or (self.head_sha is not None and not SHA.fullmatch(self.head_sha))
+            or (self.event_name == "pull_request") != (self.head_sha is not None)
+            or self.event_name not in CI_EVENTS
+            or not text_value(self.workflow_ref).startswith(
+                f"{self.repository}/.github/workflows/ci.yml@refs/"
+            )
             or not SHA.fullmatch(self.tested_sha)
             or type(self.run_id) is not int
             or self.run_id <= 0
@@ -867,6 +940,28 @@ class Provenance:
             or self.attempt <= 0
         ):
             raise ValueError("Invalid run provenance")
+
+    def record(self, job: str, cell: str) -> dict[str, object]:
+        """Build the identity that a single coverage producer must write.
+
+        Parameters:
+            job (str): GitHub job key, shared across cells of a matrix.
+            cell (str): CI matrix cell, identified by its declared artifact name.
+        Returns:
+            dict[str, object]: Exact sidecar schema, including a null PR head outside PR events.
+        Raises:
+            None.
+        """
+        return {
+            "run_id": self.run_id,
+            "run_attempt": self.attempt,
+            "job": job,
+            "cell": cell,
+            "tested_sha": self.tested_sha,
+            "pr_head_sha": self.head_sha,
+            "event_name": self.event_name,
+            "workflow_ref": self.workflow_ref,
+        }
 
     def markdown(self) -> str:
         """Render explicit repository, head, tested checkout, run and attempt.
@@ -881,8 +976,8 @@ class Provenance:
             None.
         """
         return (
-            f"Repository: {escape(self.repository)}; head: {self.head_sha}; tested: {self.tested_sha}; "
-            f"run: {self.run_id}; attempt: {self.attempt}."
+            f"Repository: {escape(self.repository)}; head: {self.head_sha or self.tested_sha}; "
+            f"tested: {self.tested_sha}; run: {self.run_id}; attempt: {self.attempt}."
         )
 
 
@@ -907,22 +1002,33 @@ def render_badge(evidence: Evidence) -> str:
     )
 
 
-def read_host_summary(directory: Path, host: str) -> Summary | None:
+def read_host_summary(directory: Path, host: str, provenance: Provenance) -> Summary | None:
     """Read and validate one host's artifact, if it was downloaded.
 
     Parameters:
         directory (Path): Artifact parent.
         host (str): Trusted host label.
+        provenance (Provenance): Independently supplied run identity.
     Returns:
         Summary | None: Validated summary, or None when no artifact exists.
     Raises:
         ValueError: The artifact is malformed or unsafe.
         OSError: The artifact cannot be read.
     """
-    path = directory / f"coverage-{host}.zip"
-    if not path.exists():
-        path = directory / f"coverage-{host}" / "coverage" / "summary.json"
-    return Summary.parse(read_summary(path)) if path.exists() else None
+    if host not in COVERAGE_HOSTS or (provenance.event_name == "pull_request" and host != "ubuntu-24.04"):
+        raise ValueError("No coverage producer for this host and event")
+    cell = f"coverage-{host}"
+    path = directory / f"{cell}.zip"
+    if not path.exists() and not path.is_symlink():
+        artifact = directory / cell
+        coverage = artifact / "coverage"
+        if artifact.is_symlink() or coverage.is_symlink():
+            raise ValueError("Symlinked coverage artifact directory")
+        path = coverage / "summary.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    expected = provenance.record("owned", cell)
+    return Summary.parse(read_summary(path, expected))
 
 
 def error_reason(error: OSError | ValueError) -> str:
@@ -941,7 +1047,7 @@ def error_reason(error: OSError | ValueError) -> str:
     return str(error)[:MAX_REASON]
 
 
-def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
+def load_evidence(directory: Path, plan_path: Path, provenance: Provenance) -> tuple[Evidence, ...]:
     """Read a trusted explicit manifest and its locally downloaded summaries.
 
     A bad or missing artifact degrades only its own host to `unavailable` with a bounded reason.
@@ -949,6 +1055,7 @@ def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
     Parameters:
         directory (Path): Artifact parent containing coverage-HOST/coverage/summary.json or coverage-HOST.zip.
         plan_path (Path): Trusted JSON mapping hosts to state and complete signal plans.
+        provenance (Provenance): Trusted identity to match against each producer record.
     Returns:
         tuple[Evidence, ...]: Validated evidence, never carrying numbers for a degraded host.
     Raises:
@@ -964,7 +1071,7 @@ def load_evidence(directory: Path, plan_path: Path) -> tuple[Evidence, ...]:
         reason = "artifact missing or expired"
         if obj.get("state") == "available":
             try:
-                summary = read_host_summary(directory, host)
+                summary = read_host_summary(directory, host, provenance)
                 if summary is not None:
                     cells.append(Evidence.parse(host, obj, summary))
                     continue
@@ -991,7 +1098,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--plan", type=Path, required=True)
-    parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--head-sha", help="PR head SHA; required for pull_request only.")
+    parser.add_argument("--event-name", required=True, choices=sorted(CI_EVENTS))
+    parser.add_argument("--workflow-ref", required=True)
     parser.add_argument("--tested-sha", required=True)
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--attempt", type=int, required=True)
@@ -999,18 +1108,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, help="Write Markdown here, otherwise stdout.")
     parser.add_argument("--baseline-artifacts", type=Path)
     parser.add_argument("--baseline-plan", type=Path)
+    parser.add_argument(
+        "--baseline-identity", nargs=5, metavar=("SHA", "RUN", "ATTEMPT", "EVENT", "WORKFLOW_REF")
+    )
     parser.add_argument("--badge-dir", type=Path)
     args = parser.parse_args(argv)
     try:
-        provenance = Provenance(args.repository, args.head_sha, args.tested_sha, args.run_id, args.attempt)
-        if bool(args.baseline_artifacts) != bool(args.baseline_plan):
-            raise ValueError("Measured-main inputs require both artifacts and plan")
-        cells = load_evidence(args.artifacts.resolve(), args.plan.resolve())
-        baseline = (
-            load_evidence(args.baseline_artifacts.resolve(), args.baseline_plan.resolve())
-            if args.baseline_plan
-            else ()
+        provenance = Provenance(
+            args.repository,
+            args.head_sha,
+            args.tested_sha,
+            args.run_id,
+            args.attempt,
+            args.event_name,
+            args.workflow_ref,
         )
+        cells = load_evidence(args.artifacts.resolve(), args.plan.resolve(), provenance)
+        baseline = ()
+        if args.baseline_artifacts or args.baseline_plan or args.baseline_identity:
+            if not (args.baseline_artifacts and args.baseline_plan and args.baseline_identity):
+                raise ValueError("Measured-main inputs require artifacts, plan and independent run identity")
+            sha, run, attempt, event, workflow = args.baseline_identity
+            baseline_run = Provenance(args.repository, None, sha, int(run), int(attempt), event, workflow)
+            baseline = load_evidence(
+                args.baseline_artifacts.resolve(), args.baseline_plan.resolve(), baseline_run
+            )
         markdown = render_markdown(cells, provenance, baseline)
         if args.output:
             args.output.write_text(markdown, encoding="utf-8")
