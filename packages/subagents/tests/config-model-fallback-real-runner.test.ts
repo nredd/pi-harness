@@ -7,9 +7,9 @@
  * definition `model:` that resolves. Nothing here replaces model selection, so
  * bypassing the shared selector's configured precedence fails these tests.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.ts";
 import { registerAgents } from "../src/agent-types.ts";
@@ -62,9 +62,9 @@ function writeScout(model: string): void {
 	writeFileSync(join(dir, "scout.md"), `---\ndescription: scout\ntools: read\nmodel: ${model}\n---\nscout.\n`);
 }
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
-	cwd = mkdtempSync(join(tmpdir(), "config-model-real-"));
+	cwd = makeTestTempDir("config-model-real-", onTestFinished);
 	process.chdir(cwd);
 	process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
 	faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
@@ -78,7 +78,6 @@ afterEach(() => {
 	if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
 	registerAgents(new Map());
-	rmSync(cwd, { recursive: true, force: true });
 });
 
 async function bootWithBus() {
@@ -163,15 +162,14 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 		let scheduler: SubagentScheduler;
 		let mgr: AgentManager;
 
-		beforeEach(() => {
-			tmp = mkdtempSync(join(tmpdir(), "config-model-real-sched-"));
+		beforeEach(({ onTestFinished }) => {
+			tmp = makeTestTempDir("config-model-real-sched-", onTestFinished);
 			scheduler = new SubagentScheduler();
 			mgr = new AgentManager();
 		});
 
 		afterEach(() => {
 			scheduler.stop();
-			rmSync(tmp, { recursive: true, force: true });
 		});
 
 		async function fire(model?: string, refused = false) {
