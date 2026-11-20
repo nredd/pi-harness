@@ -640,7 +640,11 @@ def test_dispatch_classifies_only_frozen_main_candidates(
     assert git
     repo = tmp_path / "repo"
     repo.mkdir()
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")} | {
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_") and key not in {"BASE", "HEAD"}
+    } | {
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_SYSTEM": os.devnull,
@@ -688,8 +692,6 @@ def test_dispatch_classifies_only_frozen_main_candidates(
             "GITHUB_REF": ref.format(sha=sha, other="0" * 40),
             "GITHUB_SHA": sha,
             "GITHUB_OUTPUT": str(output),
-            "BASE": sha,
-            "HEAD": sha,
         },
         capture_output=True,
         text=True,
@@ -736,7 +738,7 @@ def test_workflow_classify_preserves_pool_admission_inputs(
         "GITHUB_RUN_ATTEMPT": "3",
         "GITHUB_REPOSITORY": "fixture/runner",
         "PI_LINUX_HEARTBEAT": f"{int(time.time())}:2",
-        "PI_MACOS_HEARTBEAT": "",
+        "PI_MACOS_HEARTBEAT": f"{int(time.time())}:1",
         "UNTRUSTED": "true" if disable == "UNTRUSTED" else "",
         "PI_POOLS_DISABLED": "true" if disable == "PI_POOLS_DISABLED" else "",
     }.items():
@@ -751,10 +753,41 @@ def test_workflow_classify_preserves_pool_admission_inputs(
     monkeypatch.setattr(ci_paths, "changed_paths", lambda *_: ("scripts/ci_paths.py",))
     monkeypatch.setattr(ci_paths, "live_capacity", live_capacity)
     assert ci_classify.classify() == 0
-    assert calls == [({} if disable else {"pi-linux": 2}, "fixture/runner", 42, 3)]
+    assert calls == [({} if disable else {"pi-linux": 2, "pi-macos": 1}, "fixture/runner", 42, 3)]
     plan = json.loads(next(line[5:] for line in output.read_text().splitlines() if line.startswith("plan=")))
     shards = {entry["shard"]: entry["runner"] for entry in plan["owned (ubuntu-24.04)"]["shards"]}
     assert shards["ts"] == ("ubuntu-24.04" if disable else "pi-linux")
+
+
+@pytest.mark.parametrize(
+    ("base", "head", "missing"),
+    [(None, "HEAD", "`BASE`"), ("HEAD~1", None, "`HEAD`"), ("", "", "`BASE`, `HEAD`")],
+)
+def test_classify_reports_missing_diff_inputs(
+    tmp_path: Path, base: str | None, head: str | None, missing: str
+) -> None:
+    """Name every unset or empty diff input without publishing a plan.
+
+    Parameters:
+        tmp_path (Path): Disposable workflow output directory.
+        base (str | None): `BASE` value, or None to unset it.
+        head (str | None): `HEAD` value, or None to unset it.
+        missing (str): Expected diagnostic's list of missing inputs.
+    """
+    output = tmp_path / "output"
+    env = {key: value for key, value in os.environ.items() if key not in {"BASE", "HEAD"}}
+    env |= {name: value for name, value in (("BASE", base), ("HEAD", head)) if value is not None}
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/ci_classify.py"), "plan"],
+        cwd=tmp_path,
+        env=env | {"EVENT": "push", "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert result.stderr == f"Missing required CI environment variable(s): {missing}\n"
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
