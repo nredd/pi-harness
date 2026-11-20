@@ -337,6 +337,10 @@ def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
         tmp_path (Path): Isolated producer workspace.
         monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
         failure (str): Invalid checkout or job identity.
+    Returns:
+        None: No stale sidecar survives a failed write.
+    Raises:
+        AssertionError: The producer accepts invalid identity or leaves an old sidecar.
     """
     set_run_env(monkeypatch, "owned-ubuntu")
     git = shutil.which("git")
@@ -401,6 +405,10 @@ def test_swift_artifact_retains_reports_without_stamp(job: str) -> None:
 
     Parameters:
         job (str): Job holding the Swift report upload.
+    Returns:
+        None: The Swift upload remains and no stamp is written.
+    Raises:
+        AssertionError: The upload changes or a producer stamp returns.
     """
     steps = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"][job]["steps"]
     upload = next(step for step in steps if step.get("name") == "Preserve real-source Swift coverage")

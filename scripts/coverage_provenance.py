@@ -47,6 +47,8 @@ def attest_shards(directory: Path, run: Provenance, cell: str) -> None:
 def checkout_sha() -> str:
     """Read the checked-out commit from the producer working directory.
 
+    Parameters:
+        None.
     Returns:
         str: Commit SHA reported by Git, to be validated by `Provenance`.
     Raises:

@@ -53,6 +53,8 @@ def is_producer_job(job: str) -> TypeGuard[ProducerJob]:
         job (str): GitHub runtime job key.
     Returns:
         TypeGuard[ProducerJob]: Whether the key is in the producer map.
+    Raises:
+        None.
     """
     return job in PRODUCER_JOBS
 
