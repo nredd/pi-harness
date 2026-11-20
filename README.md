@@ -569,14 +569,20 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   capped cell was refused for missing probe heartbeats. That is a failed observation, not a
   zero-latency result. The 65,536 bytes/s condition measures a less severe terminal link;
   it does not replace or relax any existing performance ceiling.
-- A synthetic Node/Pi trial on macOS completed both 1/4-child conditions and the uncapped
-  8-child condition. Capped eight-child latency is `NOT RUN`: the attempt delivered output but
-  lacked measured probe windows. Pytest warns without failing this cell, and the suite report
-  records the reason and throughput with no latency metrics, not even zeros. Raw records remain
-  in the cell's `throttled-pty.json`. Missing measured windows cannot distinguish a hung Pi
-  from a late-starting probe. An exited child or stalled input still fails the experiment;
-  the cell report keeps the partial delivery and probe records collected before the failure.
-  #1096 tracks the complete eight-child measurement without raising the aggregate cap.
+- The macOS functional trial used Pi `v1.3.0-nredd.11`, Node `v26.13.0`, and a bare fixture
+  HOME (no installed extension stack). Both 1/4-child pairs and the uncapped eight-child
+  control completed. The capped eight-child cell lacked measured probe windows. A retry
+  with Pi `v1.3.0-nredd.13`, the same Node version and bare fixture HOME also lacked measured
+  windows. Capped eight-child latency is `NOT RUN`: pytest warns, and the suite report
+  records the reason and throughput, not latency metrics. Missing measured windows cannot
+  distinguish a hung Pi from a late-starting probe. #1096 tracks the complete eight-child
+  measurement without raising the aggregate cap.
+- Cumulative and per-cell `throttled-pty.json` reports flush and `fsync` a same-directory
+  `.pending` file before atomically replacing the previous snapshot. A write or replace
+  exception removes the pending file. The directory is not synced, so replacement is not
+  guaranteed to survive power loss. Readiness, warm-up, or measurement failures still fail
+  the experiment, with any partial delivery and raw probe records in the cell report.
+  If readiness or warm-up fails, that delivery is startup output, not a measured window.
 - Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
   baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider
   claim is made. The driver uses the standard library plus the repo's own process-group helper.
