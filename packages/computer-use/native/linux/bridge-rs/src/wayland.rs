@@ -87,3 +87,117 @@ impl PortalClient {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixStream;
+    use zbus::{connection::Builder, object_server::Interface, Guid};
+
+    struct RemoteDesktop;
+
+    #[zbus::interface(name = "org.freedesktop.portal.RemoteDesktop")]
+    impl RemoteDesktop {
+        #[zbus(property, name = "version")]
+        fn version(&self) -> u32 {
+            3
+        }
+
+        #[zbus(property)]
+        fn available_device_types(&self) -> u32 {
+            7
+        }
+    }
+
+    /// Model a ScreenCast interface that does not advertise `AvailableCursorModes`.
+    struct ScreenCastWithoutCursorModes(u32);
+
+    #[zbus::interface(name = "org.freedesktop.portal.ScreenCast")]
+    impl ScreenCastWithoutCursorModes {
+        #[zbus(property, name = "version")]
+        fn version(&self) -> u32 {
+            self.0
+        }
+
+        #[zbus(property)]
+        fn available_source_types(&self) -> u32 {
+            3
+        }
+    }
+
+    struct ScreenCastWithCursorModes;
+
+    #[zbus::interface(name = "org.freedesktop.portal.ScreenCast")]
+    impl ScreenCastWithCursorModes {
+        #[zbus(property, name = "version")]
+        fn version(&self) -> u32 {
+            2
+        }
+
+        #[zbus(property)]
+        fn available_source_types(&self) -> u32 {
+            3
+        }
+
+        #[zbus(property)]
+        fn available_cursor_modes(&self) -> u32 {
+            7
+        }
+    }
+
+    /// Inject the transport while exercising the production proxies and property decoding.
+    async fn probe_from_peer(screen: impl Interface) -> Result<PortalCapabilities, PortalError> {
+        let (server_socket, client_socket) = UnixStream::pair().unwrap();
+        let server = Builder::unix_stream(server_socket)
+            .server(Guid::generate())
+            .unwrap()
+            .p2p()
+            .serve_at(DESKTOP_PATH, RemoteDesktop)
+            .unwrap()
+            .serve_at(DESKTOP_PATH, screen)
+            .unwrap()
+            .build();
+        let client = Builder::unix_stream(client_socket).p2p().build();
+        let (_server, connection) = tokio::try_join!(server, client).unwrap();
+        PortalClient { connection }.probe().await
+    }
+
+    #[tokio::test]
+    async fn cursor_modes_follow_screencast_version() {
+        let legacy = probe_from_peer(ScreenCastWithoutCursorModes(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            legacy,
+            PortalCapabilities {
+                remote_desktop_version: 3,
+                screen_cast_version: 1,
+                available_device_types: 7,
+                available_source_types: 3,
+                available_cursor_modes: 1,
+            }
+        );
+
+        let modern = probe_from_peer(ScreenCastWithCursorModes).await.unwrap();
+        assert_eq!(
+            modern,
+            PortalCapabilities {
+                screen_cast_version: 2,
+                available_cursor_modes: 7,
+                ..legacy
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_cursor_modes_make_v2_probe_unavailable() {
+        let error = probe_from_peer(ScreenCastWithoutCursorModes(2))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PortalError::Unavailable(_)));
+        assert!(
+            error.to_string().contains("AvailableCursorModes"),
+            "{error}"
+        );
+    }
+}
