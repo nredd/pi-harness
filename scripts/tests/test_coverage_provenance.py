@@ -7,7 +7,7 @@ References:
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import subprocess
 import sys
 import zipfile
@@ -31,6 +31,10 @@ from coverage_provenance_record import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.append(str(ROOT / "tests/integration"))
+from harness.git_fixture import git as fixture_git
+from harness.git_fixture import git_env
+
 HOST = "ubuntu-24.04"
 CELL = f"coverage-{HOST}"
 WORKFLOW = "example/repo/.github/workflows/ci.yml@refs/pull/1/merge"
@@ -296,46 +300,47 @@ def test_unpacked_provenance_must_stay_in_its_artifact(tmp_path: Path, link: str
     assert report.load_evidence(tmp_path, manifest, RUN)[0].state == "unavailable"
 
 
-def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stamp the actual checkout even when Git warns on stderr.
+@pytest.mark.parametrize("from_hook", [False, True], ids=["clean", "git-hook"])
+def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_hook: bool) -> None:
+    """Stamp the actual checkout despite Git warnings and a caller's hook environment.
 
     Parameters:
-        tmp_path (Path): Artifact directory.
+        tmp_path (Path): Parent of the caller and producer checkouts.
         monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+        from_hook (bool): Inherit Git hook variables pointing at the caller.
     Returns:
-        None: The boundary contract is satisfied.
+        None: Only the producer checkout supplies the tested SHA.
     Raises:
-        AssertionError: The boundary contract regresses.
+        AssertionError: A checkout is misidentified or the caller's refs change.
     """
     set_run_env(monkeypatch, "owned-ubuntu")
     monkeypatch.setenv("GITHUB_SHA", "c" * 40)
-    git = shutil.which("git")
-    assert git is not None
-    subprocess.run([git, "-c", "init.templateDir=", "init", "--quiet", str(tmp_path)], check=True)
-    subprocess.run(
-        [
-            git,
-            "-c",
-            "user.name=Coverage Test",
-            "-c",
-            "user.email=coverage@example.test",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--quiet",
-            "--allow-empty",
-            "-m",
-            "Create checkout fixture",
-        ],
-        cwd=tmp_path,
-        check=True,
-    )
-    tested_sha = subprocess.check_output([git, "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
-    subprocess.run([git, "update-ref", "refs/heads/HEAD", tested_sha], cwd=tmp_path, check=True)
-    subprocess.run([git, "config", "core.warnAmbiguousRefs", "true"], cwd=tmp_path, check=True)
     monkeypatch.setenv("LC_ALL", "C")
-    assert tested_sha not in {RUN.head_sha, "c" * 40}
-    output = tmp_path / "provenance.json"
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    fixture_git(caller, "-c", "init.templateDir=", "init", "--quiet")
+    no_hooks = f"core.hooksPath={os.devnull}"
+    fixture_git(caller, "-c", no_hooks, "commit", "--quiet", "--allow-empty", "-m", "Caller commit")
+    caller_sha = fixture_git(caller, "rev-parse", "HEAD").strip()
+    caller_refs = fixture_git(caller, "show-ref", "--heads")
+    if from_hook:
+        monkeypatch.setenv("GIT_DIR", str(caller / ".git"))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(caller / ".git/index"))
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "caller.gitconfig"))
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    fixture_git(checkout, "-c", "init.templateDir=", "init", "--quiet")
+    fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "--allow-empty", "-m", "Producer commit")
+    tested_sha = fixture_git(checkout, "rev-parse", "HEAD").strip()
+    fixture_git(checkout, "update-ref", "refs/heads/HEAD", tested_sha)
+    fixture_git(checkout, "config", "core.warnAmbiguousRefs", "true")
+    assert fixture_git(caller, "show-ref", "--heads") == caller_refs
+    assert tested_sha not in {caller_sha, RUN.head_sha, "c" * 40}
+    output = checkout / "provenance.json"
+    env = git_env()
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     result = subprocess.run(
         [
             sys.executable,
@@ -345,7 +350,8 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
             "--output",
             str(output),
         ],
-        cwd=tmp_path,
+        cwd=checkout,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -353,6 +359,8 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.returncode == 0, result.stderr
     assert "refname 'HEAD' is ambiguous" in result.stderr
     assert json.loads(output.read_text()) == RECORD | {"tested_sha": tested_sha}
+    assert fixture_git(caller, "rev-parse", "HEAD").strip() == caller_sha
+    assert fixture_git(caller, "show-ref", "--heads") == caller_refs
 
 
 @pytest.mark.parametrize(
