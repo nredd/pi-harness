@@ -80,14 +80,18 @@ def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]
     outcomes = [outcome for outcome in result.tool_outcomes() if outcome.name == "Agent"]
     assert len(outcomes) == 1, result.transcript()
     assert not outcomes[0].is_error, result.transcript()
-    assert len(mock.messages) == 3, result.transcript()
+    # The workspace todo extension adds one parent follow-up after a successful Agent call.
+    local = (box.agent_dir / "stack-name").read_text().strip() == "local"
+    assert len(mock.messages) == (4 if local else 3), result.transcript()
+    if local:
+        assert "You have been working without a todo list." in mock.messages[3].raw_body
     body = mock.messages[1].body
     assert isinstance(body, dict)
     offered = {tool["name"] for tool in body["tools"]}
     assert {"read", "grep", "find", "ls"} <= offered
     assert offered <= {"read", "grep", "find", "ls", "SubagentWorkflow"}
     evidence = [json.loads(line) for line in registry.read_text().splitlines()]
-    assert len(evidence) == 2, evidence
+    assert len(evidence) == len(mock.messages) - 1, evidence
     return mock.messages, evidence
 
 
@@ -120,9 +124,10 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
     requests, evidence = _capture(box)
     rows: list[dict[str, Any]] = []
     stable_rows: list[Ledger] = []
+    parent_evidence = iter(evidence)
     for index, request in enumerate(requests):
         child = index == 1
-        metadata = {} if child else evidence[0 if index == 0 else 1]
+        metadata = {} if child else next(parent_evidence)
         owners = {
             tool["name"]: stable_owner(_normalized(tool["sourceInfo"]["source"], box), Path("/workspace"))
             for tool in metadata.get("tools", [])

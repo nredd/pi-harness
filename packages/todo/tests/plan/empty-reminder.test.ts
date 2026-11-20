@@ -167,9 +167,14 @@ it("resets work on todo activity and skips nonempty lists, including completed t
 	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 });
 
-it("nudges and expands the marker after the last visible todo is deleted", async () => {
-	const { tool, settle, callTodo, emit } = await setup({ calls: 2 });
+it("nudges again and expands the marker after the last visible todo is deleted", async () => {
+	const { tool, settle, callTodo, emit, input } = await setup({ calls: 2, cooldown: 1 });
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
 	await callTodo({ action: "create", subject: "Tracked work" });
+	await settle();
+	await emit("agent_settled", { aborted: false });
+	await input();
 	await tool("todo");
 	await callTodo({ action: "delete", id: 1 });
 	await tool("todo");
