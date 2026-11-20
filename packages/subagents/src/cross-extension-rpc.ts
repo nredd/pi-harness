@@ -117,7 +117,8 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 
 			const normalizedOptions = options ?? {};
 			const maxTurns = normalizedOptions.maxTurns;
-			if (maxTurns !== undefined && (typeof maxTurns !== "number" || !Number.isFinite(maxTurns))) {
+			// `!= null` like `model` below: a JSON-forwarding caller may send null for unset.
+			if (maxTurns != null && (typeof maxTurns !== "number" || !Number.isFinite(maxTurns))) {
 				throw new Error("maxTurns must be a finite number");
 			}
 			// Validate the model through the shared selector, but preserve the raw

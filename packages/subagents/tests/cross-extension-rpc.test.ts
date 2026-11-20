@@ -135,25 +135,37 @@ describe("cross-extension RPC", () => {
 			});
 		});
 
-		it.each(["3", Number.NaN, Infinity, null])(
-			"rejects an invalid maxTurns of %s before spawning",
-			async (maxTurns) => {
-				registerRpcHandlers(deps);
-				const reply = vi.fn();
-				events.on("subagents:rpc:spawn:reply:req-cap", reply);
-				events.emit("subagents:rpc:spawn", {
-					requestId: "req-cap",
-					type: "general-purpose",
-					prompt: "x",
-					options: { maxTurns },
-				});
+		it.each(["3", Number.NaN, Infinity])("rejects an invalid maxTurns of %s before spawning", async (maxTurns) => {
+			registerRpcHandlers(deps);
+			const reply = vi.fn();
+			events.on("subagents:rpc:spawn:reply:req-cap", reply);
+			events.emit("subagents:rpc:spawn", {
+				requestId: "req-cap",
+				type: "general-purpose",
+				prompt: "x",
+				options: { maxTurns },
+			});
 
-				await vi.waitFor(() =>
-					expect(reply).toHaveBeenCalledWith({ success: false, error: "maxTurns must be a finite number" }),
-				);
-				expect(manager.spawn).not.toHaveBeenCalled();
-			},
-		);
+			await vi.waitFor(() =>
+				expect(reply).toHaveBeenCalledWith({ success: false, error: "maxTurns must be a finite number" }),
+			);
+			expect(manager.spawn).not.toHaveBeenCalled();
+		});
+
+		it.each([null, undefined])("treats maxTurns %s as omitted", async (maxTurns) => {
+			registerRpcHandlers(deps);
+			const reply = vi.fn();
+			events.on("subagents:rpc:spawn:reply:req-null", reply);
+			events.emit("subagents:rpc:spawn", {
+				requestId: "req-null",
+				type: "general-purpose",
+				prompt: "x",
+				options: { maxTurns },
+			});
+
+			await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ success: true, data: { id: "agent-42" } }));
+			expect(manager.spawn).toHaveBeenCalledTimes(1);
+		});
 
 		it("returns error when no active session", async () => {
 			ctx = undefined;

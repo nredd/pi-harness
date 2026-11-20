@@ -151,6 +151,7 @@ describe("Agent tool — background resume wiring", () => {
 		[3, 3],
 		[0, 12],
 		[undefined, 12],
+		[null as unknown as undefined, 12],
 	])("dispatches an RPC Explore spawn with requested cap %s at cap %i", async (requested, cap) => {
 		const { pi, bus, lifecycle, emitted } = bootPi({}, { deliverEvents: true });
 		subagentsExtension(pi);

@@ -458,12 +458,12 @@ export function setDefaultMaxTurns(n: number | undefined): void {
 	defaultMaxTurns = normalizeMaxTurns(n);
 }
 
-/** Resolve the cap and project fallback without losing the explicit unlimited sentinel. */
+/** Resolve the cap and project fallback without losing the explicit unlimited sentinel: unlike `resolveEffectiveMaxTurns`, it KEEPS `0` as "unlimited". */
 export function resolveRunTurnCap(explicit?: number, definition?: number): number | undefined {
 	return resolveTurnCap(explicit, definition) ?? defaultMaxTurns;
 }
 
-/** The turn limit the runner and activity tracker use. `undefined` = unlimited. */
+/** The turn limit the runner and activity tracker use. Unlike `resolveRunTurnCap`, it maps `0` to `undefined` (= unlimited). */
 export function resolveEffectiveMaxTurns(explicit?: number, definition?: number): number | undefined {
 	return normalizeMaxTurns(resolveRunTurnCap(explicit, definition));
 }

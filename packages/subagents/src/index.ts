@@ -1350,10 +1350,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// built with `undefined` renders `↻3` where the Agent tool renders `↻3≤20`.
 		// Like the tool's own, it is a prediction — editing the agent file mid-run
 		// leaves the displayed ceiling stale.
-		const definitionMaxTurns = getAgentConfig(dispatch.type)?.maxTurns;
-		const maxTurns = resolveTurnCap(options?.maxTurns, definitionMaxTurns);
+		const maxTurns = resolveTurnCap(options?.maxTurns, getAgentConfig(dispatch.type)?.maxTurns);
 		const { state, callbacks } = createActivityTracker(
-			resolveEffectiveMaxTurns(options?.maxTurns, definitionMaxTurns),
+			// `maxTurns` is already the tighter caller/definition cap: only the default and 0 remain.
+			resolveEffectiveMaxTurns(maxTurns),
 			undefined,
 			clock,
 		);
@@ -2986,7 +2986,7 @@ Terse command-style prompts produce shallow, generic work.
 			// This is the pre-session snapshot — agent-manager overwrites it with the
 			// effective values the moment a session reports them.
 			const { modelName, modelId } = describeSelection(selection, ctx.modelRegistry);
-			const effectiveMaxTurns = resolveEffectiveMaxTurns(params.max_turns, customConfig?.maxTurns);
+			const effectiveMaxTurns = resolveEffectiveMaxTurns(resolvedConfig.maxTurns);
 			const agentInvocation: AgentInvocation = {
 				modelName,
 				modelId,
