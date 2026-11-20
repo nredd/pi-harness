@@ -1,8 +1,7 @@
-"""Shared process plumbing for the guest-side scripts that replaced inline Bash (#695).
+"""Process plumbing for the Linux GitHub CLI bootstrap (#695).
 
-`install_gh_linux.py`, `install_wsl_owned_tools.py` and `wsl2_run.py` run on the WSL guest's system `python3`
-(3.12) before any uv environment exists, so this module is standard library only. Commands are resolved
-through `PATH` on purpose: the CI fixtures stub them.
+`install_gh_linux.py` runs on system `python3` before any uv environment exists, so this module is
+standard library only. Commands are resolved through `PATH` on purpose: the CI fixtures stub them.
 
 References:
     https://docs.python.org/3/library/subprocess.html

@@ -411,8 +411,11 @@ def test_workflow_matrix_contract() -> None:
     """
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
     jobs = yaml.safe_load(workflow)["jobs"]
-    expected = set()
-    for name in ("owned", "contracts", "stack"):
+    owned = jobs["owned-ubuntu"]
+    expected = {
+        owned["name"].replace("${{ matrix.os }}", system) for system in owned["strategy"]["matrix"]["os"]
+    }
+    for name in ("contracts", "stack"):
         matrix = jobs[name]["strategy"]["matrix"]
         pr_json = next(iter(matrix.values())).split(" && ", 1)[1].split("'")[1]
         rows = json.loads(pr_json)
