@@ -115,9 +115,14 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 			const ctx = getCtx();
 			if (!ctx) throw new Error("No active session");
 
-			// Validate serializable overrides through the shared selector. Preserve
-			// the raw request for spawn, which records its source and outcome.
 			const normalizedOptions = options ?? {};
+			const maxTurns = normalizedOptions.maxTurns;
+			// `!= null` like `model` below: a JSON-forwarding caller may send null for unset.
+			if (maxTurns != null && (typeof maxTurns !== "number" || !Number.isFinite(maxTurns))) {
+				throw new Error("maxTurns must be a finite number");
+			}
+			// Validate the model through the shared selector, but preserve the raw
+			// request for spawn, which records its source and outcome.
 			// `!= null` on purpose: a JSON-forwarding caller can serialize an unset
 			// field as null, and the runner reads `options.model ?? default`, so null
 			// means "inherit" — not an override to resolve or scope-check.

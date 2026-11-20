@@ -531,30 +531,38 @@ describe("child-safe nested Agent tools", () => {
 		);
 	});
 
-	it("resumes a nested child at the cap it was spawned with when the call omits max_turns", async () => {
-		const [agent] = tools(["Explore"]);
-		await execute(agent, {
-			subagent_type: "Explore",
-			description: "find files",
-			prompt: "Find them",
-			max_turns: 3,
-		});
-		records.get("child-1")!.invocation = { maxTurns: 3 };
+	it.each([
+		{ type: "Explore", requested: undefined, cap: 3 },
+		{ type: "Explore", requested: 0, cap: 12 },
+		{ type: "scout", requested: 0, cap: 0 },
+	])(
+		"resumes nested $type spawned at 3 with requested cap $requested at cap $cap",
+		async ({ type, requested, cap }) => {
+			const [agent] = tools([type]);
+			await execute(agent, {
+				subagent_type: type,
+				description: "find files",
+				prompt: "Find them",
+				max_turns: 3,
+			});
+			records.get("child-1")!.invocation = { maxTurns: 3 };
 
-		await execute(agent, {
-			resume: "child-1",
-			subagent_type: "Explore",
-			description: "continue",
-			prompt: "Continue",
-		});
+			await execute(agent, {
+				resume: "child-1",
+				subagent_type: type,
+				description: "continue",
+				prompt: "Continue",
+				...(requested === undefined ? {} : { max_turns: requested }),
+			});
 
-		expect(manager.resume).toHaveBeenCalledWith(
-			"child-1",
-			"Continue",
-			undefined,
-			expect.objectContaining({ maxTurns: 3 }),
-		);
-	});
+			expect(manager.resume).toHaveBeenCalledWith(
+				"child-1",
+				"Continue",
+				undefined,
+				expect.objectContaining({ maxTurns: cap }),
+			);
+		},
+	);
 
 	it("refuses to resume a child that is still running, naming why", async () => {
 		const [agent] = tools(["scout"]);
