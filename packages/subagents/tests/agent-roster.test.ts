@@ -86,6 +86,58 @@ it("returns only authorized root metadata and preserves every internal outcome",
 	]);
 });
 
+it("limits discovery to authorized siblings and direct children of the current runs", () => {
+	const under = (id: string) => ({ parentAgentId: id, rosterParentRunId: `run-${id}` });
+	const rows = [
+		record("parent"),
+		record("uncle"),
+		record("caller", under("parent")),
+		record("sibling", { ...under("parent"), status: "completed" }),
+		record("stale-sibling", { ...under("parent"), rosterParentRunId: "old-run" }),
+		record("cousin", under("uncle")),
+		record("niece", under("sibling")),
+		record("child", under("caller")),
+		record("denied-child", { ...under("caller"), type: "Plan" }),
+		record("old-child", { ...under("caller"), rosterParentRunId: "old-run" }),
+		record("grandchild", under("child")),
+	];
+	const roster = new AgentRoster(() => rows);
+	const ids = (id: string) => roster.child(id, new Set(["Explore"])).agents.map((a) => a.id);
+	expect(ids("caller")).toEqual(["root:one", "caller", "sibling", "child"]);
+	expect(ids("parent")).toEqual(["root:one", "parent", "uncle", "caller", "sibling"]);
+	expect(roster.parent("one").agents.map((a) => a.id)).toEqual(["root:one", ...rows.map((r) => r.id)]);
+});
+
+it.each([
+	["evicted", []],
+	["finished", [record("parent", { status: "completed" })]],
+	["resumed", [record("parent", { runId: "new-run" })]],
+	["unbound", [record("parent", { runId: undefined })]],
+	["cross-root", [record("parent", { rosterRootId: "other" })]],
+] as const)("denies nested discovery when its parent run is %s without auditing a read", (_case, parents) => {
+	const roster = new AgentRoster(() => [
+		...parents,
+		record("caller", { parentAgentId: "parent", rosterParentRunId: "run-parent" }),
+	]);
+	expect(() => roster.child("caller", new Set(["Explore"]))).toThrow("no active immediate parent run");
+	expect(roster.audit("one")).toEqual([]);
+});
+
+it("does not restore nested roster membership when a parent is reopened under a new id", () => {
+	const roster = new AgentRoster(() => [
+		record("reopened-parent"),
+		record("old-child", { parentAgentId: "old-parent", rosterParentRunId: "run-old-parent" }),
+		record("new-child", { parentAgentId: "reopened-parent", rosterParentRunId: "run-reopened-parent" }),
+	]);
+	const allowed = new Set(["Explore"]);
+	expect(() => roster.child("old-child", allowed)).toThrow("no active immediate parent run");
+	expect(roster.child("reopened-parent", allowed).agents.map((a) => a.id)).toEqual([
+		"root:one",
+		"reopened-parent",
+		"new-child",
+	]);
+});
+
 it("fails closed for absent, unscoped or settled callers and invalid roots", () => {
 	for (const rows of [
 		[],
@@ -165,13 +217,20 @@ it("resolves effective type grants case-insensitively without accepting child-su
 		record("self", { type: "viewer" }),
 		record("peer"),
 		record("denied", { type: "Plan" }),
+		record("guessed-child", { parentAgentId: "peer", rosterParentRunId: "run-peer" }),
 	]);
 	for (const grant of [["explore"], ["missing"], "all"] as const) {
 		const [tool] = tools({
 			config: { ...config, allowedSubagents: typeof grant === "string" ? grant : [...grant] },
 			runtime: { manager: { roster }, parentAgentId: "self" },
 		});
-		const result = await tool!.execute("call", {}, undefined, undefined, {} as never);
+		const result = await tool!.execute(
+			"call",
+			{ id: "guessed-child", parentAgentId: "peer" } as never,
+			undefined,
+			undefined,
+			{} as never,
+		);
 		const body = JSON.parse((result.content[0] as { text: string }).text);
 		expect(body.agents.map((a: { id: string }) => a.id)).toEqual(
 			grant === "all"
