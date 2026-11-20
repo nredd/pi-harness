@@ -228,7 +228,6 @@ def test_zip_cannot_take_provenance_from_unpacked_artifact(tmp_path: Path) -> No
     ("event", "host", "state"),
     [
         ("pull_request", "macos-14", "unavailable"),
-        ("push", "wsl2", "invalid host"),
         ("workflow_dispatch", "macos-14", "available"),
     ],
 )
@@ -270,16 +269,32 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
         archive.writestr("coverage/summary.json", json.dumps(summary))
         job = producer_job(host, shard=False) if host in COVERAGE_HOSTS else "owned-ubuntu"
         archive.writestr("coverage/provenance.json", json.dumps(run.record(job, cell)))
-    if state == "invalid host":
-        with pytest.raises(ValueError, match=r"^No coverage producer for this host and event$"):
-            report.read_host_summary(tmp_path, host, run)
-        with pytest.raises(ValueError, match=r"^Invalid evidence host$"):
-            report.load_evidence(tmp_path, manifest, run)
-        return
     evidence = report.load_evidence(tmp_path, manifest, run)[0]
     assert evidence.state == state, evidence.reason
     if state == "unavailable":
         assert evidence.reason == "No coverage producer for this host and event"
+
+
+def test_retired_wsl2_host_is_rejected(tmp_path: Path) -> None:
+    """Reject the retired WSL2 host as an invalid evidence host.
+
+    Parameters:
+        tmp_path (Path): Artifact download directory.
+    Returns:
+        None: The retired host is rejected on both read paths.
+    Raises:
+        AssertionError: The renderer accepts or mislabels the retired host.
+    """
+    run = RUN
+    manifest = tmp_path / "plan.json"
+    manifest.write_text(json.dumps({"wsl2": plan()}))
+    with zipfile.ZipFile(tmp_path / "coverage-wsl2.zip", "w") as archive:
+        archive.writestr("coverage/summary.json", json.dumps(document()))
+        archive.writestr("coverage/provenance.json", json.dumps(run.record("owned-ubuntu", "coverage-wsl2")))
+    with pytest.raises(ValueError, match=r"^No coverage producer for this host and event$"):
+        report.read_host_summary(tmp_path, "wsl2", run)
+    with pytest.raises(ValueError, match=r"^Invalid evidence host$"):
+        report.load_evidence(tmp_path, manifest, run)
 
 
 @pytest.mark.parametrize("link", [CELL, "coverage", "provenance.json"])

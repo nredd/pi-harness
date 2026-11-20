@@ -1330,7 +1330,7 @@ def test_fan_in_refuses_a_report_two_shards_produced(tmp_path: Path) -> None:
         tmp_path (Path): Disposable directory.
     """
     report = "scripts/coverage/primary/lcov.info"
-    completed, workspace = run_merge(tmp_path, {"coverage-wsl2-a": [report], "coverage-wsl2-b": [report]})
+    completed, workspace = run_merge(tmp_path, {"coverage-ubuntu-24.04-a": [report], "coverage-ubuntu-24.04-b": [report]})
     assert completed.returncode == 1
     assert (
         f"::error title=duplicate shard coverage::More than one shard produced: {report}" in completed.stdout
