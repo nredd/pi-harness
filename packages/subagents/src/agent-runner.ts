@@ -458,12 +458,14 @@ export function setDefaultMaxTurns(n: number | undefined): void {
 	defaultMaxTurns = normalizeMaxTurns(n);
 }
 
-/**
- * The turn limit a run of `type` will actually enforce: the tighter caller and
- * agent caps, or the project default if neither sets one. `undefined` = unlimited.
- */
-export function resolveEffectiveMaxTurns(type: string, explicit?: number): number | undefined {
-	return normalizeMaxTurns(resolveTurnCap(explicit, getAgentConfig(type)?.maxTurns) ?? defaultMaxTurns);
+/** Resolve the cap and project fallback without losing the explicit unlimited sentinel. */
+export function resolveRunTurnCap(explicit?: number, definition?: number): number | undefined {
+	return resolveTurnCap(explicit, definition) ?? defaultMaxTurns;
+}
+
+/** The turn limit the runner and activity tracker use. `undefined` = unlimited. */
+export function resolveEffectiveMaxTurns(explicit?: number, definition?: number): number | undefined {
+	return normalizeMaxTurns(resolveRunTurnCap(explicit, definition));
 }
 
 /**
@@ -1555,7 +1557,10 @@ export async function runAgent(
 
 	options.onSessionCreated?.(session);
 
-	const run = observeRun(session, { ...options, maxTurns: resolveEffectiveMaxTurns(type, options.maxTurns) });
+	const run = observeRun(session, {
+		...options,
+		maxTurns: resolveEffectiveMaxTurns(options.maxTurns, getAgentConfig(type)?.maxTurns),
+	});
 
 	const collector = collectResponseText(session);
 	const cleanupAbort = forwardAbortSignal(session, options.signal);
@@ -1673,7 +1678,10 @@ export async function resumeAgent(
 	const startLen = session.messages.length;
 	const collector = collectResponseText(session);
 	const cleanupAbort = forwardAbortSignal(session, options.signal);
-	const run = observeRun(session, { ...options, maxTurns: resolveEffectiveMaxTurns(options.type, options.maxTurns) });
+	const run = observeRun(session, {
+		...options,
+		maxTurns: resolveEffectiveMaxTurns(options.maxTurns, getAgentConfig(options.type)?.maxTurns),
+	});
 
 	try {
 		// Already aborted: not prompted, as in `runAgent`.

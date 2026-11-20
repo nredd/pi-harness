@@ -64,6 +64,8 @@ import {
 	getGraceTurns,
 	getRememberAgents,
 	normalizeMaxTurns,
+	resolveEffectiveMaxTurns,
+	resolveRunTurnCap,
 	SUBAGENT_TOOL_NAMES,
 	setDefaultMaxTurns,
 	setGraceTurns,
@@ -1348,9 +1350,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// built with `undefined` renders `↻3` where the Agent tool renders `↻3≤20`.
 		// Like the tool's own, it is a prediction — editing the agent file mid-run
 		// leaves the displayed ceiling stale.
-		const maxTurns = resolveTurnCap(options?.maxTurns, getAgentConfig(dispatch.type)?.maxTurns);
+		const definitionMaxTurns = getAgentConfig(dispatch.type)?.maxTurns;
+		const maxTurns = resolveTurnCap(options?.maxTurns, definitionMaxTurns);
 		const { state, callbacks } = createActivityTracker(
-			normalizeMaxTurns(maxTurns ?? getDefaultMaxTurns()),
+			resolveEffectiveMaxTurns(options?.maxTurns, definitionMaxTurns),
 			undefined,
 			clock,
 		);
@@ -2256,10 +2259,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	function resumeTurnLimit(record: AgentRecord, explicit?: number): number | undefined {
 		// Preserve 0 until the runner resolves it: normalizing it here would turn
 		// an explicit unlimited budget into "unspecified" and restore the spawn cap.
-		return (
-			resolveTurnCap(explicit ?? record.invocation?.maxTurns, getAgentConfig(record.type)?.maxTurns) ??
-			getDefaultMaxTurns()
-		);
+		return resolveRunTurnCap(explicit ?? record.invocation?.maxTurns, getAgentConfig(record.type)?.maxTurns);
 	}
 
 	/** Why `reopenEvicted` did not reopen; `type-unavailable` keeps the tombstone, `session-gone` drops it. */
@@ -2986,7 +2986,7 @@ Terse command-style prompts produce shallow, generic work.
 			// This is the pre-session snapshot — agent-manager overwrites it with the
 			// effective values the moment a session reports them.
 			const { modelName, modelId } = describeSelection(selection, ctx.modelRegistry);
-			const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
+			const effectiveMaxTurns = resolveEffectiveMaxTurns(params.max_turns, customConfig?.maxTurns);
 			const agentInvocation: AgentInvocation = {
 				modelName,
 				modelId,

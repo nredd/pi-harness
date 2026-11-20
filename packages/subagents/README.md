@@ -2181,7 +2181,7 @@ Start with the [channel examples](#cross-extension-rpc) and [event table](#event
 | `description` | string | What the agent is doing. Shown in the widget, FleetView and the completion notification |
 | `name` | string | A memorable second handle (`@auth-audit`). Slugged, never validated — anything unusable degrades rather than failing the spawn |
 | `model` | `Model`, `"@tier"` **or** `"provider/modelId"` | Strings are validated at the RPC boundary against `ctx.modelRegistry`; the shared spawn selector retains the raw request and stores its outcome on the record. `null` means no explicit override: `agentModels[type]`, `agentModels["*"]`, definition, then parent apply. Only explicit non-tier strings retain fuzzy matching; tiers and alias members resolve exactly, independently of `enabledModels` — see [Model tiers](#model-tiers) |
-| `maxTurns` | number | Turn ceiling for the run; the lower of this and the agent definition's cap applies, so it can tighten but never loosen it. `0` means unlimited only when the definition sets no cap |
+| `maxTurns` | finite number | Turn ceiling for the run; the lower of this and the agent definition's cap applies, so it can tighten but never loosen it. `0` means unlimited only when the definition sets no cap. Omit to inherit; strings (including numeric strings) and non-finite numbers are rejected |
 | `isolated` | boolean | Strips extensions, skills and nested tools. Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. **Not** a git worktree — see the trap table below |
 | `inheritContext` | boolean | Fork the parent conversation into the child. Only this option decides — an agent file's `inherit_context:` does not apply to RPC spawns |
 | `thinkingLevel` | ThinkingLevel | Overrides the agent definition's thinking default for this run; clamped to what the resolved model supports |
@@ -2241,6 +2241,7 @@ Every failure reaches the caller as `{ success: false, error }`, where `error` i
 | Error | Source |
 |---|---|
 | `No active session` | spawn handler, `src/cross-extension-rpc.ts` — called before the first bound `session_start`, or in a session that excludes pi-subagents |
+| `maxTurns must be a finite number` | spawn handler, `src/cross-extension-rpc.ts` |
 | `Model override "<label>" provided but ctx.modelRegistry is unavailable` | spawn handler, `src/cross-extension-rpc.ts` |
 | `Model not found: "<input>".` + in-scope available models | `resolveModel`, `src/model-resolver.ts` |
 | `Model not in scope: "<input>".` + allowed models | `checkModelScope`, `src/model-scope.ts` — only with `scopeModels` on, and checked against the *resolved* model |

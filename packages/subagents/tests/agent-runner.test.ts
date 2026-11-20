@@ -3001,48 +3001,42 @@ describe("resolveEffectiveMaxTurns", () => {
 
 	beforeEach(() => {
 		prevDefault = getDefaultMaxTurns();
-		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig({ maxTurns: 7 }) as any);
 	});
 
 	afterEach(() => {
 		setDefaultMaxTurns(prevDefault);
-		vi.mocked(getAgentConfig).mockReset();
 	});
 
 	it("prefers an explicit value over the agent's own and the project default", () => {
 		setDefaultMaxTurns(20);
-		expect(resolveEffectiveMaxTurns("test-agent", 3)).toBe(3);
+		expect(resolveEffectiveMaxTurns(3, 7)).toBe(3);
 	});
 
 	it("falls back to the agent's own max_turns", () => {
 		setDefaultMaxTurns(20);
-		expect(resolveEffectiveMaxTurns("test-agent")).toBe(7);
+		expect(resolveEffectiveMaxTurns(undefined, 7)).toBe(7);
 	});
 
 	it("falls back to the project default when the agent sets none", () => {
 		setDefaultMaxTurns(20);
-		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig() as any);
-		expect(resolveEffectiveMaxTurns("test-agent")).toBe(20);
+		expect(resolveEffectiveMaxTurns()).toBe(20);
 	});
 
 	it("is unlimited when nothing sets a limit", () => {
 		setDefaultMaxTurns(undefined);
-		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig() as any);
-		expect(resolveEffectiveMaxTurns("test-agent")).toBeUndefined();
+		expect(resolveEffectiveMaxTurns()).toBeUndefined();
 	});
 
 	it("keeps a finite definition cap even when a caller requests unlimited", () => {
 		setDefaultMaxTurns(20);
-		expect(resolveEffectiveMaxTurns("test-agent", 0)).toBe(7);
-		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig());
-		expect(resolveEffectiveMaxTurns("test-agent", 0)).toBeUndefined();
+		expect(resolveEffectiveMaxTurns(0, 7)).toBe(7);
+		expect(resolveEffectiveMaxTurns(0)).toBeUndefined();
 	});
 
 	it("lets a caller tighten an explicitly unlimited definition", () => {
 		setDefaultMaxTurns(20);
-		vi.mocked(getAgentConfig).mockReturnValue(makeAgentConfig({ maxTurns: 0 }));
-		expect(resolveEffectiveMaxTurns("test-agent", 3)).toBe(3);
-		expect(resolveEffectiveMaxTurns("test-agent")).toBeUndefined();
+		expect(resolveEffectiveMaxTurns(3, 0)).toBe(3);
+		expect(resolveEffectiveMaxTurns(undefined, 0)).toBeUndefined();
 	});
 });
 

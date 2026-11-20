@@ -150,8 +150,8 @@ describe("Agent tool — background resume wiring", () => {
 		[40, 12],
 		[3, 3],
 		[0, 12],
-		[Number.NaN, 12],
-	])("dispatches an RPC Explore spawn with requested cap %i at cap %i", async (requested, cap) => {
+		[undefined, 12],
+	])("dispatches an RPC Explore spawn with requested cap %s at cap %i", async (requested, cap) => {
 		const { pi, bus, lifecycle, emitted } = bootPi({}, { deliverEvents: true });
 		subagentsExtension(pi);
 		await startSession(lifecycle, false);
@@ -174,6 +174,29 @@ describe("Agent tool — background resume wiring", () => {
 				"search",
 				expect.objectContaining({ maxTurns: cap }),
 			);
+		} finally {
+			await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+		}
+	});
+
+	it("rejects an RPC Explore spawn with a non-finite cap even when a definition cap exists", async () => {
+		const { pi, bus, lifecycle, emitted } = bootPi({}, { deliverEvents: true });
+		subagentsExtension(pi);
+		await startSession(lifecycle, false);
+		try {
+			bus.emit("subagents:rpc:spawn", {
+				requestId: "invalid-cap",
+				type: "Explore",
+				prompt: "search",
+				options: { maxTurns: Number.NaN },
+			});
+			await vi.waitFor(() =>
+				expect(emitted).toContainEqual({
+					event: "subagents:rpc:spawn:reply:invalid-cap",
+					payload: { success: false, error: "maxTurns must be a finite number" },
+				}),
+			);
+			expect(runAgent).not.toHaveBeenCalled();
 		} finally {
 			await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
 		}

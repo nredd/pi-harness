@@ -85,7 +85,7 @@ describe("Agent tool → persisted scheduled job", () => {
 		}
 	});
 
-	it.each([40, undefined])("keeps the requested Explore cap %s for fire-time resolution", async (max_turns) => {
+	it.each([40, 0, undefined])("keeps the requested Explore cap %s for fire-time resolution", async (max_turns) => {
 		const { job, restore } = await scheduleAndReadBack({ subagent_type: "Explore", max_turns });
 		try {
 			expect(job.max_turns).toBe(max_turns);

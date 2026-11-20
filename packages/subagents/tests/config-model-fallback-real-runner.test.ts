@@ -9,16 +9,19 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.ts";
+import { getDefaultMaxTurns, setDefaultMaxTurns } from "../src/agent-runner.ts";
 import { registerAgents } from "../src/agent-types.ts";
 import { loadCustomAgents } from "../src/custom-agents.ts";
 import { modelFallbackNote, setAgentModels } from "../src/model-resolver.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { ScheduleStore } from "../src/schedule-store.ts";
 import { bootPi, flush, startSession, textOf } from "./fixtures/boot-extension.ts";
+import { fauxModelBackend } from "./fixtures/faux-model-backend.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
 import { registerFauxProvider } from "./fixtures/pi-ai.ts";
 
@@ -159,6 +162,7 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 	});
 
 	describe("scheduler job without a stored model", () => {
+		const delay = 1_000;
 		let tmp: string;
 		let transcript: string;
 		let clock: FakeClock;
@@ -181,31 +185,38 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 			scheduler.stop();
 		});
 
-		function fire(model?: string) {
+		function schedule(requestedModel?: string, maxTurns?: number) {
 			registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
 			const pi = {
 				events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
 				exec: async () => ({ code: 1, stdout: "", stderr: "" }),
 			} as any;
-			scheduler.start(pi, ctxFor(faux.getModel()), mgr, new ScheduleStore(join(tmp, "s.json")));
+			const model = faux.getModel();
+			const { modelRegistry, modelRuntime } = fauxModelBackend(model);
+			scheduler.start(
+				pi,
+				ctxFor(model, { modelRegistry: { ...modelRegistry, runtime: modelRuntime } }),
+				mgr,
+				new ScheduleStore(join(tmp, "s.json")),
+			);
 			// Keep the one-shot in the future until the store write and timer arming finish.
-			const delay = 1_000;
 			scheduler.addJob({
 				name: "job",
 				description: "job",
 				schedule: new Date(clock.now() + delay).toISOString(),
 				subagent_type: "scout",
 				prompt: "go",
-				...(model ? { model } : {}),
+				...(requestedModel ? { model: requestedModel } : {}),
+				...(maxTurns === undefined ? {} : { max_turns: maxTurns }),
 			});
-			clock.advance(delay);
 		}
 
 		it("honors the override over a resolving definition model", async () => {
 			writeScout(parentRef());
 			setAgentModels({ scout: "claude-haiku-4-5" });
 
-			fire();
+			schedule();
+			clock.advance(delay);
 
 			const agents = mgr.listAgents();
 			expect(agents).toHaveLength(1);
@@ -225,11 +236,35 @@ describe("real runAgent honors and discloses an unavailable agentModels override
 			await vi.waitFor(() => expect(scheduler.list()[0]!.runCount).toBe(1), { timeout: 10_000 });
 		});
 
+		it.each([
+			{ maxTurns: undefined, status: "steered" },
+			{ maxTurns: 0, status: "completed" },
+		])("fires a scheduled run with max_turns=$maxTurns and finishes $status", async ({ maxTurns, status }) => {
+			writeScout(parentRef());
+			faux.setResponses([fauxAssistantMessage("done"), fauxAssistantMessage("wrapped up")]);
+			const previous = getDefaultMaxTurns();
+			try {
+				setDefaultMaxTurns(10);
+				schedule(undefined, maxTurns);
+				setDefaultMaxTurns(1);
+				clock.advance(delay);
+
+				await vi.waitFor(() => expect(scheduler.list()[0]!.runCount).toBe(1), { timeout: 10_000 });
+				expect(mgr.listAgents().map((agent) => ({ status: agent.status, error: agent.error }))).toEqual([
+					expect.objectContaining({ status }),
+				]);
+				expect(scheduler.list()[0]!.lastStatus).toBe("success");
+			} finally {
+				setDefaultMaxTurns(previous);
+			}
+		});
+
 		it("refuses the explicit stored input rather than trying a failing override after it", () => {
 			writeScout(parentRef());
 			setAgentModels({ scout: "claude-haiku-4-5" });
 
-			fire("claude-opus-4-6");
+			schedule("claude-opus-4-6");
+			clock.advance(delay);
 
 			expect(mgr.listAgents()).toEqual([]);
 			expect(scheduler.list()[0]!.lastStatus).toBe("error");
