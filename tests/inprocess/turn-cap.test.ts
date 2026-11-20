@@ -28,7 +28,9 @@ afterAll(async () => {
 });
 
 it.each([
-	...[undefined, 1, 3, 40, 99].map((maxTurns) => ({ type: "Explore", maxTurns, cap: 12 })),
+	...[undefined, 40, 99].map((maxTurns) => ({ type: "Explore", maxTurns, cap: 12 })),
+	{ type: "Explore", maxTurns: 1, cap: 1 },
+	{ type: "Explore", maxTurns: 3, cap: 3 },
 	{ type: "general-purpose", maxTurns: undefined, cap: 9 },
 ])(
 	"Agent gives $type a $cap-turn cap with project default 9 and caller max_turns=$maxTurns",

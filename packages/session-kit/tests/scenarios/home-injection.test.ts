@@ -82,7 +82,7 @@ it("factory loads its config from the injected home", () => {
 	homes.push(home);
 	const current = probe();
 	createSessionKit({ homeDir: home })(current.pi as never);
-	expect(current.handlers).toEqual(new Map());
+	expect([...current.handlers.keys()]).toEqual(["tool_not_found"]);
 	expect(current.commands).toEqual(new Map());
 });
 

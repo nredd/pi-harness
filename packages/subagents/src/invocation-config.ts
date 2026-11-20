@@ -125,6 +125,15 @@ interface ResolveOptions {
 	defaultRunInBackground?: boolean;
 }
 
+/** Pick the tighter caller and definition caps. Keep explicit zero (unlimited)
+ * distinct from an omitted value so it can still suppress the project default. */
+export function resolveTurnCap(caller?: number, definition?: number): number | undefined {
+	if (caller == null || !Number.isFinite(caller)) return definition;
+	if (caller === 0) return definition ?? caller;
+	if (definition == null || definition === 0) return caller;
+	return Math.min(caller, definition);
+}
+
 export function resolveAgentInvocationConfig(
 	agentConfig: AgentConfig | undefined,
 	params: AgentInvocationParams,
@@ -149,7 +158,7 @@ export function resolveAgentInvocationConfig(
 		// selected level to the resolved model, and agent-manager records that
 		// requested-versus-effective difference after the session starts.
 		thinking: (params.thinking ?? agentConfig?.thinking) as ThinkingLevel | undefined,
-		maxTurns: agentConfig?.maxTurns ?? params.max_turns,
+		maxTurns: resolveTurnCap(params.max_turns, agentConfig?.maxTurns),
 		inheritContext: agentConfig?.inheritContext ?? params.inherit_context ?? false,
 		runInBackground: agentConfig?.runInBackground ?? params.run_in_background ?? opts?.defaultRunInBackground ?? false,
 		isolated: agentConfig?.isolated ?? params.isolated ?? false,

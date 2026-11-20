@@ -9,6 +9,7 @@ vi.mock("../src/agent-runner.ts", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import subagentsExtension from "../src/index.ts";
+import { setModelTiers } from "../src/model-tiers.ts";
 import { ADMIT_CHANNEL, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.ts";
 import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./fixtures/boot-extension.ts";
 
@@ -26,6 +27,7 @@ afterEach(async () => {
 	await lifecycle?.get("session_shutdown")?.();
 	Reflect.deleteProperty(globalThis, managerKey);
 	lifecycle = undefined;
+	setModelTiers(undefined, undefined);
 	hermetic?.restore();
 	hermetic = undefined;
 });
@@ -240,21 +242,27 @@ describe("get_subagent_result waiting on an agent with no run promise yet", () =
 });
 
 describe("a quota-blocked dispatch that resolved through a tier", () => {
-	it("leads the refusal with the tier note", async () => {
+	it.each(["unmapped", "unavailable"])("leads the refusal with the %s tier note", async (outcome) => {
+		const resetAt = Date.now() + 3_600_000;
 		const bus = new EventEmitter();
 		bus.on(ADMIT_CHANNEL, (raw: { requestId: string }) => {
 			queueMicrotask(() =>
 				bus.emit(`${ADMIT_CHANNEL}:reply:${raw.requestId}`, {
 					success: true,
-					data: { ok: false, resetAt: Date.now() + 3_600_000, wait: false },
+					data: { ok: false, resetAt, wait: false },
 				}),
 			);
 		});
 		const { tools } = boot({}, bus);
+		if (outcome === "unavailable") setModelTiers({ fast: ["fixture/absent"] }, {});
 		const model = { provider: "fixture", id: "parent", name: "Parent", api: "openai-completions" };
 		const parent = ctx({
 			model,
-			modelRegistry: { find: () => model, getAll: () => [model], getAvailable: () => [model] },
+			modelRegistry: {
+				find: (provider: string, id: string) => (provider === model.provider && id === model.id ? model : undefined),
+				getAll: () => [model],
+				getAvailable: () => [model],
+			},
 		});
 
 		await expect(
@@ -271,7 +279,12 @@ describe("a quota-blocked dispatch that resolved through a tier", () => {
 				undefined,
 				parent,
 			),
-		).rejects.toThrow(/model tier @fast is unmapped[\s\S]*The agent was not started\./);
+		).rejects.toThrow(
+			new Error(
+				`Note: model tier @fast is ${outcome}; inheriting the parent model.\nSubscription quota for fixture/parent is exhausted; it resets at ${new Date(resetAt).toISOString()}. The agent was not started.`,
+			),
+		);
+		expect(runAgent).not.toHaveBeenCalled();
 	});
 });
 

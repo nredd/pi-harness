@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import { AGENT_WORKFLOW_GROUP, WORKFLOW_MUTEX_CHANNEL, WorkflowMutex } from "../src/workflow-mutex.ts";
 import { createPlanContext, createPlanPi } from "./fixtures/support.ts";
@@ -353,42 +352,38 @@ test("busy menu, selected-tool, shortcut, and active-implementation starts stay 
 });
 
 test("Plan releases only after exit, save, export, implementation handoff, and shutdown cleanup", async () => {
-	const exportRoot = await mkdtemp(join(tmpdir(), "pi-plan-mutex-release-"));
-	try {
-		for (const action of ["exit", "save", "export", "implement", "shutdown"] as const) {
-			const sessionManager = { getSessionId: () => "test-session", getBranch: () => [], getEntries: () => [] };
-			const mock = createPlanPi({ activeTools: ["read", "write"] });
-			planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-			const context = createPlanContext({
-				mode: "tui",
-				hasUI: true,
-				cwd: exportRoot,
-				sessionManager,
-			});
-			await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-			await mock.commands.get("plan")?.handler("start", context.ctx);
-			if (action === "save" || action === "export" || action === "implement") {
-				const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as (
-					...args: unknown[]
-				) => Promise<unknown>;
-				await complete("call", { plan: `# ${action} plan` }, undefined, undefined, context.ctx);
-			}
-
-			if (action === "shutdown") {
-				await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
-			} else if (action === "export") {
-				await mock.commands.get("plan")?.handler(`export ${join(exportRoot, `${action}.md`)}`, context.ctx);
-			} else {
-				await mock.commands.get("plan")?.handler(action, context.ctx);
-			}
-
-			const released = attempt(sessionManager);
-			mock.bus.emit(WORKFLOW_MUTEX_CHANNEL, released);
-			assert.equal(released.busy, false, `${action} should release after cleanup`);
-			assert.deepEqual(mock.pi.getActiveTools(), ["read", "write", "plan_mode_question", "plan_mode_complete"]);
+	const exportRoot = makeTestTempDir("pi-plan-mutex-release-", onTestFinished);
+	for (const action of ["exit", "save", "export", "implement", "shutdown"] as const) {
+		const sessionManager = { getSessionId: () => "test-session", getBranch: () => [], getEntries: () => [] };
+		const mock = createPlanPi({ activeTools: ["read", "write"] });
+		planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+		const context = createPlanContext({
+			mode: "tui",
+			hasUI: true,
+			cwd: exportRoot,
+			sessionManager,
+		});
+		await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+		await mock.commands.get("plan")?.handler("start", context.ctx);
+		if (action === "save" || action === "export" || action === "implement") {
+			const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as (
+				...args: unknown[]
+			) => Promise<unknown>;
+			await complete("call", { plan: `# ${action} plan` }, undefined, undefined, context.ctx);
 		}
-	} finally {
-		await rm(exportRoot, { recursive: true, force: true });
+
+		if (action === "shutdown") {
+			await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+		} else if (action === "export") {
+			await mock.commands.get("plan")?.handler(`export ${join(exportRoot, `${action}.md`)}`, context.ctx);
+		} else {
+			await mock.commands.get("plan")?.handler(action, context.ctx);
+		}
+
+		const released = attempt(sessionManager);
+		mock.bus.emit(WORKFLOW_MUTEX_CHANNEL, released);
+		assert.equal(released.busy, false, `${action} should release after cleanup`);
+		assert.deepEqual(mock.pi.getActiveTools(), ["read", "write", "plan_mode_question", "plan_mode_complete"]);
 	}
 });
 

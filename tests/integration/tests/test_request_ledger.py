@@ -51,7 +51,7 @@ def test_messages_cache_markers_hash_and_comparisons() -> None:
                 "role": "assistant",
                 "content": [
                     {"type": "thinking", "thinking": "private"},
-                    {"type": "text", "text": "reply"},
+                    {"type": "text", "text": "réply"},
                     {"type": "tool_use", "id": "call", "name": "read", "input": {"path": "x"}},
                 ],
             },
@@ -72,17 +72,19 @@ def test_messages_cache_markers_hash_and_comparisons() -> None:
     }
     raw = json.dumps(body, ensure_ascii=False)
     ledger = request_ledger(raw, owners={"read": "builtin"}, previous=raw, parent='{"model":"other"}')
-    assert sum(ledger["buckets"].values()) == len(raw.encode())
-    assert ledger["common_prefix_previous_bytes"] == len(raw.encode())
+    buckets = ledger["buckets"]
+    encoded = raw.encode()
+    assert sum(buckets.values()) == len(encoded)
+    assert ledger["common_prefix_previous_bytes"] == len(encoded)
     assert ledger["common_prefix_parent_bytes"] == len(b'{"model":')
     assert ledger["tool_array_sha256"] == "9c1884186834e8d0bc914b66d146685a8dfdfa57fc68c58a86dae612a7fe40a0"
     assert [marker["bytes_through_block"] for marker in ledger["cache_markers"]] == [
-        raw.index('], "messages"'),
-        raw.index('}, {"type": "tool_result", "tool_use_id": "missing"') + 1,
+        encoded.index(b'], "messages"'),
+        encoded.index(b'}, {"type": "tool_result", "tool_use_id": "missing"') + 1,
     ]
-    assert set(ledger["buckets"]) >= {
-        "user",
-        "assistant_text",
+    assert buckets["user"] == len(b"hello")
+    assert buckets["assistant_text"] == len("réply".encode())
+    assert set(buckets) >= {
         "thinking",
         "tool_call_args:read",
         "tool_result:read",
@@ -109,8 +111,17 @@ def test_sdk_transcript_charges_native_blocks() -> None:
     ledger = request_ledger(raw, sdk=True, owners={"read": "builtin"}, provenance={"hi": "extension:fixture"})
     assert ledger["measurement"] == "utf8_sdk_context_bytes"
     assert ledger["cache_markers"] == []
-    assert ledger["request_bytes"] == len(raw.encode())
-    payload_bytes = {
+    # Only uncharged fragments: control fields, JSON wrappers and the removed section.
+    framing = (
+        b'{"model":"fixture","messages":['
+        b'{"role":"system","content":"","sections":{"named":"","removed":null},"toolsAdded":[,]},'
+        b'{"role":"assistant","content":[{"type":"thinking","thinking":,"thinkingSignature":},'
+        b'{"type":"toolCall","name":"read","arguments":}]},'
+        b'{"role":"toolResult","toolName":"read","content":},'
+        b'{"role":"user","content":[{"type":"text","text":""},]}]}'
+    )
+    expected = {
+        "serialization_overhead": len(framing),
         "system:tag": len(b"<tag>x</tag>"),
         "system:named": len("é".encode()),
         "tool:read:owner:builtin": len(b'{"name":"read"}'),
@@ -121,9 +132,8 @@ def test_sdk_transcript_charges_native_blocks() -> None:
         "thinking": len(b'"h"') + len(b'"s"'),
         "shared": len("π".encode()) + len(b'{"type":"image","data":"x","cache_control":{}}'),
     }
-    assert ledger["buckets"] == payload_bytes | {
-        "serialization_overhead": len(raw.encode()) - sum(payload_bytes.values()),
-    }
+    assert ledger["buckets"] == expected
+    assert ledger["request_bytes"] == sum(expected.values()) == len(raw.encode())
     assert (
         ledger["tool_array_sha256"]
         == request_ledger('{"tools":[{"name":"read"},{"name":"other"}]}')["tool_array_sha256"]
@@ -146,15 +156,19 @@ def test_sdk_transcript_sanitizes_labels_and_omits_removed_section() -> None:
         '{"messages":[{"role":"system","content":"","sections":{"bad name":"é","gone":null},'
         '"toolsAdded":[{"name":"bad name"}]}]}'
     )
-    buckets = request_ledger(raw, sdk=True)["buckets"]
-    payload_bytes = {
+    ledger = request_ledger(raw, sdk=True)
+    framing = (
+        b'{"messages":[{"role":"system","content":"","sections":{"bad name":"","gone":null},'
+        b'"toolsAdded":[]}]}'
+    )
+    expected = {
+        "serialization_overhead": len(framing),
         "shared": 0,
         "system:unsafe-9c262781c6b0": len("é".encode()),
         "tool:unsafe-9c262781c6b0:owner:unknown": len(b'{"name":"bad name"}'),
     }
-    assert buckets == payload_bytes | {
-        "serialization_overhead": len(raw.encode()) - sum(payload_bytes.values()),
-    }
+    assert ledger["buckets"] == expected
+    assert ledger["request_bytes"] == sum(expected.values()) == len(raw.encode())
 
 
 def test_escaped_sections_and_provenance() -> None:
