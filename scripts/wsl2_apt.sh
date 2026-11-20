@@ -9,6 +9,16 @@
 # and an offline install against the mirror whose `update` succeeded. The sources are NOT restored: apt's lists only
 # match that mirror, and the guest is ephemeral per job.
 set -euo pipefail
+
+# shellcheck source=scripts/ubuntu_apt.sh
+source "${BASH_SOURCE[0]%/*}/ubuntu_apt.sh"
+apt_label=wsl2-apt
+apt_log=
+apt_on_timeout=show_guest_processes
+show_guest_processes() {
+  printf 'wsl2-apt: guest processes, newest first:\n' >&2
+  { ps -eo pid,ppid,etime,stat,args --sort=etime | head -n 40 >&2; } || true
+}
 if [ "$(id -u)" -ne 0 ]; then
   echo 'wsl2-apt: must run as root' >&2
   exit 1
@@ -35,21 +45,11 @@ update_seconds=${WSL_APT_UPDATE_SECONDS:-100}
 download_seconds=${WSL_APT_DOWNLOAD_SECONDS:-360}
 install_seconds=${WSL_APT_INSTALL_SECONDS:-180}
 packages=(build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils)
-bounded() {
-  local label=$1 seconds=$2 status=0
-  shift 2
-  timeout --kill-after=10 "$seconds" "$@" || status=$?
-  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-    printf 'wsl2-apt: TIMEOUT: %s exceeded %ss: %s\n' "$label" "$seconds" "$*" >&2
-    printf 'wsl2-apt: guest processes, newest first:\n' >&2
-    { ps -eo pid,ppid,etime,stat,args --sort=etime | head -n 40 >&2; } || true
-  elif [ "$status" -ne 0 ]; then
-    printf 'wsl2-apt: FAILED: %s (status %s): %s\n' "$label" "$status" "$*" >&2
-  fi
-  return "$status"
-}
 # `timeout` runs a program, not a shell function, so the install command is an array.
-install=(env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends)
+apt=(apt-get)
+UPDATE_ARGS=(update)
+INSTALL_ARGS=(install --yes --no-install-recommends)
+INSTALL_PREFIX=(env DEBIAN_FRONTEND=noninteractive)
 printf '%s\n' \
   'Acquire::Retries "3";' \
   'Acquire::http::Timeout "20";' \
@@ -65,28 +65,17 @@ if [ -n "$cache" ] && compgen -G "$cache/*.deb" > /dev/null; then
   cp -n "$cache"/*.deb "$archives/"
   printf 'wsl2-apt: restored %s cached packages\n' "$(find "$cache" -name '*.deb' | wc -l | tr -d ' ')"
 fi
-original=$(< "$sources")
-fetched=false
-for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
-  # Point both the archive and security URIs at one mirror.
-  printf '%s\n' "$original" | sed -E "s#http://(archive|security)\\.ubuntu\\.com/ubuntu/?#${mirror}/#" > "$sources"
-  if ! grep -q "$mirror" "$sources"; then
-    printf 'wsl2-apt: %s is not in %s after rewriting it\n' "$mirror" "$sources" >&2
+rewrite_sources() {
+  local original=$1 selected=$2 mirror=$3
+  # Preserve the guest's stock archive/security rewrite and warn if no replacement was made.
+  printf '%s\n' "$original" | sed -E "s#http://(archive|security)\\.ubuntu\\.com/ubuntu/?#${mirror}/#" > "$selected" || return "$?"
+  if ! grep -q "$mirror" "$selected"; then
+    printf 'wsl2-apt: %s is not in %s after rewriting it\n' "$mirror" "$selected" >&2
   fi
-  printf 'wsl2-apt: using %s\n' "$mirror"
-  if bounded "apt-get update ($mirror)" "$update_seconds" apt-get update &&
-    bounded "apt-get download ($mirror)" "$download_seconds" "${install[@]}" --download-only "${packages[@]}"; then
-    fetched=true
-    break
-  fi
-  printf 'wsl2-apt: %s failed, trying the next mirror\n' "$mirror" >&2
-done
-if [ "$fetched" != true ]; then
-  echo 'wsl2-apt: every mirror failed' >&2
-  exit 1
-fi
+}
+apt_fetch_from_mirror "$sources" "$sources" rewrite_sources "$update_seconds" "$download_seconds" "${apt[@]}"
 # Everything is on disk now: the install needs no network, so a failure here is not a mirror problem.
-bounded "apt-get install" "$install_seconds" "${install[@]}" "${packages[@]}"
+apt_bounded "apt-get install" "$install_seconds" "${INSTALL_PREFIX[@]}" "${apt[@]}" "${INSTALL_ARGS[@]}" "${packages[@]}"
 # Refresh the host cache. Housekeeping must not fail a setup whose install succeeded: a partly
 # emptied cache only costs the next run a download (a failed job saves no cache anyway). Calling it
 # on the left of `||` also suspends `set -e` inside it.
