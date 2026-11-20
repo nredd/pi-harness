@@ -110,6 +110,7 @@ def test_required_check_rejects_failed_or_missing_native_producer(
     script.write_text(step["run"])
     completed = subprocess.run(
         ["/bin/bash", "-e", str(script)],
+        cwd=ROOT,
         env=os.environ
         | {
             "SHARDS_RESULT": "success",
@@ -120,6 +121,7 @@ def test_required_check_rejects_failed_or_missing_native_producer(
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
     passes = required == "false" or result == "success"
     assert (completed.returncode == 0) is passes, completed.stdout + completed.stderr
