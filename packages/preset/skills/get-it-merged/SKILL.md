@@ -148,7 +148,7 @@ pr, base_repo, worktree, remote = sys.argv[1:]
 SOURCE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 
-def out(*cmd: str, data: bytes | None = None) -> bytes:
+def out(*cmd: str, data: bytes = b"") -> bytes:
     """Run a command; any failure or diagnostic means keep."""
     done = subprocess.run(cmd, input=data, capture_output=True, check=False)
     if done.returncode or done.stderr:
@@ -199,7 +199,7 @@ allowed. Run `git -C <repo> fetch --no-auto-maintenance origin` instead of a pla
 locked worktrees are never pruned. This advice is prose, not automated. Prune deletes a worktree's admin dir, with its `HEAD` reflog and worktree-local refs, when
 its directory or `.git` file is gone (unmounted volume, recreated empty directory) and also when
 the admin `gitdir` file is empty or missing, which `git worktree list` hides. So the guard checks
-the list, every admin dir, and what prune itself would remove.
+the list, every admin dir, and the dry run. Any dry-run output keeps, even whitespace only.
 
 ```sh
 python3 - "$repo" <<'PY'
@@ -210,7 +210,7 @@ import sys
 repo = sys.argv[1]
 
 
-def out(*cmd: str, data: bytes | None = None) -> bytes:
+def out(*cmd: str, data: bytes = b"") -> bytes:
     """Run a command; any failure or diagnostic means keep."""
     done = subprocess.run(cmd, input=data, capture_output=True, check=False)
     if done.returncode or done.stderr:
@@ -218,7 +218,7 @@ def out(*cmd: str, data: bytes | None = None) -> bytes:
     return done.stdout
 
 
-def git(*args: str, data: bytes | None = None) -> bytes:
+def git(*args: str, data: bytes = b"") -> bytes:
     """Run Git against the path passed by the shell block."""
     return out("git", "-C", sys.argv[1], *args, data=data)
 
@@ -243,7 +243,10 @@ for name in sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else []:
     admin = os.path.join(admin_root, name)
     gitdir = read(os.path.join(admin, b"gitdir"))
     dotgit = os.path.join(admin, gitdir)
-    target = read(dotgit).removeprefix(b"gitdir:").strip()
+    target = read(dotgit)
+    if target.startswith(b"gitdir:"):
+        target = target[len(b"gitdir:"):]
+    target = target.strip()
     if not gitdir or os.path.realpath(
         os.path.join(os.path.dirname(dotgit), target)
     ) != os.path.realpath(admin):
@@ -282,7 +285,7 @@ import subprocess
 import sys
 
 
-def out(*cmd: str, data: bytes | None = None) -> bytes:
+def out(*cmd: str, data: bytes = b"") -> bytes:
     """Run a command; any failure or diagnostic means keep."""
     done = subprocess.run(cmd, input=data, capture_output=True, check=False)
     if done.returncode or done.stderr:
@@ -290,7 +293,7 @@ def out(*cmd: str, data: bytes | None = None) -> bytes:
     return done.stdout
 
 
-def git(*args: str, data: bytes | None = None) -> bytes:
+def git(*args: str, data: bytes = b"") -> bytes:
     """Run Git against the path passed by the shell block."""
     return out("git", "-C", sys.argv[1], *args, data=data)
 

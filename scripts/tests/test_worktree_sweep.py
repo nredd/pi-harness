@@ -38,6 +38,36 @@ class Mutation(NamedTuple):
     original: str
     replacement: str
 
+    def apply(self, script: str) -> str:
+        """Replace the unique mutation site, failing if the shipped text changed."""
+        assert script.count(self.original) == 1, f"expected one mutation site: {self.original!r}"
+        return script.replace(self.original, self.replacement)
+
+
+SKIP_PR_URL_HOST = Mutation(
+    'if parsed.scheme not in ("https", "http") or pr_host != source[1].lower():',
+    'if parsed.scheme not in ("https", "http"):',
+)
+RESTORE_LEXISTS = Mutation(
+    """    try:
+        os.stat(marker, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            continue
+        sys.exit(f"keep: cannot stat in-progress operation marker {marker!r}: {exc}")""",
+    "    if not os.path.lexists(marker):\n        continue",
+)
+DRIFT_OUT_WRAPPER = Mutation("if done.returncode or done.stderr:", "if done.returncode:")
+STRIP_DRY_RUN_STDERR = Mutation(
+    'dry = git("worktree", "prune", "--dry-run", "--verbose")',
+    """done = subprocess.run(
+    ["git", "-C", repo, "worktree", "prune", "--dry-run", "--verbose"], capture_output=True, check=False
+)
+if done.returncode or done.stderr.strip():
+    sys.exit("keep: dry run failed")
+dry = done.stdout""",
+)
+
 
 def git_env() -> dict[str, str]:
     """Prevent ambient Git routing and global config from affecting fixtures."""
@@ -85,8 +115,7 @@ def block(
     """Run the shipped shell block with its documented variables set."""
     script = block_source(heading)
     if mutate:
-        assert mutate.original in script, f"`{mutate.original}` not in the `{heading}` block"
-        script = script.replace(mutate.original, mutate.replacement)
+        script = mutate.apply(script)
     env = git_env()
     env.pop("GH_HOST", None)
     return subprocess.run(
@@ -205,8 +234,11 @@ def prune_guard(repo: Path) -> subprocess.CompletedProcess[str]:
     return block("Prune guard", repo=str(repo))
 
 
-def test_prune_dry_run_with_stderr_keeps(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """An otherwise clean prune guard must also reject stderr from the dry run."""
+@pytest.mark.parametrize("mutate", [None, STRIP_DRY_RUN_STDERR], ids=["shipped", "strip-stderr"])
+def test_prune_dry_run_with_stderr_keeps(
+    tmp_path: Path, linked: LinkedWorktree, mutate: Mutation | None
+) -> None:
+    """The shipped guard rejects even whitespace on dry-run stderr; the old guard lets it pass."""
     real_git = shutil.which("git")
     assert real_git is not None
     stub = tmp_path / "git"
@@ -221,9 +253,17 @@ def test_prune_dry_run_with_stderr_keeps(tmp_path: Path, linked: LinkedWorktree)
         encoding="utf-8",
     )
     stub.chmod(0o755)
-    result = block("Prune guard", path=f"{tmp_path}{os.pathsep}{os.environ['PATH']}", repo=str(linked.repo))
-    assert result.returncode != 0
-    assert "keep: git failed (exit 0): b'\\n'" in result.stderr
+    result = block(
+        "Prune guard",
+        path=f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        mutate=mutate,
+        repo=str(linked.repo),
+    )
+    if mutate is None:
+        assert result.returncode != 0
+        assert "keep: git failed (exit 0): b'\\n'" in result.stderr
+    else:
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 def registered(repo: Path) -> bool:
@@ -434,6 +474,17 @@ def test_pr_url_must_verify_the_push_host(
     assert f"keep: {diagnostic}" in result.stderr
 
 
+def test_without_pr_url_host_comparison_wrong_host_passes(tmp_path: Path, linked: LinkedWorktree) -> None:
+    """Dropping only the host comparison defeats the guard even with a strict `gh`."""
+    result = identity(
+        tmp_path,
+        linked,
+        overrides={"url": "https://git.example.invalid/acme/widgets/pull/7"},
+        mutate=SKIP_PR_URL_HOST,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+
+
 def test_successful_gh_with_stderr_keeps(tmp_path: Path, linked: LinkedWorktree) -> None:
     """A valid identity payload is not proof if `gh` also emitted a warning."""
     result = identity(tmp_path, linked, warn=True)
@@ -441,18 +492,49 @@ def test_successful_gh_with_stderr_keeps(tmp_path: Path, linked: LinkedWorktree)
     assert "keep: gh failed (exit 0): b'incomplete metadata" in result.stderr
 
 
-def test_command_wrapper_is_identical_in_all_shipped_blocks() -> None:
-    """The standalone blocks must agree on command execution and failure handling."""
+def python_block(heading: str, mutate: Mutation | None = None) -> ast.Module:
+    """Parse the Python heredoc under `heading` using the Python 3.8 grammar."""
+    script = block_source(heading).split("\n", 1)[1].removesuffix("\nPY")
+    return ast.parse(mutate.apply(script) if mutate else script, feature_version=(3, 8))
+
+
+@pytest.mark.parametrize("heading", HEADINGS)
+def test_shipped_block_supports_python_38_syntax(heading: str) -> None:
+    """PEP 604 unions parse even with the 3.8 grammar, so check annotation ASTs too."""
+    for node in ast.walk(python_block(heading)):
+        if isinstance(node, (ast.AnnAssign, ast.arg)):
+            annotation = node.annotation
+        elif isinstance(node, ast.FunctionDef):
+            annotation = node.returns
+        else:
+            continue
+        assert annotation is None or not any(isinstance(part, ast.BitOr) for part in ast.walk(annotation))
+
+
+def command_wrappers(
+    name: str, headings: tuple[str, ...], *, mutate_last: Mutation | None = None
+) -> dict[str, str]:
+    """Return normalized ASTs for the named helper, optionally mutating the last copy."""
     wrappers = {}
-    for heading in HEADINGS:
-        script = block_source(heading).split("\n", 1)[1].removesuffix("\nPY")
-        (wrapper,) = (
-            node
-            for node in ast.parse(script).body
-            if isinstance(node, ast.FunctionDef) and node.name == "out"
-        )
-        wrappers[heading] = ast.dump(wrapper)
+    for index, heading in enumerate(headings):
+        tree = python_block(heading, mutate_last if index == len(headings) - 1 else None)
+        matches = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+        assert len(matches) == 1, f"expected one `{name}` helper under `{heading}`"
+        wrappers[heading] = ast.dump(matches[0])
+    return wrappers
+
+
+@pytest.mark.parametrize(("name", "headings"), [("out", HEADINGS), ("git", HEADINGS[1:])])
+def test_command_wrappers_are_identical(name: str, headings: tuple[str, ...]) -> None:
+    """The standalone blocks must agree on command execution and failure handling."""
+    wrappers = command_wrappers(name, headings)
     assert len(set(wrappers.values())) == 1, wrappers
+
+
+def test_command_wrapper_pin_detects_one_drifted_copy() -> None:
+    """Ignoring stderr in just one block produces a second wrapper AST."""
+    wrappers = command_wrappers("out", HEADINGS, mutate_last=DRIFT_OUT_WRAPPER)
+    assert len(set(wrappers.values())) == 2, wrappers
 
 
 def test_missing_skill_heading_fails_clearly() -> None:
@@ -586,21 +668,38 @@ def test_stopped_git_am_is_kept_though_status_is_clean(linked: LinkedWorktree) -
     assert "keep: in-progress operation `rebase-apply`" in result.stderr
 
 
-@pytest.mark.parametrize("err", [errno.EACCES, errno.EIO], ids=["permission-denied", "io-error"])
-def test_operation_marker_stat_error_keeps(tmp_path: Path, linked: LinkedWorktree, err: int) -> None:
+@pytest.mark.parametrize("mutate", [None, RESTORE_LEXISTS], ids=["shipped", "lexists"])
+@pytest.mark.parametrize(
+    "err",
+    [errno.EACCES, errno.EIO, errno.ELOOP, errno.ENOTDIR],
+    ids=["permission-denied", "io-error", "symlink-loop", "not-a-directory"],
+)
+def test_operation_marker_stat_error_keeps(
+    tmp_path: Path, linked: LinkedWorktree, err: int, mutate: Mutation | None
+) -> None:
     """Inject an admin lookup failure independently of privileges, while Git still runs normally."""
     worktree = linked.worktree
     git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir").strip())
     marker = os.fsencode(git_dir / "rebase-apply")
+    trace = tmp_path / "stat-hit"
+    regular_file = tmp_path / "admin-file"
+    regular_file.touch()
     (tmp_path / "sitecustomize.py").write_text(
         dedent(f"""\
             import os
 
             def fail_marker_lookup(stat):
                 def checked(path, *args, **kwargs):
-                    if path == {marker!r}:
+                    if path != {marker!r}:
+                        return stat(path, *args, **kwargs)
+                    try:
+                        if {err} == {errno.ENOTDIR}:
+                            return stat({os.fsencode(regular_file / "rebase-apply")!r}, *args, **kwargs)
                         raise OSError({err}, os.strerror({err}), path)
-                    return stat(path, *args, **kwargs)
+                    except OSError as exc:
+                        with open({str(trace)!r}, "w", encoding="utf-8") as handle:
+                            handle.write(str(exc.errno))
+                        raise
                 return checked
 
             os.stat = fail_marker_lookup(os.stat)
@@ -608,10 +707,15 @@ def test_operation_marker_stat_error_keeps(tmp_path: Path, linked: LinkedWorktre
             """),
         encoding="utf-8",
     )
-    result = scan(worktree, PYTHONPATH=str(tmp_path))
-    assert result.returncode != 0
-    assert f"keep: cannot stat in-progress operation marker {marker!r}" in result.stderr
-    assert os.strerror(err) in result.stderr
+    result = scan(worktree, mutate=mutate, PYTHONPATH=str(tmp_path))
+    assert trace.is_file(), f"stat injection not reached: {result.stderr}"
+    assert trace.read_text(encoding="utf-8") == str(err)
+    if mutate is None:
+        assert result.returncode != 0
+        assert f"keep: cannot stat in-progress operation marker {marker!r}" in result.stderr
+        assert os.strerror(err) in result.stderr
+    else:
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 def test_dangling_operation_marker_keeps(linked: LinkedWorktree) -> None:
