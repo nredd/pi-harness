@@ -29,7 +29,7 @@ RUN = report.Provenance("example/repo", "a" * 40, "b" * 40, 123, 2, "pull_reques
 RECORD: dict[str, object] = {
     "run_id": 123,
     "run_attempt": 2,
-    "job": "owned",
+    "job": "owned-ubuntu",
     "cell": CELL,
     "tested_sha": "b" * 40,
     "pr_head_sha": "a" * 40,
@@ -51,7 +51,7 @@ RECORD: dict[str, object] = {
         json.dumps(RECORD | {"run_attempt": 1}).encode(),
         json.dumps(RECORD | {"run_attempt": 2.0}).encode(),
         json.dumps(RECORD | {"run_id": 124}).encode(),
-        json.dumps(RECORD | {"job": "owned-shards"}).encode(),
+        json.dumps(RECORD | {"job": "owned-shards-ubuntu"}).encode(),
         json.dumps(RECORD | {"cell": "coverage-wsl2"}).encode(),
         json.dumps(RECORD | {"event_name": "push"}).encode(),
         json.dumps(RECORD | {"workflow_ref": WORKFLOW + "-other"}).encode(),
@@ -130,9 +130,9 @@ def test_producer_fan_in_refuses_old_and_missing_shards(
     downloads = tmp_path / "downloads"
     shard = f"{CELL}-ts"
     shard_receipt = downloads / shard / "coverage/provenance-ts.json"
-    set_run_env(monkeypatch, "owned-shards")
+    set_run_env(monkeypatch, "owned-shards-ubuntu")
     assert producer.main(["--cell", shard, "--tested-sha", "b" * 40, "--output", str(shard_receipt)]) == 0
-    set_run_env(monkeypatch, "owned")
+    set_run_env(monkeypatch, "owned-ubuntu")
     output = tmp_path / CELL / "coverage/provenance.json"
     args = ["--cell", CELL, "--tested-sha", "b" * 40, "--output", str(output), "--shards", str(downloads)]
     assert producer.main(args) == 0
@@ -165,7 +165,7 @@ def test_non_pr_record_uses_null_pr_head(tmp_path: Path, monkeypatch: pytest.Mon
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    set_run_env(monkeypatch, "owned")
+    set_run_env(monkeypatch, "owned-ubuntu")
     monkeypatch.setenv("GITHUB_EVENT_NAME", event)
     workflow = "example/repo/.github/workflows/ci.yml@refs/heads/main"
     monkeypatch.setenv("GITHUB_WORKFLOW_REF", workflow)
@@ -251,7 +251,9 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
             row["os"] = "darwin"
     with zipfile.ZipFile(tmp_path / f"{cell}.zip", "w") as archive:
         archive.writestr("coverage/summary.json", json.dumps(summary))
-        archive.writestr("coverage/provenance.json", json.dumps(run.record("owned", cell)))
+        archive.writestr(
+            "coverage/provenance.json", json.dumps(run.record(report.producer_job(cell, shard=False), cell))
+        )
     evidence = report.load_evidence(tmp_path, manifest, run)[0]
     assert evidence.state == state, evidence.reason
     if state == "unavailable":
@@ -293,7 +295,7 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    set_run_env(monkeypatch, "owned")
+    set_run_env(monkeypatch, "owned-ubuntu")
     output = tmp_path / "provenance.json"
     subprocess.run(
         [
@@ -366,3 +368,20 @@ def test_ci_wires_receipts_to_existing_uploads() -> None:
         assert writer["continue-on-error"] is True
         if kind == "fan-in":
             assert '--shards "$RUNNER_TEMP/shard-coverage"' in writer["run"]
+
+
+@pytest.mark.parametrize("host", ["ubuntu-24.04", "macos-14"])
+def test_expected_producer_jobs_exist_in_the_workflow(host: str) -> None:
+    """Pin the job ids the verifier and renderer expect to the real workflow job keys.
+
+    Parameters:
+        host (str): Coverage host whose producer jobs are checked.
+    Returns:
+        None: Both the fan-in and the shard job exist.
+    Raises:
+        AssertionError: The workflow renamed a job without the provenance code following it.
+    """
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    assert report.producer_job(f"coverage-{host}", shard=False) in jobs
+    assert report.producer_job(f"coverage-{host}-ts", shard=True) in jobs
+    assert report.producer_job(f"coverage-{host}", shard=True) in jobs

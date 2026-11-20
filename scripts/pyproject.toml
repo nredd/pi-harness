@@ -3,7 +3,7 @@
 [tool.ruff]
 line-length = 110
 target-version = "py313"
-# The guest scripts run on the WSL guest's system python3 (3.12), before any uv environment exists.
+# These scripts run on the hosted runner's system python3 (3.12), before any uv environment exists.
 per-file-target-version = { "ci_paths.py" = "py312", "ci_process.py" = "py312", "install_gh_linux.py" = "py312" }
 
 [tool.ruff.lint]

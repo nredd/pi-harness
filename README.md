@@ -264,8 +264,8 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   the released host. The fork gate's non-rewriting
   check mirrors the entire selected core script, including worktree readiness and the binary-release
   and fork-audit type checks; only Biome's `--write` is removed
-- The Forks system dependency step always installs the upstream packages. It shares Ubuntu mirror
-  selection with WSL2: try Azure first, then the Ubuntu archive if the index or package download
+- The Forks system dependency step always installs the upstream packages. It tries the Ubuntu mirrors in
+  turn: Azure first, then the Ubuntu archive if the index or package download
   fails. Each apt command has its own deadline inside the five-minute step and prints its captured
   output on completion or timeout. The script writes a scratch sources file, points apt's
   `Dir::Etc::sourcelist` at it, and disables list cleanup so the runner's configured sources and
