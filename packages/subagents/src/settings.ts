@@ -1,8 +1,18 @@
 // Persistence for pi-subagents operational settings.
-// - Global:  ~/.pi/agent/subagents.json (via getAgentDir()) — manual defaults, never written here
+// - Global:  ~/.pi/agent/subagents.json — manual defaults, except for confirmed tier proposals
 // - Project: <cwd>/.pi/subagents.json — written by /agents → Settings; overrides global on load
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	linkSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { NO_FALLBACK } from "./agent-types.ts";
 import { readEnterpriseLocalManifest } from "./enterprise-local.ts";
@@ -751,6 +761,34 @@ export function loadTrustedSettings(homeDir?: string): SubagentsSettings {
 	return { ...readSettingsFile(globalPath(homeDir)), ...enterpriseSettings };
 }
 
+/** Persist confirmed tiers only; keep the raw settings so unrelated keys survive. */
+export function saveProposedModelTiers(modelTiers: Record<string, string[]>, homeDir?: string): void {
+	const path = globalPath(homeDir);
+	const target = lstatSync(path, { throwIfNoEntry: false });
+	if (target && !target.isFile()) throw new Error("Expected a regular global settings file");
+	const raw: unknown = target ? JSON.parse(readFileSync(path, "utf-8")) : {};
+	if (!raw || typeof raw !== "object" || Array.isArray(raw) || Object.hasOwn(raw, "modelTiers")) {
+		throw new Error("Expected a global settings object without modelTiers");
+	}
+	const overlay = readEnterpriseLocalManifest(homeDir)?.subagents;
+	if (overlay && Object.hasOwn(overlay, "modelTiers")) throw new Error("Enterprise modelTiers already exists");
+
+	const dir = dirname(path);
+	mkdirSync(dir, { recursive: true });
+	const tempDir = mkdtempSync(join(dir, ".subagents-tiers-"));
+	try {
+		const temp = join(tempDir, "subagents.json");
+		writeFileSync(temp, `${JSON.stringify({ ...raw, modelTiers }, null, 2)}\n`, {
+			mode: target ? target.mode & 0o777 : 0o600,
+		});
+		// For a new file, do not replace one created by another process meanwhile.
+		if (target) renameSync(temp, path);
+		else linkSync(temp, path);
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
 /**
  * The process budget's policy, from trusted configuration only -- including
  * its depth, the GLOBAL `maxSubagentDepth`: a project file may still change
@@ -767,7 +805,7 @@ export function loadBudgetPolicy(homeDir?: string): BudgetPolicy {
 }
 
 /**
- * Write project-local settings. Global is never touched from code.
+ * Write project-local settings. This writer never touches global settings.
  * Returns `true` on success, `false` if the write (or mkdir) failed so the
  * caller can surface a warning — persistence isn't fatal but isn't silent.
  */

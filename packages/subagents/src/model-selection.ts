@@ -35,12 +35,12 @@ const LEGACY_MODEL_PINS = new Map([[LEGACY_EXPLORE_ALIAS, "anthropic/claude-haik
 
 const PROPOSAL_TIERS = ["cheap", "deep", "default", "frontier", "review"] as const;
 
-/** Show an owner-editable suggestion from registry identities only, without admission or settings writes. */
-export function describeTierProposal(
+/** Build a preview and an optional candidate map from registry identities only. */
+export function proposeModelTiers(
 	models: readonly Pick<Model<Api>, "provider" | "id" | "api">[],
 	configured: Record<string, string[]> | undefined,
 	legacyAliases: Record<string, string[]> | undefined,
-): string {
+): { preview: string; modelTiers?: Record<string, string[]> } {
 	const profiles = new Set(
 		models
 			.filter((model) => model.provider === "router" && isVirtualModel(model) && isTierName(model.id))
@@ -52,21 +52,25 @@ export function describeTierProposal(
 			.map((id) => `router/${id}`)
 			.join(", ") || "none"
 	}.`;
-	if (configured !== undefined)
-		return `${inventory}\nNo proposal: modelTiers is already configured (an empty map counts).`;
+	if (configured !== undefined) {
+		return { preview: `${inventory}\nNo proposal: modelTiers is already configured (an empty map counts).` };
+	}
 	const missing = PROPOSAL_TIERS.filter((tier) => !profiles.has(tier));
 	const lines = [inventory];
 	if (missing.length) lines.push(`No matching registered profile: ${missing.map((tier) => `@${tier}`).join(", ")}.`);
 	const preserveCheap = profiles.has("cheap") && !!parseTierBinding("cheap", legacyAliases?.[LEGACY_EXPLORE_ALIAS]);
 	if (preserveCheap) lines.push("Skipped @cheap: a binding would shadow the legacy Explore alias.");
-	const entries = PROPOSAL_TIERS.filter((tier) => profiles.has(tier) && !(tier === "cheap" && preserveCheap));
-	if (!entries.length) return [...lines, "No bindings proposed."].join("\n");
+	const entries = PROPOSAL_TIERS.filter((tier) => profiles.has(tier));
+	if (!entries.length) return { preview: [...lines, "No bindings proposed."].join("\n") };
 	const modelTiers = Object.fromEntries(entries.map((tier) => [tier, [`router/${tier}`]]));
-	return [
-		...lines,
-		"Proposal only. If you approve, copy modelTiers into your trusted global configuration. Nothing was changed.",
-		JSON.stringify({ modelTiers }, null, 2),
-	].join("\n");
+	return {
+		modelTiers,
+		preview: [
+			...lines,
+			"Proposal only. If you approve, run /agents apply-tiers to review and save. Nothing was changed.",
+			JSON.stringify({ modelTiers }, null, 2),
+		].join("\n"),
+	};
 }
 
 /** The winning precedence level, before resolution or fallback. */

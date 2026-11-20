@@ -138,10 +138,10 @@ import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.ts";
 import {
 	admitModelSelection,
 	describeSelection,
-	describeTierProposal,
 	modelIdentityNote,
 	modelSelectionNote,
 	modelShadowNote,
+	proposeModelTiers,
 	selectModel,
 } from "./model-selection.ts";
 import { configuredTierNames, tierDisclosure } from "./model-tiers.ts";
@@ -202,6 +202,7 @@ import {
 	loadTrustedSettings,
 	type SubagentsSettings,
 	saveAndEmitChanged,
+	saveProposedModelTiers,
 	type ToolDescriptionMode,
 } from "./settings.ts";
 import { hostStartupErrorClass } from "./startup-error.ts";
@@ -5723,21 +5724,51 @@ Write the file using the write tool. Only write the file, nothing else.`;
 		else pi.sendMessage({ customType: "subagents-roster", content, display: true }, { triggerTurn: false });
 	}
 
+	/** Preview or confirm an exact proposal without sending it to the session or model. */
+	async function presentTierProposal(ctx: ExtensionCommandContext, apply: boolean): Promise<void> {
+		if (!ctx.hasUI) return;
+		const load = () => {
+			const { modelTiers, modelAliases } = loadTrustedSettings(options.homeDir);
+			return proposeModelTiers(ctx.modelRegistry.getAll(), modelTiers, modelAliases);
+		};
+		let proposal: ReturnType<typeof load>;
+		try {
+			proposal = load();
+		} catch {
+			ctx.ui.notify("Could not read trusted settings or registered router profiles for the tier proposal.", "error");
+			return;
+		}
+		if (!apply || !proposal.modelTiers) {
+			ctx.ui.notify(proposal.preview, "info");
+			return;
+		}
+		const approved = JSON.stringify(proposal.modelTiers);
+		try {
+			if (!(await ctx.ui.confirm("Save proposed modelTiers?", `Add ${approved} to global subagents.json?`))) return;
+			// Settings and registrations may have changed while the owner was deciding.
+			if (JSON.stringify(load().modelTiers) !== approved) {
+				ctx.ui.notify(
+					"The tier proposal changed. Nothing was saved; run /agents apply-tiers again to review it.",
+					"warning",
+				);
+				return;
+			}
+			saveProposedModelTiers(proposal.modelTiers, options.homeDir);
+			ctx.ui.notify("Saved modelTiers to global subagents.json. Restart Pi to use the new bindings.", "info");
+		} catch {
+			ctx.ui.notify(
+				"Could not save modelTiers to global subagents.json. Check the trusted configuration and file permissions.",
+				"error",
+			);
+		}
+	}
+
 	pi.registerCommand("agents", {
-		description: "Manage agents (propose-tiers to preview modelTiers)",
+		description: "Manage agents (propose-tiers to preview or apply-tiers to confirm and save modelTiers)",
 		handler: async (args, ctx) => {
-			if (args.trim() === "propose-tiers") {
-				// Keep this output out of the session and model context, even on errors.
-				if (!ctx.hasUI) return;
-				try {
-					const { modelTiers, modelAliases } = loadTrustedSettings(options.homeDir);
-					ctx.ui.notify(describeTierProposal(ctx.modelRegistry.getAll(), modelTiers, modelAliases), "info");
-				} catch {
-					ctx.ui.notify(
-						"Could not read trusted settings or registered router profiles for the tier proposal.",
-						"error",
-					);
-				}
+			const action = args.trim();
+			if (action === "propose-tiers" || action === "apply-tiers") {
+				await presentTierProposal(ctx, action === "apply-tiers");
 				return;
 			}
 			if (args.trim() === "roster" || args.trim() === "audit") {

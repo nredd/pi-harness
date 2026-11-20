@@ -1,6 +1,6 @@
 /** Actual entry paths + manager, real Pi registry/resolver; only child execution is stubbed. */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -171,9 +171,10 @@ afterEach(async () => {
 	sandbox.restore();
 });
 
-describe("/agents propose-tiers", () => {
+describe("/agents tier proposals", () => {
 	const agentDir = () => process.env.PI_CODING_AGENT_DIR!;
 	const globalSettings = () => join(agentDir(), "subagents.json");
+	const enterpriseSettings = () => join(agentDir(), "enterprise.local.json");
 	const snapshot = (root: string) =>
 		readdirSync(root, { recursive: true, withFileTypes: true })
 			.map((entry) => {
@@ -316,6 +317,154 @@ describe("/agents propose-tiers", () => {
 		const display = await preview();
 		expect(display).toContain("Skipped @cheap: a binding would shadow the legacy Explore alias.");
 		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({ modelTiers: { default: ["router/default"] } });
+	});
+
+	async function apply(
+		confirm = vi.fn<(title: string, message: string) => Promise<boolean>>().mockResolvedValue(true),
+		hasUI = true,
+	) {
+		const notify = vi.fn<(message: string, level: string) => void>();
+		await boot.commands.get("agents").handler(
+			" apply-tiers ",
+			makeCtx({
+				hasUI,
+				cwd: sandbox.dir,
+				modelRegistry: registry,
+				ui: { notify, confirm },
+			}),
+		);
+		expect(admissionModels).toEqual([]);
+		expect(boot.pi.sendMessage).not.toHaveBeenCalled();
+		return { confirm, notify };
+	}
+
+	it("declining the exact proposal leaves settings and routing untouched", async () => {
+		const before = snapshot(agentDir());
+		const confirm = vi.fn(async () => false);
+		await apply(confirm);
+		expect(confirm).toHaveBeenCalledExactlyOnceWith(
+			"Save proposed modelTiers?",
+			'Add {"default":["router/default"]} to global subagents.json?',
+		);
+		expect(snapshot(agentDir())).toEqual(before);
+		expect(tierBinding("default")).toBeUndefined();
+	});
+
+	it("saves the confirmed exact matches globally and loads them from trusted settings", async () => {
+		register("frontier-extra");
+		register("review");
+		register("Deep");
+		const projectBefore = snapshot(sandbox.dir);
+		const { confirm, notify } = await apply();
+		const modelTiers = { default: ["router/default"], review: ["router/review"] };
+		expect(confirm).toHaveBeenCalledExactlyOnceWith(
+			"Save proposed modelTiers?",
+			`Add ${JSON.stringify(modelTiers)} to global subagents.json?`,
+		);
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers });
+		expect(settings.loadTrustedSettings().modelTiers).toEqual(modelTiers);
+		expect(snapshot(sandbox.dir)).toEqual(projectBefore);
+		expect(tierBinding("review")).toBeUndefined();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(
+			"Saved modelTiers to global subagents.json. Restart Pi to use the new bindings.",
+			"info",
+		);
+	});
+
+	it("preserves legacy aliases and unknown global settings while saving independent tiers", async () => {
+		register("cheap");
+		const original = {
+			modelAliases: { "Claude-Haiku-4-5": ["selection-path/definition"] },
+			futureOption: { active: true },
+		};
+		writeFileSync(globalSettings(), JSON.stringify(original));
+		const overlay = JSON.stringify({ version: 1, subagents: { modelResolution: { allowFallback: false } } });
+		writeFileSync(enterpriseSettings(), overlay, { mode: 0o600 });
+		const { confirm } = await apply();
+		expect(confirm).toHaveBeenCalledExactlyOnceWith(
+			"Save proposed modelTiers?",
+			'Add {"default":["router/default"]} to global subagents.json?',
+		);
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({
+			...original,
+			modelTiers: { default: ["router/default"] },
+		});
+		expect(readFileSync(enterpriseSettings(), "utf8")).toBe(overlay);
+	});
+
+	it.each(["global", "enterprise"])("does not request approval over an explicit %s map", async (layer) => {
+		const config = { modelTiers: layer === "global" ? { cheap: ["selection-path/definition"] } : {} };
+		if (layer === "global") writeFileSync(globalSettings(), JSON.stringify(config));
+		else writeFileSync(enterpriseSettings(), JSON.stringify({ version: 1, subagents: config }), { mode: 0o600 });
+		const before = snapshot(agentDir());
+		expect((await apply()).confirm).not.toHaveBeenCalled();
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("does not request approval or create settings without matching profiles", async () => {
+		registry.unregisterVirtualModel("router", "default");
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("No bindings proposed."), "info");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("does not request approval or create settings headless", async () => {
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply(undefined, false);
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("preserves an explicit empty map added during confirmation", async () => {
+		const original = '{ "modelTiers": {} }';
+		const { notify } = await apply(
+			vi.fn(async () => {
+				writeFileSync(globalSettings(), original);
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("proposal changed"), "warning");
+		expect(readFileSync(globalSettings(), "utf8")).toBe(original);
+	});
+
+	it("does not save a stale proposal after profile registrations change", async () => {
+		const before = snapshot(agentDir());
+		const { notify } = await apply(
+			vi.fn(async () => {
+				register("review");
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("proposal changed"), "warning");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it.each(["not JSON", "null", "42", "[]"])("refuses to replace invalid global config: %s", async (raw) => {
+		writeFileSync(globalSettings(), raw);
+		const before = snapshot(agentDir());
+		const { notify } = await apply();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Could not save modelTiers"), "error");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("refuses to replace a nonregular global settings path", async () => {
+		mkdirSync(globalSettings());
+		const before = snapshot(agentDir());
+		const { notify } = await apply();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Could not save modelTiers"), "error");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it.each(["global", "enterprise"])("the writer refuses to save over an existing %s tier field", (layer) => {
+		const config = { modelTiers: null };
+		if (layer === "global") writeFileSync(globalSettings(), JSON.stringify(config));
+		else writeFileSync(enterpriseSettings(), JSON.stringify({ version: 1, subagents: config }), { mode: 0o600 });
+		const before = snapshot(agentDir());
+		expect(() => settings.saveProposedModelTiers({ default: ["router/default"] })).toThrow(/modelTiers/);
+		expect(snapshot(agentDir())).toEqual(before);
 	});
 });
 
