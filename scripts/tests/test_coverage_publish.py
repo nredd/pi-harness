@@ -24,7 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_publish as pub
-from coverage_report import Provenance, producer_job
+from coverage_provenance_record import Provenance, producer_job
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).parent / "fixtures/coverage-report/coverage-ubuntu-24.04.json"
@@ -118,9 +118,10 @@ class RecordingGitHub(pub.GitHub):
                 "created_at": STAMP,
             }
         ]
-        self.record = Provenance(
+        run = Provenance(
             REPO, HEAD, TESTED, 123, 2, "pull_request", f"{REPO}/{pub.WORKFLOW}@refs/pull/4/merge"
-        ).record(producer_job(pub.ARTIFACT, shard=False), pub.ARTIFACT)
+        )
+        self.record = dict(run.record(producer_job("ubuntu-24.04", shard=False), pub.ARTIFACT))
 
     def request(self, path: str, method: str = "GET", body: dict[str, str] | None = None) -> Any:
         """Return resource data and apply sticky writes to the recording store.

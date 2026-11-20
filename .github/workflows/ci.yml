@@ -379,18 +379,6 @@ jobs:
         run: make check-integration
       # `macos-native-pure` compiles real shipped Swift sources once during the package gate.
       # Retain raw region/profile evidence separately; fan-in still consumes its validated LCOV.
-      - name: Record Swift coverage provenance
-        if: always() && matrix.guest == 'macos' && contains(matrix.workspaces, 'packages/computer-use')
-        continue-on-error: true
-        env:
-          COVERAGE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          COVERAGE_CELL: computer-use-swift-${{ matrix.os }}
-        run: |
-          if [ -d packages/computer-use/coverage/swift ]; then
-            tested_sha=$(git rev-parse HEAD)
-            python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
-              --output packages/computer-use/coverage/swift/provenance.json
-          fi
       - name: Preserve real-source Swift coverage
         if: always() && matrix.guest == 'macos' && contains(matrix.workspaces, 'packages/computer-use')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -409,8 +397,7 @@ jobs:
           COVERAGE_CELL: coverage-${{ matrix.os }}-${{ matrix.shard }}
           COVERAGE_SHARD: ${{ matrix.shard }}
         run: |
-          tested_sha=$(git rev-parse HEAD)
-          python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
+          python3 scripts/coverage_provenance.py --cell "$COVERAGE_CELL" \
             --output "coverage/provenance-$COVERAGE_SHARD.json"
       # A shard can retain its receipt without measurements. The fan-in still fails if a report
       # expected by policy is missing.
@@ -537,27 +524,12 @@ jobs:
       - name: Windows build and install routing into disposable paths
         working-directory: packages/computer-use
         run: node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs test/rust-coverage.test.mjs --coverage.enabled=false
-      - name: Record Windows native coverage provenance
-        if: always()
-        continue-on-error: true
-        env:
-          COVERAGE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if (Test-Path packages/computer-use/coverage/native-windows/compiler.log) {
-            $testedSha = git rev-parse HEAD
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            uv run --no-project --python (Get-Content .python-version) python scripts/coverage_provenance.py `
-              --tested-sha $testedSha --cell computer-use-rust-windows-x64 `
-              --output packages/computer-use/coverage/native-windows/provenance.json
-            exit $LASTEXITCODE
-          }
       - name: Preserve Windows source-bound native reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: computer-use-rust-windows-x64
           path: |
-            packages/computer-use/coverage/native-windows/provenance.json
             packages/computer-use/coverage/native-windows/compiler.log
             packages/computer-use/coverage/native-windows/coverage.json
             packages/computer-use/coverage/native-windows/*/lcov.info
@@ -729,8 +701,7 @@ jobs:
         run: |
           rm -f coverage/provenance.json
           if [ "$DOWNLOAD_OUTCOME" = success ] && [ "$MERGE_OUTCOME" = success ] && [ -f coverage/summary.json ]; then
-            tested_sha=$(git rev-parse HEAD)
-            python3 scripts/coverage_provenance.py --tested-sha "$tested_sha" --cell "$COVERAGE_CELL" \
+            python3 scripts/coverage_provenance.py --cell "$COVERAGE_CELL" \
               --shards "$RUNNER_TEMP/shard-coverage" --output coverage/provenance.json
           fi
       - name: Preserve independent coverage reports and summary

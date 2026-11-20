@@ -20,6 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
+from coverage_provenance_record import Provenance
 
 DIRECTORY = Path(__file__).parent / "fixtures/coverage-report"
 HEAD = "a8622f3551585ac84f9edc840bf684f86cd9e43b"
@@ -90,7 +91,7 @@ def test_real_fan_in_counts(host: str) -> None:
         },
     }
     cell = report.Evidence.parse(host, declaration, summary)
-    provenance = report.Provenance(
+    provenance = Provenance(
         "nredd/pi-harness",
         None,
         HEAD,

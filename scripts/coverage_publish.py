@@ -21,17 +21,8 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from coverage_report import (
-    MAX_ARCHIVE_BYTES,
-    MAX_MARKDOWN,
-    SAFE_REPOSITORY,
-    SHA,
-    Provenance,
-    load_evidence,
-    object_value,
-    read_summary,
-    render_markdown,
-)
+from coverage_provenance_record import SAFE_REPOSITORY, SHA, Provenance, object_value
+from coverage_report import MAX_ARCHIVE_BYTES, MAX_MARKDOWN, load_evidence, read_summary, render_markdown
 
 LOGGER = logging.getLogger(__name__)
 API = "https://api.github.com"

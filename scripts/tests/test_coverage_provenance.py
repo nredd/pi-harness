@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -14,19 +15,25 @@ from pathlib import Path
 
 import pytest
 import yaml
+from coverage_report_fixtures import document, plan
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from test_coverage_report import document, plan
-
 import coverage_provenance as producer
 import coverage_report as report
+from coverage_provenance_record import (
+    COVERAGE_HOSTS,
+    MAX_PROVENANCE_BYTES,
+    Provenance,
+    ProvenanceRecord,
+    producer_job,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 HOST = "ubuntu-24.04"
 CELL = f"coverage-{HOST}"
 WORKFLOW = "example/repo/.github/workflows/ci.yml@refs/pull/1/merge"
-RUN = report.Provenance("example/repo", "a" * 40, "b" * 40, 123, 2, "pull_request", WORKFLOW)
-RECORD: dict[str, object] = {
+RUN = Provenance("example/repo", "a" * 40, "b" * 40, 123, 2, "pull_request", WORKFLOW)
+RECORD: ProvenanceRecord = {
     "run_id": 123,
     "run_attempt": 2,
     "job": "owned-ubuntu",
@@ -45,7 +52,7 @@ RECORD: dict[str, object] = {
         None,
         b"not JSON",
         b"{}",
-        b" " * (report.MAX_PROVENANCE_BYTES + 1),
+        b" " * (MAX_PROVENANCE_BYTES + 1),
         json.dumps(RECORD | {"tested_sha": "a" * 40}).encode(),
         json.dumps(RECORD | {"pr_head_sha": "b" * 40}).encode(),
         json.dumps(RECORD | {"run_attempt": 1}).encode(),
@@ -127,21 +134,21 @@ def test_producer_fan_in_refuses_old_and_missing_shards(
     Raises:
         AssertionError: The boundary contract regresses.
     """
+    monkeypatch.setattr(producer, "checkout_sha", lambda: RUN.tested_sha)
     downloads = tmp_path / "downloads"
     shard = f"{CELL}-ts"
     shard_receipt = downloads / shard / "coverage/provenance-ts.json"
     set_run_env(monkeypatch, "owned-shards-ubuntu")
-    assert producer.main(["--cell", shard, "--tested-sha", "b" * 40, "--output", str(shard_receipt)]) == 0
+    assert producer.main(["--cell", shard, "--output", str(shard_receipt)]) == 0
     set_run_env(monkeypatch, "owned-ubuntu")
     output = tmp_path / CELL / "coverage/provenance.json"
-    args = ["--cell", CELL, "--tested-sha", "b" * 40, "--output", str(output), "--shards", str(downloads)]
+    args = ["--cell", CELL, "--output", str(output), "--shards", str(downloads)]
     assert producer.main(args) == 0
     assert json.loads(output.read_text()) == RECORD
     (output.parent / "summary.json").write_text(json.dumps(document()))
     manifest = tmp_path / "plan.json"
     manifest.write_text(json.dumps({HOST: plan()}))
     assert report.load_evidence(tmp_path, manifest, RUN)[0].state == "available"
-    output.unlink()
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "3")
     assert producer.main(args) == 1
     assert not output.exists()
@@ -165,12 +172,13 @@ def test_non_pr_record_uses_null_pr_head(tmp_path: Path, monkeypatch: pytest.Mon
     Raises:
         AssertionError: The boundary contract regresses.
     """
+    monkeypatch.setattr(producer, "checkout_sha", lambda: RUN.tested_sha)
     set_run_env(monkeypatch, "owned-ubuntu")
     monkeypatch.setenv("GITHUB_EVENT_NAME", event)
     workflow = "example/repo/.github/workflows/ci.yml@refs/heads/main"
     monkeypatch.setenv("GITHUB_WORKFLOW_REF", workflow)
     output = tmp_path / "provenance.json"
-    args = ["--cell", CELL, "--tested-sha", "b" * 40, "--output", str(output)]
+    args = ["--cell", CELL, "--output", str(output)]
     assert producer.main(args) == 1  # Reject an unexpected PR head on these events.
     monkeypatch.setenv("COVERAGE_PR_HEAD_SHA", "")
     assert producer.main(args) == 0
@@ -179,6 +187,9 @@ def test_non_pr_record_uses_null_pr_head(tmp_path: Path, monkeypatch: pytest.Mon
         "event_name": event,
         "workflow_ref": workflow,
     }
+    run = Provenance("example/repo", None, RUN.tested_sha, 123, 2, event, workflow)
+    rendered = report.render_markdown((), run)
+    assert f"head: n/a; tested: {RUN.tested_sha};" in rendered
     monkeypatch.delenv("GITHUB_JOB")
     assert producer.main(args) == 1
 
@@ -231,7 +242,7 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
     run = (
         RUN
         if event == "pull_request"
-        else report.Provenance(
+        else Provenance(
             RUN.repository,
             None,
             RUN.tested_sha,
@@ -251,9 +262,8 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
             row["os"] = "darwin"
     with zipfile.ZipFile(tmp_path / f"{cell}.zip", "w") as archive:
         archive.writestr("coverage/summary.json", json.dumps(summary))
-        archive.writestr(
-            "coverage/provenance.json", json.dumps(run.record(report.producer_job(cell, shard=False), cell))
-        )
+        job = producer_job(host, shard=False) if host in COVERAGE_HOSTS else "owned-ubuntu"
+        archive.writestr("coverage/provenance.json", json.dumps(run.record(job, cell)))
     evidence = report.load_evidence(tmp_path, manifest, run)[0]
     assert evidence.state == state, evidence.reason
     if state == "unavailable":
@@ -296,21 +306,52 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         AssertionError: The boundary contract regresses.
     """
     set_run_env(monkeypatch, "owned-ubuntu")
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    git = shutil.which("git")
+    assert git is not None
+    tested_sha = subprocess.check_output([git, "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    assert tested_sha not in {RUN.head_sha, "c" * 40}
     output = tmp_path / "provenance.json"
     subprocess.run(
         [
             sys.executable,
             str(ROOT / "scripts/coverage_provenance.py"),
-            "--tested-sha",
-            "b" * 40,
             "--cell",
             CELL,
             "--output",
             str(output),
         ],
         check=True,
+        cwd=ROOT,
     )
-    assert json.loads(output.read_text()) == RECORD
+    assert json.loads(output.read_text()) == RECORD | {"tested_sha": tested_sha}
+
+
+@pytest.mark.parametrize("failure", ["git-missing", "no-head", "unknown-job"])
+def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """Do not retain earlier provenance when the producer cannot record its own identity.
+
+    Parameters:
+        tmp_path (Path): Isolated producer workspace.
+        monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+        failure (str): Invalid checkout or job identity.
+    """
+    set_run_env(monkeypatch, "owned-ubuntu")
+    git = shutil.which("git")
+    assert git is not None
+    subprocess.run([git, "init", "--quiet", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    if failure == "git-missing":
+        monkeypatch.setattr(producer.shutil, "which", lambda _: None)
+    elif failure == "unknown-job":
+        monkeypatch.setattr(producer, "checkout_sha", lambda: RUN.tested_sha)
+        monkeypatch.setenv("GITHUB_JOB", "not-a-coverage-producer")
+    output = tmp_path / "provenance.json"
+    output.write_text(json.dumps(RECORD))
+    assert producer.main(["--cell", CELL, "--output", str(output)]) == 1
+    assert not output.exists()
 
 
 def test_ci_wires_receipts_to_existing_uploads() -> None:
@@ -339,35 +380,34 @@ def test_ci_wires_receipts_to_existing_uploads() -> None:
             "coverage-${{ matrix.os }}-${{ matrix.shard }}",
             "coverage/provenance-${{ matrix.shard }}.json",
         ),
-        (
-            "owned-shards-ubuntu",
-            "Swift",
-            "computer-use-swift-${{ matrix.os }}",
-            "packages/computer-use/coverage/swift/",
-        ),
-        (
-            "owned-shards-macos",
-            "Swift",
-            "computer-use-swift-${{ matrix.os }}",
-            "packages/computer-use/coverage/swift/",
-        ),
-        (
-            "computer-use-windows",
-            "Windows native",
-            "computer-use-rust-windows-x64",
-            "packages/computer-use/coverage/native-windows/provenance.json",
-        ),
     ):
         steps = jobs[job]["steps"]
         writer = next(step for step in steps if step.get("name") == f"Record {kind} coverage provenance")
         upload = steps[steps.index(writer) + 1]
         assert upload["with"]["name"] == cell
         assert receipt in upload["with"]["path"].splitlines()
-        assert "git rev-parse HEAD" in writer["run"]
+        assert "python3 scripts/coverage_provenance.py --cell" in writer["run"]
+        assert "--tested-sha" not in writer["run"]
+        assert "git rev-parse" not in writer["run"]
         assert writer["env"]["COVERAGE_PR_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
         assert writer["continue-on-error"] is True
         if kind == "fan-in":
             assert '--shards "$RUNNER_TEMP/shard-coverage"' in writer["run"]
+
+
+@pytest.mark.parametrize("job", ["owned-shards-ubuntu", "owned-shards-macos"])
+def test_swift_artifact_retains_reports_without_stamp(job: str) -> None:
+    """Keep native evidence without producing a sidecar no renderer reads.
+
+    Parameters:
+        job (str): Job holding the Swift report upload.
+    """
+    steps = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"][job]["steps"]
+    upload = next(step for step in steps if step.get("name") == "Preserve real-source Swift coverage")
+    assert upload["with"]["name"] == "computer-use-swift-${{ matrix.os }}"
+    assert upload["with"]["path"] == "packages/computer-use/coverage/swift/"
+    assert all("coverage/swift/provenance.json" not in step.get("run", "") for step in steps)
+    assert all(step.get("name") != "Record Swift coverage provenance" for step in steps)
 
 
 @pytest.mark.parametrize("host", ["ubuntu-24.04", "macos-14"])
@@ -382,6 +422,5 @@ def test_expected_producer_jobs_exist_in_the_workflow(host: str) -> None:
         AssertionError: The workflow renamed a job without the provenance code following it.
     """
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-    assert report.producer_job(f"coverage-{host}", shard=False) in jobs
-    assert report.producer_job(f"coverage-{host}-ts", shard=True) in jobs
-    assert report.producer_job(f"coverage-{host}", shard=True) in jobs
+    assert producer_job(host, shard=False) in jobs
+    assert producer_job(host, shard=True) in jobs

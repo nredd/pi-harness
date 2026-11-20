@@ -33,8 +33,10 @@ put the why in the commit.
     warnings remain essential state under the 60,000-character cap. No publishing.
     For `coverage-<os>`, the renderer requires `coverage/provenance.json` beside `coverage/summary.json`
     in the same ZIP or unpacked directory. The producer records run ID, attempt, job key, matrix cell
-    (the declared artifact name), actual `git rev-parse HEAD`, PR head SHA (null outside PRs), event
-    and workflow ref. The fan-in stamps the summary only when all downloaded shards match its run,
+    (the declared artifact name), checkout SHA read directly from Git, PR head SHA (null outside PRs),
+    event and workflow ref. Non-PR reports show `head: n/a` separately from the tested SHA. Swift
+    and native Windows keep their independent diagnostic uploads without a presentation sidecar.
+    The fan-in stamps the summary only when all downloaded shards match its run,
     attempt and checkout; a partial rerun that reuses older shards can retain reports without a stamp.
     Missing, malformed or mismatched records render `unavailable`, never zero. Accounting and floors
     are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,

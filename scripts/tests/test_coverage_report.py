@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from coverage_report_fixtures import document, plan
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
+from coverage_provenance_record import MAX_JSON_BYTES, Provenance, decode_json, object_value, text_value
 
-PROVENANCE = report.Provenance(
+PROVENANCE = Provenance(
     "example/repository",
     "a" * 40,
     "b" * 40,
@@ -29,72 +31,6 @@ PROVENANCE = report.Provenance(
     "pull_request",
     "example/repository/.github/workflows/ci.yml@refs/pull/1/merge",
 )
-
-
-def document() -> dict[str, Any]:
-    """Return a small independent measured summary with native-style unsupported counters.
-
-    Parameters:
-        None.
-
-    Returns:
-        dict[str, Any]: The boundary contract is satisfied.
-
-    Raises:
-        None.
-    """
-    return {
-        "os": "linux",
-        "measurement_only": False,
-        "packages": {
-            "pkg/primary": {"lines": 10, "uncovered_lines": 2, "functions": 0, "uncovered_functions": 0}
-        },
-        "signals": {
-            "pkg/primary": {
-                "enforcement": "enforced",
-                "reason": "",
-                "reference": {"lines": 3},
-                "delta": {"lines": -1},
-            }
-        },
-        "files": [
-            {
-                "package": "pkg",
-                "signal": "primary",
-                "os": "linux",
-                "file": "src/a.py",
-                "lines": 10,
-                "uncovered_lines": 2,
-            }
-        ],
-        "errors": [],
-        "not_measured": {"native": "No native branch producer"},
-    }
-
-
-def plan(state: str = "available") -> dict[str, Any]:
-    """Return a trusted caller plan independent of the measured summary.
-
-    Parameters:
-        state (str): Boundary input.
-
-    Returns:
-        dict[str, Any]: The boundary contract is satisfied.
-
-    Raises:
-        None.
-    """
-    return {
-        "state": state,
-        "signals": {
-            "pkg/primary": {
-                "enforcement": "enforced",
-                "reason": "reason",
-                "semantics": "coverage.py/7:lines",
-                "state": "planned",
-            }
-        },
-    }
 
 
 def cell() -> report.Evidence:
@@ -351,7 +287,7 @@ def test_object_types(value: object) -> None:
         AssertionError: The boundary contract regresses.
     """
     with pytest.raises(ValueError, match=r"^Expected a JSON object$"):
-        report.object_value(value)
+        object_value(value)
 
 
 @pytest.mark.parametrize("value", [None, 3, "line\nfeed", "x" * 8193])
@@ -368,7 +304,7 @@ def test_text_types(value: object) -> None:
         AssertionError: The boundary contract regresses.
     """
     with pytest.raises(ValueError, match=r"^Expected bounded text without control or format characters$"):
-        report.text_value(value)
+        text_value(value)
 
 
 @pytest.mark.parametrize(
@@ -378,7 +314,7 @@ def test_text_types(value: object) -> None:
         (b"\xff", r"^Cannot decode JSON: "),
         (b"[]", r"^Cannot decode JSON: 'Expected a JSON object'$"),
         (b'{"x":1,"x":2}', r"^Cannot decode JSON: 'Duplicate JSON key: .x.'$"),
-        (b" " * (report.MAX_JSON_BYTES + 1), r"^JSON byte limit exceeded$"),
+        (b" " * (MAX_JSON_BYTES + 1), r"^JSON byte limit exceeded$"),
         (b'{"x":NaN}', r"Non-finite JSON number: .NaN."),
         (b'{"x":Infinity}', r"Non-finite JSON number: .Infinity."),
         (b'{"x":-Infinity}', r"Non-finite JSON number: .-Infinity."),
@@ -401,7 +337,7 @@ def test_json_refusals(data: bytes, message: str) -> None:
         AssertionError: The boundary contract regresses.
     """
     with pytest.raises(ValueError, match=message):
-        report.decode_json(data)
+        decode_json(data)
 
 
 @pytest.mark.parametrize(
@@ -787,10 +723,10 @@ def test_integer_bound_is_ours_not_the_interpreter_s() -> None:
     sys.set_int_max_str_digits(0)
     try:
         with pytest.raises(ValueError, match=r"^Cannot decode JSON: 'Integer literal too long'$"):
-            report.decode_json(b'{"x":' + b"9" * 5000 + b"}")
+            decode_json(b'{"x":' + b"9" * 5000 + b"}")
     finally:
         sys.set_int_max_str_digits(previous)
-    assert report.decode_json(b'{"x":12345678901234567890}') == {"x": 12345678901234567890}
+    assert decode_json(b'{"x":12345678901234567890}') == {"x": 12345678901234567890}
 
 
 def trimmed_document(marker: object) -> dict[str, Any]:

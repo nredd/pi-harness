@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
+from coverage_provenance_record import Provenance
 
 
 @pytest.mark.parametrize("path", ["../a", "/a", "a//b", "a\\b", "", "safe-but-unplanned.py"])
@@ -31,7 +32,7 @@ def test_unsafe_source_paths_are_display_only(path: str) -> None:
         AssertionError: The boundary contract regresses.
     """
     file = report.File("pkg/primary", path, report.Counters.parse({"lines": 1, "uncovered_lines": 0}))
-    provenance = report.Provenance(
+    provenance = Provenance(
         "example/repo",
         "a" * 40,
         "b" * 40,
@@ -68,7 +69,7 @@ def test_source_url_uses_trusted_root_and_tested_sha() -> None:
             "source_root": "packages/pkg",
         },
     )
-    provenance = report.Provenance(
+    provenance = Provenance(
         "example/repo",
         "a" * 40,
         "b" * 40,
@@ -126,7 +127,7 @@ def test_invalid_manifest_host(tmp_path: Path) -> None:
         report.load_evidence(
             tmp_path,
             path,
-            report.Provenance(
+            Provenance(
                 "example/repo",
                 "a" * 40,
                 "b" * 40,

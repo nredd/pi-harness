@@ -19,8 +19,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_report as report
+from coverage_provenance_record import MAX_JSON_BYTES, Provenance, decode_json, producer_job
 
-PROVENANCE = report.Provenance(
+PROVENANCE = Provenance(
     "example/repo",
     None,
     "b" * 40,
@@ -182,7 +183,7 @@ def test_real_oversized_summary_member_refused(tmp_path: Path) -> None:
     """
     path = tmp_path / "big.zip"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("coverage/summary.json", b" " * (report.MAX_JSON_BYTES + 1))
+        archive.writestr("coverage/summary.json", b" " * (MAX_JSON_BYTES + 1))
     with pytest.raises(ValueError, match=r"^Invalid summary member$"):
         report.read_summary(path)
 
@@ -200,7 +201,7 @@ def test_archive_with_lying_declared_size_refused(tmp_path: Path) -> None:
         AssertionError: The boundary contract regresses.
     """
     path = tmp_path / "lie.zip"
-    stored_zip(path, b" " * (report.MAX_JSON_BYTES + 4096))
+    stored_zip(path, b" " * (MAX_JSON_BYTES + 4096))
     data = bytearray(path.read_bytes())
     local, central = data.index(b"PK\x03\x04"), data.index(b"PK\x01\x02")
     struct.pack_into("<II", data, local + 18, 10, 10)
@@ -223,7 +224,7 @@ def test_stored_member_declared_just_over_json_limit_is_refused(tmp_path: Path) 
         AssertionError: The boundary contract regresses.
     """
     path = tmp_path / "just-over.zip"
-    stored_zip(path, b"{" + b" " * report.MAX_JSON_BYTES)
+    stored_zip(path, b"{" + b" " * MAX_JSON_BYTES)
     with pytest.raises(ValueError, match=r"^Invalid summary member$"):
         report.read_summary(path)
 
@@ -314,7 +315,7 @@ def test_inconsistent_artifact_degrades_host_not_report(tmp_path: Path) -> None:
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps(document))
         path.with_name("provenance.json").write_text(
-            json.dumps(PROVENANCE.record(f"owned-{host.split('-')[0]}", f"coverage-{host}"))
+            json.dumps(PROVENANCE.record(producer_job(host, shard=False), f"coverage-{host}"))
         )
     cells = report.load_evidence(tmp_path, manifest, PROVENANCE)
     assert [cell.state for cell in cells] == ["unavailable", "unavailable"]
@@ -420,7 +421,7 @@ def test_finite_floats_still_decode() -> None:
     Raises:
         AssertionError: The boundary contract regresses.
     """
-    assert report.decode_json(b'{"x":1.5}') == {"x": 1.5}
+    assert decode_json(b'{"x":1.5}') == {"x": 1.5}
 
 
 def deflated_zip(path: Path) -> tuple[int, int]:
