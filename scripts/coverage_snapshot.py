@@ -252,21 +252,23 @@ def read_tip(api: Transport) -> str | None:
     return git_sha(ref["object"]["sha"])
 
 
-def read_snapshot(api: Transport, tip: str) -> Snapshot:
+def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot, str]:
     """Read a fixed regular file at the pinned data commit, never a checked-out tree.
 
     Parameters:
         api (Transport): Repository transport.
         tip (str): Validated snapshot commit SHA.
     Returns:
-        Snapshot: Parsed data from the pinned tip.
+        tuple[Snapshot, str]: Parsed data and its root tree SHA from the pinned tip.
     Raises:
         ValueError: Malformed Git entry or snapshot.
     """
-    tree = api.request(f"git/trees/{tip}")
-    entries = tree["tree"]
-    if tree["truncated"] is not False or len(entries) != 1 or entries[0]["path"] != FILENAME:
-        raise ValueError("Expected a data-only snapshot tree with exactly one entry")
+    commit = api.request(f"git/commits/{tip}")
+    tree_sha = git_sha(commit["tree"]["sha"])
+    tree = api.request(f"git/trees/{tree_sha}")
+    entries = [entry for entry in tree["tree"] if entry["path"] == FILENAME]
+    if tree["sha"] != tree_sha or tree["truncated"] is not False or len(entries) != 1:
+        raise ValueError("Expected exactly one snapshot entry in the complete tree")
     entry = entries[0]
     size = positive_id(entry["size"])
     if entry["mode"] != "100644" or entry["type"] != "blob" or size > MAX_BYTES:
@@ -280,7 +282,7 @@ def read_snapshot(api: Transport, tip: str) -> Snapshot:
     raw = base64.b64decode(encoded, validate=True)
     if len(raw) != size:
         raise ValueError("Invalid decoded snapshot size")
-    return Snapshot.parse(raw, api.repository)
+    return Snapshot.parse(raw, api.repository), tree_sha
 
 
 def baseline(api: Transport, now: datetime) -> Snapshot | None:
@@ -298,7 +300,7 @@ def baseline(api: Transport, now: datetime) -> Snapshot | None:
         tip = read_tip(api)
         if tip is None:
             return None
-        snapshot = read_snapshot(api, tip)
+        snapshot, _ = read_snapshot(api, tip)
     except (KeyError, OSError, TypeError, ValueError):
         return None
     return snapshot if timedelta(0) <= now - snapshot.measured_at <= MAX_AGE else None
@@ -307,6 +309,7 @@ def baseline(api: Transport, now: datetime) -> Snapshot | None:
 def write_snapshot(
     api: Transport,
     tip: str | None,
+    base_tree: str | None,
     payload: dict[str, Any],
     still_current: Callable[[], bool],
 ) -> None:
@@ -315,6 +318,7 @@ def write_snapshot(
     Parameters:
         api (Transport): Snapshot writer transport.
         tip (str | None): Previously observed ref tip.
+        base_tree (str | None): Root tree at that tip, if the ref already exists.
         payload (dict[str, Any]): Candidate snapshot JSON.
         still_current (Callable[[], bool]): Recheck run identity immediately before mutating the ref.
     Returns:
@@ -324,8 +328,11 @@ def write_snapshot(
     """
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     Snapshot.parse(raw.encode(), api.repository)
+    overlay = {"base_tree": base_tree} if base_tree is not None else {}
     tree = api.request(
-        "git/trees", "POST", {"tree": [{"path": FILENAME, "type": "blob", "mode": "100644", "content": raw}]}
+        "git/trees",
+        "POST",
+        overlay | {"tree": [{"path": FILENAME, "type": "blob", "mode": "100644", "content": raw}]},
     )
     commit = api.request(
         "git/commits",

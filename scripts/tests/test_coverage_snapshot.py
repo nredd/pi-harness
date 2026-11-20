@@ -37,6 +37,7 @@ NOW = datetime(2026, 11, 21, tzinfo=UTC)
 TIP = "c" * 40
 BLOB = "d" * 40
 TREE = "e" * 40
+BASE_TREE = "f" * 40
 
 
 def http_error(path: str, code: int) -> HTTPError:
@@ -66,6 +67,8 @@ class MainGitHub(pub.GitHub):
     race: str
     archive: str
     tree_entries: list[dict[str, Any]]
+    proposed_siblings: list[dict[str, Any]]
+    tree_metadata: dict[str, Any]
     blob: dict[str, Any]
     ref: dict[str, Any]
     policy: dict[str, Any]
@@ -90,7 +93,8 @@ class MainGitHub(pub.GitHub):
         )
         self.jobs, self.artifacts, self.writes, self.downloads, self.reads = [], [], [], [], []
         self.raw, self.race, self.archive = b"", "", ""
-        self.tree_entries, self.blob, self.ref = [], {}, {}
+        self.tree_entries, self.proposed_siblings, self.blob, self.ref = [], [], {}, {}
+        self.tree_metadata = {"sha": BASE_TREE, "truncated": False}
         self.policy = {
             "path": "coverage/policy.json",
             "type": "file",
@@ -125,7 +129,7 @@ class MainGitHub(pub.GitHub):
             )
 
     def seed_snapshot(self, raw: bytes) -> None:
-        """Put a data-only snapshot at an existing tip.
+        """Put a regular snapshot blob at an existing tip.
 
         Parameters:
             raw (bytes): Snapshot JSON.
@@ -161,7 +165,8 @@ class MainGitHub(pub.GitHub):
             if path == "actions/runs/123":
                 return self.data | ({"run_attempt": 3} if self.writes and self.race == "attempt" else {})
             return {
-                f"git/trees/{TIP}": {"tree": self.tree_entries, "truncated": False},
+                f"git/commits/{TIP}": {"tree": {"sha": BASE_TREE}},
+                f"git/trees/{BASE_TREE}": self.tree_metadata | {"tree": self.tree_entries},
                 f"git/blobs/{BLOB}": self.blob,
                 f"contents/coverage/policy.json?ref={HEAD}": self.policy,
             }[path]
@@ -172,6 +177,11 @@ class MainGitHub(pub.GitHub):
             assert entry.keys() == {"path", "type", "mode", "content"}
             assert (entry["path"], entry["type"], entry["mode"]) == (snap.FILENAME, "blob", "100644")
             self.raw = entry["content"].encode()
+            if "base_tree" in body:
+                assert body["base_tree"] == BASE_TREE
+                self.proposed_siblings = [row for row in self.tree_entries if row["path"] != entry["path"]]
+            else:
+                self.proposed_siblings = []
             return {"sha": TREE}
         if path == "git/commits":
             assert body["tree"] == TREE
@@ -180,6 +190,7 @@ class MainGitHub(pub.GitHub):
             assert body.get("force") is not True
             raise http_error(path, 422)
         self.seed_snapshot(self.raw)
+        self.tree_entries.extend(self.proposed_siblings)
         return {}
 
     def pages(self, path: str, key: str | None = None, **params: str) -> list[Any]:
@@ -469,6 +480,32 @@ def test_only_newer_executions_advance_tip(order: tuple[int, int]) -> None:
         assert not api.writes
 
 
+def test_new_snapshot_preserves_sibling_file() -> None:
+    """Overlay only the snapshot and retain the sibling's existing blob and mode.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        None.
+    """
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    api.seed_snapshot(json.dumps(json.loads(api.raw) | {"number": 6}).encode())
+    sibling = {"path": "coverage.svg", "sha": "a" * 40, "size": 42, "type": "blob", "mode": "100644"}
+    api.tree_entries.insert(0, sibling)
+    api.writes.clear()
+
+    pub.publish_snapshot(api, api.data, NOW)
+
+    assert api.writes[0][2]["base_tree"] == BASE_TREE
+    assert api.tree_entries[1:] == [sibling]
+    baseline = snap.baseline(api, NOW)
+    assert baseline is not None
+    assert baseline.order == (7, 2)
+
+
 @pytest.mark.parametrize("race", ["ref", "attempt"])
 def test_race_cannot_move_ref(race: str) -> None:
     """Reject concurrent ref creation and attempts that change after producing the commit.
@@ -520,7 +557,19 @@ def test_invalid_snapshot_identity(field: str, value: object) -> None:
 
 @pytest.mark.parametrize(
     "case",
-    ["missing", "sibling", "duplicate", "symlink", "oversized", "sha", "blob", "encoded", "decoded", "raw"],
+    [
+        "truncated",
+        "wrong-tree",
+        "missing",
+        "duplicate",
+        "symlink",
+        "oversized",
+        "sha",
+        "blob",
+        "encoded",
+        "decoded",
+        "raw",
+    ],
 )
 def test_invalid_stored_data_is_unavailable(case: str) -> None:
     """Handle short, hostile or malformed Git responses without rendering their numbers.
@@ -535,10 +584,12 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
     api = MainGitHub()
     pub.publish_snapshot(api, api.data, NOW)
     entry = api.tree_entries[0]
-    if case == "missing":
+    if case == "truncated":
+        api.tree_metadata["truncated"] = True
+    elif case == "wrong-tree":
+        api.tree_metadata["sha"] = TREE
+    elif case == "missing":
         api.tree_entries.clear()
-    elif case == "sibling":
-        api.tree_entries.append(entry | {"path": "coverage.svg"})
     elif case == "duplicate":
         api.tree_entries.append(entry)
     elif case == "symlink":
@@ -557,7 +608,7 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
     else:
         api.seed_snapshot(b"{bad json}")
     assert snap.baseline(api, NOW) is None
-    if case in {"missing", "sibling", "duplicate", "symlink", "oversized", "sha"}:
+    if case in {"truncated", "wrong-tree", "missing", "duplicate", "symlink", "oversized", "sha"}:
         assert not any(path.startswith("git/blobs/") for path in api.reads)
     api.writes.clear()
     with pytest.raises(ValueError, match=r"snapshot|Git object|Cannot decode JSON"):

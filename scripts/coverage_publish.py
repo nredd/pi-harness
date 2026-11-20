@@ -533,9 +533,12 @@ def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
     if not timedelta(0) <= now - timestamp(started) <= MAX_AGE:
         raise ValueError("Main coverage attempt is outside its retention window")
     tip = read_tip(api)
-    if tip is not None and read_snapshot(api, tip).order >= run.order:
-        LOGGER.info("Snapshot is already at this or a newer execution")
-        return
+    base_tree = None
+    if tip is not None:
+        previous, base_tree = read_snapshot(api, tip)
+        if previous.order >= run.order:
+            LOGGER.info("Snapshot is already at this or a newer execution")
+            return
     route = f"actions/runs/{run.id}"
     if main_run(api, api.request(route)) != identity:
         raise ValueError("Main attempt changed before publication")
@@ -578,7 +581,7 @@ def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
         "measured_at": started,
         "hosts": {cell.host: encode_cell(cell) for cell in cells},
     }
-    write_snapshot(api, tip, payload, lambda: main_run(api, api.request(route)) == identity)
+    write_snapshot(api, tip, base_tree, payload, lambda: main_run(api, api.request(route)) == identity)
 
 
 def main() -> int:
