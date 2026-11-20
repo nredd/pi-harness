@@ -61,6 +61,7 @@ class MainGitHub(pub.GitHub):
     artifacts: list[dict[str, Any]]
     writes: list[tuple[str, str, Any]]
     downloads: list[int]
+    reads: list[str]
     raw: bytes
     race: str
     archive: str
@@ -87,7 +88,7 @@ class MainGitHub(pub.GitHub):
             head_repository={"id": 92, "full_name": REPO},
             run_started_at=STAMP,
         )
-        self.jobs, self.artifacts, self.writes, self.downloads = [], [], [], []
+        self.jobs, self.artifacts, self.writes, self.downloads, self.reads = [], [], [], [], []
         self.raw, self.race, self.archive = b"", "", ""
         self.tree_entries, self.blob, self.ref = [], {}, {}
         self.policy = {
@@ -152,6 +153,7 @@ class MainGitHub(pub.GitHub):
             HTTPError: Missing ref or competing update.
         """
         if method == "GET":
+            self.reads.append(path)
             if path == snap.REF_API:
                 if not self.ref:
                     raise http_error(path, 404)
@@ -273,11 +275,14 @@ def test_publish_and_consume_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     assert {cell.host for cell in snap.baseline(api, NOW)} == set(pub.COVERAGE_HOSTS)
     assert snap.baseline(api, NOW + snap.MAX_AGE) == ()
     assert snap.baseline(api, NOW - timedelta(days=2)) == ()
+    data["hosts"]["ubuntu-24.04"]["dev-tools/primary"]["counters"]["uncovered_lines"] = 1
+    api.seed_snapshot(json.dumps(data).encode())
     pr = RecordingGitHub()
     monkeypatch.setattr(pr.__class__, "request", lambda self, *args: api.request(*args))
     monkeypatch.setattr(pub, "datetime", FixedClock)
     body = pub.render(pr, pub.Run.parse(pr.data), 4, TESTED, POLICY)
-    assert "lines +0, functions +0" in body
+    row = next(line for line in body.splitlines() if line.startswith("dev&#45;tools&#47;primary |"))
+    assert row.rsplit(" | ", 1)[1] == "lines -1, functions +0, branches +0, statements +0"
     assert pub.PR_NOTICE in body.splitlines()
     assert "verified" not in "\n".join(line for line in body.splitlines() if line != pub.PR_NOTICE).casefold()
 
@@ -484,6 +489,8 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
     else:
         api.seed_snapshot(b"{bad json}")
     assert snap.baseline(api, NOW) == ()
+    if case in {"missing", "duplicate", "symlink", "oversized", "sha"}:
+        assert not any(path.startswith("git/blobs/") for path in api.reads)
     api.writes.clear()
     with pytest.raises(ValueError, match=r"snapshot|Git object|Cannot decode JSON"):
         pub.publish_snapshot(api, api.data, NOW)
