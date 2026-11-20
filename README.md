@@ -59,6 +59,8 @@ make help                    # every target
 ```
 
 - `make check` never rewrites files and never modifies `forks/`
+- `PI_TIMEOUT_SCALE` scales the 300s package-contract npm and native lint subprocess deadlines. It defaults
+  to `1`, requires a finite number `>= 1`, and caps values at `10`; e.g. `PI_TIMEOUT_SCALE=3` gives 900s.
 - `check-integration` needs the `forks/pi` Gitlink initialized
 - `check-changelog-fragments` and explicit `fold-changelog` use the managed `tests/integration` uv project;
   folding edits source fragments only, never publishes or releases. Edits to enrolled packages'
