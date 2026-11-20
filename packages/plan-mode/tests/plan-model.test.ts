@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import {
 	availablePlanModelTiers,
@@ -62,31 +62,23 @@ test("planModel settings validate, save and clear like the other model settings"
 	assert.equal(normalizePlanModeSettings({ planModel: "anthropic/claude-opus-5-5" }), undefined);
 	assert.equal(normalizePlanModeSettings({})?.planModel, undefined);
 
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-plan-model-"));
+	const directory = makeTestTempDir("pi-plan-mode-plan-model-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		await writeFile(settingsPath, '{"unknown":true}\n');
-		assert.equal((await updatePlanModeSettings({ planModel: "@deep" }, { settingsPath })).planModel, "@deep");
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { unknown: true, planModel: "@deep" });
-		await assert.rejects(
-			updatePlanModeSettings({ planModel: "router/deep" as never }, { settingsPath }),
-			(error: Error) => error.message.endsWith(PLAN_MODEL_TIER_REQUIRED),
-		);
-		assert.equal((await updatePlanModeSettings({ planModel: null }, { settingsPath })).planModel, undefined);
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { unknown: true });
-		for (const planModel of [
-			'"router/deep"',
-			'"anthropic/claude-opus-5-5"',
-			'{"provider":"router","modelId":"deep"}',
-		]) {
-			await writeFile(settingsPath, `{"planModel":${planModel}}\n`);
-			assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "invalid", reason: PLAN_MODEL_TIER_REQUIRED });
-		}
-		await writeFile(settingsPath, '{"planModel":"@deep","thinkingLevel":"loud"}\n');
-		assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "invalid", reason: "invalid settings shape" });
-	} finally {
-		await rm(directory, { recursive: true, force: true });
+	await writeFile(settingsPath, '{"unknown":true}\n');
+	assert.equal((await updatePlanModeSettings({ planModel: "@deep" }, { settingsPath })).planModel, "@deep");
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { unknown: true, planModel: "@deep" });
+	await assert.rejects(
+		updatePlanModeSettings({ planModel: "router/deep" as never }, { settingsPath }),
+		(error: Error) => error.message.endsWith(PLAN_MODEL_TIER_REQUIRED),
+	);
+	assert.equal((await updatePlanModeSettings({ planModel: null }, { settingsPath })).planModel, undefined);
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { unknown: true });
+	for (const planModel of ['"router/deep"', '"anthropic/claude-opus-5-5"', '{"provider":"router","modelId":"deep"}']) {
+		await writeFile(settingsPath, `{"planModel":${planModel}}\n`);
+		assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "invalid", reason: PLAN_MODEL_TIER_REQUIRED });
 	}
+	await writeFile(settingsPath, '{"planModel":"@deep","thinkingLevel":"loud"}\n');
+	assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "invalid", reason: "invalid settings shape" });
 });
 
 test("Plan model switch state restores only while Plan is active and well formed", () => {
@@ -756,7 +748,7 @@ test("Start fresh after a manual /model keeps the user's model as the plan model
 });
 
 test("Plan model settings offer router tiers and fall back to inherit", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-plan-model-menu-"));
+	const directory = makeTestTempDir("pi-plan-mode-plan-model-menu-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const tui = createTuiHarness({ width: 100, rows: 30 });
 	const context = createPlanContext({
@@ -843,6 +835,5 @@ test("Plan model settings offer router tiers and fall back to inherit", async ()
 		await running;
 	} finally {
 		tui.dispose();
-		await rm(directory, { recursive: true, force: true });
 	}
 });

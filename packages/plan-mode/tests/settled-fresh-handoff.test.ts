@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { deferred } from "@nredd/pi-test-lib/deferred";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { packagePath } from "./fixtures/package-path.ts";
 import { builtinTool, createPlanContext, extensionTool } from "./fixtures/support.ts";
 
 const EVENT_RECORDER = Symbol.for("pi-plan-mode.issue-1263-events");
 
 test("user-opened fresh handoff starts only after settled and prompt-end dispatch", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-issue-1263-"));
+	const root = makeTestTempDir("pi-issue-1263-", onTestFinished);
 	const agentDir = join(root, "agent");
 	const followerPath = join(root, "later-extension.ts");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -190,6 +190,5 @@ export default function laterExtension(pi) {
 		Reflect.deleteProperty(globalThis, EVENT_RECORDER);
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(root, { force: true, recursive: true });
 	}
 });

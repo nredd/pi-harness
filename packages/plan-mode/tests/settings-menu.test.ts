@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { type PlanModeSettings, updatePlanModeSettings } from "../src/settings.ts";
 import { showPlanModeSettings } from "../src/settings-menu.ts";
 import { builtinTool, createPlanContext, extensionTool } from "./fixtures/support.ts";
@@ -26,7 +26,7 @@ async function withSettingsMenu(
 	}) => Promise<void>,
 	tuiOptions: Parameters<typeof createTuiHarness>[0] = {},
 ) {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-menu-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-menu-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
 	const tui = createTuiHarness({ width: 72, rows: 24, ...tuiOptions });
 	const context = createPlanContext({
@@ -41,7 +41,6 @@ async function withSettingsMenu(
 		await run({ settingsPath, tui, ctx: context.ctx, notifications: context.notifications, saved });
 	} finally {
 		tui.dispose();
-		await rm(directory, { recursive: true, force: true });
 	}
 }
 
@@ -475,28 +474,24 @@ test("shortcut input preserves paste, editing, failure, and remapped cancellatio
 });
 
 test("RPC shortcut saves and clears explain that TUI bindings require reload", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-shortcut-rpc-"));
+	const directory = makeTestTempDir("pi-plan-shortcut-rpc-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		const rpc = createRpcHarness([
-			{ kind: "select", response: "Plan mode shortcut (none)" },
-			{ kind: "input", response: "ctrl+alt+p" },
-			{ kind: "select", response: "Plan mode shortcut (ctrl+alt+p)" },
-			{ kind: "input", response: "" },
-			{ kind: "select", response: undefined },
-		]);
-		const context = createPlanContext({ mode: "rpc", hasUI: true, ...rpc.ui });
-		const saved: PlanModeSettings[] = [];
-		await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
-		rpc.assertConsumed();
-		assert.equal(saved[0]?.toggleShortcut, "ctrl+alt+p");
-		assert.equal(saved[1]?.toggleShortcut, undefined);
-		const successes = context.notifications.filter(({ level }) => level === "info");
-		assert.equal(successes.length, 2);
-		assert.ok(successes.every(({ message }) => /saved.*\/reload.*current binding is unchanged/i.test(message)));
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const rpc = createRpcHarness([
+		{ kind: "select", response: "Plan mode shortcut (none)" },
+		{ kind: "input", response: "ctrl+alt+p" },
+		{ kind: "select", response: "Plan mode shortcut (ctrl+alt+p)" },
+		{ kind: "input", response: "" },
+		{ kind: "select", response: undefined },
+	]);
+	const context = createPlanContext({ mode: "rpc", hasUI: true, ...rpc.ui });
+	const saved: PlanModeSettings[] = [];
+	await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
+	rpc.assertConsumed();
+	assert.equal(saved[0]?.toggleShortcut, "ctrl+alt+p");
+	assert.equal(saved[1]?.toggleShortcut, undefined);
+	const successes = context.notifications.filter(({ level }) => level === "info");
+	assert.equal(successes.length, 2);
+	assert.ok(successes.every(({ message }) => /saved.*\/reload.*current binding is unchanged/i.test(message)));
 });
 
 test("long export previews stay within narrow terminal widths", async () => {
@@ -569,97 +564,89 @@ test("Invalid Plan settings are read-only and save failures roll back displayed 
 });
 
 test("RPC Settings persists native callable selection and keeps hidden tools unavailable", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-native-settings-rpc-"));
+	const directory = makeTestTempDir("pi-plan-native-settings-rpc-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		const rpc = createRpcHarness([
-			{ kind: "select", response: "Plan policy tools (Automatic safe built-ins)" },
-			{ kind: "select", response: "[ ] mcp__docs__read" },
-			{ kind: "select", response: undefined },
-		]);
-		const context = createPlanContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
-		const saved: PlanModeSettings[] = [];
-		await showPlanModeSettings(
-			context.ctx,
-			menuOptions(settingsPath, saved, {
-				tools: [nativeTool("mcp__docs__read", "deferred"), nativeTool("secret", "hidden")],
-				activeToolNames: ["secret"],
-			}),
-		);
-		rpc.assertConsumed();
-		assert.deepEqual(saved.at(-1)?.defaultPlanTools, ["mcp__docs__read"]);
-		assert.ok(rpc.dialogs[1]?.options?.some((option) => /^\[-\] secret \(unavailable: Hidden in Pi/.test(option)));
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")).defaultPlanTools, ["mcp__docs__read"]);
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const rpc = createRpcHarness([
+		{ kind: "select", response: "Plan policy tools (Automatic safe built-ins)" },
+		{ kind: "select", response: "[ ] mcp__docs__read" },
+		{ kind: "select", response: undefined },
+	]);
+	const context = createPlanContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
+	const saved: PlanModeSettings[] = [];
+	await showPlanModeSettings(
+		context.ctx,
+		menuOptions(settingsPath, saved, {
+			tools: [nativeTool("mcp__docs__read", "deferred"), nativeTool("secret", "hidden")],
+			activeToolNames: ["secret"],
+		}),
+	);
+	rpc.assertConsumed();
+	assert.deepEqual(saved.at(-1)?.defaultPlanTools, ["mcp__docs__read"]);
+	assert.ok(rpc.dialogs[1]?.options?.some((option) => /^\[-\] secret \(unavailable: Hidden in Pi/.test(option)));
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")).defaultPlanTools, ["mcp__docs__read"]);
 });
 
 test("RPC Settings changes retention and export destination with the same flat navigation", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-rpc-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-rpc-", onTestFinished);
 	const settingsPath = join(directory, "pi-plan-mode.json");
-	try {
-		const rpc = createRpcHarness([
-			{
-				kind: "select",
-				options: [
-					"Plan thinking (inherit)",
-					"Plan policy tools (Automatic safe built-ins)",
-					"Plan reinjection (Off — conversation history only)",
-					"Fresh model (same as plan)",
-					"Fresh thinking (same as plan)",
-					"Export destination (PLAN.md)",
-					"Plan mode shortcut (none)",
-					"Plan model (inherit)",
-					"Back",
-				],
-				response: "Plan reinjection (Off — conversation history only)",
-			},
-			{
-				kind: "select",
-				options: [
-					"Plan thinking (inherit)",
-					"Plan policy tools (Automatic safe built-ins)",
-					"Plan reinjection (Through first implementation run)",
-					"Fresh model (same as plan)",
-					"Fresh thinking (same as plan)",
-					"Export destination (PLAN.md)",
-					"Plan mode shortcut (none)",
-					"Plan model (inherit)",
-					"Back",
-				],
-				response: "Export destination (PLAN.md)",
-			},
-			{
-				kind: "input",
-				placeholder: "PLAN.md",
-				response: "rpc/PLAN.md",
-			},
-			{
-				kind: "select",
-				options: [
-					"Plan thinking (inherit)",
-					"Plan policy tools (Automatic safe built-ins)",
-					"Plan reinjection (Through first implementation run)",
-					"Fresh model (same as plan)",
-					"Fresh thinking (same as plan)",
-					"Export destination (rpc/PLAN.md)",
-					"Plan mode shortcut (none)",
-					"Plan model (inherit)",
-					"Back",
-				],
-				response: undefined,
-			},
-		]);
-		const context = createPlanContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
-		const saved: PlanModeSettings[] = [];
-		await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
-		rpc.assertConsumed();
-		assert.equal(saved.at(-1)?.implementationPlanRetention, "clear-after-first-run");
-		assert.equal(saved.at(-1)?.defaultPlanExportPath, "rpc/PLAN.md");
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	const rpc = createRpcHarness([
+		{
+			kind: "select",
+			options: [
+				"Plan thinking (inherit)",
+				"Plan policy tools (Automatic safe built-ins)",
+				"Plan reinjection (Off — conversation history only)",
+				"Fresh model (same as plan)",
+				"Fresh thinking (same as plan)",
+				"Export destination (PLAN.md)",
+				"Plan mode shortcut (none)",
+				"Plan model (inherit)",
+				"Back",
+			],
+			response: "Plan reinjection (Off — conversation history only)",
+		},
+		{
+			kind: "select",
+			options: [
+				"Plan thinking (inherit)",
+				"Plan policy tools (Automatic safe built-ins)",
+				"Plan reinjection (Through first implementation run)",
+				"Fresh model (same as plan)",
+				"Fresh thinking (same as plan)",
+				"Export destination (PLAN.md)",
+				"Plan mode shortcut (none)",
+				"Plan model (inherit)",
+				"Back",
+			],
+			response: "Export destination (PLAN.md)",
+		},
+		{
+			kind: "input",
+			placeholder: "PLAN.md",
+			response: "rpc/PLAN.md",
+		},
+		{
+			kind: "select",
+			options: [
+				"Plan thinking (inherit)",
+				"Plan policy tools (Automatic safe built-ins)",
+				"Plan reinjection (Through first implementation run)",
+				"Fresh model (same as plan)",
+				"Fresh thinking (same as plan)",
+				"Export destination (rpc/PLAN.md)",
+				"Plan mode shortcut (none)",
+				"Plan model (inherit)",
+				"Back",
+			],
+			response: undefined,
+		},
+	]);
+	const context = createPlanContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
+	const saved: PlanModeSettings[] = [];
+	await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
+	rpc.assertConsumed();
+	assert.equal(saved.at(-1)?.implementationPlanRetention, "clear-after-first-run");
+	assert.equal(saved.at(-1)?.defaultPlanExportPath, "rpc/PLAN.md");
 });
 
 test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight save", async () => {

@@ -491,6 +491,9 @@ The macOS `native-helper.yml` build can use `pi-macos` through shared admission,
 as the hosted fallback (only on attempt 1). It has not passed on the pool image; a started failure fails its
 check. Cron rescue reads every repo run: a stranded pool `build` is rescued only once all unfinished jobs of
 its run are unstarted (e.g. `windows-helper` finished), and the whole run is then cancelled and re-run.
+If `windows-helper` cannot bootstrap the pinned Python interpreter through `uv` (including when
+an earlier step fails and skips bootstrap), it attempts to upload only `build.txt` with
+`staging=BOOTSTRAP_FAILED`, `executable=NOT_BUILT`, and `fixture=NOT_REACHED`.
 The macOS `scripts` shard stays hosted (`HOSTED_ONLY_CELLS`), DEPARTING from the original issue scope, because
 core provenance verification in `make install-owned` needs `GH_TOKEN` and the pool has none. Follow-up: make
 that verification work without a token, then drop the denylist. The installer stays hosted for its read-only
