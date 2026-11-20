@@ -60,7 +60,7 @@ export function proposeModelTiers(
 	if (missing.length) lines.push(`No matching registered profile: ${missing.map((tier) => `@${tier}`).join(", ")}.`);
 	const preserveCheap = profiles.has("cheap") && !!parseTierBinding("cheap", legacyAliases?.[LEGACY_EXPLORE_ALIAS]);
 	if (preserveCheap) lines.push("Skipped @cheap: a binding would shadow the legacy Explore alias.");
-	const entries = PROPOSAL_TIERS.filter((tier) => profiles.has(tier));
+	const entries = PROPOSAL_TIERS.filter((tier) => profiles.has(tier) && !(tier === "cheap" && preserveCheap));
 	if (!entries.length) return { preview: [...lines, "No bindings proposed."].join("\n") };
 	const modelTiers = Object.fromEntries(entries.map((tier) => [tier, [`router/${tier}`]]));
 	return {
