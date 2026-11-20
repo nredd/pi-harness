@@ -370,7 +370,7 @@ struct HeadlessTests {
         let apps = [App(bundleId: "com.example.Safe", isOnScreen: true), App(bundleId: "com.example.Vault", isOnScreen: false)]
         let (_, excluded) = try await displayCaptureContent(blocked: ["com.example.Vault"], fetch: { _, onScreenOnly in
             Content(applications: onScreenOnly ? apps.filter(\.isOnScreen) : apps)
-        }, applications: \.applications, bundleId: { $0.bundleId })
+        }, applications: \.applications, bundleId: \.bundleId)
         expect(excluded.map(\.bundleId) == ["com.example.Vault"], "exclude a blocked app even if it has no on-screen window when enumerated")
         print("macos display capture exclusion check passed")
     }

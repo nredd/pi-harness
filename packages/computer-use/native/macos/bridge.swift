@@ -345,10 +345,10 @@ func displayCaptureContent<Content, App>(
 	blocked: [String],
 	fetch: (_ excludeDesktopWindows: Bool, _ onScreenWindowsOnly: Bool) async throws -> Content,
 	applications: KeyPath<Content, [App]>,
-	bundleId: (App) -> String?
+	bundleId: KeyPath<App, String>
 ) async throws -> (Content, [App]) {
 	let content = try await fetch(false, false)
-	return (content, itemsWithBlockedBundleId(content[keyPath: applications], blocked: blocked, bundleId: bundleId))
+	return (content, itemsWithBlockedBundleId(content[keyPath: applications], blocked: blocked) { $0[keyPath: bundleId] })
 }
 
 /// The blocked pid that keyboard input would reach: the frontmost app's, or the system-wide focused app's (a
@@ -3645,7 +3645,7 @@ final class Bridge {
 		let task = Task {
 			defer { semaphore.signal() }
 			do {
-				let (shareable, excluded) = try await displayCaptureContent(blocked: blocked, fetch: SCShareableContent.excludingDesktopWindows(_:onScreenWindowsOnly:), applications: \.applications) { $0.bundleIdentifier }
+				let (shareable, excluded) = try await displayCaptureContent(blocked: blocked, fetch: SCShareableContent.excludingDesktopWindows(_:onScreenWindowsOnly:), applications: \.applications, bundleId: \.bundleIdentifier)
 				let mainId = CGMainDisplayID()
 				let displays = shareable.displays.sorted { left, right in
 					if (left.displayID == mainId) != (right.displayID == mainId) { return left.displayID == mainId }
