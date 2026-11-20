@@ -24,6 +24,7 @@ import coverage_report as report
 from coverage_provenance_record import (
     COVERAGE_HOSTS,
     MAX_PROVENANCE_BYTES,
+    SEMANTICS_FIELD,
     Provenance,
     ProvenanceRecord,
     producer_job,
@@ -428,6 +429,78 @@ def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
     assert producer.main(["--cell", CELL, "--output", str(output)]) == 1
     assert not output.exists()
     assert message in caplog.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".node-version",
+        ".bun-version",
+        ".python-version",
+        ".npmrc",
+        ".github/actions/setup/action.yml",
+        ".github/workflows/ci.yml",
+        "coverage/policy.json",
+        "scripts/run-vitest.ts",
+        "scripts/.coveragerc",
+        "scripts/setup.cfg",
+        "scripts/tox.ini",
+        "scripts/pyproject.toml",
+        "release/.coveragerc",
+        "release/setup.cfg",
+        "release/tox.ini",
+        "release/pyproject.toml",
+        "tests/integration/.coveragerc",
+        "tests/integration/setup.cfg",
+        "tests/integration/tox.ini",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
+        "tests/integration/probes/vitest.config.ts",
+        "package-lock.json",
+        "packages/computer-use/Makefile",
+        "packages/computer-use/scripts/swift-coverage.mjs",
+        "packages/computer-use/scripts/rust-coverage.mjs",
+        "packages/computer-use/native/Bridge.xcconfig",
+        "packages/computer-use/native/Package.swift",
+        "packages/computer-use/native/Package.resolved",
+        "packages/computer-use/native/.swiftpm/settings.json",
+        "packages/computer-use/native/linux/bridge-rs/Cargo.toml",
+        "packages/computer-use/native/linux/bridge-rs/Cargo.lock",
+        "packages/computer-use/native/linux/bridge-rs/build.rs",
+        "packages/computer-use/native/linux/bridge-rs/.cargo/settings.toml",
+        "rust-toolchain.toml",
+    ],
+)
+def test_each_instrumentation_input_suppresses_delta(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Change exactly one Git tree entry and require incompatible measured-main deltas.
+
+    Parameters:
+        path (str): A committed producer input or discoverable configuration path.
+        monkeypatch (pytest.MonkeyPatch): Scoped Git tree response.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Changing the input did not suppress the delta.
+    """
+    fixed = b"100644 blob 1111\tMakefile\0"
+    entry = b"\t" + path.encode() + b"\0"
+    tree = Mock(side_effect=[fixed + b"100644 blob 2222" + entry, fixed + b"100644 blob 3333" + entry])
+    monkeypatch.setattr(producer.subprocess, "check_output", tree)
+    before = producer.semantics_fingerprint(RUN.tested_sha)
+    after = producer.semantics_fingerprint(RUN.tested_sha)
+    assert before != after
+    manifest = plan()
+    signals = tuple(report.Signal.parse(name, value) for name, value in manifest["signals"].items())
+    baseline = report.Evidence(
+        HOST, "available", signals, report.Summary.parse(document() | {SEMANTICS_FIELD: before})
+    )
+    current = report.Evidence(
+        HOST, "available", signals, report.Summary.parse(document() | {SEMANTICS_FIELD: after})
+    )
+    assert (
+        report.measured_delta(current, baseline, signals[0])
+        == "not comparable: instrumentation fingerprints differ"
+    )
 
 
 @pytest.mark.parametrize("failure", ["no-git", "git-failed", "no-inputs"])

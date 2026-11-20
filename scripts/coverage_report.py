@@ -504,12 +504,30 @@ def measured_delta(current: Evidence, baseline: Evidence | None, signal: Signal)
         or previous.state != "planned"
     ):
         return "unavailable"
-    if (
-        current.summary.counter_semantics is None
-        or current.summary.counter_semantics != baseline.summary.counter_semantics
-        or tuple(n for n, _, _ in before.values) != tuple(n for n, _, _ in after.values)
-    ):
-        return "not comparable"
+    return compare_counters(
+        before, after, baseline.summary.counter_semantics, current.summary.counter_semantics
+    )
+
+
+def compare_counters(before: Counters, after: Counters, main_key: str | None, pr_key: str | None) -> str:
+    """Explain why producer counters cannot be compared, or return signed deltas.
+
+    Parameters:
+        before (Counters): Measured main counters.
+        after (Counters): Measured PR counters.
+        main_key (str | None): Main producer instrumentation fingerprint.
+        pr_key (str | None): PR producer instrumentation fingerprint.
+    Returns:
+        str: Signed deltas or the specific reason the comparison is suppressed.
+    Raises:
+        None.
+    """
+    if main_key is None or pr_key is None:
+        return "not comparable: missing instrumentation fingerprint"
+    if main_key != pr_key:
+        return "not comparable: instrumentation fingerprints differ"
+    if tuple(n for n, _, _ in before.values) != tuple(n for n, _, _ in after.values):
+        return "not comparable: supported counter sets differ"
     return ", ".join(
         f"{name} {new - old:+d}"
         for (name, _, new), (_, _, old) in zip(after.values, before.values, strict=True)

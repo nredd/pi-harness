@@ -185,7 +185,10 @@ def test_main_delta_compatibility_added_removed_and_missing() -> None:
         current.summary,
         packages={signal.name: report.Counters.parse({"lines": 11, "uncovered_lines": 3})},
     )
-    assert report.measured_delta(current, replace(current, summary=changed), signal) == "not comparable"
+    assert (
+        report.measured_delta(current, replace(current, summary=changed), signal)
+        == "not comparable: supported counter sets differ"
+    )
     missing = replace(report.Summary.parse(document()), packages={})
     assert report.measured_delta(current, replace(current, summary=missing), signal) == "unavailable"
     before = replace(

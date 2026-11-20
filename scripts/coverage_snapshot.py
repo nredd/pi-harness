@@ -172,8 +172,8 @@ def snapshot_cell(host: str, value: object) -> Evidence:
     signals, packages = [], {}
     payload = object_value(value)
     fingerprint = counter_semantics(payload)
-    if fingerprint is None or payload.keys() != {SEMANTICS_FIELD, "signals"}:
-        raise ValueError("Missing snapshot counter semantics or signals")
+    if payload.keys() not in ({"signals"}, {SEMANTICS_FIELD, "signals"}):
+        raise ValueError("Unexpected snapshot host fields")
     for name, raw in object_value(payload["signals"]).items():
         entry = object_value(raw)
         if entry.keys() != {"enforcement", "state", "semantics", "counters"}:
@@ -225,9 +225,9 @@ def encode_cell(cell: Evidence) -> dict[str, object]:
                 for key, value in ((metric, total), (f"uncovered_{metric}", uncovered))
             },
         }
-    # Omit an absent stamp so the stored schema rejects legacy main evidence explicitly.
-    semantics = {} if summary.counter_semantics is None else {SEMANTICS_FIELD: summary.counter_semantics}
-    return semantics | {"signals": projection}
+    if summary.counter_semantics is None:
+        raise ValueError("Missing snapshot counter semantics")
+    return {SEMANTICS_FIELD: summary.counter_semantics, "signals": projection}
 
 
 def read_tip(api: Transport) -> str | None:
@@ -252,14 +252,14 @@ def read_tip(api: Transport) -> str | None:
     return git_sha(ref["object"]["sha"])
 
 
-def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot, str]:
+def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot | None, str]:
     """Read a fixed regular file at the pinned data commit, never a checked-out tree.
 
     Parameters:
         api (Transport): Repository transport.
         tip (str): Validated snapshot commit SHA.
     Returns:
-        tuple[Snapshot, str]: Parsed data and its root tree SHA from the pinned tip.
+        tuple[Snapshot | None, str]: Optional snapshot and root tree SHA at the pinned tip.
     Raises:
         ValueError: Malformed Git entry or snapshot.
     """
@@ -267,8 +267,10 @@ def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot, str]:
     tree_sha = git_sha(commit["tree"]["sha"])
     tree = api.request(f"git/trees/{tree_sha}")
     entries = [entry for entry in tree["tree"] if entry["path"] == FILENAME]
-    if tree["sha"] != tree_sha or tree["truncated"] is not False or len(entries) != 1:
-        raise ValueError("Expected exactly one snapshot entry in the complete tree")
+    if tree["sha"] != tree_sha or tree["truncated"] is not False or len(entries) > 1:
+        raise ValueError("Invalid or ambiguous snapshot tree")
+    if not entries:
+        return None, tree_sha
     entry = entries[0]
     size = positive_id(entry["size"])
     if entry["mode"] != "100644" or entry["type"] != "blob" or size > MAX_BYTES:
@@ -303,7 +305,9 @@ def baseline(api: Transport, now: datetime) -> Snapshot | None:
         snapshot, _ = read_snapshot(api, tip)
     except (KeyError, OSError, TypeError, ValueError):
         return None
-    return snapshot if timedelta(0) <= now - snapshot.measured_at <= MAX_AGE else None
+    return (
+        snapshot if snapshot is not None and timedelta(0) <= now - snapshot.measured_at <= MAX_AGE else None
+    )
 
 
 def write_snapshot(
@@ -312,7 +316,7 @@ def write_snapshot(
     base_tree: str | None,
     payload: dict[str, Any],
     still_current: Callable[[], bool],
-) -> None:
+) -> bool:
     """Commit only data, then advance the ref without force or create it exactly once.
 
     Parameters:
@@ -322,9 +326,10 @@ def write_snapshot(
         payload (dict[str, Any]): Candidate snapshot JSON.
         still_current (Callable[[], bool]): Recheck run identity immediately before mutating the ref.
     Returns:
-        None.
+        bool: Whether the ref advanced, or false on a rejected ref mutation.
     Raises:
         ValueError: Invalid snapshot or changed attempt.
+        HTTPError: Git API failure other than a 422 on the final ref mutation.
     """
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     Snapshot.parse(raw.encode(), api.repository)
@@ -346,7 +351,14 @@ def write_snapshot(
     sha = git_sha(commit["sha"])
     if not still_current():
         raise ValueError("Main attempt changed during publication")
-    if tip is None:
-        api.request("git/refs", "POST", {"ref": REF, "sha": sha})
-    else:
-        api.request("git/refs/heads/coverage-data", "PATCH", {"sha": sha, "force": False})
+    try:
+        if tip is None:
+            api.request("git/refs", "POST", {"ref": REF, "sha": sha})
+        else:
+            api.request("git/refs/heads/coverage-data", "PATCH", {"sha": sha, "force": False})
+    except HTTPError as error:
+        if error.code != 422:
+            raise
+        error.close()
+        return False
+    return True

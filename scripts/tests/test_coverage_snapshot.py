@@ -17,7 +17,7 @@ from urllib.error import HTTPError
 from zipfile import ZipFile
 
 import pytest
-from test_coverage_publish import (
+from coverage_publish_fixtures import (
     FINGERPRINT,
     FIXTURE,
     HEAD,
@@ -38,6 +38,7 @@ TIP = "c" * 40
 BLOB = "d" * 40
 TREE = "e" * 40
 BASE_TREE = "f" * 40
+SIBLING = {"path": "coverage.svg", "sha": "a" * 40, "size": 42, "type": "blob", "mode": "100644"}
 
 
 def http_error(path: str, code: int) -> HTTPError:
@@ -72,6 +73,9 @@ class MainGitHub(pub.GitHub):
     blob: dict[str, Any]
     ref: dict[str, Any]
     policy: dict[str, Any]
+    competing_order: int
+    conflicts: int
+    root_tree: str
 
     def __init__(self) -> None:
         """Seed a completed main attempt with independent retained OS fixtures.
@@ -95,6 +99,7 @@ class MainGitHub(pub.GitHub):
         self.raw, self.race, self.archive = b"", "", ""
         self.tree_entries, self.proposed_siblings, self.blob, self.ref = [], [], {}, {}
         self.tree_metadata = {"sha": BASE_TREE, "truncated": False}
+        self.competing_order, self.conflicts, self.root_tree = 6, 0, BASE_TREE
         self.policy = {
             "path": "coverage/policy.json",
             "type": "file",
@@ -165,8 +170,8 @@ class MainGitHub(pub.GitHub):
             if path == "actions/runs/123":
                 return self.data | ({"run_attempt": 3} if self.writes and self.race == "attempt" else {})
             return {
-                f"git/commits/{TIP}": {"tree": {"sha": BASE_TREE}},
-                f"git/trees/{BASE_TREE}": self.tree_metadata | {"tree": self.tree_entries},
+                f"git/commits/{self.ref.get('object', {}).get('sha')}": {"tree": {"sha": self.root_tree}},
+                f"git/trees/{self.root_tree}": (self.tree_metadata | {"tree": self.tree_entries}),
                 f"git/blobs/{BLOB}": self.blob,
                 f"contents/coverage/policy.json?ref={HEAD}": self.policy,
             }[path]
@@ -178,7 +183,7 @@ class MainGitHub(pub.GitHub):
             assert (entry["path"], entry["type"], entry["mode"]) == (snap.FILENAME, "blob", "100644")
             self.raw = entry["content"].encode()
             if "base_tree" in body:
-                assert body["base_tree"] == BASE_TREE
+                assert body["base_tree"] == self.root_tree
                 self.proposed_siblings = [row for row in self.tree_entries if row["path"] != entry["path"]]
             else:
                 self.proposed_siblings = []
@@ -189,6 +194,19 @@ class MainGitHub(pub.GitHub):
         if self.race == "ref":
             assert body.get("force") is not True
             raise http_error(path, 422)
+        if self.race == "forbidden":
+            raise http_error(path, 403)
+        if method == "PATCH":
+            assert body["force"] is False
+            if self.race == "contended" or (self.race == "advance" and not self.conflicts):
+                self.conflicts += 1
+                payload = json.loads(self.raw) | {"number": self.competing_order}
+                self.seed_snapshot(json.dumps(payload).encode())
+                self.ref["object"]["sha"] = f"{100 + self.conflicts:040x}"
+                self.root_tree = self.tree_metadata["sha"] = f"{self.conflicts:040x}"
+                self.tree_entries.append(SIBLING)
+                raise http_error(path, 422)
+            assert self.writes[-2][2]["parents"] == [self.ref["object"]["sha"]]
         self.seed_snapshot(self.raw)
         self.tree_entries.extend(self.proposed_siblings)
         return {}
@@ -267,18 +285,29 @@ class MainGitHub(pub.GitHub):
                 archive.writestr("../snapshot.json", "{}")
 
 
-@pytest.mark.parametrize("fingerprint", [FINGERPRINT, "f" * 64, None])
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("match", "lines -1, functions +0, branches +0, statements +0"),
+        ("pr-missing", "not comparable: missing instrumentation fingerprint"),
+        ("main-missing", "not comparable: missing instrumentation fingerprint"),
+        ("changed", "not comparable: instrumentation fingerprints differ"),
+        ("counters", "not comparable: supported counter sets differ"),
+    ],
+)
 def test_publish_and_consume_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    fingerprint: str | None,
+    case: str,
+    expected: str,
 ) -> None:
     """Round-trip a two-host baseline and render independent signed deltas in the PR comment.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Scoped reader and clock overrides.
         tmp_path (Path): Step summary output directory.
-        fingerprint (str | None): PR evidence semantics.
+        case (str): Compatibility case to render.
+        expected (str): Exact measured-main cell.
     Returns:
         None.
     Raises:
@@ -304,10 +333,16 @@ def test_publish_and_consume_snapshot(
     assert snap.baseline(api, NOW + snap.MAX_AGE) is None
     assert snap.baseline(api, NOW - timedelta(days=2)) is None
     data.update(sha=BLOB, run=321)
-    data["hosts"]["ubuntu-24.04"]["signals"]["dev-tools/primary"]["counters"]["uncovered_lines"] = 1
+    ubuntu = data["hosts"]["ubuntu-24.04"]
+    counters = ubuntu["signals"]["dev-tools/primary"]["counters"]
+    counters["uncovered_lines"] = 1
+    if case == "main-missing":
+        del ubuntu[SEMANTICS_FIELD]
+    if case == "counters":
+        del counters["statements"], counters["uncovered_statements"]
     api.seed_snapshot(json.dumps(data).encode())
     pr = RecordingGitHub()
-    pr.fingerprint = fingerprint
+    pr.fingerprint = {"pr-missing": None, "changed": "f" * 64}.get(case, FINGERPRINT)
     original = RecordingGitHub.request
 
     def request(self: RecordingGitHub, path: str, *args: Any) -> Any:
@@ -330,16 +365,11 @@ def test_publish_and_consume_snapshot(
     body = pr.writes[-1][2]["body"]
     assert summary.read_text() == body + "\n"
     label = "Producer-reported main baseline (not independently verified):"
-    assert f"{label} `{BLOB}`" in body
+    assert f"{label} [`{BLOB}`](https://github.com/{REPO}/commit/{BLOB})" in body
     assert f"https://github.com/{REPO}/actions/runs/321/attempts/2" in body
     assert "vs measured main (producer-reported)" in body
     assert body.index(pub.PR_NOTICE) < body.index("Ubuntu enforced signals:")
     row = next(line for line in body.splitlines() if line.startswith("dev&#45;tools&#47;primary |"))
-    expected = (
-        "lines -1, functions +0, branches +0, statements +0"
-        if fingerprint == FINGERPRINT
-        else "not comparable"
-    )
     assert row.rsplit(" | ", 1)[1] == expected
     assert pub.PR_NOTICE in body.splitlines()
     assert (
@@ -480,11 +510,12 @@ def test_only_newer_executions_advance_tip(order: tuple[int, int]) -> None:
         assert not api.writes
 
 
-def test_new_snapshot_preserves_sibling_file() -> None:
+@pytest.mark.parametrize("has_snapshot", [False, True])
+def test_new_snapshot_preserves_sibling_file(has_snapshot: bool) -> None:
     """Overlay only the snapshot and retain the sibling's existing blob and mode.
 
     Parameters:
-        None.
+        has_snapshot (bool): Whether the branch already has a baseline.
     Returns:
         None.
     Raises:
@@ -493,17 +524,82 @@ def test_new_snapshot_preserves_sibling_file() -> None:
     api = MainGitHub()
     pub.publish_snapshot(api, api.data, NOW)
     api.seed_snapshot(json.dumps(json.loads(api.raw) | {"number": 6}).encode())
-    sibling = {"path": "coverage.svg", "sha": "a" * 40, "size": 42, "type": "blob", "mode": "100644"}
-    api.tree_entries.insert(0, sibling)
+    if not has_snapshot:
+        api.tree_entries.clear()
+    api.tree_entries.insert(0, SIBLING)
     api.writes.clear()
 
     pub.publish_snapshot(api, api.data, NOW)
 
     assert api.writes[0][2]["base_tree"] == BASE_TREE
-    assert api.tree_entries[1:] == [sibling]
+    assert api.tree_entries[1:] == [SIBLING]
     baseline = snap.baseline(api, NOW)
     assert baseline is not None
     assert baseline.order == (7, 2)
+
+
+@pytest.mark.parametrize(
+    ("race", "other_order", "expected_order", "writes"),
+    [
+        ("advance", 6, 7, 2),
+        ("advance", 8, 8, 1),
+        ("contended", 6, 6, 3),
+    ],
+)
+def test_retry_when_existing_ref_advances(
+    race: str, other_order: int, expected_order: int, writes: int
+) -> None:
+    """Rebase a still-newer snapshot, skip stale candidates, and bound retries.
+
+    Parameters:
+        race (str): Once or repeatedly advance the competing writer.
+        other_order (int): Competing snapshot's run number.
+        expected_order (int): Readable run number after the update.
+        writes (int): Expected PATCH attempts.
+    Returns:
+        None.
+    Raises:
+        AssertionError: A conflicting update loses assets, retries without bounds, or publishes stale data.
+    """
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    api.seed_snapshot(json.dumps(json.loads(api.raw) | {"number": 5}).encode())
+    api.writes.clear()
+    api.race = race
+    api.competing_order = other_order
+    if race == "contended":
+        with pytest.raises(ValueError, match="changed on every write attempt"):
+            pub.publish_snapshot(api, api.data, NOW)
+    else:
+        pub.publish_snapshot(api, api.data, NOW)
+    assert [method for _, method, _ in api.writes].count("PATCH") == writes
+    assert api.tree_entries[1:] == [SIBLING]
+    baseline = snap.baseline(api, NOW)
+    assert baseline is not None
+    assert baseline.order == (expected_order, 2)
+
+
+def test_rejected_update_keeps_old_baseline_readable() -> None:
+    """Leave the old snapshot readable when the proposed ref update is denied.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The rejected update replaces the old snapshot.
+    """
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    api.seed_snapshot(json.dumps(json.loads(api.raw) | {"number": 6}).encode())
+    before = snap.baseline(api, NOW)
+    assert before is not None
+    api.race = "forbidden"
+
+    with pytest.raises(HTTPError, match="403"):
+        pub.publish_snapshot(api, api.data, NOW)
+
+    assert snap.baseline(api, NOW) == before
 
 
 @pytest.mark.parametrize("race", ["ref", "attempt"])
@@ -519,7 +615,10 @@ def test_race_cannot_move_ref(race: str) -> None:
     """
     api = MainGitHub()
     api.race = race
-    with pytest.raises((HTTPError, ValueError), match=r"Recording transport|changed during publication"):
+    with pytest.raises(
+        (HTTPError, ValueError),
+        match=r"Recording transport|changed during publication|without a concurrent change",
+    ):
         pub.publish_snapshot(api, api.data, NOW)
     assert not api.ref
     if race == "attempt":
@@ -560,7 +659,6 @@ def test_invalid_snapshot_identity(field: str, value: object) -> None:
     [
         "truncated",
         "wrong-tree",
-        "missing",
         "duplicate",
         "symlink",
         "oversized",
@@ -588,8 +686,6 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
         api.tree_metadata["truncated"] = True
     elif case == "wrong-tree":
         api.tree_metadata["sha"] = TREE
-    elif case == "missing":
-        api.tree_entries.clear()
     elif case == "duplicate":
         api.tree_entries.append(entry)
     elif case == "symlink":
@@ -608,7 +704,7 @@ def test_invalid_stored_data_is_unavailable(case: str) -> None:
     else:
         api.seed_snapshot(b"{bad json}")
     assert snap.baseline(api, NOW) is None
-    if case in {"truncated", "wrong-tree", "missing", "duplicate", "symlink", "oversized", "sha"}:
+    if case in {"truncated", "wrong-tree", "duplicate", "symlink", "oversized", "sha"}:
         assert not any(path.startswith("git/blobs/") for path in api.reads)
     api.writes.clear()
     with pytest.raises(ValueError, match=r"snapshot|Git object|Cannot decode JSON"):

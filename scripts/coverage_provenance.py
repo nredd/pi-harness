@@ -38,18 +38,43 @@ SEMANTICS_PATHS = (
     "coverage/policy.json",
     "scripts/*",
     "forks/pi",
-    "Makefile",
     "packages/*/scripts/*",
+    "*/.cargo/*",
+    ".cargo/*",
+    "*/.swiftpm/*",
+    ".swiftpm/*",
 )
 SEMANTICS_FILENAMES = (
+    # CI setup actions, npm workspace builds, and the Makefile's owned gates.
+    ".node-version",
+    ".bun-version",
+    ".python-version",
+    ".npmrc",
+    "Makefile",
+    "*.mk",
     "package*.json",
-    "*config*",
+    "*config*",  # Vitest, Istanbul/V8 overrides, TypeScript and native configuration.
+    "vitest.*",  # Includes setup files used from a Vitest config.
+    ".nycrc*",
+    # pytest-cov in scripts/, release/ and tests/integration; also uv and pytest discovery.
+    ".coveragerc",
     "pyproject.toml",
+    "setup.cfg",
+    "tox.ini",
+    "pytest.ini",
     "uv.lock",
-    "Cargo.*",
-    "Package.swift",
-    "rust-toolchain*",
+    "uv.toml",
     "conftest.py",
+    # Native coverage scripts use Cargo/LLVM and Swift/Xcode settings.
+    "Cargo.*",
+    "build.rs",
+    "rust-toolchain*",
+    "Package.swift",
+    "Package.resolved",
+    "project.pbxproj",
+    "*.xcconfig",
+    "*.xcscheme",
+    "*.xctestplan",
 )
 
 

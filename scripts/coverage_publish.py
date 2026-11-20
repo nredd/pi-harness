@@ -62,6 +62,7 @@ MARKER = "<!-- pi-harness:coverage:v1 -->"
 ORDER = re.compile(r"<!-- ci:([1-9][0-9]{0,19}):([1-9][0-9]{0,19}) -->")
 BOT_ID = 41898282  # github-actions[bot] user ID from GET /users/github-actions%5Bbot%5D.
 MAX_METADATA_BYTES = 8 * 1024 * 1024
+MAX_SNAPSHOT_WRITES = 3
 PR_NOTICE = (
     "Coverage numbers come from this PR's own CI run (PR-controlled code) and are not independently "
     "verified. Required checks, not this comment, are the merge gate."
@@ -436,7 +437,8 @@ def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path)
         main_baseline = baseline(api, datetime.now(UTC)) if state == "available" else None
         if main_baseline is not None:
             prefix += (
-                f"Producer-reported main baseline (not independently verified): `{main_baseline.sha}` "
+                f"Producer-reported main baseline (not independently verified): [`{main_baseline.sha}`]"
+                f"(https://github.com/{api.repository}/commit/{main_baseline.sha}) "
                 f"([CI run {main_baseline.run_id}, attempt {main_baseline.order[1]}]"
                 f"(https://github.com/{api.repository}/actions/runs/{main_baseline.run_id}/"
                 f"attempts/{main_baseline.order[1]})).\n\n"
@@ -533,12 +535,10 @@ def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
     if not timedelta(0) <= now - timestamp(started) <= MAX_AGE:
         raise ValueError("Main coverage attempt is outside its retention window")
     tip = read_tip(api)
-    base_tree = None
-    if tip is not None:
-        previous, base_tree = read_snapshot(api, tip)
-        if previous.order >= run.order:
-            LOGGER.info("Snapshot is already at this or a newer execution")
-            return
+    previous, base_tree = (None, None) if tip is None else read_snapshot(api, tip)
+    if previous is not None and previous.order >= run.order:
+        LOGGER.info("Snapshot is already at this or a newer execution")
+        return
     route = f"actions/runs/{run.id}"
     if main_run(api, api.request(route)) != identity:
         raise ValueError("Main attempt changed before publication")
@@ -581,7 +581,20 @@ def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
         "measured_at": started,
         "hosts": {cell.host: encode_cell(cell) for cell in cells},
     }
-    write_snapshot(api, tip, base_tree, payload, lambda: main_run(api, api.request(route)) == identity)
+    for _ in range(MAX_SNAPSHOT_WRITES):
+        if write_snapshot(
+            api, tip, base_tree, payload, lambda: main_run(api, api.request(route)) == identity
+        ):
+            return
+        new_tip = read_tip(api)
+        if new_tip == tip:
+            raise ValueError("Coverage snapshot ref update rejected without a concurrent change")
+        tip = new_tip
+        previous, base_tree = (None, None) if tip is None else read_snapshot(api, tip)
+        if previous is not None and previous.order >= run.order:
+            LOGGER.info("Snapshot advanced to this or a newer execution")
+            return
+    raise ValueError("Coverage snapshot ref changed on every write attempt")
 
 
 def main() -> int:
