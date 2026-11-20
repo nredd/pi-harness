@@ -347,6 +347,8 @@ it("accounts for compacted history and the actual spawned child's registry", asy
 		// Pin the core wrapper and split-turn text independently of the captured request.
 		// The bucket includes JSON escapes (e.g. `\\n`) but not the enclosing quotes.
 		const summaryBytes = Buffer.byteLength(JSON.stringify(WRAPPED_SUMMARY).slice(1, -1));
+		// A wrapper wording change in core (the `compaction` summary prefix) must be a deliberate edit here too.
+		expect(summaryBytes, "core compaction wrapper wording changed: update WRAPPED_SUMMARY and this pin").toBe(204);
 		expect(rows[4]?.buckets.compaction_summary, "escaped compaction summary text, excluding JSON quotes").toBe(
 			summaryBytes,
 		);
