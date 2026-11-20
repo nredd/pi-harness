@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml
 
+from timeout_scale import scaled_timeout
+
 LOGGER = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = Path(__file__).with_name("native_lint_tools.json")
@@ -68,8 +70,10 @@ def run(argv: list[str], cwd: Path) -> str:
         str: Combined output, also logged.
     Raises:
         OSError: The tool is missing or cannot execute.
-        subprocess.SubprocessError: Execution fails or exceeds five minutes.
+        ValueError: The timeout multiplier is invalid.
+        subprocess.SubprocessError: Execution fails or exceeds its deadline.
     """
+    timeout = scaled_timeout(300)
     with tempfile.TemporaryDirectory() as home:
         env = os.environ | {
             "HOME": home,
@@ -79,7 +83,7 @@ def run(argv: list[str], cwd: Path) -> str:
             "POWERSHELL_TELEMETRY_OPTOUT": "1",
         }
         result = subprocess.check_output(
-            argv, cwd=cwd, env=env, text=True, stderr=subprocess.STDOUT, timeout=300
+            argv, cwd=cwd, env=env, text=True, stderr=subprocess.STDOUT, timeout=timeout
         )
     if "ls-files" not in argv:
         LOGGER.info(result.strip())
@@ -312,8 +316,8 @@ def lint(root: Path, prefix: Path) -> None:
         for path in owned
         if path.parent == root / ".github/workflows" and path.suffix in {".yml", ".yaml"}
     ]
-    if not shells or not powershell or not workflows:
-        raise ValueError("Empty shell, PowerShell or workflow inventory")
+    if not shells or not workflows:
+        raise ValueError("Empty shell or workflow inventory")
     with tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         cfg = scratch / "actionlint.yml"
@@ -352,6 +356,8 @@ def lint(root: Path, prefix: Path) -> None:
                     elif shell.split()[0] in {"pwsh", "powershell"}:
                         script = EXPRESSION.sub("synthetic", step["run"])
                         (ps_sources / f"{path.stem}-{job_name}-{index}.ps1").write_text(script)
+        if not any(ps_sources.iterdir()):
+            raise ValueError("Empty PowerShell inventory, including workflow and composite steps")
         analyzer = prefix / "analyzer/PSScriptAnalyzer.psd1"
         runner = scratch / "analyze.ps1"
         runner.write_text(PS_SCRIPT)

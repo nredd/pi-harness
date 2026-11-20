@@ -346,8 +346,9 @@ print("macos keyboard layout checks passed (\(checked) reference sources)")
 }
 @main
 struct HeadlessTests {
-    @MainActor static func main() async {
+    @MainActor static func main() async throws {
         runPureAssertions()
+        try await runDisplayCaptureAssertions()
         runRefLookAssertions()
         runKeyboardAssertions()
         runRequestFramingAssertions()
@@ -357,6 +358,23 @@ struct HeadlessTests {
         runGlowLayoutAssertions()
         await runGlowLifecycleAssertions()
     }
+
+    private static func runDisplayCaptureAssertions() async throws {
+        struct App {
+            let bundleId: String
+            let isOnScreen: Bool
+        }
+        struct Content {
+            let applications: [App]
+        }
+        let apps = [App(bundleId: "com.example.Safe", isOnScreen: true), App(bundleId: "com.example.Vault", isOnScreen: false)]
+        let (_, excluded) = try await displayCaptureContent(blocked: ["com.example.Vault"], fetch: { _, onScreenOnly in
+            Content(applications: onScreenOnly ? apps.filter(\.isOnScreen) : apps)
+        }, applications: \.applications, bundleId: \.bundleId)
+        expect(excluded.map(\.bundleId) == ["com.example.Vault"], "exclude a blocked app even if it has no on-screen window when enumerated")
+        print("macos display capture exclusion check passed")
+    }
+
     @MainActor
     static func testMotionLifecycle() {
         let renderer = AgentCursorRenderer()

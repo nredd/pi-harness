@@ -3,7 +3,7 @@ without `attestation` (Ubuntu 24.04 apt has 2.45; `gh attestation verify` needs 
 
 Usage: `install_gh_linux.sh <install-dir>`, then put `<install-dir>/bin` on `PATH`. The shell file is only a
 compatibility bootstrap; the logic lives here so `python-scripts` measures it. Standard library only: it runs
-on the guest's system `python3` (3.12) before any uv environment exists.
+on the runner's system `python3` (3.12) before any uv environment exists.
 
 The tarball and its sha256 are from the immutable cli/cli release; the digest was checked against
 `gh release verify-asset v2.103.2 gh_2.103.2_linux_<arch>.tar.gz --repo cli/cli` for each arch. To bump,
@@ -25,7 +25,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from wsl2_exec import Runner, run_command, terminate
+from ci_process import Runner, run_command, terminate
 
 GH_VERSION = "2.103.2"
 GH_SHA256_AMD64 = "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8"

@@ -246,7 +246,7 @@ def test_one_bad_host_degrades_only_that_host(tmp_path: Path) -> None:
     good.parent.mkdir(parents=True)
     good.write_text(json.dumps(summary_document()))
     good.with_name("provenance.json").write_text(
-        json.dumps(PROVENANCE.record("owned", "coverage-ubuntu-24.04"))
+        json.dumps(PROVENANCE.record("owned-ubuntu", "coverage-ubuntu-24.04"))
     )
     (tmp_path / "coverage-macos-14.zip").write_text("not a zip")
     bad = tmp_path / "coverage-wsl2" / "coverage" / "summary.json"
@@ -314,7 +314,7 @@ def test_inconsistent_artifact_degrades_host_not_report(tmp_path: Path) -> None:
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps(document))
         path.with_name("provenance.json").write_text(
-            json.dumps(PROVENANCE.record("owned", f"coverage-{host}"))
+            json.dumps(PROVENANCE.record(f"owned-{host.split('-')[0]}", f"coverage-{host}"))
         )
     cells = report.load_evidence(tmp_path, manifest, PROVENANCE)
     assert [cell.state for cell in cells] == ["unavailable", "unavailable"]
@@ -527,7 +527,7 @@ def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> 
     good.parent.mkdir(parents=True)
     good.write_text(json.dumps(summary_document()))
     good.with_name("provenance.json").write_text(
-        json.dumps(PROVENANCE.record("owned", "coverage-ubuntu-24.04"))
+        json.dumps(PROVENANCE.record("owned-ubuntu", "coverage-ubuntu-24.04"))
     )
     bad = tmp_path / "coverage-macos-14.zip"
     if damage == "lzma":
