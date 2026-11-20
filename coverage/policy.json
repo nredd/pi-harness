@@ -416,12 +416,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): AT-SPI snapshot traversal reduced uncovered L/F/regions from 1059/145/1968 to 967/129/1793. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
+      "note": "Pinned Linux ARM64 measurement (#696): shared peer tests and AT-SPI root discovery reduced uncovered L/F/regions from 967/129/1793 to 932/126/1733. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 967, "functions": 129 } },
+          "max_uncovered": { "linux": { "lines": 932, "functions": 126 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],

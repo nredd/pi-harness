@@ -537,10 +537,16 @@ fn atspi_error(error: impl std::fmt::Display) -> ProtocolError {
     )
 }
 
+// Keep the shared test module here so `lib.rs` remains a declaration-only
+// module that the native coverage accountant can validate without an LLVM map.
+#[cfg(test)]
+#[path = "tests.rs"]
+pub(crate) mod test_peer;
+
 #[cfg(test)]
 mod tests {
+    use super::test_peer::with_peer;
     use super::*;
-    use crate::tests::with_peer;
 
     #[test]
     fn activation_action_selection_prefers_semantics_over_index_zero() {
@@ -655,6 +661,7 @@ mod tests {
 
     /// Accessible properties and edges for a small, cyclic AT-SPI tree.
     struct TreeNode {
+        name: &'static str,
         role: &'static str,
         children: &'static [(&'static str, &'static str)],
         has_text: bool,
@@ -664,7 +671,7 @@ mod tests {
     impl TreeNode {
         #[zbus(property)]
         fn name(&self) -> &str {
-            self.role
+            self.name
         }
 
         #[zbus(property)]
@@ -690,6 +697,93 @@ mod tests {
                 vec![]
             }
         }
+    }
+
+    struct WindowExtents(i32);
+
+    #[zbus::interface(name = "org.a11y.atspi.Component")]
+    impl WindowExtents {
+        fn get_extents(&self, coordinate_type: u32) -> (i32, i32, i32, i32) {
+            assert_eq!(coordinate_type, 0, "use screen coordinates");
+            (-20, 40, self.0, 480)
+        }
+    }
+
+    #[tokio::test]
+    async fn lists_atspi_roots_with_pid_filter_title_fallback_and_screen_bounds() {
+        const DESTINATION: &str = ":1.42";
+        const APP: &str = "/app";
+        const WINDOW: &str = "/app/window";
+        const DIALOG: &str = "/app/dialog";
+
+        with_peer(
+            |server| {
+                let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
+                    name,
+                    role,
+                    children,
+                    has_text: false,
+                };
+                server
+                    .serve_at(DBUS_ROOT, MockBus)?
+                    .serve_at(
+                        REGISTRY_ROOT,
+                        node("Registry", "desktop", &[(DESTINATION, APP)]),
+                    )?
+                    .serve_at(
+                        APP,
+                        node(
+                            "Editor",
+                            "application",
+                            &[(DESTINATION, WINDOW), (DESTINATION, DIALOG)],
+                        ),
+                    )?
+                    .serve_at(WINDOW, node("Notes", "frame", &[]))?
+                    .serve_at(WINDOW, WindowExtents(640))?
+                    .serve_at(DIALOG, node("", "dialog", &[]))?
+                    .serve_at(DIALOG, WindowExtents(0))
+            },
+            async |connection| {
+                let client = AtspiClient { connection };
+                let roots = client.list_roots(None).await.unwrap();
+                let [window, dialog] = roots.as_slice() else {
+                    panic!(
+                        "expected one window and one dialog, got {} roots",
+                        roots.len()
+                    );
+                };
+                assert_eq!(window.accessible.path, WINDOW);
+                assert_eq!(window.accessible.destination, DESTINATION);
+                assert_eq!(window.pid, 25361);
+                assert_eq!(window.name, "Notes");
+                assert_eq!(window.app_name, "Editor");
+                assert_eq!(window.role, "frame");
+                assert_eq!(
+                    window.frame,
+                    Some(Rect {
+                        x: -20,
+                        y: 40,
+                        width: 640,
+                        height: 480
+                    })
+                );
+                assert_eq!(dialog.accessible.path, DIALOG);
+                assert_eq!(dialog.name, "Editor");
+                assert_eq!(dialog.role, "dialog");
+                assert_eq!(dialog.frame, None);
+
+                let matching = client.list_roots(Some(25361)).await.unwrap();
+                assert_eq!(
+                    matching
+                        .iter()
+                        .map(|root| root.accessible.path.as_str())
+                        .collect::<Vec<_>>(),
+                    [WINDOW, DIALOG]
+                );
+                assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+            },
+        )
+        .await;
     }
 
     /// Record calls so a password read fails even if its result is subsequently discarded.
@@ -718,6 +812,7 @@ mod tests {
                     .serve_at(
                         ROOT,
                         TreeNode {
+                            name: "frame",
                             role: "frame",
                             children: &[
                                 (DESTINATION, PASSWORD),
@@ -731,6 +826,7 @@ mod tests {
                     .serve_at(
                         PASSWORD,
                         TreeNode {
+                            name: "PaSsWoRd TeXt",
                             role: "PaSsWoRd TeXt",
                             children: &[],
                             has_text: true,
@@ -740,6 +836,7 @@ mod tests {
                     .serve_at(
                         LABEL,
                         TreeNode {
+                            name: "label",
                             role: "label",
                             children: &[(DESTINATION, ROOT)],
                             has_text: true,

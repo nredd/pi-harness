@@ -91,7 +91,7 @@ impl PortalClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::with_peer;
+    use crate::atspi::test_peer::with_peer;
     use zbus::object_server::Interface;
 
     struct RemoteDesktop;
