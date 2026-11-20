@@ -1,4 +1,4 @@
-"""Run the shipping skill's read-only scan against disposable linked worktrees.
+"""Run the shipped worktree sweep blocks (scan, identity check, prune guard) in disposable repos.
 
 References:
     https://git-scm.com/docs/git-worktree
@@ -71,9 +71,21 @@ def block(
     )
 
 
-def scan(worktree: Path) -> subprocess.CompletedProcess[str]:
+def scan(worktree: Path, mutate: tuple[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Execute the shipped ref, reflog and filter scan, without any removal step."""
-    return block("Ref, reflog and filter scan", worktree=str(worktree))
+    return block("Ref, reflog and filter scan", mutate=mutate, worktree=str(worktree))
+
+
+def dry_prune(repo: Path) -> str:
+    """Return what `git worktree prune --dry-run --verbose` reports (Git writes it to stderr)."""
+    done = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "prune", "--dry-run", "--verbose"],
+        env=git_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return done.stdout + done.stderr
 
 
 def assert_looks_clean(worktree: Path) -> None:
@@ -183,17 +195,8 @@ def test_unmounted_worktree_is_kept_and_unguarded_prune_loses_it(linked: tuple[P
     guard = prune_guard(repo)
     assert guard.returncode != 0
     assert "keep: Git reports" in guard.stderr
-    dry = subprocess.run(
-        ["git", "-C", str(repo), "worktree", "prune", "--dry-run", "--verbose"],
-        env=git_env(),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert (
-        "Removing worktrees/linked-worktree: gitdir file points to non-existent location"
-        in dry.stderr + dry.stdout
-    )
+    dry = dry_prune(repo)
+    assert "Removing worktrees/linked-worktree: gitdir file points to non-existent location" in dry
     assert registered(repo)
 
     # The loss the guard prevents: an unguarded prune deletes the admin dir with its local refs and reflog.
@@ -240,15 +243,15 @@ def stub_gh(tmp_path: Path, script: str) -> str:
     return f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
-def strict_gh(payload: dict[str, object]) -> str:
-    """A `gh` that prints `payload` only when called with `--repo acme/widgets` and every PR field."""
+def strict_gh(payload: dict[str, object], base_repo: str) -> str:
+    """A `gh` that prints `payload` only when called with `--repo <base_repo>` and every PR field."""
     return f"""repo= fields= prev=
 for arg; do
   [ "$prev" = --repo ] && repo=$arg
   [ "$prev" = --json ] && fields=$arg
   prev=$arg
 done
-[ "$repo" = acme/widgets ] || {{ echo "bad --repo: $repo" >&2; exit 2; }}
+[ "$repo" = {base_repo} ] || {{ echo "bad --repo: $repo" >&2; exit 2; }}
 for need in {" ".join(PR_FIELDS)}; do
   case ",$fields," in *",$need,"*) ;; *) echo "missing --json field $need" >&2; exit 2 ;; esac
 done
@@ -265,6 +268,8 @@ def identity(
     mutate: tuple[str, str] | None = None,
     script: str | None = None,
     overrides: dict[str, object] | None = None,
+    base_repo: str = "acme/widgets",
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the shipped identity block for a worktree whose branch is `merged` from `acme/widgets`."""
     repo, worktree = linked
@@ -279,12 +284,13 @@ def identity(
     payload = {key: value for key, value in payload.items() if value is not None}
     return block(
         "PR identity check",
-        path=stub_gh(tmp_path, script or strict_gh(payload)),
+        path=stub_gh(tmp_path, script or strict_gh(payload, base_repo)),
         mutate=mutate,
         pr="7",
-        base_repo="acme/widgets",
+        base_repo=base_repo,
         worktree=str(worktree),
         remote="origin",
+        **(env or {}),
     )
 
 
@@ -387,14 +393,8 @@ def test_hidden_worktree_with_empty_admin_gitdir_is_kept(linked: tuple[Path, Pat
 
     listing = git(repo, "worktree", "list", "--porcelain", "-z")
     assert "linked worktree" not in listing
-    dry = subprocess.run(
-        ["git", "-C", str(repo), "worktree", "prune", "--dry-run", "--verbose"],
-        env=git_env(),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert "Removing worktrees/linked-worktree: invalid gitdir file" in dry.stdout + dry.stderr
+    dry = dry_prune(repo)
+    assert "Removing worktrees/linked-worktree: invalid gitdir file" in dry
 
     # The previous guard looked only at the list: nothing prunable, every listed `.git` present.
     assert "prunable" not in listing
@@ -420,3 +420,105 @@ def test_dot_git_file_pointing_at_another_admin_dir_is_kept(linked: tuple[Path, 
     guard = prune_guard(repo)
     assert guard.returncode != 0
     assert "no matching `.git` file" in guard.stderr
+
+
+HOST = "git.example.invalid"
+
+
+def test_base_repo_with_host_prefix_matches_remote_host(tmp_path: Path, linked: tuple[Path, Path]) -> None:
+    """`<host>/<owner>/<repo>` names the expected host explicitly."""
+    ok = identity(tmp_path, linked, url=f"https://{HOST}/acme/widgets.git", base_repo=f"{HOST}/acme/widgets")
+    assert (ok.returncode, ok.stdout, ok.stderr) == (0, "", "")
+
+
+def test_base_repo_with_host_prefix_rejects_github_remote(tmp_path: Path, linked: tuple[Path, Path]) -> None:
+    """A github.com push remote does not satisfy a `<host>/<owner>/<repo>` base."""
+    bad = identity(tmp_path, linked, base_repo=f"{HOST}/acme/widgets")
+    assert bad.returncode != 0
+    assert "keep: PR identity mismatch" in bad.stderr
+
+
+def test_gh_host_environment_names_the_expected_host(tmp_path: Path, linked: tuple[Path, Path]) -> None:
+    """`GH_HOST` replaces the `github.com` default for a bare `<owner>/<repo>`."""
+    ok = identity(tmp_path, linked, url=f"https://{HOST}/acme/widgets.git", env={"GH_HOST": HOST})
+    assert (ok.returncode, ok.stdout, ok.stderr) == (0, "", "")
+
+
+def test_gh_host_environment_rejects_github_remote(tmp_path: Path, linked: tuple[Path, Path]) -> None:
+    """With `GH_HOST` set, a github.com push remote is a different host."""
+    bad = identity(tmp_path, linked, env={"GH_HOST": HOST})
+    assert bad.returncode != 0
+    assert "keep: PR identity mismatch" in bad.stderr
+
+
+NEW_CHECK = ("if os.path.lexists(os.path.join(git_dir, os.fsencode(name))):", "if False:")
+FAILING_PATCH = """From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001
+From: Fixture <fixture@example.invalid>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] Unappliable
+
+---
+ missing.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/missing.txt b/missing.txt
+--- a/missing.txt
++++ b/missing.txt
+@@ -1 +1 @@
+-old
++new
+--\x20
+2.0.0
+"""
+
+
+def test_stopped_git_am_is_kept_though_status_is_clean(linked: tuple[Path, Path]) -> None:
+    """A failed `git am` leaves `rebase-apply/` in the admin dir, which worktree removal deletes."""
+    _, worktree = linked
+    am = subprocess.run(
+        ["git", "-C", str(worktree), "am"],
+        input=FAILING_PATCH,
+        env=git_env(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert am.returncode != 0
+    assert_looks_clean(worktree)
+    assert (Path(git(worktree, "rev-parse", "--absolute-git-dir").strip()) / "rebase-apply").is_dir()
+
+    assert scan(worktree, mutate=NEW_CHECK).returncode == 0
+    result = scan(worktree)
+    assert result.returncode != 0
+    assert "keep: in-progress operation `rebase-apply`" in result.stderr
+
+
+def test_stopped_cherry_pick_is_kept(linked: tuple[Path, Path]) -> None:
+    """A conflicted multi-commit cherry-pick leaves `sequencer/` and `CHERRY_PICK_HEAD`."""
+    _, worktree = linked
+    (worktree / "f").write_text("a\n", encoding="utf-8")
+    git(worktree, "add", "f")
+    git(worktree, "commit", "-m", "A")
+    git(worktree, "switch", "-c", "side", "HEAD~1")
+    (worktree / "f").write_text("b\n", encoding="utf-8")
+    git(worktree, "add", "f")
+    git(worktree, "commit", "-m", "B")
+    (worktree / "g").write_text("g\n", encoding="utf-8")
+    git(worktree, "add", "g")
+    git(worktree, "commit", "-m", "C")
+    git(worktree, "switch", "merged")
+    pick = subprocess.run(
+        ["git", "-C", str(worktree), "cherry-pick", "side~1", "side"],
+        env=git_env(),
+        capture_output=True,
+        check=False,
+    )
+    assert pick.returncode != 0
+    git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir").strip())
+    assert (git_dir / "sequencer").is_dir()
+    assert (git_dir / "CHERRY_PICK_HEAD").is_file()
+
+    assert scan(worktree, mutate=NEW_CHECK).returncode == 0
+    result = scan(worktree)
+    assert result.returncode != 0
+    assert "keep: in-progress operation" in result.stderr

@@ -123,10 +123,10 @@ no-PR cleanup. Check each candidate before removal:
     `core.ignoreStat` worktrees until the operator deliberately makes the full status visible
   - Verify branch and PR identity and preserve extra commits on a separate ref before addressing a
     HEAD mismatch. For no-PR work, restore or verify the upstream. Resolve any live ownership or
-    borrowed-object hold without discarding data. Rerun all three blocks (the ref, reflog and filter
-    scan, the PR identity check and the prune guard). A failed check is never overridden, except that
-    the operator may waive a hold caused only by the scan's `filter` output through the manual flow in
-    that scan's section
+    borrowed-object hold without discarding data. Then rerun the per-worktree blocks (the scan and
+    the PR identity check); the parent reruns the prune guard separately before any prune. A failed
+    check is never overridden, except that the operator may waive a hold caused only by the scan's
+    `filter` output through the manual flow in that scan's section
 
 #### PR identity check
 
@@ -182,7 +182,9 @@ PY
 
 Only the parent runs this, before any `git worktree prune`; workers never prune. Set `repo`. Empty
 output and exit 0 allow the prune. Anything else means only `git worktree prune --dry-run` is
-allowed. Prune deletes a worktree's admin dir, with its `HEAD` reflog and worktree-local refs, when
+allowed. Run `git -C <repo> fetch --no-auto-maintenance origin` instead of a plain fetch, or
+`git worktree lock` worktrees on removable volumes: auto-gc runs the same prune on its own, and
+locked worktrees are never pruned. This advice is prose, not automated. Prune deletes a worktree's admin dir, with its `HEAD` reflog and worktree-local refs, when
 its directory or `.git` file is gone (unmounted volume, recreated empty directory) and also when
 the admin `gitdir` file is empty or missing, which `git worktree list` hides. So the guard checks
 the list, every admin dir, and what prune itself would remove.
@@ -222,9 +224,10 @@ common = os.fsencode(os.path.join(repo, git("rev-parse", "--git-common-dir").dec
 admin_root = os.path.join(common, b"worktrees")
 for name in sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else []:
     admin = os.path.join(admin_root, name)
-    dotgit = os.path.join(admin, read(os.path.join(admin, b"gitdir")))
+    gitdir = read(os.path.join(admin, b"gitdir"))
+    dotgit = os.path.join(admin, gitdir)
     target = read(dotgit).removeprefix(b"gitdir:").strip()
-    if not read(os.path.join(admin, b"gitdir")) or os.path.realpath(
+    if not gitdir or os.path.realpath(
         os.path.join(os.path.dirname(dotgit), target)
     ) != os.path.realpath(admin):
         sys.exit(f"keep: admin dir {admin!r} has no matching `.git` file")
@@ -240,17 +243,24 @@ PY
 #### Ref, reflog and filter scan
 
 Set `worktree` to the candidate's exact path. The scan is read-only and is the only list of these
-rules: worktree-local refs, `HEAD` reflog commits outside `git rev-list --all`, and tracked `filter`
+rules: worktree-local refs, `HEAD` reflog commits outside `git rev-list --all`, an in-progress
+`am`, rebase, merge, cherry-pick, revert or bisect in its admin dir, and tracked `filter`
 attributes. Empty output and exit 0 pass **only** these checks. Any `keep:` output means keep and
-report it. A clean filter can map different on-disk bytes to the index blob, so empty status is not
-proof. The scan keeps printing `keep` for as long as a `filter` attribute exists, so an agent can
-never proceed on it. Operator-run manual flow, never automated: the operator reads the printed
-paths, confirms those raw files are disposable or backed up, and removes that exact worktree by hand
-from outside it with `git -C <repo> worktree remove <worktree>` (no `--force`). Paths stay
-NUL-delimited.
+report it. Paths stay NUL-delimited.
+
+Operator notes, never automated:
+
+- A normal rebase, amend or force-push leaves pre-rewrite commits in the `HEAD` reflog, so the scan
+  keeps. The operator checks them by hand or anchors them (`git branch saved <sha>`), then reruns
+- A clean filter can map different on-disk bytes to the index blob, so empty status is not proof.
+  The scan keeps printing `keep` while a `filter` attribute exists, so an agent can never proceed on
+  it. The operator reads the printed paths, confirms those raw files are disposable or backed up,
+  and removes that exact worktree by hand from outside it with
+  `git -C <repo> worktree remove <worktree>` (no `--force`)
 
 ```sh
 python3 - "$worktree" <<'PY'
+import os
 import subprocess
 import sys
 
@@ -268,6 +278,11 @@ def git(*args: str, data: bytes = b"") -> bytes:
 local_refs = git("for-each-ref", "--format=%(refname)", "refs/worktree", "refs/bisect", "refs/rewritten")
 if local_refs:
     sys.exit(f"keep: worktree-local refs: {local_refs!r}")
+
+git_dir = git("rev-parse", "--absolute-git-dir").strip()
+for name in ("rebase-apply", "rebase-merge", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"):
+    if os.path.lexists(os.path.join(git_dir, os.fsencode(name))):
+        sys.exit(f"keep: in-progress operation `{name}` in {git_dir!r}")
 
 git("reflog", "exists", "HEAD")
 reflog = set(git("reflog", "show", "--format=%H", "HEAD").splitlines())

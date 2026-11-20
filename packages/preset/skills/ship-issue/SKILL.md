@@ -39,7 +39,8 @@ cwd repo.
 
 Never work in the user's checkout. One issue, one worktree.
 
-- `git -C <repo> fetch origin`. Workers never run `git worktree prune` or sweep worktrees. The parent
+- `git -C <repo> fetch --no-auto-maintenance origin` (auto-gc can prune an unmounted worktree's admin
+  dir). Workers never run `git worktree prune` or sweep worktrees. The parent
   runs `git worktree prune` only after the `#### Prune guard` in `get-it-merged` passes; otherwise
   only `git worktree prune --dry-run`
 - Parent: read `/skill:get-it-merged` and apply only its `### Guarded merged-worktree sweep` section

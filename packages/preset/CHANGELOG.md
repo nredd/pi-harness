@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- Keep worktrees with local refs, reflog-only commits, or unconfirmed clean filters. Verify the PR source branch and repository before removal, and refuse `git worktree prune` while any registered worktree is prunable or lacks a reachable `.git`. ([#1057](https://github.com/nredd/pi-harness/issues/1057))
+- Keep worktrees with local refs, reflog-only commits, an in-progress `am`, rebase, merge, cherry-pick, revert or bisect, or unconfirmed clean filters. Verify the PR source branch, repository host and head before removal. Refuse `git worktree prune` while Git reports a prunable worktree, an admin `gitdir` is empty or missing, a `.git` file names another admin dir, or `git worktree prune --dry-run --verbose` prints anything. Fetch with `--no-auto-maintenance`. ([#1057](https://github.com/nredd/pi-harness/issues/1057))
 - Share the same worktree safety checks before creating an issue worktree, after merge, and before no-PR removal. Use the recorded merged PR head when the upstream is gone. Report retained ignored paths and preserve files hidden by index flags. ([#1050](https://github.com/nredd/pi-harness/issues/1050))
 - Remove claimed scratch before handback or after merge. For symlinks, check the resolved parent plus link name and unlink only the link. Keep worktrees with ignored files. ([#1024](https://github.com/nredd/pi-harness/issues/1024))
 
