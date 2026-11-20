@@ -1007,6 +1007,28 @@ function resolveConfiguredSessionDir(
 	return resolve(cwd, sessionDir);
 }
 
+/** Always pass an explicit directory for restart path validation, mirroring the host's default cwd encoding. */
+export function childSessionDir(
+	configured: string | undefined,
+	setting: string | undefined,
+	cwd: string,
+	agentDir: string,
+	homeDir?: string,
+): string {
+	return (
+		resolveConfiguredSessionDir(configured, cwd, homeDir) ??
+		(setting
+			? normalizeHomePath(setting, homeDir)
+			: join(
+					resolve(agentDir),
+					"sessions",
+					`--${resolve(cwd)
+						.replace(/^[/\\\\]/, "")
+						.replace(/[/\\\\:]/g, "-")}--`,
+				))
+	);
+}
+
 export async function runAgent(
 	ctx: ExtensionContext,
 	type: SubagentType,
@@ -1424,24 +1446,13 @@ export async function runAgent(
 		sessionExcludeTools = [...denyTools];
 	}
 
-	const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd, options.homeDir);
-	const sessionDirSetting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
-	// SessionManager's implicit default consults the host home again. Pin the
-	// same cwd encoding under our injected agentDir instead when isolating a run.
-	// SDK settings go straight through SessionManager's native normalization;
-	// unlike frontmatter, file URLs expand and relative settings stay relative.
-	const defaultSessionDir =
-		options.homeDir === undefined
-			? sessionDirSetting
-			: sessionDirSetting
-				? normalizeHomePath(sessionDirSetting, options.homeDir)
-				: join(
-						resolve(agentDir),
-						"sessions",
-						`--${resolve(effectiveCwd)
-							.replace(/^[/\\\\]/, "")
-							.replace(/[/\\\\:]/g, "-")}--`,
-					);
+	const sessionDir = childSessionDir(
+		agentConfig?.sessionDir,
+		process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.(),
+		effectiveCwd,
+		agentDir,
+		options.homeDir,
+	);
 	// Frontmatter wins when it says anything; otherwise the project default,
 	// which `rememberAgents` supplies for top-level agents only. Same precedence
 	// as `outputTranscript`.
@@ -1450,9 +1461,9 @@ export async function runAgent(
 		? // Reopening an existing conversation: the file already carries its own
 			// header (cwd, parent) and history, so none of the create-time options
 			// apply. `sessionDir` still matters for a later /new or /branch off it.
-			SessionManager.open(options.resumeSessionFile, configuredSessionDir ?? defaultSessionDir)
+			SessionManager.open(options.resumeSessionFile, sessionDir)
 		: persistSession
-			? SessionManager.create(effectiveCwd, configuredSessionDir ?? defaultSessionDir, {
+			? SessionManager.create(effectiveCwd, sessionDir, {
 					// Optional metadata — it only nests the subagent under its spawner in
 					// `/resume`. Until `rememberAgents` this ran solely for the rare
 					// `persist_session: true` agent; now it runs for every spawn, so a
