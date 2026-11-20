@@ -186,19 +186,20 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try withTemporaryClipboard/,
+		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try world\.withClipboard/,
 		"paste must refuse a blocked focused app before it touches the clipboard",
 	);
-	const pasteBody = swift.match(/let restored = try withTemporaryClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
-	const recheckAt = pasteBody.indexOf("try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))");
-	const lookupAt = pasteBody.indexOf("pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData)");
-	const postAt = pasteBody.indexOf("try postKeyCode(");
+	const pasteBody = swift.match(/let restored = try world\.withClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
+	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
+	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
+	const postAt = pasteBody.indexOf("try world.postKeyCode(");
+	assert.match(swift, /pasteKeyCode: \{ pasteKeyCode\(layoutData: currentKeyboardInputSource\(\)\.layoutData\) \}/);
 	assert.ok(
 		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",
 	);
 	assert.ok(
-		!pasteBody.slice(recheckAt, postAt).includes("currentKeyboardInputSource"),
+		!/(?:currentKeyboardInputSource|pasteKeyCode)\(/.test(pasteBody.slice(recheckAt, postAt)),
 		"nothing slow may sit between the last blocked-app check and the post",
 	);
 	assert.match(
@@ -224,15 +225,15 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/,
+		/if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = world\.setAttribute\(element, kAXFocusedAttribute/,
 		"web setText must wait for focus and refuse a blocked focused app before its HID keys",
 	);
 	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
 	const keyboardOrder = [
 		'guard delivery == "hid"',
 		"focusTargetForPhysicalInput()",
-		"try requireTargetFocus(pid: pid)",
-		"try refuseBlockedKeyboardTarget(",
+		"try world.requireTargetFocus(pid)",
+		"try world.refuseBlockedKeyboard(",
 	].map((needle) => keyboardHelper.indexOf(needle));
 	assert.ok(
 		keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]),
@@ -240,7 +241,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		keyboardHelper,
-		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry refuseBlockedKeyboardTarget/,
+		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry world\.refuseBlockedKeyboard/,
 		"preserveFocus skips only the focus wait, never the blocked-app check",
 	);
 	assert.match(
@@ -257,7 +258,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		"act coordinate input must not refuse before focus and preflight",
 	);
 	for (const post of ["postMouseClick(", "postMouseMove(", "postScrollWheel(", "postMouseDrag("]) {
-		const postAt = coordinates.indexOf(`try ${post}`);
+		const postAt = coordinates.indexOf(`try world.${post}`);
 		const refuseAt = coordinates.lastIndexOf("try refuseBlockedBeforePost(", postAt);
 		assert.ok(
 			refuseAt > preflightAt && postAt > refuseAt,
@@ -268,7 +269,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.match(coordinates, /try refuseBlockedBeforePost\(points\)/, "act drag must check every vertex");
 	assert.match(
 		swift,
-		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry refuseBlockedPoints\(/,
+		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry world\.refuseBlockedPoints\(/,
 		"act pointer refusal is gated on HID delivery",
 	);
 	assert.match(
