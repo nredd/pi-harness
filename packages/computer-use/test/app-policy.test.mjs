@@ -193,7 +193,17 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
-	assert.match(swift, /pasteKeyCode: \{ pasteKeyCode\(layoutData: currentKeyboardInputSource\(\)\.layoutData\) \}/);
+	const actionWorld = swift.match(/func actionWorld\(\) -> ActWorld \{[\s\S]*?\n\t\}/)?.[0] ?? "";
+	for (const [binding, helper] of [
+		["requireTargetFocus", "requireTargetFocus(pid:)"],
+		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
+		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
+		["withClipboard", "withTemporaryClipboard"],
+		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
+	]) {
+		const value = actionWorld.match(new RegExp(`\\b${binding}: ([^,\\n]+)`))?.[1];
+		assert.equal(value, helper, `live actionWorld must bind ${binding} to ${helper}`);
+	}
 	assert.ok(
 		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",

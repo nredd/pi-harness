@@ -18,6 +18,10 @@ private final class ActFixture {
     var scrollPositions = ["before", "after"]
     var bar: ActWorld.ScrollBarWrite?
     var blocked = false
+    var refuseKeyboardAt: Int?
+    var keyboardChecks = 0
+    var focusFails = false
+    var pasteCode: UInt16? = 9
     var range: CFTypeRef?
     var trace: [String] = []
     var pointers: [CGPoint] = []
@@ -68,10 +72,17 @@ private final class ActFixture {
             activateIfInactive: { _ in self.trace.append("activate"); return true },
             raiseWindow: { _, _ in self.trace.append("raise"); return true },
             animateCursor: { _, window in self.trace.append("cursor:\(window)") },
-            requireTargetFocus: { pid in self.trace.append("require:\(pid)") },
+            requireTargetFocus: { pid in
+                self.trace.append("require:\(pid)")
+                if self.focusFails { throw BridgeFailure(message: "focus fixture", code: "focus_not_acquired") }
+            },
             refuseBlockedKeyboard: { blocked in
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "keyboard refusal receives request and built-in blocks")
                 self.trace.append("keyboard")
+                self.keyboardChecks += 1
+                if self.keyboardChecks == self.refuseKeyboardAt {
+                    throw BridgeFailure(message: "blocked fixture", code: "app_blocked")
+                }
                 try self.checkBlocked()
             },
             refuseBlockedPoints: { points, blocked in
@@ -87,11 +98,11 @@ private final class ActFixture {
             lockInput: { self.trace.append("lock") }, unlockInput: { self.trace.append("unlock") },
             sleep: { self.trace.append("sleep:\($0)") },
             scrollSignature: { _ in self.scrollPositions.isEmpty ? "after" : self.scrollPositions.removeFirst() },
-            scrollAction: { _, pid, x, y, steps in
-                self.trace.append("scrollAX:\(pid):\(x):\(y):\(steps)")
+            scrollAction: { _, request in
+                self.trace.append("scrollAX:\(request.targetPid):\(request.scrollX):\(request.scrollY):\(request.steps)")
                 return self.scrollResult
             },
-            scrollBar: { _, _, x, y, _ in self.trace.append("bar:\(x):\(y)"); return self.bar },
+            scrollBar: { _, request in self.trace.append("bar:\(request.scrollX):\(request.scrollY)"); return self.bar },
             postMouseClick: { point, pid, button, count, delivery in
                 expect(point == self.point, "click uses the grounded point")
                 self.trace.append("click:\(pid):\(button.rawValue):\(count):\(delivery)")
@@ -121,7 +132,7 @@ private final class ActFixture {
                 try body()
                 return true
             },
-            pasteKeyCode: { self.trace.append("layout"); return 9 }
+            pasteKeyCode: { self.trace.append("layout"); return self.pasteCode }
         )
     }
 
@@ -140,18 +151,20 @@ private final class ActFixture {
     }
 }
 
-private func actionFailure(_ code: String, _ body: () throws -> [String: Any]) throws {
+private func actionFailure(_ code: String, message: String? = nil, _ body: () throws -> [String: Any]) throws {
     do {
         _ = try body()
         expect(false, "expected action failure \(code)")
     } catch let error as BridgeFailure {
         expect(error.code == code, "expected \(code), got \(error.code)")
+        if let message { expect(error.message == message, "expected '\(message)', got '\(error.message)'") }
     }
 }
 
 func runActAssertions() throws {
     try runPointerAssertions()
     try runKeyboardActionAssertions()
+    try runPasteFailureAssertions()
     try runScrollAssertions()
     runAXScrollAssertions()
     try runBatchAssertions()
@@ -233,6 +246,33 @@ private func runKeyboardActionAssertions() throws {
     expect(secondary["outcome"] as? String == "unknown" && keys.trace == ["begin:1234", "ax:AXShowMenu:cached", "finish"], "ambiguous secondary action failure is not retried")
 }
 
+private func runPasteFailureAssertions() throws {
+    let params: [String: Any] = ["text": "temporary", "preserveFocus": true]
+    let first = ActFixture()
+    first.refuseKeyboardAt = 1
+    try actionFailure("app_blocked") { try first.act("paste", coords: true, params: params) }
+    expect(first.trace == ["begin:1234", "lock", "keyboard", "unlock"], "first refusal never touches the clipboard or posts")
+
+    let second = ActFixture()
+    second.refuseKeyboardAt = 2
+    try actionFailure("app_blocked") { try second.act("paste", coords: true, params: params) }
+    expect(second.trace == ["begin:1234", "lock", "keyboard", "clipboard:temporary", "layout", "keyboard", "restore", "unlock"], "second refusal restores the clipboard without posting Cmd+V")
+
+    let layout = ActFixture()
+    layout.pasteCode = nil
+    try actionFailure("layout_unsupported", message: "The active keyboard layout is unreadable, so cmd+v cannot be sent") {
+        try layout.act("paste", coords: true, params: params)
+    }
+    expect(layout.trace == ["begin:1234", "lock", "keyboard", "clipboard:temporary", "layout", "restore", "unlock"], "unreadable layout restores without rechecking or posting")
+
+    let focus = ActFixture()
+    focus.focusFails = true
+    try actionFailure("focus_not_acquired", message: "focus fixture") {
+        try focus.act("paste", coords: true, params: ["text": "temporary"])
+    }
+    expect(focus.trace == ["begin:1234", "lock", "activate", "raise", "sleep:20000", "require:1234", "unlock"], "failed focus stops before privacy checks, clipboard and input")
+}
+
 private func runScrollAssertions() throws {
     let params = ["scrollX": 15, "scrollY": -25]
     let semantic = ActFixture()
@@ -282,21 +322,23 @@ private func runAXScrollAssertions() {
         }
     )
     let bridge = fixture.bridge
-    let action = bridge.performScrollActionOrAncestor(startingAt: leaf, targetPid: 1234, scrollX: 3, scrollY: -4, steps: 1, world: world)
-    expect(action["scrolled"] as? Bool == true && trace == ["AXScrollUp", "AXScrollRight"], "ancestor scroll actions use vertical then horizontal directions")
+    let request = ActScrollRequest(targetPid: 1234, scrollX: 3, scrollY: -4, steps: 2, point: fixture.point)
+    let action = bridge.performScrollActionOrAncestor(startingAt: leaf, request: request, world: world)
+    expect(action["scrolled"] as? Bool == true && trace == ["AXScrollUp", "AXScrollRight", "AXScrollUp", "AXScrollRight"], "distinct axes select the directions and steps repeat the pair")
     trace = []
-    let reversed = bridge.performScrollActionOrAncestor(startingAt: leaf, targetPid: 1234, scrollX: -3, scrollY: 4, steps: 1, world: world)
+    let opposite = ActScrollRequest(targetPid: 1234, scrollX: -3, scrollY: 4, steps: 1, point: nil)
+    let reversed = bridge.performScrollActionOrAncestor(startingAt: leaf, request: opposite, world: world)
     expect(reversed["scrolled"] as? Bool == true && trace == ["AXScrollDown", "AXScrollLeft"], "ancestor scroll actions support reversed directions")
     trace = []
-    let bars = bridge.setScrollBarValueOrAncestor(startingAt: leaf, targetPid: 1234, scrollX: 3, scrollY: -4, point: fixture.point, world: world)
+    let bars = bridge.setScrollBarValueOrAncestor(startingAt: leaf, request: request, world: world)
     expect(bars?.remainingX == 3 && bars?.remainingY == 0 && bars?.confirmed == false && trace == ["hit:1234", "AXVerticalScrollBar:-4", "AXHorizontalScrollBar:3"], "same-area hit allows the ancestor write and consumes even an unconfirmed axis")
     trace = []
     hit = AXUIElementCreateApplication(9876)
-    let outside = bridge.setScrollBarValueOrAncestor(startingAt: leaf, targetPid: 1234, scrollX: 3, scrollY: -4, point: fixture.point, world: world)
+    let outside = bridge.setScrollBarValueOrAncestor(startingAt: leaf, request: request, world: world)
     expect(outside == nil && trace == ["hit:1234"], "unrelated hit cannot authorize an outer scroll bar write")
     trace = []
     areaPid = 4321
-    let wrongPid = bridge.performScrollActionOrAncestor(startingAt: leaf, targetPid: 1234, scrollX: 3, scrollY: -4, steps: 1, world: world)
+    let wrongPid = bridge.performScrollActionOrAncestor(startingAt: leaf, request: request, world: world)
     expect(wrongPid["reason"] as? String == "pid_mismatch" && trace.isEmpty, "ancestor scroll stops before an action in another process")
 }
 
@@ -331,6 +373,10 @@ private func runEventAssertions() throws {
     var events: [Event] = []
     var delays: [useconds_t] = []
     var rejectDragAt: CGPoint?
+    var rejectMouseType: CGEventType?
+    var rejectWheel = false
+    var keyAllocations = 0
+    var rejectKeyAllocation: Int?
     func record(_ event: CGEvent, pid: Int32, delivery: String) {
         var entry = Event(type: event.type, pid: pid, delivery: delivery)
         switch event.type {
@@ -353,8 +399,15 @@ private func runEventAssertions() throws {
     }
     let bridge = Bridge(activityGlow: nil, inputSink: NativeInputSink(
         mouseEvent: { type, point, button in
-            guard type != .leftMouseDragged || point != rejectDragAt else { return nil }
+            guard type != rejectMouseType, type != .leftMouseDragged || point != rejectDragAt else { return nil }
             return NativeInputSink.createMouseEvent(type, point, button)
+        },
+        wheelEvent: { vertical, horizontal in
+            rejectWheel ? nil : NativeInputSink.createWheelEvent(vertical, horizontal)
+        },
+        keyEvent: { code, down in
+            keyAllocations += 1
+            return keyAllocations == rejectKeyAllocation ? nil : NativeInputSink.createKeyEvent(code, down)
         },
         postToPid: { record($0, pid: $1, delivery: "pid") },
         postHID: { record($0, pid: $1, delivery: "hid") },
@@ -393,4 +446,44 @@ private func runEventAssertions() throws {
     events = []; delays = []
     try world.postAtomicUnicodeText("a🙂", 1234, "pid")
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a🙂", "a🙂"] && delays == [8_000], "atomic replacement delivers the whole text in one pair")
+
+    events = []; delays = []
+    rejectMouseType = .rightMouseUp
+    try actionFailure("input_failed", message: "Failed to create mouse click event") {
+        try world.postMouseClick(start, 1234, .right, 2, "pid")
+        return [:]
+    }
+    expect(events == [mouse(.mouseMoved, start)] && delays.isEmpty, "failed click pair posts neither a partial click nor the next click")
+    rejectMouseType = nil
+
+    events = []; delays = []
+    rejectWheel = true
+    try actionFailure("input_failed", message: "Failed to create scroll event") {
+        try world.postScrollWheel(start, 15, -25, 1234, "hid")
+        return [:]
+    }
+    expect(events == [mouse(.mouseMoved, start, delivery: "hid")] && delays.isEmpty, "failed wheel posts only the preceding mouse move")
+
+    events = []; delays = []; keyAllocations = 0
+    rejectKeyAllocation = 4
+    try actionFailure("input_failed", message: "Failed to create key event") {
+        try world.postKeyPress(["a", "tab", "b"], 1234, "pid")
+        return [:]
+    }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && keyAllocations == 4 && delays == [8_000], "failed second key pair posts neither a partial pair nor the next key")
+
+    events = []; delays = []; keyAllocations = 0
+    try actionFailure("input_failed", message: "Failed to create unicode key event") {
+        try world.postUnicodeText("a🙂b", 1234, "pid")
+        return [:]
+    }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a", "a"] && keyAllocations == 4 && delays == [8_000], "failed second scalar posts neither a partial pair nor the next scalar")
+
+    events = []; delays = []; keyAllocations = 0
+    rejectKeyAllocation = 2
+    try actionFailure("input_failed", message: "Failed to create unicode text event") {
+        try world.postAtomicUnicodeText("a🙂", 1234, "pid")
+        return [:]
+    }
+    expect(events.isEmpty && keyAllocations == 2 && delays.isEmpty, "failed atomic pair posts nothing")
 }

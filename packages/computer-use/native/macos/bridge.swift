@@ -606,6 +606,14 @@ struct LookRecord {
 	let hasImage: Bool
 }
 
+struct ActScrollRequest {
+	let targetPid: Int32
+	let scrollX: Int
+	let scrollY: Int
+	let steps: Int
+	let point: CGPoint?
+}
+
 /// Native boundaries for an action. The headless world supplies every operation, with no live fallback.
 struct ActWorld {
 	typealias ScrollBarWrite = (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)
@@ -636,8 +644,8 @@ struct ActWorld {
 	let unlockInput: () -> Void
 	let sleep: (useconds_t) -> Void
 	let scrollSignature: (AXUIElement) -> String
-	let scrollAction: (AXUIElement, Int32, Int, Int, Int) -> [String: Any]
-	let scrollBar: (AXUIElement, Int32, Int, Int, CGPoint?) -> ScrollBarWrite?
+	let scrollAction: (AXUIElement, ActScrollRequest) -> [String: Any]
+	let scrollBar: (AXUIElement, ActScrollRequest) -> ScrollBarWrite?
 	let postMouseClick: (CGPoint, Int32, CGMouseButton, Int, String) throws -> Void
 	let postMouseMove: (CGPoint, Int32, String) throws -> Void
 	let postScrollWheel: (CGPoint, Int, Int, Int32, String) throws -> Void
@@ -665,6 +673,8 @@ struct AXScrollWorld {
 /// Event creation and delivery boundaries; the sequencer still owns ordering and delays.
 struct NativeInputSink {
 	let mouseEvent: (CGEventType, CGPoint, CGMouseButton) -> CGEvent?
+	let wheelEvent: (Int32, Int32) -> CGEvent?
+	let keyEvent: (CGKeyCode, Bool) -> CGEvent?
 	let postToPid: (CGEvent, Int32) -> Void
 	let postHID: (CGEvent, Int32) -> Void
 	let sleep: (useconds_t) -> Void
@@ -674,8 +684,18 @@ struct NativeInputSink {
 		CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
 	}
 
+	static func createWheelEvent(_ vertical: Int32, _ horizontal: Int32) -> CGEvent? {
+		CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0)
+	}
+
+	static func createKeyEvent(_ code: CGKeyCode, _ down: Bool) -> CGEvent? {
+		CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+	}
+
 	static let live = NativeInputSink(
 		mouseEvent: createMouseEvent,
+		wheelEvent: createWheelEvent,
+		keyEvent: createKeyEvent,
 		postToPid: { $0.postToPid($1) },
 		postHID: { event, pid in
 			// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
@@ -2536,8 +2556,8 @@ final class Bridge {
 			refuseBlockedPoints: refuseBlockedPoints(_:blocked:), beginRootDelta: beginActRootDelta(pid:),
 			lockInput: physicalInputLock.lock, unlockInput: physicalInputLock.unlock, sleep: { _ = usleep($0) },
 			scrollSignature: scrollPositionSignature,
-			scrollAction: { self.performScrollActionOrAncestor(startingAt: $0, targetPid: $1, scrollX: $2, scrollY: $3, steps: $4, world: scroll) },
-			scrollBar: { self.setScrollBarValueOrAncestor(startingAt: $0, targetPid: $1, scrollX: $2, scrollY: $3, point: $4, world: scroll) },
+			scrollAction: { self.performScrollActionOrAncestor(startingAt: $0, request: $1, world: scroll) },
+			scrollBar: { self.setScrollBarValueOrAncestor(startingAt: $0, request: $1, world: scroll) },
 			postMouseClick: postMouseClick(at:pid:button:clickCount:delivery:), postMouseMove: postMouseMove(to:pid:delivery:),
 			postScrollWheel: postScrollWheel(at:deltaX:deltaY:pid:delivery:), postMouseDrag: postMouseDrag(points:pid:delivery:),
 			postKeyPress: postKeyPress(keys:pid:delivery:), postKeyCode: postKeyCode(_:flags:pid:delivery:),
@@ -2954,7 +2974,9 @@ final class Bridge {
 		} else if let element, action == "scroll" {
 			let cursorPoint = try? coordinatePoint()
 			let before = world.scrollSignature(element)
-			let result = world.scrollAction(element, pid, (params["scrollX"] as? NSNumber)?.intValue ?? 0, (params["scrollY"] as? NSNumber)?.intValue ?? 0, 1)
+			let scroll = ActScrollRequest(targetPid: pid, scrollX: (params["scrollX"] as? NSNumber)?.intValue ?? 0,
+				scrollY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, steps: 1, point: cursorPoint)
+			let result = world.scrollAction(element, scroll)
 			if (result["scrolled"] as? Bool) == true {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
@@ -2965,9 +2987,7 @@ final class Bridge {
 			// SwiftUI and many AppKit scroll areas expose no scroll actions and can
 			// ignore wheel events posted to a background app, but accept a write to
 			// their scroll bar's value.
-			let requestedX = (params["scrollX"] as? NSNumber)?.intValue ?? 0
-			let requestedY = (params["scrollY"] as? NSNumber)?.intValue ?? 0
-			if let write = world.scrollBar(element, pid, requestedX, requestedY, cursorPoint) {
+			if let write = world.scrollBar(element, scroll) {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
 				performed["axScroll"] = "scroll_bar_value"
@@ -3323,18 +3343,18 @@ final class Bridge {
 			hitTest: hitTestElement(at:pid:), sameElement: sameElement, writeBar: setScrollBarValue(area:barAttribute:delta:vertical:))
 	}
 
-	func performScrollActionOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, steps: Int, world: AXScrollWorld) -> [String: Any] {
-		let actions = scrollActionNames(scrollX: scrollX, scrollY: scrollY)
+	func performScrollActionOrAncestor(startingAt element: AXUIElement, request: ActScrollRequest, world: AXScrollWorld) -> [String: Any] {
+		let actions = scrollActionNames(scrollX: request.scrollX, scrollY: request.scrollY)
 		guard !actions.isEmpty else { return ["scrolled": false, "reason": "zero_delta"] }
 		var current: AXUIElement? = element
 		var depth = 0
 
 		while let candidate = current, depth < 10 {
-			if let pid = world.pid(candidate), pid != targetPid {
+			if let pid = world.pid(candidate), pid != request.targetPid {
 				return ["scrolled": false, "reason": "pid_mismatch", "ownerPid": Int(pid)]
 			}
 			var didScroll = false
-			for _ in 0..<steps {
+			for _ in 0..<request.steps {
 				for action in actions where world.supportsAction(candidate, action) {
 					let status = world.performAction(candidate, action)
 					if status == .success { didScroll = true }
@@ -3353,8 +3373,8 @@ final class Bridge {
 	/// region falls through to the wheel instead of scrolling the outer area. Returns the last value read back
 	/// (nil when no write was confirmed), whether every written axis was confirmed, and the deltas no bar
 	/// delivered. Nil when no bar was written.
-	func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?, world: AXScrollWorld) -> ActWorld.ScrollBarWrite? {
-		var remaining = (x: scrollX, y: scrollY)
+	func setScrollBarValueOrAncestor(startingAt element: AXUIElement, request: ActScrollRequest, world: AXScrollWorld) -> ActWorld.ScrollBarWrite? {
+		var remaining = (x: request.scrollX, y: request.scrollY)
 		var value: Double?
 		var anyWritten = false
 		var confirmed = true
@@ -3362,7 +3382,7 @@ final class Bridge {
 		func hitTestResolves(to area: AXUIElement) -> Bool {
 			if hitArea == nil {
 				var found: AXUIElement?
-				if let point, var hit = world.hitTest(point, world.pid(element) ?? targetPid) {
+				if let point = request.point, var hit = world.hitTest(point, world.pid(element) ?? request.targetPid) {
 					var hops = 0
 					while hops < 10 {
 						if world.role(hit) == (kAXScrollAreaRole as String) { found = hit; break }
@@ -3379,7 +3399,7 @@ final class Bridge {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 10, remaining.x != 0 || remaining.y != 0 {
-			if let pid = world.pid(candidate), pid != targetPid { break }
+			if let pid = world.pid(candidate), pid != request.targetPid { break }
 			if world.role(candidate) == (kAXScrollAreaRole as String) {
 				guard scrollBarWriteAllowed(depthFromStart: depth, hitTestResolvesToArea: depth <= 1 ? false : hitTestResolves(to: candidate)) else { break }
 				let writeY = remaining.y != 0 ? world.writeBar(candidate, "AXVerticalScrollBar", remaining.y, true) : (write: ScrollAxisWrite.notWritten, value: nil)
@@ -4710,14 +4730,7 @@ final class Bridge {
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try postMouseMove(to: point, pid: pid, delivery: delivery)
 		let counts = scrollWheelCounts(deltaX: deltaX, deltaY: deltaY)
-		guard let event = CGEvent(
-			scrollWheelEvent2Source: nil,
-			units: .pixel,
-			wheelCount: 2,
-			wheel1: counts.wheel1,
-			wheel2: counts.wheel2,
-			wheel3: 0
-		) else {
+		guard let event = inputSink.wheelEvent(counts.wheel1, counts.wheel2) else {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
 		}
 		event.location = point
@@ -4810,8 +4823,7 @@ final class Bridge {
 	private func postKeyCode(_ code: CGKeyCode, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
-			let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
+		guard let down = inputSink.keyEvent(code, true), let up = inputSink.keyEvent(code, false)
 		else {
 			throw BridgeFailure(message: "Failed to create key event", code: "input_failed")
 		}
@@ -4832,8 +4844,7 @@ final class Bridge {
 				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery)
 				continue
 			}
-			guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-				let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+			guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
 			else {
 				throw BridgeFailure(message: "Failed to create unicode key event", code: "input_failed")
 			}
@@ -4848,8 +4859,7 @@ final class Bridge {
 	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-			let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+		guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
 		else { throw BridgeFailure(message: "Failed to create unicode text event", code: "input_failed") }
 		setUnicodeString(event: down, text: text)
 		setUnicodeString(event: up, text: text)
