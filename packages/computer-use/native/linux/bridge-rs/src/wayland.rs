@@ -146,20 +146,25 @@ mod tests {
     }
 
     /// Inject the transport while exercising the production proxies and property decoding.
+    /// Bounded so a stalled handshake or property read fails the test and cannot stall CI.
     async fn probe_from_peer(screen: impl Interface) -> Result<PortalCapabilities, PortalError> {
-        let (server_socket, client_socket) = UnixStream::pair().unwrap();
-        let server = Builder::unix_stream(server_socket)
-            .server(Guid::generate())
-            .unwrap()
-            .p2p()
-            .serve_at(DESKTOP_PATH, RemoteDesktop)
-            .unwrap()
-            .serve_at(DESKTOP_PATH, screen)
-            .unwrap()
-            .build();
-        let client = Builder::unix_stream(client_socket).p2p().build();
-        let (_server, connection) = tokio::try_join!(server, client).unwrap();
-        PortalClient { connection }.probe().await
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (server_socket, client_socket) = UnixStream::pair().unwrap();
+            let server = Builder::unix_stream(server_socket)
+                .server(Guid::generate())
+                .unwrap()
+                .p2p()
+                .serve_at(DESKTOP_PATH, RemoteDesktop)
+                .unwrap()
+                .serve_at(DESKTOP_PATH, screen)
+                .unwrap()
+                .build();
+            let client = Builder::unix_stream(client_socket).p2p().build();
+            let (_server, connection) = tokio::try_join!(server, client).unwrap();
+            PortalClient { connection }.probe().await
+        })
+        .await
+        .expect("portal probe timed out")
     }
 
     #[tokio::test]
