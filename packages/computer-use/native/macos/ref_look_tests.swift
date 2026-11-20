@@ -20,21 +20,23 @@ private func runAXTraversalAssertions() {
   let hidden = Node("hidden")
   let label = Node("label")
   let button = Node("button")
+  // The back edge `link -> Node("web")` is a DIFFERENT object equal to `web` by `sameElement`,
+  // like the fresh handle AX returns on every call; object-identity dedupe would revisit `web`.
   let children = [
     root.name: [web, toolbar], web.name: [link, hidden], toolbar.name: [button],
-    link.name: [web], hidden.name: [label],
+    link.name: [Node(web.name)], hidden.name: [label],
   ]
   // Visibility queries may return a different handle for the same AX element.
   let visible = [web.name: [Node(link.name)], hidden.name: [label]]
   let world = AXTraversalWorld<Node>(
-    role: { $0 === web ? "AXWebArea" : "AXGroup" },
+    role: { $0.name == web.name ? "AXWebArea" : "AXGroup" },
     childLists: { (children[$0.name] ?? [], visible[$0.name]) },
-    sameElement: { $0.name == $1.name })
+    sameElement: { $0.name == $1.name }, hash: { $0.name.hashValue })
 
   let all = world.collect(startingAt: root, maxDepth: 8, maxNodes: 20)
   check(
     all.map(\.element.name) == ["window", "web", "toolbar", "link", "hidden", "button", "label"],
-    "AX traversal is breadth-first in sibling order and visits a cyclic handle only once")
+    "AX traversal is breadth-first in sibling order and visits equivalent cyclic handles only once")
   check(all.map(\.depth) == [0, 1, 1, 2, 2, 2, 3], "AX traversal reports depth from the root")
 
   check(
@@ -54,6 +56,15 @@ private func runAXTraversalAssertions() {
     "AX traversal counts the root against the node budget and returns the breadth-first prefix")
   let minimum = world.collect(startingAt: root, maxDepth: 8, maxNodes: 0)
   check(minimum.map(\.element.name) == ["window"], "AX traversal retains the root at zero budget")
+  // Equality, not the hash, decides: distinct elements sharing a hash are both visited.
+  let collidingWorld = AXTraversalWorld<Node>(
+    role: { _ in "AXGroup" },
+    childLists: { (children[$0.name] ?? [], nil) },
+    sameElement: { $0.name == $1.name }, hash: { _ in 0 })
+  check(
+    collidingWorld.collect(startingAt: root, maxDepth: 8, maxNodes: 20).map(\.element.name)
+      == ["window", "web", "toolbar", "link", "hidden", "button", "label"],
+    "AX traversal compares colliding hashes by equivalence and still dedupes the cycle")
   print("macos AX descendant traversal checks passed")
 }
 
@@ -97,6 +108,12 @@ func runRefLookAssertions() {
   check(
     fixture.terminationStatus == 0 && !fixture.isRunning, "isolated PID fixture exits and is reaped"
   )
+  check(
+    axEquivalenceHash(element) == axEquivalenceHash(equivalent),
+    "equivalent AX handles share an equivalence hash")
+  check(
+    bucketKey(UInt.max) == -1 && bucketKey(UInt(Int.max) + 1) == Int.min && bucketKey(0) == 0,
+    "bucket keys map hashes with the top bit set without trapping")
   check(!CFEqual(element, distinct), "different owned fixture PID produces an unequal AX handle")
   let store = AXRefStore(unownedCapacity: 2)
   let window = store.storeWindow(element)
