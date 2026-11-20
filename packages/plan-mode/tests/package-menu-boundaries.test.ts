@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { showPlanLaunchMenu } from "../src/plan-launch-menu.ts";
 import { showPlanModeSettings } from "../src/settings-menu.ts";
 import { createPlanContext } from "./fixtures/support.ts";
@@ -72,33 +72,29 @@ test("launch Settings can close its parent menu without starting Plan mode", asy
 });
 
 test("settings resets fresh thinking to same as plan and rejects an invalid pasted shortcut", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pm-settings-input-"));
+	const directory = makeTestTempDir("pm-settings-input-", onTestFinished);
 	const settingsPath = join(directory, "settings.json");
-	try {
-		await writeFile(settingsPath, JSON.stringify({ defaultImplementationThinkingLevel: "max" }));
-		const rpc = createRpcHarness([
-			{ kind: "select", response: "Fresh thinking (max)" },
-			{ kind: "select", response: "Plan mode shortcut (none)" },
-			{ kind: "input", response: "ctrl+ctrl+p" },
-			{ kind: "input", response: undefined },
-			{ kind: "select", response: undefined },
-		]);
-		const context = createPlanContext({ hasUI: true, mode: "rpc", ...rpc.ui });
-		let saves = 0;
-		await showPlanModeSettings(context.ctx, {
-			settingsPath,
-			tools: [],
-			signal: new AbortController().signal,
-			isCurrent: () => true,
-			onSaved: () => {
-				saves++;
-			},
-		});
-		rpc.assertConsumed();
-		assert.equal(saves, 1);
-		assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {});
-		assert.ok(context.notifications.some((notice) => /Invalid key identifier/.test(notice.message)));
-	} finally {
-		await rm(directory, { recursive: true, force: true });
-	}
+	await writeFile(settingsPath, JSON.stringify({ defaultImplementationThinkingLevel: "max" }));
+	const rpc = createRpcHarness([
+		{ kind: "select", response: "Fresh thinking (max)" },
+		{ kind: "select", response: "Plan mode shortcut (none)" },
+		{ kind: "input", response: "ctrl+ctrl+p" },
+		{ kind: "input", response: undefined },
+		{ kind: "select", response: undefined },
+	]);
+	const context = createPlanContext({ hasUI: true, mode: "rpc", ...rpc.ui });
+	let saves = 0;
+	await showPlanModeSettings(context.ctx, {
+		settingsPath,
+		tools: [],
+		signal: new AbortController().signal,
+		isCurrent: () => true,
+		onSaved: () => {
+			saves++;
+		},
+	});
+	rpc.assertConsumed();
+	assert.equal(saves, 1);
+	assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {});
+	assert.ok(context.notifications.some((notice) => /Invalid key identifier/.test(notice.message)));
 });

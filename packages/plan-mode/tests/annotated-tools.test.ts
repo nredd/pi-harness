@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ToolCallEventResult, ToolInfo } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import planMode from "../src/plan-mode.ts";
 import {
 	classifyPlanModeTool,
@@ -158,7 +158,7 @@ test("ssh_exec is gated on a configured host and the remote reviewed policy", ()
 });
 
 test("configured defaultPlanTools and annotated tools are both admitted through the hook", async () => {
-	const agentDir = await mkdtemp(join(tmpdir(), "plan-annotated-defaults-"));
+	const agentDir = makeTestTempDir("plan-annotated-defaults-", onTestFinished);
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
@@ -192,12 +192,11 @@ test("configured defaultPlanTools and annotated tools are both admitted through 
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
-		await rm(agentDir, { recursive: true, force: true });
 	}
 });
 
 test("active Plan mode admits annotated tools and gates ssh_exec at the tool hook", async () => {
-	const agentDir = await mkdtemp(join(tmpdir(), "plan-annotated-"));
+	const agentDir = makeTestTempDir("plan-annotated-", onTestFinished);
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
@@ -240,6 +239,5 @@ test("active Plan mode admits annotated tools and gates ssh_exec at the tool hoo
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
-		await rm(agentDir, { recursive: true, force: true });
 	}
 });

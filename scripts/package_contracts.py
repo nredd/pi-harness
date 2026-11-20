@@ -828,6 +828,7 @@ SUBAGENTS_CONTRACT = PackageContract(
         "src/notification-result.ts",
         "src/output-file.ts",
         "src/package-resources.ts",
+        "src/peer-mailbox.ts",
         "src/plan-mode-children.ts",
         "src/process-budget.ts",
         "src/prompts.ts",

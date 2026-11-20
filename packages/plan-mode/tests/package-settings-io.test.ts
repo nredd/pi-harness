@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, onTestFinished, test, vi } from "vitest";
 import { exportPlanToFile, exportStoredPlan, resolvePlanExportPath } from "../src/plan-export.ts";
 import { readPlanModeSettings, updatePlanModeSettings } from "../src/settings.ts";
 import { createPlanContext } from "./fixtures/support.ts";
@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 test("export propagates non-collision write failures without claiming a successful publication", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-export-io-"));
+	const directory = makeTestTempDir("pm-export-io-", onTestFinished);
 	const path = join(directory, "plan.md");
 	const failure = Object.assign(new Error("disk I/O failure"), { code: "EIO" });
 	try {
@@ -28,13 +28,12 @@ test("export propagates non-collision write failures without claiming a successf
 		await assert.rejects(fs.readFile(path), /ENOENT/);
 	} finally {
 		vi.restoreAllMocks();
-		await actualFs.rm(directory, { recursive: true, force: true });
 	}
 });
 
 /** These hooks gate real filesystem operations, not the settings parser or mutation queue. */
 test("a canonical settings file arriving while legacy is read wins even when invalid", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-race-"));
+	const directory = makeTestTempDir("pm-settings-race-", onTestFinished);
 	const settingsPath = join(directory, "canonical.json");
 	const legacySettingsPath = join(directory, "legacy.json");
 	const open = actualFs.open;
@@ -52,12 +51,11 @@ test("a canonical settings file arriving while legacy is read wins even when inv
 		assert.equal(await fs.readFile(legacySettingsPath, "utf8"), "{}");
 	} finally {
 		vi.restoreAllMocks();
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("a settings file growing after stat is rejected by the bounded read", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-grow-"));
+	const directory = makeTestTempDir("pm-settings-grow-", onTestFinished);
 	const settingsPath = join(directory, "settings.json");
 	const open = actualFs.open;
 	try {
@@ -79,30 +77,25 @@ test("a settings file growing after stat is rejected by the bounded read", async
 		if (result.kind === "invalid") assert.match(result.reason, /exceeds.*bytes/);
 	} finally {
 		vi.restoreAllMocks();
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("oversized merged settings refuse publication and preserve the original bytes", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-size-"));
+	const directory = makeTestTempDir("pm-settings-size-", onTestFinished);
 	const settingsPath = join(directory, "settings.json");
-	try {
-		// Compact input fits the read limit; pretty-printing an unknown retained array does not.
-		const original = JSON.stringify({ retained: Array.from({ length: 30_000 }, () => 0) });
-		await fs.writeFile(settingsPath, original);
-		await assert.rejects(
-			updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }),
-			/settings document exceeds/,
-		);
-		assert.equal(await fs.readFile(settingsPath, "utf8"), original);
-		assert.deepEqual(await fs.readdir(directory), ["settings.json"]);
-	} finally {
-		await fs.rm(directory, { recursive: true, force: true });
-	}
+	// Compact input fits the read limit; pretty-printing an unknown retained array does not.
+	const original = JSON.stringify({ retained: Array.from({ length: 30_000 }, () => 0) });
+	await fs.writeFile(settingsPath, original);
+	await assert.rejects(
+		updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath }),
+		/settings document exceeds/,
+	);
+	assert.equal(await fs.readFile(settingsPath, "utf8"), original);
+	assert.deepEqual(await fs.readdir(directory), ["settings.json"]);
 });
 
 test("cleanup failure after publication does not misreport a successfully saved setting", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-cleanup-"));
+	const directory = makeTestTempDir("pm-settings-cleanup-", onTestFinished);
 	const settingsPath = join(directory, "settings.json");
 	const remove = actualFs.rm;
 	let cleanupAttempts = 0;
@@ -120,12 +113,11 @@ test("cleanup failure after publication does not misreport a successfully saved 
 		assert.deepEqual(await fs.readdir(directory), ["settings.json"]);
 	} finally {
 		vi.restoreAllMocks();
-		await remove(directory, { recursive: true, force: true });
 	}
 });
 
 test("a valid canonical file arriving while legacy is read is merged, not overwritten", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-race-valid-"));
+	const directory = makeTestTempDir("pm-settings-race-valid-", onTestFinished);
 	const settingsPath = join(directory, "canonical.json");
 	const legacySettingsPath = join(directory, "legacy.json");
 	const open = actualFs.open;
@@ -144,12 +136,11 @@ test("a valid canonical file arriving while legacy is read is merged, not overwr
 		});
 	} finally {
 		vi.restoreAllMocks();
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("reading settings prefers a canonical file that arrives while the legacy file is read", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-read-race-"));
+	const directory = makeTestTempDir("pm-settings-read-race-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	const open = actualFs.open;
@@ -168,12 +159,11 @@ test("reading settings prefers a canonical file that arrives while the legacy fi
 		vi.restoreAllMocks();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("a non-Error read failure is reported as text", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-settings-string-failure-"));
+	const directory = makeTestTempDir("pm-settings-string-failure-", onTestFinished);
 	try {
 		vi.spyOn(fs, "open").mockRejectedValue("disk gone");
 		assert.deepEqual(await readPlanModeSettings(join(directory, "settings.json")), {
@@ -182,7 +172,6 @@ test("a non-Error read failure is reported as text", async () => {
 		});
 	} finally {
 		vi.restoreAllMocks();
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
 
@@ -201,7 +190,7 @@ test("an export path that is only an at-sign prefix is rejected as empty", () =>
 });
 
 test("export failures of any thrown value reach the user as one sanitized line", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-export-string-failure-"));
+	const directory = makeTestTempDir("pm-export-string-failure-", onTestFinished);
 	const context = createPlanContext({ hasUI: true, cwd: directory });
 	try {
 		vi.spyOn(fs, "writeFile").mockRejectedValue("disk\u0001gone\u0085now");
@@ -209,12 +198,11 @@ test("export failures of any thrown value reach the user as one sanitized line",
 		assert.deepEqual(context.notifications, [{ message: "Unable to export plan: disk gone now", level: "error" }]);
 	} finally {
 		vi.restoreAllMocks();
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("an export that finishes after its menu went stale reports nothing", async () => {
-	const directory = await fs.mkdtemp(join(tmpdir(), "pm-export-stale-"));
+	const directory = makeTestTempDir("pm-export-stale-", onTestFinished);
 	const context = createPlanContext({ hasUI: true, cwd: directory });
 	const write = actualFs.writeFile;
 	let current = true;
@@ -232,6 +220,5 @@ test("an export that finishes after its menu went stale reports nothing", async 
 		assert.equal(await fs.readFile(join(directory, "plan.md"), "utf8"), "# Plan\n");
 	} finally {
 		vi.restoreAllMocks();
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 });

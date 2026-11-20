@@ -13,6 +13,8 @@ import shutil
 from pathlib import Path
 
 EXE_NAME = "windows-bridge.exe"
+PROTOCOL = 4
+CAPABILITY = "fail-closed-live-target-v1"
 FIXTURE_STATUS = Path("native-fixture-status.txt")
 EVIDENCE_FILES = (Path("native-fixture.log"), Path("native-compiler.log"), FIXTURE_STATUS)
 
@@ -50,8 +52,8 @@ def stage(executable: Path, artifact_dir: Path, source_sha: str) -> None:
         f"source={source_sha}\n"
         "target=x86_64-pc-windows-msvc\n"
         "rust_requested=1.97.1\n"
-        "protocol=4\n"
-        "capability=fail-closed-live-target-v1\n"
+        f"protocol={PROTOCOL}\n"
+        f"capability={CAPABILITY}\n"
         f"executable={executable_status}\n"
         f"fixture={fixture_status}\r\n"
     )

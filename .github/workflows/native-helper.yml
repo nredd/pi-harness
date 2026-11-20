@@ -84,13 +84,20 @@ jobs:
       RUSTUP_TOOLCHAIN: '1.97.1'
       HELPER_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out Windows helper source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        id: setup_uv
         with:
           version: "0.13.1"
+      # Resolve the same interpreter as staging before any build or fixture can run.
+      - name: Bootstrap pinned staging interpreter
+        id: bootstrap_python
+        shell: pwsh
+        run: uv run --no-project --python (Get-Content .python-version) python --version
       - name: Install pinned native toolchain
         shell: pwsh
         run: |
@@ -123,17 +130,37 @@ jobs:
             'PASS' | Set-Content -Encoding ascii native-fixture-status.txt
             'Native GUI fixture: PASS against only its own disposable windows.' >> $env:GITHUB_STEP_SUMMARY
           }
+      # Stage and upload the full payload only on bootstrap_python success. Otherwise
+      # (including skipped or cancelled bootstrap), write and upload only the receipt.
       - name: Stage source-bound executable without publishing or installing
-        if: always()
+        if: ${{ always() && steps.bootstrap_python.outcome == 'success' }}
         shell: pwsh
         run: >-
           uv run --no-project --python (Get-Content .python-version) python scripts/ci_native_helper.py --source-sha "$env:HELPER_SOURCE_SHA"
           --executable "packages/computer-use/native/windows/bridge-rs/target/x86_64-pc-windows-msvc/release/windows-bridge.exe"
           --artifact-dir native-helper-artifact
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Record Windows helper bootstrap failure
+        if: ${{ always() && steps.bootstrap_python.outcome != 'success' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force native-helper-artifact | Out-Null
+          # Keep this self-contained after checkout failure. Tests pin all shared fields against Python staging.
+          $receipt = @(
+            "source=$env:HELPER_SOURCE_SHA"
+            'target=x86_64-pc-windows-msvc'
+            "rust_requested=$env:RUSTUP_TOOLCHAIN"
+            'protocol=4'
+            'capability=fail-closed-live-target-v1'
+            'executable=NOT_BUILT'
+            'fixture=NOT_REACHED'
+            'staging=BOOTSTRAP_FAILED'
+          ) -join "`n"
+          Set-Content -LiteralPath native-helper-artifact/build.txt -Encoding ascii -NoNewline -Value "$receipt`r`n"
+      - name: Upload Windows helper evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: windows-helper-native-${{ github.event.pull_request.head.sha || github.sha }}
-          path: native-helper-artifact/*
+          path: ${{ steps.bootstrap_python.outcome == 'success' && 'native-helper-artifact/*' || 'native-helper-artifact/build.txt' }}
           if-no-files-found: error
           retention-days: 7

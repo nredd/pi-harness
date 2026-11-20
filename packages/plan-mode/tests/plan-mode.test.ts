@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import { planModeCompleted } from "../src/completion-tool.ts";
 import { FINALIZE_PLAN_PROMPT, RETRY_FINALIZE_PLAN_PROMPT } from "../src/finalization-request.ts";
 import planMode, {
@@ -195,7 +195,7 @@ test("completePlanArguments suggests management tokens only", () => {
 });
 
 test("missing settings reset a previously loaded fixed thinking level", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-reset-"));
+	const directory = makeTestTempDir("pi-plan-mode-settings-reset-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -212,12 +212,11 @@ test("missing settings reset a previously loaded fixed thinking level", async ()
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("malformed persisted Plan state fails closed", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-malformed-state-"));
+	const directory = makeTestTempDir("pi-plan-mode-malformed-state-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -245,12 +244,11 @@ test("malformed persisted Plan state fails closed", async () => {
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("inherit settings clear stale persisted thinking ownership", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-inherit-ownership-"));
+	const directory = makeTestTempDir("pi-plan-mode-inherit-ownership-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -278,12 +276,11 @@ test("inherit settings clear stale persisted thinking ownership", async () => {
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
 test("session resume restores active Plan state and required tools", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-resume-"));
+	const directory = makeTestTempDir("pi-plan-mode-resume-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -308,7 +305,6 @@ test("session resume restores active Plan state and required tools", async () =>
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
@@ -501,7 +497,7 @@ test("session restore recovers only valid completion details after the latest st
 });
 
 test("Plan thinking level restores only while the extension owns the applied value", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-agent-"));
+	const directory = makeTestTempDir("pi-plan-mode-agent-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -535,7 +531,6 @@ test("Plan thinking level restores only while the extension owns the applied val
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
@@ -550,7 +545,7 @@ test("Plan activation adds only its helpers to an intentionally empty active-too
 });
 
 test("manual thinking changes survive active Plan-mode shutdown and resume", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-manual-resume-"));
+	const directory = makeTestTempDir("pi-plan-mode-manual-resume-", onTestFinished);
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = directory;
 	try {
@@ -578,7 +573,6 @@ test("manual thinking changes survive active Plan-mode shutdown and resume", asy
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		await rm(directory, { recursive: true, force: true });
 	}
 });
 
