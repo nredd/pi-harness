@@ -14,7 +14,7 @@ import sys
 import time
 from itertools import pairwise
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from harness.fleet_load import make_sandboxes, streaming_script
 from harness.interactive import FIRST_FRAME_PATTERN
@@ -92,25 +92,38 @@ class ProbeMetrics(TypedDict):
     starts: list[dict[str, Any]]
 
 
-class RawCell(TypedDict):
+class MissingMeasuredWindows(RuntimeError):
+    """A started probe did not cover the measured interval."""
+
+
+class CellDelivery(TypedDict):
+    """Delivery observations that do not imply any measured latency."""
+
+    count: int
+    aggregate_cap: int | None
+    delivery: DeliveryRecord
+    delivered_bytes_per_s: float
+
+
+class RawCell(CellDelivery):
     """Retained driver/probe evidence, also when the cell is refused."""
 
-    count: int
-    aggregate_cap: int | None
-    delivery: DeliveryRecord
-    delivered_bytes_per_s: float
     raw_probes: list[list[dict[str, Any]]]
     failure: NotRequired[str]
+    status: NotRequired[Literal["NOT RUN"]]
 
 
-class Cell(TypedDict):
+class Cell(CellDelivery):
     """A complete cell; incomplete observations never construct this result."""
 
-    count: int
-    aggregate_cap: int | None
-    delivery: DeliveryRecord
-    delivered_bytes_per_s: float
     probe: ProbeMetrics
+
+
+class NotRunCell(CellDelivery):
+    """A capped eight-child attempt with delivery but no accepted probe metrics."""
+
+    status: Literal["NOT RUN"]
+    reason: str
 
 
 def _delivery_record(sample: Drain) -> DeliveryRecord:
@@ -207,7 +220,7 @@ def probe_metrics(outs: list[Path], since_ms: float, until_ms: float) -> ProbeMe
                 for left, right in pairwise(windows)
             )
         ):
-            raise RuntimeError("Missing measured latency windows")
+            raise MissingMeasuredWindows("Missing measured latency windows")
         reading = summarize(windows)
         if reading.bytes_per_s <= 0 or len(reading.input_to_paint_ms) < 4:
             raise RuntimeError("Missing measured terminal writes or input-to-paint samples")
@@ -220,7 +233,7 @@ def probe_metrics(outs: list[Path], since_ms: float, until_ms: float) -> ProbeMe
     }
 
 
-def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Cell:
+def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Cell | NotRunCell:
     """Run one bounded real interactive synthetic cell, without changing any baseline.
 
     Parameters:
@@ -230,7 +243,8 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
         cap (int | None): aggregate delivered byte rate, `None` for the uncapped control.
 
     Returns:
-        Cell: throughput and probe observations, not idle-host acceptance.
+        Cell | NotRunCell: throughput and probe observations, or explicit NOT RUN for the
+            capped eight-child cell with missing measured windows. Neither is idle-host acceptance.
     """
     if count not in (1, 4, 8) or cap not in (None, AGGREGATE_CAP):
         raise ValueError("Use fleet sizes 1/4/8 and the documented aggregate cap or control")
@@ -278,13 +292,13 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
                 next_key = time.monotonic() + KEY_INTERVAL_S
 
         delivery = fleet.drain(WINDOW_S, bytes_per_s=cap, tick=type_keys)
-        observations: RawCell = {
+        delivered: CellDelivery = {
             "count": count,
             "aggregate_cap": cap,
             "delivery": _delivery_record(delivery),
             "delivered_bytes_per_s": delivery.bytes_per_s,
-            "raw_probes": [read_records(out) for out in outs],
         }
+        observations: RawCell = {**delivered, "raw_probes": [read_records(out) for out in outs]}
         report = root / "throttled-pty.json"
         report.write_text(json.dumps(observations, indent=2))
         try:
@@ -293,13 +307,12 @@ def run_cell(root: Path, template_home: Path, count: int, cap: int | None) -> Ce
             metrics = probe_metrics(outs, since_ms, time.time() * 1000)
         except RuntimeError as error:
             observations["failure"] = str(error)
+            if count == 8 and cap == AGGREGATE_CAP and isinstance(error, MissingMeasuredWindows):
+                observations["status"] = "NOT RUN"
+                report.write_text(json.dumps(observations, indent=2))
+                LOGGER.warning(f"Capped eight-child latency NOT RUN: {error}; raw observations at '{report}'")
+                return {**delivered, "status": "NOT RUN", "reason": str(error)}
             report.write_text(json.dumps(observations, indent=2))
             LOGGER.error(f"Refused synthetic PTY observations: {json.dumps(observations)}")
             raise
-    return {
-        "count": count,
-        "aggregate_cap": cap,
-        "delivery": _delivery_record(delivery),
-        "delivered_bytes_per_s": delivery.bytes_per_s,
-        "probe": metrics,
-    }
+    return {**delivered, "probe": metrics}

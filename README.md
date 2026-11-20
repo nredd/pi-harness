@@ -528,7 +528,7 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 ### Throttled synthetic PTY experiment
 
 `tests/integration/scenarios/bench/test_throttled_pty.py` is a separate POSIX experiment
-(#977), dependent on the integration layout move in #884. It reuses the generated 2,000-message
+(#977). It reuses the generated 2,000-message
 session, faux provider, installed fixture homes and latency probe. No existing multisession
 threshold, history or baseline changes. From `tests/integration`, run serially on an admitted
 quiet runner with explicit `PI_BIN` and `--stack`:
@@ -547,10 +547,11 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   refuses absent writes, a writer heartbeat older than 0.5 seconds at the window end, low
   uncapped throughput, failure to deliver the capped rate, or no observed increase in completed
   write duration. Retain the raw calibration JSON, not just a
-  claimed cap. A hung writer, exited child, absent measured probe windows, missing terminal
-  output or fewer than four input-to-paint samples per child fails the experiment. Probe windows
+  claimed cap. A hung writer, exited child, failed probe startup, missing terminal output or
+  insufficient input-to-paint samples in measured windows fails the experiment. Probe windows
   must be contiguous (2 ms timestamp-rounding tolerance), with start/end coverage within one
-  second; a recent final heartbeat cannot hide an omitted interior interval.
+  second; a recent final heartbeat cannot hide an omitted interior interval. Missing measured
+  windows fail all cells except the capped eight-child cell, which reports `NOT RUN`.
 - The report separates actual delivered bytes/s from probe write volume, event-loop lag,
   synchronous write duration and raw input-to-paint samples. Input-to-paint is stdin receipt
   to the *next write invocation*, not terminal display or the rendering of that exact input.
@@ -563,9 +564,10 @@ uv run --locked pytest scenarios/bench/test_throttled_pty.py --stack stacks/loca
   zero-latency result. The 65,536 bytes/s condition measures a less severe terminal link;
   it does not replace or relax any existing performance ceiling.
 - A synthetic Node/Pi trial on macOS completed both 1/4-child conditions and the uncapped
-  8-child condition. The capped 8-child condition was refused for missing measured probe
-  windows, NOT recorded as a passing latency result. Failed cells retain raw probe records
-  and delivered-byte observations in their `throttled-pty.json` and error log.
+  8-child condition. Capped eight-child latency is `NOT RUN`: the attempt delivered output but
+  lacked measured probe windows. The suite report records the reason and throughput, with no
+  latency metrics, not even zeros. Raw records remain in the cell's `throttled-pty.json`.
+  #1096 tracks the complete eight-child measurement without raising the aggregate cap.
 - Busy-host functional execution is not idle performance acceptance. Native WSL2 and quiet-host
   baselines remain NOT RUN until actually measured. No ConPTY, terminal emulator or live-provider
   claim is made. The experiment requires only standard-library POSIX PTY operations in its driver.

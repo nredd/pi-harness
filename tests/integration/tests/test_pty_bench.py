@@ -94,23 +94,37 @@ def test_cell_refuses_unsupported_inputs(tmp_path: Path, count: int, cap: int | 
         run_cell(tmp_path / "cell", tmp_path / "missing", count, cap)
 
 
-@pytest.mark.parametrize("missing_output", [False, True])
-def test_cell_assembles_existing_fixtures_and_refuses_missing_delivery(
+@pytest.mark.parametrize(
+    ("count", "cap", "failure"),
+    [
+        (4, None, ""),
+        (8, pty_bench.AGGREGATE_CAP, ""),
+        (8, pty_bench.AGGREGATE_CAP, "delivered no output"),
+        (8, pty_bench.AGGREGATE_CAP, "not-started"),
+        (8, pty_bench.AGGREGATE_CAP, "Missing measured latency windows"),
+        (8, None, "Missing measured latency windows"),
+        (4, pty_bench.AGGREGATE_CAP, "Missing measured latency windows"),
+    ],
+)
+def test_cell_reports_latency_only_with_measured_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    missing_output: bool,
+    count: int,
+    cap: int | None,
+    failure: str,
 ) -> None:
-    """The adapter uses explicit faux/session/probe fixtures and samples every child."""
+    """Only missing measured windows in the capped eight-child cell yield NOT RUN."""
     template = build_sandbox(tmp_path / "template")
     monkeypatch.setenv("PI_BIN", sys.executable)
     sent: list[tuple[int, bytes]] = []
+    cell_root = tmp_path / "cell"
 
     class Fleet:
         """Recording boundary double; real interactive execution is a separate requirement."""
 
         def __init__(self, specs: list[Child]) -> None:
             self.specs = specs
-            assert len(specs) == 4
+            assert len(specs) == count
             assert all(Path(spec.env["HOME"]).is_relative_to(tmp_path / "cell") for spec in specs)
             assert all("HARNESS_SCRIPT" in spec.env for spec in specs)
 
@@ -131,23 +145,39 @@ def test_cell_assembles_existing_fixtures_and_refuses_missing_delivery(
                 kwargs["tick"](self)
                 time.sleep(0.16)
                 kwargs["tick"](self)
+                assert kwargs["bytes_per_s"] == cap
                 for spec in self.specs:
                     data = records()
                     data[1]["t"] = time.time() * 1000
                     data[1]["window_s"] = 0.01
+                    if failure == "Missing measured latency windows":
+                        data.pop()
+                    elif failure == "not-started":
+                        data.clear()
                     save(Path(spec.env["PI_LATENCY_PROBE"]), data)
-            return Drain((0 if missing_output else 100,) * 4, duration)
+            return Drain((0 if failure == "delivered no output" else 100,) * count, duration)
 
     monkeypatch.setattr(pty_bench, "PtyFleet", Fleet)
-    if missing_output:
-        with pytest.raises(RuntimeError, match="delivered no output"):
-            run_cell(tmp_path / "cell", template.home, 4, None)
+    not_run = count == 8 and cap is not None and failure == "Missing measured latency windows"
+    if failure and not not_run:
+        match = "did not start" if failure == "not-started" else failure
+        with pytest.raises(RuntimeError, match=match):
+            run_cell(cell_root, template.home, count, cap)
     else:
-        result = run_cell(tmp_path / "cell", template.home, 4, None)
-        assert result["count"] == 4
-        assert result["aggregate_cap"] is None
-        assert result["delivery"]["delivered"] == (100, 100, 100, 100)
-    assert sent == [(i, b"go\r") for i in range(4)] + [(i, b"x") for i in range(4)]
+        result = run_cell(cell_root, template.home, count, cap)
+        assert result["count"] == count
+        assert result["aggregate_cap"] == cap
+        assert result["delivery"]["delivered"] == (100,) * count
+        raw = json.loads((cell_root / "throttled-pty.json").read_text())
+        if not_run:
+            assert result.get("status") == raw["status"] == "NOT RUN"
+            assert result.get("reason") == raw["failure"] == failure
+            assert "probe" not in result
+            assert raw["raw_probes"] == [[{"kind": "start", "tui": True}]] * count
+        else:
+            assert "probe" in result
+            assert "status" not in result
+    assert sent == [(i, b"go\r") for i in range(count)] + [(i, b"x") for i in range(count)]
 
 
 @pytest.mark.parametrize(

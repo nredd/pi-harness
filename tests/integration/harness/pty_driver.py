@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
-from harness.process_group import kill_owned_group
+from pi_release.process_group import kill_owned_group
 
 if TYPE_CHECKING:
     from collections.abc import Callable
