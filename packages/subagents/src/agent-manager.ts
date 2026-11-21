@@ -1290,7 +1290,13 @@ export class AgentManager {
 			}
 		} catch (error) {
 			this.chargePool(record.chargedPool, -1);
-			throw error;
+			if (record.status === "running") throw error;
+			// An explicit stop already settled the record. Keep that outcome even
+			// if admission refused the model or threw while unwinding.
+			this.detachParentAbort(record);
+			this.releaseLease(record);
+			this.drainQueue();
+			return;
 		}
 
 		// Worktree isolation: try to create a temporary git worktree. Strict —
@@ -1737,9 +1743,8 @@ export class AgentManager {
 		// rethrown below, so the contract is the same either way.
 		await this.awaitStartup(id);
 
-		// undefined when it was aborted while queued, or stopped mid-copy, and so
-		// never ran — the record is already terminal with a completedAt, which is
-		// what the caller renders.
+		// Undefined if the agent stopped before the runner, whether queued, in
+		// admission or mid-copy. The caller renders the already terminal record.
 		if (record.promise) await record.promise;
 
 		// A record that ended "error" without ever getting a promise never ran: the
