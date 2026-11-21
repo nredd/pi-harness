@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
@@ -8,16 +8,18 @@ import path from "node:path";
 import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	type ActionState,
 	canRetryInForeground,
 	outcomeAfterCheck,
 	outcomeAfterObservedValues,
+	type PreparedAction,
 	prepareAction,
 	strictHeadlessRejection,
 	unsupportedActionRejection,
-	type ActionState,
-	type PreparedAction,
 } from "./actions.ts";
 import {
+	type CdpConsoleEntry,
+	type CdpPageSnapshot,
 	cdpClickForContext,
 	cdpDragForContext,
 	cdpEvaluateForContext,
@@ -31,61 +33,24 @@ import {
 	cdpTypeForContext,
 	disconnectCdp,
 	listCdpPageContexts,
-	type CdpConsoleEntry,
-	type CdpPageSnapshot,
 } from "./cdp.ts";
 import {
+	blockedAppId,
 	type ComputerUseConfig,
 	getComputerUseConfig,
-	isBlockedBundleId,
 	isBrowserUseEnabled,
 	isHeadlessMode,
 	loadComputerUseConfig,
 } from "./config.ts";
-import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
-import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
 import {
-	controlLine,
-	foldToBudget,
-	graftScopedOutline,
-	nodeByRef,
-	outlineNodeLabel,
-	outlineNodePath,
-	rankedTextMatch,
-	renderInteractiveControls,
-	restoreOutline,
-	searchOutline,
-	searchOutlineRanked,
-	serializeOutline,
-	serializeOutlineNodeShallow,
-	serializeOutlineSearchMatch,
-	type LookResponse,
-	type Outline,
-	type OutlineChange,
-	type OutlineDiff,
-	type OutlineNode,
-	type OutlineSearchMatch,
-	type SerializedOutline,
-	type SerializedOutlineNode,
-	type SerializedOutlineSearchMatch,
-} from "./outline.ts";
-import {
-	applyOutputEnvelope,
-	boundToolError,
-	clearStoredOutputs,
-	readStoredOutput,
-	UI_TEXT_PAGE_CHARS,
-} from "./output.ts";
-import {
-	AGENT_TOOL_NAMES,
 	type ActParams,
+	AGENT_TOOL_NAMES,
 	type EvaluateBrowserParams,
 	type ExpandUiParams,
+	type FindParams,
 	type ImageMode,
 	type InspectUiParams,
 	type LaunchBrowserParams,
-	type FindParams,
 	type NavigateBrowserParams,
 	type ObserveDetail,
 	type ObserveParams,
@@ -96,34 +61,70 @@ import {
 	type UiAction,
 	type WaitForParams,
 } from "./contract.ts";
+import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
+import { normalizeFindParams } from "./find-params.ts";
+import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import {
+	controlLine,
+	foldToBudget,
+	graftScopedOutline,
+	type LookResponse,
+	nodeByRef,
+	type Outline,
+	type OutlineChange,
+	type OutlineDiff,
+	type OutlineNode,
+	type OutlineSearchMatch,
+	outlineNodeLabel,
+	outlineNodePath,
+	rankedTextMatch,
+	renderInteractiveControls,
+	restoreOutline,
+	type SerializedOutline,
+	type SerializedOutlineNode,
+	type SerializedOutlineSearchMatch,
+	searchOutline,
+	searchOutlineRanked,
+	serializeOutline,
+	serializeOutlineNodeShallow,
+	serializeOutlineSearchMatch,
+} from "./outline.ts";
+import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
+import {
+	applyOutputEnvelope,
+	boundToolError,
+	clearStoredOutputs,
+	readStoredOutput,
+	UI_TEXT_PAGE_CHARS,
+} from "./output.ts";
+import type { PermissionStatus } from "./permissions.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import type {
 	FramePoints,
+	PlatformFrontmostResult as FrontmostResult,
 	HelperActPerformed,
 	HelperActResult,
+	PlatformApp as HelperApp,
+	PlatformRoot as HelperWindow,
 	NativeInputDelivery,
 	PlatformActRequest,
-	PlatformApp as HelperApp,
 	PlatformDiagnostics,
-	PlatformFrontmostResult as FrontmostResult,
-	PlatformRoot as HelperWindow,
+	PlatformRoot,
 } from "./platform/types.ts";
-import type { PermissionStatus } from "./permissions.ts";
-import { ResourceScheduler } from "./runtime.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
-import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
-import type { PlatformRoot } from "./platform/types.ts";
-import { SavedStates, type CurrentCapture, type CurrentTarget, type OperationState } from "./state.ts";
+import { ResourceScheduler } from "./runtime.ts";
+import { type CurrentCapture, type CurrentTarget, type OperationState, SavedStates } from "./state.ts";
 import { changesBetween, renderChanges, stabilizeRefs } from "./view.ts";
+
 export type {
 	ActParams,
 	EvaluateBrowserParams,
 	ExpandUiParams,
+	FindParams,
 	ImageMode,
 	InspectUiParams,
 	LaunchBrowserParams,
-	FindParams,
 	MouseButtonName,
 	NavigateBrowserParams,
 	ObserveParams,
@@ -370,6 +371,7 @@ interface ResolvedTarget extends CurrentTarget {
 interface WindowRefRecord {
 	ref: string;
 	appName: string;
+	appId?: string;
 	bundleId?: string;
 	pid: number;
 	windowTitle: string;
@@ -680,8 +682,9 @@ function emptyActivation(): ActivationFlags {
 	return { activated: false, unminimized: false, raised: false };
 }
 
-async function ensureReady(ctx: ExtensionContext, signal?: AbortSignal): Promise<void> {
-	loadComputerUseConfig(ctx.cwd);
+async function ensureReady(ctx: ExtensionContext, signal?: AbortSignal, preflight?: () => void): Promise<void> {
+	loadComputerUseConfig(ctx.cwd, currentPlatformBackend.name);
+	preflight?.();
 
 	throwIfAborted(signal);
 	const ready = await currentPlatformBackend.ensureReady(
@@ -789,11 +792,12 @@ class ComputerUseError extends Error {
 }
 
 /** Fail closed with `app_blocked` for password managers, credential UIs, terminals and system auth agents. */
-function assertAppNotBlocked(target: { appName: string; bundleId?: string }): void {
-	if (!isBlockedBundleId(target.bundleId)) return;
+function assertAppNotBlocked(target: Pick<HelperApp, "appName" | "appId" | "bundleId">): void {
+	const id = blockedAppId(currentPlatformBackend.name, target);
+	if (!id) return;
 	throw new ComputerUseError(
 		"app_blocked",
-		`app_blocked: '${target.appName}' (${target.bundleId}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
+		`app_blocked: '${target.appName}' (${id}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
 	);
 }
 
@@ -839,6 +843,7 @@ function storeBrowserRootRef(contextId: string): string {
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
 	return storeWindowRef({
 		appName: app.appName,
+		appId: window.appId ?? app.appId,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -889,6 +894,7 @@ function chooseRankedWindowOrUndefined(windows: HelperWindow[]): HelperWindow | 
 function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget {
 	const baseTarget = {
 		appName: app.appName,
+		appId: window.appId ?? app.appId,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -923,6 +929,7 @@ function setCurrentTarget(target: ResolvedTarget): void {
 	assertAppNotBlocked(target);
 	operationState().currentTarget = {
 		appName: target.appName,
+		appId: target.appId,
 		bundleId: target.bundleId,
 		pid: target.pid,
 		windowTitle: target.windowTitle,
@@ -947,7 +954,8 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 	if (!fromRef) {
 		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
-	const app: HelperApp = { appName: fromRef.appName, bundleId: fromRef.bundleId, pid: fromRef.pid };
+	assertAppNotBlocked(fromRef);
+	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
 	const match =
 		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
@@ -972,6 +980,7 @@ async function resolveCurrentTarget(
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
+	assertAppNotBlocked(current);
 	const windows = await listWindows(current.pid, signal);
 	if (!windows.length) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
@@ -1022,6 +1031,7 @@ async function resolveCurrentTarget(
 
 	const app: HelperApp = {
 		appName: current.appName,
+		appId: current.appId,
 		bundleId: current.bundleId,
 		pid: current.pid,
 	};
@@ -1033,12 +1043,15 @@ async function resolveCurrentTarget(
 
 async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTarget> {
 	const frontmost = await getFrontmost(signal);
+	assertAppNotBlocked(frontmost);
 	const apps = await listApps(signal);
 	const app = apps.find((candidate) => candidate.pid === frontmost.pid) ?? {
 		appName: frontmost.appName,
+		appId: frontmost.appId,
 		bundleId: frontmost.bundleId,
 		pid: frontmost.pid,
 	};
+	assertAppNotBlocked(app);
 
 	const windows = await listWindows(frontmost.pid, signal);
 	if (!windows.length) {
@@ -1483,7 +1496,9 @@ function windowDetails(
 		pairing: platformRootPairing(window),
 		zOrder: window.zOrder,
 		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
-		blocked: isBlockedBundleId(app.bundleId),
+		blocked:
+			blockedAppId(currentPlatformBackend.name, { appId: window.appId ?? app.appId, bundleId: app.bundleId }) !==
+			undefined,
 		score: scoreWindow(window),
 	};
 }
@@ -2203,7 +2218,7 @@ async function performExpandUi(
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	let outline = currentOutlineOrThrow();
+	const outline = currentOutlineOrThrow();
 	const ref = trimOrUndefined(params.ref);
 	if (!ref) throw new Error("expand_ui.ref is required.");
 	const initialTarget = nodeByRef(outline, ref);
@@ -2445,7 +2460,7 @@ function extensionRefForNative(pid: number, nativeRef: string): string | undefin
  */
 export async function normalizeRootDeltaRefs(
 	execution: ExecutionTrace,
-	target: Pick<ResolvedTarget, "pid" | "appName" | "bundleId">,
+	target: Pick<ResolvedTarget, "pid" | "appName" | "appId" | "bundleId">,
 ): Promise<void> {
 	if (!execution.rootDelta?.length) return;
 	const rootsByPid = new Map<number, PlatformRoot[]>();
@@ -2466,6 +2481,7 @@ export async function normalizeRootDeltaRefs(
 				const sameApp = delta.pid === target.pid;
 				const app: HelperApp = {
 					appName: sameApp ? target.appName : (root.appName ?? "Unknown App"),
+					appId: sameApp ? target.appId : root.appId,
 					bundleId: sameApp ? target.bundleId : root.bundleId,
 					pid: delta.pid,
 				};
@@ -3567,7 +3583,21 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 	});
 }
 
+/** A known blocked root must not even reach helper readiness or root re-resolution. */
+function assertKnownRootNotBlocked(tool: string, root: unknown, outputRef: boolean): void {
+	if (tool === "observe_ui" && root !== undefined) {
+		const known = typeof root === "string" ? runtimeState.windowRefs.get(root) : undefined;
+		if (known) assertAppNotBlocked(known);
+		return;
+	}
+	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {
+		const target = operationState().currentTarget;
+		if (target) assertAppNotBlocked(target);
+	}
+}
+
 async function executeTool<P, T>(
+	tool: string,
 	ctx: ExtensionContext,
 	params: P,
 	signal: AbortSignal | undefined,
@@ -3584,7 +3614,9 @@ async function executeTool<P, T>(
 	const operation = savedStates.hydrate(stateRecord);
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
-			await ensureReady(ctx, signal);
+			await ensureReady(ctx, signal, () =>
+				assertKnownRootNotBlocked(tool, (params as { root?: unknown } | undefined)?.root, outputRef),
+			);
 			throwIfAborted(signal);
 			// Start the tool before releasing readiness: launch_browser joins its lifecycle
 			// synchronously, so shutdown cannot drain readiness and overtake that launch.
@@ -3611,7 +3643,7 @@ function makeToolExecutor<P, D>(
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
 		try {
-			return applyOutputEnvelope(tool, await executeTool(ctx, params, signal, () => perform(params, signal)));
+			return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)));
 		} catch (error) {
 			throw boundToolError(tool, error);
 		}

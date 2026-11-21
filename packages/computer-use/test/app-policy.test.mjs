@@ -24,6 +24,29 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 		"../src/config.ts"
 	);
 	assert.deepEqual([...ALWAYS_BLOCKED_BUNDLE_IDS], SYSTEM_AGENTS);
+	assert.deepEqual(
+		[...DEFAULT_BLOCKED_APPS],
+		[
+			"com.apple.keychainaccess",
+			"com.apple.Passwords",
+			"com.1password.1password",
+			"com.1password.1password7",
+			"com.agilebits.onepassword7",
+			"com.agilebits.onepassword-osx-helper",
+			"com.bitwarden.desktop",
+			"com.lastpass.LastPass",
+			"com.dashlane.dashlanephonefinal",
+			"org.keepassxc.keepassxc",
+			"com.apple.Terminal",
+			"com.googlecode.iterm2",
+			"net.kovidgoyal.kitty",
+			"com.mitchellh.ghostty",
+			"dev.warp.Warp-Stable",
+			"co.zeit.hyper",
+			"org.alacritty",
+			"com.github.wez.wezterm",
+		],
+	);
 	const agentDir = makeTestTempDir("cu-agent-", onTestFinished);
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -34,7 +57,7 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 	mkdirSync(path.join(agentDir, "extensions"));
 	const userFile = path.join(agentDir, "extensions", "pi-computer-use.json");
 	const cwd = makeTestTempDir("cu-policy-", onTestFinished);
-	const load = () => loadComputerUseConfig(cwd);
+	const load = () => loadComputerUseConfig(cwd, "macos");
 	const list = () => load().config.blocked_apps;
 
 	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], "default list applies with no config");
@@ -110,7 +133,7 @@ test("blocked_apps: invalid entries are a config error that keeps the defaults",
 		{ a: 1 },
 	]) {
 		writeFileSync(userFile, JSON.stringify({ blocked_apps: bad }));
-		const loaded = loadComputerUseConfig(cwd);
+		const loaded = loadComputerUseConfig(cwd, "macos");
 		assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS], `${JSON.stringify(bad)} keeps defaults`);
 		assert.equal(loaded.blockedAppsErrors.length, 1, JSON.stringify(bad));
 		assert.match(loaded.blockedAppsErrors[0], /blocked_apps/);
@@ -131,7 +154,7 @@ test("project config can only add to blocked_apps, never remove", async ({ onTes
 	const cwd = makeTestTempDir("cu-policy-", onTestFinished);
 	mkdirSync(path.join(cwd, ".pi"));
 	const projectFile = path.join(cwd, ".pi", "computer-use.json");
-	const list = () => loadComputerUseConfig(cwd).config.blocked_apps;
+	const list = () => loadComputerUseConfig(cwd, "macos").config.blocked_apps;
 
 	writeFileSync(projectFile, JSON.stringify({ blocked_apps: [] }));
 	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], "project [] cannot opt out");
@@ -139,7 +162,7 @@ test("project config can only add to blocked_apps, never remove", async ({ onTes
 	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS, "com.example.Vault"], "project ids are unioned");
 	assert.ok(isBlockedBundleId("com.example.vault"));
 	writeFileSync(projectFile, JSON.stringify({ blocked_apps: [123] }));
-	const loaded = loadComputerUseConfig(cwd);
+	const loaded = loadComputerUseConfig(cwd, "macos");
 	assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS]);
 	assert.equal(loaded.blockedAppsErrors.length, 1, "invalid project entries are surfaced");
 
@@ -444,6 +467,7 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 			timings: { captureMs: 0, describeMs: 0, readTextMs: 0 },
 		});
 	Object.assign(currentPlatformBackend, {
+		name: "macos",
 		ensureReady: async () => ({
 			permissionStatus: { accessibility: true, screenRecording: true },
 			lastPermissionCheckAt: Date.now(),
@@ -539,7 +563,8 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 			);
 		}
 	});
-	// A non-darwin backend has no implementation: coded unsupported_command, nothing delivered.
+	// On an allowed target, a non-darwin backend has no implementation: coded unsupported_command.
+	delete process.env[ENV];
 	await withPlatform("linux", async () => {
 		for (const action of newActions) {
 			await assert.rejects(
@@ -551,6 +576,7 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 			);
 		}
 	});
+	process.env[ENV] = "com.example.Safe";
 	assert.equal(calls.act, 0, "blocked act_ui must not deliver input");
 	const readCalls = [];
 	currentPlatformBackend.readText = async (request) => {
@@ -659,4 +685,106 @@ test("macOS act and actBatch send the effective blocklist so coordinate input is
 	assert.equal(sent[1].name, "actBatch");
 	assert.equal(sent[1].args.actions.length, 2);
 	for (const action of sent[1].args.actions) assert.deepEqual(action.blockedBundleIds, expected);
+});
+
+async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
+	const { currentPlatformBackend, platformBackendForRuntime } = await import("../src/platform/index.ts");
+	const { executeFind, executeObserve } = await import("../src/bridge.ts");
+	const original = { ...currentPlatformBackend };
+	const backend = { ...platformBackendForRuntime(platform) };
+	const originalCommand = helper.command;
+	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const cwd = makeTestTempDir("cu-host-policy-", onTestFinished);
+	process.env.PI_CODING_AGENT_DIR = cwd;
+	delete process.env[ENV];
+	onTestFinished(() => {
+		Object.assign(currentPlatformBackend, original);
+		helper.command = originalCommand;
+		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+	});
+	const calls = [];
+	Object.assign(currentPlatformBackend, backend, {
+		ensureReady: async (_ctx, state) => {
+			calls.push("ensureReady");
+			return state;
+		},
+	});
+	helper.command = async (name, args) => {
+		calls.push(name);
+		assert.equal(name, "listRoots");
+		assert.deepEqual(Object.keys(args), args.pid ? ["pid"] : [], "never forward the blocklist");
+		return { roots: args.pid ? roots.filter((root) => root.pid === args.pid) : roots };
+	};
+	mkdirSync(path.join(cwd, "extensions"));
+	const userFile = path.join(cwd, "extensions", "pi-computer-use.json");
+	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
+	const find = async (params = {}) => (await executeFind("t", params, undefined, undefined, ctx)).details.windows;
+	const observe = (root) => executeObserve("t", { root, mode: "semantic" }, undefined, undefined, ctx);
+	return { calls, find, observe, userFile };
+}
+
+function policyRoot(pid, appName, processName, bundleId) {
+	return {
+		kind: "window",
+		rootRef: String(pid),
+		pid,
+		title: appName,
+		appName,
+		processName,
+		bundleId,
+		isFocused: pid === 101,
+	};
+}
+
+test("Windows blocks known roots by executable before helper calls, not by display name or bundle id", async ({
+	onTestFinished,
+}) => {
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const roots = [
+		policyRoot(101, "Console", "wINDOWStERMINAL.EXE"),
+		policyRoot(102, "Elevated UI", "CoNsEnT.ExE"),
+		policyRoot(103, "Private vault", "Vault.EXE"),
+		policyRoot(104, "Vault.EXE", "safe.exe", "VAULT.exe"),
+		policyRoot(105, "WindowsTerminal.exe", undefined, "WindowsTerminal.exe"),
+	];
+	const { calls, find, observe, userFile } = await useRootPolicyFixture("win32", windowsHelper, roots, onTestFinished);
+	const byPid = (windows, pid) => windows.find((root) => root.pid === pid);
+	const discovered = await find();
+	assert.equal(byPid(discovered, 101).blocked, true);
+	assert.equal(byPid(discovered, 102).blocked, true);
+	assert.equal(byPid(discovered, 103).blocked, false);
+	assert.equal(byPid(discovered, 105).blocked, false);
+	assert.equal(byPid(await find({ pid: 101 }), 101).blocked, true);
+	calls.length = 0;
+	await assert.rejects(observe(byPid(discovered, 101).windowRef), { code: "app_blocked" });
+	assert.deepEqual(calls, [], "blocked selection must not reach readiness, discovery, or observation");
+
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["vAuLt.exe"] }));
+	await assert.rejects(observe(byPid(discovered, 103).windowRef), { code: "app_blocked" });
+	assert.deepEqual(calls, [], "a newly blocked saved root must not reach the helper");
+	const configured = await find();
+	assert.equal(byPid(configured, 101).blocked, false, "a user-global list replaces defaults");
+	assert.equal(byPid(configured, 102).blocked, true, "always-blocked entries survive replacement");
+	assert.equal(byPid(configured, 103).blocked, true);
+	assert.equal(byPid(configured, 104).blocked, false, "neither the title nor the bundle id is a Windows identity");
+});
+
+test("Linux maps the helper name but never treats it as a policy identity", async ({ onTestFinished }) => {
+	const { linuxHelper } = await import("../src/platform/linux/helper.ts");
+	const { linuxBackend } = await import("../src/platform/linux/backend.ts");
+	const { getComputerUseConfig } = await import("../src/config.ts");
+	const roots = [policyRoot(101, "Terminal label", "xterm"), policyRoot(102, "Vault label", "my-vault")];
+	const { find, userFile } = await useRootPolicyFixture("linux", linuxHelper, roots, onTestFinished);
+	assert.equal((await linuxBackend.listRoots({}))[0].appId, "xterm");
+	assert.equal(
+		(await find()).some((root) => root.blocked),
+		false,
+	);
+	assert.ok(getComputerUseConfig().blocked_apps.includes("xterm"));
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["my-vault"] }));
+	assert.equal(
+		(await find()).some((root) => root.blocked),
+		false,
+	);
 });
