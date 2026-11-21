@@ -13,14 +13,24 @@ import errno
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
+from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
+GIT_LOCATIONS = ("/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git")
+BIN_DIRS = (
+    Path("/usr/bin"),
+    Path("/opt/homebrew/bin"),
+    Path("/usr/local/bin"),
+    Path("/usr/sbin"),
+)
+GIT_BINARY: ContextVar[Path | None] = ContextVar("GIT_BINARY", default=None)
 TIMEOUT = 30
+MAX_TREE_ENTRIES = 100_000
 QUIET_SECONDS = 3600
 PR_FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
 OPERATIONS = (
@@ -36,6 +46,9 @@ SOURCE = re.compile(
     r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$"
 )
 OID = re.compile(rb"(?:[a-f0-9]{40}|[a-f0-9]{64})")
+REFLOG = re.compile(
+    rb"([a-f0-9]+) ([a-f0-9]+) [^\n<>]+ <[^\n<>]*> [0-9]+ [+-][0-9]{4}(?:\t[^\n\0]*)?"
+)
 REPO_ENV = {
     "GIT_DIR",
     "GIT_COMMON_DIR",
@@ -69,16 +82,50 @@ SCAN_ERRORS = (
 )
 
 
+@lru_cache(maxsize=16)
+def binary(locations: tuple[str, ...], label: str) -> Path:
+    """Resolve an executable from explicit absolute candidate locations.
+
+    Parameters:
+        locations: tuple[str, ...], Candidate executable paths.
+        label: str, Name to use in diagnostics.
+    Returns:
+        Path: Resolved executable
+    Raises:
+        KeepError: No trusted executable is available.
+    """
+    for location in locations:
+        path = Path(location)
+        if path.is_absolute() and path.is_file() and os.access(path, os.X_OK):
+            return path.resolve(strict=True)
+    raise KeepError(f"missing trusted executable for `{label}`")
+
+
 def out(
-    tool: str, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False
+    executable: Path,
+    label: str,
+    *args: str,
+    data: bytes = b"",
+    missing: int = 0,
+    silent: bool = False,
 ) -> bytes:
-    """Run a bounded command; diagnostics or unexpected exit codes require keeping."""
-    executable = shutil.which(tool)
-    if executable is None:
-        raise KeepError(f"missing `{tool}`")
+    """Run a bounded command; diagnostics or unexpected exit codes require keeping.
+
+    Parameters:
+        executable: Path, Absolute executable path.
+        label: str, Name to use in diagnostics.
+        args: str, Positional command arguments.
+        data: bytes, Raw evidence or input bytes.
+        missing: int, Additional accepted exit status.
+        silent: bool, Require empty standard output.
+    Returns:
+        bytes: Command stdout
+    Raises:
+        KeepError: The command times out, fails or emits diagnostics.
+    """
     try:
         done = subprocess.run(
-            [os.path.abspath(executable), *args],
+            [str(executable), *args],
             input=data,
             capture_output=True,
             check=False,
@@ -92,10 +139,10 @@ def out(
             },
         )
     except subprocess.TimeoutExpired as exc:
-        raise KeepError(f"`{tool}` timed out") from exc
+        raise KeepError(f"`{label}` timed out") from exc
     if done.stderr or done.returncode not in (0, missing) or (silent and done.stdout):
         raise KeepError(
-            f"`{tool}` {args[5:7] if tool == 'git' else args[:2]} failed ({done.returncode}): {done.stderr!r}"
+            f"`{label}` failed ({done.returncode}): {done.stderr!r}"
             + (f" {done.stdout!r}" if silent else "")
         )
     return done.stdout
@@ -104,12 +151,27 @@ def out(
 def git(
     path: Path, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False
 ) -> bytes:
-    """Run Git without optional writes (including status index refresh)."""
+    """Run Git without optional writes (including status index refresh).
+
+    Parameters:
+        path: Path, Candidate checkout.
+        args: str, Positional command arguments.
+        data: bytes, Raw evidence or input bytes.
+        missing: int, Additional accepted exit status.
+        silent: bool, Require empty standard output.
+    Returns:
+        bytes: Git stdout
+    Raises:
+        KeepError: Git cannot establish the requested evidence.
+    """
     return out(
-        "git",
+        GIT_BINARY.get() or binary(GIT_LOCATIONS, "git"),
+        "git " + " ".join(args[:2]),
         "--no-optional-locks",
         "-c",
         "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
         "-C",
         str(path),
         *args,
@@ -120,7 +182,15 @@ def git(
 
 
 def present(path: Path) -> bool:
-    """Count dangling symlinks as present; only ENOENT proves absence."""
+    """Count dangling symlinks as present; only ENOENT proves absence.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+    Returns:
+        bool: Whether the directory entry exists
+    Raises:
+        KeepError: Absence cannot be established.
+    """
     try:
         path.lstat()
     except OSError as exc:
@@ -131,30 +201,117 @@ def present(path: Path) -> bool:
 
 
 def inside(path: Path, root: Path) -> bool:
-    """Test containment of already resolved paths."""
+    """Test containment of already resolved paths.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        root: Path, Resolved containment root.
+    Returns:
+        bool: Whether the path lies within the root
+    Raises:
+        None.
+    """
     return path == root or root in path.parents
 
 
 def config(path: Path, key: str, *opts: str) -> str:
-    """Read a single effective setting, allowing Git's missing-key status."""
+    """Read a single effective setting, allowing Git's missing-key status.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        key: str, Configuration key.
+        opts: str, Additional scan or command options.
+    Returns:
+        str: Effective configuration value, or empty if absent
+    Raises:
+        KeepError: Git cannot read the value.
+    """
     value = git(path, "config", *opts, "--get", key, missing=1).decode()
     return value[:-1]
 
 
 def inventory(repo: Path) -> list[tuple[Path, list[bytes]]]:
-    """Read NUL-delimited worktree metadata without interpreting path characters."""
-    return [
-        (Path(os.fsdecode(fields[0][len(b"worktree ") :])), fields[1:])
-        for record in git(repo, "worktree", "list", "--porcelain", "-z").split(b"\0\0")
-        if record
-        for fields in [record.rstrip(b"\0").split(b"\0")]
-    ]
+    """Read NUL-delimited worktree metadata without interpreting path characters.
+
+    Parameters:
+        repo: Path, Repository owning the worktrees.
+    Returns:
+        list[tuple[Path, list[bytes]]]: Validated worktree paths and records
+    Raises:
+        KeepError: Git cannot produce a valid inventory.
+    """
+    return parse_inventory(git(repo, "worktree", "list", "--porcelain", "-z"))
+
+
+def parse_inventory(data: bytes) -> list[tuple[Path, list[bytes]]]:
+    """Validate every record before allowing any candidate.
+
+    Parameters:
+        data: bytes, Raw evidence or input bytes.
+    Returns:
+        list[tuple[Path, list[bytes]]]: Validated worktree paths and records
+    Raises:
+        KeepError: A record is incomplete, duplicate or malformed.
+    """
+    if not data.endswith(b"\0\0"):
+        raise KeepError("incomplete worktree inventory")
+    records = []
+    seen = set()
+    for record in data[:-2].split(b"\0\0"):
+        location, *fields = record.split(b"\0")
+        path = Path(os.fsdecode(location[9:]))
+        if (
+            not location.startswith(b"worktree ")
+            or not path.is_absolute()
+            or path in seen
+        ):
+            raise KeepError("invalid worktree inventory path")
+        validate_fields(fields)
+        seen.add(path)
+        records.append((path, fields))
+    return records
+
+
+def validate_fields(fields: list[bytes]) -> None:
+    """Require documented porcelain fields in their published order.
+
+    Parameters:
+        fields: list[bytes], Porcelain fields for one record.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
+    core = fields[:1] if fields[:1] == [b"bare"] else fields[:2]
+    if core != [b"bare"] and (
+        len(core) != 2
+        or not core[0].startswith(b"HEAD ")
+        or not OID.fullmatch(core[0][5:])
+        or not (
+            core[1] == b"detached"
+            or (core[1].startswith(b"branch refs/heads/") and len(core[1]) > 18)
+        )
+    ):
+        raise KeepError("invalid worktree inventory identity")
+    tags = [field.partition(b" ")[0] for field in fields[len(core) :]]
+    if tags not in ([], [b"locked"], [b"prunable"], [b"locked", b"prunable"]):
+        raise KeepError("unknown or duplicate worktree inventory field")
 
 
 def check_admin(
     repo: Path, common: Path, records: list[tuple[Path, list[bytes]]]
 ) -> None:
-    """Keep globally when pruning could orphan an admin dir or Git reports prune output."""
+    """Keep globally when pruning could orphan an admin dir or Git reports prune output.
+
+    Parameters:
+        repo: Path, Repository owning the worktrees.
+        common: Path, Common Git metadata directory.
+        records: list[tuple[Path, list[bytes]]], Original worktree inventory.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     for path, fields in records:
         if any(
             field == b"prunable" or field.startswith(b"prunable ") for field in fields
@@ -177,13 +334,27 @@ def check_admin(
     git(repo, "worktree", "prune", "--dry-run", "--verbose", silent=True)
 
 
-def check_activity(path: Path, admin: Path, holds: set[Path], now: float) -> None:
-    """Hold known owned work, active process cwd paths and recently touched worktrees."""
+def check_activity(
+    path: Path, admin: Path, holds: set[Path], now: float, lsof: Path
+) -> None:
+    """Hold known owned work, active process cwd paths and recently touched worktrees.
+
+    Parameters:
+        path: Path, Candidate checkout.
+        admin: Path, Candidate metadata directory.
+        holds: set[Path], Known ownership and retention holds.
+        now: float, Scan start time in epoch seconds.
+        lsof: Path, Absolute process snapshot command.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     if path in holds:
         raise KeepError("recorded owner or retained claimed directory")
     if inside(Path.cwd().resolve(), path):
         raise KeepError("current directory is inside worktree")
-    cwd_fields = out("lsof", "-d", "cwd", "-F0n").split(b"\0")
+    cwd_fields = out(lsof, "lsof cwd", "-d", "cwd", "-F0n").split(b"\0")
     cwd_paths = [
         field[1:]
         for item in cwd_fields
@@ -199,7 +370,15 @@ def check_activity(path: Path, admin: Path, holds: set[Path], now: float) -> Non
 
 
 def gitlinks(path: Path) -> list[Path]:
-    """Locate gitlinks even if the superproject config ignores submodule status."""
+    """Locate gitlinks even if the superproject config ignores submodule status.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+    Returns:
+        list[Path].
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     return [
         path / os.fsdecode(record.split(b"\t", 1)[1])
         for record in git(path, "ls-files", "--stage", "-z").split(b"\0")
@@ -208,31 +387,30 @@ def gitlinks(path: Path) -> list[Path]:
 
 
 def check_status(path: Path, admin: Path) -> None:
-    """Protect dirty, hidden, ignored and nested work; never authorize a forced removal."""
-    for submodule in gitlinks(path):
-        if present(submodule / ".git"):
-            if git(
-                submodule,
-                "status",
-                "--porcelain",
-                "--ignored",
-                "--untracked-files=all",
-                "--ignore-submodules=none",
-            ):
-                raise KeepError(f"submodule dirty: {str(submodule)!r}")
-            # Even a clean submodule can have unpublished refs or a reflog only in this gitdir.
-            raise KeepError(
-                f"initialized submodule may contain unpushed commits: {str(submodule)!r}"
-            )
+    """Protect dirty, hidden, ignored and nested work; never authorize a forced removal.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        admin: Path, Candidate metadata directory.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     if present(admin / "modules"):
         raise KeepError("retained submodule gitdir")
+    # Even a clean submodule can have unpublished refs; status could run its filters.
+    modules = gitlinks(path)
+    if modules:
+        raise KeepError(f"registered submodule: {modules!r}")
+    check_nested(path)
     status = git(
         path,
         "status",
         "--porcelain",
         "--ignored",
         "--untracked-files=all",
-        "--ignore-submodules=none",
+        "--ignore-submodules=all",
         "-z",
     )
     if status:
@@ -249,11 +427,53 @@ def check_status(path: Path, admin: Path) -> None:
             raise KeepError(f"`{key}` is enabled")
 
 
+def check_nested(path: Path) -> None:
+    """Bound a no-symlink walk independently of Git's status traversal.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
+    pending = [path]
+    entries = 0
+    deadline = time.monotonic() + TIMEOUT
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as children:
+            for entry in children:
+                entries += 1
+                if entries > MAX_TREE_ENTRIES or time.monotonic() > deadline:
+                    raise KeepError("incomplete nested repository scan")
+                if directory != path and entry.name.lower() == ".git":
+                    raise KeepError(f"nested Git metadata: {entry.path!r}")
+                if entry.name.lower() != ".git" and entry.is_dir(follow_symlinks=False):
+                    pending.append(Path(entry.path))
+
+
 def check_borrowed(
-    path: Path, admin: Path, common: Path, records: list[tuple[Path, list[bytes]]]
+    path: Path,
+    admin: Path,
+    common: Path,
+    records: list[tuple[Path, list[bytes]]],
+    borrower_gitdirs: tuple[Path, ...] = (),
 ) -> None:
-    """Inspect registered checkouts and module stores for paths into the candidate."""
-    roots = [common, common / "worktrees"]
+    """Inspect registered checkouts and module stores for paths into the candidate.
+
+    Parameters:
+        path: Path, Candidate checkout.
+        admin: Path, Candidate metadata directory.
+        common: Path, Common Git metadata directory.
+        records: list[tuple[Path, list[bytes]]], Original worktree inventory.
+        borrower_gitdirs: tuple[Path, ...], External metadata roots from a closed fixture scope.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
+    roots = [common, common / "worktrees", *borrower_gitdirs]
     others = [
         other
         for other, fields in records
@@ -262,6 +482,8 @@ def check_borrowed(
     seen = set()
     while others:
         other = others.pop().resolve(strict=True)
+        if inside(other, path):
+            raise KeepError(f"another checkout is inside the candidate: {str(other)!r}")
         if other in seen:
             continue
         seen.add(other)
@@ -275,10 +497,34 @@ def check_borrowed(
             submodule for submodule in gitlinks(other) if present(submodule / ".git")
         )
 
-    def fail(error: OSError) -> None:
-        """Never interpret an incomplete filesystem walk as proof."""
-        raise error
+    check_stores(path, admin, roots)
 
+
+def fail(error: OSError) -> None:
+    """Never interpret an incomplete filesystem walk as proof.
+
+    Parameters:
+        error: OSError, Directory traversal failure.
+    Returns:
+        None.
+    Raises:
+        OSError: The original filesystem error.
+    """
+    raise error
+
+
+def check_stores(path: Path, admin: Path, roots: list[Path]) -> None:
+    """Verify the known Git metadata roots, without following filesystem aliases.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        admin: Path, Candidate metadata directory.
+        roots: list[Path], Metadata roots to scan.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     for root in dict.fromkeys(roots):
         for directory, dirs, names in os.walk(root, onerror=fail):
             current = Path(directory)
@@ -315,7 +561,16 @@ def check_borrowed(
 
 
 def check_history(path: Path, admin: Path) -> None:
-    """Protect worktree-local refs, operations, reflog-only commits and raw filtered files."""
+    """Protect worktree-local refs, operations, reflog-only commits and raw filtered files.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        admin: Path, Candidate metadata directory.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     local_refs = git(
         path,
         "for-each-ref",
@@ -323,17 +578,14 @@ def check_history(path: Path, admin: Path) -> None:
         "refs/worktree",
         "refs/bisect",
         "refs/rewritten",
+        "refs/stash",
     )
     if local_refs:
-        raise KeepError(f"worktree-local refs: {local_refs!r}")
+        raise KeepError(f"worktree-local refs or stash: {local_refs!r}")
     for name in OPERATIONS:
         if present(admin / name):
             raise KeepError(f"in-progress operation `{name}`")
-    # `reflog show HEAD` can fall back to the branch log even when this file is empty.
-    log = admin / "logs" / "HEAD"
-    if not log.stat().st_size:
-        raise KeepError("empty HEAD reflog")
-    reflog = set(git(path, "reflog", "show", "--format=%H", "HEAD").splitlines())
+    reflog = reflog_oids((admin / "logs" / "HEAD").read_bytes())
     missing = sorted(reflog.difference(git(path, "rev-list", "--all").splitlines()))
     if missing:
         raise KeepError(f"HEAD reflog commits outside refs: {missing!r}")
@@ -341,10 +593,54 @@ def check_history(path: Path, admin: Path) -> None:
         path, "check-attr", "-z", "--stdin", "-a", data=git(path, "ls-files", "-z")
     )
     check_attributes(attrs)
+    if git(
+        path, "config", "--null", "--get", "core.autocrlf", missing=1
+    ).lower() not in (b"", b"false\0"):
+        raise KeepError("conversion config: core.autocrlf")
+    for key in ("core.eol", "core.safecrlf"):
+        if git(path, "config", "--null", "--get", key, missing=1):
+            raise KeepError(f"conversion config: {key}")
+
+
+def reflog_oids(data: bytes) -> set[bytes]:
+    """Read both old and new object IDs without Git dropping malformed records.
+
+    Parameters:
+        data: bytes, Raw evidence or input bytes.
+    Returns:
+        set[bytes]: Nonzero old and new object IDs
+    Raises:
+        KeepError: The log is incomplete or malformed.
+    """
+    if not data:
+        raise KeepError("empty HEAD reflog")
+    if not data.endswith(b"\n"):
+        raise KeepError("incomplete HEAD reflog")
+    oids = set()
+    for record in data[:-1].split(b"\n"):
+        match = REFLOG.fullmatch(record)
+        if match is None:
+            raise KeepError("malformed HEAD reflog record")
+        for oid in match.groups():
+            if not OID.fullmatch(oid):
+                raise KeepError("malformed HEAD reflog OID")
+            if oid.strip(b"0"):
+                oids.add(oid)
+    if not oids:
+        raise KeepError("no HEAD reflog commit evidence")
+    return oids
 
 
 def check_attributes(attrs: bytes) -> None:
-    """Reject invalid NUL-delimited attribute records or any filter attribute."""
+    """Reject invalid NUL-delimited attribute records or any filter attribute.
+
+    Parameters:
+        attrs: bytes, NUL-delimited attribute triples.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     fields = attrs.split(b"\0")
     if fields[-1] or (len(fields) - 1) % 3:
         raise KeepError("malformed attribute scan")
@@ -352,10 +648,22 @@ def check_attributes(attrs: bytes) -> None:
     filtered = [(name, value) for name, attr, value in filters if attr == b"filter"]
     if filtered:
         raise KeepError(f"filter attributes on tracked paths: {filtered!r}")
+    conversions = {b"text", b"eol", b"crlf", b"ident", b"working-tree-encoding"}
+    if any(attr in conversions for attr in fields[1::3]):
+        raise KeepError("built-in conversion attributes on tracked paths")
 
 
 def check_upstream(path: Path, branch: str) -> None:
-    """Require the configured upstream to exist live at the local tracking tip."""
+    """Require the configured upstream to exist live at the local tracking tip.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        branch: str, Checked-out branch name.
+    Returns:
+        None.
+    Raises:
+        KeepError: The evidence is unsafe or incomplete.
+    """
     remote = config(path, f"branch.{branch}.remote")
     merge = config(path, f"branch.{branch}.merge")
     if not remote or remote == "." or not merge.startswith("refs/heads/"):
@@ -371,18 +679,40 @@ def check_upstream(path: Path, branch: str) -> None:
 
 
 def advertised_tip(live: bytes, merge: str) -> bytes:
-    """Require one well-formed remote advertisement for the exact upstream ref."""
+    """Require one well-formed remote advertisement for the exact upstream ref.
+
+    Parameters:
+        live: bytes, Raw remote advertisement.
+        merge: str, Exact upstream ref name.
+    Returns:
+        bytes: Remote object ID
+    Raises:
+        KeepError: The advertisement does not match the upstream ref.
+    """
     tip, separator, ref = live.rstrip(b"\n").partition(b"\t")
     if not separator or not OID.fullmatch(tip) or ref != merge.encode():
         raise KeepError("upstream is unverifiable")
     return tip
 
 
-def check_remote(path: Path, branch: str, base: str, *, no_pr: bool) -> str:
-    """Require exact merged PR identity, or live upstream proof for an explicit no-PR candidate."""
+def check_remote(path: Path, branch: str, base: str, gh: Path, *, no_pr: bool) -> str:
+    """Require exact merged PR identity, or live upstream proof for an explicit no-PR candidate.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        branch: str, Checked-out branch name.
+        base: str, GitHub repository to query.
+        gh: Path, Absolute GitHub evidence command.
+        no_pr: bool, Permit upstream proof instead of a merged PR.
+    Returns:
+        str: Description of remote proof
+    Raises:
+        KeepError: Remote evidence cannot establish eligibility.
+    """
     prs = json.loads(
         out(
-            "gh",
+            gh,
+            "gh pr list",
             "pr",
             "list",
             "--repo",
@@ -415,7 +745,17 @@ def check_remote(path: Path, branch: str, base: str, *, no_pr: bool) -> str:
     if type(number) is not int or number <= 0:
         raise KeepError("invalid PR number")
     info = json.loads(
-        out("gh", "pr", "view", str(number), "--repo", base, "--json", PR_FIELDS)
+        out(
+            gh,
+            "gh pr view",
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            base,
+            "--json",
+            PR_FIELDS,
+        )
     )
     remote = (
         config(path, f"branch.{branch}.pushRemote")
@@ -430,7 +770,7 @@ def check_remote(path: Path, branch: str, base: str, *, no_pr: bool) -> str:
     )
     source = SOURCE.fullmatch(url) if "\n" not in url else None
     host = (
-        base.split("/")[0]
+        base.partition("/")[0]
         if base.count("/") == 2
         else os.environ.get("GH_HOST", "github.com")
     )
@@ -462,7 +802,19 @@ def assess(
     opts: argparse.Namespace,
     now: float,
 ) -> str:
-    """Require every per-worktree check before allowing the candidate."""
+    """Require every per-worktree check before allowing the candidate.
+
+    Parameters:
+        path: Path, Candidate checkout.
+        common: Path, Common Git metadata directory.
+        records: list[tuple[Path, list[bytes]]], Original worktree inventory.
+        opts: argparse.Namespace, Additional scan or command options.
+        now: float, Scan start time in epoch seconds.
+    Returns:
+        str: Description of remote proof
+    Raises:
+        KeepError: A local or remote predicate failed.
+    """
     branch_ref = git(path, "symbolic-ref", "--quiet", "HEAD", missing=1).rstrip(b"\n")
     if not branch_ref.startswith(b"refs/heads/"):
         raise KeepError("detached HEAD")
@@ -471,28 +823,64 @@ def assess(
     ).resolve(strict=True)
     if admin.parent != common / "worktrees":
         raise KeepError("not a linked worktree of this repository")
-    check_history(path, admin)
-    check_borrowed(path, admin, common, records)
-    check_activity(path, admin, opts.hold, now)
-    check_status(path, admin)
-    return check_remote(
+    head = git(path, "rev-parse", "--verify", "HEAD")
+    reason = check_remote(
         path,
         os.fsdecode(branch_ref[len(b"refs/heads/") :]),
         opts.base_repo,
+        opts.gh,
         no_pr=opts.no_pr,
     )
+    fresh = inventory(opts.repo)
+    if fresh != records or head != git(path, "rev-parse", "--verify", "HEAD"):
+        raise KeepError("worktree inventory or HEAD changed during remote proof")
+    check_admin(opts.repo, common, fresh)
+    check_borrowed(path, admin, common, records, opts.borrower_gitdirs or ())
+    check_activity(path, admin, opts.hold, now, opts.lsof)
+    check_history(path, admin)
+    check_status(path, admin)
+    if opts.borrower_gitdirs is None:
+        raise KeepError("cannot establish a complete external borrower scope")
+    return reason
 
 
 def verdict(path: Path, decision: str, reason: str) -> None:
-    """Write one machine-readable verdict, escaping unusual path characters."""
+    """Write one machine-readable verdict, escaping unusual path characters.
+
+    Parameters:
+        path: Path, Path being checked or reported.
+        decision: str, Verdict classification.
+        reason: str, Explanation of the result.
+    Returns:
+        None.
+    Raises:
+        OSError: The output stream cannot be written.
+    """
     sys.stdout.write(
         json.dumps({"worktree": str(path), "verdict": decision, "reasons": [reason]})
         + "\n"
     )
 
 
-def main() -> int:
-    """Report scoped or repository-wide decisions; exit nonzero if inventory is unavailable."""
+def main(
+    *,
+    git_binary: str | None = None,
+    gh_binary: str | None = None,
+    lsof_binary: str | None = None,
+    borrower_gitdirs: tuple[Path, ...] | None = None,
+) -> int:
+    """Report scoped or repository-wide decisions; exit nonzero if inventory is unavailable.
+
+    Parameters:
+        git_binary: str | None, Absolute fixture override for Git.
+        gh_binary: str | None, Absolute fixture adapter for GitHub.
+        lsof_binary: str | None, Absolute fixture adapter for process evidence.
+        borrower_gitdirs: tuple[Path, ...] | None, External metadata roots from a closed fixture scope.
+    Returns:
+        int: Exit status
+    Raises:
+        SystemExit: Invalid CLI arguments.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path)
     parser.add_argument("base_repo", help="owner/repo or host/owner/repo for GitHub")
@@ -512,6 +900,7 @@ def main() -> int:
         help="allow live upstream proof for a worktree with no PR; requires --worktree",
     )
     opts = parser.parse_args()
+    opts.borrower_gitdirs = borrower_gitdirs
     if opts.no_pr and opts.worktree is None:
         parser.error("--no-pr requires --worktree")
     try:
@@ -520,6 +909,21 @@ def main() -> int:
             raise KeepError(
                 f"unexpected Git repository overrides: {', '.join(overrides)}"
             )
+        GIT_BINARY.set(
+            binary(GIT_LOCATIONS if git_binary is None else (git_binary,), "git")
+        )
+        opts.gh = binary(
+            tuple(str(path / "gh") for path in BIN_DIRS)
+            if gh_binary is None
+            else (gh_binary,),
+            "gh",
+        )
+        opts.lsof = binary(
+            tuple(str(path / "lsof") for path in BIN_DIRS)
+            if lsof_binary is None
+            else (lsof_binary,),
+            "lsof",
+        )
         records = inventory(opts.repo)
         common = (
             opts.repo

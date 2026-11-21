@@ -61,7 +61,11 @@ Use `<host>/<owner>/<repo>` off GitHub.com. Pass a repeatable `--hold <path>` fo
 with a known active owner or retained claimed directory. The guard emits one JSON line per
 registered worktree with its path, `keep` or `eligible`, and reasons. It does not mutate anything.
 Use `--worktree <path>` for an exact-path recheck. A failed run, absent verdict or `keep` never
-licenses removal. Workers report holds; only the parent may act on an `eligible` merged worktree.
+licenses removal. Unknown external borrower scope is a keep; the ordinary command cannot enumerate
+independent or unmounted checkouts. See the [preset README](../../README.md) for the local holds.
+Workers report holds; only the parent may act on an `eligible` merged worktree. Treat the verdict
+as a snapshot: if permitted, remove immediately after the scoped check, without force. Ignored files
+are not protected by `git worktree remove`.
 
 ## 3. Read the repo's rules
 

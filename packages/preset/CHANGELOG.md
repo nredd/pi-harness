@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Use one read-only worktree sweep guard in `ship-issue` and `get-it-merged`. Keep the legacy command available during rollout. (#1175)
+- Use one read-only worktree sweep guard in `ship-issue` and `get-it-merged`. Keep worktrees when independent borrowers cannot be ruled out. Keep the legacy command available during rollout. (#1175)
 - Restore the `architect` routing hint, cost-ranked survey cards, `shortcut:` decisions, large-repo scoping, grill format and survey length limit. Keep the preset's intentional `codebase-design` preload (the local definition had `skills: false`). ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 - Document that `general-purpose` no longer runs critics; the parent owns the final critic review. ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 

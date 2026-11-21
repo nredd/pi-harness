@@ -87,8 +87,8 @@ error), not file contents. Keep disputed files and refs until the operator prese
 then rerun the guard. Do not bypass a keep verdict.
 
 Only consider non-forced removal of the exact linked path after an immediate successful scoped
-recheck returns `eligible` for a merged PR. Use `git worktree remove <path>` from outside that
-path. Leave branches alone. No automatic prune and no call to the legacy mutating helper from
+recheck returns `eligible` for a merged PR. Run `git worktree remove <path>` immediately from
+outside that path. The verdict is a snapshot, not a lock; non-forced removal can delete ignored files. Leave branches alone. No automatic prune and no call to the legacy mutating helper from
 this skill. A report alone is never permission to remove another worker's files as scratch.
 
 ## 5. Report

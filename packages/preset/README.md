@@ -271,8 +271,15 @@ Before creating an issue worktree and after merge, the parent follows the
 Git, `gh` and `lsof`; it reports `keep` or `eligible` without removing anything. Supply known
 ownership and retained directory holds with `--hold`; `lsof` only sees processes visible to the
 caller. The guard requires one hour of quiet on the checkout and Git activity markers. Only a fresh
-scoped merged-PR verdict can lead to non-forced removal. No-PR mode is verdict-only; initialized
-submodules stay put.
+scoped merged-PR verdict can lead to non-forced removal. The CLI keeps otherwise clean worktrees
+when it cannot prove a complete external borrower scope: Git cannot enumerate independent clones,
+alternate stores or unmounted checkouts. No-PR mode is verdict-only. Gitlinks and retained submodule
+metadata stay put without running submodule status. Nested `.git` files or directories, incomplete
+walks, malformed inventory or HEAD logs, unreachable old or new HEAD log IDs, and conversion
+attributes (including `text=auto`) or conversion configuration also mean keep.
+A verdict is a snapshot. Local checks follow remote proof, but another process can still write
+before removal. If removal is permitted, run it immediately after the scoped verdict;
+`git worktree remove` does not protect ignored files.
 No automatic prune or branch deletion. The installed `git prune-merged-worktrees` command and
 older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound

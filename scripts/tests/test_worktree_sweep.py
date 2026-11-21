@@ -11,10 +11,10 @@ import ast
 import json
 import os
 import runpy
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+from shlex import quote
 from textwrap import dedent
 from typing import NamedTuple
 
@@ -26,6 +26,8 @@ from harness.git_fixture import GIT_IDENTITY, git_env
 
 GUARD = ROOT / "packages/preset/skills/ship-issue/sweep_guard.py"
 BASE = "owner/project"
+GUARD_MODULE = runpy.run_path(str(GUARD))
+GIT = GUARD_MODULE["binary"](GUARD_MODULE["GIT_LOCATIONS"], "git")
 TIMEOUT = 45
 
 
@@ -42,7 +44,7 @@ class Worktrees(NamedTuple):
 def git(path: Path, *args: str) -> bytes:
     """Run real Git with disposable identity and no inherited repository."""
     return subprocess.check_output(
-        ["git", *GIT_IDENTITY, "-C", str(path), *args],
+        [str(GIT), *GIT_IDENTITY, "-C", str(path), *args],
         env=git_env(),
         timeout=TIMEOUT,
         stderr=subprocess.STDOUT,
@@ -83,6 +85,7 @@ def wt(tmp_path: Path) -> Worktrees:
         """
         import os
         import sys
+        from pathlib import Path
 
         base = os.environ["SWEEP_BASE"]
         args = sys.argv[1:]
@@ -92,6 +95,12 @@ def wt(tmp_path: Path) -> Worktrees:
         if args == list_args:
             print(os.environ["SWEEP_LIST"])
         elif args == ["pr", "view", "123", "--repo", base, "--json", view_fields]:
+            if recovery := os.environ.get("SWEEP_WRITE_DURING_VIEW"):
+                target = Path(recovery)
+                target.write_text("recovery")
+                os.utime(target.parent, (1, 1))
+            if locked := os.environ.get("SWEEP_LOCK_DURING_VIEW"):
+                Path(locked).write_text("locked during remote proof")
             print(os.environ["SWEEP_PR"])
         else:
             sys.exit(f"unexpected arguments: {args!r}")
@@ -133,6 +142,8 @@ def run(
     cwd: Path | None = None,
     base: str = BASE,
     variables: dict[str, str] | None = None,
+    borrower_gitdirs: tuple[Path, ...] | None = (),
+    inventory_suffix: bytes = b"",
 ) -> tuple[int, list[dict[str, object]]]:
     """Run the shipped CLI without a real GitHub or process lookup."""
     env = git_env()
@@ -145,9 +156,37 @@ def run(
         "SWEEP_CWD": str(wt.repo),
         **(variables or {}),
     }
+    if borrower_gitdirs is not None:
+        env["SWEEP_SCOPE"] = json.dumps(list(map(str, borrower_gitdirs)))
+    if inventory_suffix:
+        env["SWEEP_INVENTORY_SUFFIX"] = inventory_suffix.hex()
     scope = [] if all_paths else ["--worktree", str(wt.path)]
     done = subprocess.run(
-        [sys.executable, str(GUARD), str(wt.repo), base, *scope, *args],
+        [
+            sys.executable,
+            "-c",
+            "import json, os, runpy, sys; from pathlib import Path; "
+            "source, git, gh, lsof = sys.argv[1:5]; sys.argv[1:5] = []; "
+            "scope = os.getenv('SWEEP_SCOPE'); "
+            "roots = None if scope is None else tuple(map(Path, json.loads(scope))); "
+            "module = runpy.run_path(source); main = module['main']; "
+            "parse = module['parse_inventory']; "
+            "globals_ = main.__globals__; "
+            "limit = 'MAX_TREE_ENTRIES'; "
+            "globals_[limit] = int(os.getenv('SWEEP_ENTRY_LIMIT', globals_[limit])); "
+            "suffix = bytes.fromhex(os.getenv('SWEEP_INVENTORY_SUFFIX', '')); "
+            "main.__globals__['parse_inventory'] = "
+            "lambda raw: parse(raw[:-1] + suffix if suffix else raw); "
+            "sys.exit(main(git_binary=git, gh_binary=gh, lsof_binary=lsof, borrower_gitdirs=roots))",
+            str(GUARD),
+            str(GIT),
+            str(wt.bin / "gh"),
+            str(wt.bin / "lsof"),
+            str(wt.repo),
+            base,
+            *scope,
+            *args,
+        ],
         cwd=cwd or wt.repo,
         env=env,
         timeout=TIMEOUT,
@@ -268,7 +307,7 @@ def test_recent_activity(wt: Worktrees) -> None:
     keep(wt, "recent activity")
 
 
-@pytest.mark.parametrize("ref", ["refs/worktree/wip", "refs/bisect/wip", "refs/rewritten/wip"])
+@pytest.mark.parametrize("ref", ["refs/worktree/wip", "refs/bisect/wip", "refs/rewritten/wip", "refs/stash"])
 def test_local_ref(wt: Worktrees, ref: str) -> None:
     git(wt.path, "update-ref", ref, "HEAD")
     quiet(wt)
@@ -345,7 +384,8 @@ def test_stopped_am(wt: Worktrees) -> None:
         git(wt.path, "am", str(patch))
     assert git(wt.path, "status", "--porcelain") == b""
     quiet(wt)
-    assert git(wt.path, "rev-parse", "HEAD").decode().strip() != base
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    assert wt.pr["headRefOid"] != base
     keep(wt, "in-progress operation `rebase-apply`")
 
 
@@ -407,9 +447,9 @@ def test_git_prune_is_only_ever_called_in_dry_run_mode(wt: Worktrees) -> None:
         for line in trace.read_text().splitlines()
         if (event := json.loads(line))["event"] == "start"
     ]
-    assert [argv[-4:] for argv in starts if "prune" in argv] == [
-        ["worktree", "prune", "--dry-run", "--verbose"]
-    ]
+    prunes = [argv[-4:] for argv in starts if "prune" in argv]
+    assert prunes
+    assert all(argv == ["worktree", "prune", "--dry-run", "--verbose"] for argv in prunes)
 
 
 @pytest.mark.parametrize("dependency", ["alternates", "gitdir"])
@@ -434,7 +474,7 @@ def test_borrowed_submodule_metadata(wt: Worktrees, dependency: str) -> None:
     keep(wt, reason)
 
 
-@pytest.mark.parametrize("state", ["dirty", "clean", "deinitialized"])
+@pytest.mark.parametrize("state", ["filter", "clean", "deinitialized"])
 def test_submodule_work_is_kept(wt: Worktrees, state: str) -> None:
     source = wt.repo.parent / "module-source"
     init(source)
@@ -442,17 +482,26 @@ def test_submodule_work_is_kept(wt: Worktrees, state: str) -> None:
     git(wt.path, "-c", "protocol.file.allow=always", "submodule", "add", str(source), "sub")
     git(wt.path, "commit", "-m", "Add module")
     wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
-    if state == "dirty":
-        (sub / "tracked").write_text("dirty\n")
+    marker = wt.repo.parent / "clean-filter-ran"
+    if state == "filter":
+        attrs = wt.repo.parent / "submodule-attributes"
+        attrs.write_text("tracked filter=marker\n")
+        git(sub, "config", "core.attributesFile", str(attrs))
+        git(sub, "config", "filter.marker.clean", f"touch {quote(str(marker))}; cat")
+        (sub / "tracked").write_text("wip!!\n")
     elif state == "deinitialized":
         git(wt.path, "submodule", "deinit", "sub")
     quiet(wt)
     expected = {
-        "dirty": "submodule dirty",
-        "clean": "submodule may contain unpushed commits",
+        "filter": "retained submodule gitdir",
+        "clean": "retained submodule gitdir",
         "deinitialized": "retained submodule gitdir",
     }
-    keep(wt, expected[state])
+    code, (result,) = run(wt)
+    assert not marker.exists(), "the guard ran the submodule clean filter"
+    assert code == 0
+    assert result["verdict"] == "keep"
+    assert expected[state] in str(result["reasons"])
 
 
 @pytest.mark.parametrize(
@@ -590,9 +639,9 @@ def test_no_pr_requires_scope(wt: Worktrees) -> None:
 def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     guard = runpy.run_path(str(GUARD))
     with pytest.raises(guard["KeepError"], match="missing"):
-        guard["out"](str(tmp_path / "not-installed"))
-    with pytest.raises(guard["KeepError"], match=r"failed \(0\)"):
-        guard["out"](sys.executable, "-c", "print(' ')", silent=True)
+        guard["binary"](("git", str(tmp_path / "not-installed")), "git")
+    with pytest.raises(guard["KeepError"], match=r"explicit label.*failed"):
+        guard["out"](Path(sys.executable), "explicit label", "-c", "print(' ')", silent=True)
 
     def timed_out(*args: object, **kwargs: object) -> None:
         raise subprocess.TimeoutExpired(sys.executable, 30)
@@ -600,7 +649,7 @@ def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, "run", timed_out)
         with pytest.raises(guard["KeepError"], match="timed out"):
-            guard["out"](sys.executable, "-V")
+            guard["out"](Path(sys.executable), "python", "-V")
 
 
 def test_malformed_evidence_parsers() -> None:
@@ -647,6 +696,156 @@ def test_symlinked_borrower_store_keeps(wt: Worktrees) -> None:
     keep(wt, "cannot verify symlinked Git metadata")
 
 
+@pytest.mark.parametrize("suffix", [b"lock damaged\0\0", b"locked\0locked\0\0", b"truncated"])
+def test_unrecognized_inventory_evidence_keeps(wt: Worktrees, suffix: bytes) -> None:
+    # Mutate actual Git output at the parser boundary, not the Git executable.
+    quiet(wt)
+    code, (result,) = run(wt, inventory_suffix=suffix)
+    assert code == 1
+    assert result["verdict"] == "keep"
+    assert "inventory" in str(result["reasons"])
+
+
+def test_git_resolution_never_uses_path(wt: Worktrees) -> None:
+    marker = wt.bin / "fake-git-ran"
+    adapter(wt.bin, "git", f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    quiet(wt)
+    code, (result,) = run(wt)
+    assert not marker.exists()
+    assert code == 0
+    assert result["verdict"] == "eligible", result
+
+
+def test_external_borrower_scope_is_required(wt: Worktrees) -> None:
+    borrower = wt.repo.parent / "external"
+    init(borrower)
+    objects = wt.admin / "objects"
+    objects.mkdir()
+    gitdir = borrower / ".git"
+    (gitdir / "objects/info/alternates").write_text(f"{objects}\n")
+    assert os.fsencode(borrower) not in git(wt.repo, "worktree", "list", "--porcelain", "-z")
+    quiet(wt)
+    for roots, reason in [(None, "complete external borrower scope"), ((gitdir,), "borrows objects")]:
+        code, (result,) = run(wt, borrower_gitdirs=roots)
+        assert code == 0
+        assert result["verdict"] == "keep"
+        assert reason in str(result["reasons"])
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_nested_repo_stash_is_not_visible_to_outer_status(wt: Worktrees, kind: str) -> None:
+    src = wt.path / "src"
+    src.mkdir()
+    tracked = src / "tracked"
+    tracked.write_text("saved\n")
+    git(wt.path, "add", "src")
+    git(wt.path, "commit", "-m", "Track src")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    opts = ("--separate-git-dir", str(wt.repo.parent / "nested-admin")) if kind == "file" else ()
+    git(src, "init", "--template=", *opts)
+    git(src, "add", "tracked")
+    git(src, "commit", "-m", "Nested base")
+    tracked.write_text("stash this\n")
+    git(src, "stash", "push")
+    assert git(src, "stash", "list")
+    assert git(wt.path, "status", "--porcelain", "--ignored") == b""
+    quiet(wt)
+    keep(wt, "nested Git metadata")
+
+
+@pytest.mark.parametrize("attr", ["text eol=lf", "text=auto"])
+def test_mixed_endings_are_hidden_by_status(wt: Worktrees, attr: str) -> None:
+    attrs = wt.path / ".gitattributes"
+    attrs.write_text(f"tracked {attr}\n")
+    target = wt.path / "tracked"
+    target.write_bytes(b"one\ntwo\n")
+    git(wt.path, "add", ".")
+    git(wt.path, "commit", "-m", "Normalize line endings")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    target.write_bytes(b"one\r\ntwo\n")
+    git(wt.path, "-c", "core.safecrlf=false", "add", "--renormalize", "tracked")
+    assert git(wt.path, "-c", "core.safecrlf=false", "status", "--porcelain") == b""
+    quiet(wt)
+    keep(wt, "built-in conversion attributes")
+
+
+@pytest.mark.parametrize(("key", "value"), [("autocrlf", "input"), ("eol", "crlf"), ("safecrlf", "warn")])
+def test_effective_conversion_cfg_keeps(wt: Worktrees, key: str, value: str) -> None:
+    git(wt.path, "config", f"core.{key}", value)
+    quiet(wt)
+    keep(wt, f"conversion config: core.{key}")
+
+
+def test_file_written_during_pr_view_keeps(wt: Worktrees) -> None:
+    recovery = wt.path / "ignored"
+    quiet(wt)
+    keep(wt, "dirty or ignored paths", SWEEP_WRITE_DURING_VIEW=str(recovery))
+    assert recovery.read_text() == "recovery"
+
+
+def test_old_reflog_oid_protects_detached_commit(wt: Worktrees) -> None:
+    git(wt.path, "switch", "--detach")
+    git(wt.path, "commit", "--allow-empty", "-m", "Detached work")
+    oid = git(wt.path, "rev-parse", "HEAD").strip()
+    git(wt.path, "switch", "merged")
+    git(wt.path, "reflog", "delete", "HEAD@{1}")
+    assert oid not in git(wt.path, "reflog", "show", "--format=%H", "HEAD")
+    assert any(line.startswith(oid + b" ") for line in (wt.admin / "logs/HEAD").read_bytes().splitlines())
+    quiet(wt)
+    keep(wt, "HEAD reflog commits outside refs")
+
+
+@pytest.mark.parametrize(
+    ("data", "reason"),
+    [
+        (b"truncated", "incomplete"),
+        (b"garbage\n", "malformed HEAD reflog record"),
+        (b"0 0 name <a@b> 123 +0000\n", "malformed HEAD reflog OID"),
+        (b"0" * 40 + b" " + b"0" * 40 + b" name <a@b> 123 +0000\n", "no HEAD reflog commit evidence"),
+    ],
+)
+def test_incomplete_nonempty_head_reflog_keeps(wt: Worktrees, data: bytes, reason: str) -> None:
+    (wt.admin / "logs/HEAD").write_bytes(data)
+    if data == b"garbage\n":
+        branch_log = wt.repo / ".git/logs/refs/heads/merged"
+        branch_log.unlink()
+        assert git(wt.path, "reflog", "show", "--format=%H", "HEAD") == b""
+    quiet(wt)
+    keep(wt, reason)
+
+
+def test_incomplete_nested_scan_keeps(wt: Worktrees) -> None:
+    quiet(wt)
+    keep(wt, "incomplete nested repository scan", SWEEP_ENTRY_LIMIT="1")
+
+
+def test_nested_registered_checkout_keeps(wt: Worktrees) -> None:
+    git(wt.repo, "worktree", "add", "-b", "nested", str(wt.path / "nested"))
+    quiet(wt)
+    keep(wt, "another checkout is inside the candidate")
+
+
+def test_uninitialized_gitlink_keeps(wt: Worktrees) -> None:
+    head = str(wt.pr["headRefOid"])
+    git(wt.path, "update-index", "--add", "--cacheinfo", f"160000,{head},sub")
+    git(wt.path, "commit", "-m", "Record a gitlink")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    quiet(wt)
+    keep(wt, "registered submodule")
+
+
+def test_lock_during_remote_proof_keeps(wt: Worktrees) -> None:
+    quiet(wt)
+    keep(wt, "inventory or HEAD changed", SWEEP_LOCK_DURING_VIEW=str(wt.admin / "locked"))
+    assert b"\0locked locked during remote proof\0" in git(wt.repo, "worktree", "list", "--porcelain", "-z")
+
+
+@pytest.mark.parametrize("raw", [b"worktree Relative\0bare\0\0", b"worktree /absolute\0HEAD bad\0\0"])
+def test_invalid_inventory_identity_keeps(raw: bytes) -> None:
+    guard = runpy.run_path(str(GUARD))
+    with pytest.raises(guard["KeepError"], match="invalid worktree inventory"):
+        guard["parse_inventory"](raw)
+
+
 def test_shipped_program_uses_python_38_grammar() -> None:
     ast.parse(GUARD.read_text(), feature_version=(3, 8))
-    assert shutil.which("git")
