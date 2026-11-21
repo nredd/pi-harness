@@ -801,7 +801,9 @@ The run itself takes five keys, and the footer offers each only while it can act
 | `r` | Retry the selected agent: the child is stopped and the same call runs again, so the script's `agent()` promise is still the one waiting and gets the new answer. Running agents only — once a call has settled its value is already the script's, and a re-run would have nowhere to put one. The row then reads `attempt 2 · user retry` |
 | `c` | Open the selected agent's **conversation** — the same live, scrolling viewer a fleet-list row opens, over the dialog, which hides itself underneath and comes back when you close it. The one key here that shows something rather than changing the run, so it works at both levels and on an agent that has already finished; reading what a child actually did is most of why anyone opens the inspector. Offered once the child has a record to open, which excludes a queued agent and one replayed from the resume journal. Records are swept ten minutes after they finish, and the key says so rather than opening an empty viewer |
 
-Skipping is immediate for a running agent and for one held at a pause; an agent parked behind the concurrency limit takes its skip when it reaches the front of the queue.
+Skipping is immediate for an agent in the runner or held at a pause. An agent skipped during model admission is marked skipped when admission returns, even if the model was refused. An agent parked behind the concurrency limit takes its skip when it reaches the front of the queue.
+
+A retry clears the previous conversation link. The `c` action becomes available again when the new attempt reaches the runner; a retry that fails before then has no conversation link.
 
 ### CLI flags
 

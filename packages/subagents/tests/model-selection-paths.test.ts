@@ -37,6 +37,7 @@ import * as settings from "../src/settings.ts";
 import type { FleetUICtx } from "../src/ui/fleet-list.ts";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../src/ui/fleet-state.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
+import { runWorkflow, type WorkflowControl } from "../src/workflow/runtime.ts";
 import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./fixtures/boot-extension.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -1616,6 +1617,54 @@ it("does not launch a child aborted during tier admission", async () => {
 	await expect(manager.awaitStartup(id)).rejects.toThrow("Agent aborted during model admission");
 	expect(runner.runAgent).not.toHaveBeenCalled();
 });
+
+it.each([true, false])(
+	"preserves a workflow skip during deferred tier admission (admitted: %s)",
+	async (ok) => {
+		setModelTiers({ cheap: [ref("typed")] }, {});
+		const events = bus();
+		boot.pi.events = events;
+		let control: WorkflowControl | undefined;
+		let skipped: boolean | undefined;
+		events.on("router:rpc:admit", (data) => {
+			const { requestId } = data as { requestId: string };
+			// Stop after the real manager enters admission, before its reply arrives.
+			skipped = control?.skip(0);
+			queueMicrotask(() => {
+				events.emit(`router:rpc:admit:reply:${requestId}`, {
+					success: true,
+					data: ok ? { ok: true } : { ok: false, resetAt: clock.now() + 1000 },
+				});
+			});
+		});
+		const signal = AbortSignal.timeout(5_000);
+		const host = createWorkflowHost({
+			pi: boot.pi,
+			ctx: context,
+			manager,
+			workflowId: "wf_admission",
+			signal,
+			isRunning: () => !signal.aborted,
+		});
+		const result = await runWorkflow({
+			script:
+				'export const meta = { name: "admission", description: "fixture" }; return await agent("go", { agentType: "scout", model: "@cheap" });',
+			host,
+			signal,
+			onControl: (value) => {
+				control = value;
+			},
+		});
+		expect(skipped).toBe(true);
+		expect(result).toMatchObject({ status: "completed", value: null });
+		const terminal = result.progress.findLast((entry) => entry.type === "workflow_agent");
+		expect(terminal).toMatchObject({ state: "error", skipped: true });
+		expect(terminal).not.toHaveProperty("recordId");
+		expect(runner.runAgent).not.toHaveBeenCalled();
+		expect(manager.listAgents().map((record) => record.status)).toEqual(["stopped"]);
+	},
+	10_000,
+);
 
 it("updates workflow resolution from the admitted model to the answering model", async () => {
 	setModelTiers({ cheap: ["router/default"] }, {});
