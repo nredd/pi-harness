@@ -407,6 +407,8 @@ def check_status(path: Path, admin: Path) -> None:
             raise KeepError(f"`{key}` is enabled")
     if config(path, "core.filemode", "--type=bool") == "false":
         raise KeepError("`core.filemode` is disabled; executable-bit changes may be hidden")
+    if config(path, "core.trustctime", "--type=bool") == "false":
+        raise KeepError("`core.trustctime` is disabled; restored mtimes may hide content changes")
 
 
 def check_nested(path: Path) -> None:

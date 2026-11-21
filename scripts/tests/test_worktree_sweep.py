@@ -322,6 +322,22 @@ def test_disabled_filemode_hides_executable_bit_change(wt: Worktrees) -> None:
     keep(wt, "core.filemode")
 
 
+def test_disabled_trustctime_hides_same_size_edit_with_restored_mtime(wt: Worktrees) -> None:
+    git(wt.path, "config", "core.trustctime", "false")
+    target = wt.path / "tracked"
+    os.utime(target, (1, 1))
+    git(wt.path, "update-index", "--refresh")
+    original = target.stat()
+    target.write_text("other\n")
+    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert git(wt.path, "status", "--porcelain") == b""
+    assert git(wt.path, "hash-object", "--no-filters", "tracked") != git(wt.path, "rev-parse", "HEAD:tracked")
+    quiet(wt)
+    os.utime(wt.admin / "index", (10, 10))
+    assert git(wt.path, "--no-optional-locks", "status", "--porcelain") == b""
+    keep(wt, "core.trustctime")
+
+
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
     (wt.path / "retained-empty").mkdir()
     quiet(wt)

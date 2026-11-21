@@ -283,6 +283,9 @@ Limits:
 - The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate is otherwise clean. Report holds and scratch; delete nothing.
+- No raw content hash comparison is performed. With effective `core.trustctime=false`, a same-size
+  edit with its original mtime restored can look clean to Git, so the guard keeps the worktree
+  without trying to distinguish it from a clean one.
 - A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
   older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound
