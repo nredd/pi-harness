@@ -42,6 +42,8 @@ it.each([
 		p: { failure: { parser: "generic" }, windows: [rolling, { ...calendar, limits: {} }], collector: { id: "new-id" } },
 	},
 	{ p: { collector: { options: { custom: [{ nested: null }] } } } },
+	{ p: { failure: { minHintSeconds: 0 } } },
+	{ p: { failure: { minHintSeconds: 0.5 } } },
 ])("accepts optional provider data: %j", (providers) => {
 	const document = { profiles: {}, providers, otherRootKey: true };
 	expect(Check(schema, document)).toBe(true);
@@ -64,7 +66,9 @@ it.each([
 	[{ p: { fallbackOnReadError: "yes" } }, "providers.p.fallbackOnReadError: expected a boolean"],
 	[{ p: { failure: { parser: "other" } } }, "providers.p.failure.parser:"],
 	[{ p: { failure: { typo: 1 } } }, "providers.p.failure.typo: unknown key"],
-	[{ p: { failure: { minHintSeconds: 0 } } }, "providers.p.failure.minHintSeconds:"],
+	[{ p: { failure: { minHintSeconds: -1 } } }, "providers.p.failure.minHintSeconds:"],
+	[{ p: { failure: { minHintSeconds: "0" } } }, "providers.p.failure.minHintSeconds:"],
+	[{ p: { failure: { minHintSeconds: Number.POSITIVE_INFINITY } } }, "providers.p.failure.minHintSeconds:"],
 	[{ p: { failure: { maxBlockMinutes: 1441 } } }, "providers.p.failure.maxBlockMinutes: must not exceed 1440"],
 	[
 		{ p: { failure: { repeat: { count: 1.5, withinMinutes: 10 } } } },

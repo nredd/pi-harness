@@ -40,7 +40,7 @@
 					"additionalProperties": false,
 					"properties": {
 						"parser": { "enum": ["generic", "google-rpc"] },
-						"minHintSeconds": { "$ref": "#/definitions/positive" },
+						"minHintSeconds": { "type": "number", "minimum": 0 },
 						"maxBlockMinutes": { "type": "number", "exclusiveMinimum": 0, "maximum": 1440 },
 						"repeat": {
 							"type": "object",

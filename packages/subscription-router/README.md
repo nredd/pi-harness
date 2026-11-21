@@ -170,7 +170,7 @@ Optional top-level `providers` entries are keyed by Pi provider ID. Merge declar
   subscription collector or OAuth client is shipped.
 - `evidence` lists unique adapter IDs in order: `read`, `failure` and `observed`.
   `fallbackOnReadError` opts in to continuing after a failed read; `failure` can declare
-  `parser`, `minHintSeconds`, `repeat` (`count` and `withinMinutes`) and
+  `parser`, `minHintSeconds` (non-negative), `repeat` (`count` and `withinMinutes`) and
   `maxBlockMinutes` (at most 1440).
 
 The [schema](schemas/subscription-router.schema.json) rejects unknown keys inside provider

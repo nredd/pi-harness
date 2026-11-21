@@ -152,7 +152,11 @@ function validateFailure(raw: unknown, where: string): void {
 		"maxBlockMinutes",
 	]);
 	if (parser !== undefined) oneOf(parser, ["generic", "google-rpc"], `${where}.parser`);
-	if (minHintSeconds !== undefined) positive(minHintSeconds, `${where}.minHintSeconds`);
+	if (minHintSeconds !== undefined) {
+		if (typeof minHintSeconds !== "number" || !Number.isFinite(minHintSeconds) || minHintSeconds < 0) {
+			throw new Error(`${where}.minHintSeconds: expected a finite non-negative number`);
+		}
+	}
 	if (maxBlockMinutes !== undefined) {
 		positive(maxBlockMinutes, `${where}.maxBlockMinutes`);
 		if (maxBlockMinutes > 1440) throw new Error(`${where}.maxBlockMinutes: must not exceed 1440`);
