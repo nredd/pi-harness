@@ -125,12 +125,13 @@ once per human prompt, independently of the plan reminder. The context hook subs
 list only on that request, and only if the work remains held and unarmed. A wake is not proof of
 completion; only the parent changes todo status with evidence.
 
-In TUI only, an unchanged list with `pending` or `in_progress` todos adds a hidden
+In parent TUI sessions only, an unchanged list with `pending` or `in_progress` todos adds a hidden
 `rpiv-todo-stale-reminder` after `staleAfterSettles` completed settles (default 10, set in
 `~/.config/rpiv-todo/config.json`; a non-positive-integer value falls back to the default) that would otherwise stop, even when a
 background agent is armed. It asks the parent to run `todo list` and reconcile actual progress.
 A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
+On resume or `/reload`, a restored marker blocks another nudge until fresh human input.
 
 In an interactive TUI session, when a parent works without any visible todos
 (deleted todos do not count), the next completed run about to settle nudges it after
@@ -192,6 +193,7 @@ Optional. Create `~/.config/rpiv-todo/config.json` (or
 | `maxWidgetLines` | Content rows the overlay may use, heading included. Minimum `3`. Applies on the next repaint. Pi's tool-output expansion mode shows all tasks. | `12` |
 | `collapseKey` | Key that collapses and expands the panel, in Pi keybinding form (`alt+o`, `ctrl+shift+t`). Set `"off"` to register no shortcut. Needs `/reload` to rebind. | `"ctrl+shift+t"` |
 | `collapseOnResume` | Start the panel collapsed when a session is resumed. Set `false` to keep it expanded. Read at each session start. | `true` |
+| `staleAfterSettles` | Completed settles with an unchanged open list before nudging in a parent TUI session. Must be a positive integer. Read at eligible settles, without `/reload`. | `10` |
 | `emptyAfterToolCalls` | Tool calls before nudging an empty list. A successful `Agent` call bypasses the count. Set `0` to disable both triggers. | `10` |
 | `emptyReminderCooldownSettles` | Completed settles between empty-list nudges. Minimum `1`. | `10` |
 | `guidance` | Replaces the built-in instructions the extension gives the model about when and how to use the todo list. Needs `/reload`. | _(built-ins)_ |

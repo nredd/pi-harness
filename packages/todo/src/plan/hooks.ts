@@ -492,7 +492,7 @@ export function registerPlanHooks(
 	// The age follows the snapshot, while the reminder budget follows human input.
 	const staleAge = new WeakMap<TaskState, number>();
 	const staleReminded = new Set<string>();
-	const tuiSessions = new Set<string>();
+	const parentTuiSessions = new Set<string>();
 	// Core needs a persisted non-assistant tail to accept a continuation after a normal reply.
 	// Keep the permission to expand that placeholder request-local, not in the restored branch.
 	const pendingNudges = new Map<string, string>();
@@ -501,7 +501,7 @@ export function registerPlanHooks(
 		return reminderDraft(event, type, marker, {});
 	};
 	const emptyConfig = getEmptyReminderConfig(options.homeDir);
-	const emptyEnabled = emptyConfig.toolCalls > 0 && !isChildActivation();
+	const childActivation = isChildActivation();
 	const emptyTrackers = new Map<string, ReturnType<typeof trackEmptyReminder>>();
 
 	const onSettle: SettleHandler = (event, ctx) => {
@@ -529,7 +529,7 @@ export function registerPlanHooks(
 				return reminderDraft(event, HELD_REMINDER_MESSAGE_TYPE, HELD_REMINDER_MARKER, { held: held.map((t) => t.id) });
 		}
 		// Age only completed settles that would otherwise stop, independent of any armed wake.
-		if (!tuiSessions.has(id) || !hasOpenTodos(state)) return undefined;
+		if (!parentTuiSessions.has(id) || !hasOpenTodos(state)) return undefined;
 		const threshold = getStaleAfterSettles(options.homeDir);
 		const age = Math.min((staleAge.get(state) ?? 0) + 1, threshold);
 		staleAge.set(state, age);
@@ -608,11 +608,18 @@ export function registerPlanHooks(
 		async sessionStarted(sessionId, resumed, branch, mode) {
 			live.add(sessionId);
 			pendingNudges.delete(sessionId);
-			if (mode === "tui") tuiSessions.add(sessionId);
-			else tuiSessions.delete(sessionId);
-			if (emptyEnabled && mode === "tui") {
+			const parentTui = mode === "tui" && !childActivation;
+			if (parentTui) {
+				parentTuiSessions.add(sessionId);
 				// A persisted user message could be an extension prompt; only a live
 				// human input event can safely rearm after restoring a reminder.
+				if (
+					branch.some((entry) => entry.type === "custom_message" && entry.customType === STALE_REMINDER_MESSAGE_TYPE)
+				) {
+					staleReminded.add(sessionId);
+				}
+			} else parentTuiSessions.delete(sessionId);
+			if (parentTui && emptyConfig.toolCalls > 0) {
 				const previouslyReminded = branch.some(
 					(entry) => entry.type === "custom_message" && entry.customType === EMPTY_REMINDER_MESSAGE_TYPE,
 				);
@@ -639,7 +646,7 @@ export function registerPlanHooks(
 			reported.delete(sessionId);
 			resumedOwners.delete(sessionId);
 			staleReminded.delete(sessionId);
-			tuiSessions.delete(sessionId);
+			parentTuiSessions.delete(sessionId);
 			pendingNudges.delete(sessionId);
 			emptyTrackers.delete(sessionId);
 		},
