@@ -2,10 +2,10 @@
 
 # One Python gate: ruff, ty, then pytest across cores (`--dist loadfile` keeps each test file on one worker)
 # with branch-measured LCOV written under `<dir>/coverage/python/` for `scripts/coverage_accounting.py`.
-# $(1) project dir (cwd, so LCOV paths are project-relative), $(2) extra uv flags, $(3) pytest paths, $(4) --cov source.
+# $(1) project dir, $(2) extra uv flags, $(3) pytest paths, $(4) --cov source, $(5) LCOV option override.
 define PY_GATE
 cd $(1) && uv run --locked $(2) ruff format --check . && uv run --locked $(2) ruff check --no-fix --ignore-noqa . && uv run --locked $(2) ty check
-cd $(1) && uv run --locked $(2) pytest $(3) -n 2 --dist loadfile -p no:cacheprovider --cov=$(4) --cov-branch --cov-report=lcov:coverage/python/lcov.info --cov-report=term:skip-covered --cov-fail-under=100
+cd $(1) && uv run --locked $(2) pytest $(3) -n 2 --dist loadfile -p no:cacheprovider --cov=$(4) --cov-branch $(or $(5),--cov-report=lcov:coverage/python/lcov.info) --cov-report=term:skip-covered --cov-fail-under=100
 endef
 
 help:  ## List targets
@@ -51,12 +51,18 @@ check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/
 	cd scripts && uv run --locked --project ../tests/integration ruff format --check --line-length 88 --target-version py38 $(SWEEP_GUARD)
 	cd scripts && uv run --locked --project ../tests/integration ruff check --config pyproject.toml --no-fix --ignore-noqa --target-version py38 $(SWEEP_GUARD)
 	cd scripts && uv run --locked --project ../tests/integration ty check --python-version 3.8 $(SWEEP_GUARD)
-	$(call PY_GATE,scripts,--project ../tests/integration,,. --cov=../packages/preset/skills/ship-issue)
-	mkdir -p packages/preset/coverage/sweep-guard
-	cd scripts && uv run --locked --project ../tests/integration coverage lcov --include='*/ship-issue/sweep_guard.py' -o ../packages/preset/coverage/sweep-guard/lcov.info
+	$(call PY_GATE,scripts,--project ../tests/integration,,. --cov=../packages/preset/skills/ship-issue,--cov-report=)
+	$(MAKE) report-script-coverage
 	uv run --locked --project tests/integration python scripts/package_contracts.py --packed-files-only
 	uv run --locked --project tests/integration python scripts/package_layout.py --compare-ref "$(or $(BASE),origin/main)"
 	$(MAKE) check-import-audit
+
+# Render from each source root; an SF tied to the producer checkout cannot replay in fan-in.
+.PHONY: report-script-coverage
+COVERAGE_REPORT ?= uv run --locked --project "$(CURDIR)/tests/integration" coverage
+report-script-coverage:
+	cd scripts && $(COVERAGE_REPORT) lcov --data-file=.coverage --omit='*/ship-issue/sweep_guard.py' -o coverage/python/lcov.info
+	cd packages/preset && $(COVERAGE_REPORT) lcov --data-file=../../scripts/.coverage --include='*/ship-issue/sweep_guard.py' -o coverage/sweep-guard/lcov.info
 
 # Unset BASE: compare against where HEAD diverged from origin/main. Any explicit BASE, even empty, is passed unchanged.
 check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE, else HEAD's merge base with origin/main; COVERAGE_OS=darwin|linux names the reports' OS, COVERAGE_HOST the CI host class, COVERAGE_SKIPPED_GATES the gates the CI plan skipped

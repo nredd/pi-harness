@@ -11,10 +11,14 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from shlex import quote
 from typing import Any
 
 import yaml
+
+from coverage import CoverageData
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
@@ -32,6 +36,47 @@ BUN_COVERAGE_ARGS = [
     "--coverage.reporter=json-summary",
     "--coverage.reportsDirectory=coverage/bun",
 ]
+
+
+def test_script_lcov_replays_from_a_different_checkout(tmp_path: Path) -> None:
+    producer = tmp_path / "producer"
+    replay = tmp_path / "fan-in"
+    signals = (
+        ("scripts", "example.py", "coverage/python/lcov.info"),
+        ("packages/preset", "skills/ship-issue/sweep_guard.py", "coverage/sweep-guard/lcov.info"),
+    )
+    sources = {}
+    for package, source, _ in signals:
+        path = producer / package / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n")
+        sources[str(path)] = [1]
+    data = CoverageData(basename=str(producer / "scripts/.coverage"))
+    data.add_lines(sources)
+    data.write()
+    subprocess.run(
+        [
+            "/usr/bin/make",
+            "-f",
+            str(ROOT / "Makefile"),
+            f"COVERAGE_REPORT={quote(sys.executable)} -m coverage",
+            "report-script-coverage",
+        ],
+        cwd=producer,
+        check=True,
+        timeout=30,
+    )
+    for package, source, artifact in signals:
+        build_root = producer / package
+        replay_root = replay / package
+        for relative in (source, artifact):
+            target = replay_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(build_root / relative, target)
+        report = (replay_root / artifact).read_text().splitlines()
+        files = [line.removeprefix("SF:") for line in report if line.startswith("SF:")]
+        assert files == [source]
+        assert (replay_root / files[0]).resolve(strict=True) == replay_root / source
 
 
 def launch_bun(tmp_path: Path, *args: str) -> list[str]:

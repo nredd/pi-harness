@@ -475,7 +475,11 @@ are measured by the shared `PY_GATE` Makefile recipe: ruff, ty, then
 suite from both uv projects, independently measuring product and harness code. These paths are
 not `coverage/primary`, which is import-audit's report. The `--cov` sources are `.`, `pi_release`
 and `harness`; policy `owned` globs stay the only source inventory. For `scripts`, the measured
-root includes `scripts/tests/`, so test files themselves must also reach 100%.
+root includes `scripts/tests/`, so test files themselves must also reach 100%. The scripts gate also
+measures the preset sweep guard. `make report-script-coverage` renders two disjoint LCOV reports
+from the same data: `scripts/coverage/python/lcov.info` relative to `scripts/`, and
+`packages/preset/coverage/sweep-guard/lcov.info` relative to `packages/preset/`. Neither report
+needs the producer's checkout path when copied to fan-in.
 `scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
 `coverage_accounting.py` count. `pytest-cov` is locked in `tests/integration/pyproject.toml`.
 Measurement can report an OS with no reference floor; enforcement still requires one. Summary totals
