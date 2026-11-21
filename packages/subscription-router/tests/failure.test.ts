@@ -308,10 +308,19 @@ it.each([
 	["2026-03-08T07:59:00Z", "2026-03-08T08:00:00Z"], // 23:59 PST before spring forward
 	["2026-03-08T08:00:00Z", "2026-03-09T07:00:00Z"], // 23-hour day
 	["2026-03-08T08:01:00Z", "2026-03-09T07:00:00Z"],
+	["2026-03-08T09:59:00Z", "2026-03-09T07:00:00Z"], // 01:59 PST
+	["2026-03-08T10:01:00Z", "2026-03-09T07:00:00Z"], // 03:01 PDT
 	["2026-11-01T06:59:00Z", "2026-11-01T07:00:00Z"], // 23:59 PDT before fall back
 	["2026-11-01T07:00:00Z", "2026-11-02T08:00:00Z"], // 25-hour day
 	["2026-11-01T07:01:00Z", "2026-11-02T08:00:00Z"],
+	["2026-11-01T07:59:00Z", "2026-11-02T08:00:00Z"], // 00:59 PDT
+	["2026-11-01T08:59:00Z", "2026-11-02T08:00:00Z"], // 01:59 PDT
+	["2026-11-01T09:59:00Z", "2026-11-02T08:00:00Z"], // 01:59 PST (repeated hour)
+	["2026-11-01T10:01:00Z", "2026-11-02T08:00:00Z"], // 02:01 PST
 	["2027-01-01T07:59:59.999Z", "2027-01-01T08:00:00.000Z"],
 ])("finds the next Pacific midnight for %s", (at, resetAt) => {
-	expect(nextPacificMidnight(Date.parse(at))).toBe(Date.parse(resetAt));
+	const now = Date.parse(at);
+	const expected = Date.parse(resetAt);
+	expect(nextPacificMidnight(now)).toBe(expected);
+	expect(classify("RESOURCE_EXHAUSTED: Daily", now)).toStrictEqual({ ...daily, resetAt: expected });
 });
