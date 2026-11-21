@@ -313,6 +313,15 @@ def test_hidden_status_configuration(wt: Worktrees, key: str) -> None:
     keep(wt, key)
 
 
+def test_disabled_filemode_hides_executable_bit_change(wt: Worktrees) -> None:
+    git(wt.path, "config", "core.filemode", "false")
+    (wt.path / "tracked").chmod(0o755)
+    assert git(wt.path, "status", "--porcelain") == b""
+    assert b"mode change 100644 => 100755" in git(wt.path, "-c", "core.filemode=true", "diff", "--summary")
+    quiet(wt)
+    keep(wt, "core.filemode")
+
+
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
     (wt.path / "retained-empty").mkdir()
     quiet(wt)

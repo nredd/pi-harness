@@ -43,13 +43,9 @@ OPERATIONS = (
     "REVERT_HEAD",
     "BISECT_LOG",
 )
-SOURCE = re.compile(
-    r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$"
-)
+SOURCE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 OID = re.compile(rb"(?:[a-f0-9]{40}|[a-f0-9]{64})")
-REFLOG = re.compile(
-    rb"([a-f0-9]+) ([a-f0-9]+) [^\n<>]+ <[^\n<>]*> [0-9]+ [+-][0-9]{4}(?:\t[^\n\0]*)?"
-)
+REFLOG = re.compile(rb"([a-f0-9]+) ([a-f0-9]+) [^\n<>]+ <[^\n<>]*> [0-9]+ [+-][0-9]{4}(?:\t[^\n\0]*)?")
 REPO_ENV = {
     "GIT_DIR",
     "GIT_COMMON_DIR",
@@ -143,15 +139,12 @@ def out(
         raise KeepError(f"`{label}` timed out") from exc
     if done.stderr or done.returncode not in (0, missing) or (silent and done.stdout):
         raise KeepError(
-            f"`{label}` failed ({done.returncode}): {done.stderr!r}"
-            + (f" {done.stdout!r}" if silent else "")
+            f"`{label}` failed ({done.returncode}): {done.stderr!r}" + (f" {done.stdout!r}" if silent else "")
         )
     return done.stdout
 
 
-def git(
-    path: Path, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False
-) -> bytes:
+def git(path: Path, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False) -> bytes:
     """Run Git without optional writes (including status index refresh).
 
     Parameters:
@@ -261,11 +254,7 @@ def parse_inventory(data: bytes) -> list[tuple[Path, list[bytes]]]:
     for record in data[:-2].split(b"\0\0"):
         location, *fields = record.split(b"\0")
         path = Path(os.fsdecode(location[9:]))
-        if (
-            not location.startswith(b"worktree ")
-            or not path.is_absolute()
-            or path in seen
-        ):
+        if not location.startswith(b"worktree ") or not path.is_absolute() or path in seen:
             raise KeepError("invalid worktree inventory path")
         validate_fields(fields)
         seen.add(path)
@@ -288,10 +277,7 @@ def validate_fields(fields: list[bytes]) -> None:
         len(core) != 2
         or not core[0].startswith(b"HEAD ")
         or not OID.fullmatch(core[0][5:])
-        or not (
-            core[1] == b"detached"
-            or (core[1].startswith(b"branch refs/heads/") and len(core[1]) > 18)
-        )
+        or not (core[1] == b"detached" or (core[1].startswith(b"branch refs/heads/") and len(core[1]) > 18))
     ):
         raise KeepError("invalid worktree inventory identity")
     tags = [field.partition(b" ")[0] for field in fields[len(core) :]]
@@ -299,9 +285,7 @@ def validate_fields(fields: list[bytes]) -> None:
         raise KeepError("unknown or duplicate worktree inventory field")
 
 
-def check_admin(
-    repo: Path, common: Path, records: list[tuple[Path, list[bytes]]]
-) -> None:
+def check_admin(repo: Path, common: Path, records: list[tuple[Path, list[bytes]]]) -> None:
     """Keep globally when pruning could orphan an admin dir or Git reports prune output.
 
     Parameters:
@@ -314,9 +298,7 @@ def check_admin(
         KeepError: The evidence is unsafe or incomplete.
     """
     for path, fields in records:
-        if any(
-            field == b"prunable" or field.startswith(b"prunable ") for field in fields
-        ):
+        if any(field == b"prunable" or field.startswith(b"prunable ") for field in fields):
             raise KeepError(f"Git reports {str(path)!r} prunable")
     root = common / "worktrees"
     if present(root):
@@ -328,16 +310,13 @@ def check_admin(
             target = dotgit.read_bytes().rstrip(b"\n")
             if (
                 not target.startswith(b"gitdir: ")
-                or (dotgit.parent / os.fsdecode(target[8:])).resolve()
-                != admin.resolve()
+                or (dotgit.parent / os.fsdecode(target[8:])).resolve() != admin.resolve()
             ):
                 raise KeepError(f"admin dir {str(admin)!r} has no matching `.git` file")
     git(repo, "worktree", "prune", "--dry-run", "--verbose", silent=True)
 
 
-def check_activity(
-    path: Path, admin: Path, holds: set[Path], now: float, lsof: Path
-) -> None:
+def check_activity(path: Path, admin: Path, holds: set[Path], now: float, lsof: Path) -> None:
     """Hold known owned work, active process cwd paths and recently touched worktrees.
 
     Parameters:
@@ -356,11 +335,7 @@ def check_activity(
     if inside(Path.cwd().resolve(), path):
         raise KeepError("current directory is inside worktree")
     cwd_fields = out(lsof, "lsof cwd", "-d", "cwd", "-F0n").split(b"\0")
-    cwd_paths = [
-        field[1:]
-        for item in cwd_fields
-        if (field := item.lstrip(b"\n")).startswith(b"n/")
-    ]
+    cwd_paths = [field[1:] for item in cwd_fields if (field := item.lstrip(b"\n")).startswith(b"n/")]
     if not cwd_paths:
         raise KeepError("no process cwd evidence")
     if any(inside(Path(os.fsdecode(cwd)).resolve(), path) for cwd in cwd_paths):
@@ -426,6 +401,8 @@ def check_status(path: Path, admin: Path) -> None:
     for key in ("core.sparseCheckout", "core.ignoreStat"):
         if config(path, key, "--type=bool") == "true":
             raise KeepError(f"`{key}` is enabled")
+    if config(path, "core.filemode", "--type=bool") == "false":
+        raise KeepError("`core.filemode` is disabled; executable-bit changes may be hidden")
 
 
 def check_nested(path: Path) -> None:
@@ -475,11 +452,7 @@ def check_borrowed(
         KeepError: The evidence is unsafe or incomplete.
     """
     roots = [common, common / "worktrees", *borrower_gitdirs]
-    others = [
-        other
-        for other, fields in records
-        if b"bare" not in fields and other.resolve() != path
-    ]
+    others = [other for other, fields in records if b"bare" not in fields and other.resolve() != path]
     seen = set()
     while others:
         other = others.pop().resolve(strict=True)
@@ -488,15 +461,13 @@ def check_borrowed(
         if other in seen:
             continue
         seen.add(other)
-        other_admin = Path(
-            os.fsdecode(git(other, "rev-parse", "--absolute-git-dir").rstrip(b"\n"))
-        ).resolve(strict=True)
+        other_admin = Path(os.fsdecode(git(other, "rev-parse", "--absolute-git-dir").rstrip(b"\n"))).resolve(
+            strict=True
+        )
         if inside(other_admin, admin) or inside(other_admin, path):
             raise KeepError(f"another checkout uses gitdir {str(other_admin)!r}")
         roots.append(other_admin)
-        others.extend(
-            submodule for submodule in gitlinks(other) if present(submodule / ".git")
-        )
+        others.extend(submodule for submodule in gitlinks(other) if present(submodule / ".git"))
 
     check_stores(path, admin, roots)
 
@@ -535,15 +506,11 @@ def check_stores(path: Path, admin: Path, roots: list[Path]) -> None:
             elif "HEAD" in names:
                 dirs[:] = [name for name in dirs if name in {"objects", "modules"}]
             if any((current / name).is_symlink() for name in dirs):
-                raise KeepError(
-                    f"cannot verify symlinked Git metadata under {str(current)!r}"
-                )
-            if {"objects", "HEAD", "config"}.issubset(
-                set(dirs) | set(names)
-            ) and inside(current.resolve(), admin):
-                target = config(
-                    path, "core.worktree", "--file", str(current / "config")
-                )
+                raise KeepError(f"cannot verify symlinked Git metadata under {str(current)!r}")
+            if {"objects", "HEAD", "config"}.issubset(set(dirs) | set(names)) and inside(
+                current.resolve(), admin
+            ):
+                target = config(path, "core.worktree", "--file", str(current / "config"))
                 if target and not inside((current / target).resolve(), path):
                     raise KeepError(f"another checkout uses gitdir {str(current)!r}")
             alternates = current / "alternates"
@@ -556,9 +523,7 @@ def check_stores(path: Path, admin: Path, roots: list[Path]) -> None:
                     if line:
                         target_path = (current.parent / os.fsdecode(line)).resolve()
                         if inside(target_path, admin) or inside(target_path, path):
-                            raise KeepError(
-                                f"another checkout borrows objects via {str(alternates)!r}"
-                            )
+                            raise KeepError(f"another checkout borrows objects via {str(alternates)!r}")
 
 
 def check_history(path: Path, admin: Path) -> None:
@@ -590,13 +555,9 @@ def check_history(path: Path, admin: Path) -> None:
     missing = sorted(reflog.difference(git(path, "rev-list", "--all").splitlines()))
     if missing:
         raise KeepError(f"HEAD reflog commits outside refs: {missing!r}")
-    attrs = git(
-        path, "check-attr", "-z", "--stdin", "-a", data=git(path, "ls-files", "-z")
-    )
+    attrs = git(path, "check-attr", "-z", "--stdin", "-a", data=git(path, "ls-files", "-z"))
     check_attributes(attrs)
-    if git(
-        path, "config", "--null", "--get", "core.autocrlf", missing=1
-    ).lower() not in (b"", b"false\0"):
+    if git(path, "config", "--null", "--get", "core.autocrlf", missing=1).lower() not in (b"", b"false\0"):
         raise KeepError("conversion config: core.autocrlf")
     for key in ("core.eol", "core.safecrlf"):
         if git(path, "config", "--null", "--get", key, missing=1):
@@ -670,10 +631,7 @@ def check_upstream(path: Path, branch: str) -> None:
     if not remote or remote == "." or not merge.startswith("refs/heads/"):
         raise KeepError("missing configured remote upstream")
     live = git(path, "ls-remote", "--exit-code", "--refs", "--", remote, merge)
-    if (
-        advertised_tip(live, merge)
-        != git(path, "rev-parse", "--verify", "@{upstream}").strip()
-    ):
+    if advertised_tip(live, merge) != git(path, "rev-parse", "--verify", "@{upstream}").strip():
         raise KeepError("local upstream is stale")
     if git(path, "rev-list", "@{upstream}..HEAD"):
         raise KeepError("unpushed commits")
@@ -764,17 +722,9 @@ def check_remote(path: Path, branch: str, base: str, gh: Path, *, no_pr: bool) -
         or config(path, f"branch.{branch}.remote")
         or "origin"
     )
-    url = (
-        git(path, "remote", "get-url", "--push", "--all", "--", remote)
-        .decode()
-        .rstrip("\n")
-    )
+    url = git(path, "remote", "get-url", "--push", "--all", "--", remote).decode().rstrip("\n")
     source = SOURCE.fullmatch(url) if "\n" not in url else None
-    host = (
-        base.partition("/")[0]
-        if base.count("/") == 2
-        else os.environ.get("GH_HOST", "github.com")
-    )
+    host = base.partition("/")[0] if base.count("/") == 2 else os.environ.get("GH_HOST", "github.com")
     head = git(path, "rev-parse", "--verify", "HEAD").strip()
     actual = (
         info["state"],
@@ -819,9 +769,7 @@ def assess(
     branch_ref = git(path, "symbolic-ref", "--quiet", "HEAD", missing=1).rstrip(b"\n")
     if not branch_ref.startswith(b"refs/heads/"):
         raise KeepError("detached HEAD")
-    admin = Path(
-        os.fsdecode(git(path, "rev-parse", "--absolute-git-dir").rstrip(b"\n"))
-    ).resolve(strict=True)
+    admin = Path(os.fsdecode(git(path, "rev-parse", "--absolute-git-dir").rstrip(b"\n"))).resolve(strict=True)
     if admin.parent != common / "worktrees":
         raise KeepError("not a linked worktree of this repository")
     head = git(path, "rev-parse", "--verify", "HEAD")
@@ -859,10 +807,7 @@ def verdict(path: Path, decision: str, reason: str, *, scope_known: bool) -> Non
         OSError: The output stream cannot be written.
     """
     reasons = [reason] if scope_known else list(dict.fromkeys((UNKNOWN_SCOPE, reason)))
-    sys.stdout.write(
-        json.dumps({"worktree": str(path), "verdict": decision, "reasons": reasons})
-        + "\n"
-    )
+    sys.stdout.write(json.dumps({"worktree": str(path), "verdict": decision, "reasons": reasons}) + "\n")
 
 
 def main(
@@ -887,9 +832,7 @@ def main(
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path)
     parser.add_argument("base_repo", help="owner/repo or host/owner/repo for GitHub")
-    parser.add_argument(
-        "--worktree", type=Path, help="evaluate only this exact registered path"
-    )
+    parser.add_argument("--worktree", type=Path, help="evaluate only this exact registered path")
     parser.add_argument(
         "--hold",
         type=Path,
@@ -910,28 +853,19 @@ def main(
     try:
         overrides = sorted(REPO_ENV.intersection(os.environ))
         if overrides:
-            raise KeepError(
-                f"unexpected Git repository overrides: {', '.join(overrides)}"
-            )
-        GIT_BINARY.set(
-            binary(GIT_LOCATIONS if git_binary is None else (git_binary,), "git")
-        )
+            raise KeepError(f"unexpected Git repository overrides: {', '.join(overrides)}")
+        GIT_BINARY.set(binary(GIT_LOCATIONS if git_binary is None else (git_binary,), "git"))
         opts.gh = binary(
-            tuple(str(path / "gh") for path in BIN_DIRS)
-            if gh_binary is None
-            else (gh_binary,),
+            tuple(str(path / "gh") for path in BIN_DIRS) if gh_binary is None else (gh_binary,),
             "gh",
         )
         opts.lsof = binary(
-            tuple(str(path / "lsof") for path in BIN_DIRS)
-            if lsof_binary is None
-            else (lsof_binary,),
+            tuple(str(path / "lsof") for path in BIN_DIRS) if lsof_binary is None else (lsof_binary,),
             "lsof",
         )
         records = inventory(opts.repo)
         common = (
-            opts.repo
-            / os.fsdecode(git(opts.repo, "rev-parse", "--git-common-dir").rstrip(b"\n"))
+            opts.repo / os.fsdecode(git(opts.repo, "rev-parse", "--git-common-dir").rstrip(b"\n"))
         ).resolve(strict=True)
         opts.hold = {path.resolve() for path in opts.hold}
         selected = opts.worktree.resolve() if opts.worktree is not None else None
@@ -957,9 +891,7 @@ def main(
             matched = True
             if index == 0 or b"bare" in fields:
                 raise KeepError("main or bare checkout")
-            if any(
-                field == b"locked" or field.startswith(b"locked ") for field in fields
-            ):
+            if any(field == b"locked" or field.startswith(b"locked ") for field in fields):
                 raise KeepError("locked")
             if global_hold is not None:
                 raise KeepError(global_hold)
