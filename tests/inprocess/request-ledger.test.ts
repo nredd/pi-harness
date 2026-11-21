@@ -13,24 +13,30 @@ import {
 	fauxToolCall,
 	registerFauxProvider,
 } from "@nredd/pi-test-lib/harness";
+import { type Static, Type } from "typebox";
+import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { isolateStackHome, loadFork } from "./support.ts";
 
+const ByteCount = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const PrefixBytes = Type.Union([ByteCount, Type.Null()]);
+const RowSchema = Type.Object({
+	session: Type.Union([Type.Literal("parent"), Type.Literal("child")]),
+	synthetic: Type.Object({ usage: Type.Literal("faux, not reported") }),
+	measurement: Type.Literal("utf8_sdk_context_bytes"),
+	model: Type.String(),
+	tool_array_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+	token_estimates: Type.Null(),
+	request_bytes: ByteCount,
+	// Match all keys, including line breaks, so no bucket value escapes validation.
+	buckets: Type.Record(Type.String({ pattern: "^[\\s\\S]*$" }), ByteCount),
+	common_prefix_previous_bytes: PrefixBytes,
+	common_prefix_parent_bytes: PrefixBytes,
+	cache_markers: Type.Tuple([]),
+});
+type Row = Static<typeof RowSchema>;
 type Owners = Record<string, string>;
-type Capture = { session: "parent" | "child"; raw: string; owners: Owners };
-type Row = {
-	session: Capture["session"];
-	synthetic: { usage: "faux, not reported" };
-	measurement: "utf8_sdk_context_bytes";
-	model: string;
-	tool_array_sha256: string;
-	token_estimates: null;
-	request_bytes: number;
-	buckets: Record<string, number>;
-	common_prefix_previous_bytes: number | null;
-	common_prefix_parent_bytes: number | null;
-	cache_markers: unknown[];
-};
+type Capture = { session: Row["session"]; raw: string; owners: Owners };
 
 const INTEGRATION = new URL("../integration/", import.meta.url);
 const OLD = "Old history to replace: 🦩";
@@ -44,30 +50,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isByteCount(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 /** Reject malformed subprocess output before the assertions or artifact writer use it. */
 function isRow(row: unknown): row is Row {
-	return (
-		isRecord(row) &&
-		(row.session === "parent" || row.session === "child") &&
-		isRecord(row.synthetic) &&
-		row.synthetic.usage === "faux, not reported" &&
-		row.measurement === "utf8_sdk_context_bytes" &&
-		typeof row.model === "string" &&
-		typeof row.tool_array_sha256 === "string" &&
-		/^[a-f0-9]{64}$/.test(row.tool_array_sha256) &&
-		row.token_estimates === null &&
-		isByteCount(row.request_bytes) &&
-		isRecord(row.buckets) &&
-		Object.values(row.buckets).every(isByteCount) &&
-		(row.common_prefix_previous_bytes === null || isByteCount(row.common_prefix_previous_bytes)) &&
-		(row.common_prefix_parent_bytes === null || isByteCount(row.common_prefix_parent_bytes)) &&
-		Array.isArray(row.cache_markers) &&
-		row.cache_markers.length === 0
-	);
+	return Check(RowSchema, row);
 }
 
 // A valid first parent row; change one field at a time so another guard can't mask a regression.
@@ -100,6 +85,7 @@ it.each([
 	["string request bytes", { ...validRow, request_bytes: "20" }],
 	["array buckets", { ...validRow, buckets: [20] }],
 	["fractional bucket bytes", { ...validRow, buckets: { shared: 0, serialization_overhead: 19.5 } }],
+	["invalid bucket bytes under a multiline key", { ...validRow, buckets: { "tool_result:line\nbreak": "20" } }],
 	["unsafe previous prefix bytes", { ...validRow, common_prefix_previous_bytes: Number.MAX_SAFE_INTEGER + 1 }],
 	["missing parent prefix bytes", { ...validRow, common_prefix_parent_bytes: undefined }],
 	["non-array cache markers", { ...validRow, cache_markers: "" }],
