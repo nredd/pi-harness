@@ -11,9 +11,7 @@ const FAKE_SSH = join(import.meta.dirname, "..", "fixtures", "ssh", "fake-ssh");
 describe("ssh_exec through a real session", () => {
 	let harness: Harness;
 	let work: string;
-
 	let dispose: (() => void) | undefined;
-	afterAll(() => dispose?.());
 	beforeAll(async () => {
 		work = makeTestTempDir("pi-dev-tools-ssh-scenario-", (cleanup) => {
 			dispose = cleanup;
@@ -26,7 +24,11 @@ describe("ssh_exec through a real session", () => {
 	});
 
 	afterAll(() => {
-		harness.cleanup();
+		try {
+			harness?.cleanup();
+		} finally {
+			dispose?.();
+		}
 	});
 
 	it("validates the host, runs the script, and separates remote from ssh failures", async () => {

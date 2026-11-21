@@ -237,7 +237,11 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 			"build-native.mjs --platform windows (output to tmpdir)",
 			async () => {
 				// Use a temp output path so we never pollute prebuilt/windows/ during tests.
-				const tmpBuildOut = path.join(makeTestTempDir("pi-windows-smoke-", onTestFinished), "windows-bridge.exe");
+				let tmpBuildOut;
+				onTestFinished(() => {
+					assert.equal(fs.existsSync(tmpBuildOut), false, "temporary Windows build output is cleaned up");
+				});
+				tmpBuildOut = path.join(makeTestTempDir("pi-windows-smoke-", onTestFinished), "windows-bridge.exe");
 				const result = await runScript("build-native.mjs", ["--platform", "windows", "--output", tmpBuildOut]);
 				if (isWin32()) {
 					assertScriptCode(result, 0, "build-native.mjs --platform windows --output <tmp> exits 0 on Windows");

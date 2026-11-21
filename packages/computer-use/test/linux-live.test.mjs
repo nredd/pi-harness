@@ -6,8 +6,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
-import { describe, onTestFinished, test } from "vitest";
+import { describe, test } from "vitest";
 
 // The launcher's whole-session budget. Its own deadline still bounds startup and teardown around this case.
 const LIVE_SCENARIO_TIMEOUT_MS = 5 * 60 * 1000;
@@ -35,7 +34,6 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")(
 				];
 				for (const executable of required) await fs.access(executable, fsConstants.X_OK);
 
-				const _tempDir = makeTestTempDir("pi-computer-use-linux-live-", onTestFinished);
 				const processes = [];
 				const display = await unusedDisplay();
 				const env = {
