@@ -456,6 +456,25 @@ def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
         "tests/integration/pyproject.toml",
         "tests/integration/uv.lock",
         "tests/integration/probes/vitest.config.ts",
+        "packages/subagents/vitest.workflow-examples.config.ts",
+        "packages/session-kit/tests/fixtures/monitor/worker-death.vitest.config.ts",
+        "packages/subagents/vite.config.ts",
+        "packages/subagents/istanbul.config.js",
+        "packages/subagents/nyc.config.js",
+        "packages/subagents/tsconfig.json",
+        "tsconfig.base.json",
+        "tests/lib/src/home-setup.ts",
+        "tests/lib/src/home-guard.ts",
+        "tests/lib/src/sandbox.ts",
+        "packages/plan-mode/tests/fixtures/vitest.global-setup.ts",
+        "packages/plan-mode/tests/fixtures/vitest.setup.ts",
+        "packages/plan-mode/tests/fixtures/vitest.runner.ts",
+        "packages/plan-mode/tests/fixtures/test-timeout-policy.ts",
+        "packages/todo/tests/fixtures/setup.ts",
+        "packages/subagents/tests/fixtures/tmp-root-setup.ts",
+        "packages/subagents/tests/workflow/workflow-examples.test.ts",
+        "packages/subagents/src/workflow/runtime.ts",
+        "packages/subagents/src/workflow/worker-source.ts",
         "package-lock.json",
         "packages/computer-use/Makefile",
         "packages/computer-use/scripts/swift-coverage.mjs",
@@ -501,6 +520,25 @@ def test_each_instrumentation_input_suppresses_delta(path: str, monkeypatch: pyt
         report.measured_delta(current, baseline, signals[0])
         == "not comparable: instrumentation fingerprints differ"
     )
+
+
+@pytest.mark.parametrize("package", ["todo", "session-kit", "subagents"])
+def test_application_config_preserves_fingerprint(package: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not treat an application file named `config.ts` as coverage configuration.
+
+    Parameters:
+        package (str): Package whose application configuration changes.
+        monkeypatch (pytest.MonkeyPatch): Scoped Git tree response.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The application edit changed the instrumentation fingerprint.
+    """
+    fixed = b"100644 blob 1111\tMakefile\0"
+    entry = f"\tpackages/{package}/src/config.ts\0".encode()
+    tree = Mock(side_effect=[fixed + b"100644 blob 2222" + entry, fixed + b"100644 blob 3333" + entry])
+    monkeypatch.setattr(producer.subprocess, "check_output", tree)
+    assert producer.semantics_fingerprint(RUN.tested_sha) == producer.semantics_fingerprint(RUN.tested_sha)
 
 
 @pytest.mark.parametrize("failure", ["no-git", "git-failed", "no-inputs"])

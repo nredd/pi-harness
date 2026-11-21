@@ -535,8 +535,8 @@ def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
     if not timedelta(0) <= now - timestamp(started) <= MAX_AGE:
         raise ValueError("Main coverage attempt is outside its retention window")
     tip = read_tip(api)
-    previous, base_tree = (None, None) if tip is None else read_snapshot(api, tip)
-    if previous is not None and previous.order >= run.order:
+    branch = None if tip is None else read_snapshot(api, tip)
+    if branch is not None and branch.snapshot is not None and branch.snapshot.order >= run.order:
         LOGGER.info("Snapshot is already at this or a newer execution")
         return
     route = f"actions/runs/{run.id}"
@@ -582,16 +582,13 @@ def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
         "hosts": {cell.host: encode_cell(cell) for cell in cells},
     }
     for _ in range(MAX_SNAPSHOT_WRITES):
-        if write_snapshot(
-            api, tip, base_tree, payload, lambda: main_run(api, api.request(route)) == identity
-        ):
+        if write_snapshot(api, branch, payload, lambda: main_run(api, api.request(route)) == identity):
             return
         new_tip = read_tip(api)
-        if new_tip == tip:
+        if new_tip == (branch.tip if branch is not None else None):
             raise ValueError("Coverage snapshot ref update rejected without a concurrent change")
-        tip = new_tip
-        previous, base_tree = (None, None) if tip is None else read_snapshot(api, tip)
-        if previous is not None and previous.order >= run.order:
+        branch = None if new_tip is None else read_snapshot(api, new_tip)
+        if branch is not None and branch.snapshot is not None and branch.snapshot.order >= run.order:
             LOGGER.info("Snapshot advanced to this or a newer execution")
             return
     raise ValueError("Coverage snapshot ref changed on every write attempt")

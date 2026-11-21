@@ -74,6 +74,7 @@ class MainGitHub(pub.GitHub):
     ref: dict[str, Any]
     policy: dict[str, Any]
     competing_order: int
+    conflict_code: int
     conflicts: int
     root_tree: str
 
@@ -100,6 +101,7 @@ class MainGitHub(pub.GitHub):
         self.tree_entries, self.proposed_siblings, self.blob, self.ref = [], [], {}, {}
         self.tree_metadata = {"sha": BASE_TREE, "truncated": False}
         self.competing_order, self.conflicts, self.root_tree = 6, 0, BASE_TREE
+        self.conflict_code = 422
         self.policy = {
             "path": "coverage/policy.json",
             "type": "file",
@@ -193,7 +195,7 @@ class MainGitHub(pub.GitHub):
             return {"sha": HEAD}
         if self.race == "ref":
             assert body.get("force") is not True
-            raise http_error(path, 422)
+            raise http_error(path, self.conflict_code)
         if self.race == "forbidden":
             raise http_error(path, 403)
         if method == "PATCH":
@@ -205,7 +207,7 @@ class MainGitHub(pub.GitHub):
                 self.ref["object"]["sha"] = f"{100 + self.conflicts:040x}"
                 self.root_tree = self.tree_metadata["sha"] = f"{self.conflicts:040x}"
                 self.tree_entries.append(SIBLING)
-                raise http_error(path, 422)
+                raise http_error(path, self.conflict_code)
             assert self.writes[-2][2]["parents"] == [self.ref["object"]["sha"]]
         self.seed_snapshot(self.raw)
         self.tree_entries.extend(self.proposed_siblings)
@@ -546,8 +548,9 @@ def test_new_snapshot_preserves_sibling_file(has_snapshot: bool) -> None:
         ("contended", 6, 6, 3),
     ],
 )
+@pytest.mark.parametrize("conflict_code", [422, 409])
 def test_retry_when_existing_ref_advances(
-    race: str, other_order: int, expected_order: int, writes: int
+    race: str, other_order: int, expected_order: int, writes: int, conflict_code: int
 ) -> None:
     """Rebase a still-newer snapshot, skip stale candidates, and bound retries.
 
@@ -556,6 +559,7 @@ def test_retry_when_existing_ref_advances(
         other_order (int): Competing snapshot's run number.
         expected_order (int): Readable run number after the update.
         writes (int): Expected PATCH attempts.
+        conflict_code (int): HTTP status used for the competing ref update.
     Returns:
         None.
     Raises:
@@ -567,6 +571,7 @@ def test_retry_when_existing_ref_advances(
     api.writes.clear()
     api.race = race
     api.competing_order = other_order
+    api.conflict_code = conflict_code
     if race == "contended":
         with pytest.raises(ValueError, match="changed on every write attempt"):
             pub.publish_snapshot(api, api.data, NOW)

@@ -575,13 +575,15 @@ from another test file.
 
 The hosted `workflow_run` publisher updates `coverage-data:snapshot.json` for successful same-repo
 `main` pushes. The first snapshot can initialize an asset-only branch; updates overlay only the
-snapshot entry. A rejected ref update retries against the new tip up to three total writes, and
-skips the candidate if the stored run number and attempt are already as new or newer.
+snapshot entry. On HTTP `409` or `422`, a moved ref is retried against the newly observed commit
+and tree, up to three total writes. An unchanged tip aborts; an equal or newer snapshot wins.
 The PR comment and step summary link to both the baseline commit and the CI attempt. Numeric deltas
 require matching producer fingerprints in the summary and provenance, plus equal OS, signal,
 writer and supported counters. The versioned fingerprint covers committed policy, CI, measurement
-scripts, runtime pins, Python coverage configuration, Vitest configuration and native build and
-toolchain configuration. The report distinguishes missing fingerprints, differing fingerprints and
+scripts, runtime pins, Python coverage configuration, named Vitest/Vite/TypeScript and Istanbul/NYC
+configs, Vitest setup and runner hooks and their helpers, the workflow-examples VM instrumenter and
+counter transport, and native build and toolchain configuration. Application files named `config.ts`
+are not instrumentation inputs. The report distinguishes missing fingerprints, differing fingerprints and
 differing supported counter sets. An absent or expired snapshot is `unavailable`.
 
 Limits:

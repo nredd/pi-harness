@@ -252,14 +252,23 @@ def read_tip(api: Transport) -> str | None:
     return git_sha(ref["object"]["sha"])
 
 
-def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot | None, str]:
+@dataclass(frozen=True)
+class BranchState:
+    """The observed commit and its root tree, with optional parsed snapshot data."""
+
+    tip: str
+    tree: str
+    snapshot: Snapshot | None
+
+
+def read_snapshot(api: Transport, tip: str) -> BranchState:
     """Read a fixed regular file at the pinned data commit, never a checked-out tree.
 
     Parameters:
         api (Transport): Repository transport.
         tip (str): Validated snapshot commit SHA.
     Returns:
-        tuple[Snapshot | None, str]: Optional snapshot and root tree SHA at the pinned tip.
+        BranchState: The pinned commit and tree, with a snapshot if present.
     Raises:
         ValueError: Malformed Git entry or snapshot.
     """
@@ -270,7 +279,7 @@ def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot | None, str]:
     if tree["sha"] != tree_sha or tree["truncated"] is not False or len(entries) > 1:
         raise ValueError("Invalid or ambiguous snapshot tree")
     if not entries:
-        return None, tree_sha
+        return BranchState(tip, tree_sha, None)
     entry = entries[0]
     size = positive_id(entry["size"])
     if entry["mode"] != "100644" or entry["type"] != "blob" or size > MAX_BYTES:
@@ -284,7 +293,7 @@ def read_snapshot(api: Transport, tip: str) -> tuple[Snapshot | None, str]:
     raw = base64.b64decode(encoded, validate=True)
     if len(raw) != size:
         raise ValueError("Invalid decoded snapshot size")
-    return Snapshot.parse(raw, api.repository), tree_sha
+    return BranchState(tip, tree_sha, Snapshot.parse(raw, api.repository))
 
 
 def baseline(api: Transport, now: datetime) -> Snapshot | None:
@@ -302,7 +311,7 @@ def baseline(api: Transport, now: datetime) -> Snapshot | None:
         tip = read_tip(api)
         if tip is None:
             return None
-        snapshot, _ = read_snapshot(api, tip)
+        snapshot = read_snapshot(api, tip).snapshot
     except (KeyError, OSError, TypeError, ValueError):
         return None
     return (
@@ -312,8 +321,7 @@ def baseline(api: Transport, now: datetime) -> Snapshot | None:
 
 def write_snapshot(
     api: Transport,
-    tip: str | None,
-    base_tree: str | None,
+    branch: BranchState | None,
     payload: dict[str, Any],
     still_current: Callable[[], bool],
 ) -> bool:
@@ -321,19 +329,18 @@ def write_snapshot(
 
     Parameters:
         api (Transport): Snapshot writer transport.
-        tip (str | None): Previously observed ref tip.
-        base_tree (str | None): Root tree at that tip, if the ref already exists.
+        branch (BranchState | None): Observed commit and tree, or no existing ref.
         payload (dict[str, Any]): Candidate snapshot JSON.
         still_current (Callable[[], bool]): Recheck run identity immediately before mutating the ref.
     Returns:
         bool: Whether the ref advanced, or false on a rejected ref mutation.
     Raises:
         ValueError: Invalid snapshot or changed attempt.
-        HTTPError: Git API failure other than a 422 on the final ref mutation.
+        HTTPError: Git API failure other than a 409 or 422 on the final ref mutation.
     """
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     Snapshot.parse(raw.encode(), api.repository)
-    overlay = {"base_tree": base_tree} if base_tree is not None else {}
+    overlay = {"base_tree": branch.tree} if branch is not None else {}
     tree = api.request(
         "git/trees",
         "POST",
@@ -345,19 +352,19 @@ def write_snapshot(
         {
             "message": "Record measured main coverage",
             "tree": git_sha(tree["sha"]),
-            "parents": [tip] if tip else [],
+            "parents": [branch.tip] if branch is not None else [],
         },
     )
     sha = git_sha(commit["sha"])
     if not still_current():
         raise ValueError("Main attempt changed during publication")
     try:
-        if tip is None:
+        if branch is None:
             api.request("git/refs", "POST", {"ref": REF, "sha": sha})
         else:
             api.request("git/refs/heads/coverage-data", "PATCH", {"sha": sha, "force": False})
     except HTTPError as error:
-        if error.code != 422:
+        if error.code not in {409, 422}:
             raise
         error.close()
         return False
