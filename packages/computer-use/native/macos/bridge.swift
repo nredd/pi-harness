@@ -654,7 +654,7 @@ struct ActWorld {
 	let postKeyCode: (CGKeyCode, CGEventFlags, Int32, String) throws -> Void
 	let postUnicodeText: (String, Int32, String) throws -> Void
 	let postAtomicUnicodeText: (String, Int32, String) throws -> Void
-	let withClipboard: (String, () throws -> Void) throws -> Bool
+	let snapshotClipboard: (String) -> (write: () throws -> Void, restore: () -> Bool)
 	let pasteKeyCode: () -> UInt16?
 }
 
@@ -1266,9 +1266,9 @@ final class Bridge {
 		case "listApps":
 			return listApps()
 		case "listWindows":
-			return try listWindows(pid: Int32(try intArg(request, "pid")))
+			return try listWindows(pid: pidArg(request))
 		case "listRoots":
-			return try listRoots(pid: optionalIntArg(request, "pid").map { Int32($0) }, title: optionalStringArg(request, "title"))
+			return try listRoots(pid: request["pid"] == nil ? nil : pidArg(request), title: optionalStringArg(request, "title"))
 		case "getFrontmost":
 			return try getFrontmost()
 		case "getUserContext":
@@ -1333,6 +1333,13 @@ final class Bridge {
 			return Int(value)
 		}
 		throw BridgeFailure(message: "Missing integer argument '\(key)'", code: "invalid_args")
+	}
+
+	private func pidArg(_ request: [String: Any]) throws -> Int32 {
+		guard let raw = request["pid"] as? Int, let pid = Int32(exactly: raw) else {
+			throw BridgeFailure(message: "pid must be a 32-bit integer", code: "invalid_args")
+		}
+		return pid
 	}
 
 	/// `windowId` from the wire, treating invalid ids as absent (unpaired roots have no CG window).
@@ -1683,7 +1690,7 @@ final class Bridge {
 	}
 
 	private func restoreUserFocus(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let targetTitle = optionalStringArg(request, "windowTitle")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 		guard let app = NSRunningApplication(processIdentifier: pid) else {
 			throw BridgeFailure(message: "App with pid \(pid) is no longer running", code: "app_not_found")
@@ -1720,7 +1727,7 @@ final class Bridge {
 	}
 
 	private func setWindowFrame(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
@@ -1747,7 +1754,7 @@ final class Bridge {
 	}
 
 	private func focusWindow(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
@@ -1827,16 +1834,15 @@ final class Bridge {
 				return (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
 			})
 			apps = listApps(cgEntries: entries).filter { app in
-				guard let rawPid = app["pid"] as? Int else { return false }
-				return matchingPids.contains(Int32(rawPid))
+				guard let rawPid = app["pid"] as? Int, let pid = Int32(exactly: rawPid) else { return false }
+				return matchingPids.contains(pid)
 			}
 		} else {
 			apps = broadRootCandidateApps(entries: entries)
 		}
 		var roots: [[String: Any]] = []
 		for app in apps {
-			guard let rawPid = app["pid"] as? Int else { continue }
-			let appPid = Int32(rawPid)
+			guard let rawPid = app["pid"] as? Int, let appPid = Int32(exactly: rawPid) else { continue }
 			let appName = app["appName"] as? String ?? processName(pid: appPid) ?? "Unknown App"
 			let bundleId = app["bundleId"] as? String
 			for var root in (try? listWindows(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)) ?? [] {
@@ -2562,7 +2568,7 @@ final class Bridge {
 			postScrollWheel: postScrollWheel(at:deltaX:deltaY:pid:delivery:), postMouseDrag: postMouseDrag(points:pid:delivery:),
 			postKeyPress: postKeyPress(keys:pid:delivery:), postKeyCode: postKeyCode(_:flags:pid:delivery:),
 			postUnicodeText: postUnicodeText(_:pid:delivery:), postAtomicUnicodeText: postAtomicUnicodeText(_:pid:delivery:),
-			withClipboard: withTemporaryClipboard, pasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }
+			snapshotClipboard: snapshotClipboard, pasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }
 		)
 	}
 
@@ -2586,7 +2592,7 @@ final class Bridge {
 		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
 		}
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let action = try stringArg(request, "action")
 		let target = request["target"] as? [String: Any] ?? [:]
 		let params = request["params"] as? [String: Any] ?? [:]
@@ -2920,8 +2926,10 @@ final class Bridge {
 			acquirePhysicalInputIfNeeded()
 			// cmd+v reaches the focused app under HID delivery: refuse a blocked one BEFORE the clipboard is touched.
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
-			let restored = try world.withClipboard(text) {
-				// Snapshotting the clipboard can take long (large or lazily provided types): focus may have moved since the check above.
+			let clipboard = world.snapshotClipboard(text)
+			// Lazy pasteboard data can stall the snapshot while focus moves. Do not publish if it moved to a blocked app.
+			if delivery == "hid" { try world.refuseBlockedKeyboard(blockedBundleIdList(request)) }
+			let restored = try withRestoredClipboard(write: clipboard.write, restore: clipboard.restore) {
 				// Looked up first, inside the clipboard: activating the target can switch the input source, and the lookup
 				// (a main-queue hop plus layout translation) must not sit between the last focus check and the post. Throwing restores the clipboard.
 				guard let vKeyCode = world.pasteKeyCode() else {
@@ -3047,10 +3055,9 @@ final class Bridge {
 		return finish(response)
 	}
 
-	/// Writes `text` to the general pasteboard as a transient, auto-generated item (clipboard history managers skip
-	/// it), runs `body`, then restores the previous contents (every item and type) unless something else wrote to
-	/// the pasteboard in the meantime. Restores on every exit. Returns whether it restored.
-	private func withTemporaryClipboard(_ text: String, _ body: () throws -> Void) throws -> Bool {
+	/// Snapshots every item and type without writing. The returned operations publish a transient item and
+	/// restore the snapshot only while we still own the pasteboard change count.
+	private func snapshotClipboard(_ text: String) -> (write: () throws -> Void, restore: () -> Bool) {
 		let pasteboard = NSPasteboard.general
 		let saved: [[NSPasteboard.PasteboardType: Data]] = (pasteboard.pasteboardItems ?? []).map { item in
 			var entry: [NSPasteboard.PasteboardType: Data] = [:]
@@ -3069,7 +3076,7 @@ final class Bridge {
 			}
 			return items.isEmpty || pasteboard.writeObjects(items)
 		}
-		return try withRestoredClipboard(write: {
+		return (write: {
 			// Keep the pasted text off Universal Clipboard / Handoff: it must not sync to the user's other devices.
 			pasteboard.prepareForNewContents(with: .currentHostOnly)
 			ownChangeCount = pasteboard.changeCount
@@ -3080,7 +3087,7 @@ final class Bridge {
 				throw BridgeFailure(message: "The clipboard rejected the text", code: "clipboard_write_failed")
 			}
 			ownChangeCount = pasteboard.changeCount
-		}, restore: restore, body: body)
+		}, restore: restore)
 	}
 
 	private func actBatch(_ request: [String: Any]) throws -> [String: Any] {
@@ -3091,9 +3098,10 @@ final class Bridge {
 		guard let actions = request["actions"] as? [[String: Any]], !actions.isEmpty, actions.count <= 20 else {
 			throw BridgeFailure(message: "actBatch requires 1...20 actions", code: "invalid_args")
 		}
-		let pid = Int32(try intArg(actions[0], "pid"))
+		let pids = try actions.map(pidArg)
+		let pid = pids[0]
 		let lookId = try stringArg(actions[0], "lookId")
-		guard actions.allSatisfy({ ($0["pid"] as? NSNumber)?.int32Value == pid }) else {
+		guard pids.allSatisfy({ $0 == pid }) else {
 			throw BridgeFailure(message: "actBatch actions must target one pid", code: "invalid_args")
 		}
 		guard actions.allSatisfy({ ($0["lookId"] as? String) == lookId }) else {
@@ -3228,7 +3236,7 @@ final class Bridge {
 	}
 
 	private func axWaitFor(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		ensureEnhancedAccessibility(pid: pid)
 		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
@@ -3687,7 +3695,7 @@ final class Bridge {
 	}
 
 	private func focusedElement(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
 		let windowRef = optionalStringArg(request, "windowRef")
 		let app = AXUIElementCreateApplication(pid)
@@ -3809,7 +3817,7 @@ final class Bridge {
 	private func requireTargetFocus(pid: Int32) throws {
 		let held = waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: {
 			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), targetPid: pid)
-		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(DispatchTime.now().uptimeNanoseconds / 1_000_000) })
+		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(clamping: DispatchTime.now().uptimeNanoseconds / 1_000_000) })
 		if !held { throw BridgeFailure(message: "The target app did not take focus, so keyboard input was not sent", code: "focus_not_acquired") }
 	}
 
@@ -4698,13 +4706,14 @@ final class Bridge {
 		let maxStep = max(12, total / 1000)
 		var previous = first
 		var lastPosition = first
-		func releaseButton(at position: CGPoint) {
-			if let up = inputSink.mouseEvent(.leftMouseUp, position, .left) {
-				up.setIntegerValueField(.mouseEventClickState, value: 1)
-				postEvent(up, pid: pid, delivery: delivery)
+		func releaseButton(at position: CGPoint) throws {
+			guard let up = inputSink.mouseEvent(.leftMouseUp, position, .left) else {
+				throw BridgeFailure(message: "Failed to create mouse up event", code: "input_failed")
 			}
+			up.setIntegerValueField(.mouseEventClickState, value: 1)
+			postEvent(up, pid: pid, delivery: delivery)
 		}
-		// Never leave the button held if anything below fails.
+		// Attempt to release at the last posted position without masking the original failure.
 		do {
 			for point in points.dropFirst() {
 				for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
@@ -4719,10 +4728,10 @@ final class Bridge {
 				previous = point
 			}
 		} catch {
-			releaseButton(at: lastPosition)
+			try? releaseButton(at: lastPosition)
 			throw error
 		}
-		releaseButton(at: points.last ?? lastPosition)
+		try releaseButton(at: points.last ?? lastPosition)
 	}
 
 	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid") throws {
