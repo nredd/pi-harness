@@ -27,6 +27,7 @@ from coverage_accounting import (
     Signal,
     account,
     check_signal_ratchet,
+    parse_lcov,
 )
 
 
@@ -353,8 +354,6 @@ def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
         ("malformed-metadata", "Cannot read Windows coverage metadata"),
         ("older-inputs", "metadata source hashes differ"),
         ("missing-source", "source lists differ"),
-        ("missing-totals", "Missing LLVM LCOV totals"),
-        ("impossible-totals", "Inconsistent LLVM LCOV totals"),
         ("stale-totals", "counters differ"),
         ("over-budget", "Budget exceeded"),
         ("missing-floor", "Missing OS floor"),
@@ -391,10 +390,6 @@ def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, cas
     lcov = "".join(f"SF:{file['filename']}{rows}" for file in files)
     if case == "missing-source":
         lcov = lcov.split("end_of_record\n", 1)[1]
-    if case == "missing-totals":
-        lcov = lcov.replace("FNF:3\n", "", 1)
-    if case == "impossible-totals":
-        lcov = lcov.replace("LH:1", "LH:4", 1)
     if case == "stale-totals":
         lcov = lcov.replace("LH:1", "LH:2", 1)
     if case == "over-budget":
@@ -419,6 +414,24 @@ def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, cas
         assert len(results) == 4
         assert sum(int(str(row["uncovered_regions"])) for row in results) == 6
         assert all(row["statements"] is None and "branches" not in row for row in results)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement", "error"),
+    [
+        ("LF:3\n", "", "Missing LLVM LCOV totals"),
+        ("LH:1\n", "", "Missing LLVM LCOV totals"),
+        ("FNF:3\n", "", "Missing LLVM LCOV totals"),
+        ("FNH:1\n", "", "Missing LLVM LCOV totals"),
+        ("LH:1\n", "LH:4\n", "Inconsistent LLVM LCOV totals"),
+        ("FNH:1\n", "FNH:4\n", "Inconsistent LLVM LCOV totals"),
+    ],
+)
+def test_llvm_rejects_each_missing_or_impossible_total(original: str, replacement: str, error: str) -> None:
+    """Change one field at a time so invalid line totals never mask invalid function totals."""
+    lcov = "SF:src/main.rs\nLF:3\nLH:1\nFNF:3\nFNH:1\nend_of_record\n"
+    with pytest.raises(ValueError, match=error):
+        parse_lcov(lcov.replace(original, replacement), llvm=True)
 
 
 def test_windows_native_policy_cannot_loosen_or_remove_platform() -> None:
