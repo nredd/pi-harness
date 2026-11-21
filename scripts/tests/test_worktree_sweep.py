@@ -845,11 +845,14 @@ def test_old_reflog_oid_protects_detached_commit(wt: Worktrees) -> None:
         (b"truncated", "incomplete"),
         (b"garbage\n", "malformed HEAD reflog record"),
         (b"0 0 name <a@b> 123 +0000\n", "malformed HEAD reflog OID"),
+        (b"0" * 64 + b" {head} name <a@b> 123 +0000\n", "malformed HEAD reflog OID"),
+        (b"0" * 40 + b" {head} name <a@b> 123 +0000\t\xff\n", "non-UTF-8 HEAD reflog"),
+        (b"0" * 40 + b" {head} n\0ame <a@b> 123 +0000\n", "malformed HEAD reflog record"),
         (b"0" * 40 + b" " + b"0" * 40 + b" name <a@b> 123 +0000\n", "no HEAD reflog commit evidence"),
     ],
 )
 def test_incomplete_nonempty_head_reflog_keeps(wt: Worktrees, data: bytes, reason: str) -> None:
-    (wt.admin / "logs/HEAD").write_bytes(data)
+    (wt.admin / "logs/HEAD").write_bytes(data.replace(b"{head}", git(wt.path, "rev-parse", "HEAD").strip()))
     if data == b"garbage\n":
         branch_log = wt.repo / ".git/logs/refs/heads/merged"
         branch_log.unlink()
@@ -884,7 +887,15 @@ def test_lock_during_remote_proof_keeps(wt: Worktrees) -> None:
     assert b"\0locked locked during remote proof\0" in git(wt.repo, "worktree", "list", "--porcelain", "-z")
 
 
-@pytest.mark.parametrize("raw", [b"worktree Relative\0bare\0\0", b"worktree /absolute\0HEAD bad\0\0"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"worktree Relative\0bare\0\0",
+        b"worktree /absolute\0HEAD bad\0\0",
+        b"worktree /absolute\0HEAD " + b"1" * 40 + b"\0branch refs/heads/\0\0",
+        b"worktree /absolute\0HEAD " + b"1" * 40 + b"\0branch refs/heads/bad-\xff\0\0",
+    ],
+)
 def test_invalid_inventory_identity_keeps(raw: bytes) -> None:
     guard = runpy.run_path(str(GUARD))
     with pytest.raises(guard["KeepError"], match="invalid worktree inventory"):

@@ -45,7 +45,7 @@ OPERATIONS = (
 )
 SOURCE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 OID = re.compile(rb"(?:[a-f0-9]{40}|[a-f0-9]{64})")
-REFLOG = re.compile(rb"([a-f0-9]+) ([a-f0-9]+) [^\n<>]+ <[^\n<>]*> [0-9]+ [+-][0-9]{4}(?:\t[^\n\0]*)?")
+REFLOG = re.compile(rb"([a-f0-9]+) ([a-f0-9]+) [^\n\0<>]+ <[^\n\0<>]*> [0-9]+ [+-][0-9]{4}(?:\t[^\n\0]*)?")
 REPO_ENV = {
     "GIT_DIR",
     "GIT_COMMON_DIR",
@@ -280,6 +280,10 @@ def validate_fields(fields: list[bytes]) -> None:
         or not (core[1] == b"detached" or (core[1].startswith(b"branch refs/heads/") and len(core[1]) > 18))
     ):
         raise KeepError("invalid worktree inventory identity")
+    try:
+        core[-1].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise KeepError("invalid worktree inventory branch encoding") from exc
     tags = [field.partition(b" ")[0] for field in fields[len(core) :]]
     if tags not in ([], [b"locked"], [b"prunable"], [b"locked", b"prunable"]):
         raise KeepError("unknown or duplicate worktree inventory field")
@@ -526,12 +530,13 @@ def check_stores(path: Path, admin: Path, roots: list[Path]) -> None:
                             raise KeepError(f"another checkout borrows objects via {str(alternates)!r}")
 
 
-def check_history(path: Path, admin: Path) -> None:
+def check_history(path: Path, admin: Path, oid_width: int) -> None:
     """Protect worktree-local refs, operations, reflog-only commits and raw filtered files.
 
     Parameters:
         path: Path, Path being checked or reported.
         admin: Path, Candidate metadata directory.
+        oid_width: int, Hexadecimal object ID width in this repository.
     Returns:
         None.
     Raises:
@@ -551,7 +556,7 @@ def check_history(path: Path, admin: Path) -> None:
     for name in OPERATIONS:
         if present(admin / name):
             raise KeepError(f"in-progress operation `{name}`")
-    reflog = reflog_oids((admin / "logs" / "HEAD").read_bytes())
+    reflog = reflog_oids((admin / "logs" / "HEAD").read_bytes(), oid_width)
     missing = sorted(reflog.difference(git(path, "rev-list", "--all").splitlines()))
     if missing:
         raise KeepError(f"HEAD reflog commits outside refs: {missing!r}")
@@ -564,11 +569,12 @@ def check_history(path: Path, admin: Path) -> None:
             raise KeepError(f"conversion config: {key}")
 
 
-def reflog_oids(data: bytes) -> set[bytes]:
+def reflog_oids(data: bytes, oid_width: int) -> set[bytes]:
     """Read both old and new object IDs without Git dropping malformed records.
 
     Parameters:
         data: bytes, Raw evidence or input bytes.
+        oid_width: int, Hexadecimal object ID width in this repository.
     Returns:
         set[bytes]: Nonzero old and new object IDs
     Raises:
@@ -578,13 +584,17 @@ def reflog_oids(data: bytes) -> set[bytes]:
         raise KeepError("empty HEAD reflog")
     if not data.endswith(b"\n"):
         raise KeepError("incomplete HEAD reflog")
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise KeepError("non-UTF-8 HEAD reflog") from exc
     oids = set()
     for record in data[:-1].split(b"\n"):
         match = REFLOG.fullmatch(record)
         if match is None:
             raise KeepError("malformed HEAD reflog record")
         for oid in match.groups():
-            if not OID.fullmatch(oid):
+            if len(oid) != oid_width:
                 raise KeepError("malformed HEAD reflog OID")
             if oid.strip(b"0"):
                 oids.add(oid)
@@ -775,7 +785,7 @@ def assess(
     head = git(path, "rev-parse", "--verify", "HEAD")
     reason = check_remote(
         path,
-        os.fsdecode(branch_ref[len(b"refs/heads/") :]),
+        branch_ref[len(b"refs/heads/") :].decode("utf-8"),
         opts.base_repo,
         opts.gh,
         no_pr=opts.no_pr,
@@ -786,7 +796,7 @@ def assess(
     check_admin(opts.repo, common, fresh)
     check_borrowed(path, admin, common, records, opts.borrower_gitdirs or ())
     check_activity(path, admin, opts.hold, now, opts.lsof)
-    check_history(path, admin)
+    check_history(path, admin, len(head.strip()))
     check_status(path, admin)
     if opts.borrower_gitdirs is None:
         raise KeepError(UNKNOWN_SCOPE)
