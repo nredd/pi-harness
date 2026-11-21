@@ -193,13 +193,35 @@ class MainGitHub(pub.GitHub):
         if path == "git/commits":
             assert body["tree"] == TREE
             return {"sha": HEAD}
+        return self.mutate_ref(path, method, body)
+
+    def mutate_ref(self, path: str, method: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Apply a proposed ref mutation or simulate a competing writer.
+
+        Parameters:
+            path (str): Ref API route.
+            method (str): HTTP verb.
+            body (dict[str, Any]): Proposed ref mutation.
+        Returns:
+            dict[str, Any]: Successful ref response.
+        Raises:
+            HTTPError: The proposed ref mutation was rejected.
+        """
         if self.race == "ref":
             assert body.get("force") is not True
             raise http_error(path, self.conflict_code)
+        if self.race == "first-publish":
+            assert (path, method) == ("git/refs", "POST")
+            assert not self.ref
+            payload = json.loads(self.raw) | {"number": 8, "run": 456, "sha": BLOB}
+            self.seed_snapshot(json.dumps(payload).encode())
+            raise http_error(path, 409)
         if self.race == "forbidden":
             raise http_error(path, 403)
         if method == "PATCH":
             assert body["force"] is False
+            if self.race == "unchanged":
+                raise http_error(path, self.conflict_code)
             if self.race == "contended" or (self.race == "advance" and not self.conflicts):
                 self.conflicts += 1
                 payload = json.loads(self.raw) | {"number": self.competing_order}
@@ -582,6 +604,60 @@ def test_retry_when_existing_ref_advances(
     baseline = snap.baseline(api, NOW)
     assert baseline is not None
     assert baseline.order == (expected_order, 2)
+
+
+@pytest.mark.parametrize("conflict_code", [409, 422])
+def test_conflict_with_unchanged_existing_tip_aborts(conflict_code: int) -> None:
+    """Reread the ref and do not retry a rejected PATCH when the tip did not move.
+
+    Parameters:
+        conflict_code (int): HTTP status returned by the rejected PATCH.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The publisher did not stop after rereading the unchanged ref.
+    """
+    api = MainGitHub()
+    pub.publish_snapshot(api, api.data, NOW)
+    api.seed_snapshot(json.dumps(json.loads(api.raw) | {"number": 6}).encode())
+    api.reads.clear()
+    api.writes.clear()
+    api.race = "unchanged"
+    api.conflict_code = conflict_code
+
+    with pytest.raises(ValueError, match="Coverage snapshot ref update rejected without a concurrent change"):
+        pub.publish_snapshot(api, api.data, NOW)
+
+    assert api.reads.count(snap.REF_API) == 2
+    assert [method for _, method, _ in api.writes] == ["POST", "POST", "PATCH"]
+    assert api.ref["object"]["sha"] == TIP
+
+
+def test_first_publish_conflict_preserves_newer_snapshot() -> None:
+    """Yield to a newer snapshot installed before the first ref POST completes.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The publisher overwrote the newer snapshot or did not reread the new ref.
+    """
+    api = MainGitHub()
+    api.race = "first-publish"
+
+    pub.publish_snapshot(api, api.data, NOW)
+
+    assert api.reads.count(snap.REF_API) == 2
+    assert api.reads.count(f"git/commits/{TIP}") == 1
+    assert [(path, method) for path, method, _ in api.writes] == [
+        ("git/trees", "POST"),
+        ("git/commits", "POST"),
+        ("git/refs", "POST"),
+    ]
+    baseline = snap.baseline(api, NOW)
+    assert baseline is not None
+    assert (baseline.order, baseline.run_id, baseline.sha) == ((8, 2), 456, BLOB)
 
 
 def test_rejected_update_keeps_old_baseline_readable() -> None:

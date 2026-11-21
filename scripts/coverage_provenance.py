@@ -39,7 +39,8 @@ SEMANTICS_PATHS = (
     "scripts/*",
     "forks/pi",
     "packages/*/scripts/*",
-    # Setup and runner hooks loaded by the owned Vitest configurations.
+    # Launcher environment and setup/runner hooks for the owned Vitest configurations.
+    "tests/lib/src/isolated-home.ts",
     "tests/lib/src/home-setup.ts",
     "tests/lib/src/home-guard.ts",
     "tests/lib/src/sandbox.ts",

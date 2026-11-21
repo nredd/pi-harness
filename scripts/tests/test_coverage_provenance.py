@@ -463,6 +463,8 @@ def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
         "packages/subagents/nyc.config.js",
         "packages/subagents/tsconfig.json",
         "tsconfig.base.json",
+        "scripts/vitest-package.ts",
+        "tests/lib/src/isolated-home.ts",
         "tests/lib/src/home-setup.ts",
         "tests/lib/src/home-guard.ts",
         "tests/lib/src/sandbox.ts",

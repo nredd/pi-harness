@@ -592,6 +592,8 @@ Limits:
 - The hosted publisher runs reviewed default-branch code and reads artifacts as data, never executes
   them. Only the snapshot job gets `contents: write`. Its token is repository-scoped, like release
   workflows; no ref isolation is claimed (owner decision pending).
+- The fingerprint conservatively hashes whole files, so even a comment-only change in
+  `workflow-examples.test.ts` suppresses measured deltas for unrelated packages.
 - GitHub's single pending publisher slot lets a late-finishing older CI run evict the newest pending
   publisher, so the snapshot can lag until the next eligible push.
 
