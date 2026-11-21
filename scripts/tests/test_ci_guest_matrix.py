@@ -1632,6 +1632,23 @@ def test_running_fan_in_accounts_for_the_merged_reports(tmp_path: Path, check: s
         assert (step in steps) is (check == "owned (ubuntu-24.04)")
 
 
+def test_running_ubuntu_fan_in_without_computer_use_skips_windows() -> None:
+    """Keep Ubuntu accounting active without requiring a Windows report for an unselected workspace."""
+    check = "owned (ubuntu-24.04)"
+    job = jobs()["owned-ubuntu"]
+    plan = {check: {"run": True, "shards": [{"workspaces": ["packages/dev-tools"]}]}}
+    context = {
+        "needs.classify.outputs.plan": json.dumps(plan),
+        "steps.plan.outputs.run": "true",
+    }
+    required = render(job["env"]["WINDOWS_REQUIRED"], context)
+    assert required == "false"
+    steps = walk_steps(job["steps"], context | {"env.WINDOWS_REQUIRED": required})
+    assert "Coverage accounting (existing reports, including test failures)" in steps
+    assert "Download Windows x64 coverage" not in steps
+    assert "Account for Windows x64 coverage separately" not in steps
+
+
 def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> None:
     """Keep exact scenario selectors and gates."""
     cfg = jobs()
