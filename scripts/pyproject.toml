@@ -4,7 +4,11 @@
 line-length = 110
 target-version = "py313"
 # These scripts run on the hosted runner's system python3 (3.12), before any uv environment exists.
-per-file-target-version = { "ci_paths.py" = "py312", "ci_process.py" = "py312", "install_gh_linux.py" = "py312" }
+[tool.ruff.per-file-target-version]
+"ci_fork_check.py" = "py312"
+"ci_paths.py" = "py312"
+"ci_process.py" = "py312"
+"install_gh_linux.py" = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PL", "PT", "C4", "PTH", "RET"]

@@ -279,7 +279,9 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   `make check-probes` still lints the whole probe directory and type-checks the other probes against
   the released host. The fork gate's non-rewriting
   check runs through measured `scripts/ci_fork_check.py`. It refuses drift from the selected core
-  check list before running any checks, drops Biome's `--write`, and invokes `tsc` through `npx`
+  check list before running any checks, drops Biome's `--write`, and invokes `tsc` through `npx`.
+  It resolves the `setup-node` toolchain once and relies on the job deadline. Unlike Bash command
+  substitution, it rejects NUL bytes rather than stripping them with a version-dependent warning.
 - The Forks system dependency step always installs the upstream packages. It tries the Ubuntu mirrors in
   turn: Azure first, then the Ubuntu archive if the index or package download
   fails. Each apt command has its own deadline inside the five-minute step and prints its captured
