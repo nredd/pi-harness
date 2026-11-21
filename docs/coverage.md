@@ -437,7 +437,8 @@ generators were retired (#870), not left as unmeasured source.
 The native Windows x64 Rust signal, `computer-use-windows-native` (#696), uses the headless
 `computer-use-rust-windows-x64-<attempt>` artifact. When the CI plan selects computer-use, the
 required Ubuntu fan-in downloads the successful producer's artifact by ID, including when the
-producer is carried over on a partial rerun. It writes `coverage/windows-x64-summary.json`
+producer is carried over on a partial rerun. Reports uploaded by a failed, cancelled or skipped
+producer are not downloaded or accounted for. The fan-in writes `coverage/windows-x64-summary.json`
 separately from the Ubuntu counters. Missing or invalid LCOV, raw LLVM JSON or metadata fails
 the check. The recorded source hashes must match the checkout. LLVM reports source
 line and function totals in `LF/LH` and `FNF/FNH`, not one unit per `DA` or `FNDA` row. Accounting

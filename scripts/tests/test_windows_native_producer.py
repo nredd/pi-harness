@@ -270,6 +270,15 @@ def test_required_check_rejects_failed_or_missing_native_producer(
     )
     passes = decision is False or (decision is True and result == "success")
     assert (completed.returncode == 0) is passes, completed.stdout + completed.stderr
+    context = {
+        "steps.plan.outputs.run": "true",
+        "env.WINDOWS_REQUIRED": required,
+        "env.WINDOWS_RESULT": result,
+        "env.WINDOWS_ARTIFACT_ID": "12345",
+    }
+    for name in ("Download Windows x64 coverage", "Account for Windows x64 coverage separately"):
+        consumer = next(step for step in fan_in["steps"] if step.get("name") == name)
+        assert evaluate(consumer["if"], context) is (decision is True and result == "success")
     if not isinstance(decision, bool):
         assert "WINDOWS_REQUIRED must be true or false" in completed.stdout
     elif not passes:

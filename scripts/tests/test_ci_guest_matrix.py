@@ -329,6 +329,8 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
         f"env.{key}": render(value, context | classify_context(trigger))
         for key, value in job.get("env", {}).items()
     }
+    if name == "owned":
+        context["env.WINDOWS_RESULT"] = "success"
     return walk_steps(job["steps"], context)
 
 
@@ -1648,7 +1650,9 @@ def test_running_ubuntu_fan_in_without_computer_use_skips_windows() -> None:
     }
     required = render(job["env"]["WINDOWS_REQUIRED"], context)
     assert required == "false"
-    steps = walk_steps(job["steps"], context | {"env.WINDOWS_REQUIRED": required})
+    steps = walk_steps(
+        job["steps"], context | {"env.WINDOWS_REQUIRED": required, "env.WINDOWS_RESULT": "success"}
+    )
     assert "Coverage accounting (existing reports, including test failures)" in steps
     assert "Download Windows x64 coverage" not in steps
     assert "Account for Windows x64 coverage separately" not in steps
