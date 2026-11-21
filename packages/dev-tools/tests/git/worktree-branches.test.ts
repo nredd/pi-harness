@@ -4,9 +4,9 @@
  * that delegates everything else to real git).
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
@@ -30,17 +30,14 @@ registerGitTools(mock.pi);
 
 let root: string;
 let repo: string;
-beforeEach(() => {
-	root = realpathSync(mkdtempSync(join(tmpdir(), "pi-dev-tools-wtb-")));
+beforeEach(({ onTestFinished }) => {
+	root = realpathSync(makeTestTempDir("pi-dev-tools-wtb-", onTestFinished));
 	repo = join(root, "repo");
 	mkdirSync(repo);
 	sh(repo, "init", "-q");
 	writeFileSync(join(repo, "a.txt"), "one\n");
 	sh(repo, "add", "a.txt");
 	sh(repo, "commit", "-q", "-m", "Initial");
-});
-afterEach(() => {
-	rmSync(root, { recursive: true, force: true });
 });
 
 describe("parseWorktrees and formatWorktrees edge records", () => {

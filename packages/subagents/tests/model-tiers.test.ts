@@ -268,6 +268,35 @@ describe("exact model tiers", () => {
 		expect(await resolveTier("cheap", { registry, admit: open })).toMatchObject({ kind: "unavailable" });
 	});
 
+	it("selects and admits an exact Google tier member and agent override", async () => {
+		registry.registerProvider("google", {
+			api: "google-generative-ai",
+			baseUrl: "http://localhost:1",
+			apiKey: "fixture-not-a-secret",
+			models: ["gemini-3.8-flash", "gemini-4-carbon"].map((id) => ({
+				id,
+				name: id,
+				reasoning: false,
+				input: ["text"],
+				contextWindow: 1000,
+				maxTokens: 100,
+				cost: costs,
+			})),
+		});
+		const pinned = "google/gemini-3.8-flash";
+		const model = { provider: "google", id: "gemini-3.8-flash" };
+		setModelTiers({ cheap: [pinned] }, { onUnavailable: "error" });
+		expect(select("@cheap")).toMatchObject({ requested: "@cheap", model });
+		expect(await resolveTier("cheap", { registry, admit: open })).toMatchObject({ model });
+		setAgentModels({ Scout: pinned });
+		expect(
+			selectModel({ agentType: "Scout", parentModel: registry.find("tier-test", "parent"), registry, cwd: dir }),
+		).toMatchObject({
+			model,
+			source: "agentModels:type",
+		});
+	});
+
 	it("ignores enabledModels and newer siblings even for an explicit tier", async () => {
 		setModelTiers({ cheap: [ref("gpt-6-luna")] }, {});
 		const before = await resolveTier("cheap", { registry, admit: open });

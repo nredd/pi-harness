@@ -1,8 +1,8 @@
 // `managed_browser_profile` opt-in: only the user-global file may set it (#674).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, test } from "vitest";
 import { loadComputerUseConfig } from "../src/config.ts";
 
@@ -16,9 +16,9 @@ const writeJson = (file: string, value: unknown) => {
 const userFile = () => path.join(root, "agent", "extensions", "pi-computer-use.json");
 const projectFile = () => path.join(cwd(), ".pi", "computer-use.json");
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-	root = mkdtempSync(path.join(os.tmpdir(), "cu-profile-config-"));
+	root = makeTestTempDir("cu-profile-config-", onTestFinished);
 	mkdirSync(cwd(), { recursive: true });
 	process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
 });
@@ -26,8 +26,7 @@ beforeEach(() => {
 afterEach(() => {
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	rmSync(root, { recursive: true, force: true });
-	loadComputerUseConfig(path.join(os.tmpdir(), "cu-profile-config-reset"));
+	loadComputerUseConfig(path.join(root, "reset"));
 });
 
 test("only user-global config can opt into a persistent credential-bearing profile", () => {

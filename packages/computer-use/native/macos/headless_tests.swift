@@ -83,6 +83,12 @@ func runPureAssertions() {
     check(keyboardTargetRefusalPid(frontmostPid: 10, focusedPid: nil, isBlockedPid: isBlockedPid) == 10, "a blocked frontmost app is refused when the focused app is unknown")
     check(keyboardTargetRefusalPid(frontmostPid: 5, focusedPid: nil, isBlockedPid: isBlockedPid) == nil, "unknown focus with an unblocked frontmost app runs")
     check(keyboardTargetRefusalPid(frontmostPid: 5, focusedPid: 6, isBlockedPid: isBlockedPid) == nil, "unblocked frontmost and focused apps run")
+    var frontmost: Int32 = 5
+    let (freshFrontmost, focused) = sampleKeyboardTargets(frontmostPid: { frontmost }, focusedPid: {
+        frontmost = 10
+        return nil
+    })
+    check(keyboardTargetRefusalPid(frontmostPid: freshFrontmost, focusedPid: focused, isBlockedPid: isBlockedPid) == 10, "AX timeout samples the changed frontmost app after the probe")
     // Coordinate act refuses a blocked window or AX hit at the point
     check(coordinateTargetRefusalPid(windows: overlayList, at: CGPoint(x: 150, y: 150), hitPid: nil, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked window at the point")
     check(coordinateTargetRefusalPid(windows: [], at: CGPoint(x: 1, y: 1), hitPid: 10, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked AX hit")
