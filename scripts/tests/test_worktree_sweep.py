@@ -918,5 +918,14 @@ def test_invalid_inventory_identity_keeps(raw: bytes) -> None:
         guard["parse_inventory"](raw)
 
 
+def test_shipped_skills_keep_claimed_scratch_at_handback() -> None:
+    skills = GUARD.parent.parent
+    worker = (GUARD.parent / "SKILL.md").read_text()
+    parent = (skills / "get-it-merged/SKILL.md").read_text()
+    assert "Before handback, leave scratch in place" in worker
+    assert "Before handback, remove" not in worker
+    assert "With the shipped guard, do not delete scratch" in parent
+
+
 def test_shipped_program_uses_python_38_grammar() -> None:
     ast.parse(GUARD.read_text(), feature_version=(3, 8))

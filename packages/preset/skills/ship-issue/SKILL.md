@@ -182,9 +182,10 @@ spawned by a parent for this issue. Never hand off to yourself.
 - If a PR exists or is planned, do NOT remove its worktree before the PR lands. After merge, use the
   guarded sweep from step 2; a delegated worker leaves its worktree for the parent. Never
   force-remove a worktree or discard another worker's changes
-- Before handback, remove only untracked scratch you created yourself. At creation, record the path, entry type and SHA-256 hash of each regular file's bytes or symlink's raw `readlink` bytes (no added newline). Use the same method as the parent in `get-it-merged`.
-  - Remove only regular files and symlinks listed as `??` in THAT worktree's `git status --porcelain --untracked-files=all`, on an exact type and hash match. Require the real path of a regular file, or the real path of a symlink's parent directory joined with the link name, to be inside the worktree. Never resolve the link itself; unlink only the link and leave its target untouched.
-  - Never remove ignored files or recursively delete contents. Keep and report directories. In the handback, claim only leftover scratch you created, with its path, type, creation hash for files and symlinks, and reason it remains. Report other changes separately; do not claim them
+- Before handback, leave scratch in place. Claim only scratch you created, with its path, type,
+  and reason it remains. Record the creation SHA-256 of regular file bytes or raw symlink
+  `readlink` bytes (no added newline). The record identifies scratch; it does not authorize
+  deletion. Report other changes separately; do not claim them.
 - For work where no PR will ever exist, the parent may request a verdict with
   `--no-pr --worktree <path>`. Report the verdict and owner. During rollout, no-PR removal
   is not automated by these skills; leave the worktree and both branches in place
