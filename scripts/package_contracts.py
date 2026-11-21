@@ -2021,6 +2021,8 @@ def ensure_stock_pi(prefix: Path, sandbox: Sandbox) -> Path:
 
     Raises:
         ContractError: If the installed version or registry integrity differs from the pins.
+        ValueError: If installation is needed and `PI_TIMEOUT_SCALE` is set to a value that is not
+            a finite number at least 1.
     """
     # npm keys its lockfile by realpath; a symlinked prefix (macOS `/var` -> `/private/var`) would
     # yield `../../private/...` keys that `verify_stock_pi` cannot find.
@@ -2130,6 +2132,7 @@ def pack(
 
     Raises:
         ContractError: If npm output is malformed or disagrees with the tarball.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     timeout = scaled_timeout(NPM_TIMEOUT_S)
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
@@ -2467,6 +2470,7 @@ def run_packed_files_gate(
 
     Raises:
         ContractError: If a file contract or production source rule fails.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     sandbox = Sandbox(work / "base", locate_tools())
     tarballs = work / "tarballs"
@@ -3224,6 +3228,7 @@ def install_alone(artifact: PackedArtifact, sandbox: Sandbox, project: Path) -> 
         ContractError: If the package is missing or ships a nested `node_modules`; its installed or
             locked dependencies differ from the contract; a required dependency is not installed; or the
             lockfile paths, installed packages or top-level entries differ from the derived closure.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     project.mkdir(parents=True)
     (project / "package.json").write_text('{"name": "contract-consumer", "private": true}\n')
@@ -3591,6 +3596,7 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
 
     Raises:
         ContractError: If the tool misbehaves.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     repo = ctx.work / "repo"
     repo.mkdir()
@@ -3678,6 +3684,7 @@ def published_sampler_dist(sandbox: Sandbox, cwd: Path) -> PublishedDist:
 
     Raises:
         ContractError: If the query fails or the response is malformed.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     spec = f"{RESOURCE_SAMPLER_CONTRACT.name}@{RESOURCE_SAMPLER_VERSION}"
     done = run(
@@ -4893,6 +4900,7 @@ def run_gate(
 
     Raises:
         ContractError: On the first violated contract or a malformed report, after all static audits ran.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     selected = [contract for contract in contracts if only is None or contract.directory in only]
     if not selected:
@@ -4977,6 +4985,7 @@ def run_audit_gate(
 
     Raises:
         ContractError: If the tarball audit or the clean install fails.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     tools = locate_tools()
     sandbox = Sandbox(work / "base", tools)
