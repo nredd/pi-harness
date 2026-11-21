@@ -14,9 +14,9 @@
  * background envelope. The child session, and pi's cost in creating one, are
  * deliberately outside the measurement.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, describe, vi } from "vitest";
 import { bench } from "./fixtures/benchmark.ts";
 
@@ -59,19 +59,18 @@ function agentFile(i: number): string {
  * not an error.
  */
 function projectDirWith(n: number): string {
-	const dir = mkdtempSync(join(tmpdir(), "perf-agents-"));
+	const dir = makeTestTempDir("perf-agents-", (cleanup) => cleanups.push(cleanup));
 	const agentsDir = join(dir, ".pi", "agents");
 	mkdirSync(agentsDir, { recursive: true });
 	for (let i = 0; i < n; i++) writeFileSync(join(agentsDir, `perf-agent-${i}.md`), agentFile(i));
-	tempDirs.push(dir);
 	return dir;
 }
 
-const tempDirs: string[] = [];
+const cleanups: (() => void)[] = [];
 const hermetics: Hermetic[] = [];
 afterAll(() => {
 	for (const h of hermetics.reverse()) h.restore();
-	for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+	for (const cleanup of cleanups) cleanup();
 	registerAgents(new Map());
 	delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
 });

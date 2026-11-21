@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type EventBus,
@@ -699,12 +699,12 @@ describe("cross-extension RPC", () => {
 		let prevAgentDir: string | undefined;
 		let prevEnabled: boolean;
 
-		beforeEach(() => {
+		beforeEach(({ onTestFinished }) => {
 			// resolveEnabledModels memoizes on (patterns, mtime+size of both settings
 			// files) — a fresh project dir per test keeps one case's allowlist from
 			// being served to the next. Same harness as test/model-scope.test.ts.
-			projectDir = mkdtempSync(join(tmpdir(), "pi-rpc-scope-project-"));
-			agentDir = mkdtempSync(join(tmpdir(), "pi-rpc-scope-global-"));
+			projectDir = makeTestTempDir("pi-rpc-scope-project-", onTestFinished);
+			agentDir = makeTestTempDir("pi-rpc-scope-global-", onTestFinished);
 			prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 			process.env.PI_CODING_AGENT_DIR = agentDir;
 			prevEnabled = isScopeModelsEnabled();
@@ -722,8 +722,6 @@ describe("cross-extension RPC", () => {
 			setScopeModelsEnabled(prevEnabled); // module-global — restore for other suites
 			if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-			rmSync(projectDir, { recursive: true, force: true });
-			rmSync(agentDir, { recursive: true, force: true });
 		});
 
 		async function spawn(requestId: string, model: unknown) {

@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseColor } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 import { StatsView, summary } from "../../src/stats/component.ts";
 import { quotaRows } from "../../src/stats/quota.ts";
 import { loadCombined } from "../../src/stats/snapshot.ts";
@@ -17,11 +17,10 @@ const now = Date.now();
 const observed = now / 1000 - 1200;
 const reset = Math.floor(now / 1000) + 3600;
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "capture-export-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("capture-export-", onTestFinished);
 	root = seedHarnessHome(join(dir, "home")).claude;
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 /** Execute the distributed no-network CLI in an isolated home, never the operator's environment. */
 function run(...args: string[]): string {

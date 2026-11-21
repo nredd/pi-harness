@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { freshnessLines } from "../../src/stats/freshness.ts";
 import { CACHE_VERSION } from "../../src/stats/load.ts";
@@ -8,15 +8,14 @@ import { loadCombined, machineIdentity } from "../../src/stats/snapshot.ts";
 import { assistantLine, sessionFile } from "../fixtures/stats/fixtures.ts";
 
 let dir: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "kit-default-stats-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("kit-default-stats-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", dir);
 	vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", undefined);
 });
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 it("uses the viewer clock when freshness callers omit now", () => {

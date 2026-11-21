@@ -1,7 +1,7 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CACHE_VERSION, isFileStats, loadUsage, opaqueId, parseSession } from "../../src/stats/load.ts";
 import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
@@ -102,14 +102,13 @@ describe("stats file races", () => {
 	let dir: string;
 	let root: string;
 	let cache: string;
-	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "psk-load-boundaries-"));
+	beforeEach(({ onTestFinished }) => {
+		dir = makeTestTempDir("psk-load-boundaries-", onTestFinished);
 		root = join(dir, "sessions");
 		cache = join(dir, "cache.json");
 	});
 	afterEach(() => {
 		vi.mocked(stat).mockReset();
-		rmSync(dir, { recursive: true, force: true });
 	});
 
 	/** Two ordered inputs make the second parse disappear after its successful stat. */

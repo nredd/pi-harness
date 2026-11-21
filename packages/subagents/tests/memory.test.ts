@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock homedir so the user-scope legacy fallback check (~/.pi/agent-memory)
 // resolves against a controlled temp home rather than the developer's real
@@ -27,17 +27,13 @@ import {
 describe("memory", () => {
 	let tmpDir: string;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-mem-test-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-mem-test-", onTestFinished);
 		// Point homedir at a clean temp home with no legacy agent-memory dirs, so
 		// user-scope resolution deterministically returns the agent-dir location.
 		const fakeHome = join(tmpDir, "home");
 		mkdirSync(fakeHome, { recursive: true });
 		mockHomedir.mockReturnValue(fakeHome);
-	});
-
-	afterEach(() => {
-		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
 	describe("resolveMemoryDir", () => {

@@ -3,9 +3,9 @@
  * `handle` and spawner-`name` handle, so a listener (pi-todo's owner column)
  * can match an agent by what the parent typed instead of only its id (#444).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AgentRunner from "../src/agent-runner.ts";
 
@@ -43,9 +43,9 @@ function ctx() {
 	} as any;
 }
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
-	cwd = mkdtempSync(join(tmpdir(), "lifecycle-identity-"));
+	cwd = makeTestTempDir("lifecycle-identity-", onTestFinished);
 	process.chdir(cwd);
 	process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
 	mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
@@ -61,7 +61,6 @@ afterEach(() => {
 	if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
 	registerAgents(new Map());
-	rmSync(cwd, { recursive: true, force: true });
 });
 
 async function boot() {

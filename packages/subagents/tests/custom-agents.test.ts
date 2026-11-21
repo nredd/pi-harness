@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { serializeAgentFile } from "../src/agent-file-toggle.ts";
 import { BUILTIN_TOOL_NAMES } from "../src/agent-types.ts";
 import { loadCustomAgents as loadCustomAgentsAtHome } from "../src/custom-agents.ts";
@@ -15,8 +15,8 @@ describe("loadCustomAgents", () => {
 	let tmpDir: string;
 	let originalAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-test-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-test-", onTestFinished);
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = join(tmpDir, ".pi", "agent");
 		// These suites exercise project agent files, which load only for a trusted
@@ -29,7 +29,6 @@ describe("loadCustomAgents", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
 	function writeAgentIn(projectDir: ".agents" | ".pi", name: string, content: string) {
@@ -1283,7 +1282,7 @@ Good body.`,
 	});
 
 	it("honors PI_CODING_AGENT_DIR for global custom agent discovery", () => {
-		const altAgentDir = mkdtempSync(join(tmpdir(), "pi-alt-agent-"));
+		const altAgentDir = makeTestTempDir("pi-alt-agent-", onTestFinished);
 		const originalEnv = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = altAgentDir;
 		try {
@@ -1299,7 +1298,6 @@ Good body.`,
 		} finally {
 			if (originalEnv == null) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = originalEnv;
-			rmSync(altAgentDir, { recursive: true, force: true });
 		}
 	});
 
@@ -1450,8 +1448,8 @@ describe("package-provided agents", () => {
 	let pkgDir: string;
 	let originalAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-test-pkg-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-test-pkg-", onTestFinished);
 		pkgDir = join(tmpDir, "package", "agents");
 		mkdirSync(pkgDir, { recursive: true });
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -1466,7 +1464,6 @@ describe("package-provided agents", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
 	/** Write an agent into the fake package directory. */

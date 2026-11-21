@@ -1,14 +1,16 @@
 /** Root-local discovery through the public metadata and tool boundaries. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, expect, it } from "vitest";
 import { AgentRoster, AUDIT_LIMIT, ROSTER_BYTES, ROSTER_LIMIT, rosterJson } from "../src/agent-roster.ts";
 import { createRosterTools } from "../src/roster-tools.ts";
 import type { AgentConfig, AgentRecord } from "../src/types.ts";
 
-const home = mkdtempSync(join(tmpdir(), "roster-"));
-afterEach(() => rmSync(home, { recursive: true, force: true }));
+let home: string;
+beforeEach(({ onTestFinished }) => {
+	home = makeTestTempDir("roster-", onTestFinished);
+});
 
 function record(id: string, extra: Partial<AgentRecord> = {}): AgentRecord {
 	return {

@@ -3,11 +3,11 @@
 // with a mock pi (same pattern as print-mode.test.ts) inside a temp cwd, then
 // inspects the registered Agent tool's description.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { formatToolsSuffix } from "../src/index.ts";
 import { setWorktreeIsolationEnabled } from "../src/worktree.ts";
 import { bootPi, type SessionStartHandler, startSession } from "./fixtures/boot-extension.ts";
@@ -20,17 +20,20 @@ describe("toolDescriptionMode", () => {
 	let hermeticAgentDir: string;
 	let prevCwd: string;
 	let prevAgentDir: string | undefined;
-	let shutdown: (() => Promise<void>) | undefined;
+	const shutdowns: (() => Promise<void>)[] = [];
 	let handlers: Map<string, SessionStartHandler>;
 
+	beforeEach(() => {
+		prevCwd = process.cwd();
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+	});
+
 	function setup(settings?: Record<string, unknown>, beforeInstantiate?: () => void) {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-"));
+		tmpDir = makeTestTempDir("pi-tooldesc-", onTestFinished);
 		// Isolate global settings (getAgentDir / ~/.pi) so the dev's real
 		// subagents.json can't leak into the "default is full" assertion.
-		hermeticAgentDir = mkdtempSync(join(tmpdir(), "pi-tooldesc-agentdir-"));
-		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		hermeticAgentDir = makeTestTempDir("pi-tooldesc-agentdir-", onTestFinished);
 		process.env.PI_CODING_AGENT_DIR = hermeticAgentDir;
-		prevCwd = process.cwd();
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		// Package agents are installation-dependent and make the compact type list
 		// vary by runner. This fixture verifies the built-in description contract,
@@ -43,28 +46,28 @@ describe("toolDescriptionMode", () => {
 		const { pi, tools } = made;
 		handlers = made.handlers;
 		subagentsExtension(pi);
-		shutdown = async () => {
-			await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, {
+		shutdowns.push(async () => {
+			await made.handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, {
 				hasUI: false,
 				ui: {},
 			} as never);
-		};
+		});
 		return tools;
 	}
 
 	afterEach(async () => {
-		await shutdown?.();
-		shutdown = undefined;
-		// applySettings only applies keys that are PRESENT, so a subagents.json
-		// without `worktreeIsolation` leaves the module singleton wherever the
-		// previous test left it. Reset it so each setup()'s settings decide, and
-		// so the "default" assertions below really test the default.
-		setWorktreeIsolationEnabled(true);
-		process.chdir(prevCwd);
-		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(hermeticAgentDir, { recursive: true, force: true });
+		try {
+			for (const shutdown of shutdowns.splice(0).reverse()) await shutdown();
+		} finally {
+			// applySettings only applies keys that are PRESENT, so a subagents.json
+			// without `worktreeIsolation` leaves the module singleton wherever the
+			// previous test left it. Reset it so each setup()'s settings decide, and
+			// so the "default" assertions below really test the default.
+			setWorktreeIsolationEnabled(true);
+			process.chdir(prevCwd);
+			if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+		}
 	});
 
 	it("defaults to the full description", () => {

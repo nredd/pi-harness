@@ -14,9 +14,9 @@
  * real extension, so what they pin is the actual delivery path — the notification
  * fires for an unjoined agent, and does not for a consumed one.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -53,9 +53,9 @@ describe("subagents:rpc:consume", () => {
 	let prevAgentDir: string | undefined;
 	let shutdown: (() => Promise<void>) | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-consume-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-consume-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-consume-", onTestFinished);
+		agentDir = makeTestTempDir("pi-consume-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -74,8 +74,6 @@ describe("subagents:rpc:consume", () => {
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 

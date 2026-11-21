@@ -1,21 +1,5 @@
-// src/ui/schedule-menu.ts had 0% coverage — every one of its 50 statements.
-// That is not a cosmetic gap: the menu's only action is DESTRUCTIVE (cancel a
-// scheduled job), and it identifies the chosen job by matching the selected
-// label string back against the label list.
-//
-// Labels are built by `formatJob`, which truncates the name to 18 characters
-// (`j.name.padEnd(18).slice(0, 18)`). Job names come from the `Agent` call's
-// `description`, which is LLM-authored and routinely shares a prefix. Two jobs
-// whose names agree in the first 18 chars, with the same schedule, type, run
-// count and run times, produce byte-identical labels — and `labels.indexOf`
-// then resolves to the FIRST of them regardless of which the user picked.
-//
-// CHANGELOG 0.10.0 states the menu "lets you cancel any one of them", so this
-// contradicts documented intent rather than merely being unspecified.
-
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SubagentScheduler } from "../../src/schedule.ts";
 import { ScheduleStore } from "../../src/schedule-store.ts";
@@ -33,8 +17,8 @@ describe("showSchedulesMenu", () => {
 	let dir: string;
 	let scheduler: SubagentScheduler;
 
-	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "pi-schedmenu-"));
+	beforeEach(({ onTestFinished }) => {
+		dir = makeTestTempDir("pi-schedmenu-", onTestFinished);
 		scheduler = new SubagentScheduler();
 		scheduler.start(
 			{ events: { emit: vi.fn() } } as any,
@@ -46,7 +30,6 @@ describe("showSchedulesMenu", () => {
 
 	afterEach(() => {
 		scheduler.stop();
-		rmSync(dir, { recursive: true, force: true });
 	});
 
 	const addJob = (name: string) =>

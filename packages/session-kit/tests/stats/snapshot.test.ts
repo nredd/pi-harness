@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import {
 	copyFileSync,
 	mkdirSync,
-	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
@@ -10,10 +9,10 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 import { cachePath, dedupCalls, flatten, loadUsage, opaqueId, parseSession } from "../../src/stats/load.ts";
 import {
 	atomicJson,
@@ -36,13 +35,12 @@ let dir: string;
 let repo: string;
 let a: string;
 let b: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "stats-snapshot-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("stats-snapshot-", onTestFinished);
 	repo = join(dir, "repo");
 	a = join(dir, "a");
 	b = join(dir, "b");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 const usage = (id: string, ms = at("2026-10-01"), input = 10): string => {
 	const e = JSON.parse(assistantLine({ ms, provider: "enterprise-raw", model: "wire-model", input }));
 	e.id = id;

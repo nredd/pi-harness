@@ -1,9 +1,9 @@
 import { type ChildProcess, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { BoundedMatcher } from "../../src/monitor/matcher.ts";
 
 const children = vi.hoisted(() => [] as ChildProcess[]);
@@ -44,30 +44,26 @@ it("exits on parent IPC loss even when the isolated regex is spinning", async ()
 });
 
 it("runs matching from a real compiled Bun host without re-entering its bundled entrypoint", () => {
-	const dir = mkdtempSync(join(tmpdir(), "kit-matcher-compiled-"));
-	try {
-		const fixture = join(dir, "main.ts");
-		const executable = join(dir, "matcher-host");
-		const source = new URL("../../src/monitor/matcher.ts", import.meta.url).pathname;
-		writeFileSync(
-			fixture,
-			`import { BoundedMatcher } from ${JSON.stringify(source)};
+	const dir = makeTestTempDir("kit-matcher-compiled-", onTestFinished);
+	const fixture = join(dir, "main.ts");
+	const executable = join(dir, "matcher-host");
+	const source = new URL("../../src/monitor/matcher.ts", import.meta.url).pathname;
+	writeFileSync(
+		fixture,
+		`import { BoundedMatcher } from ${JSON.stringify(source)};
 const matcher = new BoundedMatcher('^READY$');
 const results = [];
 for (const text of ['no', 'READY']) matcher.test(text, value => results.push(value));
 await matcher.drain();
 await matcher.close();
 console.log(JSON.stringify(results));`,
-		);
-		const build = spawnSync("bun", ["build", "--compile", fixture, "--outfile", executable], {
-			encoding: "utf8",
-			timeout: 10_000,
-		});
-		expect(build.status, build.stderr).toBe(0);
-		const run = spawnSync(executable, [], { encoding: "utf8", timeout: 5_000 });
-		expect(run.status, run.stderr).toBe(0);
-		expect(run.stdout.trim()).toBe("[false,true]");
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
+	);
+	const build = spawnSync("bun", ["build", "--compile", fixture, "--outfile", executable], {
+		encoding: "utf8",
+		timeout: 10_000,
+	});
+	expect(build.status, build.stderr).toBe(0);
+	const run = spawnSync(executable, [], { encoding: "utf8", timeout: 5_000 });
+	expect(run.status, run.stderr).toBe(0);
+	expect(run.stdout.trim()).toBe("[false,true]");
 });

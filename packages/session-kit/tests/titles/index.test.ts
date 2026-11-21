@@ -1,6 +1,6 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/titles/index.ts";
@@ -26,13 +26,12 @@ const ASSISTANT_ENTRY = { type: "message", message: { role: "assistant", content
 let agentDir: string;
 const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
 
-beforeEach(() => {
-	agentDir = mkdtempSync(path.join(tmpdir(), "kit-titles-"));
+beforeEach(({ onTestFinished }) => {
+	agentDir = makeTestTempDir("kit-titles-", onTestFinished);
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 });
 
 afterEach(() => {
-	rmSync(agentDir, { recursive: true, force: true });
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
 });

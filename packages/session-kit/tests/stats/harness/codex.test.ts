@@ -1,7 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 import { readCodex } from "../../../src/stats/harness/codex.ts";
 import { accountHash, entryHash, sessionHash } from "../../../src/stats/harness/common.ts";
 import type { HarnessCache } from "../../../src/stats/harness/scan.ts";
@@ -19,10 +18,9 @@ import {
 const SALT = "0123456789abcdef0123456789abcdef";
 let root: string;
 const rollout = (name: string, day = "2026/10/02") => join(root, "sessions", day, `rollout-${name}.jsonl`);
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "psk-codex-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("psk-codex-", onTestFinished);
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 const weekly = { used_percent: 12.5, window_minutes: 10080, resets_at: 1_790_000_000 };
 const fiveHour = { used_percent: 40, window_minutes: 300, resets_at: 1_789_000_000 };

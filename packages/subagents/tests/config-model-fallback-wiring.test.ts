@@ -12,9 +12,9 @@
  * are in config-model-fallback-spawn.test.ts. All run the real `resolveModel` and
  * the real `selectModel`; only the session itself is stubbed.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AgentRunner from "../src/agent-runner.ts";
 
@@ -70,9 +70,9 @@ describe("config model that does not resolve", () => {
 	let pi: any;
 	let lifecycle: Map<string, any>;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		originalCwd = process.cwd();
-		cwd = mkdtempSync(join(tmpdir(), "config-model-fallback-"));
+		cwd = makeTestTempDir("config-model-fallback-", onTestFinished);
 		process.chdir(cwd);
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
@@ -89,7 +89,6 @@ describe("config model that does not resolve", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		registerAgents(new Map());
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	async function boot() {

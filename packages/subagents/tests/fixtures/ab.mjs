@@ -31,9 +31,9 @@
  *    taking the run down.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 
 const REPO = process.cwd();
 const PERF_DIR = "tests";
@@ -154,12 +154,18 @@ const opts = parseArgs(process.argv.slice(2));
 if (!existsSync(join(REPO, PERF_DIR))) usage(`No ${PERF_DIR} directory here — run from the repo root.`);
 
 const sha = git("rev-parse", "--short", opts.ref);
-const worktree = mkdtempSync(join(tmpdir(), "pi-subagents-ab-"));
-const jsonDir = mkdtempSync(join(tmpdir(), "pi-subagents-ab-json-"));
+let removeWorktree;
+let removeJsonDir;
+const worktree = makeTestTempDir("pi-subagents-ab-", (cleanup) => {
+	removeWorktree = cleanup;
+});
 
 console.log(`\n  Comparing working tree against ${opts.ref} (${sha}), ${opts.rounds} round(s).`);
 
 try {
+	const jsonDir = makeTestTempDir("pi-subagents-ab-json-", (cleanup) => {
+		removeJsonDir = cleanup;
+	});
 	git("worktree", "add", "--detach", worktree, sha);
 
 	// Dependencies are identical for both sides by construction; installing them
@@ -195,12 +201,12 @@ try {
 	try {
 		execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, stdio: "ignore" });
 	} catch {
-		rmSync(worktree, { recursive: true, force: true });
+		removeWorktree();
 		try {
 			execFileSync("git", ["worktree", "prune"], { cwd: REPO, stdio: "ignore" });
 		} catch {
 			/* best effort */
 		}
 	}
-	rmSync(jsonDir, { recursive: true, force: true });
+	removeJsonDir?.();
 }

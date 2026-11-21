@@ -4,8 +4,7 @@
  * doubles in `@nredd/pi-test-lib/pi`; this file only adds the views these tests read.
  */
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -15,6 +14,7 @@ import {
 	type RecordingPi,
 	type RecordingPiOptions,
 } from "@nredd/pi-test-lib/pi";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, vi } from "vitest";
 
 /**
@@ -183,8 +183,10 @@ export function hermeticDir(
 	opts: { settings?: Record<string, unknown>; agentFiles?: Record<string, string> } = {},
 ): Hermetic {
 	// process.cwd() and project discovery use physical paths, including macOS /var.
-	const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-boot-")));
-	const agentDir = realpathSync(mkdtempSync(join(tmpdir(), "pi-boot-agentdir-")));
+	const cleanups: (() => void)[] = [];
+	const registerCleanup = (cleanup: () => void) => cleanups.push(cleanup);
+	const dir = realpathSync(makeTestTempDir("pi-boot-", registerCleanup));
+	const agentDir = realpathSync(makeTestTempDir("pi-boot-agentdir-", registerCleanup));
 	const prevCwd = process.cwd();
 	const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -208,8 +210,7 @@ export function hermeticDir(
 			process.chdir(prevCwd);
 			if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-			rmSync(dir, { recursive: true, force: true });
-			rmSync(agentDir, { recursive: true, force: true });
+			for (const cleanup of cleanups) cleanup();
 		},
 	};
 }

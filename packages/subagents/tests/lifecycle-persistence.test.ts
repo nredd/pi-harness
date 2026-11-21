@@ -1,8 +1,8 @@
 /** Real private filesystem failures and schema diagnostics, without changing HOME. */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isDisabledContent } from "../src/agent-file-toggle.ts";
 import { loadCustomAgents } from "../src/custom-agents.ts";
@@ -19,15 +19,14 @@ import { listSavedWorkflows } from "../src/workflow/saved.ts";
 import { createWorkflowTask, resolveResumeTarget, workflowResultText } from "../src/workflow/task.ts";
 
 let root: string;
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "subagent-lifecycle-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("subagent-lifecycle-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
 });
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	resetPackageState();
-	rmSync(root, { recursive: true, force: true });
 });
 
 function job(): ScheduledSubagent {

@@ -1,11 +1,10 @@
 /** Public scheduler/outbox clock seams, independent of Vitest's global fake timers. */
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.ts";
 import { realClock } from "../src/clock.ts";
 import { CompletionOutbox } from "../src/completion-outbox.ts";
@@ -21,8 +20,7 @@ afterEach(async () => {
 });
 
 function schedulerFixture(events: AdmissionEvents = { emit: vi.fn(), on: () => () => {} }) {
-	const dir = mkdtempSync(join(tmpdir(), "subagents-clock-"));
-	cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+	const dir = makeTestTempDir("subagents-clock-", onTestFinished);
 	const clock = new FakeClock();
 	const scheduler = new SubagentScheduler({ clock });
 	cleanup.push(() => scheduler.stop());

@@ -16,11 +16,11 @@
  * proves the detector can see parallelism at all, so `maxInFlight === 1` is a
  * result rather than a broken probe.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentCall, agentToolResults, type PrintModeRun, runPrintMode } from "../fixtures/print-mode-runner.ts";
 
 // Real pi-mono: loader, dynamic extension import, three live sessions.
@@ -33,17 +33,14 @@ const CHILD_HOLD_MS = 120;
 
 describe.skipIf(LIVE)("maxConcurrentForeground e2e (real pi agent loop)", () => {
 	let run: PrintModeRun | undefined;
-	const tmpDirs: string[] = [];
 
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
-		for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 	});
 
 	function projectDir(settings: Record<string, unknown>): string {
-		const dir = mkdtempSync(join(tmpdir(), "pi-fgconc-e2e-"));
-		tmpDirs.push(dir);
+		const dir = makeTestTempDir("pi-fgconc-e2e-", onTestFinished);
 		mkdirSync(join(dir, ".pi"), { recursive: true });
 		writeFileSync(join(dir, ".pi", "subagents.json"), JSON.stringify({ outputTranscript: false, ...settings }));
 		return dir;

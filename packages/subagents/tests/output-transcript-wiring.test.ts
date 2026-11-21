@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -48,9 +48,9 @@ describe("output_transcript agent wiring", () => {
 	let previousCwd: string;
 	let previousAgentDir: string | undefined;
 
-	beforeEach(() => {
-		cwd = mkdtempSync(join(tmpdir(), "pi-output-transcript-cwd-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-output-transcript-agent-"));
+	beforeEach(({ onTestFinished }) => {
+		cwd = makeTestTempDir("pi-output-transcript-cwd-", onTestFinished);
+		agentDir = makeTestTempDir("pi-output-transcript-agent-", onTestFinished);
 		previousCwd = process.cwd();
 		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -70,8 +70,6 @@ describe("output_transcript agent wiring", () => {
 		process.chdir(previousCwd);
 		if (previousAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		rmSync(cwd, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		setOutputTranscriptDefault(true);
 		vi.clearAllMocks();
 	});

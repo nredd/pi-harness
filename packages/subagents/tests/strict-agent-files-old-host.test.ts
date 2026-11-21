@@ -4,10 +4,10 @@
  * activation, clearly, before any project file is read, rather than silently
  * degrade to warnings. Non-strict activation stays fully supported.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as hostSdk from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.ts";
 import { hostStartupErrorClass } from "../src/startup-error.ts";
@@ -26,9 +26,9 @@ let originalCwd: string;
 let originalAgentDir: string | undefined;
 
 describe("strictAgentFiles on a host without ExtensionStartupError", () => {
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		originalCwd = process.cwd();
-		cwd = mkdtempSync(join(tmpdir(), "strict-old-host-"));
+		cwd = makeTestTempDir("strict-old-host-", onTestFinished);
 		process.chdir(cwd);
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
@@ -45,7 +45,6 @@ describe("strictAgentFiles on a host without ExtensionStartupError", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		registerAgents(new Map());
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	it("simulates an old host: the SDK exports no startup error", () => {

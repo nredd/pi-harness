@@ -21,9 +21,9 @@
  * and "not found" was the correct answer. Test 3 pins the eviction rule that
  * DOES apply, so the two are not confused again.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -89,12 +89,12 @@ describe("issue #174: foreground agent that hits max_turns", () => {
 	let prevCwd: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// Hermetic cwd + global dir, scheduling off — same isolation as
 		// clear-completed-wiring.test.ts, so session_start doesn't spin a
 		// scheduler or touch the dev's filesystem.
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-174-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-174-agentdir-"));
+		tmpDir = makeTestTempDir("pi-174-", onTestFinished);
+		agentDir = makeTestTempDir("pi-174-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -107,8 +107,6 @@ describe("issue #174: foreground agent that hits max_turns", () => {
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 
