@@ -8,14 +8,13 @@ References:
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
 import re
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -28,26 +27,19 @@ from coverage_provenance_record import (
     SAFE_REPOSITORY,
     SHA,
     Provenance,
-    decode_json,
     object_value,
+    text_value,
 )
 from coverage_report import (
     HOSTS,
     MAX_ARCHIVE_BYTES,
     MAX_MARKDOWN,
+    Evidence,
+    Signal,
     load_evidence,
+    read_host_summary,
     read_summary,
     render_markdown,
-)
-from coverage_snapshot import (
-    MAX_AGE,
-    baseline,
-    encode_cell,
-    positive_id,
-    read_snapshot,
-    read_tip,
-    timestamp,
-    write_snapshot,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -62,7 +54,8 @@ MARKER = "<!-- pi-harness:coverage:v1 -->"
 ORDER = re.compile(r"<!-- ci:([1-9][0-9]{0,19}):([1-9][0-9]{0,19}) -->")
 BOT_ID = 41898282  # github-actions[bot] user ID from GET /users/github-actions%5Bbot%5D.
 MAX_METADATA_BYTES = 8 * 1024 * 1024
-MAX_SNAPSHOT_WRITES = 3
+MAX_MAIN_RUNS = 10
+BASELINE_NOTICE = "Main baselines are selected by CI run recency, not the PR merge base."
 PR_NOTICE = (
     "Coverage numbers come from this PR's own CI run (PR-controlled code) and are not independently "
     "verified. Required checks, not this comment, are the merge gate."
@@ -290,6 +283,8 @@ def fetch_evidence(
     run: Run,
     directory: Path,
     host: str = "ubuntu-24.04",
+    *,
+    census: tuple[list[Any], list[Any]] | None = None,
     repository_id: int | None = None,
 ) -> str:
     """Determine NOT RUN from the attempt job, or download its unique bounded artifact.
@@ -297,7 +292,11 @@ def fetch_evidence(
     Upload time is only an extra ownership check; the renderer must still validate the
     full producer sidecar. Artefacts from another attempt are never a fallback.
     """
-    jobs = api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
+    jobs = (
+        api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
+        if census is None
+        else census[0]
+    )
     owned = [job for job in jobs if job["name"] == OWNED_JOB.format(host=host)]
     if len(owned) != 1:
         return "unavailable"
@@ -319,9 +318,10 @@ def fetch_evidence(
         return "unavailable"
     start, end = timestamp(upload["started_at"]), timestamp(upload["completed_at"])
     artifact = ARTIFACT.format(host=host)
+    artifacts = api.pages(f"actions/runs/{run.id}/artifacts", "artifacts") if census is None else census[1]
     candidates = [
         row
-        for row in api.pages(f"actions/runs/{run.id}/artifacts", "artifacts")
+        for row in artifacts
         if row["name"] == artifact
         and row["expired"] is False
         and start <= timestamp(row["created_at"]) <= end
@@ -434,16 +434,23 @@ def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path)
         state = fetch_evidence(api, run, directory)
         write_plan(policy, manifest, state)
         evidence = load_evidence(directory, manifest, provenance)
-        main_baseline = baseline(api, datetime.now(UTC)) if state == "available" else None
-        if main_baseline is not None:
-            prefix += (
-                f"Producer-reported main baseline (not independently verified): [`{main_baseline.sha}`]"
-                f"(https://github.com/{api.repository}/commit/{main_baseline.sha}) "
-                f"([CI run {main_baseline.run_id}, attempt {main_baseline.order[1]}]"
-                f"(https://github.com/{api.repository}/actions/runs/{main_baseline.run_id}/"
-                f"attempts/{main_baseline.order[1]})).\n\n"
-            )
-        main_cells = () if main_baseline is None else main_baseline.evidence
+        baselines = main_baselines(api, run, read_summary(policy)) if state == "available" else {}
+        if state == "available":
+            prefix += BASELINE_NOTICE + "\n\n"
+            for host in COVERAGE_HOSTS:
+                entry = baselines.get(host)
+                if entry is None:
+                    prefix += f"{HOSTS[host][0]} measured main baseline: unavailable.\n\n"
+                    continue
+                source, _ = entry
+                prefix += (
+                    f"{HOSTS[host][0]} measured main baseline "
+                    "(producer-reported, not independently verified): "
+                    f"[`{source.head}`](https://github.com/{api.repository}/commit/{source.head}) "
+                    f"([CI run {source.id}, attempt {source.attempt}]"
+                    f"(https://github.com/{api.repository}/actions/runs/{source.id}/attempts/{source.attempt})).\n\n"
+                )
+        main_cells = tuple(cell for _, cell in baselines.values())
         return prefix + render_markdown(evidence, provenance, main_cells, limit=MAX_MARKDOWN - len(prefix))
 
 
@@ -492,106 +499,151 @@ def publish(api: GitHub, run: Run, policy: Path, summary: Path) -> None:
         api.request(comments, "POST", {"body": body})
 
 
-def main_run(api: GitHub, data: Any) -> tuple[Run, int, str]:
-    """Require a successful, same-repository push to main, independent of artifact contents.
+def positive_id(value: object) -> int:
+    """Require a positive bounded GitHub identifier or ordinal, never a boolean.
 
     Parameters:
-        api (GitHub): Target repository transport.
-        data (Any): GitHub run identity metadata.
+        value (object): Candidate identifier.
     Returns:
-        tuple[Run, int, str]: Validated execution, repository ID and attempt start.
+        int: Positive bounded integer.
     Raises:
-        ValueError: Not an eligible main run.
+        ValueError: Invalid identifier.
     """
+    if type(value) is not int or not 0 < value < 10**20:
+        raise ValueError("Invalid GitHub identifier")
+    return value
+
+
+def timestamp(value: object) -> datetime:
+    """Decode GitHub's canonical UTC timestamp, at second resolution.
+
+    Parameters:
+        value (object): Candidate timestamp.
+    Returns:
+        datetime: Measurement time in UTC.
+    Raises:
+        ValueError: Invalid timestamp.
+    """
+    text = text_value(value)
+    when = datetime.fromisoformat(text)
+    if when.isoformat(timespec="seconds").replace("+00:00", "Z") != text or when.tzinfo != UTC:
+        raise ValueError("Invalid GitHub timestamp")
+    return when
+
+
+def main_run(api: GitHub, data: Any, trigger: Run) -> tuple[Run, int]:
+    """Bind an eligible main push to the same CI workflow and non-fork repository."""
     run = Run.parse(data, "push")
     repo_id = positive_id(data["repository"]["id"])
     if (
-        run.branch != "main"
+        run.id == trigger.id
+        or run.workflow_id != trigger.workflow_id
+        or run.branch != "main"
         or run.fork != api.repository
         or run.prs
         or data["repository"]["full_name"] != api.repository
+        or data["repository"]["fork"] is not False
+        or data["head_repository"]["fork"] is not False
         or positive_id(data["head_repository"]["id"]) != repo_id
         or run.status != "completed"
         or run.conclusion != "success"
     ):
         raise ValueError("Not a successful same-repository main push")
-    return run, repo_id, data["run_started_at"]
+    return run, repo_id
 
 
-def publish_snapshot(api: GitHub, trigger: Any, now: datetime) -> None:
-    """Record complete measurements from a completed main attempt, never a PR or dispatch.
+def main_page(api: GitHub, path: str, key: str, *, limit: int = 100, **params: str) -> list[Any]:
+    """Read one bounded page, requiring the full census for jobs and artifacts."""
+    data = api.request(f"{path}?{urlencode(params | {'per_page': limit, 'page': 1})}")
+    rows = data[key]
+    if not isinstance(rows, list) or len(rows) > limit or (limit == 100 and data["total_count"] != len(rows)):
+        raise ValueError("Invalid or truncated main coverage census")
+    return rows
 
-    Parameters:
-        api (GitHub): Snapshot writer transport.
-        trigger (Any): Completed workflow-run metadata.
-        now (datetime): Publisher time in UTC.
-    Returns:
-        None.
-    Raises:
-        ValueError: Execution, producer evidence or previous snapshot was invalid.
-    """
-    identity = main_run(api, trigger)
-    run, repo_id, started = identity
-    if not timedelta(0) <= now - timestamp(started) <= MAX_AGE:
-        raise ValueError("Main coverage attempt is outside its retention window")
-    tip = read_tip(api)
-    branch = None if tip is None else read_snapshot(api, tip)
-    if branch is not None and branch.snapshot is not None and branch.snapshot.order >= run.order:
-        LOGGER.info("Snapshot is already at this or a newer execution")
-        return
-    route = f"actions/runs/{run.id}"
-    if main_run(api, api.request(route)) != identity:
-        raise ValueError("Main attempt changed before publication")
-    policy_file = api.request(f"contents/coverage/policy.json?ref={run.head}")
-    if (
-        policy_file["path"] != "coverage/policy.json"
-        or policy_file["type"] != "file"
-        or policy_file["encoding"] != "base64"
-    ):
-        raise ValueError("Unexpected tested policy file")
-    policy = decode_json(base64.b64decode(policy_file["content"].replace("\n", ""), validate=True))
+
+def main_cell(
+    api: GitHub,
+    source: Run,
+    repo_id: int,
+    host: str,
+    census: tuple[list[Any], list[Any]],
+    *,
+    policy: dict[str, object],
+) -> Evidence | None:
+    """Read the main artifact through the same attempt, ZIP and sidecar validation as the PR."""
     provenance = Provenance(
         api.repository,
         None,
-        run.head,
-        run.id,
-        run.attempt,
+        source.head,
+        source.id,
+        source.attempt,
         "push",
         f"{api.repository}/{WORKFLOW}@refs/heads/main",
     )
-    with TemporaryDirectory() as temp:
-        directory = Path(temp)
-        manifest = directory / "plan.json"
-        manifest.write_text(
-            json.dumps(
-                {
-                    host: host_plan(policy, host, fetch_evidence(api, run, directory, host, repo_id))
-                    for host in COVERAGE_HOSTS
-                }
-            )
+    try:
+        with TemporaryDirectory() as temp:
+            directory = Path(temp)
+            if (
+                fetch_evidence(api, source, directory, host, census=census, repository_id=repo_id)
+                != "available"
+            ):
+                return None
+            summary = read_host_summary(directory, host, provenance)
+        if summary is None or summary.os != HOSTS[host][1] or summary.measurement_only or summary.errors:
+            return None
+        # Only compare signals measured on main. The fingerprint binds the producer and policy;
+        # a historical run need not cover the publisher checkout's entire current signal plan.
+        signals = object_value(host_plan(policy, host, "available")["signals"])
+        plan = tuple(
+            Signal.parse(name, signals[name]) for name in sorted(signals.keys() & summary.packages.keys())
         )
-        cells = load_evidence(directory, manifest, provenance)
-    payload = {
-        "schema": 1,
-        "repository": api.repository,
-        "sha": run.head,
-        "run": run.id,
-        "number": run.number,
-        "attempt": run.attempt,
-        "measured_at": started,
-        "hosts": {cell.host: encode_cell(cell) for cell in cells},
-    }
-    for _ in range(MAX_SNAPSHOT_WRITES):
-        if write_snapshot(api, branch, payload, lambda: main_run(api, api.request(route)) == identity):
-            return
-        new_tip = read_tip(api)
-        if new_tip == (branch.tip if branch is not None else None):
-            raise ValueError("Coverage snapshot ref update rejected without a concurrent change")
-        branch = None if new_tip is None else read_snapshot(api, new_tip)
-        if branch is not None and branch.snapshot is not None and branch.snapshot.order >= run.order:
-            LOGGER.info("Snapshot advanced to this or a newer execution")
-            return
-    raise ValueError("Coverage snapshot ref changed on every write attempt")
+        return Evidence(host, "available", plan, summary)
+    except (KeyError, OSError, TypeError, ValueError):
+        LOGGER.warning(f"Main coverage artifact unusable for {host}, run {source.id}")
+        return None
+
+
+def macos_cancelled(jobs: list[Any], artifacts: list[Any]) -> bool:
+    """Recognize a missing macOS fan-in caused by cancelled main-push shards."""
+    return not any(row["name"] == "coverage-macos-14" for row in artifacts) and any(
+        job["name"].startswith("owned shard (macos-14, ") and job["conclusion"] == "cancelled" for job in jobs
+    )
+
+
+def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict[str, tuple[Run, Evidence]]:
+    """Select per-host evidence by push run recency; walk back only past cancelled macOS cells."""
+    baselines = {}
+    try:
+        rows = main_page(
+            api,
+            f"actions/workflows/{trigger.workflow_id}/runs",
+            "workflow_runs",
+            limit=MAX_MAIN_RUNS,
+            event="push",
+            branch="main",
+            status="success",
+        )
+        runs = []
+        for row in rows:
+            try:
+                runs.append(main_run(api, row, trigger))
+            except (KeyError, TypeError, ValueError):
+                continue
+        hosts = tuple(COVERAGE_HOSTS)
+        for source, repo_id in sorted(runs, key=lambda entry: entry[0].order, reverse=True):
+            route = f"actions/runs/{source.id}"
+            jobs = main_page(api, f"{route}/attempts/{source.attempt}/jobs", "jobs")
+            artifacts = main_page(api, f"{route}/artifacts", "artifacts")
+            for host in hosts:
+                cell = main_cell(api, source, repo_id, host, (jobs, artifacts), policy=policy)
+                if cell is not None:
+                    baselines[host] = source, cell
+            if "macos-14" in baselines or not macos_cancelled(jobs, artifacts):
+                break
+            hosts = ("macos-14",)
+    except (KeyError, OSError, TypeError, ValueError):
+        LOGGER.warning("Main coverage census unavailable")
+    return baselines
 
 
 def main() -> int:
@@ -610,15 +662,12 @@ def main() -> int:
         if not SAFE_REPOSITORY.fullmatch(repository):
             raise ValueError("Invalid target repository")
         api = GitHub(repository, os.environ["GH_TOKEN"])
-        if os.environ.get("COVERAGE_SNAPSHOT") == "1":
-            publish_snapshot(api, event["workflow_run"], datetime.now(UTC))
-        else:
-            publish(
-                api,
-                Run.parse(event["workflow_run"]),
-                Path("coverage/policy.json"),
-                Path(os.environ["GITHUB_STEP_SUMMARY"]),
-            )
+        publish(
+            api,
+            Run.parse(event["workflow_run"]),
+            Path("coverage/policy.json"),
+            Path(os.environ["GITHUB_STEP_SUMMARY"]),
+        )
     except HTTPError as error:
         LOGGER.error(f"Coverage publication failed: GitHub HTTP {error.code}")
         return 1

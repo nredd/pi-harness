@@ -75,6 +75,8 @@ def test_sticky_comment_and_retry(tmp_path: Path, repository: str) -> None:
     assert not any("verified" in line.casefold() for line in headings)
     assert "macOS: NOT RUN (main/dispatch only). WSL2: no longer scheduled." in body.splitlines()
     assert "WSL enforced signals:" not in body
+    assert "Ubuntu measured main baseline: unavailable." in body
+    assert "macOS measured main baseline: unavailable." in body
     assert f"tested: {TESTED}" in body
     assert len(body) <= 60_000
     assert summary.read_text() == (body + "\n") * 2
@@ -405,21 +407,8 @@ def test_workflow_contract() -> None:
     assert workflow[True] == {"workflow_run": {"workflows": ["CI"], "types": ["completed"]}}
     assert workflow["permissions"] == {}
     job = workflow["jobs"]["comment"]
-    assert set(workflow["jobs"]) == {"comment", "snapshot"}
-    snapshot = workflow["jobs"]["snapshot"]
-    assert snapshot["permissions"] == {"actions": "read", "contents": "write"}
-    assert snapshot["runs-on"] == job["runs-on"] == "ubuntu-24.04"
-    assert snapshot["concurrency"] == {"group": "coverage-main-snapshot", "cancel-in-progress": False}
-    assert snapshot["if"].split(" && ") == [
-        "github.ref == 'refs/heads/main'",
-        "github.event.workflow_run.event == 'push'",
-        "github.event.workflow_run.head_branch == 'main'",
-        "github.event.workflow_run.head_repository.id == github.event.repository.id",
-        "github.event.workflow_run.conclusion == 'success'",
-    ]
-    assert snapshot["steps"][0] == job["steps"][0]
-    assert snapshot["steps"][1]["env"] == job["steps"][1]["env"] | {"COVERAGE_SNAPSHOT": "1"}
-    assert snapshot["steps"][1]["run"] == job["steps"][1]["run"]
+    assert set(workflow["jobs"]) == {"comment"}
+    assert job["runs-on"] == "ubuntu-24.04"
     assert job["if"] == "github.event.workflow_run.event == 'pull_request'"
     assert job["permissions"] == {"actions": "read", "contents": "read", "pull-requests": "write"}
     assert job["concurrency"]["cancel-in-progress"] is False

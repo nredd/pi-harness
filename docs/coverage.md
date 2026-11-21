@@ -573,29 +573,33 @@ Its tests are `scripts/tests/test_coverage_*.py`, one file per behavior (`lcov`,
 boundary), sharing `scripts/tests/coverage_fixtures.py`. A test imports fixtures from there, never
 from another test file.
 
-The hosted `workflow_run` publisher updates `coverage-data:snapshot.json` for successful same-repo
-`main` pushes. The first snapshot can initialize an asset-only branch; updates overlay only the
-snapshot entry. On HTTP `409` or `422`, a moved ref is retried against the newly observed commit
-and tree, up to three total writes. An unchanged tip aborts; an equal or newer snapshot wins.
-The PR comment and step summary link to both the baseline commit and the CI attempt. Numeric deltas
-require matching producer fingerprints in the summary and provenance, plus equal OS, signal,
-writer and supported counters. The versioned fingerprint covers committed policy, CI, measurement
+The trusted `workflow_run` publisher reads coverage artifacts from the newest successful CI
+push to `main` in this repository. It checks producer job, upload timing, run, attempt and SHA,
+using the same ZIP and sidecar validation as for PR coverage. The comment and step summary link to
+the baseline commit and CI attempt for each host. If the macOS push shards were cancelled and
+their fan-in did not upload an artifact, the publisher looks back through recent successful runs
+for macOS only. No successful run, an expired artifact (90-day retention), or missing or invalid
+evidence without that cancellation leaves the affected host `unavailable`.
+
+Numeric deltas require matching OS, signal, supported counters and producer fingerprints in the
+summary and provenance. The versioned fingerprint covers committed policy, CI, measurement
 scripts, runtime pins, Python coverage configuration, named Vitest/Vite/TypeScript and Istanbul/NYC
 configs, Vitest setup and runner hooks and their helpers, the workflow-examples VM instrumenter and
 counter transport, and native build and toolchain configuration. Application files named `config.ts`
 are not instrumentation inputs. The report distinguishes missing fingerprints, differing fingerprints and
-differing supported counter sets. An absent or expired snapshot is `unavailable`.
+differing supported counter sets.
 
 Limits:
-- The baseline and fingerprint are producer-reported, not independently verified. Required checks,
-  not the snapshot or comment, gate merges.
-- The hosted publisher runs reviewed default-branch code and reads artifacts as data, never executes
-  them. Only the snapshot job gets `contents: write`. Its token is repository-scoped, like release
-  workflows; no ref isolation is claimed (owner decision pending).
-- The fingerprint conservatively hashes whole files, so even a comment-only change in
-  `workflow-examples.test.ts` suppresses measured deltas for unrelated packages.
-- GitHub's single pending publisher slot lets a late-finishing older CI run evict the newest pending
-  publisher, so the snapshot can lag until the next eligible push.
+- The baseline and fingerprint are producer-reported, not independently verified. The PR's
+  numbers are also producer-reported and come from PR-controlled code. Required checks gate merges.
+- Baselines follow CI run recency, not the PR merge base. A newer successful push can change the
+  baseline for an unchanged PR.
+- The search uses one page of up to 10 successful runs. It shares one jobs and one artifacts listing
+  per inspected run (at most 21 baseline list requests, no per-file API reads).
+- The publisher runs default-branch code and never executes anything from artifacts. It has
+  `actions: read`, `contents: read` for checkout and `pull-requests: write` for the sticky comment.
+- The fingerprint hashes whole files: even a comment-only change in `workflow-examples.test.ts`
+  suppresses measured deltas for unrelated packages.
 
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is

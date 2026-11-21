@@ -31,31 +31,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/coverage_publish.py
-
-  snapshot:
-    name: Record measured main coverage
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.id == github.event.repository.id &&
-      github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      contents: write
-    concurrency:
-      group: coverage-main-snapshot
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Store the measured main snapshot
-        shell: bash -e {0}
-        env:
-          COVERAGE_SNAPSHOT: '1'
-          GH_TOKEN: ${{ github.token }}
-        run: python3 -B scripts/coverage_publish.py

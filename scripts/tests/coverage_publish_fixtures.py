@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import json
 import sys
-from email.message import Message
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
 from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -140,8 +138,11 @@ class RecordingGitHub(pub.GitHub):
             else:
                 self.comments[-1] = current
             return current
-        if path == "git/ref/heads/coverage-data":
-            raise HTTPError(path, 404, "Missing branch", Message(), None)
+        if path.startswith("actions/workflows/12/runs?"):
+            assert (
+                path == "actions/workflows/12/runs?event=push&branch=main&status=success&per_page=10&page=1"
+            )
+            return {"total_count": 0, "workflow_runs": []}
         assert path == "actions/runs/123"
         return self.data
 
