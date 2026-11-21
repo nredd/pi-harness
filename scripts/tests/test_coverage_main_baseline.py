@@ -38,7 +38,16 @@ HOSTS = (UBUNTU, MACOS)
 
 
 def main_push(number: int, **overrides: Any) -> dict[str, Any]:
-    """Build a main run listing entry; ordinals describe push order, not finish order."""
+    """Build a main run listing entry; ordinals describe push order, not finish order.
+
+    Parameters:
+        number (int): Push ordinal.
+        **overrides (Any): Replacement API fields.
+    Returns:
+        dict[str, Any]: Workflow run metadata.
+    Raises:
+        None.
+    """
     return run_data(
         **(
             {
@@ -61,7 +70,15 @@ class MainGitHub(RecordingGitHub):
     """Serve bounded GitHub listing envelopes and realistic attempt artifacts."""
 
     def __init__(self) -> None:
-        """Seed a main run with two fan-ins and a fork PR with its own artifact."""
+        """Seed a main run with two fan-ins and a fork PR with its own artifact.
+
+        Parameters:
+            None.
+        Returns:
+            None.
+        Raises:
+            None.
+        """
         super().__init__()
         self.runs: list[dict[str, Any]] = []
         self.listed: dict[str, dict[str, Any]] = {}
@@ -72,7 +89,16 @@ class MainGitHub(RecordingGitHub):
         self.fingerprint = FINGERPRINT
 
     def add(self, run: dict[str, Any], *, cancelled: bool = False) -> tuple[list[Any], list[Any]]:
-        """Add a run and its attempt-specific producer jobs and retained artifacts."""
+        """Add a run and its attempt-specific producer jobs and retained artifacts.
+
+        Parameters:
+            run (dict[str, Any]): Workflow run metadata.
+            cancelled (bool): Omit the macOS artifact and cancel a shard.
+        Returns:
+            tuple[list[Any], list[Any]]: Job and artifact lists.
+        Raises:
+            None.
+        """
         self.runs.append(run)
         jobs: list[Any] = []
         artifacts: list[Any] = []
@@ -124,7 +150,17 @@ class MainGitHub(RecordingGitHub):
         return jobs, artifacts
 
     def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
-        """Check query bounds and reject any unexpected read or non-comment write."""
+        """Check query bounds and reject any unexpected read or non-comment write.
+
+        Parameters:
+            path (str): Requested API route.
+            method (str): HTTP verb.
+            body (dict[str, Any] | None): Comment payload.
+        Returns:
+            Any: GitHub-style response envelope.
+        Raises:
+            AssertionError: Fixture or contract did not match.
+        """
         route = urlsplit(path).path
         if route == "actions/runs/123" or method != "GET":
             return super().request(path, method, body)
@@ -146,7 +182,16 @@ class MainGitHub(RecordingGitHub):
         return {"total_count": len(rows), **listing}
 
     def download(self, artifact_id: int, destination: Path) -> None:
-        """Write a producer ZIP or simulate one selected archive failure."""
+        """Write a producer ZIP or simulate one selected archive failure.
+
+        Parameters:
+            artifact_id (int): Artifact from the listing.
+            destination (Path): Download target.
+        Returns:
+            None.
+        Raises:
+            HTTPError: Injected transport failure.
+        """
         self.downloads.append(artifact_id)
         if artifact_id == 8:
             super().download(artifact_id, destination)
@@ -174,8 +219,9 @@ class MainGitHub(RecordingGitHub):
                 raise HTTPError("hidden", 410, "expired", Message(), None)
             if self.failure == "sidecar":
                 record["run_attempt"] = 1
-            if self.failure == "fingerprint":
-                record[SEMANTICS_FIELD] = "f" * 64
+            record[SEMANTICS_FIELD] = {"fingerprint": "f" * 64, "malformed-fingerprint": "invalid"}.get(
+                self.failure, FINGERPRINT
+            )
             if self.failure == "legacy":
                 del summary[SEMANTICS_FIELD], record[SEMANTICS_FIELD]
             if self.failure == "os":
@@ -192,7 +238,15 @@ class MainGitHub(RecordingGitHub):
 
 
 def test_recency_and_cancelled_mac_walkback(tmp_path: Path) -> None:
-    """Link independent hosts on the sticky comment and summary, ignoring newer ineligible runs."""
+    """Link independent hosts on the sticky comment and summary, ignoring newer ineligible runs.
+
+    Parameters:
+        tmp_path (Path): Isolated summary directory.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     newest, older = main_push(20, run_attempt=3), main_push(18)
     api.runs.extend(
@@ -257,7 +311,15 @@ def test_recency_and_cancelled_mac_walkback(tmp_path: Path) -> None:
     ],
 )
 def test_rejects_ineligible_run(mutation: dict[str, Any]) -> None:
-    """Reject the PR run itself and invalid identities before looking up any artifacts."""
+    """Reject the PR run itself and invalid identities before looking up any artifacts.
+
+    Parameters:
+        mutation (dict[str, Any]): Ineligible run metadata overrides.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     api.runs.append(main_push(20, **mutation))
     assert not pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY))
@@ -275,6 +337,7 @@ def test_rejects_ineligible_run(mutation: dict[str, Any]) -> None:
         "download",
         "sidecar",
         "fingerprint",
+        "malformed-fingerprint",
         "os",
         "diagnostic",
         "errors",
@@ -289,7 +352,17 @@ def test_invalid_host_does_not_fail_or_reuse_older_ubuntu(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Degrade only the damaged host and still write the sticky comment and step summary."""
+    """Degrade only the damaged host and still write the sticky comment and step summary.
+
+    Parameters:
+        failure (str): Evidence corruption to simulate.
+        tmp_path (Path): Isolated summary directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped test override.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     api.failure = failure
     jobs, artifacts = api.add(main_push(20))
@@ -323,13 +396,30 @@ def test_invalid_host_does_not_fail_or_reuse_older_ubuntu(
 
 @pytest.mark.parametrize("failure", ["http", "bad-list", "oversized", "incomplete"])
 def test_bad_census(failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail closed on broken and truncated API listings without propagating errors."""
+    """Fail closed on broken and truncated API listings without propagating errors.
+
+    Parameters:
+        failure (str): Listing failure to simulate.
+        monkeypatch (pytest.MonkeyPatch): Scoped test override.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     api.add(main_push(20))
     read = MainGitHub.request
 
     def request(self: MainGitHub, path: str) -> Any:
-        """Corrupt the requested bounded response."""
+        """Corrupt the requested bounded response.
+
+        Parameters:
+            path (str): Requested listing route.
+        Returns:
+            Any: Corrupted response.
+        Raises:
+            HTTPError: Injected transport failure.
+        """
         data = read(self, path)
         if failure == "http":
             raise HTTPError(path, 403, "denied", Message(), None)
@@ -345,7 +435,15 @@ def test_bad_census(failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_missing_mac_without_cancellation_does_not_walk_back() -> None:
-    """Missing macOS evidence alone does not allow an older baseline."""
+    """Missing macOS evidence alone does not allow an older baseline.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     _, artifacts = api.add(main_push(20))
     artifacts.pop()
@@ -356,7 +454,15 @@ def test_missing_mac_without_cancellation_does_not_walk_back() -> None:
 
 
 def test_walkback_does_not_reuse_evidence_past_an_expired_artifact() -> None:
-    """The first earlier listing with a macOS artifact is authoritative even if expired."""
+    """The first earlier listing with a macOS artifact is authoritative even if expired.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     api.add(main_push(20), cancelled=True)
     _, artifacts = api.add(main_push(19))
@@ -369,7 +475,15 @@ def test_walkback_does_not_reuse_evidence_past_an_expired_artifact() -> None:
 
 
 def test_cancellation_bound() -> None:
-    """Cap the walk-back at one run page and two lists per candidate."""
+    """Cap the walk-back at one run page and two lists per candidate.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     for number in range(30, 20, -1):
         api.add(main_push(number), cancelled=True)
@@ -382,7 +496,15 @@ def test_cancellation_bound() -> None:
 
 
 def test_legacy_baseline_still_has_identity() -> None:
-    """Link a legacy baseline but explain why the instruments cannot be compared."""
+    """Link a legacy baseline but explain why the instruments cannot be compared.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Fixture or contract did not match.
+    """
     api = MainGitHub()
     api.failure = "legacy"
     api.add(main_push(20))
