@@ -1,9 +1,24 @@
 //! Shared headless D-Bus fixtures.
 
-use std::{ops::AsyncFnOnce, time::Duration};
+use std::{future::pending, ops::AsyncFnOnce, time::Duration};
 
-use tokio::net::UnixStream;
+use tokio::{net::UnixStream, sync::mpsc};
 use zbus::{connection::Builder, Connection, Guid};
+
+/// Observe receipt of a request without ever replying to it.
+pub(crate) struct StalledReply(mpsc::UnboundedSender<()>);
+
+impl StalledReply {
+    pub(crate) fn new() -> (Self, mpsc::UnboundedReceiver<()>) {
+        let (started, requests) = mpsc::unbounded_channel();
+        (Self(started), requests)
+    }
+
+    pub(crate) async fn wait<T>(&self) -> T {
+        self.0.send(()).unwrap();
+        pending().await
+    }
+}
 
 /// Serve fixture interfaces over a private socket pair, keeping the server alive
 /// until the client exercise finishes. Bound both the handshake and all requests.
