@@ -1,0 +1,1860 @@
+{
+  "_comment": [
+    "Generate from the repo root using the reviewed base:",
+    "base=3430c69337b950b323d5a3c7411ce8f770101d62",
+    "scratch=$(mktemp -d)",
+    "git archive \"$base\" | tar -xf - -C \"$scratch\"",
+    "(cd scripts && uv run --locked --project ../tests/integration python - \"$scratch\" <<'PY'",
+    "import json, runpy, sys, tempfile",
+    "from pathlib import Path",
+    "",
+    "sys.path.insert(0, str(Path(sys.argv[1]) / \"scripts\"))",
+    "import ci_paths",
+    "",
+    "test = runpy.run_path(\"tests/test_ci_paths.py\")",
+    "path = test[\"BASE_PLAN_FIXTURE\"]",
+    "data = json.loads(path.read_text())",
+    "for case in data[\"scenarios\"].values():",
+    "    with tempfile.TemporaryDirectory() as scratch_repo:",
+    "        repo = test[\"repo\"].__wrapped__(Path(scratch_repo))",
+    "        case[\"plan\"] = test[\"serialized_plan\"](repo, **case[\"inputs\"])",
+    "path.write_text(json.dumps(data, indent=2) + \"\\n\")",
+    "PY",
+    ")",
+    "rm -r \"$scratch\""
+  ],
+  "scenarios": {
+    "docs": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "docs/guide.md"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "scripts": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "scripts/ci_paths.py"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "stack-input": {
+      "inputs": {
+        "event": "pull_request",
+        "path": ".github/workflows/ci.yml"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "computer-use": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/computer-use/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "dev-tools": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/dev-tools/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "plan-mode": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/plan-mode/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "preset": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/preset/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "resource-sampler": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/resource-sampler/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "session-kit": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/session-kit/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "subagents": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/subagents/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "subscription-router": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/subscription-router/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "todo": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/todo/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "inprocess": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "tests/inprocess/package.json"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "title-blocked": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/computer-use/package.json",
+        "title_problem": "bad title"
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": true,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "bad title",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": true,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "bad title",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": true,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "bad title",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": true,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "bad title",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "push-main": {
+      "inputs": {
+        "event": "push",
+        "path": ".github/workflows/ci.yml"
+      },
+      "plan": {
+        "contracts (macos-14)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (macos-14)": {
+          "blocked": false,
+          "coverage_os": "darwin",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "macos",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "scripts",
+              "skipped_gates": "",
+              "workspaces": ""
+            },
+            {
+              "gates": "check-integration",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (macos-14, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "dispatch-full": {
+      "inputs": {
+        "event": "workflow_dispatch",
+        "path": null
+      },
+      "plan": {
+        "contracts (macos-14)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (macos-14)": {
+          "blocked": false,
+          "coverage_os": "darwin",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "macos",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "scripts",
+              "skipped_gates": "",
+              "workspaces": ""
+            },
+            {
+              "gates": "check-integration",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (macos-14, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "pool-pr-setup-only": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "packages/dev-tools/package.json",
+        "capacity": {
+          "pi-linux": 2,
+          "pi-macos": 2
+        }
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "pi-linux",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs.",
+          "run": true,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "pool-push-all": {
+      "inputs": {
+        "event": "push",
+        "path": ".github/workflows/ci.yml",
+        "capacity": {
+          "pi-linux": 10,
+          "pi-macos": 10
+        }
+      },
+      "plan": {
+        "contracts (macos-14)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "runner": "pi-macos",
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (macos-14)": {
+          "blocked": false,
+          "coverage_os": "darwin",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "macos",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "pi-macos",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "pi-macos",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "pi-macos",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "xcode-27",
+              "shard": "scripts",
+              "skipped_gates": "",
+              "workspaces": ""
+            },
+            {
+              "gates": "check-integration",
+              "guest": "macos",
+              "os": "macos-14",
+              "runner": "pi-macos",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "linux",
+          "gates": "check-ts check-scripts check-integration",
+          "guest": "linux",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "subagents",
+              "skipped_gates": "",
+              "workspaces": "packages/subagents"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "computer-use",
+              "skipped_gates": "",
+              "workspaces": "packages/computer-use"
+            },
+            {
+              "gates": "check-ts",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "pi-linux",
+              "shard": "ts",
+              "skipped_gates": "",
+              "workspaces": "packages/dev-tools packages/plan-mode packages/preset packages/resource-sampler packages/session-kit packages/subscription-router packages/todo tests/inprocess tests/lib"
+            },
+            {
+              "gates": "check-scripts check-integration",
+              "guest": "linux",
+              "os": "ubuntu-24.04",
+              "runner": "ubuntu-24.04",
+              "shard": "python",
+              "skipped_gates": "",
+              "workspaces": ""
+            }
+          ],
+          "skipped_gates": ""
+        },
+        "stack (macos-14, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "runner": "pi-macos",
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "",
+          "run": true,
+          "scenarios": true,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    },
+    "pool-docs-bypass": {
+      "inputs": {
+        "event": "pull_request",
+        "path": "docs/guide.md",
+        "capacity": {
+          "pi-linux": 10,
+          "pi-macos": 10
+        }
+      },
+      "plan": {
+        "contracts (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "owned (ubuntu-24.04)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, local)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        },
+        "stack (ubuntu-24.04, personal)": {
+          "blocked": false,
+          "coverage_os": "",
+          "gates": "",
+          "guest": "",
+          "reason": "Skipped because the change is docs-only.",
+          "run": false,
+          "scenarios": false,
+          "shards": [],
+          "skipped_gates": ""
+        }
+      }
+    }
+  }
+}

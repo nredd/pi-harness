@@ -162,6 +162,7 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
     body = re.sub(r"\]\.(\w+)", r"]['\1']", body)  # `fromJSON(...)[key].property`
     functions = {
         "fromJSON": lambda text: json.loads(text, object_hook=Absent),
+        "toJSON": lambda value: json.dumps(None if isinstance(value, Absent) and not value else value),
         "format": github_format,
         "contains": lambda haystack, needle: needle in haystack,
         "cancelled": lambda: context.get("cancelled") == "true",
@@ -1284,7 +1285,6 @@ def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards()
         assert fan_in["env"]["SHARDS_RESULT"] == f"${{{{ needs.{shards}.result }}}}"
         if ubuntu:
             assert fan_in["env"]["WINDOWS_RESULT"] == "${{ needs.computer-use-windows.result }}"
-            assert "packages/computer-use" in fan_in["env"]["WINDOWS_REQUIRED"]
         else:
             assert fan_in["env"] == {
                 "SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}",
