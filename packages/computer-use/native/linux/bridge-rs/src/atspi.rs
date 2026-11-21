@@ -71,6 +71,14 @@ pub struct NodeSnapshot {
     pub depth: usize,
 }
 
+/// A best-effort tree plus the information needed to distinguish absence from missing data.
+#[derive(Debug)]
+pub struct Snapshot {
+    pub nodes: Vec<NodeSnapshot>,
+    pub incomplete: bool,
+    pub root_fields_incomplete: bool,
+}
+
 impl NodeSnapshot {
     #[cfg(test)]
     pub(crate) fn minimal(accessible: AccessibleRef) -> Self {
@@ -118,10 +126,15 @@ impl AtspiClient {
         )
         .await?
         .map_err(unavailable)?;
-        Ok(Self {
+        Ok(Self::from_connection(connection, REQUEST_TIMEOUT))
+    }
+
+    /// Use an established accessibility connection with a per-request deadline.
+    pub fn from_connection(connection: Connection, request_timeout: Duration) -> Self {
+        Self {
             connection,
-            request_timeout: REQUEST_TIMEOUT,
-        })
+            request_timeout,
+        }
     }
 
     /// Bound a single request, keeping transport and reply errors distinct from a deadline.
@@ -162,9 +175,9 @@ impl AtspiClient {
         accessible: &AccessibleRef,
     ) -> Result<Vec<AccessibleRef>, ProtocolError> {
         let proxy = self.proxy(accessible, ACCESSIBLE).await?;
-        let children: Vec<(String, OwnedObjectPath)> = self
-            .request("GetChildren", proxy.call("GetChildren", &()))
-            .await?;
+        let member = "GetChildren";
+        let children: Vec<(String, OwnedObjectPath)> =
+            self.request(member, proxy.call(member, &())).await?;
         Ok(children
             .into_iter()
             .filter(|(destination, path)| !destination.is_empty() && path.as_str() != "/")
@@ -175,45 +188,36 @@ impl AtspiClient {
             .collect())
     }
 
-    async fn string_property(&self, accessible: &AccessibleRef, property: &str) -> String {
-        match self.proxy(accessible, ACCESSIBLE).await {
-            Ok(proxy) => self
-                .request(property, proxy.get_property(property))
-                .await
-                .unwrap_or_default(),
-            Err(_) => String::new(),
-        }
+    async fn string_property(
+        &self,
+        accessible: &AccessibleRef,
+        property: &str,
+    ) -> Result<String, ProtocolError> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        self.request(property, proxy.get_property(property)).await
     }
 
-    async fn role(&self, accessible: &AccessibleRef) -> String {
-        match self.proxy(accessible, ACCESSIBLE).await {
-            Ok(proxy) => self
-                .request("GetRoleName", proxy.call("GetRoleName", &()))
-                .await
-                .unwrap_or_default(),
-            Err(_) => String::new(),
-        }
+    async fn role(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        let member = "GetRoleName";
+        self.request(member, proxy.call(member, &())).await
     }
 
-    async fn interfaces(&self, accessible: &AccessibleRef) -> HashSet<String> {
-        match self.proxy(accessible, ACCESSIBLE).await {
-            Ok(proxy) => self
-                .request(
-                    "GetInterfaces",
-                    proxy.call::<_, _, Vec<String>>("GetInterfaces", &()),
-                )
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            Err(_) => HashSet::new(),
-        }
+    async fn interfaces(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<HashSet<String>, ProtocolError> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        let member = "GetInterfaces";
+        let names: Vec<String> = self.request(member, proxy.call(member, &())).await?;
+        Ok(names.into_iter().collect())
     }
 
     async fn bounds(&self, accessible: &AccessibleRef) -> Option<Rect> {
         let proxy = self.proxy(accessible, COMPONENT).await.ok()?;
+        let member = "GetExtents";
         let (x, y, width, height): (i32, i32, i32, i32) = self
-            .request("GetExtents", proxy.call("GetExtents", &(0u32)))
+            .request(member, proxy.call(member, &(0u32)))
             .await
             .ok()?;
         (width > 0 && height > 0).then_some(Rect {
@@ -235,14 +239,9 @@ impl AtspiClient {
         else {
             return 0;
         };
+        let member = "GetConnectionUnixProcessID";
         let connection_pid: Option<u32> = self
-            .request(
-                "GetConnectionUnixProcessID",
-                bus.call(
-                    "GetConnectionUnixProcessID",
-                    &(accessible.destination.as_str()),
-                ),
-            )
+            .request(member, bus.call(member, &(accessible.destination.as_str())))
             .await
             .ok();
         connection_pid.map(u64::from).unwrap_or(0)
@@ -263,11 +262,14 @@ impl AtspiClient {
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
-            let app_name = self.string_property(&app, "Name").await;
+            let app_name = self.string_property(&app, "Name").await.unwrap_or_default();
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let role = self.role(&window).await;
-                let name = self.string_property(&window, "Name").await;
+                let role = self.role(&window).await.unwrap_or_default();
+                let name = self
+                    .string_property(&window, "Name")
+                    .await
+                    .unwrap_or_default();
                 roots.push(RootSnapshot {
                     frame: self.bounds(&window).await,
                     accessible: window,
@@ -294,36 +296,58 @@ impl AtspiClient {
         root: &RootSnapshot,
         max_nodes: usize,
         max_depth: usize,
-    ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
+    ) -> Result<Snapshot, ProtocolError> {
         self.snapshot_from(&root.accessible, max_nodes, max_depth)
             .await
     }
 
+    /// Preserve partial observations without mistaking unread nodes for absent nodes.
     pub async fn snapshot_from(
         &self,
         start: &AccessibleRef,
         max_nodes: usize,
         max_depth: usize,
-    ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
+    ) -> Result<Snapshot, ProtocolError> {
         let mut result = Vec::new();
+        let mut incomplete = false;
+        let mut root_fields_incomplete = false;
         let mut seen = HashSet::new();
         let mut queue = VecDeque::from([(start.clone(), None, 0usize)]);
         while let Some((accessible, parent, depth)) = queue.pop_front() {
-            if result.len() >= max_nodes || depth > max_depth || !seen.insert(accessible.clone()) {
+            if !seen.insert(accessible.clone()) {
                 continue;
             }
-            let interfaces = self.interfaces(&accessible).await;
-            let role = self.role(&accessible).await;
-            let name = self.string_property(&accessible, "Name").await;
-            let description = self.string_property(&accessible, "Description").await;
-            let is_secure =
-                role.eq_ignore_ascii_case("password text") || role.eq_ignore_ascii_case("password");
+            if result.len() >= max_nodes || depth > max_depth {
+                incomplete = true;
+                continue;
+            }
+            let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
+            let role = self.role(&accessible).await.unwrap_or_default();
+            let unknown_role = role.trim().is_empty();
+            incomplete |= unknown_role;
+            let name = field_or_default(
+                self.string_property(&accessible, "Name").await,
+                &mut incomplete,
+            );
+            let description = field_or_default(
+                self.string_property(&accessible, "Description").await,
+                &mut incomplete,
+            );
+            let is_secure = unknown_role
+                || role.eq_ignore_ascii_case("password text")
+                || role.eq_ignore_ascii_case("password");
             let value = if !is_secure && interfaces.contains(TEXT) {
-                self.read_text(&accessible).await.unwrap_or_default()
+                field_or_default(self.read_text(&accessible).await, &mut incomplete)
             } else {
                 String::new()
             };
-            let children = self.children(&accessible).await.unwrap_or_default();
+            if depth == 0 {
+                root_fields_incomplete = incomplete;
+            }
+            let children = self.children(&accessible).await.unwrap_or_else(|_| {
+                incomplete = true;
+                Vec::new()
+            });
             for child in children {
                 queue.push_back((child, Some(accessible.clone()), depth + 1));
             }
@@ -341,12 +365,17 @@ impl AtspiClient {
                 depth,
             });
         }
-        Ok(result)
+        Ok(Snapshot {
+            nodes: result,
+            incomplete,
+            root_fields_incomplete,
+        })
     }
 
     pub async fn read_text(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, TEXT).await?;
-        self.request("GetText", proxy.call("GetText", &(0i32, -1i32)))
+        let member = "GetText";
+        self.request(member, proxy.call(member, &(0i32, -1i32)))
             .await
     }
 
@@ -369,12 +398,13 @@ impl AtspiClient {
         )?;
         let mut names = Vec::new();
         if action_count > 1 {
+            let member = "GetName";
             names.reserve(action_count);
             for index in 0..action_count {
                 let name: String = wait_for_reply(
                     self.request_timeout,
-                    "GetName",
-                    proxy.call("GetName", &(index as i32)),
+                    member,
+                    proxy.call(member, &(index as i32)),
                 )
                 .await?
                 .unwrap_or_default();
@@ -384,7 +414,8 @@ impl AtspiClient {
         let Some(action_index) = selected_action_index(action_count, &names) else {
             return Ok(false);
         };
-        self.request("DoAction", proxy.call("DoAction", &(action_index)))
+        let member = "DoAction";
+        self.request(member, proxy.call(member, &(action_index)))
             .await
     }
 
@@ -396,8 +427,8 @@ impl AtspiClient {
             ));
         }
         let proxy = self.proxy(&node.accessible, EDITABLE_TEXT).await?;
-        self.request("SetTextContents", proxy.call("SetTextContents", &(text)))
-            .await
+        let member = "SetTextContents";
+        self.request(member, proxy.call(member, &(text))).await
     }
 }
 
@@ -584,10 +615,19 @@ async fn accessibility_bus_address(
     let bus = Proxy::new(session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus")
         .await
         .map_err(unavailable)?;
-    let address: String = wait_for_reply(timeout, "GetAddress", bus.call("GetAddress", &()))
+    let member = "GetAddress";
+    let address: String = wait_for_reply(timeout, member, bus.call(member, &()))
         .await?
         .map_err(unavailable)?;
     address.parse().map_err(unavailable)
+}
+
+/// Retain optional field defaults, but do not use a missing timed-out field to prove absence.
+fn field_or_default<T: Default>(result: Result<T, ProtocolError>, incomplete: &mut bool) -> T {
+    result.unwrap_or_else(|error| {
+        *incomplete |= error.code == ErrorCode::Timeout;
+        T::default()
+    })
 }
 
 fn unavailable(error: impl std::fmt::Display) -> ProtocolError {
@@ -1102,7 +1142,10 @@ mod tests {
                     path: ROOT.into(),
                 };
 
-                let nodes = client.snapshot_from(&root, 10, 10).await.unwrap();
+                let Snapshot {
+                    nodes, incomplete, ..
+                } = client.snapshot_from(&root, 10, 10).await.unwrap();
+                assert!(!incomplete);
                 assert_eq!(nodes.len(), 3);
                 assert_eq!(nodes[0].accessible, root);
                 assert_eq!(nodes[0].parent, None);
@@ -1123,11 +1166,13 @@ mod tests {
                 assert_eq!(nodes[2].value, "fixture text");
 
                 let depth_limited = client.snapshot_from(&root, 10, 0).await.unwrap();
-                assert_eq!(depth_limited.len(), 1);
-                assert_eq!(depth_limited[0].accessible, root);
+                assert!(depth_limited.incomplete);
+                assert_eq!(depth_limited.nodes.len(), 1);
+                assert_eq!(depth_limited.nodes[0].accessible, root);
                 let node_limited = client.snapshot_from(&root, 2, 10).await.unwrap();
-                assert_eq!(node_limited.len(), 2);
-                assert_eq!(node_limited[1].accessible.path, PASSWORD);
+                assert!(node_limited.incomplete);
+                assert_eq!(node_limited.nodes.len(), 2);
+                assert_eq!(node_limited.nodes[1].accessible.path, PASSWORD);
                 assert!(password_text.0.lock().unwrap().is_empty());
                 assert_eq!(*label_text.0.lock().unwrap(), [(0, -1)]);
             },
