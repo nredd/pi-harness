@@ -276,7 +276,7 @@ means a scan produced verdicts; unreadable inventory or no matching worktree exi
 Gitlinks and retained submodule
 metadata stay put without running submodule status. Nested `.git` files or directories, incomplete
 walks, malformed inventory or HEAD logs (including non-UTF-8 branch names or log records and
-log IDs of the wrong width for the repository), unreachable old or new HEAD log IDs, and conversion
+inventory or log IDs of the wrong width for the repository), unreachable old or new HEAD log IDs, and conversion
 attributes (including `text=auto`) or conversion configuration also mean keep. Effective
 `core.filemode=false` means keep because Git status can hide executable-bit changes.
 Limits:

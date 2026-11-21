@@ -177,7 +177,7 @@ def run(
             "globals_[limit] = int(os.getenv('SWEEP_ENTRY_LIMIT', globals_[limit])); "
             "suffix = bytes.fromhex(os.getenv('SWEEP_INVENTORY_SUFFIX', '')); "
             "main.__globals__['parse_inventory'] = "
-            "lambda raw: parse(raw[:-1] + suffix if suffix else raw); "
+            "lambda raw, width: parse(raw[:-1] + suffix if suffix else raw, width); "
             "attrs = os.getenv('SWEEP_ACTIVATE_FILTER'); "
             "check_status = globals_['check_status']; "
             "globals_['check_status'] = check_status if attrs is None else "
@@ -951,7 +951,30 @@ def test_lock_during_remote_proof_keeps(wt: Worktrees) -> None:
 def test_invalid_inventory_identity_keeps(raw: bytes) -> None:
     guard = runpy.run_path(str(GUARD))
     with pytest.raises(guard["KeepError"], match="invalid worktree inventory"):
-        guard["parse_inventory"](raw)
+        guard["parse_inventory"](raw, 40)
+
+
+@pytest.mark.parametrize("separator", [b"\n", b"\r", b"\0"])
+def test_inventory_ref_name_rejects_embedded_separator(separator: bytes) -> None:
+    oid = b"HEAD " + b"1" * 40
+    branch = b"branch refs/heads/left" + separator + b"right"
+    raw = b"worktree /absolute\0" + oid + b"\0" + branch + b"\0\0"
+    with pytest.raises(GUARD_MODULE["KeepError"], match="ref-name separator"):
+        GUARD_MODULE["validate_fields"]([oid, branch], 40)
+    with pytest.raises(GUARD_MODULE["KeepError"], match="worktree inventory"):
+        GUARD_MODULE["parse_inventory"](raw, 40)
+
+
+@pytest.mark.parametrize(("storage", "width", "wrong_width"), [("sha1", 40, 64), ("sha256", 64, 40)])
+def test_inventory_requires_storage_oid_width(
+    tmp_path: Path, storage: str, width: int, wrong_width: int
+) -> None:
+    git(tmp_path, "init", "--template=", f"--object-format={storage}")
+    git(tmp_path, "commit", "--allow-empty", "-m", "Base")
+    raw = git(tmp_path, "worktree", "list", "--porcelain", "-z")
+    assert GUARD_MODULE["inventory"](tmp_path) == GUARD_MODULE["parse_inventory"](raw, width)
+    with pytest.raises(GUARD_MODULE["KeepError"], match="inventory identity"):
+        GUARD_MODULE["parse_inventory"](raw, wrong_width)
 
 
 def test_shipped_skills_keep_claimed_scratch_at_handback() -> None:

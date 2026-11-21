@@ -241,14 +241,20 @@ def inventory(repo: Path) -> list[tuple[Path, list[bytes]]]:
     Raises:
         KeepError: Git cannot produce a valid inventory.
     """
-    return parse_inventory(git(repo, "worktree", "list", "--porcelain", "-z"))
+    # Git reports the storage format from extensions.objectFormat, defaulting to SHA-1.
+    storage = git(repo, "rev-parse", "--show-object-format").strip()
+    oid_width = {b"sha1": 40, b"sha256": 64}[storage]
+    return parse_inventory(
+        git(repo, "worktree", "list", "--porcelain", "-z"), oid_width
+    )
 
 
-def parse_inventory(data: bytes) -> list[tuple[Path, list[bytes]]]:
+def parse_inventory(data: bytes, oid_width: int) -> list[tuple[Path, list[bytes]]]:
     """Validate every record before allowing any candidate.
 
     Parameters:
         data: bytes, Raw evidence or input bytes.
+        oid_width: int, Hexadecimal width of a storage object ID.
     Returns:
         list[tuple[Path, list[bytes]]]: Validated worktree paths and records
     Raises:
@@ -267,17 +273,18 @@ def parse_inventory(data: bytes) -> list[tuple[Path, list[bytes]]]:
             or path in seen
         ):
             raise KeepError("invalid worktree inventory path")
-        validate_fields(fields)
+        validate_fields(fields, oid_width)
         seen.add(path)
         records.append((path, fields))
     return records
 
 
-def validate_fields(fields: list[bytes]) -> None:
+def validate_fields(fields: list[bytes], oid_width: int) -> None:
     """Require documented porcelain fields in their published order.
 
     Parameters:
         fields: list[bytes], Porcelain fields for one record.
+        oid_width: int, Hexadecimal width of a storage object ID.
     Returns:
         None.
     Raises:
@@ -288,12 +295,15 @@ def validate_fields(fields: list[bytes]) -> None:
         len(core) != 2
         or not core[0].startswith(b"HEAD ")
         or not OID.fullmatch(core[0][5:])
+        or len(core[0][5:]) != oid_width
         or not (
             core[1] == b"detached"
             or (core[1].startswith(b"branch refs/heads/") and len(core[1]) > 18)
         )
     ):
         raise KeepError("invalid worktree inventory identity")
+    if any(byte in core[-1] for byte in (b"\n", b"\r", b"\0")):
+        raise KeepError("invalid worktree inventory ref-name separator")
     try:
         core[-1].decode("utf-8")
     except UnicodeDecodeError as exc:
