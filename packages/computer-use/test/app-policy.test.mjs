@@ -995,6 +995,21 @@ test("matches a Windows basename with leading whitespace", async ({ onTestFinish
 	);
 });
 
+test("Windows rejects a blank user blocklist entry and keeps the prior list", async ({ onTestFinished }) => {
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const { loadComputerUseConfig } = await import("../src/config.ts");
+	const { ctx, userFile } = await useRootPolicyFixture("win32", windowsHelper, [], onTestFinished);
+	const load = () => loadComputerUseConfig(ctx.cwd, "windows");
+	const prior = load().config.blocked_apps;
+	assert.ok(prior.includes("conhost.exe"));
+
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: [" "] }));
+	const loaded = load();
+	assert.equal(loaded.blockedAppsErrors.length, 1);
+	assert.match(loaded.blockedAppsErrors[0], /blocked_apps.*non-blank string/);
+	assert.deepEqual(loaded.config.blocked_apps, prior);
+});
+
 test("Windows blocklist lookup does not substitute a macOS bundle alias for a missing executable", async () => {
 	const { blockedAppId } = await import("../src/config.ts");
 	assert.equal(blockedAppId("windows", { bundleId: "consent.exe" }), undefined);
