@@ -12,6 +12,7 @@ import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { streamToOutputFile } from "../src/output-file.ts";
 import * as budget from "../src/process-budget.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
+import type { WorkflowAgentEntry } from "../src/workflow/progress.ts";
 import { runWorkflow, type WorkflowControl } from "../src/workflow/runtime.ts";
 import {
 	completeWorkflowTask,
@@ -481,6 +482,65 @@ describe("workflow host lifecycle", () => {
 		const retryRows = result.progress.filter((entry) => entry.type === "workflow_agent" && entry.attempt === 2);
 		expect(retryRows.at(-1)).toMatchObject({ state: "error", error: expect.stringContaining("retry copy failed") });
 		for (const row of retryRows) expect(row).not.toHaveProperty("recordId");
+	}, 10_000);
+
+	it("links a successful retry only after its new runner starts", async () => {
+		const { manager } = managerWithClock();
+		const path = workflowCtx.cwd;
+		const copy = { path, workPath: path, repoRoot: path, branch: "test", baseSha: "abc" };
+		let latest: WorkflowAgentEntry | undefined;
+		let duringStartup: WorkflowAgentEntry | undefined;
+		let callsDuringStartup: number | undefined;
+		vi.spyOn(worktrees, "createWorktree")
+			.mockResolvedValueOnce(copy)
+			.mockImplementationOnce(async () => {
+				duringStartup = latest;
+				callsDuringStartup = vi.mocked(runAgent).mock.calls.length;
+				return copy;
+			});
+		vi.spyOn(worktrees, "cleanupWorktree").mockResolvedValue({ hasChanges: false });
+		const stopped = { responseText: "", session, aborted: true, steered: false };
+		const held = deferred<typeof stopped>();
+		vi.mocked(runAgent)
+			.mockReturnValueOnce(held.promise)
+			.mockResolvedValueOnce({ responseText: "retried", session, aborted: false, steered: false });
+		let control: WorkflowControl | undefined;
+		let firstId: string | undefined;
+		let retried: boolean | undefined;
+		const result = await runWorkflow({
+			script:
+				'export const meta = { name: "retry", description: "fixture" }; return await agent("go", { isolation: "worktree" });',
+			host: createWorkflowHost({ pi, ctx: workflowCtx, manager }),
+			signal: AbortSignal.timeout(5_000),
+			onControl: (value) => {
+				control = value;
+			},
+			onProgress: (entries) => {
+				for (const entry of entries) {
+					if (entry.type !== "workflow_agent") continue;
+					latest = entry;
+					if (entry.recordId === undefined || firstId !== undefined) continue;
+					firstId = entry.recordId;
+					retried = control?.retry(entry.index);
+					held.resolve(stopped);
+				}
+			},
+		}).finally(() => held.resolve(stopped));
+		expect(retried).toBe(true);
+		const [first, second] = vi.mocked(runAgent).mock.calls;
+		expect(runAgent).toHaveBeenCalledTimes(2);
+		expect(firstId).toBe(first?.[3].agentId);
+		const secondId = second?.[3].agentId;
+		expect(secondId).toEqual(expect.any(String));
+		expect(secondId).not.toBe(firstId);
+		expect(callsDuringStartup).toBe(1);
+		expect(duringStartup).toMatchObject({ attempt: 2, state: "start" });
+		expect(duringStartup).not.toHaveProperty("recordId");
+		expect(result).toMatchObject({ status: "completed", value: "retried" });
+		const retryRows = result.progress.filter((entry) => entry.type === "workflow_agent" && entry.attempt === 2);
+		for (const row of retryRows) expect(row).not.toMatchObject({ recordId: firstId });
+		expect(retryRows).toContainEqual(expect.objectContaining({ state: "start", recordId: secondId }));
+		expect(retryRows.at(-1)).toMatchObject({ state: "done", recordId: secondId });
 	}, 10_000);
 
 	it("denies roster after workflow failure", async () => {
