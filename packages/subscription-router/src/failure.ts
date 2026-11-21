@@ -45,6 +45,8 @@ const WEAK =
 	/\b(?:429|402)\b|quota|rate.?limit|too many requests|usage.?limit|out of budget|extra.?usage|available balance/i;
 const DAILY = /PerDay|Daily/i;
 const PER_MINUTE = /PerMinute/i;
+const DAILY_TOKEN = /\b(?:RequestsPerDay\b|Per[ -]?Day\b|Daily(?:\s+(?:quota|limit)\b|(?=\s*(?:$|[.,;:)!]))))/i;
+const PER_MINUTE_TOKEN = /\b(?:RequestsPerMinute|Per[ -]?Minute)\b/i;
 // Only an explicit spend-window signal, not an arbitrary mention of spend in a 429.
 const SPEND_WINDOW = /SpendPer10Minutes|\bspend-10m\b|\b10[- ]minute spend (?:cap|limit)\b/i;
 
@@ -141,8 +143,8 @@ export function classify(errorMessage: string | undefined, now: number): Failure
 	if (http === 429 || VERDICT.test(signal) || LEGACY_LIMIT.test(signal) || interactionsDaily) {
 		const windows = quotaIds.join(" ");
 		// The prose fallback accepts explicit window tokens, not arbitrary mentions of the word daily.
-		if (PER_MINUTE.test(windows) || /\bPerMinute\b/i.test(message)) return { class: "per-minute", ...quota };
-		if (interactionsDaily || DAILY.test(windows) || /\b(?:PerDay|daily (?:quota|limit))\b/i.test(message)) {
+		if (PER_MINUTE.test(windows) || PER_MINUTE_TOKEN.test(message)) return { class: "per-minute", ...quota };
+		if (interactionsDaily || DAILY.test(windows) || DAILY_TOKEN.test(message)) {
 			return { class: "daily", resetAt: nextPacificMidnight(now), ...quota };
 		}
 		if (SPEND_WINDOW.test(`${windows} ${message}`)) return { class: "rolling", resetAt: now + 10 * MINUTE, ...quota };

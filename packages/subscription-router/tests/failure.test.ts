@@ -40,6 +40,10 @@ describe("classify failure text", () => {
 		["Interactions daily error code", '{"error":{"code":"quota_exceeded"}}', daily],
 		["plain terminal code", "quota_exceeded", daily],
 		["raw PerDay marker", "RESOURCE_EXHAUSTED: PerDay", daily],
+		["raw Daily marker", "RESOURCE_EXHAUSTED: Daily", daily],
+		["raw per day marker", "RESOURCE_EXHAUSTED: requests per day exhausted", daily],
+		["raw RequestsPerDay marker", "RESOURCE_EXHAUSTED: RequestsPerDay", daily],
+		["raw per minute beats daily", "RESOURCE_EXHAUSTED: PerDay and requests per minute", perMinute],
 		["explicit spend window", rpc(quotaId("SpendPer10Minutes")), rolling],
 		["spend without an explicit window", "429: Spend quota exceeded", unknown],
 		[
