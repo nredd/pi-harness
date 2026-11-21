@@ -359,10 +359,9 @@ describe("the workflow host at its edges", () => {
 				_ctx: unknown,
 				_type: unknown,
 				_prompt: unknown,
-				opts: Record<string, unknown>,
-				onSpawned?: (id: string) => void,
+				opts: Record<string, unknown> & { onPrepare?: (id: string) => void },
 			) {
-				onSpawned?.(full.id);
+				opts.onPrepare?.(full.id);
 				await during?.(opts);
 				return { id: full.id, record: full };
 			},

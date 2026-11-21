@@ -531,10 +531,11 @@ The parameterless tool binds the caller internally and returns JSON metadata for
 orchestrator and the caller itself. Immediate siblings and direct children appear only if their
 enabled types pass the caller's effective `allowed_subagents` list. Standalone top-level agents
 are siblings only of other standalone top-level agents; parentless workflow workers are siblings
-only within the same workflow run. Nested agents share only the parent run that spawned them,
-not cousins or descendants of their siblings. A missing, settled, or replaced parent run makes a
-nested caller's roster unavailable. No other root, process, user, payload, transcript or result is
-queried.
+only within the same execution, even if two runs share a displayed workflow ID. Nested agents
+share only the parent run that spawned them, not cousins or descendants of their siblings. A
+missing, settled, or replaced parent run makes a nested caller's roster unavailable. Workflow
+workers and their descendants also need a live workflow execution. When that run settles, workers
+still in startup are stopped. No other root, process, user, payload, transcript or result is queried.
 Entries contain `id`, opaque `run` (renewed on resume), `handle` (type label for unnamed nested
 children), `type`, `status` (`queued`, `running`, `finished`, `error`), and `assignment`.
 Discovery still works at the nesting depth cap; it grants no delegation, sibling steering,

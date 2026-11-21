@@ -385,6 +385,8 @@ export interface AgentRecord {
 	rosterRootId?: string;
 	/** Roster-only binding to the immediate parent run that spawned this nested record. */
 	rosterParentRunId?: string;
+	/** Unique workflow execution and its lifetime, inherited by nested descendants. */
+	rosterWorkflowRun?: AbortSignal;
 	/** Opaque identity of the current run, renewed on every accepted resume. */
 	runId?: string;
 }

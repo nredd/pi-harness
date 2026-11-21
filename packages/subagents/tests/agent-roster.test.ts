@@ -138,6 +138,14 @@ it("does not restore nested roster membership when a parent is reopened under a 
 	]);
 });
 
+it("excludes workflow-owned records without an execution binding", () => {
+	const roster = new AgentRoster(() => [record("standalone"), record("unbound", { workflowId: "wf_shared" })]);
+	const allowed = new Set(["Explore"]);
+	expect(() => roster.child("unbound", allowed)).toThrow("no active workflow run");
+	expect(roster.audit("one")).toEqual([]);
+	expect(roster.child("standalone", allowed).agents.map((agent) => agent.id)).toEqual(["root:one", "standalone"]);
+});
+
 it("fails closed for absent, unscoped or settled callers and invalid roots", () => {
 	for (const rows of [
 		[],

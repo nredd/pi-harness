@@ -11,6 +11,8 @@ import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { streamToOutputFile } from "../src/output-file.ts";
 import * as budget from "../src/process-budget.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
+import { runWorkflow } from "../src/workflow/runtime.ts";
+import { completeWorkflowTask, createWorkflowTask } from "../src/workflow/task.ts";
 import * as worktrees from "../src/worktree.ts";
 
 vi.mock("../src/agent-runner.ts", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
@@ -331,6 +333,97 @@ describe("resumed-turn lifecycle", () => {
 });
 
 describe("workflow host lifecycle", () => {
+	const workflowCtx = { ...ctx, cwd: tmpdir(), sessionManager: { getSessionId: () => "root" } } as ExtensionContext;
+	const allowed = new Set(["general-purpose"]);
+	const readRoster = (manager: AgentManager, id: string) => manager.roster.child(id, allowed).agents;
+
+	it("denies roster after workflow failure", async () => {
+		const { manager } = managerWithClock();
+		const path = mkdtempSync(join(tmpdir(), "workflow-pending-"));
+		transcriptRoots.push(path);
+		const copy = { path, workPath: path, repoRoot: path, branch: "test", baseSha: "abc" };
+		const pending = deferred<typeof copy>();
+		const create = vi.spyOn(worktrees, "createWorktree").mockReturnValue(pending.promise);
+		const cleanup = vi.spyOn(worktrees, "cleanupWorktree").mockResolvedValue({ hasChanges: false });
+		const task = createWorkflowTask({
+			id: "wf_shared",
+			script: `export const meta = { name: "roster", description: "fixture" };
+				await agent("retained assignment", { label: "retained" });
+				agent("pending worker", { label: "pending", isolation: "worktree" });`,
+		});
+		const signal = task.abortController.signal;
+		const host = createWorkflowHost({ pi, ctx: workflowCtx, manager, workflowId: task.id, signal });
+		let startup: Promise<void> | undefined;
+		try {
+			const result = await runWorkflow({ script: task.script, host, signal: AbortSignal.timeout(10_000) });
+			completeWorkflowTask(task, result);
+			const worker = manager.listAgents().find((record) => record.description === "pending")!;
+			const retained = manager.listAgents().find((record) => record.description === "retained")!;
+			startup = manager.awaitStartup(worker.id);
+			expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("unawaited agent launch") });
+			expect(create).toHaveBeenCalledOnce();
+			expect(worker.status).toBe("stopped");
+			expect(() => readRoster(manager, worker.id)).toThrow("Agent roster unavailable");
+
+			// Exercise the workflow guard independently of the worker status guard
+			// by reopening a retained worker directly through the manager.
+			const held = deferred<Awaited<ReturnType<typeof resumeAgent>>>();
+			vi.mocked(resumeAgent).mockReturnValueOnce(held.promise);
+			const resume = manager.resume(retained.id, "late turn");
+			try {
+				expect(retained.status).toBe("running");
+				expect(() => readRoster(manager, retained.id)).toThrow("no active workflow run");
+				expect(manager.roster.audit("root")).toEqual([]);
+			} finally {
+				held.resolve({ text: "done", aborted: false, steered: false });
+				await resume;
+			}
+		} finally {
+			pending.resolve(copy);
+			await startup;
+		}
+		expect(cleanup).toHaveBeenCalledOnce();
+		expect(runAgent).toHaveBeenCalledOnce();
+	}, 15_000);
+
+	it("isolates duplicate workflow IDs", async () => {
+		const { manager } = managerWithClock();
+		const host = () =>
+			createWorkflowHost({
+				pi,
+				ctx: workflowCtx,
+				manager,
+				workflowId: "wf_shared",
+				signal: new AbortController().signal,
+			});
+		const [first, second] = [host(), host()];
+		const request = (label: string) => ({
+			agentId: label,
+			index: 0,
+			label,
+			prompt: label,
+			agentType: "general-purpose",
+		});
+		await first.spawnAgent(request("first assignment"));
+		await second.spawnAgent(request("second assignment"));
+		const done = { responseText: "done", session, aborted: false, steered: false };
+		const held = deferred<typeof done>();
+		vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+		const wait = second.spawnAgent(request("caller"));
+		try {
+			const caller = manager.listAgents().find((record) => record.description === "caller")!;
+			expect(manager.listAgents().map((record) => record.workflowId)).toEqual(["wf_shared", "wf_shared", "wf_shared"]);
+			expect(readRoster(manager, caller.id).map((entry) => entry.assignment)).toEqual([
+				"",
+				"caller",
+				"second assignment",
+			]);
+		} finally {
+			held.resolve(done);
+			await wait;
+		}
+	}, 10_000);
+
 	it("reports retained model provenance before resume and resolves an explicit nested script file", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "lifecycle-host-"));
 		const f = managerWithClock((record) => {

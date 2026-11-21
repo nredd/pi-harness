@@ -60,16 +60,15 @@ interface StubManager {
 /** A manager that spawns nothing; `settle` decides what each spawn produces. */
 function stubManager(
 	settle: (type: string, prompt: string, options: any) => Promise<AgentRecord> | AgentRecord = () => record(),
+	id = "agent-1",
 ): StubManager {
 	const abort = vi.fn();
 	const resume = vi.fn(async () => record({ id: "agent-1", result: "resumed" }));
-	const spawnAndWait = vi.fn(
-		async (_pi: any, _ctx: any, type: string, prompt: string, options: any, onSpawned?: (id: string) => void) => {
-			const settled = await settle(type, prompt, options);
-			onSpawned?.(settled.id);
-			return { id: settled.id, record: settled };
-		},
-	);
+	const spawnAndWait = vi.fn(async (_pi: any, _ctx: any, type: string, prompt: string, options: any) => {
+		options.onPrepare?.(id);
+		const settled = await settle(type, prompt, options);
+		return { id: settled.id, record: settled };
+	});
 	return {
 		manager: { spawnAndWait, abort, resume, getRecord: () => undefined } as unknown as AgentManager,
 		spawnAndWait,
@@ -210,6 +209,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 			ctx: ctx(),
 			manager: stub.manager,
 			workflowId: "wf_run1",
+			signal: new AbortController().signal,
 		});
 
 		await host.spawnAgent(request({}));
@@ -522,7 +522,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 	});
 
 	it("aborts the manager record the runtime's agent id stands for", async () => {
-		const stub = stubManager(() => record({ id: "manager-id-7" }));
+		const stub = stubManager(() => record({ id: "manager-id-7" }), "manager-id-7");
 		const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
 		await host.spawnAgent(request({ agentId: "wf-agent-3" }));
@@ -541,7 +541,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 	});
 
 	it("resumes the same manager record, long after that agent settled", async () => {
-		const stub = stubManager(() => record({ id: "manager-id-7" }));
+		const stub = stubManager(() => record({ id: "manager-id-7" }), "manager-id-7");
 		const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
 		await host.spawnAgent(request({ agentId: "wf-agent-0" }));
@@ -559,7 +559,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 			requestedThinking: "high",
 		});
 		let current: AgentRecord = record({ id: "manager-id-7", invocation: invocation("high") as never });
-		const stub = stubManager(() => current);
+		const stub = stubManager(() => current, current.id);
 		const getRecord = () => current;
 		const manager = { ...(stub.manager as object), getRecord } as unknown as AgentManager;
 		stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
@@ -579,7 +579,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 	});
 
 	it("ignores a per-message relabel before the resumed child's model is known (#906)", async () => {
-		const stub = stubManager(() => record({ id: "manager-id-7" }));
+		const stub = stubManager(() => record({ id: "manager-id-7" }), "manager-id-7");
 		stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
 			options.onAssistantUsage();
 			return record({ id: "manager-id-7" });

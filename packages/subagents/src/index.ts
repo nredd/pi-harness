@@ -1370,6 +1370,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// Internal too: a forged value would hide an RPC-spawned agent inside
 		// someone else's workflow, and take it out of the concurrency pool with it.
 		delete safeOptions.workflowId;
+		delete safeOptions.rosterWorkflowRun;
 		delete safeOptions.depth;
 		delete safeOptions.maxSubagentDepth;
 		delete safeOptions.configCwd;

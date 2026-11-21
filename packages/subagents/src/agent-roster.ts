@@ -96,28 +96,33 @@ export class AgentRoster {
 		if (!caller?.rosterRootId || !caller.runId || (caller.status !== "running" && caller.status !== "queued")) {
 			throw new Error("Agent roster unavailable: caller has no active root-scoped run identity.");
 		}
+		const workflowRun = caller.rosterWorkflowRun;
+		if (workflowRun?.aborted || (caller.workflowId !== undefined && workflowRun === undefined)) {
+			throw new Error("Agent roster unavailable: caller has no active workflow run.");
+		}
 		if (caller.parentAgentId !== undefined) {
 			const parent = records.find((record) => record.id === caller.parentAgentId);
 			if (
 				!parent?.runId ||
 				parent.runId !== caller.rosterParentRunId ||
 				parent.rosterRootId !== caller.rosterRootId ||
+				parent.rosterWorkflowRun !== workflowRun ||
+				(parent.workflowId !== undefined && workflowRun === undefined) ||
 				parent.status !== "running"
 			) {
 				throw new Error("Agent roster unavailable: caller has no active immediate parent run.");
 			}
 		}
-		// A workflow id identifies one run, not the workflow definition. Parentless
-		// records share a sibling group only within that run (or outside workflows).
+		// Compare execution identity, never the display id, which can collide.
 		return this.read(
 			caller.rosterRootId,
 			caller.id,
 			caller.runId,
 			(record) =>
 				allowed.has(record.type) &&
-				((record.parentAgentId === caller.parentAgentId &&
-					record.rosterParentRunId === caller.rosterParentRunId &&
-					(caller.parentAgentId !== undefined || record.workflowId === caller.workflowId)) ||
+				record.rosterWorkflowRun === workflowRun &&
+				(record.workflowId === undefined || workflowRun !== undefined) &&
+				((record.parentAgentId === caller.parentAgentId && record.rosterParentRunId === caller.rosterParentRunId) ||
 					(record.parentAgentId === caller.id && record.rosterParentRunId === caller.runId)),
 		);
 	}

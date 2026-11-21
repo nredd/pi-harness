@@ -211,6 +211,7 @@ export function completeWorkflowTask(task: WorkflowTask, result: WorkflowRunResu
 	task.error = result.error;
 	task.errorStack = result.errorStack;
 	task.endTime = Date.now();
+	task.abortController.abort();
 }
 
 /**
@@ -223,6 +224,7 @@ export function failWorkflowTask(task: WorkflowTask, error: string): void {
 	task.status = "failed";
 	task.error = error;
 	task.endTime = Date.now();
+	task.abortController.abort();
 }
 
 /** The run's outcome as text, for the notification and the LLM-facing result. */
