@@ -29,7 +29,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_seeded_history_counts_four_models_over_the_window(tmp_path: Path) -> None:
+def test_seeded_history_counts_five_models_over_the_window(tmp_path: Path) -> None:
     """The favorite is the real token leader, and every counted call sits inside the window.
 
     Parameters:
@@ -46,7 +46,7 @@ def test_seeded_history_counts_four_models_over_the_window(tmp_path: Path) -> No
         entry
         for entry in entries
         if entry["message"]["role"] == "assistant"
-        and entry["message"]["provider"] in {"anthropic", "openai-codex"}
+        and entry["message"]["provider"] in {"anthropic", "openai-codex", "google"}
         and entry["message"]["usage"]["totalTokens"] > 0
     ]
     assert len(entries) - len(counted) == 3

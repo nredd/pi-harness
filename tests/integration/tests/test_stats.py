@@ -30,12 +30,23 @@ def test_hourly_fixture_is_exact_at_any_utc_hour(hour: int) -> None:
         entry
         for entry in entries
         if entry["message"]["role"] == "assistant"
-        and entry["message"]["provider"] in {"anthropic", "openai-codex"}
+        and entry["message"]["provider"] in {"anthropic", "openai-codex", "google"}
         and datetime.fromisoformat(entry["timestamp"]) <= now
     ]
-    assert len(counted) == 6
-    assert len({entry["id"] for entry in counted}) == 6
-    for hours, expected, anthropic, codex in [(5, 78, 26, 52), (24, 260, 104, 156), (None, 546, 234, 312)]:
+    assert len(counted) == 7
+    assert len({entry["id"] for entry in counted}) == 7
+    google = next(entry["message"] for entry in counted if entry["message"]["provider"] == "google")
+    assert google["model"] == "gemini-4-carbon"
+    assert google["usage"] == {
+        "input": 16,
+        "output": 8,
+        "reasoning": 4,
+        "cacheRead": 160,
+        "cacheWrite": 0,
+        "totalTokens": 184,
+        "cost": {"total": 0.00008},
+    }
+    for hours, expected, anthropic, codex in [(5, 262, 26, 52), (24, 444, 104, 156), (None, 730, 234, 312)]:
         calls = [
             entry
             for entry in counted
