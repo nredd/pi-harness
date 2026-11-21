@@ -278,8 +278,8 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   missing, and owns its private HOME/auth/tmp and offline environment through `harness.sandbox`.
   `make check-probes` still lints the whole probe directory and type-checks the other probes against
   the released host. The fork gate's non-rewriting
-  check mirrors the entire selected core script, including worktree readiness and the binary-release
-  and fork-audit type checks; only Biome's `--write` is removed
+  check runs through measured `scripts/ci_fork_check.py`. It refuses drift from the selected core
+  check list before running any checks, drops Biome's `--write`, and invokes `tsc` through `npx`
 - The Forks system dependency step always installs the upstream packages. It tries the Ubuntu mirrors in
   turn: Azure first, then the Ubuntu archive if the index or package download
   fails. Each apt command has its own deadline inside the five-minute step and prints its captured
