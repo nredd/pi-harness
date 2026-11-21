@@ -138,10 +138,10 @@ import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.ts";
 import {
 	admitModelSelection,
 	describeSelection,
-	describeTierProposal,
 	modelIdentityNote,
 	modelSelectionNote,
 	modelShadowNote,
+	proposeModelTiers,
 	selectModel,
 } from "./model-selection.ts";
 import { configuredTierNames, tierDisclosure } from "./model-tiers.ts";
@@ -199,9 +199,12 @@ import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
 	applyAndEmitLoaded,
 	loadSettings,
-	loadTrustedSettings,
+	loadTierProposalSettings,
 	type SubagentsSettings,
 	saveAndEmitChanged,
+	saveProposedModelTiers,
+	TierSettingsChangedError,
+	TierSettingsTargetError,
 	type ToolDescriptionMode,
 } from "./settings.ts";
 import { hostStartupErrorClass } from "./startup-error.ts";
@@ -5723,21 +5726,59 @@ Write the file using the write tool. Only write the file, nothing else.`;
 		else pi.sendMessage({ customType: "subagents-roster", content, display: true }, { triggerTurn: false });
 	}
 
-	pi.registerCommand("agents", {
-		description: "Manage agents (propose-tiers to preview modelTiers)",
-		handler: async (args, ctx) => {
-			if (args.trim() === "propose-tiers") {
-				// Keep this output out of the session and model context, even on errors.
-				if (!ctx.hasUI) return;
-				try {
-					const { modelTiers, modelAliases } = loadTrustedSettings(options.homeDir);
-					ctx.ui.notify(describeTierProposal(ctx.modelRegistry.getAll(), modelTiers, modelAliases), "info");
-				} catch {
-					ctx.ui.notify(
-						"Could not read trusted settings or registered router profiles for the tier proposal.",
-						"error",
-					);
+	/** Preview or confirm an exact proposal without sending it to the session or model. */
+	async function presentTierProposal(ctx: ExtensionCommandContext, apply: boolean): Promise<void> {
+		if (!ctx.hasUI) return;
+		const load = () => {
+			const { settings, snapshot } = loadTierProposalSettings(apply, options.homeDir);
+			const proposal = proposeModelTiers(ctx.modelRegistry.getAll(), settings.modelTiers, settings.modelAliases);
+			return { proposal, snapshot };
+		};
+		let initial: ReturnType<typeof load>;
+		try {
+			initial = load();
+		} catch (error) {
+			const reason = error instanceof TierSettingsTargetError ? ` ${error.message}.` : "";
+			ctx.ui.notify(
+				`Could not read trusted settings or registered router profiles for the tier proposal.${reason}`,
+				"error",
+			);
+			return;
+		}
+		const { proposal, snapshot } = initial;
+		if (!apply || !proposal.modelTiers) {
+			ctx.ui.notify(proposal.preview, "info");
+			return;
+		}
+		const approved = JSON.stringify(proposal.modelTiers);
+		try {
+			if (!(await ctx.ui.confirm("Save proposed modelTiers?", `Add ${approved} to global subagents.json?`))) return;
+			await saveProposedModelTiers(proposal.modelTiers, snapshot, options.homeDir, () => {
+				// Check again after confirmation and any wait for the write lock.
+				if (JSON.stringify(load().proposal.modelTiers) !== approved) {
+					throw new TierSettingsChangedError("The tier proposal changed.");
 				}
+			});
+			ctx.ui.notify("Saved modelTiers to global subagents.json. Restart Pi to use the new bindings.", "info");
+		} catch (error) {
+			if (error instanceof TierSettingsChangedError) {
+				ctx.ui.notify(error.message, "warning");
+				return;
+			}
+			const reason =
+				error instanceof TierSettingsTargetError
+					? ` ${error.message}.`
+					: " Check the trusted configuration and file permissions.";
+			ctx.ui.notify(`Could not save modelTiers.${reason} Run /agents apply-tiers again.`, "error");
+		}
+	}
+
+	pi.registerCommand("agents", {
+		description: "Manage agents (propose-tiers to preview or apply-tiers to confirm and save modelTiers)",
+		handler: async (args, ctx) => {
+			const action = args.trim();
+			if (action === "propose-tiers" || action === "apply-tiers") {
+				await presentTierProposal(ctx, action === "apply-tiers");
 				return;
 			}
 			if (args.trim() === "roster" || args.trim() === "audit") {

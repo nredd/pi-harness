@@ -769,6 +769,8 @@ Stop a running or queued background agent, like Claude Code's `TaskStop`. A stee
 | Command | Description |
 |---------|-------------|
 | `/agents` | Interactive agent management menu — agent types, running agents, scheduled jobs, workflow runs, settings |
+| `/agents propose-tiers` | Preview exact [model tier](#model-tiers) bindings from registered router profiles; never writes settings |
+| `/agents apply-tiers` | Review and confirm saving proposed [model tier](#model-tiers) bindings to global settings |
 
 `/agents → Workflows` (shown only when [workflows](#persistent-settings) are on) opens a framed two-pane inspector over a run, with two levels of depth:
 
@@ -925,7 +927,13 @@ Bindings live ONLY in global `~/.pi/agent/subagents.json` or the `subagents` obj
 
 Run `/agents propose-tiers` in an interactive session to list registered `router/*` profiles with valid tier names and preview a `modelTiers` map. It suggests only exact, case-sensitive matches for `cheap`, `deep`, `default`, `frontier` and `review`. Other valid tier names, such as `frontier-extra`, are listed but not proposed. Invalid tier names, such as `Deep`, are omitted. A missing profile is left unmapped. Registration is not a check of credentials, quota or the health of a profile's members.
 
-The command reads only trusted global settings and the owner-only `enterprise.local.json` overlay. Project-level `modelTiers` is ignored. It proposes nothing when a trusted `modelTiers` map already exists, even `{}`, and skips `cheap` if it would shadow the legacy Explore compatibility alias. You can still bind `cheap` by hand; an explicit binding takes precedence over the alias. Review the JSON and, only if you approve, copy the `modelTiers` field into your trusted global configuration yourself. The command never writes settings or changes routing. Without a UI it returns silently, without reading settings or listing profiles.
+These [commands](#commands) read only trusted global settings and the owner-only `enterprise.local.json` overlay. Project-level `modelTiers` is ignored. They propose nothing when a trusted `modelTiers` map already exists, even `{}`, and skip `cheap` if it would shadow the legacy Explore compatibility alias. You can still bind `cheap` by hand; an explicit binding takes precedence over the alias.
+
+Run `/agents apply-tiers` to review the current proposal and explicitly confirm saving it. The command inserts only `modelTiers` into global `subagents.json`, leaving every existing byte intact. It never writes project settings or the enterprise overlay. Declining, an empty proposal, or a stale proposal writes nothing. Apply refuses malformed JSON, nonregular paths (including symlinks), read-only files, and any pre-existing `modelTiers` field. Restart Pi to use the saved bindings. Without a UI both commands return silently.
+
+Limits: Apply commands cooperate through the adjacent `subagents.json.lock`. Apply checks the directory after locking, then checks the directory and file again before publishing. A mismatch in identity, mode, or bytes fails closed; re-run to review the current settings. A busy lock or a mode that cannot be preserved also aborts. Cleanup removes only entries whose identities matched at the time of the check. There is no conditional unlink in POSIX; an entry swapped in the few microseconds between the check and removal can still be removed. A crash or a moved directory can leave a lock or staging file behind; remove it only after verifying no apply is running.
+
+Node has no directory-handle-relative filesystem operations. An editor save or directory swap can still race the final identity checks and atomic rename in the last microseconds. If the rename succeeds despite the race, apply reports success even if it overwrote an edit or wrote to a replacement directory. Don't edit `subagents.json` or move its directory while applying tiers.
 
 Routed personal setup (configure the router profiles separately):
 
@@ -1082,8 +1090,8 @@ When on, each subagent spawn's effective model is validated against pi's own `en
 
 Runtime tuning values set via `/agents` → Settings (max concurrency, max foreground concurrency, default max turns, grace turns, nested depth, notice result chars, fallback agent, default join mode, scheduling on/off, scope models on/off, disable defaults on/off, strict agent files on/off, package agents on/off, package workflows on/off, agent mentions on/off, output transcript on/off, tool description full/compact/custom, widget all/background/off, usage reporting on/off, cost display on/off, model display on/off, viewer markdown off/assistant/all) persist across pi restarts. Two files, merged on load:
 
-- **Global:** `~/.pi/agent/subagents.json` — your machine-wide defaults. Edit by hand; the `/agents` menu never writes here.
-- **Project:** `<cwd>/.pi/subagents.json` — per-project overrides. Written by `/agents` → Settings.
+- **Global:** `~/.pi/agent/subagents.json` -- your machine-wide defaults. Edit by hand, except that [`/agents apply-tiers`](#model-tiers) can add `modelTiers` after confirmation.
+- **Project:** `<cwd>/.pi/subagents.json` -- per-project overrides. `/agents -> Settings` writes only this file.
 
 **Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max concurrency `10`, max foreground concurrency `0` = unlimited, default max turns unlimited, grace turns `5`, nested depth `2`, notice result chars `16000`, join mode `smart`, defaults enabled).
 
