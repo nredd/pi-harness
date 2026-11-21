@@ -15,6 +15,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.client import HTTPException
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -144,16 +145,16 @@ class GitHub:
             ValueError: Download exceeded its bound or lacked a signed redirect.
         """
         try:
-            self.request(f"actions/artifacts/{artifact_id}/zip")
-        except HTTPError as error:
-            url = error.headers.get("Location", "")
-            error.close()
-            target = urlsplit(url)
-            if error.code != 302 or target.scheme != "https" or not target.hostname or target.username:
-                raise
-        else:
-            raise ValueError("Expected a signed artifact redirect")
-        try:
+            try:
+                self.request(f"actions/artifacts/{artifact_id}/zip")
+            except HTTPError as error:
+                url = error.headers.get("Location", "")
+                error.close()
+                target = urlsplit(url)
+                if error.code != 302 or target.scheme != "https" or not target.hostname or target.username:
+                    raise
+            else:
+                raise ValueError("Expected a signed artifact redirect")
             with build_opener(NoRedirect()).open(url, timeout=30) as response, destination.open("wb") as out:
                 remaining = MAX_ARCHIVE_BYTES
                 while chunk := response.read(min(remaining + 1, 1024 * 1024)):
@@ -161,6 +162,9 @@ class GitHub:
                     if remaining < 0:
                         raise ValueError("Coverage archive exceeds size limit")
                     out.write(chunk)
+        except HTTPException as error:
+            destination.unlink(missing_ok=True)
+            raise OSError("Coverage artifact HTTP transfer failed") from error
         except (OSError, ValueError):
             destination.unlink(missing_ok=True)
             raise

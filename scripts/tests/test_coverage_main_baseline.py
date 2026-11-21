@@ -7,8 +7,10 @@ References:
 
 from __future__ import annotations
 
+import io
 import json
 from email.message import Message
+from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -425,6 +427,72 @@ def test_invalid_host_does_not_fail_or_reuse_older_ubuntu(
     assert "Ubuntu enforced signals: 34/34 zero uncovered" in body
     assert summary.read_text() == body + "\n"
     assert len(api.reads) == 3
+
+
+@pytest.mark.parametrize("status", [302, 404])
+def test_baseline_http_failure_still_posts(
+    status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use the real downloader and fail after writing a chunk, or on a deleted artifact.
+
+    Parameters:
+        status (int): Artifact endpoint response status.
+        tmp_path (Path): Isolated summary directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped test override.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The comment did not degrade only the affected host.
+    """
+    api = MainGitHub()
+    api.add(main_push(20))
+    request = api.request
+    download = api.download
+
+    def artifact_request(path: str, *args: Any, **kwargs: Any) -> Any:
+        """Serve a signed redirect or a 404 for the Ubuntu baseline."""
+        if path == "actions/artifacts/2200/zip":
+            headers = Message()
+            headers["Location"] = "https://artifact.example/coverage.zip"
+            raise HTTPError(path, status, "fixture", headers, None)
+        return request(path, *args, **kwargs)
+
+    def download_ubuntu(artifact_id: int, destination: Path, **kwargs: Any) -> None:
+        """Exercise the normal transport boundary only for the affected artifact."""
+        if artifact_id == 2200:
+            try:
+                pub.GitHub.download(api, artifact_id, destination, **kwargs)
+            finally:
+                assert not destination.exists()
+        else:
+            download(artifact_id, destination, **kwargs)
+
+    class Truncated(io.BytesIO):
+        """Return one chunk, then fail on the next incomplete chunk."""
+
+        def read(self, size: int | None = -1, /) -> bytes:
+            """Read the first chunk before raising a transport-level error."""
+            if self.tell():
+                raise IncompleteRead(b"partial bytes", 100)
+            return super().read(size)
+
+        def open(self, url: str, *, timeout: float) -> Truncated:
+            """Act as the anonymous storage opener."""
+            assert url == "https://artifact.example/coverage.zip"
+            assert 0 < timeout <= 30
+            return self
+
+    monkeypatch.setattr(
+        MainGitHub, "request", lambda self, *args, **kwargs: artifact_request(*args, **kwargs)
+    )
+    monkeypatch.setattr(
+        MainGitHub, "download", lambda self, *args, **kwargs: download_ubuntu(*args, **kwargs)
+    )
+    monkeypatch.setattr(pub, "build_opener", lambda _: Truncated(b"first chunk"))
+    pub.publish(api, pub.Run.parse(api.data), POLICY, tmp_path / "summary.md")
+    (write,) = api.writes
+    assert "Ubuntu measured main baseline: unavailable." in write[2]["body"]
+    assert "macOS measured main baseline (producer-reported" in write[2]["body"]
 
 
 @pytest.mark.parametrize("failure", ["http", "bad-list", "oversized", "incomplete"])
