@@ -1177,8 +1177,12 @@ def test_shipped_skills_keep_claimed_scratch_at_handback() -> None:
     assert "Before handback, remove" not in worker
     assert "With the shipped guard, do not delete scratch" in parent
 
-    for skill in (worker, parent):
+    for skill, handback in (
+        (worker, "report the path and only the guard's reasons and any status evidence it already collected"),
+        (parent, "report only the guard's reasons and any status evidence it already collected"),
+    ):
         prose = " ".join(skill.replace("`", "").split())
+        assert handback in prose
         warning = (
             "Never run a standalone git status (or git diff) on a retained worktree to fill in "
             "evidence: it can run configured filters."
