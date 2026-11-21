@@ -855,7 +855,9 @@ function insertModelTiers(source: string, modelTiers: Record<string, string[]>):
 	// character inside them give us an insertion point without walking values.
 	const start = source.indexOf("{") + 1;
 	const inside = source.slice(start, source.lastIndexOf("}"));
-	const whitespace = /^[ \t\r\n]*/.exec(inside)?.[0] ?? "";
+	let leading = 0;
+	while (leading < inside.length && " \t\r\n".includes(inside.charAt(leading))) leading++;
+	const whitespace = inside.slice(0, leading);
 	let end = inside.length;
 	while (end > 0 && " \t\r\n".includes(inside.charAt(end - 1))) end--;
 	const member = `"modelTiers": ${JSON.stringify(modelTiers)}`;
@@ -866,17 +868,14 @@ function insertModelTiers(source: string, modelTiers: Record<string, string[]>):
 
 async function acquireTierSettingsLock(path: string): Promise<number> {
 	const deadline = performance.now() + 1_000;
-	for (;;) {
+	do {
 		try {
 			return openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			const remaining = deadline - performance.now();
-			if (remaining <= 0) break;
-			await delay(Math.min(25, remaining));
-			if (performance.now() >= deadline) break;
+			await delay(Math.min(25, deadline - performance.now()));
 		}
-	}
+	} while (performance.now() < deadline);
 	throw new TierSettingsTargetError("Another tier save holds the global settings lock");
 }
 

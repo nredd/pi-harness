@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import * as fs from "node:fs";
 import {
 	chmodSync,
 	lstatSync,
@@ -14,7 +15,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { join, relative } from "node:path";
+import { join, parse, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
@@ -37,6 +38,11 @@ import type { FleetUICtx } from "../src/ui/fleet-list.ts";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../src/ui/fleet-state.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
 import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./fixtures/boot-extension.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return { ...fs, fstatSync: vi.fn(fs.fstatSync), openSync: vi.fn(fs.openSync), realpathSync: vi.fn(fs.realpathSync) };
+});
 
 vi.mock("../src/agent-runner.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof runner>()),
@@ -553,6 +559,70 @@ describe("/agents tier proposals", () => {
 		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
 		expect(readdirSync(agentDir())).not.toContain("subagents.json.lock");
 		expect(readdirSync(agentDir()).some((name) => name.startsWith(".subagents-tiers-"))).toBe(false);
+	});
+
+	it("creates a missing agent directory only after approval", async () => {
+		const target = join(agentDir(), "missing", "agent");
+		vi.stubEnv("PI_CODING_AGENT_DIR", target);
+		try {
+			await apply(
+				vi.fn(async () => {
+					expect(lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+					return true;
+				}),
+			);
+			expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("rejects a dangling agent-directory symlink instead of creating its target", async () => {
+		const current = join(agentDir(), "current");
+		const absent = join(agentDir(), "absent");
+		symlinkSync(absent, current, "junction");
+		vi.stubEnv("PI_CODING_AGENT_DIR", current);
+		try {
+			const { confirm } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(lstatSync(absent, { throwIfNoEntry: false })).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it.each(["ENOENT", "EACCES"])("propagates an unresolved filesystem root: %s", (code) => {
+		vi.stubEnv("PI_CODING_AGENT_DIR", parse(agentDir()).root);
+		try {
+			const error = Object.assign(new Error("synthetic realpath failure"), { code });
+			vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
+				throw error;
+			});
+			expect(() => settings.loadTierProposalSettings(true)).toThrow(error);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("rejects a different inode opened after the first lstat", () => {
+		writeFileSync(globalSettings(), "{}\n");
+		const other = `${globalSettings()}.other`;
+		writeFileSync(other, "{}\n");
+		vi.mocked(fs.fstatSync).mockReturnValueOnce(lstatSync(other, { bigint: true }));
+		expect(() => settings.loadTierProposalSettings(true)).toThrow(settings.TierSettingsChangedError);
+	});
+
+	it("reports an unexpected lock failure without saving", async () => {
+		const { notify } = await apply(
+			vi.fn(async () => {
+				vi.mocked(fs.openSync).mockImplementationOnce(() => {
+					throw Object.assign(new Error("synthetic lock permission failure"), { code: "EACCES" });
+				});
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Check the trusted configuration"), "error");
+		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
 	});
 
 	it("serializes two cooperating saves from the same snapshot", async () => {
