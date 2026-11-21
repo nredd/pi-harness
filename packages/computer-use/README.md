@@ -218,6 +218,11 @@ hosted app. Match the exact executable basename, case-insensitively: `powershell
 no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, `OpenConsole.exe`,
 `wt.exe`, and `wsl.exe` when those processes own a root.
 
+Known blocked desktop roots fail before helper readiness for live operations, including
+`search_ui` OCR and `expand_ui` scoped looks. On macOS this is an intentional ordering change:
+`app_blocked` wins even if helper readiness would also fail. The macOS lists, matching, and
+helper payloads are unchanged. Cached searches and expansions that need no new look remain available.
+
 The cross-OS conformance suite and Linux keyboard-at-coordinate refusal are separate work.
 
 ## Documentation

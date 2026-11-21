@@ -800,20 +800,24 @@ function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: 
 	return blockedAppId(currentPlatformBackend.name, target);
 }
 
-/** Fail closed with `app_blocked` for denied or unresolved identities. */
-function assertAppNotBlocked(target: Pick<HelperApp, "appName"> & PolicyIdentity): void {
+function appPolicyRefusal(target: Pick<HelperApp, "appName"> & PolicyIdentity): ComputerUseError | undefined {
 	const id = appBlockReason(target);
 	if (typeof id === "object") {
-		throw new ComputerUseError(
+		return new ComputerUseError(
 			"app_blocked",
 			`app_blocked: Cannot observe or control '${target.appName}': application identity could not be determined.`,
 		);
 	}
-	if (!id) return;
-	throw new ComputerUseError(
+	if (!id) return undefined;
+	return new ComputerUseError(
 		"app_blocked",
 		`app_blocked: '${target.appName}' (${id}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
 	);
+}
+
+function assertAppNotBlocked(target: Pick<HelperApp, "appName"> & PolicyIdentity): void {
+	const refusal = appPolicyRefusal(target);
+	if (refusal) throw refusal;
 }
 
 function windowRecordIdentity(
@@ -2150,8 +2154,28 @@ function matchIsNonActionableStatic(match: OutlineSearchMatch): boolean {
 	return !node.canPress && !node.canFocus && !node.canSetValue && node.actions.length === 0 && !node.pictureOnly;
 }
 
-function shouldEscalateSearchOCR(matches: OutlineSearchMatch[], _text?: string): boolean {
-	return matches.length === 0 || matches.every(matchIsNonActionableStatic);
+const SEARCH_UI_LIMIT = 12;
+
+function searchUiFilters(params: SearchUiParams) {
+	return {
+		text: trimOrUndefined(params.text),
+		role: trimOrUndefined(params.role),
+		capability: trimOrUndefined(params.capability),
+	};
+}
+
+function canEscalateSearchOCR(): boolean {
+	const { contextId, currentLook } = operationState();
+	return Boolean(
+		!isBrowserContextId(contextId) &&
+			currentLook &&
+			currentLook.readText?.requested !== "never" &&
+			!currentLook.readText?.executed,
+	);
+}
+
+function shouldEscalateSearchOCR(matches: OutlineSearchMatch[]): boolean {
+	return canEscalateSearchOCR() && matches.every(matchIsNonActionableStatic);
 }
 
 /** Pure outline query unless a window selector is supplied, in which case current target selection may change. */
@@ -2161,24 +2185,13 @@ async function performSearchUi(
 ): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
 	let outline = currentOutlineOrThrow();
-	const text = trimOrUndefined(params.text);
-	const role = trimOrUndefined(params.role);
-	const capability = trimOrUndefined(params.capability);
+	const { text, role, capability } = searchUiFilters(params);
 	if (!text && !role && !capability)
 		throw new Error("search_ui requires text, role, or capability. Use observe_ui for a bounded overview.");
-	const limit = 12;
-	let ranked = searchOutlineRanked(outline, text, role, capability, limit);
+	let ranked = searchOutlineRanked(outline, text, role, capability, SEARCH_UI_LIMIT);
 	let matches = ranked.matches;
 	let escalatedOCR = false;
-	const look = state.currentLook;
-	// A browser state has no desktop window to re-capture; report the outline matches as they are.
-	if (
-		!isBrowserContextId(state.contextId) &&
-		shouldEscalateSearchOCR(matches, text) &&
-		look &&
-		look.readText?.requested !== "never" &&
-		!look.readText?.executed
-	) {
+	if (shouldEscalateSearchOCR(matches)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		// captureCurrentTarget adopts the new look/outline/capture into
 		// runtimeState, so refs in these matches stay actable. Keep the image
@@ -2192,7 +2205,7 @@ async function performSearchUi(
 			)
 		).value;
 		outline = captureResult.outline;
-		ranked = searchOutlineRanked(outline, text, role, capability, limit);
+		ranked = searchOutlineRanked(outline, text, role, capability, SEARCH_UI_LIMIT);
 		matches = ranked.matches;
 		escalatedOCR = true;
 	}
@@ -2233,6 +2246,18 @@ async function performSearchUi(
 	};
 }
 
+function needsScopedLook(outline: Outline, target: OutlineNode): boolean {
+	const state = operationState();
+	if (isBrowserContextId(state.contextId)) return false;
+	const regionKey = noteRegionKeyForRef(outline, target.ref);
+	return (
+		target.truncated ||
+		Boolean(
+			regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"),
+		)
+	);
+}
+
 /** Reads cached outline; truncated refs trigger a scoped look. */
 async function performExpandUi(
 	params: ExpandUiParams,
@@ -2246,12 +2271,7 @@ async function performExpandUi(
 	if (!initialTarget) throw new Error(`Outline ref '${ref}' is not available in the current outline.`);
 	let target: OutlineNode = initialTarget;
 	const depth = Math.max(1, Math.min(8, Math.trunc(toFiniteNumber(params.depth, 3))));
-	const regionKey = noteRegionKeyForRef(outline, ref);
-	const regionChanged = Boolean(
-		regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"),
-	);
-	// A browser state has no desktop window to scope a look into; render the cached subtree as is.
-	if (!isBrowserContextId(state.contextId) && (target.truncated || regionChanged)) {
+	if (needsScopedLook(outline, target)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
 		const scoped = (
@@ -3604,16 +3624,37 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 	});
 }
 
-/** A known blocked root must not even reach helper readiness or root re-resolution. */
-function assertKnownRootNotBlocked(tool: string, root: unknown, outputRef: boolean): void {
+type PolicyPreflightParams = SearchUiParams & { root?: unknown; ref?: string };
+
+/** A known blocked root must not even reach helper readiness for a live operation. */
+function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, outputRef: boolean): void {
+	const root = params?.root;
 	if (tool === "observe_ui" && root !== undefined) {
 		const known = typeof root === "string" ? runtimeState.windowRefs.get(root) : undefined;
 		if (known) assertAppNotBlocked(known);
 		return;
 	}
+	const { currentTarget } = operationState();
+	if (!currentTarget) return;
 	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {
-		const target = operationState().currentTarget;
-		if (target) assertAppNotBlocked(target);
+		assertAppNotBlocked(currentTarget);
+	} else if (tool === "search_ui" || tool === "expand_ui") {
+		// Reuse the live-path predicates; cached queries do not require policy admission.
+		const refusal = appPolicyRefusal(currentTarget);
+		if (!refusal) return;
+		const currentOutline = currentOutlineOrThrow();
+		if (tool === "search_ui") {
+			const { text, role, capability } = searchUiFilters(params);
+			if (
+				(text || role || capability) &&
+				shouldEscalateSearchOCR(searchOutlineRanked(currentOutline, text, role, capability, SEARCH_UI_LIMIT).matches)
+			)
+				throw refusal;
+		} else {
+			const ref = trimOrUndefined(params.ref);
+			const node = ref ? nodeByRef(currentOutline, ref) : undefined;
+			if (node && needsScopedLook(currentOutline, node)) throw refusal;
+		}
 	}
 }
 
@@ -3635,9 +3676,7 @@ async function executeTool<P, T>(
 	const operation = savedStates.hydrate(stateRecord);
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
-			await ensureReady(ctx, signal, () =>
-				assertKnownRootNotBlocked(tool, (params as { root?: unknown } | undefined)?.root, outputRef),
-			);
+			await ensureReady(ctx, signal, () => assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef));
 			throwIfAborted(signal);
 			// Start the tool before releasing readiness: launch_browser joins its lifecycle
 			// synchronously, so shutdown cannot drain readiness and overtake that launch.

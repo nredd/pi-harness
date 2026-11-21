@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, test, vi } from "vitest";
+import { wireButton, wireNode } from "./support/fake-desktop.mjs";
 
 const ENV = "PI_COMPUTER_USE_BLOCKED_APPS";
 const SYSTEM_AGENTS = [
@@ -689,7 +690,8 @@ test("macOS act and actBatch send the effective blocklist so coordinate input is
 
 async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 	const { currentPlatformBackend, platformBackendForRuntime } = await import("../src/platform/index.ts");
-	const { executeFind, executeObserve } = await import("../src/bridge.ts");
+	const bridge = await import("../src/bridge.ts");
+	const { executeFind, executeObserve } = bridge;
 	const original = { ...currentPlatformBackend };
 	const backend = { ...platformBackendForRuntime(platform) };
 	const originalCommand = helper.command;
@@ -716,6 +718,19 @@ async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 	});
 	helper.command = async (name, args) => {
 		calls.push(name);
+		if (name === "look") {
+			assert.equal(platform, "win32");
+			assert.equal(args.blockedApps, undefined);
+			assert.equal(args.blockedBundleIds, undefined);
+			return {
+				lookId: "windows-look",
+				window: { rootRef: args.rootRef, framePoints: { x: 0, y: 0, w: 100, h: 100 }, scaleFactor: 1 },
+				outline: wireNode("root", "window", "Notes", {
+					children: [wireButton("save", "Save"), wireNode("group", "group", "Group", { truncated: true })],
+				}),
+				readText: { requested: args.readText, executed: false },
+			};
+		}
 		assert.equal(name, "listRoots");
 		assert.deepEqual(Object.keys(args), args.pid ? ["pid"] : [], "never forward the blocklist");
 		return { roots: args.pid ? roots.filter((root) => root.pid === args.pid) : roots };
@@ -723,9 +738,10 @@ async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 	mkdirSync(path.join(cwd, "extensions"));
 	const userFile = path.join(cwd, "extensions", "pi-computer-use.json");
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
-	const find = async (params = {}) => (await executeFind("t", params, undefined, undefined, ctx)).details.windows;
-	const observe = (root) => executeObserve("t", { root, mode: "semantic" }, undefined, undefined, ctx);
-	return { calls, find, observe, userFile };
+	const call = (executor, params) => executor("t", params, undefined, undefined, ctx);
+	const find = async (params = {}) => (await call(executeFind, params)).details.windows;
+	const observe = (root, mode = "semantic") => call(executeObserve, { root, mode });
+	return { bridge, call, calls, find, observe, userFile };
 }
 
 function policyRoot(pid, appName, processName, bundleId) {
@@ -784,6 +800,50 @@ test("Windows blocks known roots by executable before helper calls, not by displ
 	assert.equal(byPid(configured, 102).blocked, true, "always-blocked entries survive replacement");
 	assert.equal(byPid(configured, 103).blocked, true);
 	assert.equal(byPid(configured, 104).blocked, false, "neither the title nor the bundle id is a Windows identity");
+});
+
+test("Windows refuses re-blocked saved-state live operations before readiness", async ({ onTestFinished }) => {
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const roots = [policyRoot(101, "Notes", "notes.exe")];
+	const { bridge, call, calls, find, observe, userFile } = await useRootPolicyFixture(
+		"win32",
+		windowsHelper,
+		roots,
+		onTestFinished,
+	);
+	const [{ windowRef }] = await find();
+	const {
+		details: {
+			capture: { stateId },
+		},
+	} = await observe(windowRef, "fused");
+	const { executeAct, executeReadText, executeWaitFor, executeSearchUi, executeExpandUi, executeInspectUi } = bridge;
+	const search = (text) => call(executeSearchUi, { stateId, text });
+	const expand = (ref) => call(executeExpandUi, { stateId, ref });
+	const saveRef = (await search("Save")).details.matches[0].ref;
+	const groupRef = (await call(executeInspectUi, { stateId, ref: "@e3" })).details.target.ref;
+
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["NOTES.EXE"] }));
+	calls.length = 0;
+	for (const [name, operation] of [
+		["act_ui", () => call(executeAct, { stateId, actions: [{ action: "press", ref: saveRef }] })],
+		["read_text", () => call(executeReadText, { stateId, ref: saveRef })],
+		["wait_for", () => call(executeWaitFor, { stateId, text: "Save" })],
+		["search_ui OCR", () => search("missing")],
+		["expand_ui scoped", () => expand(groupRef)],
+	]) {
+		await assert.rejects(operation, { code: "app_blocked" }, name);
+		assert.deepEqual(calls, [], `${name} must not reach readiness or the helper`);
+	}
+	assert.equal((await search("Save")).details.matches[0].ref, saveRef, "cached query still works");
+	assert.match((await expand(saveRef)).content[0].text, /Save/, "cached expansion still works");
+	await assert.rejects(search(undefined), /requires text, role, or capability/);
+	await assert.rejects(expand(undefined), /ref is required/);
+	await assert.rejects(expand("@e99"), /not available/);
+	assert.ok(
+		calls.every((name) => name === "ensureReady"),
+		"cached queries do not look again",
+	);
 });
 
 test("Windows defaults and additive project entries match exact owner executable basenames", async ({
