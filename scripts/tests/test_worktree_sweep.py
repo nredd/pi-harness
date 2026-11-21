@@ -865,6 +865,32 @@ def test_mixed_endings_are_hidden_by_status(wt: Worktrees, attr: str) -> None:
     keep(wt, "built-in conversion attributes")
 
 
+@pytest.mark.parametrize("non_lf", [b"one\r\ntwo\r\n", b"one\r\ntwo\n"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_index_and_worktree_line_endings_differ_without_attributes(
+    wt: Worktrees, non_lf: bytes, reverse: bool
+) -> None:
+    target = wt.path / "tracked"
+    lf = b"one\ntwo\n"
+    indexed, current = (non_lf, lf) if reverse else (lf, non_lf)
+    target.write_bytes(indexed)
+    git(wt.path, "add", "tracked")
+    git(wt.path, "commit", "-m", "Record raw line endings")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    target.write_bytes(current)
+    quiet(wt)
+    keep(wt, "index and worktree line endings differ: b'tracked'")
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [(b"truncated", "incomplete"), (b"bad\tpath\0", "malformed"), (b"i/lf w/lf attr/\t\0", "malformed")],
+)
+def test_malformed_line_ending_inventory_keeps(raw: bytes, reason: str) -> None:
+    with pytest.raises(GUARD_MODULE["KeepError"], match=f"{reason} line-ending inventory"):
+        GUARD_MODULE["check_eol"](raw)
+
+
 @pytest.mark.parametrize(("key", "value"), [("autocrlf", "input"), ("eol", "crlf"), ("safecrlf", "warn")])
 def test_effective_conversion_cfg_keeps(wt: Worktrees, key: str, value: str) -> None:
     git(wt.path, "config", f"core.{key}", value)

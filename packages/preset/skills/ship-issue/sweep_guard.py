@@ -46,6 +46,7 @@ OPERATIONS = (
 SOURCE = re.compile(
     r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$"
 )
+EOL_HEADER = re.compile(rb"i/([^ ]*) +w/([^ ]*) +attr/[^\t]*")
 OID = re.compile(rb"(?:[a-f0-9]{40}|[a-f0-9]{64})")
 REFLOG = re.compile(
     rb"([a-f0-9]+) ([a-f0-9]+) [^\n\0<>]+ <[^\n\0<>]*> [0-9]+ [+-][0-9]{4}(?:\t[^\n\0]*)?"
@@ -424,6 +425,8 @@ def check_status(path: Path, admin: Path) -> None:
     untracked = git(path, "ls-files", "--others", "-z")
     if untracked:
         raise KeepError(f"untracked or ignored paths: {untracked!r}")
+    # ls-files --eol classifies raw index blobs and worktree bytes; it does not convert them.
+    check_eol(git(path, "ls-files", "--eol", "-z"))
     flags = [
         entry
         for entry in git(path, "ls-files", "-v", "-z").split(b"\0")
@@ -442,6 +445,28 @@ def check_status(path: Path, admin: Path) -> None:
         raise KeepError(
             "`core.trustctime` is disabled; restored mtimes may hide content changes"
         )
+
+
+def check_eol(data: bytes) -> None:
+    """Hold if raw index and worktree line-ending classifications differ.
+
+    Parameters:
+        data: bytes, NUL-delimited Git line-ending inventory.
+    Returns:
+        None.
+    Raises:
+        KeepError: A record is malformed or its classifications disagree.
+    """
+    records = data.split(b"\0")
+    if records[-1]:
+        raise KeepError("incomplete line-ending inventory")
+    for record in records[:-1]:
+        header, _, name = record.partition(b"\t")
+        match = EOL_HEADER.fullmatch(header)
+        if match is None or not name:
+            raise KeepError("malformed line-ending inventory")
+        if match[1] != match[2]:
+            raise KeepError(f"index and worktree line endings differ: {name!r}")
 
 
 def check_nested(path: Path) -> None:
