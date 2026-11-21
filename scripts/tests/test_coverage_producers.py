@@ -179,7 +179,7 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     makefile = (ROOT / "Makefile").read_text()
     recipe = makefile[makefile.index("define PY_GATE") : makefile.index("endef")]
     assert "-n 2 --dist loadfile" in recipe
-    sources = dict(re.findall(r"\$\(call PY_GATE,([\w/]+),[^,]*,[^,]*,([^)]+)\)", makefile))
+    sources = dict(re.findall(r"\$\(call PY_GATE,([\w/]+),[^,]*,[^,]*,([^,)]+)", makefile))
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
     python = {name: pkg for name, pkg in policy["packages"].items() if name.startswith("python-")}
     for name, package in python.items():
@@ -194,8 +194,13 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     (guard,) = sweep["owned"]
     primary = sweep["signals"]["primary"]
     assert f"--cov=../{sweep['root']}/{Path(guard).parent}" in sources["scripts"].split()
-    assert f"-o ../{sweep['root']}/{primary['report']}" in makefile
-    assert f"--include='*/{Path(guard).parent.name}/{Path(guard).name}'" in makefile
+    recipe = makefile.split("\nreport-script-coverage:\n", 1)[1].split("\n\n", 1)[0]
+    scripts_report, sweep_report = recipe.strip().splitlines()
+    assert scripts_report.strip().startswith("cd scripts && ")
+    assert scripts_report.endswith(f"-o {python['python-scripts']['signals']['primary']['report']}")
+    assert sweep_report.strip().startswith(f"cd {sweep['root']} && ")
+    assert sweep_report.endswith(f"-o {primary['report']}")
+    assert f"--include='*/{Path(guard).parent.name}/{Path(guard).name}'" in sweep_report
 
 
 def test_workspace_bun_commands_delegate_coverage_to_the_launcher() -> None:
