@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -16,6 +17,7 @@ from typing import Any
 
 import pytest
 import yaml
+from test_ci_guest_matrix import PULL_REQUEST, Trigger, classify_context, evaluate, render
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,7 +37,6 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     producer = jobs["computer-use-windows"]
     assert producer["runs-on"] == "windows-2025"
     assert producer["needs"] == "classify"
-    assert "packages/computer-use" in producer["if"]
     assert producer["env"]["RUSTUP_TOOLCHAIN"] == "1.97.1"
     steps = producer["steps"]
     commands = "\n".join(step.get("run", "") for step in steps)
@@ -92,20 +93,68 @@ def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> Non
     assert bundle.read_text().startswith("-----BEGIN CERTIFICATE-----")
 
 
-@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
-@pytest.mark.parametrize("required", ["true", "false"])
+def windows_plan_context(decision: bool | str | None) -> dict[str, str]:
+    """Return a real executing PR plan, with an optional override of its Windows decision."""
+    context = classify_context(PULL_REQUEST)
+    plan = json.loads(context["needs.classify.outputs.plan"])
+    ubuntu = plan["owned (ubuntu-24.04)"]
+    if decision is None:
+        del ubuntu["windows_native_required"]
+    elif decision is not True:
+        # Keep the same shards to catch a consumer that recomputes the plan decision.
+        ubuntu["windows_native_required"] = decision
+    return context | {"needs.classify.outputs.plan": json.dumps(plan)}
+
+
+@pytest.mark.parametrize("decision", [True, False, None, "true", "false", ""])
+def test_windows_producer_reads_a_strict_plan_decision(decision: bool | str | None) -> None:
+    """Evaluate the real schedule condition, rejecting null and strings before coercion."""
+    condition = workflow_jobs()["computer-use-windows"]["if"]
+    context = windows_plan_context(decision)
+    if isinstance(decision, bool):
+        assert evaluate(condition, context) is decision
+    else:
+        with pytest.raises(json.JSONDecodeError):
+            evaluate(condition, context)
+
+
+def test_windows_producer_stays_off_without_an_executing_successful_cell() -> None:
+    """A failed classifier can publish a plan; a missing or bypassed cell must not run either."""
+    condition = workflow_jobs()["computer-use-windows"]["if"]
+    context = classify_context(PULL_REQUEST)
+    for report in (
+        context | {"needs.classify.result": "failure"},
+        context | {"needs.classify.outputs.plan": ""},
+        context | {"needs.classify.outputs.plan": "{}"},
+        classify_context(Trigger(docs_only="true")),
+    ):
+        assert not evaluate(condition, report)
+
+
+@pytest.mark.parametrize(
+    ("decision", "result"),
+    [
+        (required, outcome)
+        for required in (True, False)
+        for outcome in ("success", "failure", "cancelled", "skipped", "")
+    ]
+    + [(None, "success"), ("true", "success"), ("false", "success"), ("", "success")],
+)
 def test_required_check_rejects_failed_or_missing_native_producer(
-    tmp_path: Path, result: str, required: str
+    tmp_path: Path, decision: bool | str | None, result: str
 ) -> None:
     """Execute the submitted fan-in against every terminal or missing native result.
 
     Parameters:
         tmp_path (Path): Disposable script directory.
         result (str): Native producer outcome.
-        required (str): Whether the classified cell requires computer-use.
+        decision (bool | str | None): Boolean plan decision, a malformed string or an absent field.
     """
-    steps = workflow_jobs()["owned-ubuntu"]["steps"]
-    step = next(step for step in steps if step.get("name") == "Require every planned shard to succeed")
+    fan_in = workflow_jobs()["owned-ubuntu"]
+    required = render(fan_in["env"]["WINDOWS_REQUIRED"], windows_plan_context(decision))
+    step = next(
+        step for step in fan_in["steps"] if step.get("name") == "Require every planned shard to succeed"
+    )
     script = tmp_path / "require.sh"
     script.write_text(step["run"])
     completed = subprocess.run(
@@ -123,9 +172,11 @@ def test_required_check_rejects_failed_or_missing_native_producer(
         check=False,
         timeout=10,
     )
-    passes = required == "false" or result == "success"
+    passes = decision is False or (decision is True and result == "success")
     assert (completed.returncode == 0) is passes, completed.stdout + completed.stderr
-    if not passes:
+    if not isinstance(decision, bool):
+        assert "WINDOWS_REQUIRED must be true or false" in completed.stdout
+    elif not passes:
         assert (
             "Native Windows x64 compiler, tests, reports and build scripts must succeed" in completed.stdout
         )

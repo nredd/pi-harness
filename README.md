@@ -183,7 +183,7 @@ Docs-only PRs still report the four Ubuntu checks without running their gates. m
 
 GitHub does not order job admission by push age: a delayed or re-run older push can cancel a newer push’s macOS cell. A tip check cannot make admission atomic with `main` moving. These are not required checks; the cancelled cell is visible, and the next push or an eligible dispatch re-measures it.
 
-For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. Ubuntu requires a successful Windows native producer when the plan includes `packages/computer-use`; macOS explicitly does not require that producer.
+For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. The planner sets `windows_native_required` when an executing Ubuntu cell selects the `packages/computer-use` workspace. The Windows job and Ubuntu fan-in both read that boolean and fail on a missing or malformed decision for an executing cell. macOS does not require the Windows producer.
 
 ### Review and merge evidence
 

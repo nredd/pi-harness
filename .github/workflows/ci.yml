@@ -473,7 +473,15 @@ jobs:
   computer-use-windows:
     name: computer-use Rust (windows-x64)
     needs: classify
-    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run && contains(toJSON(fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+    # `toJSON` distinguishes booleans from null and strings. Invalid decisions on a running cell
+    # deliberately fail job-level expression evaluation rather than skipping the producer.
+    if: >-
+      ${{ needs.classify.result == 'success'
+      && fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run
+      && fromJSON(
+        toJSON(fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].windows_native_required) == 'true' && 'true'
+        || toJSON(fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].windows_native_required) == 'false' && 'false'
+        || 'invalid windows_native_required') }}
     runs-on: windows-2025
     timeout-minutes: 25
     defaults:
@@ -614,7 +622,8 @@ jobs:
         os: [ubuntu-24.04]
     env:
       SHARDS_RESULT: ${{ needs.owned-shards-ubuntu.result }}
-      WINDOWS_REQUIRED: ${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+      # Preserve the JSON type so strings like "false" cannot pass the fan-in's validation.
+      WINDOWS_REQUIRED: ${{ toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].windows_native_required) }}
       WINDOWS_RESULT: ${{ needs.computer-use-windows.result }}
     runs-on: ubuntu-24.04
     timeout-minutes: &owned-timeout 15
