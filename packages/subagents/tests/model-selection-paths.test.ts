@@ -41,7 +41,14 @@ import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession
 
 vi.mock("node:fs", async (importOriginal) => {
 	const fs = await importOriginal<typeof import("node:fs")>();
-	return { ...fs, fstatSync: vi.fn(fs.fstatSync), openSync: vi.fn(fs.openSync), realpathSync: vi.fn(fs.realpathSync) };
+	return {
+		...fs,
+		chmodSync: vi.fn(fs.chmodSync),
+		fstatSync: vi.fn(fs.fstatSync),
+		mkdirSync: vi.fn(fs.mkdirSync),
+		openSync: vi.fn(fs.openSync),
+		realpathSync: vi.fn(fs.realpathSync),
+	};
 });
 
 vi.mock("../src/agent-runner.ts", async (importOriginal) => ({
@@ -529,6 +536,58 @@ describe("/agents tier proposals", () => {
 		}
 	});
 
+	function swapAgentDirectory() {
+		const dir = agentDir();
+		const moved = join(sandbox.dir, "moved-agent-dir");
+		renameSync(dir, moved);
+		mkdirSync(dir);
+		return moved;
+	}
+
+	it("rejects a new directory at the same path before locking", async () => {
+		let moved = "";
+		const open = vi.mocked(fs.openSync);
+		const callsBefore = open.mock.calls.length;
+		const { notify } = await apply(
+			vi.fn(async () => {
+				moved = swapAgentDirectory();
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("settings directory changed"), "warning");
+		expect(open.mock.calls.slice(callsBefore).map(([path]) => path)).not.toContain(`${globalSettings()}.lock`);
+		expect(readdirSync(agentDir())).toEqual([]);
+		expect(readdirSync(moved)).not.toContain("subagents.json.lock");
+	});
+
+	it("rejects a same-path directory swap at the replacement boundary and leaves the planted lock", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const lock = `${globalSettings()}.lock`;
+		let moved = "";
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				moved = swapAgentDirectory();
+				writeFileSync(lock, "replacement process lock");
+			}),
+		).rejects.toThrow(/settings directory changed/);
+		expect(readdirSync(agentDir())).toEqual(["subagents.json.lock"]);
+		expect(readFileSync(lock, "utf8")).toBe("replacement process lock");
+		expect(lstatSync(join(moved, "subagents.json.lock")).isFile()).toBe(true);
+	});
+
+	it("does not unlink a different lock planted in the approved directory", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const lock = `${globalSettings()}.lock`;
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				renameSync(lock, `${lock}.moved`);
+				writeFileSync(lock, "replacement process lock");
+				throw new Error("abort replacement");
+			}),
+		).rejects.toThrow(/abort replacement/);
+		expect(readFileSync(lock, "utf8")).toBe("replacement process lock");
+	});
+
 	it("refuses a replaced file even when its mode and bytes match the proposal", async () => {
 		const source = '{"keep":1}\n';
 		const replacement = `${globalSettings()}.replacement`;
@@ -729,11 +788,51 @@ describe("/agents tier proposals", () => {
 		}
 	});
 
-	it("refuses a 0464 file owned by the caller (0444 on Windows)", async () => {
+	function canOpenForWrite(path: string): boolean {
+		try {
+			fs.closeSync(fs.openSync(path, "r+"));
+			return true;
+		} catch (error) {
+			if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+			return false;
+		}
+	}
+
+	async function expectEffectiveWriteAccess() {
+		if (canOpenForWrite(globalSettings())) {
+			const { notify } = await apply();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Saved modelTiers"), "info");
+			expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+		} else await expectNoWriteAccess();
+	}
+
+	it("refuses 0444 even if a privileged write-capable open succeeds", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o444 });
+		const fd = fs.openSync(globalSettings(), "r");
+		// Simulate DAC override without requiring a privileged test worker.
+		vi.mocked(fs.openSync).mockReturnValueOnce(fd);
+		try {
+			await expectNoWriteAccess();
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("does not read a proposal if the preview open fails", () => {
+		writeFileSync(globalSettings(), "{}\n");
+		const error = new Error("synthetic read failure");
+		vi.mocked(fs.openSync).mockImplementationOnce(() => {
+			throw error;
+		});
+		expect(() => settings.loadTierProposalSettings(false)).toThrow(error);
+	});
+
+	it("honors effective access on a 0464 file owned by the caller (0444 on Windows)", async () => {
 		writeFileSync(globalSettings(), "{}\n");
 		chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
 		try {
-			await expectNoWriteAccess();
+			if (process.platform === "win32") await expectNoWriteAccess();
+			else await expectEffectiveWriteAccess();
 		} finally {
 			chmodSync(globalSettings(), 0o600);
 		}
@@ -748,7 +847,8 @@ describe("/agents tier proposals", () => {
 			} else {
 				chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
 			}
-			await expectNoWriteAccess();
+			if (process.platform === "win32") await expectNoWriteAccess();
+			else await expectEffectiveWriteAccess();
 		} finally {
 			if (process.platform === "darwin") execFileSync("chmod", ["-N", globalSettings()]);
 			chmodSync(globalSettings(), 0o600);
@@ -761,7 +861,7 @@ describe("/agents tier proposals", () => {
 		try {
 			await expect(
 				settings.saveProposedModelTiers(tiers, approved, undefined, () => {
-					chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
+					chmodSync(globalSettings(), 0o444);
 				}),
 			).rejects.toThrow(/No write access/);
 			expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
@@ -772,11 +872,53 @@ describe("/agents tier proposals", () => {
 
 	it("preserves the original mode on replacement", async () => {
 		writeFileSync(globalSettings(), "{}\n");
-		chmodSync(globalSettings(), 0o640);
-		const mode = lstatSync(globalSettings()).mode & 0o777;
+		chmodSync(globalSettings(), process.platform === "win32" ? 0o640 : 0o1640);
+		const mode = lstatSync(globalSettings()).mode & 0o7777;
+		if (process.platform === "darwin" || process.platform === "linux") expect(mode).toBe(0o1640);
 		await apply();
 		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
-		expect(lstatSync(globalSettings()).mode & 0o777).toBe(mode);
+		expect(lstatSync(globalSettings()).mode & 0o7777).toBe(mode);
+	});
+
+	it("refuses replacement if the destination cannot retain the approved mode", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const chmod = (await vi.importActual<typeof import("node:fs")>("node:fs")).chmodSync;
+		vi.mocked(fs.chmodSync).mockImplementationOnce((path) => chmod(path, 0o444));
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/Cannot preserve/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+	});
+
+	it("refuses to lock a newly created directory that disappears", async () => {
+		const path = join(agentDir(), "missing");
+		vi.stubEnv("PI_CODING_AGENT_DIR", path);
+		try {
+			const { snapshot: approved } = settings.loadTierProposalSettings(true);
+			// Simulate disappearance at the mkdir boundary by making the leaf mkdir a no-op.
+			vi.mocked(fs.mkdirSync)
+				.mockImplementationOnce(() => undefined)
+				.mockImplementationOnce(() => undefined);
+			await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
+			expect(lstatSync(path, { throwIfNoEntry: false })).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("rejects a mode-only change at replacement (sticky bit on Unix)", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const maskedMode = () => lstatSync(globalSettings()).mode & 0o7777;
+		const mode = maskedMode();
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				// Windows chmod only supports the writable toggle.
+				chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : mode | 0o1000);
+				expect(maskedMode()).not.toBe(mode);
+			}),
+		).rejects.toThrow(process.platform === "win32" ? /No write access/ : /Global settings changed/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+		chmodSync(globalSettings(), 0o600);
 	});
 
 	it.each(["global", "enterprise"])("the writer refuses to save over an existing %s tier field", async (layer) => {

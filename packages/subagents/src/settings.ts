@@ -3,7 +3,6 @@
 // - Project: <cwd>/.pi/subagents.json — written by /agents → Settings; overrides global on load
 
 import {
-	accessSync,
 	chmodSync,
 	closeSync,
 	constants,
@@ -773,8 +772,13 @@ function withEnterpriseSettings(global: SubagentsSettings, homeDir?: string): Su
 	return { ...global, ...(enterprise === undefined ? {} : sanitize(enterprise)) };
 }
 
-type TierSettingsFile = { bytes: Buffer; mode: number; dev: bigint; ino: bigint };
-type TierSettingsSnapshot = { dir: string; file: TierSettingsFile | undefined };
+type FileIdentity = { dev: bigint; ino: bigint };
+type TierSettingsFile = FileIdentity & { bytes: Buffer; mode: number };
+type TierSettingsSnapshot = { dir: string; directory: FileIdentity | undefined; file: TierSettingsFile | undefined };
+
+function sameIdentity(a: FileIdentity | undefined, b: FileIdentity | undefined): boolean {
+	return a?.dev === b?.dev && a?.ino === b?.ino;
+}
 
 /** Resolve existing ancestors without creating the agent directory during preview. */
 function tierSettingsDir(path: string): string {
@@ -789,8 +793,14 @@ function tierSettingsDir(path: string): string {
 	}
 }
 
-function checkTierSettingsDir(path: string, expected: string): void {
-	if (tierSettingsDir(path) !== expected) {
+function readDirectoryIdentity(path: string): FileIdentity | undefined {
+	const info = lstatSync(path, { throwIfNoEntry: false, bigint: true });
+	if (info && !info.isDirectory()) throw new TierSettingsTargetError("Expected a global settings directory");
+	return info;
+}
+
+function checkTierSettingsDir(path: string, dir: string, directory: FileIdentity | undefined): void {
+	if (tierSettingsDir(path) !== dir || !sameIdentity(readDirectoryIdentity(dir), directory)) {
 		throw new TierSettingsChangedError("The global settings directory changed.");
 	}
 }
@@ -803,22 +813,24 @@ function readTierSettingsFile(path: string, apply: boolean): TierSettingsFile | 
 	const target = lstatSync(path, { throwIfNoEntry: false, bigint: true });
 	if (!target) return undefined;
 	if (!target.isFile()) throw new TierSettingsTargetError("Expected a regular global settings file");
-	// The path may have changed since lstat. Nonblocking open prevents a
-	// replacement FIFO from hanging the command before we can check the fd.
-	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+	// Use a non-truncating write-capable open for apply, so kernel access
+	// checks use the caller's effective permissions. A raced FIFO must not block.
+	const flags = (apply ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+	let fd: number;
+	try {
+		fd = openSync(path, flags);
+	} catch (error) {
+		if (apply) throw new TierSettingsTargetError("No write access to the global settings file");
+		throw error;
+	}
 	try {
 		const opened = fstatSync(fd, { bigint: true });
-		if (!opened.isFile() || opened.dev !== target.dev || opened.ino !== target.ino) {
-			throw new TierSettingsChangedError();
+		if (!opened.isFile() || !sameIdentity(opened, target)) throw new TierSettingsChangedError();
+		// Respect an explicitly read-only mode even when the caller can bypass it.
+		if (apply && (opened.mode & 0o222n) === 0n) {
+			throw new TierSettingsTargetError("No write access to the global settings file (read-only mode)");
 		}
-		if (apply) {
-			try {
-				accessSync(path, constants.W_OK);
-			} catch {
-				throw new TierSettingsTargetError("No write access to the global settings file");
-			}
-		}
-		return { bytes: readFileSync(fd), mode: Number(opened.mode & 0o777n), dev: opened.dev, ino: opened.ino };
+		return { bytes: readFileSync(fd), mode: Number(opened.mode & 0o7777n), dev: opened.dev, ino: opened.ino };
 	} finally {
 		closeSync(fd);
 	}
@@ -838,8 +850,9 @@ function parseTierSettings(source: string): Record<string, unknown> {
 /** Compute a proposal from exactly the validated bytes used for the replacement check. */
 export function loadTierProposalSettings(apply: boolean, homeDir?: string) {
 	const dir = tierSettingsDir(resolve(resolveAgentDir(homeDir)));
+	const directory = readDirectoryIdentity(dir);
 	const file = readTierSettingsFile(join(dir, "subagents.json"), apply);
-	const snapshot: TierSettingsSnapshot = { dir, file };
+	const snapshot: TierSettingsSnapshot = { dir, directory, file };
 	const settings = withEnterpriseSettings(sanitize(parseTierSettings(tierSettingsSource(file))), homeDir);
 	return { settings, snapshot };
 }
@@ -866,9 +879,10 @@ function insertModelTiers(source: string, modelTiers: Record<string, string[]>):
 	return `${source.slice(0, start + end)}${prefix}${member}${source.slice(start + end)}`;
 }
 
-async function acquireTierSettingsLock(path: string): Promise<number> {
+async function acquireTierSettingsLock(path: string, checkDirectory: () => void): Promise<number> {
 	const deadline = performance.now() + 1_000;
 	do {
+		checkDirectory();
 		try {
 			return openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
 		} catch (error) {
@@ -891,42 +905,63 @@ export async function saveProposedModelTiers(
 	const path = join(dir, "subagents.json");
 	const source = tierSettingsSource(file);
 	if (Object.hasOwn(parseTierSettings(source), "modelTiers")) throw new Error("Global modelTiers already exists");
-	checkTierSettingsDir(configuredDir, dir);
-	mkdirSync(dir, { recursive: true });
+	let directory = expected.directory;
+	if (!directory) {
+		checkTierSettingsDir(configuredDir, dir, undefined);
+		mkdirSync(dirname(dir), { recursive: true });
+		mkdirSync(dir);
+		directory = readDirectoryIdentity(dir);
+		if (!directory) throw new TierSettingsChangedError("The global settings directory changed.");
+	}
+	const approvedDirectory = directory;
+	const checkDirectory = () => checkTierSettingsDir(configuredDir, dir, approvedDirectory);
 	const lock = `${path}.lock`;
-	const fd = await acquireTierSettingsLock(lock);
+	const fd = await acquireTierSettingsLock(lock, checkDirectory);
 	try {
-		const overlay = readEnterpriseLocalManifest(homeDir)?.subagents;
-		if (overlay && Object.hasOwn(overlay, "modelTiers")) {
-			throw new TierSettingsChangedError("Enterprise modelTiers already exists.");
-		}
-		const tempDir = mkdtempSync(join(dir, ".subagents-tiers-"));
+		const lockIdentity = fstatSync(fd, { bigint: true });
 		try {
-			const temp = join(tempDir, "subagents.json");
-			writeFileSync(temp, insertModelTiers(source, modelTiers), { mode: 0o600 });
-			if (file) chmodSync(temp, file.mode);
-			beforeReplace?.();
-			checkTierSettingsDir(configuredDir, dir);
-			const current = readTierSettingsFile(path, true);
-			if (current?.dev !== file?.dev || current?.ino !== file?.ino) {
-				throw new TierSettingsChangedError("The global settings file was replaced.");
+			const overlay = readEnterpriseLocalManifest(homeDir)?.subagents;
+			if (overlay && Object.hasOwn(overlay, "modelTiers")) {
+				throw new TierSettingsChangedError("Enterprise modelTiers already exists.");
 			}
-			if (file && (!current || current.mode !== file.mode || !file.bytes.equals(current.bytes))) {
-				throw new TierSettingsChangedError();
+			const tempDir = mkdtempSync(join(dir, ".subagents-tiers-"));
+			try {
+				const temp = join(tempDir, "subagents.json");
+				writeFileSync(temp, insertModelTiers(source, modelTiers), { mode: 0o600 });
+				if (file) {
+					chmodSync(temp, file.mode);
+					if (Number(lstatSync(temp, { bigint: true }).mode & 0o7777n) !== file.mode) {
+						throw new TierSettingsTargetError("Cannot preserve the global settings file mode");
+					}
+				}
+				beforeReplace?.();
+				const current = readTierSettingsFile(path, true);
+				if (!sameIdentity(current, file)) {
+					throw new TierSettingsChangedError("The global settings file was replaced.");
+				}
+				if (file && (!current || current.mode !== file.mode || !file.bytes.equals(current.bytes))) {
+					throw new TierSettingsChangedError();
+				}
+				// Non-cooperating editors can still race this check and rename.
+				// For a new file even that window cannot overwrite a concurrent creation.
+				checkDirectory();
+				if (file) renameSync(temp, path);
+				else linkSync(temp, path);
+			} finally {
+				if (sameIdentity(lstatSync(dir, { throwIfNoEntry: false, bigint: true }), approvedDirectory)) {
+					rmSync(tempDir, { recursive: true, force: true });
+				}
 			}
-			// Non-cooperating editors can still race this check and rename.
-			// For a new file even that window cannot overwrite a concurrent creation.
-			if (file) renameSync(temp, path);
-			else linkSync(temp, path);
 		} finally {
-			rmSync(tempDir, { recursive: true, force: true });
+			// Keep our descriptor open so its inode cannot be recycled before the check.
+			if (
+				sameIdentity(lstatSync(dir, { throwIfNoEntry: false, bigint: true }), approvedDirectory) &&
+				sameIdentity(lstatSync(lock, { throwIfNoEntry: false, bigint: true }), lockIdentity)
+			)
+				unlinkSync(lock);
 		}
 	} finally {
-		try {
-			closeSync(fd);
-		} finally {
-			unlinkSync(lock);
-		}
+		closeSync(fd);
 	}
 }
 
