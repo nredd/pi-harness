@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { bootLaunchStack, expectHeld, heldTool } from "../fixtures/launch-stack.ts";
 
 it.each([
@@ -28,15 +28,26 @@ it.each([
 	expect(record.workflowId).toBeDefined();
 	stack.expectOwnerScoped(id);
 	expect(stack.fleet().join("\n")).toContain("workflow subject");
-	const viewer = await stack.openViewer(id, (lines) => {
-		const inspector = lines.join("\n");
-		expect(inspector).toContain(resume ? "1/2 agents" : "0/1 agent");
-		expect(inspector).not.toContain(heldTool.tool);
-		// The default selection stays on the completed invocation while its resume runs.
-		if (resume) expect(inspector).toContain("❯ ✔ child");
-	});
-	expect(viewer).toContain(`[Tool: ${heldTool.tool}]`);
-	// Unlike the top-level widget fallback, the workflow viewer omits the footer entirely.
-	expect(viewer).not.toContain("▍");
-	if (resume) expect(viewer).toContain(`[Tool: ${prior.tool}]`);
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+	try {
+		const viewer = await stack.openViewer(id, (lines) => {
+			expect(vi.getTimerCount(), "workflow inspector spinner must be armed").toBeGreaterThan(0);
+			const inspector = lines.join("\n");
+			expect(inspector).toContain(resume ? "1/2 agents" : "0/1 agent");
+			expect(inspector).not.toContain(heldTool.tool);
+			// The default selection stays on the completed invocation while its resume runs.
+			if (resume) expect(inspector).toContain("❯ ✔ child");
+		});
+		expect(viewer).toContain(`[Tool: ${heldTool.tool}]`);
+		// Unlike the top-level widget fallback, the workflow viewer omits the footer entirely.
+		expect(viewer).not.toContain("▍");
+		if (resume) expect(viewer).toContain(`[Tool: ${prior.tool}]`);
+	} finally {
+		try {
+			stack.closeOverlays();
+			expect(vi.getTimerCount(), "workflow overlays must clear their native intervals").toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	}
 });

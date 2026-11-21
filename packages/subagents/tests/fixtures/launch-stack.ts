@@ -90,9 +90,12 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 	const held: ReturnType<typeof deferred<void>>[] = [];
 	const commands: Promise<unknown>[] = [];
 	let pending: ReturnType<typeof holdAt> | undefined;
+	function closeOverlays() {
+		for (const overlay of overlays.splice(0).reverse()) overlay.close();
+	}
 	onTestFinished(async () => {
 		try {
-			for (const overlay of overlays.reverse()) overlay.close();
+			closeOverlays();
 			for (const gate of held) gate.resolve();
 			await boot.lifecycle.get("session_shutdown")?.({ reason: "quit" }, context);
 			await Promise.allSettled(commands);
@@ -259,6 +262,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		...boot,
 		agent,
 		clock,
+		closeOverlays,
 		command,
 		context,
 		execute,
