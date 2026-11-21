@@ -153,9 +153,11 @@ legacy strategies keep their behavior and serialized decisions.
 
 ### Provider declarations
 
-Optional top-level `providers` entries are keyed by Pi provider ID. Merge declarations from
-[here](examples/providers.json) into an existing config, keeping its `profiles`. The example's
-`profiles: {}` registers nothing. No declarations are installed by default.
+This release validates and loads `providers` declarations but does not apply them to routing,
+usage reads or display yet. Optional top-level `providers` entries are keyed by Pi provider ID.
+
+Merge declarations from [here](examples/providers.json) into an existing config, keeping its
+`profiles`. The example's `profiles: {}` registers nothing. No declarations are installed by default.
 
 - `label` takes both `full` and `compact` display names. `quotaGroup` opts providers into shared
   exhaustion marks: set the same group on each provider that really shares quota. Leave it unset
@@ -179,10 +181,9 @@ The [schema](schemas/subscription-router.schema.json) rejects unknown keys insid
 settings except inside `collector.options`. The loader also checks that `timeZone` is known
 by `Intl`. Configs that omit `providers` keep their existing behavior. `providers` is now a
 reserved root key: an invalid value such as `null` rejects the whole file, so no profiles
-register. Other unknown root keys are still ignored. This release
-validates and loads declarations but does not apply them to routing, usage reads or display yet.
+register. Other unknown root keys are still ignored.
 
-Routing (legacy strategies):
+### Routing with legacy strategies
 
 - Ordered `user`, `direct`: first eligible entry, unchanged
 - Balanced `user`: highest-ranked eligible entry, with incumbent hysteresis below
