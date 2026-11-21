@@ -20,7 +20,6 @@ from typing import Any
 
 import pytest
 import yaml
-
 from coverage import CoverageData
 
 ROOT = Path(__file__).resolve().parents[2]

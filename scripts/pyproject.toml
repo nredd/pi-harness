@@ -6,6 +6,10 @@ target-version = "py313"
 # These scripts run on the hosted runner's system python3 (3.12), before any uv environment exists.
 per-file-target-version = { "ci_paths.py" = "py312", "ci_process.py" = "py312", "install_gh_linux.py" = "py312" }
 
+[tool.ruff.lint.isort]
+# `coverage` is the PyPI package; a generated scripts/coverage/ report directory must not make it first-party.
+known-third-party = ["coverage"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PL", "PT", "C4", "PTH", "RET"]
 ignore = [
