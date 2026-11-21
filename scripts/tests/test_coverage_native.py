@@ -334,7 +334,17 @@ def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Pa
 
 
 def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
-    """Simulate missing, malformed, or stale producer metadata in a valid report pair."""
+    """Simulate missing, malformed, or stale producer metadata in a valid report pair.
+
+    Parameters:
+        path (Path): LCOV report path beside the metadata.
+        source (Path): Checkout source path to alter for the stale case.
+        case (str): Fixture corruption, if any.
+    Returns:
+        None.
+    Raises:
+        OSError: A fixture input cannot be read or modified.
+    """
     metadata = path.with_name("metadata.json")
     if case == "missing-metadata":
         metadata.unlink()
@@ -429,7 +439,17 @@ def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, cas
     ],
 )
 def test_llvm_rejects_each_missing_or_impossible_total(original: str, replacement: str, error: str) -> None:
-    """Change one field at a time so invalid line totals never mask invalid function totals."""
+    """Change one field at a time so invalid line totals never mask invalid function totals.
+
+    Parameters:
+        original (str): Valid counter row to replace.
+        replacement (str): Invalid counter row or empty string to remove it.
+        error (str): Expected parser error.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The parser accepts the mutated record.
+    """
     lcov = "SF:src/main.rs\nLF:3\nLH:1\nFNF:3\nFNH:1\nend_of_record\n"
     with pytest.raises(ValueError, match=error):
         parse_lcov(lcov.replace(original, replacement), llvm=True)
@@ -446,7 +466,16 @@ def test_llvm_rejects_each_missing_or_impossible_total(original: str, replacemen
     ],
 )
 def test_llvm_producer_selection_is_explicit(producer: str, uses_llvm: bool) -> None:
-    """Do not infer LLVM report semantics from a shared name prefix."""
+    """Do not infer LLVM report semantics from a shared name prefix.
+
+    Parameters:
+        producer (str): Supported or unknown producer name.
+        uses_llvm (bool): Whether the producer should use LLVM source counters.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The predicate misclassifies the producer.
+    """
     assert is_llvm_producer(producer) is uses_llvm
 
 

@@ -1253,6 +1253,8 @@ def is_llvm_producer(producer: str) -> bool:
         producer (str): Producer name from the signal declaration.
     Returns:
         bool: True for raw LLVM JSON or paired LCOV and JSON.
+    Raises:
+        None.
     """
     return producer in {"llvm-cov", "llvm-lcov"}
 
