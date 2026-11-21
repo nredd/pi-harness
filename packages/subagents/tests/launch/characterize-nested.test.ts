@@ -43,12 +43,20 @@ it.each([
 		first.release();
 		expect((await result).isError).not.toBe(true);
 	}
+	const priorRun = priorId ? stack.manager.getRecord(priorId)?.runId : undefined;
 	const child = stack.holdAt(heldTool);
 	const result = start(priorId);
-	const childId = await expectHeld(child);
-	if (resume) expect(childId).toBe(priorId);
-	expect(stack.manager.getRecord(childId)?.parentAgentId).toBe(parentId);
-	stack.expectOwnerScoped(childId);
+	const attempt = await Promise.race([child.started.promise, result.then(() => undefined)]);
+	expect(attempt, "nested tool must reach the child runner before settling").toBeDefined();
+	const record = stack.manager.listAgents().find((entry) => entry.parentAgentId === parentId);
+	expect(record).toMatchObject({ id: attempt?.id, status: "running", ranThisRun: true });
+	expect(record?.session).toBe(attempt?.session);
+	if (resume) {
+		expect(record?.id).toBe(priorId);
+		expect(record?.runId).not.toBe(priorRun);
+	}
+	// The live child is visible to its manager but not to the top-level UI.
+	stack.expectOwnerScoped(await expectHeld(child));
 	stack.expectTracked(parentId, parent);
 	child.release();
 	expect((await result).isError).not.toBe(true);

@@ -123,7 +123,11 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 	function holdAt({ turn, tool }: { turn: number; tool: string }) {
 		if (pending) throw new Error("Previous launch never reached the runner");
 		const release = deferred<void>();
-		const started = deferred<{ id: string; dispatchToolActivity: (activity: ToolActivity) => void }>();
+		const started = deferred<{
+			id: string;
+			session: AgentSession;
+			dispatchToolActivity: (activity: ToolActivity) => void;
+		}>();
 		held.push(release);
 		const gate = { turn, tool, started, release: () => release.resolve(), released: release.promise };
 		pending = gate;
@@ -149,7 +153,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		// Record dispatch before the manager forwards activity to any tracker.
 		const dispatchToolActivity = vi.fn(options.onToolActivity);
 		dispatchToolActivity({ type: "start", toolName: gate.tool });
-		gate.started.resolve({ id, dispatchToolActivity });
+		gate.started.resolve({ id, session, dispatchToolActivity });
 		await gate.released;
 		dispatchToolActivity({ type: "end", toolName: gate.tool });
 	}
