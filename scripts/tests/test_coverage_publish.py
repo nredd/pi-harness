@@ -17,176 +17,23 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
-from zipfile import ZipFile
 
 import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from coverage_publish_fixtures import (
+    FORK,
+    HEAD,
+    POLICY,
+    REPO,
+    ROOT,
+    TESTED,
+    RecordingGitHub,
+    run_data,
+)
+
 import coverage_publish as pub
-from coverage_provenance_record import Provenance, producer_job
-
-ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = Path(__file__).parent / "fixtures/coverage-report/coverage-ubuntu-24.04.json"
-REPO = "nredd/pi-harness"
-FORK = "contributor/pi-harness"
-HEAD = "a" * 40
-TESTED = "b" * 40
-POLICY = ROOT / "coverage/policy.json"
-UPLOAD = "Preserve independent coverage reports and summary"
-STAMP = "2026-11-20T04:50:01Z"
-
-
-def run_data(**overrides: Any) -> dict[str, Any]:
-    """Build GitHub's fork run metadata with its empty PR array.
-
-    Parameters:
-        **overrides (Any): Fields replacing the default run metadata.
-    Returns:
-        dict[str, Any]: GitHub run metadata with the requested overrides.
-    Raises:
-        AssertionError: An expected contract does not hold.
-    """
-    return {
-        "id": 123,
-        "run_number": 7,
-        "run_attempt": 2,
-        "workflow_id": 12,
-        "status": "completed",
-        "conclusion": "success",
-        "head_sha": HEAD,
-        "head_branch": "topic/fix",
-        "event": "pull_request",
-        "path": pub.WORKFLOW,
-        "head_repository": {"full_name": FORK},
-        "pull_requests": [],
-    } | overrides
-
-
-class RecordingGitHub(pub.GitHub):
-    """Record exact API writes while exercising real rendering and archive validation."""
-
-    data: dict[str, Any]
-    peers: list[Any]
-    pulls: list[Any]
-    comments: list[Any]
-    writes: list[tuple[str, str, dict[str, str]]]
-    jobs: list[Any]
-    artifacts: list[Any]
-    record: dict[str, object] | None
-
-    def __init__(self) -> None:
-        """Seed one current attempt, PR and artifact.
-
-        Parameters:
-            None.
-        Returns:
-            None: Contract holds.
-        Raises:
-            AssertionError: An expected contract does not hold.
-        """
-        super().__init__(REPO, "synthetic-token")
-        self.data = run_data()
-        self.peers = [self.data, run_data(id=222, run_number=6)]
-        self.pulls = [
-            {
-                "number": 4,
-                "state": "open",
-                "merge_commit_sha": TESTED,
-                "head": {"ref": "topic/fix", "sha": HEAD, "repo": {"full_name": FORK}},
-                "base": {"ref": "main", "repo": {"full_name": REPO}},
-            }
-        ]
-        self.comments = []
-        self.writes = []
-        self.jobs = [
-            {
-                "name": "owned (ubuntu-24.04)",
-                "conclusion": "success",
-                "steps": [
-                    {"name": "Report execution plan", "conclusion": "success"},
-                    {"name": UPLOAD, "conclusion": "success", "started_at": STAMP, "completed_at": STAMP},
-                ],
-            }
-        ]
-        self.artifacts = [
-            {
-                "name": pub.ARTIFACT,
-                "id": 8,
-                "size_in_bytes": 9900,
-                "expired": False,
-                "created_at": STAMP,
-            }
-        ]
-        run = Provenance(
-            REPO, HEAD, TESTED, 123, 2, "pull_request", f"{REPO}/{pub.WORKFLOW}@refs/pull/4/merge"
-        )
-        self.record = dict(run.record(producer_job("ubuntu-24.04", shard=False), pub.ARTIFACT))
-
-    def request(self, path: str, method: str = "GET", body: dict[str, str] | None = None) -> Any:
-        """Return resource data and apply sticky writes to the recording store.
-
-        Parameters:
-            path (str): Requested route.
-            method (str): Expected HTTP verb.
-            body (dict[str, str] | None): Comment payload, if writing.
-        Returns:
-            Any: Recorded comment or current run metadata.
-        Raises:
-            AssertionError: An expected contract does not hold.
-        """
-        if body is not None:
-            self.writes.append((path, method, body))
-            current = {"id": 17, "user": {"id": pub.BOT_ID}, "body": body["body"]}
-            if method == "POST":
-                self.comments.append(current)
-            else:
-                self.comments[-1] = current
-            return current
-        assert path == "actions/runs/123"
-        return self.data
-
-    def pages(self, path: str, key: str | None = None, **params: str) -> list[Any]:
-        """Verify the publisher scopes every census to the expected resource.
-
-        Parameters:
-            path (str): Requested route.
-            key (str | None): Optional list envelope key.
-            **params (str): Expected API query filters.
-        Returns:
-            list[Any]: Rows for the requested GitHub collection.
-        Raises:
-            AssertionError: An expected contract does not hold.
-        """
-        if path == "pulls":
-            owner = self.data["head_repository"]["full_name"].split("/")[0]
-            assert params == {"head": f"{owner}:topic/fix", "state": "open"}
-            return self.pulls
-        if path == "actions/workflows/12/runs":
-            assert params == {"event": "pull_request", "branch": "topic/fix", "head_sha": HEAD}
-            return self.peers
-        return {
-            "actions/runs/123/attempts/2/jobs": self.jobs,
-            "actions/runs/123/artifacts": self.artifacts,
-            "issues/4/comments": self.comments,
-        }[path]
-
-    def download(self, artifact_id: int, destination: Path) -> None:
-        """Package real fixture counts with the synthetic attempt metadata.
-
-        Parameters:
-            artifact_id (int): Expected artifact ID from the listing.
-            destination (Path): ZIP path the renderer will read.
-        Returns:
-            None: Contract holds.
-        Raises:
-            AssertionError: An expected contract does not hold.
-        """
-        assert artifact_id == 8
-        with ZipFile(destination, "w") as archive:
-            archive.write(FIXTURE, "coverage/summary.json")
-            if self.record is not None:
-                archive.writestr("coverage/provenance.json", json.dumps(self.record))
 
 
 @pytest.mark.parametrize("repository", [FORK, REPO])
@@ -392,6 +239,23 @@ def test_artifact_attempt_filter(case: str, tmp_path: Path) -> None:
     assert not list(tmp_path.iterdir())
 
 
+def test_skipped_job_retains_notice() -> None:
+    """Keep the PR-controlled-numbers notice ahead of the skipped headline.
+
+    Parameters:
+        None.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The skipped render loses its notice.
+    """
+    api = RecordingGitHub()
+    api.jobs[0]["steps"][1]["conclusion"] = "skipped"
+    body = pub.render(api, pub.Run.parse(api.data), 4, TESTED, POLICY)
+    assert "Ubuntu enforced signals: NOT RUN" in body
+    assert body.index(pub.PR_NOTICE) < body.index("Ubuntu enforced signals:")
+
+
 def test_artifact_transport_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Gracefully handle expiry between listing and download.
 
@@ -443,6 +307,7 @@ def test_artifact_sidecar_fails_closed(case: str) -> None:
     body = pub.render(api, pub.Run.parse(api.data), 4, None if case == "no-merge-sha" else TESTED, POLICY)
     assert "Ubuntu enforced signals: unavailable" in body
     assert "zero uncovered" not in body
+    assert pub.PR_NOTICE in body.splitlines()
 
 
 @pytest.mark.parametrize(
@@ -513,10 +378,16 @@ def test_ci_producer_display_names() -> None:
     Raises:
         AssertionError: A producer name changed without updating the publisher.
     """
-    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["owned-ubuntu"]
-    assert job["name"].replace("${{ matrix.os }}", "ubuntu-24.04") == pub.OWNED_JOB
-    names = {step.get("name") for step in job["steps"]}
-    assert {pub.PLAN_STEP, pub.UPLOAD_STEP} <= names
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    for host, (producer, _) in pub.COVERAGE_HOSTS.items():
+        job = jobs[producer]
+        assert job["name"].replace("${{ matrix.os }}", host) == pub.OWNED_JOB.format(host=host)
+        steps = {step.get("name"): step for step in job["steps"]}
+        assert pub.PLAN_STEP in steps
+        assert steps[pub.UPLOAD_STEP]["with"]["name"].replace(
+            "${{ matrix.os }}", host
+        ) == pub.ARTIFACT.format(host=host)
+        assert "--summary coverage/summary.json" in steps["Record fan-in coverage provenance"]["run"]
 
 
 def test_workflow_contract() -> None:
@@ -534,7 +405,21 @@ def test_workflow_contract() -> None:
     assert workflow[True] == {"workflow_run": {"workflows": ["CI"], "types": ["completed"]}}
     assert workflow["permissions"] == {}
     job = workflow["jobs"]["comment"]
-    assert set(workflow["jobs"]) == {"comment"}
+    assert set(workflow["jobs"]) == {"comment", "snapshot"}
+    snapshot = workflow["jobs"]["snapshot"]
+    assert snapshot["permissions"] == {"actions": "read", "contents": "write"}
+    assert snapshot["runs-on"] == job["runs-on"] == "ubuntu-24.04"
+    assert snapshot["concurrency"] == {"group": "coverage-main-snapshot", "cancel-in-progress": False}
+    assert snapshot["if"].split(" && ") == [
+        "github.ref == 'refs/heads/main'",
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_branch == 'main'",
+        "github.event.workflow_run.head_repository.id == github.event.repository.id",
+        "github.event.workflow_run.conclusion == 'success'",
+    ]
+    assert snapshot["steps"][0] == job["steps"][0]
+    assert snapshot["steps"][1]["env"] == job["steps"][1]["env"] | {"COVERAGE_SNAPSHOT": "1"}
+    assert snapshot["steps"][1]["run"] == job["steps"][1]["run"]
     assert job["if"] == "github.event.workflow_run.event == 'pull_request'"
     assert job["permissions"] == {"actions": "read", "contents": "read", "pull-requests": "write"}
     assert job["concurrency"]["cancel-in-progress"] is False

@@ -43,6 +43,7 @@ from coverage_provenance_record import (
     PROVENANCE_MEMBER,
     Provenance,
     ProvenanceRecord,
+    counter_semantics,
     decode_json,
     decode_record,
     object_value,
@@ -82,7 +83,7 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
         with path.open("rb") as stream:
             summary = decode_json(stream.read(MAX_JSON_BYTES + 1))
         if expected is not None:
-            validate_record(read_record(path.with_name("provenance.json")), expected)
+            validate_summary_record(summary, read_record(path.with_name("provenance.json")), expected)
         return summary
     try:
         with zipfile.ZipFile(path) as archive:
@@ -117,7 +118,9 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
                 if receipt.file_size > MAX_PROVENANCE_BYTES:
                     raise ValueError("Coverage provenance byte limit exceeded")
                 with archive.open(receipt) as stream:
-                    validate_record(decode_record(stream.read(MAX_PROVENANCE_BYTES + 1)), expected)
+                    validate_summary_record(
+                        summary, decode_record(stream.read(MAX_PROVENANCE_BYTES + 1)), expected
+                    )
             return summary
     except (
         zipfile.BadZipFile,
@@ -131,6 +134,27 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
         OverflowError,
     ) as error:
         raise ValueError(f"Cannot read artifact ZIP: '{error}'") from error
+
+
+def validate_summary_record(
+    summary: dict[str, object],
+    record: dict[str, object],
+    expected: ProvenanceRecord,
+) -> None:
+    """Require the summary and matching provenance to agree on semantics.
+
+    Parameters:
+        summary (dict[str, object]): Decoded producer summary.
+        record (dict[str, object]): Decoded provenance sidecar.
+        expected (ProvenanceRecord): Independently sourced identity.
+    Returns:
+        None: Both records agree, including for legacy artifacts without semantics.
+    Raises:
+        ValueError: Identity or semantics disagree.
+    """
+    validate_record(record, expected)
+    if counter_semantics(summary) != counter_semantics(record):
+        raise ValueError("Summary and provenance counter semantics disagree")
 
 
 @dataclass(frozen=True)
@@ -250,6 +274,7 @@ class Summary:
     not_measured: dict[str, str]
     errors: tuple[str, ...]
     trimmed_from: int | None = None
+    counter_semantics: str | None = None
 
     @classmethod
     def parse(cls, obj: dict[str, object]) -> Summary:
@@ -310,6 +335,7 @@ class Summary:
             {text_value(k): text_value(v) for k, v in object_value(obj.get("not_measured")).items()},
             tuple(text_value(value) for value in raw_errors),
             trimmed,
+            counter_semantics(obj),
         )
 
 
@@ -478,8 +504,30 @@ def measured_delta(current: Evidence, baseline: Evidence | None, signal: Signal)
         or previous.state != "planned"
     ):
         return "unavailable"
+    return compare_counters(
+        before, after, baseline.summary.counter_semantics, current.summary.counter_semantics
+    )
+
+
+def compare_counters(before: Counters, after: Counters, main_key: str | None, pr_key: str | None) -> str:
+    """Explain why producer counters cannot be compared, or return signed deltas.
+
+    Parameters:
+        before (Counters): Measured main counters.
+        after (Counters): Measured PR counters.
+        main_key (str | None): Main producer instrumentation fingerprint.
+        pr_key (str | None): PR producer instrumentation fingerprint.
+    Returns:
+        str: Signed deltas or the specific reason the comparison is suppressed.
+    Raises:
+        None.
+    """
+    if main_key is None or pr_key is None:
+        return "not comparable: missing instrumentation fingerprint"
+    if main_key != pr_key:
+        return "not comparable: instrumentation fingerprints differ"
     if tuple(n for n, _, _ in before.values) != tuple(n for n, _, _ in after.values):
-        return "incompatible counters"
+        return "not comparable: supported counter sets differ"
     return ", ".join(
         f"{name} {new - old:+d}"
         for (name, _, new), (_, _, old) in zip(after.values, before.values, strict=True)
@@ -580,7 +628,7 @@ def host_rows(cell: Evidence, main: Evidence | None) -> list[str]:
     """
     rows = [
         f"\n{HOSTS[cell.host][0]}:\n\nSignal | L | F | B | S | Enforcement / reason | "
-        "vs policy reference | vs measured main\n"
+        "vs policy reference | vs measured main (producer-reported)\n"
         "--- | --- | --- | --- | --- | --- | --- | ---"
     ]
     rows.extend(
