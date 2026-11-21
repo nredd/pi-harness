@@ -636,6 +636,23 @@ describe("/agents tier proposals", () => {
 		}
 	});
 
+	it("refuses an agent-directory path that resolves to a regular file", async () => {
+		const path = join(agentDir(), "not-a-directory");
+		writeFileSync(path, "keep me");
+		vi.stubEnv("PI_CODING_AGENT_DIR", path);
+		try {
+			const { confirm, notify } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(
+				expect.stringContaining("Expected a global settings directory"),
+				"error",
+			);
+			expect(readFileSync(path, "utf8")).toBe("keep me");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("rejects a dangling agent-directory symlink instead of creating its target", async () => {
 		const current = join(agentDir(), "current");
 		const absent = join(agentDir(), "absent");
