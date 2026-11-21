@@ -1118,6 +1118,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 					if (intent() === "retry" && !aborted) {
 						live.intent = undefined;
 						attempt++;
+						// Only this attempt can publish its inspector conversation link.
+						delete base.recordId;
 						emit([{ ...base, queuedAt, attempt, lastAttemptReason: "user-retry" }]);
 						continue;
 					}

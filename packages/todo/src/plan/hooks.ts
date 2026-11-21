@@ -492,8 +492,16 @@ export function registerPlanHooks(
 	// The age follows the snapshot, while the reminder budget follows human input.
 	const staleAge = new WeakMap<TaskState, number>();
 	const staleReminded = new Set<string>();
+	const parentTuiSessions = new Set<string>();
+	// Core needs a persisted non-assistant tail to accept a continuation after a normal reply.
+	// Keep the permission to expand that placeholder request-local, not in the restored branch.
+	const pendingNudges = new Map<string, string>();
+	const nudge = (id: string, event: AgentBeforeSettleEvent, type: string, marker: string) => {
+		pendingNudges.set(id, type);
+		return reminderDraft(event, type, marker, {});
+	};
 	const emptyConfig = getEmptyReminderConfig(options.homeDir);
-	const emptyEnabled = emptyConfig.toolCalls > 0 && !isChildActivation();
+	const childActivation = isChildActivation();
 	const emptyTrackers = new Map<string, ReturnType<typeof trackEmptyReminder>>();
 
 	const onSettle: SettleHandler = (event, ctx) => {
@@ -504,7 +512,7 @@ export function registerPlanHooks(
 		if (completed && !planning) refreshSurvivors(id);
 		const state = getState(id);
 		if (emptyTrackers.get(id)?.beforeSettle(completed, planning, hasEmptyList(state))) {
-			return reminderDraft(event, EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER, {});
+			return nudge(id, event, EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER);
 		}
 		if (!completed || planning) return undefined;
 		if (!remindedSinceLastPrompt(messages)) {
@@ -521,13 +529,13 @@ export function registerPlanHooks(
 				return reminderDraft(event, HELD_REMINDER_MESSAGE_TYPE, HELD_REMINDER_MARKER, { held: held.map((t) => t.id) });
 		}
 		// Age only completed settles that would otherwise stop, independent of any armed wake.
-		if (!hasOpenTodos(state)) return undefined;
+		if (!parentTuiSessions.has(id) || !hasOpenTodos(state)) return undefined;
 		const threshold = getStaleAfterSettles(options.homeDir);
 		const age = Math.min((staleAge.get(state) ?? 0) + 1, threshold);
 		staleAge.set(state, age);
 		if (age < threshold || staleReminded.has(id)) return undefined;
 		staleReminded.add(id);
-		return reminderDraft(event, STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER, {});
+		return nudge(id, event, STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER);
 	};
 	pi.on("agent_before_settle", onSettle);
 
@@ -544,11 +552,13 @@ export function registerPlanHooks(
 		const id = sid(ctx);
 		reported.delete(id);
 		staleReminded.delete(id);
+		pendingNudges.delete(id);
 		emptyTrackers.get(id)?.humanInput();
 	});
 	pi.on("agent_settled", (event, ctx) => {
-		const planning = isPlanning(ctx, []);
 		const id = sid(ctx);
+		pendingNudges.delete(id);
+		const planning = isPlanning(ctx, []);
 		emptyTrackers.get(id)?.settled(event.aborted, planning);
 		if (planning) return;
 		refreshSurvivors(id);
@@ -561,9 +571,11 @@ export function registerPlanHooks(
 	});
 
 	pi.on("context", async (event, ctx) => {
+		const id = sid(ctx);
+		const pendingNudge = pendingNudges.get(id);
+		pendingNudges.delete(id);
 		if (isPlanning(ctx, event.messages)) return undefined;
 		const last = event.messages[event.messages.length - 1] as SettleMessage | undefined;
-		const id = sid(ctx);
 		const state = getState(id);
 		if (isReminder(last, HELD_REMINDER_MESSAGE_TYPE)) refreshSurvivors(id);
 		let content: string;
@@ -575,11 +587,11 @@ export function registerPlanHooks(
 			if (!held.length) return undefined;
 			content = formatHeldReminder(held);
 		} else if (isReminder(last, STALE_REMINDER_MESSAGE_TYPE)) {
-			if (!hasOpenTodos(state)) return undefined;
+			if (pendingNudge !== STALE_REMINDER_MESSAGE_TYPE || !hasOpenTodos(state)) return undefined;
 			content =
 				"The open todo list has not changed for several settles. Run `todo` with action `list` and reconcile it with what actually happened. Complete only with evidence, defer with a reason, and leave work that is still running open.";
 		} else if (isReminder(last, EMPTY_REMINDER_MESSAGE_TYPE)) {
-			if (!emptyTrackers.has(id) || !hasEmptyList(state)) return undefined;
+			if (pendingNudge !== EMPTY_REMINDER_MESSAGE_TYPE || !hasEmptyList(state)) return undefined;
 			content =
 				"You have been working without a todo list. If this work has multiple steps, use `todo` to record what is still open before continuing. Do not create tasks for a simple request that is already done.";
 		} else return undefined;
@@ -595,9 +607,19 @@ export function registerPlanHooks(
 		},
 		async sessionStarted(sessionId, resumed, branch, mode) {
 			live.add(sessionId);
-			if (emptyEnabled && mode === "tui") {
+			pendingNudges.delete(sessionId);
+			const parentTui = mode === "tui" && !childActivation;
+			if (parentTui) {
+				parentTuiSessions.add(sessionId);
 				// A persisted user message could be an extension prompt; only a live
 				// human input event can safely rearm after restoring a reminder.
+				if (
+					branch.some((entry) => entry.type === "custom_message" && entry.customType === STALE_REMINDER_MESSAGE_TYPE)
+				) {
+					staleReminded.add(sessionId);
+				}
+			} else parentTuiSessions.delete(sessionId);
+			if (parentTui && emptyConfig.toolCalls > 0) {
 				const previouslyReminded = branch.some(
 					(entry) => entry.type === "custom_message" && entry.customType === EMPTY_REMINDER_MESSAGE_TYPE,
 				);
@@ -624,6 +646,8 @@ export function registerPlanHooks(
 			reported.delete(sessionId);
 			resumedOwners.delete(sessionId);
 			staleReminded.delete(sessionId);
+			parentTuiSessions.delete(sessionId);
+			pendingNudges.delete(sessionId);
 			emptyTrackers.delete(sessionId);
 		},
 	};

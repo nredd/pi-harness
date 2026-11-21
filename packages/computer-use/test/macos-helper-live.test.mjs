@@ -5,9 +5,9 @@
 // its OWN instance of the installed helper app, never the shared daemon other pi sessions use.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, describe, test, vi } from "vitest";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
 
@@ -28,6 +28,7 @@ describe.skipIf(!live)("macos live helper checks (PI_COMPUTER_USE_LIVE=1 on macO
 	let macosBackend;
 	let macosHelper;
 
+	let dispose;
 	beforeAll(async () => {
 		// The bundle with the user's Accessibility grant lives under the account home, not the test home.
 		if (!process.env.PI_COMPUTER_USE_HELPER_APP_PATH?.trim()) {
@@ -45,7 +46,9 @@ describe.skipIf(!live)("macos live helper checks (PI_COMPUTER_USE_LIVE=1 on macO
 		macosHelper = helper.macosHelper;
 		({ macosBackend } = await import("../src/platform/macos/backend.ts"));
 
-		dir = mkdtempSync(path.join(os.tmpdir(), "pcu-alert-"));
+		dir = makeTestTempDir("pcu-alert-", (cleanup) => {
+			dispose = cleanup;
+		});
 		const bin = path.join(dir, "alertapp");
 		execFileSync("swiftc", ["-o", bin, new URL("../tests/fixtures/alert-app.swift", import.meta.url).pathname], {
 			stdio: "inherit",
@@ -57,7 +60,7 @@ describe.skipIf(!live)("macos live helper checks (PI_COMPUTER_USE_LIVE=1 on macO
 		// Stop only the helper instance this file launched on its private socket.
 		await macosHelper?.command("shutdown", {}, { timeoutMs: SHUTDOWN_TIMEOUT_MS }).catch(() => undefined);
 		child?.kill();
-		if (dir) rmSync(dir, { recursive: true, force: true });
+		dispose?.();
 		vi.unstubAllEnvs();
 	});
 

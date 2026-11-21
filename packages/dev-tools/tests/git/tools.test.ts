@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -21,13 +21,18 @@ function sh(cwd: string, args: string[]): string {
 	});
 }
 
+let root: string;
 let repo: string;
 let remote: string;
 const mock = createToolHost();
 
+let dispose: (() => void) | undefined;
+afterAll(() => dispose?.());
 beforeAll(() => {
 	registerGitTools(mock.pi);
-	const root = mkdtempSync(join(tmpdir(), "pi-dev-tools-git-"));
+	root = makeTestTempDir("pi-dev-tools-git-", (cleanup) => {
+		dispose = cleanup;
+	});
 	remote = join(root, "remote.git");
 	repo = join(root, "repo");
 	execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
@@ -100,7 +105,7 @@ describe("git read tools", () => {
 		expect(mock.text(r)).toContain("+one");
 		const statOnly = await mock.call("git_show", { rev: "HEAD", stat: true }, repo);
 		expect(mock.text(statOnly)).not.toContain("+one");
-		const bad = await mock.call("git_show", { rev: "--output=/tmp/x" }, repo);
+		const bad = await mock.call("git_show", { rev: `--output=${join(root, "show-output")}` }, repo);
 		expect(bad.isError).toBe(true);
 	});
 
@@ -109,7 +114,7 @@ describe("git read tools", () => {
 		expect(r.isError).toBe(true);
 		expect(mock.text(r)).toMatch(/^git show: unknown revision/);
 		expect(r.structuredContent).toMatchObject({ error: expect.stringContaining("unknown revision") });
-		const outside = await mock.call("git_status", {}, tmpdir());
+		const outside = await mock.call("git_status", {}, root);
 		expect(outside.isError).toBe(true);
 		expect(mock.text(outside)).toMatch(/^git status: not a git repository/);
 		const badDiff = await mock.call("git_diff", { base: "nope-not-a-ref" }, repo);
@@ -120,16 +125,18 @@ describe("git read tools", () => {
 	});
 
 	it("refuses option-like refs on every read and keeps refs after --end-of-options", async () => {
+		const output = join(root, "rejected-output");
+		const option = `--output=${output}`;
 		for (const [tool, params] of [
-			["git_diff", { base: "--output=/tmp/pi-dev-tools-evil" }],
-			["git_log", { ref: "--output=/tmp/pi-dev-tools-evil" }],
-			["git_show", { rev: "--output=/tmp/pi-dev-tools-evil" }],
+			["git_diff", { base: option }],
+			["git_log", { ref: option }],
+			["git_show", { rev: option }],
 		] as const) {
 			const r = await mock.call(tool, params, repo);
 			expect(r.isError, tool).toBe(true);
 			expect(mock.text(r)).toMatch(/must not start with '-'/);
 		}
-		expect(existsSync("/tmp/pi-dev-tools-evil")).toBe(false);
+		expect(existsSync(output)).toBe(false);
 	});
 
 	it("treats globs and pathspec magic as literal file names", async () => {
@@ -236,7 +243,7 @@ describe("git_commit", () => {
 	});
 
 	it("reports a push failure without re-committing", async () => {
-		sh(repo, ["remote", "set-url", "origin", join(tmpdir(), "does-not-exist.git")]);
+		sh(repo, ["remote", "set-url", "origin", join(root, "does-not-exist.git")]);
 		const r = await mock.call("git_commit", { subject: "Change b for real", paths: ["b.txt"] }, repo);
 		expect(r.isError).toBe(true);
 		const s = r.structuredContent as { stage: string; sha: string; pushed: boolean };

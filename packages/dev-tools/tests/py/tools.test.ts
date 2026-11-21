@@ -1,9 +1,9 @@
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
-import { beforeAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { findProjectRoot, registerPyTools } from "../../src/py/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -20,8 +20,8 @@ const mock = createToolHost();
 let root: string;
 
 /** A tiny uv project with one lint, one format, one type and one test failure, synced offline-ish. */
-function buildProject(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-dev-tools-py-"));
+function buildProject(onCleanup: (cleanup: () => void) => void): string {
+	const dir = makeTestTempDir("pi-dev-tools-py-", onCleanup);
 	writeFileSync(
 		join(dir, "pyproject.toml"),
 		`[project]
@@ -66,14 +66,19 @@ it("annotates typecheck and test read-only, lint/format/uv not", () => {
 });
 
 describe.skipIf(!haveUv())("py tools against a real uv project", () => {
+	let dispose: (() => void) | undefined;
+	afterAll(() => dispose?.());
 	beforeAll(() => {
 		registerPyTools(mock.pi);
-		root = buildProject();
+		root = buildProject((cleanup) => {
+			dispose = cleanup;
+		});
 	}, 180_000);
 
 	it("finds the project root from a subdirectory and fails cleanly outside one", async () => {
 		expect(findProjectRoot(join(root, "src", "pt"))).toBe(realpathSync(root));
-		const r = await mock.call("py_typecheck", {}, tmpdir());
+		const outside = makeTestTempDir("pi-dev-tools-no-pyproject-", onTestFinished);
+		const r = await mock.call("py_typecheck", {}, outside);
 		expect(r.isError).toBe(true);
 		expect(mock.text(r)).toMatch(/no pyproject\.toml/);
 	});
@@ -163,7 +168,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 			["py_lint", { select: ["--fix"] }],
 			["py_format", { paths: ["--config=/evil"] }],
 			["py_typecheck", { paths: ["--exit-zero"] }],
-			["py_test", { targets: ["--basetemp=/tmp/victim"] }],
+			["py_test", { targets: [`--basetemp=${join(root, "rejected-basetemp")}`] }],
 		] as const) {
 			const r = await mock.call(tool, params, root);
 			expect(r.isError, tool).toBe(true);
@@ -175,7 +180,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 	});
 
 	it("names uv's own failures instead of mislabelling them", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-dev-tools-nolock-"));
+		const dir = makeTestTempDir("pi-dev-tools-nolock-", onTestFinished);
 		writeFileSync(
 			join(dir, "pyproject.toml"),
 			'[project]\nname = "nl"\nversion = "0"\nrequires-python = ">=3.12"\ndependencies = []\n',
@@ -263,7 +268,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 	});
 
 	it("names a tool missing from the environment", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-dev-tools-notool-"));
+		const dir = makeTestTempDir("pi-dev-tools-notool-", onTestFinished);
 		writeFileSync(
 			join(dir, "pyproject.toml"),
 			'[project]\nname = "nt"\nversion = "0"\nrequires-python = ">=3.12"\ndependencies = []\n',

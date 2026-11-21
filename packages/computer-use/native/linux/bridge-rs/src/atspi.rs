@@ -5,8 +5,11 @@
 //! applications in the background and do not steal focus.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::time::Duration;
 
 use serde_json::{json, Value};
+use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Address, Connection, Proxy};
 
@@ -21,6 +24,7 @@ const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
 const COMPONENT: &str = "org.a11y.atspi.Component";
 const ACTION: &str = "org.a11y.atspi.Action";
 const MAX_ATSPI_ACTIONS: usize = 64;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
 pub const TEXT: &str = "org.a11y.atspi.Text";
 
@@ -67,6 +71,14 @@ pub struct NodeSnapshot {
     pub depth: usize,
 }
 
+/// A best-effort tree plus the information needed to distinguish absence from missing data.
+#[derive(Debug)]
+pub struct Snapshot {
+    pub nodes: Vec<NodeSnapshot>,
+    pub incomplete: bool,
+    pub root_fields_incomplete: bool,
+}
+
 impl NodeSnapshot {
     #[cfg(test)]
     pub(crate) fn minimal(accessible: AccessibleRef) -> Self {
@@ -93,18 +105,47 @@ impl NodeSnapshot {
 #[derive(Clone)]
 pub struct AtspiClient {
     connection: Connection,
+    request_timeout: Duration,
 }
 
 impl AtspiClient {
     pub async fn connect() -> Result<Self, ProtocolError> {
-        let session = Connection::session().await.map_err(unavailable)?;
-        let address = accessibility_bus_address(&session).await?;
-        let connection = zbus::connection::Builder::address(address)
-            .map_err(unavailable)?
-            .build()
-            .await
-            .map_err(unavailable)?;
-        Ok(Self { connection })
+        let session = wait_for_reply(
+            REQUEST_TIMEOUT,
+            "session bus connection",
+            Connection::session(),
+        )
+        .await?
+        .map_err(unavailable)?;
+        let address = accessibility_bus_address(&session, REQUEST_TIMEOUT).await?;
+        let builder = zbus::connection::Builder::address(address).map_err(unavailable)?;
+        let connection = wait_for_reply(
+            REQUEST_TIMEOUT,
+            "accessibility bus connection",
+            builder.build(),
+        )
+        .await?
+        .map_err(unavailable)?;
+        Ok(Self::from_connection(connection, REQUEST_TIMEOUT))
+    }
+
+    /// Use an established accessibility connection with a per-request deadline.
+    pub fn from_connection(connection: Connection, request_timeout: Duration) -> Self {
+        Self {
+            connection,
+            request_timeout,
+        }
+    }
+
+    /// Bound a single request, keeping transport and reply errors distinct from a deadline.
+    async fn request<T>(
+        &self,
+        operation: &str,
+        request: impl Future<Output = zbus::Result<T>>,
+    ) -> Result<T, ProtocolError> {
+        wait_for_reply(self.request_timeout, operation, request)
+            .await?
+            .map_err(atspi_error)
     }
 
     pub async fn available() -> bool {
@@ -116,14 +157,17 @@ impl AtspiClient {
         accessible: &'a AccessibleRef,
         interface: &'a str,
     ) -> Result<Proxy<'a>, ProtocolError> {
-        Proxy::new(
-            &self.connection,
-            accessible.destination.as_str(),
-            accessible.path.as_str(),
-            interface,
-        )
-        .await
-        .map_err(atspi_error)
+        // These proxies are short-lived. Fetch a property directly rather than starting
+        // a background `GetAll` that can outlive the request deadline.
+        zbus::proxy::Builder::new(&self.connection)
+            .destination(accessible.destination.as_str())
+            .and_then(|builder| builder.path(accessible.path.as_str()))
+            .and_then(|builder| builder.interface(interface))
+            .map_err(atspi_error)?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
+            .map_err(atspi_error)
     }
 
     async fn children(
@@ -131,8 +175,9 @@ impl AtspiClient {
         accessible: &AccessibleRef,
     ) -> Result<Vec<AccessibleRef>, ProtocolError> {
         let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        let member = "GetChildren";
         let children: Vec<(String, OwnedObjectPath)> =
-            proxy.call("GetChildren", &()).await.map_err(atspi_error)?;
+            self.request(member, proxy.call(member, &())).await?;
         Ok(children
             .into_iter()
             .filter(|(destination, path)| !destination.is_empty() && path.as_str() != "/")
@@ -143,36 +188,38 @@ impl AtspiClient {
             .collect())
     }
 
-    async fn string_property(&self, accessible: &AccessibleRef, property: &str) -> String {
-        match self.proxy(accessible, ACCESSIBLE).await {
-            Ok(proxy) => proxy.get_property(property).await.unwrap_or_default(),
-            Err(_) => String::new(),
-        }
+    async fn string_property(
+        &self,
+        accessible: &AccessibleRef,
+        property: &str,
+    ) -> Result<String, ProtocolError> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        self.request(property, proxy.get_property(property)).await
     }
 
-    async fn role(&self, accessible: &AccessibleRef) -> String {
-        match self.proxy(accessible, ACCESSIBLE).await {
-            Ok(proxy) => proxy.call("GetRoleName", &()).await.unwrap_or_default(),
-            Err(_) => String::new(),
-        }
+    async fn role(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        let member = "GetRoleName";
+        self.request(member, proxy.call(member, &())).await
     }
 
-    async fn interfaces(&self, accessible: &AccessibleRef) -> HashSet<String> {
-        match self.proxy(accessible, ACCESSIBLE).await {
-            Ok(proxy) => proxy
-                .call::<_, _, Vec<String>>("GetInterfaces", &())
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            Err(_) => HashSet::new(),
-        }
+    async fn interfaces(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<HashSet<String>, ProtocolError> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await?;
+        let member = "GetInterfaces";
+        let names: Vec<String> = self.request(member, proxy.call(member, &())).await?;
+        Ok(names.into_iter().collect())
     }
 
     async fn bounds(&self, accessible: &AccessibleRef) -> Option<Rect> {
         let proxy = self.proxy(accessible, COMPONENT).await.ok()?;
-        let (x, y, width, height): (i32, i32, i32, i32) =
-            proxy.call("GetExtents", &(0u32)).await.ok()?;
+        let member = "GetExtents";
+        let (x, y, width, height): (i32, i32, i32, i32) = self
+            .request(member, proxy.call(member, &(0u32)))
+            .await
+            .ok()?;
         (width > 0 && height > 0).then_some(Rect {
             x,
             y,
@@ -192,11 +239,9 @@ impl AtspiClient {
         else {
             return 0;
         };
-        let connection_pid: Option<u32> = bus
-            .call(
-                "GetConnectionUnixProcessID",
-                &(accessible.destination.as_str()),
-            )
+        let member = "GetConnectionUnixProcessID";
+        let connection_pid: Option<u32> = self
+            .request(member, bus.call(member, &(accessible.destination.as_str())))
             .await
             .ok();
         connection_pid.map(u64::from).unwrap_or(0)
@@ -217,11 +262,14 @@ impl AtspiClient {
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
-            let app_name = self.string_property(&app, "Name").await;
+            let app_name = self.string_property(&app, "Name").await.unwrap_or_default();
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let role = self.role(&window).await;
-                let name = self.string_property(&window, "Name").await;
+                let role = self.role(&window).await.unwrap_or_default();
+                let name = self
+                    .string_property(&window, "Name")
+                    .await
+                    .unwrap_or_default();
                 roots.push(RootSnapshot {
                     frame: self.bounds(&window).await,
                     accessible: window,
@@ -248,36 +296,58 @@ impl AtspiClient {
         root: &RootSnapshot,
         max_nodes: usize,
         max_depth: usize,
-    ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
+    ) -> Result<Snapshot, ProtocolError> {
         self.snapshot_from(&root.accessible, max_nodes, max_depth)
             .await
     }
 
+    /// Preserve partial observations without mistaking unread nodes for absent nodes.
     pub async fn snapshot_from(
         &self,
         start: &AccessibleRef,
         max_nodes: usize,
         max_depth: usize,
-    ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
+    ) -> Result<Snapshot, ProtocolError> {
         let mut result = Vec::new();
+        let mut incomplete = false;
+        let mut root_fields_incomplete = false;
         let mut seen = HashSet::new();
         let mut queue = VecDeque::from([(start.clone(), None, 0usize)]);
         while let Some((accessible, parent, depth)) = queue.pop_front() {
-            if result.len() >= max_nodes || depth > max_depth || !seen.insert(accessible.clone()) {
+            if !seen.insert(accessible.clone()) {
                 continue;
             }
-            let interfaces = self.interfaces(&accessible).await;
-            let role = self.role(&accessible).await;
-            let name = self.string_property(&accessible, "Name").await;
-            let description = self.string_property(&accessible, "Description").await;
-            let is_secure =
-                role.eq_ignore_ascii_case("password text") || role.eq_ignore_ascii_case("password");
+            if result.len() >= max_nodes || depth > max_depth {
+                incomplete = true;
+                continue;
+            }
+            let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
+            let role = self.role(&accessible).await.unwrap_or_default();
+            let unknown_role = role.trim().is_empty();
+            incomplete |= unknown_role;
+            let name = field_or_default(
+                self.string_property(&accessible, "Name").await,
+                &mut incomplete,
+            );
+            let description = field_or_default(
+                self.string_property(&accessible, "Description").await,
+                &mut incomplete,
+            );
+            let is_secure = unknown_role
+                || role.eq_ignore_ascii_case("password text")
+                || role.eq_ignore_ascii_case("password");
             let value = if !is_secure && interfaces.contains(TEXT) {
-                self.read_text(&accessible).await.unwrap_or_default()
+                field_or_default(self.read_text(&accessible).await, &mut incomplete)
             } else {
                 String::new()
             };
-            let children = self.children(&accessible).await.unwrap_or_default();
+            if depth == 0 {
+                root_fields_incomplete = incomplete;
+            }
+            let children = self.children(&accessible).await.unwrap_or_else(|_| {
+                incomplete = true;
+                Vec::new()
+            });
             for child in children {
                 queue.push_back((child, Some(accessible.clone()), depth + 1));
             }
@@ -295,15 +365,18 @@ impl AtspiClient {
                 depth,
             });
         }
-        Ok(result)
+        Ok(Snapshot {
+            nodes: result,
+            incomplete,
+            root_fields_incomplete,
+        })
     }
 
     pub async fn read_text(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, TEXT).await?;
-        proxy
-            .call("GetText", &(0i32, -1i32))
+        let member = "GetText";
+        self.request(member, proxy.call(member, &(0i32, -1i32)))
             .await
-            .map_err(atspi_error)
     }
 
     pub async fn press(&self, node: &NodeSnapshot) -> Result<bool, ProtocolError> {
@@ -314,25 +387,36 @@ impl AtspiClient {
             ));
         }
         let proxy = self.proxy(&node.accessible, ACTION).await?;
-        let action_count = bounded_action_count(proxy.get_property::<i32>("NActions").await.ok())?;
+        let action_count = bounded_action_count(
+            wait_for_reply(
+                self.request_timeout,
+                "NActions",
+                proxy.get_property::<i32>("NActions"),
+            )
+            .await?
+            .ok(),
+        )?;
         let mut names = Vec::new();
         if action_count > 1 {
+            let member = "GetName";
             names.reserve(action_count);
             for index in 0..action_count {
-                let name: String = proxy
-                    .call("GetName", &(index as i32))
-                    .await
-                    .unwrap_or_default();
+                let name: String = wait_for_reply(
+                    self.request_timeout,
+                    member,
+                    proxy.call(member, &(index as i32)),
+                )
+                .await?
+                .unwrap_or_default();
                 names.push(name);
             }
         }
         let Some(action_index) = selected_action_index(action_count, &names) else {
             return Ok(false);
         };
-        proxy
-            .call("DoAction", &(action_index))
+        let member = "DoAction";
+        self.request(member, proxy.call(member, &(action_index)))
             .await
-            .map_err(atspi_error)
     }
 
     pub async fn set_text(&self, node: &NodeSnapshot, text: &str) -> Result<bool, ProtocolError> {
@@ -343,10 +427,8 @@ impl AtspiClient {
             ));
         }
         let proxy = self.proxy(&node.accessible, EDITABLE_TEXT).await?;
-        proxy
-            .call("SetTextContents", &(text))
-            .await
-            .map_err(atspi_error)
+        let member = "SetTextContents";
+        self.request(member, proxy.call(member, &(text))).await
     }
 }
 
@@ -514,13 +596,38 @@ fn relative_coordinate(value: i32, origin: i32) -> i32 {
     value.saturating_sub(origin)
 }
 
+/// Bound the wait without changing how each caller handles a reply error.
+async fn wait_for_reply<T>(
+    timeout: Duration,
+    operation: &str,
+    request: impl Future<Output = T>,
+) -> Result<T, ProtocolError> {
+    tokio::time::timeout(timeout, request).await.map_err(|_| {
+        ProtocolError::new(format!("AT-SPI2 {operation} timed out"), ErrorCode::Timeout)
+    })
+}
+
 /// Resolve and validate the accessibility bus address advertised on the session bus.
-async fn accessibility_bus_address(session: &Connection) -> Result<Address, ProtocolError> {
+async fn accessibility_bus_address(
+    session: &Connection,
+    timeout: Duration,
+) -> Result<Address, ProtocolError> {
     let bus = Proxy::new(session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus")
         .await
         .map_err(unavailable)?;
-    let address: String = bus.call("GetAddress", &()).await.map_err(unavailable)?;
+    let member = "GetAddress";
+    let address: String = wait_for_reply(timeout, member, bus.call(member, &()))
+        .await?
+        .map_err(unavailable)?;
     address.parse().map_err(unavailable)
+}
+
+/// Retain optional field defaults, but do not use a missing timed-out field to prove absence.
+fn field_or_default<T: Default>(result: Result<T, ProtocolError>, incomplete: &mut bool) -> T {
+    result.unwrap_or_else(|error| {
+        *incomplete |= error.code == ErrorCode::Timeout;
+        T::default()
+    })
 }
 
 fn unavailable(error: impl std::fmt::Display) -> ProtocolError {
@@ -545,18 +652,24 @@ pub(crate) mod test_peer;
 
 #[cfg(test)]
 mod tests {
-    use super::test_peer::with_peer;
+    use super::test_peer::{with_peer, StalledReply};
     use super::*;
     use std::{
         future::pending,
         sync::{Arc, Mutex},
-        time::Duration,
     };
-    use tokio::sync::mpsc;
+    const STALLED_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
 
     const FIXTURE_REGISTRY_ROOT: &str = "/org/a11y/atspi/accessible/root";
 
     const FIXTURE_DBUS_ROOT: &str = "/org/freedesktop/DBus";
+
+    fn peer_client(connection: Connection) -> AtspiClient {
+        AtspiClient {
+            connection,
+            request_timeout: REQUEST_TIMEOUT,
+        }
+    }
 
     #[test]
     fn activation_action_selection_prefers_semantics_over_index_zero() {
@@ -621,7 +734,7 @@ mod tests {
                     .serve_at(REGISTRY_ROOT, MockApplication)
             },
             async |connection| {
-                let client = AtspiClient { connection };
+                let client = peer_client(connection);
                 let app = AccessibleRef {
                     destination: ":1.42".into(),
                     path: REGISTRY_ROOT.into(),
@@ -650,7 +763,7 @@ mod tests {
     async fn discover_from_peer(reply: &'static str) -> Result<Address, ProtocolError> {
         with_peer(
             |server| server.serve_at("/org/a11y/bus", MockAccessibilityBus(reply)),
-            async |session| accessibility_bus_address(&session).await,
+            async |session| accessibility_bus_address(&session, REQUEST_TIMEOUT).await,
         )
         .await
     }
@@ -667,6 +780,34 @@ mod tests {
         let error = discover_from_peer("not a bus address").await.unwrap_err();
         assert_eq!(error.code, ErrorCode::CapabilityDeferred);
         assert!(error.message.starts_with("AT-SPI2 is unavailable: "));
+    }
+
+    struct StalledAccessibilityBus(StalledReply);
+
+    #[zbus::interface(name = "org.a11y.Bus")]
+    impl StalledAccessibilityBus {
+        async fn get_address(&self) -> String {
+            self.0.wait().await
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_timeout_when_address_discovery_never_replies() {
+        let (stall, mut requests) = StalledReply::new();
+        with_peer(
+            |server| server.serve_at("/org/a11y/bus", StalledAccessibilityBus(stall)),
+            async |session| {
+                let (result, received) = tokio::join!(
+                    accessibility_bus_address(&session, STALLED_REQUEST_TIMEOUT),
+                    requests.recv(),
+                );
+                assert_eq!(received, Some(()));
+                let error = result.unwrap_err();
+                assert_eq!(error.code, ErrorCode::Timeout);
+                assert_eq!(error.message, "AT-SPI2 GetAddress timed out");
+            },
+        )
+        .await;
     }
 
     /// Accessible properties and edges for a small, cyclic AT-SPI tree.
@@ -774,7 +915,7 @@ mod tests {
                     )
             },
             async |connection| {
-                let client = AtspiClient { connection };
+                let client = peer_client(connection);
                 let roots = client.list_roots(None).await.unwrap();
                 let [window, dialog] = roots.as_slice() else {
                     panic!(
@@ -835,10 +976,7 @@ mod tests {
         with_peer(
             |server| server.serve_at(FIXTURE_REGISTRY_ROOT, DisconnectingRegistry),
             async |connection| {
-                let error = AtspiClient { connection }
-                    .list_roots(None)
-                    .await
-                    .unwrap_err();
+                let error = peer_client(connection).list_roots(None).await.unwrap_err();
                 assert_eq!(error.code, ErrorCode::InternalError);
                 assert_eq!(
                     error.message,
@@ -863,10 +1001,7 @@ mod tests {
         with_peer(
             |server| server.serve_at(FIXTURE_REGISTRY_ROOT, MalformedRegistry),
             async |connection| {
-                let error = AtspiClient { connection }
-                    .list_roots(None)
-                    .await
-                    .unwrap_err();
+                let error = peer_client(connection).list_roots(None).await.unwrap_err();
                 assert_eq!(error.code, ErrorCode::InternalError);
                 assert_eq!(
                     error.message,
@@ -877,33 +1012,69 @@ mod tests {
         .await;
     }
 
-    struct StalledRegistry(mpsc::UnboundedSender<()>);
+    struct StalledRegistry(StalledReply);
 
     #[zbus::interface(name = "org.a11y.atspi.Accessible")]
     impl StalledRegistry {
         async fn get_children(&self) -> Vec<(String, OwnedObjectPath)> {
-            self.0.send(()).unwrap();
-            pending().await
+            self.0.wait().await
         }
     }
 
     #[tokio::test]
-    async fn list_roots_stays_pending_when_registry_never_replies() {
-        let (started, mut requests) = mpsc::unbounded_channel();
+    async fn list_roots_reports_timeout_when_registry_never_replies() {
+        let (stall, mut requests) = StalledReply::new();
         with_peer(
-            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, StalledRegistry(started)),
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, StalledRegistry(stall)),
             async |connection| {
-                let client = AtspiClient { connection };
-                let request = client.list_roots(None);
-                tokio::pin!(request);
-                tokio::select! {
-                    received = requests.recv() => assert_eq!(received, Some(())),
-                    result = &mut request => panic!("list_roots completed before the registry stalled: {result:?}"),
-                }
-                // Production has no per-request timeout. The caller's deadline cancels the wait.
-                assert!(tokio::time::timeout(Duration::from_millis(100), request).await.is_err());
+                let client = AtspiClient {
+                    connection,
+                    request_timeout: STALLED_REQUEST_TIMEOUT,
+                };
+                let (result, received) = tokio::join!(client.list_roots(None), requests.recv());
+                assert_eq!(received, Some(()));
+                let error = result.unwrap_err();
+                assert_eq!(error.code, ErrorCode::Timeout);
+                assert_eq!(error.code.to_string(), "timeout");
+                assert_eq!(error.message, "AT-SPI2 GetChildren timed out");
             },
-        ).await;
+        )
+        .await;
+    }
+
+    struct StalledAction(StalledReply);
+
+    #[zbus::interface(name = "org.a11y.atspi.Action")]
+    impl StalledAction {
+        #[zbus(property, name = "NActions")]
+        async fn n_actions(&self) -> i32 {
+            self.0.wait().await
+        }
+    }
+
+    #[tokio::test]
+    async fn press_reports_timeout_when_action_count_never_replies() {
+        let (stall, mut requests) = StalledReply::new();
+        with_peer(
+            |server| server.serve_at("/node", StalledAction(stall)),
+            async |connection| {
+                let client = AtspiClient {
+                    connection,
+                    request_timeout: STALLED_REQUEST_TIMEOUT,
+                };
+                let mut node = NodeSnapshot::minimal(AccessibleRef {
+                    destination: ":1.42".into(),
+                    path: "/node".into(),
+                });
+                node.interfaces.insert(ACTION.into());
+                let (result, received) = tokio::join!(client.press(&node), requests.recv());
+                assert_eq!(received, Some(()));
+                let error = result.unwrap_err();
+                assert_eq!(error.code, ErrorCode::Timeout);
+                assert_eq!(error.message, "AT-SPI2 NActions timed out");
+            },
+        )
+        .await;
     }
 
     /// Record calls so a password read fails even if its result is subsequently discarded.
@@ -965,13 +1136,16 @@ mod tests {
                     .serve_at(LABEL, label_text.clone())
             },
             async |connection| {
-                let client = AtspiClient { connection };
+                let client = peer_client(connection);
                 let root = AccessibleRef {
                     destination: DESTINATION.into(),
                     path: ROOT.into(),
                 };
 
-                let nodes = client.snapshot_from(&root, 10, 10).await.unwrap();
+                let Snapshot {
+                    nodes, incomplete, ..
+                } = client.snapshot_from(&root, 10, 10).await.unwrap();
+                assert!(!incomplete);
                 assert_eq!(nodes.len(), 3);
                 assert_eq!(nodes[0].accessible, root);
                 assert_eq!(nodes[0].parent, None);
@@ -992,11 +1166,13 @@ mod tests {
                 assert_eq!(nodes[2].value, "fixture text");
 
                 let depth_limited = client.snapshot_from(&root, 10, 0).await.unwrap();
-                assert_eq!(depth_limited.len(), 1);
-                assert_eq!(depth_limited[0].accessible, root);
+                assert!(depth_limited.incomplete);
+                assert_eq!(depth_limited.nodes.len(), 1);
+                assert_eq!(depth_limited.nodes[0].accessible, root);
                 let node_limited = client.snapshot_from(&root, 2, 10).await.unwrap();
-                assert_eq!(node_limited.len(), 2);
-                assert_eq!(node_limited[1].accessible.path, PASSWORD);
+                assert!(node_limited.incomplete);
+                assert_eq!(node_limited.nodes.len(), 2);
+                assert_eq!(node_limited.nodes[1].accessible.path, PASSWORD);
                 assert!(password_text.0.lock().unwrap().is_empty());
                 assert_eq!(*label_text.0.lock().unwrap(), [(0, -1)]);
             },

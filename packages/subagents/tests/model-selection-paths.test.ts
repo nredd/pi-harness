@@ -31,12 +31,14 @@ import { setAgentModels, setModelAliases } from "../src/model-resolver.ts";
 import { setScopeModelsEnabled } from "../src/model-scope.ts";
 import { setModelTiers, tierBinding } from "../src/model-tiers.ts";
 import { createNestedSubagentTools } from "../src/nested-tools.ts";
+import * as budget from "../src/process-budget.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.ts";
 import * as settings from "../src/settings.ts";
 import type { FleetUICtx } from "../src/ui/fleet-list.ts";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../src/ui/fleet-state.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
+import { runWorkflow, type WorkflowControl } from "../src/workflow/runtime.ts";
 import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./fixtures/boot-extension.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -1616,6 +1618,108 @@ it("does not launch a child aborted during tier admission", async () => {
 	await expect(manager.awaitStartup(id)).rejects.toThrow("Agent aborted during model admission");
 	expect(runner.runAgent).not.toHaveBeenCalled();
 });
+
+it("reports an unskipped tier refusal as a workflow agent error", async () => {
+	setModelTiers({ cheap: [ref("typed")] }, {});
+	blockedUntil = clock.now() + 1000;
+	const result = await runWorkflow({
+		script:
+			'export const meta = { name: "admission", description: "fixture" }; return await agent("go", { agentType: "scout", model: "@cheap" });',
+		host: createWorkflowHost({ pi: boot.pi, ctx: context, manager }),
+		signal: AbortSignal.timeout(5_000),
+	});
+	expect(result).toMatchObject({ status: "completed", value: null });
+	const terminal = result.progress.findLast((entry) => entry.type === "workflow_agent");
+	expect(terminal).toMatchObject({
+		state: "error",
+		error: expect.stringContaining(
+			`Subscription quota for @cheap is exhausted; it resets at ${new Date(blockedUntil).toISOString()}.`,
+		),
+	});
+	expect(terminal).not.toMatchObject({ skipped: true });
+	expect(runner.runAgent).not.toHaveBeenCalled();
+}, 10_000);
+
+it.each([true, false])(
+	"releases a skipped workflow worker's only budget slot (admitted: %s)",
+	async (ok) => {
+		setModelTiers({ cheap: [ref("typed")] }, {});
+		const events = bus();
+		boot.pi.events = events;
+		let control: WorkflowControl | undefined;
+		let skipped: boolean | undefined;
+		let pendingRetry: boolean | undefined;
+		let atAdmission: ReturnType<typeof budget.budgetUsage> | undefined;
+		let afterSkip: ReturnType<typeof budget.budgetUsage> | undefined;
+		let skipReleases: unknown[][] | undefined;
+		// Counters detect leaks, but releasing the same lease twice is idempotent.
+		const release = vi.spyOn(budget, "releaseBudget");
+		events.on("router:rpc:admit", (data) => {
+			const { requestId } = data as { requestId: string };
+			// Stop after the real manager enters admission, before its reply arrives.
+			atAdmission = budget.budgetUsage();
+			skipped = control?.skip(0);
+			pendingRetry = control?.retry(0);
+			queueMicrotask(() => {
+				events.emit(`router:rpc:admit:reply:${requestId}`, {
+					success: true,
+					data: ok ? { ok: true } : { ok: false, resetAt: clock.now() + 1000 },
+				});
+			});
+		});
+		const signal = AbortSignal.timeout(5_000);
+		const host = createWorkflowHost({
+			pi: boot.pi,
+			ctx: context,
+			manager,
+			workflowId: "wf_admission",
+			signal,
+			isRunning: () => !signal.aborted,
+		});
+		const policy = budget.getBudgetPolicy();
+		budget.setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+		try {
+			const result = await runWorkflow({
+				script: `export const meta = { name: "admission", description: "fixture" };
+					const skipped = await agent("go", { agentType: "scout", model: "@cheap" });
+					const next = await agent("next", { agentType: "scout", model: "${ref("explicit")}" });
+					return [skipped, next];`,
+				host,
+				signal,
+				onControl: (value) => {
+					control = value;
+				},
+				onProgress: (entries) => {
+					if (
+						entries.some((entry) => entry.type === "workflow_agent" && entry.index === 0 && entry.state === "error")
+					) {
+						afterSkip = budget.budgetUsage();
+						skipReleases = [...release.mock.calls];
+					}
+				},
+			});
+			expect(atAdmission).toEqual({ active: 1, pending: 0, maxActive: 1 });
+			expect(afterSkip).toEqual({ active: 0, pending: 0, maxActive: 1 });
+			expect(skipReleases).toEqual([[expect.objectContaining({ released: true })]]);
+			expect(skipped).toBe(true);
+			expect(pendingRetry).toBe(false);
+			expect(control?.retry(0)).toBe(false);
+			expect(result).toMatchObject({ status: "completed", value: [null, "done"] });
+			const terminal = result.progress.findLast((entry) => entry.type === "workflow_agent" && entry.index === 0);
+			expect(terminal).toMatchObject({ state: "error", skipped: true });
+			expect(terminal).not.toHaveProperty("recordId");
+			expect(runner.runAgent).toHaveBeenCalledOnce();
+			expect(vi.mocked(runner.runAgent).mock.calls[0]?.[2]).toBe("next");
+			expect(manager.listAgents().map((record) => record.status)).toEqual(["stopped", "completed"]);
+			expect(manager.hasRunning()).toBe(false);
+			expect(budget.budgetUsage()).toEqual({ active: 0, pending: 0, maxActive: 1 });
+		} finally {
+			release.mockRestore();
+			budget.setBudgetPolicy(policy);
+		}
+	},
+	10_000,
+);
 
 it("updates workflow resolution from the admitted model to the answering model", async () => {
 	setModelTiers({ cheap: ["router/default"] }, {});

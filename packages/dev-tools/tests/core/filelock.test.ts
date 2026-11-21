@@ -1,9 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import {
 	FileLockAbortedError,
 	FileLockFailedError,
@@ -12,13 +12,11 @@ import {
 } from "../../src/core/filelock.ts";
 
 const CHILD = fileURLToPath(new URL("../fixtures/filelock-child.ts", import.meta.url));
-const roots: string[] = [];
 const children: ChildProcess[] = [];
 
 /** Every temp root is registered for teardown; `x.lock` lives inside it. */
 const tmp = () => {
-	const root = mkdtempSync(join(tmpdir(), "pi-dev-tools-fl-"));
-	roots.push(root);
+	const root = makeTestTempDir("pi-dev-tools-fl-", onTestFinished);
 	return join(root, "x.lock");
 };
 const rootOf = (lock: string) => join(lock, "..");
@@ -32,7 +30,6 @@ afterEach(() => {
 		).toBe(false);
 		c.kill("SIGKILL");
 	}
-	for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
 });
 
 function pidAlive(pid: number): boolean {

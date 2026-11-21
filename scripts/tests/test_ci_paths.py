@@ -25,6 +25,8 @@ import merge_pr_checks
 import runner_pools
 
 GIT = ci_paths.GIT
+BASE_PLAN_FIXTURE = Path(__file__).with_name("fixtures") / "ci_base_plans.json"
+BASE_PLAN_CASES = json.loads(BASE_PLAN_FIXTURE.read_text(encoding="utf-8"))["scenarios"]
 
 
 def test_native_helper_rejects_a_mistyped_heartbeat_and_the_build_falls_back_hosted(tmp_path: Path) -> None:
@@ -538,7 +540,14 @@ def test_code_change_runs_ubuntu_with_its_gates(repo: Path) -> None:
     plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
     ubuntu = plan["owned (ubuntu-24.04)"]
     assert ubuntu == ci_paths.CellPlan(
-        True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards, guest="linux", coverage_os="linux"
+        True,
+        True,
+        ALL_NATIVE_GATES,
+        "",
+        shards=ubuntu.shards,
+        guest="linux",
+        coverage_os="linux",
+        windows_native_required=True,
     )
     assert len(ubuntu.shards) == 4
     assert plan["stack (ubuntu-24.04, local)"].scenarios
@@ -833,6 +842,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
         ],
         "guest": "macos",
         "coverage_os": "darwin",
+        "windows_native_required": False,
         "skipped_gates": "",
     }
     assert plan["contracts (macos-14)"]["shards"] == []
@@ -1249,6 +1259,116 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     assert all((cell.guest, cell.coverage_os) == ("", "") for cell in docs.values())
     blocked = ci_paths.plan_cells(classify_change(repo, {"b.txt": "x\n"}), PULL_REQUEST, "too long")
     assert all(cell.shards == () for cell in blocked.values())
+
+
+@pytest.mark.parametrize(
+    "workspace", ["packages/computer-use", "packages/dev-tools", "packages/computer-use-extra"]
+)
+def test_windows_native_decision_uses_exact_shard_workspace(
+    monkeypatch: pytest.MonkeyPatch, workspace: str
+) -> None:
+    """Resolve from exact workspace membership, not from the shard name.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Override the Ubuntu shard table.
+        workspace (str): Selected workspace, possibly just a prefix match.
+
+    Returns:
+        None: Assertions verify the plan's workspace and decision.
+    """
+    os_name = "ubuntu-24.04"
+    monkeypatch.setitem(ci_paths.OWNED_SHARDS, os_name, (ci_paths.Shard("computer-use", ("check-ts",)),))
+    result = ci_paths.ChangeClassification(paths=(), docs_only=False, inputs={})
+    cell = ci_paths.native_plan("owned", os_name, result, PUSH, (workspace,))
+    assert cell.run
+    assert cell.shards[0].workspaces == (workspace,)
+    assert cell.to_output()["windows_native_required"] is (workspace == "packages/computer-use")
+
+
+def serialized_plan(
+    repo: Path,
+    *,
+    event: str,
+    path: str | None,
+    title_problem: str = "",
+    capacity: dict[str, int] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Read the planner's real `plan` GitHub output for a fixed scenario.
+
+    Parameters:
+        repo (Path): Disposable repository for the changed-path comparison.
+        event (str): Workflow event name.
+        path (str | None): Changed path, or None for a full dispatch.
+        title_problem (str): PR title validation failure, or empty for a valid title.
+        capacity (dict[str, int] | None): Fixed admitted slots, or None for hosted only.
+
+    Returns:
+        dict[str, dict[str, object]]: Serialized plan by cell name.
+
+    Raises:
+        ci_paths.ClassificationError: The planner cannot read or split the workspaces.
+        StopIteration: The planner failed to publish a `plan` line.
+    """
+    files = {} if path is None else {path: "change\n"}
+    result = classify_change(repo, files) if files else ci_paths.full_classification()
+    cells = ci_paths.plan_cells(result, event, title_problem, capacity)
+    output = repo / "github-output"
+    ci_paths.write_github_output(output, result, cells)
+    lines = output.read_text(encoding="utf-8").splitlines()
+    plan = next(line for line in lines if line.startswith("plan="))
+    return json.loads(plan.removeprefix("plan="))
+
+
+@pytest.mark.parametrize("scenario", BASE_PLAN_CASES)
+def test_windows_native_decision_preserves_base_plan(repo: Path, scenario: str) -> None:
+    """Compare every cell and both legacy Windows predicates to the reviewed base.
+
+    Generate from the repo root with the pinned base checkout and its own imports:
+
+        base=3430c69337b950b323d5a3c7411ce8f770101d62
+        scratch=$(mktemp -d)
+        git archive "$base" | tar -xf - -C "$scratch"
+        (cd scripts && uv run --locked --project ../tests/integration python - "$scratch" <<'PY'
+        import json, runpy, sys, tempfile
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+        import ci_paths
+
+        test = runpy.run_path("tests/test_ci_paths.py")
+        path = test["BASE_PLAN_FIXTURE"]
+        data = json.loads(path.read_text())
+        for case in data["scenarios"].values():
+            with tempfile.TemporaryDirectory() as scratch_repo:
+                repo = test["repo"].__wrapped__(Path(scratch_repo))
+                case["plan"] = test["serialized_plan"](repo, **case["inputs"])
+        path.write_text(json.dumps(data, indent=2) + "\n")
+        PY
+        )
+        rm -r "$scratch"
+
+    Parameters:
+        repo (Path): Disposable repository for the scenario's changed paths.
+        scenario (str): Named input and expected plan in `ci_base_plans.json`.
+
+    Returns:
+        None: Assertions verify cell identities, exact plans and Windows decisions.
+    """
+    case = BASE_PLAN_CASES[scenario]
+    base = case["plan"]
+    actual = serialized_plan(repo, **case["inputs"])
+    assert actual.keys() == base.keys()
+    for name, expected in base.items():
+        cell = actual[name]
+        decision = cell.pop("windows_native_required")
+        expected_json = json.dumps(expected, sort_keys=True)
+        assert json.dumps(cell, sort_keys=True) == expected_json, name
+        # Only the Ubuntu owned fan-in and producer used `contains(toJSON(...))`.
+        old_required = name == "owned (ubuntu-24.04)" and (
+            "packages/computer-use" in json.dumps(expected["shards"]).casefold()
+        )
+        assert decision is old_required, name
+        assert decision is (expected["run"] and old_required), name
 
 
 def write_workspace(root: Path, relative: str) -> None:
