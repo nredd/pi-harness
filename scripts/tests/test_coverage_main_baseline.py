@@ -460,7 +460,18 @@ def test_baseline_http_failure_still_posts(
     download = api.download
 
     def artifact_request(path: str, *args: Any, **kwargs: Any) -> Any:
-        """Serve a signed redirect or a 404 for the Ubuntu baseline."""
+        """Serve a signed redirect or a 404 for the Ubuntu baseline.
+
+        Parameters:
+            path (str): Artifact route.
+            *args (Any): HTTP method and body.
+            **kwargs (Any): Request timeout.
+
+        Returns:
+            Any: Recorded API response.
+        Raises:
+            HTTPError: Injected redirect or missing artifact.
+        """
         if path == "actions/artifacts/2200/zip":
             headers = Message()
             headers["Location"] = "https://artifact.example/coverage.zip"
@@ -468,7 +479,18 @@ def test_baseline_http_failure_still_posts(
         return request(path, *args, **kwargs)
 
     def download_ubuntu(artifact_id: int, destination: Path, **kwargs: Any) -> None:
-        """Exercise the normal transport boundary only for the affected artifact."""
+        """Exercise the normal transport boundary only for the affected artifact.
+
+        Parameters:
+            artifact_id (int): Listed artifact ID.
+            destination (Path): Private ZIP destination.
+            **kwargs (Any): Download deadline.
+
+        Returns:
+            None.
+        Raises:
+            OSError: The real downloader rejected the transport failure.
+        """
         if artifact_id == 2200:
             try:
                 pub.GitHub.download(api, artifact_id, destination, **kwargs)
@@ -481,13 +503,32 @@ def test_baseline_http_failure_still_posts(
         """Return one chunk, then fail on the next incomplete chunk."""
 
         def read(self, size: int | None = -1, /) -> bytes:
-            """Read the first chunk before raising a transport-level error."""
+            """Read the first chunk before raising a transport-level error.
+
+            Parameters:
+                size (int | None): Maximum read length.
+
+            Returns:
+                bytes: First complete chunk.
+            Raises:
+                IncompleteRead: The second chunk was truncated.
+            """
             if self.tell():
                 raise IncompleteRead(b"partial bytes", 100)
             return super().read(size)
 
         def open(self, url: str, *, timeout: float) -> Truncated:
-            """Act as the anonymous storage opener."""
+            """Act as the anonymous storage opener.
+
+            Parameters:
+                url (str): Signed artifact storage URL.
+                timeout (float): Socket timeout in seconds.
+
+            Returns:
+                Truncated: Fixture byte stream.
+            Raises:
+                AssertionError: The URL or timeout was unexpected.
+            """
             assert url == "https://artifact.example/coverage.zip"
             assert 0 < timeout <= 30
             return self
@@ -637,7 +678,19 @@ def test_slow_main_lookup_still_posts(
         *,
         timeout: float = 30,
     ) -> Any:
-        """Charge 15 seconds for each baseline listing, not for PR requests."""
+        """Charge 15 seconds for each baseline listing, not for PR requests.
+
+        Parameters:
+            path (str): Requested API route.
+            method (str): HTTP method.
+            body (dict[str, Any] | None): Optional comment payload.
+            timeout (float): Socket timeout in seconds.
+
+        Returns:
+            Any: Recorded API response.
+        Raises:
+            pub.BaselineTimeout: The injected hard alarm fired.
+        """
         nonlocal elapsed
         if "?" in path:
             timeouts.append(timeout)

@@ -558,7 +558,16 @@ def test_rejects_unsupported_compression_before_open(
     original = zipfile.ZipFile.open
 
     def guarded_open(self: zipfile.ZipFile, name: zipfile.ZipInfo) -> IO[bytes]:
-        """Fail if the reader opens the member whose compression is disallowed."""
+        """Fail if the reader opens the member whose compression is disallowed.
+
+        Parameters:
+            name (zipfile.ZipInfo): Member about to be read.
+
+        Returns:
+            IO[bytes]: Open stream for an allowed member.
+        Raises:
+            AssertionError: The disallowed member was opened.
+        """
         assert name.filename != f"coverage/{member}.json"
         return original(self, name)
 
