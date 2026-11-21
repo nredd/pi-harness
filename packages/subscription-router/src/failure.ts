@@ -104,17 +104,18 @@ function rawSignals(text: string) {
 		quotaIds: [...text.matchAll(/[{,]\s*"(?:quotaId|quota_limit)"\s*:\s*"([^"\r\n]*)"/g)].map((match) =>
 			string(match[1]),
 		),
-		delays: [...text.matchAll(/[{,]\s*"retryDelay"\s*:\s*"(\d+(?:\.\d+)?s)"/g)].map((match) => string(match[1])),
+		delays: [...text.matchAll(/[{,]\s*"retryDelay"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map((match) => string(match[1])),
 	};
 }
 
 function retryHint(delays: string[], prose: string): number | undefined {
 	for (const delay of [
 		...delays,
-		...[...prose.matchAll(/\bretry in\s+(\d+(?:\.\d+)?s)\b/gi)].map((match) => string(match[1])),
+		...[...prose.matchAll(/\bretry in\s+((?:\d+(?:\.\d+)?[hms])+)(?!\w|\.\d)/gi)].map((match) => string(match[1])),
 	]) {
-		if (!/^\d+(?:\.\d+)?s$/i.test(delay)) continue;
-		const ms = Number(delay.slice(0, -1)) * SECOND;
+		const parts = /^(?=\d)(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/i.exec(delay);
+		if (!parts) continue;
+		const ms = Number(parts[1] ?? 0) * 60 * MINUTE + Number(parts[2] ?? 0) * MINUTE + Number(parts[3] ?? 0) * SECOND;
 		if (Number.isFinite(ms)) return ms;
 	}
 	return undefined;
