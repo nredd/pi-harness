@@ -1,20 +1,14 @@
 /** Edge paths of the ssh tools driven through disposable ssh/scp stand-ins; nothing connects to a host. */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 import { wrapperFixture } from "../fixtures/wrapper.ts";
 
-const fixtures: ReturnType<typeof wrapperFixture>[] = [];
-afterEach(() => {
-	for (const f of fixtures.splice(0)) f.cleanup();
-});
-
 /** Register the tools with `body` as both the ssh and the scp binary (a `/bin/sh` script). */
 function tools(body: string) {
 	const fixture = wrapperFixture("pyproject.toml");
-	fixtures.push(fixture);
 	fixture.script(body, "/bin/sh");
 	const mock = createToolHost();
 	registerSshTools(mock.pi, { knownHosts: () => new Set(["home"]), sshBin: fixture.bin, scpBin: fixture.bin });

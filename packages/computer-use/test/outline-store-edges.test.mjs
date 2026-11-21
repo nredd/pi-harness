@@ -1,8 +1,7 @@
 // Edge cases for the agent-cache outline store: stray files, bad shapes, failed writes (#702).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, test } from "vitest";
 
 const outlineOf = () => {
@@ -44,16 +43,15 @@ async function modules() {
 let savedAgentDir;
 let agentDir;
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-	agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "cu-outline-store-"));
+	agentDir = makeTestTempDir("cu-outline-store-", onTestFinished);
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 });
 
 afterEach(() => {
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	fs.rmSync(agentDir, { recursive: true, force: true });
 });
 
 test("a missing store directory, stray files and unreadable states are all tolerated", async () => {

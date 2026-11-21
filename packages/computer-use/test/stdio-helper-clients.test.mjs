@@ -2,17 +2,17 @@
 // helper (`support/fake-helper.mjs`): framing, protocol mismatch, spawn failure, exit mid-command, timeouts, error codes.
 // No real helper, Windows or Linux host: `node:child_process.spawn` is replaced and the executable check uses a temp file.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { getEventListeners } from "node:events";
+import { chmodSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import {
 	body,
 	createFakeChild,
 	createFakeSpawn,
 	createHelperEngine,
-	drop,
 	fail,
 	ok,
 	raw,
@@ -36,8 +36,8 @@ let tmp;
 let helperPath;
 let clients;
 
-beforeEach(() => {
-	tmp = mkdtempSync(path.join(os.tmpdir(), "shc-"));
+beforeEach(({ onTestFinished }) => {
+	tmp = makeTestTempDir("shc-", onTestFinished);
 	helperPath = path.join(tmp, "bridge");
 	clients = [];
 });
@@ -48,7 +48,6 @@ afterEach(() => {
 	vi.doUnmock("node:child_process");
 	vi.unstubAllEnvs();
 	vi.resetModules();
-	rmSync(tmp, { recursive: true, force: true });
 });
 
 /** Make `helperPath` an executable (or remove its exec bit). */
@@ -144,7 +143,7 @@ describe("Windows helper client", () => {
 	test("runs setup once when the helper is missing, then reuses the installed helper", async () => {
 		const engine = envelope("Windows", { look: ok({ roots: [] }) });
 		const { client, spawn } = await windows({
-			setup: (command, args, options) => {
+			setup: (_command, _args, _options) => {
 				install();
 				return { exitCode: 0 };
 			},
