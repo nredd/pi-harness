@@ -9,9 +9,9 @@
 // pinned agent the moment someone enables the setting. Collapsing the two in
 // either direction is a one-line edit with no test in the way.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ModelRegistryRef } from "../src/enabled-models.ts";
 import { checkModelScope, isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.ts";
@@ -40,12 +40,12 @@ describe("checkModelScope", () => {
 	let prevAgentDir: string | undefined;
 	let prevEnabled: boolean;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// resolveEnabledModels memoizes on (patterns, mtime+size of both settings
 		// files). A fresh project dir per test keeps one case's allowlist from
 		// being served to the next.
-		projectDir = mkdtempSync(join(tmpdir(), "pi-scope-project-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-scope-global-"));
+		projectDir = makeTestTempDir("pi-scope-project-", onTestFinished);
+		agentDir = makeTestTempDir("pi-scope-global-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevEnabled = isScopeModelsEnabled();
@@ -55,8 +55,6 @@ describe("checkModelScope", () => {
 		setScopeModelsEnabled(prevEnabled); // module-global — restore for other suites
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(projectDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 	});
 
 	function setEnabledModels(models: string[]) {

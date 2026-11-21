@@ -1,7 +1,7 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
 import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
@@ -14,8 +14,8 @@ let output: string;
 const argv = process.argv;
 const exitCode = process.exitCode;
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "stats-cli-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("stats-cli-", onTestFinished);
 	source = join(dir, "source");
 	viewer = join(dir, "viewer");
 	output = join(dir, "output");
@@ -24,7 +24,6 @@ afterEach(() => {
 	process.argv = argv;
 	process.exitCode = exitCode;
 	vi.restoreAllMocks();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 /** Seed one counted assistant call under an injected agent directory. */

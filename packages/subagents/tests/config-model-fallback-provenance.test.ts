@@ -7,9 +7,9 @@
  * config-model-fallback-wiring.test.ts.)
  */
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AgentRunner from "../src/agent-runner.ts";
 
@@ -55,9 +55,9 @@ function ctx() {
 	} as any;
 }
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
-	cwd = mkdtempSync(join(tmpdir(), "config-model-prov-"));
+	cwd = makeTestTempDir("config-model-prov-", onTestFinished);
 	process.chdir(cwd);
 	process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
 	mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
@@ -83,7 +83,6 @@ afterEach(async () => {
 	if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
 	registerAgents(new Map());
-	rmSync(cwd, { recursive: true, force: true });
 });
 
 async function boot(clock?: FakeClock) {

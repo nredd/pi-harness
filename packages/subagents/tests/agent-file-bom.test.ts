@@ -13,9 +13,9 @@
  * tests in custom-agents/agent-file-toggle cannot reach.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { disableInContent, enableInContent } from "../src/agent-file-toggle.ts";
 import { loadCustomAgents } from "../src/custom-agents.ts";
@@ -34,8 +34,8 @@ describe("BOM-prefixed agent files", () => {
 	let tmpDir: string;
 	let originalAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-bom-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-bom-", onTestFinished);
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		delete process.env.PI_CODING_AGENT_DIR;
 		// Project agent files load only for a trusted project.
@@ -47,7 +47,6 @@ describe("BOM-prefixed agent files", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
 	/** Write an agent file and return its path. */

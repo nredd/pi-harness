@@ -181,6 +181,8 @@ Required checks on `main`, four contexts:
 
 Docs-only PRs still report the four Ubuntu checks without running their gates. macOS is not required and runs only on main pushes and eligible dispatches. Its owned shards report through a separate fan-in, so their queue and result do not affect `owned (ubuntu-24.04)`.
 
+For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. Ubuntu requires a successful Windows native producer when the plan includes `packages/computer-use`; macOS explicitly does not require that producer.
+
 ### Review and merge evidence
 
 The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.

@@ -23,11 +23,11 @@
  * paths resolve and the .mjs fixtures can import `@sinclair/typebox` from the
  * repo's node_modules.
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { getAgentConfig, registerAgents } from "../../src/agent-types.ts";
 import { loadCustomAgents } from "../../src/custom-agents.ts";
@@ -70,13 +70,15 @@ const PARENT_PROMPT = "PARENT_PROMPT_MARKER";
 
 describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)", () => {
 	let prevAgentDir: string | undefined;
-	let hermeticDir: string;
+	let cleanupDir: (() => void) | undefined;
 	let faux: ReturnType<typeof registerFauxProvider>;
 
 	beforeAll(() => {
 		// Isolate global discovery (getAgentDir / ~/.pi) so the dev's real agents
 		// and extensions can't bleed into the run.
-		hermeticDir = mkdtempSync(join(tmpdir(), "subagents-tmpl-"));
+		const hermeticDir = makeTestTempDir("subagents-tmpl-", (cleanup) => {
+			cleanupDir = cleanup;
+		});
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = hermeticDir;
 
@@ -89,10 +91,10 @@ describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)
 	});
 
 	afterAll(() => {
-		faux.unregister();
+		faux?.unregister();
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(hermeticDir, { recursive: true, force: true });
+		cleanupDir?.();
 	});
 
 	async function runScenario(agentName: string): Promise<{ active: string[]; prompt: string }> {

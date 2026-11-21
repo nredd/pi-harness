@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { getAvailableTypes, registerAgents, setDefaultsDisabled, setFallbackSubagent } from "../src/agent-types.ts";
 import { loadCustomAgents } from "../src/custom-agents.ts";
 import { setScopeModelsEnabled } from "../src/model-scope.ts";
@@ -70,8 +70,8 @@ async function execute(tool: any, params: Record<string, unknown>, executionCwd 
 	return tool.execute("call-1", params, undefined, undefined, ctx(executionCwd));
 }
 
-beforeEach(() => {
-	cwd = mkdtempSync(join(tmpdir(), "nested-tools-test-"));
+beforeEach(({ onTestFinished }) => {
+	cwd = makeTestTempDir("nested-tools-test-", onTestFinished);
 	writeAgent("scout");
 	writeAgent("reviewer");
 	registerAgents(loadCustomAgents(cwd, false, { projectTrusted: true }));
@@ -103,7 +103,6 @@ beforeEach(() => {
 
 afterEach(() => {
 	setScopeModelsEnabled(false);
-	rmSync(cwd, { recursive: true, force: true });
 });
 
 describe("nested type availability (#331, #333)", () => {
@@ -180,29 +179,25 @@ describe("child-safe nested Agent tools", () => {
 	});
 
 	it("keeps agent discovery rooted in inherited config, not the working directory", async () => {
-		const workCwd = mkdtempSync(join(tmpdir(), "nested-tools-work-"));
+		const workCwd = makeTestTempDir("nested-tools-work-", onTestFinished);
 		const workAgentDir = join(workCwd, ".pi", "agents");
 		mkdirSync(workAgentDir, { recursive: true });
 		writeFileSync(join(workAgentDir, "intruder.md"), "---\ndescription: intruder\n---\nintruder\n");
 
-		try {
-			const [agent] = tools();
-			const result = await execute(
-				agent,
-				{
-					subagent_type: "intruder",
-					description: "untrusted agent",
-					prompt: "Do work",
-				},
-				workCwd,
-			);
+		const [agent] = tools();
+		const result = await execute(
+			agent,
+			{
+				subagent_type: "intruder",
+				description: "untrusted agent",
+				prompt: "Do work",
+			},
+			workCwd,
+		);
 
-			expect(result.isError).toBe(true);
-			expect(result.content[0].text).toContain("Unknown or disabled");
-			expect(spawnAndWait).not.toHaveBeenCalled();
-		} finally {
-			rmSync(workCwd, { recursive: true, force: true });
-		}
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toContain("Unknown or disabled");
+		expect(spawnAndWait).not.toHaveBeenCalled();
 	});
 
 	it("hides project agent files from the nested registry when the parent's project is untrusted", async () => {
@@ -278,28 +273,24 @@ describe("child-safe nested Agent tools", () => {
 	it("resolves nested types without touching the process-global registry", async () => {
 		// A worktree-isolated parent hands its own config root down. Resolving from
 		// it must not swap the registry the main session and every other agent read.
-		const otherCwd = mkdtempSync(join(tmpdir(), "nested-tools-config-"));
+		const otherCwd = makeTestTempDir("nested-tools-config-", onTestFinished);
 		const otherAgentDir = join(otherCwd, ".pi", "agents");
 		mkdirSync(otherAgentDir, { recursive: true });
 		writeFileSync(join(otherAgentDir, "branch-only.md"), "---\ndescription: branch-only\n---\nbranch-only\n");
 		const before = getAvailableTypes();
 
-		try {
-			const [agent] = tools("all", 1, 2, otherCwd);
-			const result = await execute(agent, {
-				subagent_type: "branch-only",
-				description: "branch agent",
-				prompt: "Do work",
-			});
+		const [agent] = tools("all", 1, 2, otherCwd);
+		const result = await execute(agent, {
+			subagent_type: "branch-only",
+			description: "branch agent",
+			prompt: "Do work",
+		});
 
-			// Resolved from the inherited root...
-			expect(result.isError).toBe(false);
-			// ...without leaking it into the shared registry.
-			expect(getAvailableTypes()).toEqual(before);
-			expect(getAvailableTypes()).not.toContain("branch-only");
-		} finally {
-			rmSync(otherCwd, { recursive: true, force: true });
-		}
+		// Resolved from the inherited root...
+		expect(result.isError).toBe(false);
+		// ...without leaking it into the shared registry.
+		expect(getAvailableTypes()).toEqual(before);
+		expect(getAvailableTypes()).not.toContain("branch-only");
 	});
 
 	it("applies the scopeModels allowlist to a caller-supplied model", async () => {

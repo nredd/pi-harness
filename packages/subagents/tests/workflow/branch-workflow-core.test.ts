@@ -6,10 +6,10 @@
  * listing's guards. Each test pins the observable outcome of one branch.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { Check, Errors } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../../src/agent-manager.ts";
@@ -248,10 +248,9 @@ describe("compileJsonSchema with a validator that misbehaves", () => {
 
 describe("journal entries carrying the resume mark", () => {
 	let dir: string;
-	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "wf-journal-branch-"));
+	beforeEach(({ onTestFinished }) => {
+		dir = makeTestTempDir("wf-journal-branch-", onTestFinished);
 	});
-	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("keeps `resumed: true` and drops any other value", () => {
 		const path = join(dir, "run.jsonl");
@@ -267,9 +266,9 @@ describe("saved workflow edges", () => {
 	let agentDir: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-wf-branch-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-wf-branch-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-wf-branch-", onTestFinished);
+		agentDir = makeTestTempDir("pi-wf-branch-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		resetPackageState();
@@ -279,8 +278,6 @@ describe("saved workflow edges", () => {
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 	});
 
 	/** A package declaring individual workflow files, registered in pi's user settings. */

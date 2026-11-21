@@ -16,6 +16,7 @@ export const sources = [
 ].map((name) => `native/macos/${name}`);
 export const testSources = [
 	"native/macos/headless_tests.swift",
+	"native/macos/act_tests.swift",
 	"native/macos/cursor_motion_tests.swift",
 	"native/macos/overlay_tests.swift",
 	"native/macos/ref_look_tests.swift",

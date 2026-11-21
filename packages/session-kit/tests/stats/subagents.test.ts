@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../../src/stats/cli.ts";
 import { reportSubagents } from "../../src/stats/subagents.ts";
@@ -9,12 +9,11 @@ import { call, header, info, timestamp, writeSession } from "../fixtures/subagen
 
 let root: string;
 const file = (name: string, entries: unknown[]) => writeSession(root, name, entries);
-beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "agent-report-"));
+beforeEach(async ({ onTestFinished }) => {
+	root = makeTestTempDir("agent-report-", onTestFinished);
 });
 afterEach(async () => {
 	vi.restoreAllMocks();
-	await rm(root, { recursive: true, force: true });
 });
 
 it("joins original child names, dedupes copies and parent usage, and preserves hand-computed prices/cache", async () => {

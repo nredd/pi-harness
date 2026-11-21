@@ -1,7 +1,7 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { entryHash, sessionHash } from "../../../src/stats/harness/common.ts";
 import { type LoadSqlite, loadNodeSqlite, readOpenCode } from "../../../src/stats/harness/opencode.ts";
@@ -11,8 +11,8 @@ import { CANARY } from "../../fixtures/stats/harness/fixtures.ts";
 let dir: string;
 let dbPath: string;
 let writer: DatabaseSync;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "psk-opencode-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("psk-opencode-", onTestFinished);
 	dbPath = join(dir, "opencode.db");
 	writer = new DatabaseSync(dbPath);
 	writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
@@ -23,7 +23,6 @@ beforeEach(() => {
 });
 afterEach(() => {
 	writer.close();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 const T0 = Date.parse("2026-10-03T09:00:00Z");

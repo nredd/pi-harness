@@ -1,9 +1,9 @@
 // Faults the real host never produces on a developer machine: a Pi that lacks the package-manager
 // API the peer range `>=1.1.0` allows, and a filesystem whose root cannot be canonicalized (e.g. a
 // missing drive on Windows).
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({ manager: "real" as "real" | "missing" | "no-listing", failRealpath: false }));
@@ -33,14 +33,13 @@ import { listPiPackages, resolveDeclaredPaths } from "../src/package-resources.t
 
 let dir: string;
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "pi-pkghost-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("pi-pkghost-", onTestFinished);
 });
 
 afterEach(() => {
 	host.manager = "real";
 	host.failRealpath = false;
-	rmSync(dir, { recursive: true, force: true });
 });
 
 describe("listPiPackages against a host without the package manager API", () => {

@@ -6,10 +6,10 @@
 // serves saved workflows out of a map), so everything here is otherwise
 // unexercised.
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { resetPackageState, setPackageWorkflowsGate, setProjectTrusted } from "../../src/package-resources.ts";
 import {
 	listSavedWorkflows,
@@ -26,9 +26,9 @@ describe("saved workflows on disk", () => {
 	let agentDir: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-wf-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-wf-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-wf-", onTestFinished);
+		agentDir = makeTestTempDir("pi-wf-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		resetPackageState();
@@ -38,8 +38,6 @@ describe("saved workflows on disk", () => {
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 	});
 
 	/** Write `name.js` into one of the local roots. */
@@ -164,15 +162,11 @@ describe("saved workflows on disk", () => {
 		});
 
 		it("rejects a symlinked root entirely", () => {
-			const real = mkdtempSync(join(tmpdir(), "pi-wf-real-"));
+			const real = makeTestTempDir("pi-wf-real-", onTestFinished);
 			writeFileSync(join(real, "demo.js"), SCRIPT);
-			try {
-				mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-				symlinkSync(real, projectRoot(), "dir");
-				expect(readSavedWorkflow("demo", tmpDir).ok).toBe(false);
-			} finally {
-				rmSync(real, { recursive: true, force: true });
-			}
+			mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+			symlinkSync(real, projectRoot(), "dir");
+			expect(readSavedWorkflow("demo", tmpDir).ok).toBe(false);
 		});
 
 		it("reports a shadowing file that is not a workflow instead of reaching past it", () => {

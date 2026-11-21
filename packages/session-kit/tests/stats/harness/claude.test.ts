@@ -1,7 +1,7 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { readClaude } from "../../../src/stats/harness/claude.ts";
 import { entryHash, sessionHash } from "../../../src/stats/harness/common.ts";
 import type { HarnessCache } from "../../../src/stats/harness/scan.ts";
@@ -9,10 +9,9 @@ import { CANARY, claudeRow, claudeUser, writeLines } from "../../fixtures/stats/
 
 let root: string;
 const proj = (name = `-Users-${CANARY}-work`) => join(root, "projects", name);
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "psk-claude-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("psk-claude-", onTestFinished);
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("readClaude", () => {
 	it("reports a missing root as not installed, silently", async () => {
@@ -185,13 +184,9 @@ describe("readClaude", () => {
 		expect((await readClaude(root, cache)).calls.map((c) => c.output)).toEqual([22]);
 
 		// A record cached for a path outside this root is not reported.
-		const other = mkdtempSync(join(tmpdir(), "psk-claude-other-"));
-		try {
-			expect((await readClaude(other, cache)).found).toBe(true);
-			expect((await readClaude(other, cache)).calls).toEqual([]);
-		} finally {
-			rmSync(other, { recursive: true, force: true });
-		}
+		const other = makeTestTempDir("psk-claude-other-", onTestFinished);
+		expect((await readClaude(other, cache)).found).toBe(true);
+		expect((await readClaude(other, cache)).calls).toEqual([]);
 	});
 
 	it("counts an unreadable file and keeps the rest", async () => {

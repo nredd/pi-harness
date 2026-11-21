@@ -350,6 +350,7 @@ struct HeadlessTests {
         runPureAssertions()
         try await runDisplayCaptureAssertions()
         runRefLookAssertions()
+        try runActAssertions()
         runKeyboardAssertions()
         runRequestFramingAssertions()
         testMotionLifecycle()

@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { loadModelAliases } from "../../src/titles/aliases.ts";
 
 it("resolves default aliases only inside the disposable agent directory", () => {
-	const dir = mkdtempSync(join(tmpdir(), "kit-aliases-"));
+	const dir = makeTestTempDir("kit-aliases-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", dir);
 	try {
 		expect(loadModelAliases()).toEqual({});
@@ -13,6 +13,5 @@ it("resolves default aliases only inside the disposable agent directory", () => 
 		expect(loadModelAliases()).toEqual({});
 	} finally {
 		vi.unstubAllEnvs();
-		rmSync(dir, { recursive: true, force: true });
 	}
 });

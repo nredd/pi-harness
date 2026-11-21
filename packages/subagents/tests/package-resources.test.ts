@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import {
 	isPackageResourceExcluded,
 	listPiPackages,
@@ -74,16 +74,14 @@ describe("unscopedShortName", () => {
 describe("resolveDeclaredPaths", () => {
 	let root: string;
 
-	beforeEach(() => {
-		root = mkdtempSync(join(tmpdir(), "pi-pkg-"));
+	beforeEach(({ onTestFinished }) => {
+		root = makeTestTempDir("pi-pkg-", onTestFinished);
 		mkdirSync(join(root, "agents"), { recursive: true });
 		mkdirSync(join(root, "extra"), { recursive: true });
 		writeFileSync(join(root, "agents", "one.md"), "x");
 		writeFileSync(join(root, "loose.md"), "x");
 		writeFileSync(join(root, "notes.txt"), "x");
 	});
-
-	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 	it("splits directory entries from file entries", () => {
 		const { dirs, files } = resolveDeclaredPaths(root, ["./agents", "./loose.md"], "agents");
@@ -110,27 +108,22 @@ describe("resolveDeclaredPaths", () => {
 	it("refuses a symlink that points out of the package root", () => {
 		// `..` is not the only way out: `readdirSync` follows a symlinked directory,
 		// so the containment check has to run on canonical paths.
-		const outside = mkdtempSync(join(tmpdir(), "pi-outside-"));
-		try {
-			writeFileSync(join(outside, "sneaky.md"), "x");
-			symlinkSync(outside, join(root, "escape"), "dir");
-			expect(resolveDeclaredPaths(root, ["./escape"], "agents")).toMatchObject({ dirs: [], files: [] });
-		} finally {
-			rmSync(outside, { recursive: true, force: true });
-		}
+		const outside = makeTestTempDir("pi-outside-", onTestFinished);
+		writeFileSync(join(outside, "sneaky.md"), "x");
+		symlinkSync(outside, join(root, "escape"), "dir");
+		expect(resolveDeclaredPaths(root, ["./escape"], "agents")).toMatchObject({ dirs: [], files: [] });
 	});
 
 	it("still resolves a package installed under a symlinked path", () => {
 		// Both sides are canonicalized, so `/var` -> `/private/var` on macOS does
 		// not make a package fail its own containment check.
-		const linkDir = mkdtempSync(join(tmpdir(), "pi-link-"));
+		const linkDir = makeTestTempDir("pi-link-", onTestFinished);
 		const link = join(linkDir, "pkg");
 		try {
 			symlinkSync(root, link, "dir");
 			expect(resolveDeclaredPaths(link, ["./agents"], "agents").dirs).toEqual([join(link, "agents")]);
 		} finally {
 			unlinkSync(link);
-			rmSync(linkDir, { recursive: true, force: true });
 		}
 	});
 
@@ -208,8 +201,8 @@ describe("discovery through pi's configured packages", () => {
 	let projectDir: string;
 	let originalAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-pkgdisc-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-pkgdisc-", onTestFinished);
 		agentDir = join(tmpDir, "agentdir");
 		projectDir = join(tmpDir, "project");
 		mkdirSync(agentDir, { recursive: true });
@@ -223,7 +216,6 @@ describe("discovery through pi's configured packages", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
 	/** Build a package on disk and return its root. `manifest` is merged into package.json. */

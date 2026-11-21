@@ -18,10 +18,10 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 vi.mock("../../src/agent-runner.ts", () => ({
 	runAgent: vi.fn(),
@@ -94,7 +94,7 @@ const execFail = (stderr: string): ExecResult => ({ stdout: "", stderr, code: 1,
 
 /** A git repo with one commit, so `git worktree add` has a HEAD to copy. */
 function initRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-gate-repo-"));
+	const dir = makeTestTempDir("pi-gate-repo-", onTestFinished);
 	execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
 	execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "pipe" });
 	execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "pipe" });

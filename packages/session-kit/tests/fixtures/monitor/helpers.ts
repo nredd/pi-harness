@@ -1,16 +1,18 @@
 import { type ChildProcess, execFile } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { signalGroup, spawnMonitor } from "../../../src/monitor/process.ts";
 import { STAY } from "./stay.ts";
 
 export const SLEEPER = ["node", "-e", STAY];
 
 export function tempDir(): { dir: string; cleanup: () => void } {
-	const dir = mkdtempSync(join(tmpdir(), "psk-monitor-test-"));
-	return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+	let cleanup: () => void = () => {};
+	const dir = makeTestTempDir("psk-monitor-test-", (remove) => {
+		cleanup = remove;
+	});
+	return { dir, cleanup };
 }
 
 export function alive(pid: number): boolean {

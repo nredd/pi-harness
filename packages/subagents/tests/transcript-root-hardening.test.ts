@@ -8,7 +8,6 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
-	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
@@ -18,8 +17,8 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir as realTmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakeTmp = vi.hoisted(() => ({ dir: "" }));
@@ -103,8 +102,8 @@ function unwritable(dir: string): string {
 	return join(dir, "blocker", "x");
 }
 
-beforeEach(() => {
-	fakeTmp.dir = realpathSync(mkdtempSync(join(realTmpdir(), "pi-hardening-")));
+beforeEach(({ onTestFinished }) => {
+	fakeTmp.dir = realpathSync(makeTestTempDir("pi-hardening-", onTestFinished));
 	process.env.XDG_STATE_HOME = join(fakeTmp.dir, "state");
 	delete process.env.PI_SUBAGENTS_TRANSCRIPT_DIR;
 });
@@ -118,7 +117,6 @@ afterEach(() => {
 	lstatCalls.vanish = "";
 	restoreEnv("XDG_STATE_HOME", saved.xdg);
 	restoreEnv("PI_SUBAGENTS_TRANSCRIPT_DIR", saved.override);
-	rmSync(fakeTmp.dir, { recursive: true, force: true });
 	fakeTmp.dir = "";
 });
 
@@ -283,7 +281,7 @@ describe("temp fallback root", () => {
 		},
 	);
 
-	it.skipIf(process.platform === "win32")("only then falls back to a fresh mkdtemp dir", () => {
+	it.skipIf(process.platform === "win32")("only then falls back to a fresh temp dir", () => {
 		symlinkSync(fakeTmp.dir, join(fakeTmp.dir, `pi-subagents-${UID}`));
 		symlinkSync(fakeTmp.dir, hashed());
 		const root = transcriptRoot();

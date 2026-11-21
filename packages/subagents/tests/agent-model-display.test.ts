@@ -7,9 +7,9 @@
  * reported as though it had been honored (#182), and a resume rendered the
  * parameters of the call rather than the session it reopened.
  */
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -102,9 +102,9 @@ let cwd: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	originalCwd = process.cwd();
-	cwd = mkdtempSync(join(tmpdir(), "agent-model-display-"));
+	cwd = makeTestTempDir("agent-model-display-", onTestFinished);
 	process.chdir(cwd);
 	// A developer's own ~/.pi agents and settings would otherwise leak in.
 	originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -118,7 +118,6 @@ afterEach(() => {
 	if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 	registerAgents(new Map());
-	rmSync(cwd, { recursive: true, force: true });
 	vi.restoreAllMocks();
 	setModelAliases(undefined);
 });

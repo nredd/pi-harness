@@ -1,25 +1,22 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { running, waitFor } from "../fixtures/monitor/helpers.ts";
 import { STAY, stayWhileAlive, WORKER_ALIVE_SH } from "../fixtures/monitor/stay.ts";
 
 const spawned: ChildProcess[] = [];
-const dirs: string[] = [];
 
 afterEach(() => {
 	// Only processes this test spawned, by pid, so a failed assertion cannot leave the loop behind.
 	for (const child of spawned.splice(0)) child.kill("SIGKILL");
-	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** A stub `ps` that logs each probe to `calls` and runs `body` for its exit status. */
 function stubPs(body: string): { ps: string; calls: () => number } {
-	const dir = mkdtempSync(join(tmpdir(), "psk-stay-"));
-	dirs.push(dir);
+	const dir = makeTestTempDir("psk-stay-", onTestFinished);
 	const ps = join(dir, "ps");
 	const log = join(dir, "calls");
 	writeFileSync(ps, `#!/bin/sh\necho >> "${log}"\n${body}\n`);

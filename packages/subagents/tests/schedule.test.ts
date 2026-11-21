@@ -9,10 +9,8 @@
  *   - One-shot auto-disable
  *   - Concurrency-bypass option flows through to manager.spawn
  */
-
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
 import { SubagentScheduler } from "../src/schedule.ts";
@@ -101,8 +99,8 @@ describe("SubagentScheduler — lifecycle", () => {
 	let pi: any;
 	let ctx: any;
 
-	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "scheduler-test-"));
+	beforeEach(({ onTestFinished }) => {
+		tmp = makeTestTempDir("scheduler-test-", onTestFinished);
 		store = new ScheduleStore(join(tmp, "s.json"));
 		scheduler = new SubagentScheduler();
 		manager = makeMockManager();
@@ -113,7 +111,6 @@ describe("SubagentScheduler — lifecycle", () => {
 
 	afterEach(() => {
 		scheduler.stop();
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	it("isActive() reports start/stop state", () => {
@@ -273,9 +270,9 @@ describe("SubagentScheduler — fire path", () => {
 	let pi: any;
 	let ctx: any;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		vi.useFakeTimers();
-		tmp = mkdtempSync(join(tmpdir(), "scheduler-fire-"));
+		tmp = makeTestTempDir("scheduler-fire-", onTestFinished);
 		store = new ScheduleStore(join(tmp, "s.json"));
 		scheduler = new SubagentScheduler();
 		manager = makeMockManager();
@@ -291,7 +288,6 @@ describe("SubagentScheduler — fire path", () => {
 		// assertion can't leak strict dispatch into every test that follows.
 		setFallbackSubagent(undefined);
 		registerAgents(new Map());
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	it("interval jobs fire repeatedly via setInterval", () => {

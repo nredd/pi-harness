@@ -1,9 +1,9 @@
 /** Release gate against the host's real shared estimator, never an injected pricing stub. */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as modelApi from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { opaqueId } from "../../src/stats/load.ts";
 import { createValuer, valuation } from "../../src/stats/pricing.ts";
 import { exportStats, importStats, loadCombined, machineIdentity, makeSnapshot } from "../../src/stats/snapshot.ts";
@@ -15,13 +15,11 @@ const assessment = PRICING_ASSESSMENT;
 const rates = PRICING_RATES;
 const model = PRICING_MODEL;
 const event = call(date, model.provider, model.id, 0, 0, { cost: 99 });
-const roots: string[] = [];
 beforeEach(() => {
 	vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network forbidden in offline pricing gate"));
 });
-afterEach(async () => {
+afterEach(() => {
 	vi.restoreAllMocks();
-	await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 // nredd/pi-harness#799: the installed peer must ship `estimateTokenCost`; a peer without it fails loudly here.
@@ -76,8 +74,7 @@ describe("matching-core pricing contract", () => {
 		expect(value({ ...event, model: "unmapped-alias", input: 1000000 }).cost).toBeNull();
 	});
 	it("values local/imported/deleted cached events without changing transcripts, snapshot bytes or IDs", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pricing-core-contract-"));
-		roots.push(root);
+		const root = makeTestTempDir("pricing-core-contract-", onTestFinished);
 		const producer = join(root, "producer");
 		const viewer = join(root, "viewer");
 		const repo = join(root, "repo");

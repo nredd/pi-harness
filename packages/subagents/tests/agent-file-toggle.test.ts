@@ -8,11 +8,11 @@
 // command closure because `registerCommand` is mocked in every wiring test,
 // which is why none of this had coverage.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	buildNewAgentFile,
 	disableInContent,
@@ -254,9 +254,9 @@ describe("findAgentFile", () => {
 	let agentDir: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-toggle-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-toggle-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-toggle-", onTestFinished);
+		agentDir = makeTestTempDir("pi-toggle-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 	});
@@ -264,8 +264,6 @@ describe("findAgentFile", () => {
 	afterEach(() => {
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 	});
 
 	function write(dir: string, name: string) {
@@ -470,7 +468,7 @@ describe("unterminated or missing frontmatter", () => {
 
 describe("default working directory", () => {
 	it("resolves workspace and agent lookups against process.cwd()", () => {
-		const cwd = mkdtempSync(join(tmpdir(), "pi-toggle-cwd-"));
+		const cwd = makeTestTempDir("pi-toggle-cwd-", onTestFinished);
 		const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
 		try {
 			expect(workspaceAgentsDir()).toBe(join(cwd, ".agents", "agents"));
@@ -482,7 +480,6 @@ describe("default working directory", () => {
 			});
 		} finally {
 			spy.mockRestore();
-			rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 });

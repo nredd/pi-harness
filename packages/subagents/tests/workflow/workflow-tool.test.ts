@@ -14,10 +14,10 @@
  * those are what these assertions are about — the mapping is.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../../src/agent-manager.ts";
 import { SUBAGENT_TOOL_NAMES } from "../../src/agent-runner.ts";
@@ -342,13 +342,13 @@ describe("createWorkflowHost — scopeModels", () => {
 			...overrides,
 		});
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// `resolveEnabledModels` memoizes on the patterns plus the mtime/size of
 		// both settings files, so one case's allowlist would otherwise be served to
 		// the next — a fresh project dir per test is what invalidates it. Same
 		// harness as test/cross-extension-rpc.test.ts.
-		projectDir = mkdtempSync(join(tmpdir(), "wf-scope-project-"));
-		agentDir = mkdtempSync(join(tmpdir(), "wf-scope-global-"));
+		projectDir = makeTestTempDir("wf-scope-project-", onTestFinished);
+		agentDir = makeTestTempDir("wf-scope-global-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevEnabled = isScopeModelsEnabled();
@@ -383,8 +383,6 @@ describe("createWorkflowHost — scopeModels", () => {
 		setScopeModelsEnabled(prevEnabled); // module-global — restore for other suites
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(projectDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		registerAgents(new Map());
 	});
 
@@ -472,13 +470,9 @@ describe("createWorkflowHost — scopeModels", () => {
 describe("createWorkflowHost — worktree cwd propagation", () => {
 	let worktree: string;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		registerAgents(new Map());
-		worktree = mkdtempSync(join(tmpdir(), "wf-worktree-"));
-	});
-
-	afterEach(() => {
-		rmSync(worktree, { recursive: true, force: true });
+		worktree = makeTestTempDir("wf-worktree-", onTestFinished);
 	});
 
 	it("reports the directory the child ran in, so a gate verifies that tree", async () => {

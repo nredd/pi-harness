@@ -9,9 +9,9 @@
  * spawns would be no fix at all. The fallback tests assert the opposite — that
  * it ran, and which agent it ran.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -60,9 +60,9 @@ function ctx() {
 const textOf = (r: any): string => r.content[0].text;
 
 describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		originalCwd = process.cwd();
-		cwd = mkdtempSync(join(tmpdir(), "fallback-wiring-"));
+		cwd = makeTestTempDir("fallback-wiring-", onTestFinished);
 		writeAgents();
 		process.chdir(cwd);
 		// A developer's real ~/.pi/subagents.json would otherwise set this very
@@ -79,7 +79,6 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		registerAgents(new Map());
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	/** Project agent files load at session_start, once pi reports the project trusted. */
