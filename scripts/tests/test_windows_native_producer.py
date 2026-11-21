@@ -94,7 +94,20 @@ def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> Non
 
 
 def windows_plan_context(decision: bool | str | None) -> dict[str, str]:
-    """Return a real executing PR plan, with an optional override of its Windows decision."""
+    """Return a real executing PR plan with a Windows decision override.
+
+    Parameters:
+        decision (bool | str | None): True keeps the planner's decision, False or a
+            string overrides it, and None removes the field rather than writing JSON null.
+
+    Returns:
+        dict[str, str]: Workflow expression context with the modified plan JSON.
+
+    Raises:
+        json.JSONDecodeError: The classifier did not emit valid plan JSON.
+        KeyError: The classifier omitted the plan, the Ubuntu owned cell, or the
+            decision field to be removed.
+    """
     context = classify_context(PULL_REQUEST)
     plan = json.loads(context["needs.classify.outputs.plan"])
     ubuntu = plan["owned (ubuntu-24.04)"]
@@ -106,9 +119,36 @@ def windows_plan_context(decision: bool | str | None) -> dict[str, str]:
     return context | {"needs.classify.outputs.plan": json.dumps(plan)}
 
 
+def test_windows_plan_context_documents_and_omits_the_missing_decision() -> None:
+    """Keep the missing-field fixture and its documented contract in sync.
+
+    Returns:
+        None: Assertions verify the typed contract and distinguish omission from null.
+    """
+    doc = windows_plan_context.__doc__
+    assert doc is not None
+    assert "Parameters:" in doc
+    assert "decision (bool | str | None):" in doc
+    assert "Returns:" in doc
+    assert "dict[str, str]:" in doc
+    assert "Raises:" in doc
+    assert "json.JSONDecodeError:" in doc
+    assert "None removes the field rather than writing JSON null" in doc
+    context = windows_plan_context(None)
+    plan = json.loads(context["needs.classify.outputs.plan"])
+    assert "windows_native_required" not in plan["owned (ubuntu-24.04)"]
+
+
 @pytest.mark.parametrize("decision", [True, False, None, "true", "false", ""])
 def test_windows_producer_reads_a_strict_plan_decision(decision: bool | str | None) -> None:
-    """Evaluate the real schedule condition, rejecting null and strings before coercion."""
+    """Evaluate the real schedule condition without coercing absent fields or strings.
+
+    Parameters:
+        decision (bool | str | None): Boolean, malformed string, or absent decision.
+
+    Returns:
+        None: Assertions verify the condition accepts only booleans.
+    """
     condition = workflow_jobs()["computer-use-windows"]["if"]
     context = windows_plan_context(decision)
     if isinstance(decision, bool):
@@ -119,7 +159,11 @@ def test_windows_producer_reads_a_strict_plan_decision(decision: bool | str | No
 
 
 def test_windows_producer_stays_off_without_an_executing_successful_cell() -> None:
-    """A failed classifier can publish a plan; a missing or bypassed cell must not run either."""
+    """Keep the producer off for a failed classifier or a missing or bypassed cell.
+
+    Returns:
+        None: Assertions verify the producer's scheduling condition.
+    """
     condition = workflow_jobs()["computer-use-windows"]["if"]
     context = classify_context(PULL_REQUEST)
     for report in (
