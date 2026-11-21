@@ -81,7 +81,7 @@ const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string
 	},
 };
 
-function hostPlatform(): PlatformName {
+export function hostPlatform(): PlatformName {
 	return process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
 }
 

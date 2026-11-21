@@ -118,7 +118,24 @@ describe("/computer-use", () => {
 		return ctx.notes[0].message;
 	};
 
-	test("defaults: everything enabled but the glow, default blocklist, no sources", async () => {
+	test.each([
+		[
+			"darwin",
+			[`blocked_apps: ${defaultBlockedApps("macos").join(", ")} (system authentication agents are always blocked)`],
+		],
+		[
+			"win32",
+			[`blocked_apps: ${defaultBlockedApps("windows").join(", ")} (system authentication agents are always blocked)`],
+		],
+		[
+			"linux",
+			[
+				`blocked_apps: ${defaultBlockedApps("linux").join(", ")}`,
+				"blocklist: configured entries are listed but INACTIVE on Linux until #1180 (identity)",
+			],
+		],
+	])("%s: default status reports the host's blocklist enforcement", async (platform, blocklistStatus) => {
+		setPlatform(platform);
 		const text = await run();
 		assert.equal(
 			text,
@@ -129,7 +146,7 @@ describe("/computer-use", () => {
 				"headless: disabled",
 				"cursor_overlay: enabled",
 				"activity_glow: disabled",
-				`blocked_apps: ${defaultBlockedApps().join(", ")} (system authentication agents are always blocked)`,
+				...blocklistStatus,
 				"",
 				"Sources:",
 				`- ${path.join(root, "agent", "extensions", "pi-computer-use.json")}: not found`,
@@ -140,6 +157,7 @@ describe("/computer-use", () => {
 	});
 
 	test("user file flips every flag, empties the blocklist and the env override is listed", async () => {
+		setPlatform("darwin");
 		writeUserConfig({
 			computer_use: {
 				browser_use: "off",
