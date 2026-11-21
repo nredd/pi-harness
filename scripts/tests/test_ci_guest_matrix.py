@@ -157,13 +157,14 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
     body = expression.strip().removeprefix("${{").removesuffix("}}")
     body = re.sub(r"!(?!=)", " not ", body)
     body = re.sub(
-        r"(?<!['\w])[a-z]+(?:\.[a-z_][a-z_0-9-]*)+", lambda match: repr(context.get(match[0], "")), body
+        r"(?<!['\w])[a-z]+(?:\.[a-zA-Z_][a-zA-Z_0-9-]*)+", lambda match: repr(context.get(match[0], "")), body
     )
     body = re.sub(r"\]\.(\w+)", r"]['\1']", body)  # `fromJSON(...)[key].property`
     functions = {
         "fromJSON": lambda text: json.loads(text, object_hook=Absent),
         "format": github_format,
         "contains": lambda haystack, needle: needle in haystack,
+        "toJSON": json.dumps,
         "cancelled": lambda: context.get("cancelled") == "true",
         "always": lambda: True,
         "false": False,
@@ -323,7 +324,12 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
-    return walk_steps(jobs()[cell_job(name, cell)]["steps"], context)
+    job = jobs()[cell_job(name, cell)]
+    context |= {
+        f"env.{key}": render(value, context | classify_context(trigger))
+        for key, value in job.get("env", {}).items()
+    }
+    return walk_steps(job["steps"], context)
 
 
 def walk_steps(steps: list[dict[str, Any]], context: dict[str, Any]) -> set[str]:
@@ -1537,7 +1543,12 @@ def test_fan_in_downloads_exactly_its_own_shard_uploads() -> None:
     shard_paths = shard_upload["with"]["path"].splitlines()
     fan_in_paths = fan_in_upload["with"]["path"].splitlines()
     assert shard_paths[0] == "coverage/provenance-${{ matrix.shard }}.json"
-    assert fan_in_paths == [*shard_paths[1:], "coverage/summary.json", "coverage/provenance.json"]
+    assert fan_in_paths == [
+        *shard_paths[1:],
+        "coverage/summary.json",
+        "coverage/windows-x64-summary.json",
+        "coverage/provenance.json",
+    ]
 
 
 @pytest.mark.parametrize(("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin")])
@@ -1617,6 +1628,8 @@ def test_running_fan_in_accounts_for_the_merged_reports(tmp_path: Path, check: s
         "./.github/actions/setup-ci-tools",
     } <= steps
     assert not any(step.startswith("Owned gate ") for step in steps)
+    for step in ("Download Windows x64 coverage", "Account for Windows x64 coverage separately"):
+        assert (step in steps) is (check == "owned (ubuntu-24.04)")
 
 
 def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> None:

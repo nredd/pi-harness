@@ -67,6 +67,30 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     assert "Git\\mingw64" not in commands
 
 
+def test_required_fan_in_accounts_the_windows_artifact_separately() -> None:
+    """Require accounting on the selected Ubuntu check, not on unrelated or macOS runs."""
+    jobs = workflow_jobs()
+    ubuntu = jobs["owned-ubuntu"]
+    steps = ubuntu["steps"]
+    by_name = {step.get("name"): step for step in steps}
+    download = by_name["Download Windows x64 coverage"]
+    account = by_name["Account for Windows x64 coverage separately"]
+    required = by_name["Require every planned shard to succeed"]
+    assert steps.index(required) < steps.index(download) < steps.index(account)
+    assert download["with"]["name"] == "computer-use-rust-windows-x64"
+    assert download["if"] == account["if"]
+    assert "steps.plan.outputs.run == 'true' && env.WINDOWS_REQUIRED == 'true'" in account["if"]
+    assert jobs["owned-macos"]["env"]["WINDOWS_REQUIRED"] == "false"
+    assert "--os win32 --base" in account["run"]
+    assert 'cp "$reports"/windows-*/lcov.info "$destination/lcov.info"' in account["run"]
+    assert "coverage/windows-x64-summary.json" in account["run"]
+    assert (
+        "coverage/windows-x64-summary.json"
+        in by_name["Preserve independent coverage reports and summary"]["with"]["path"]
+    )
+    assert not account.get("continue-on-error")
+
+
 def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> None:
     """Execute the workflow's actual CA producer and validate the resulting TLS roots offline.
 
@@ -84,7 +108,9 @@ def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> Non
     node = shutil.which("node")
     assert node is not None, "The repository's pinned Node toolchain is required"
     bundle = tmp_path / "public-roots.pem"
-    subprocess.run([node, "-e", match[1], str(bundle)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [node, "-e", match[1], str(bundle)], check=True, capture_output=True, text=True, timeout=30
+    )
     context = ssl.create_default_context(cafile=str(bundle))
     assert context.cert_store_stats()["x509_ca"] > 0
     assert context.check_hostname

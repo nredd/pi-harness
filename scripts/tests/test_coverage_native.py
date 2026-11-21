@@ -268,12 +268,142 @@ def test_native_cli_retains_region_totals_and_missing_output_control(tmp_path: P
         "--summary",
         str(tmp_path / "summary.json"),
     ]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=30)
     assert result.returncode == 0, result.stderr
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["packages"]["native/primary"]["regions"] == 9
     assert summary["packages"]["native/primary"]["uncovered_regions"] == 6
     output.unlink()
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=30)
     assert result.returncode == 1
     assert "No such file" in result.stderr
+
+
+def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Path, Path]:
+    """Build a Windows inventory and report destination on a portable checkout.
+
+    Parameters:
+        tmp_path (Path): Disposable source and separate reports roots.
+    Returns:
+        tuple[Policy, dict[str, Any], Path, Path]: Policy, raw export, package report and reports root.
+    Raises:
+        OSError: Fixture files cannot be written.
+    """
+    cfg, report, _ = native_fixture(tmp_path)
+    package = cfg.packages.pop("native")
+    package.root = "packages/computer-use"
+    package.owned = ["native/windows/bridge-rs/src/**/*.rs"]
+    crate = tmp_path / package.root / "native/windows/bridge-rs"
+    crate.mkdir(parents=True)
+    (tmp_path / "pkg/src").rename(crate / "src")
+    lib = crate / "src/lib.rs"
+    lib.write_text(lib.read_text() + "/* Embedded reference: examples can include fn f() {}. */\n")
+    cfg.packages["windows"] = package
+    signal = Signal(
+        report="coverage/native-windows/lcov.info",
+        max_uncovered={"win32": Counts(lines=6, functions=6)},
+        reporters=["text", "lcov", "json"],
+        producer="llvm-lcov",
+        platforms=["win32"],
+    )
+    package.signals["primary"] = signal
+    reports = tmp_path / "download"
+    path = reports / package.root / signal.report
+    path.parent.mkdir(parents=True)
+    return cfg, report, path, reports
+
+
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("valid", ""),
+        ("missing-lcov", "No such file"),
+        ("missing-json", "No such file"),
+        ("missing-source", "source lists differ"),
+        ("missing-totals", "Missing LLVM LCOV totals"),
+        ("impossible-totals", "Inconsistent LLVM LCOV totals"),
+        ("stale-totals", "counters differ"),
+        ("over-budget", "Budget exceeded"),
+        ("missing-floor", "Missing OS floor"),
+        ("sysroot-lookalike", "LLVM source outside inventory"),
+    ],
+)
+def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, case: str, error: str) -> None:
+    """Gate Windows by source totals, not LCOV instantiations or Linux coverage.
+
+    Parameters:
+        tmp_path (Path): Disposable source and separate reports roots.
+        case (str): Corruption or policy change to introduce, if any.
+        error (str): Expected failed validation, empty for a valid report.
+    Returns:
+        None: Only the Windows signal gates Windows reports.
+    Raises:
+        AssertionError: The coverage reader accepts invalid inputs or miscounts the producer units.
+    """
+    cfg, report, path, reports = windows_artifact_fixture(tmp_path)
+    signal = cfg.packages["windows"].signals["primary"]
+    files = report["data"][0]["files"]
+    prefix = r"D:\a\repo\repo\packages\computer-use\native\windows\bridge-rs"
+    for file in files:
+        relative = file["filename"].split("/src/")[1].replace("/", "\\")
+        file["filename"] = f"{prefix}\\src\\{relative}"
+    sysroot = f"\\rustc\\{'a' * 40}\\library\\std\\thread_local.rs"
+    if case == "sysroot-lookalike":
+        sysroot = sysroot.replace("library", "src")
+    files.append({"filename": prefix + sysroot, "summary": {}})
+    rows = (
+        "\nFN:1,first\nFN:1,second\nFNDA:1,first\nFNDA:0,second\nDA:1,1\n"
+        "LF:3\nLH:1\nFNF:3\nFNH:1\nBRF:0\nBRH:0\nend_of_record\n"
+    )
+    lcov = "".join(f"SF:{file['filename']}{rows}" for file in files)
+    if case == "missing-source":
+        lcov = lcov.split("end_of_record\n", 1)[1]
+    if case == "missing-totals":
+        lcov = lcov.replace("FNF:3\n", "", 1)
+    if case == "impossible-totals":
+        lcov = lcov.replace("LH:1", "LH:4", 1)
+    if case == "stale-totals":
+        lcov = lcov.replace("LH:1", "LH:2", 1)
+    if case == "over-budget":
+        signal.max_uncovered["win32"].lines = 5
+    if case == "missing-floor":
+        del signal.max_uncovered["win32"]
+    if case != "missing-lcov":
+        path.write_text(lcov)
+    if case != "missing-json":
+        path.with_name("coverage.json").write_text(json.dumps(report))
+    assert account(tmp_path, cfg, "linux") == ([], [])
+    assert account(tmp_path, cfg, "darwin") == ([], [])
+    results, failures = account(tmp_path, cfg, "win32", reports)
+    if error:
+        assert len(failures) == 1
+        assert error in failures[0]
+    else:
+        assert not failures
+        assert len(results) == 4
+        assert sum(int(str(row["uncovered_regions"])) for row in results) == 6
+        assert all(row["statements"] is None and "branches" not in row for row in results)
+
+
+def test_windows_native_policy_cannot_loosen_or_remove_platform() -> None:
+    """Ratchet the real Windows policy and never attribute it to Linux or macOS.
+
+    Parameters:
+        None.
+    Returns:
+        None: Windows caps cannot increase and the Windows platform cannot be dropped.
+    Raises:
+        AssertionError: The real policy or its ratchet no longer protects Windows x64.
+    """
+    root = Path(__file__).resolve().parents[2]
+    cfg = Policy.model_validate_json((root / "coverage/policy.json").read_text())
+    old = cfg.packages["computer-use-windows-native"].signals["primary"]
+    assert old.platforms == ["win32"]
+    assert old.enforcement == "enforced"
+    new = old.model_copy(deep=True)
+    new.max_uncovered["win32"].functions += 1
+    with pytest.raises(ValueError, match=r"Ratchet violation.*win32"):
+        check_signal_ratchet("computer-use-windows-native/primary", new, old)
+    new.platforms = ["linux"]
+    with pytest.raises(ValueError, match="Cannot remove measured platforms"):
+        check_signal_ratchet("computer-use-windows-native/primary", new, old)

@@ -149,8 +149,7 @@ checks on disposable Windows infrastructure. Its `windows-helper-native-<SHA>` a
 If `uv`/Python bootstrap does not succeed, the job attempts to upload only `build.txt` with
 `staging=BOOTSTRAP_FAILED`. Download the exact reviewed commit's artifact, verify `SHA256SUMS` independently and inspect the native log before manually
 placing the executable at the owner-controlled path described by #981. This is build delivery, NOT
-publication, release acceptance or activation. The unchanged macOS `build` job is separate; its passing result is not Windows link/run proof. Existing Windows LLVM coverage production is unchanged; absent native branch
-and statement counters remain unmeasured.
+publication, release acceptance or activation. The unchanged macOS `build` job is separate; its passing result is not Windows link/run proof. The main CI workflow separately accounts for headless Windows x64 Rust coverage, with line/function caps and no branch or statement claim. See the [coverage reference](../../docs/coverage.md#inventory-and-exclusions) for the accounting and its limits.
 
 Local Rust tests and Windows-target type checks are NOT Windows link/run proof. The full #673 matrix
 still needs an authorized interactive Windows/WSL2 owner: rich-app labels, non-invokable control input,

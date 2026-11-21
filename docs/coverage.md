@@ -17,13 +17,14 @@ coverage-maintenance exclusion. Both require a nonblank
 `goal: ratchet` (#314) was deleted (#386) and the schema rejects it, in the current policy and in a
 base read alike; an enforced `excluded` signal is the only nonzero floor and can only tighten.
 
-Native LLVM signals declare `producer: "llvm-cov"` and remain report-only until runtime attribution
-is resolved. `computer-use-linux-native/primary` reads raw JSON rather than inventing LCOV branch
+Raw-JSON-only LLVM signals declare `producer: "llvm-cov"` and remain report-only until runtime
+attribution is resolved. The paired Windows `llvm-lcov` signal enforces headless x64 line/function caps. `computer-use-linux-native/primary` reads raw JSON rather than inventing LCOV branch
 rows: its summary carries lines/functions/regions and explicitly omits unproduced branch counts.
 Rust modules anywhere under `src`, including nested test/fixture modules, remain in the complete
 source inventory. Only conservative module/re-export-only source can validate an absent LLVM map.
-Explicit `skip_os` and `skip_hosts` declare unsupported cells as NOT RUN; selected cells still fail
-on missing reports. Adding skipped platforms to an established signal fails the base ratchet.
+`platforms` defaults to `darwin` and `linux`; Windows opts into `win32` instead. Explicit `skip_os`
+and `skip_hosts` also declare unsupported cells as NOT RUN. Selected cells fail on missing reports.
+Dropping a platform or adding an explicit skip to an established signal fails the base ratchet.
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -429,8 +430,27 @@ branches or statements. Explicit unsupported OS/host cells are NOT RUN, not zero
 native reports remain mandatory. Native attribution and thin live-adapter exceptions stay with #645
 and the native coverage owners.
 
-`computer-use` retains the complete native inventory; Windows Rust remains **not measured, tracked**.
-The inherited documentation site and its generators were retired (#870), not left as unmeasured source. Native Ubuntu Linux Rust is measured separately by the
+`computer-use` retains the complete native inventory. The inherited documentation site and its
+generators were retired (#870), not left as unmeasured source.
+
+The native Windows x64 Rust signal, `computer-use-windows-native` (#696), uses the headless
+`computer-use-rust-windows-x64` artifact. When the CI plan selects computer-use, the required
+Ubuntu fan-in downloads it and writes `coverage/windows-x64-summary.json` separately from the
+Ubuntu counters. Missing or invalid LCOV or raw LLVM JSON fails the check. LLVM reports source
+line and function totals in `LF/LH` and `FNF/FNH`, not one unit per `DA` or `FNDA` row. Accounting
+checks those summaries against the paired JSON and keeps regions from JSON only. The two hosted
+main runs [here](https://github.com/nredd/pi-harness/actions/runs/44914453077) and
+[here](https://github.com/nredd/pi-harness/actions/runs/44876056492) agree on **3000 / 324 / 4868**
+uncovered lines / functions / regions across the crate's `src/` inventory. Only lines and functions
+are capped and ratcheted. Integration tests and sysroot files are outside the denominator, but
+inline source tests count. This is not Windows ARM64 or live desktop evidence.
+
+To replay with the matching source checkout, download the named Windows artifact, copy the
+single `windows-*/lcov.info` and top-level `coverage.json` into
+`<reports-root>/packages/computer-use/coverage/native-windows/`, and run
+`uv run --locked --project tests/integration python scripts/coverage_accounting.py --os win32 --base HEAD --reports-root <reports-root>`.
+
+Native Ubuntu Linux Rust is measured separately by the
 report-only/excluded `computer-use-linux-native` signal (#758); regions are not branches or statements,
 and inline/source test hits do not establish runtime coverage. The separate `computer-use-swift` report-only/excluded
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.

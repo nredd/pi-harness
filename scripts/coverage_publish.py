@@ -316,6 +316,8 @@ def write_plan(policy: Path, destination: Path, state: str) -> None:
     for name, raw_package in object_value(read_summary(policy)["packages"]).items():
         package: Any = raw_package
         for label, signal in package.get("signals", {}).items():
+            if "linux" not in signal.get("platforms", ("darwin", "linux")):
+                continue
             skipped = "linux" in (*signal.get("skip_hosts", []), *signal.get("skip_os", []))
             signals[f"{name}/{label}"] = {
                 "enforcement": signal.get("enforcement", "enforced"),
