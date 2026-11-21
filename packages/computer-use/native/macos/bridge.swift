@@ -679,6 +679,12 @@ struct NativeInputSink {
 	let postHID: (CGEvent, Int32) -> Void
 	let sleep: (useconds_t) -> Void
 	let keyboardInputSource: () -> KeyboardInputSource
+	var checkCancellation: (() throws -> Void)?
+
+	func checkDragCancellation() throws {
+		try Task.checkCancellation()
+		try checkCancellation?()
+	}
 
 	static func createMouseEvent(_ type: CGEventType, _ point: CGPoint, _ button: CGMouseButton) -> CGEvent? {
 		CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
@@ -1233,7 +1239,10 @@ final class Bridge {
 		return recentCompletedRequestIds
 	}
 
-	func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
+	func handleRequest(
+		_ request: [String: Any], clientID: UUID?,
+		discoverRoots: ((Int32?, String?) throws -> [String: Any])? = nil
+	) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
 		if let refusal = lockedSessionRefusal(cmd: cmd, session: readSession()) {
 			throw BridgeFailure(message: refusal.message, code: refusal.code)
@@ -1268,7 +1277,11 @@ final class Bridge {
 		case "listWindows":
 			return try listWindows(pid: pidArg(request))
 		case "listRoots":
-			return try listRoots(pid: request["pid"] == nil ? nil : pidArg(request), title: optionalStringArg(request, "title"))
+			// Missing, null and nonnumeric filters previously meant broad discovery. Never truncate numeric filters.
+			let pid = try request["pid"] is NSNumber ? pidArg(request) : nil
+			let title = optionalStringArg(request, "title")
+			if let discoverRoots { return try discoverRoots(pid, title) }
+			return try listRoots(pid: pid, title: title)
 		case "getFrontmost":
 			return try getFrontmost()
 		case "getUserContext":
@@ -4688,8 +4701,13 @@ final class Bridge {
 	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard points.count >= 2, let first = points.first else {
+		guard points.count >= 2, let first = points.first, let last = points.last else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
+		}
+		try inputSink.checkDragCancellation()
+		// Reserve the matching release before sending any input. Unwinding must not allocate it.
+		guard let up = inputSink.mouseEvent(.leftMouseUp, first, .left) else {
+			throw BridgeFailure(message: "Failed to create mouse up event", code: "input_failed")
 		}
 		try postMouseMove(to: first, pid: pid, delivery: delivery)
 		guard let down = inputSink.mouseEvent(.leftMouseDown, first, .left) else {
@@ -4697,6 +4715,12 @@ final class Bridge {
 		}
 		down.setIntegerValueField(.mouseEventClickState, value: 1)
 		postEvent(down, pid: pid, delivery: delivery)
+		var releasePosition = first
+		defer {
+			up.location = releasePosition
+			up.setIntegerValueField(.mouseEventClickState, value: 1)
+			postEvent(up, pid: pid, delivery: delivery)
+		}
 		inputSink.sleep(30_000)
 
 		// Real drags are a stream of positions; apps ignore a single long jump. Step each segment (~12pt),
@@ -4705,33 +4729,20 @@ final class Bridge {
 		for pair in zip(points, points.dropFirst()) { total += hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y) }
 		let maxStep = max(12, total / 1000)
 		var previous = first
-		var lastPosition = first
-		func releaseButton(at position: CGPoint) throws {
-			guard let up = inputSink.mouseEvent(.leftMouseUp, position, .left) else {
-				throw BridgeFailure(message: "Failed to create mouse up event", code: "input_failed")
-			}
-			up.setIntegerValueField(.mouseEventClickState, value: 1)
-			postEvent(up, pid: pid, delivery: delivery)
-		}
-		// Attempt to release at the last posted position without masking the original failure.
-		do {
-			for point in points.dropFirst() {
-				for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
-					guard let drag = inputSink.mouseEvent(mouseDraggedType(for: .left), step, .left) else {
-						throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
-					}
-					drag.setIntegerValueField(.mouseEventClickState, value: 1)
-					postEvent(drag, pid: pid, delivery: delivery)
-					lastPosition = step
-					inputSink.sleep(8_000)
+		for point in points.dropFirst() {
+			for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
+				try inputSink.checkDragCancellation()
+				guard let drag = inputSink.mouseEvent(mouseDraggedType(for: .left), step, .left) else {
+					throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
 				}
-				previous = point
+				drag.setIntegerValueField(.mouseEventClickState, value: 1)
+				postEvent(drag, pid: pid, delivery: delivery)
+				releasePosition = step
+				inputSink.sleep(8_000)
 			}
-		} catch {
-			try? releaseButton(at: lastPosition)
-			throw error
+			previous = point
 		}
-		try releaseButton(at: points.last ?? lastPosition)
+		releasePosition = last
 	}
 
 	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid") throws {

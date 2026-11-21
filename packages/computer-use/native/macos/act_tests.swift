@@ -175,6 +175,7 @@ func runActAssertions() throws {
     try runScrollAssertions()
     runAXScrollAssertions()
     try runBatchAssertions()
+    try runRootPIDAssertions()
     expect(suppressionTapShouldReenable(.tapDisabledByTimeout) && suppressionTapShouldReenable(.tapDisabledByUserInput), "re-enable the tap on either disable notification")
     expect(!suppressionTapShouldReenable(.keyDown) && !suppressionTapShouldReenable(.mouseMoved), "ordinary user events stay suppressed")
     try runEventAssertions()
@@ -384,6 +385,30 @@ private func runBatchAssertions() throws {
     expect(fixture.trace.isEmpty, "invalid batches have no root or input side effects")
 }
 
+private func runRootPIDAssertions() throws {
+    let bridge = Bridge(activityGlow: nil, readSession: { nil })
+    var discovered: [Int32?] = []
+    func listRoots(_ json: String) throws -> [String: Any] {
+        let request = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        return try bridge.handleRequest(request, clientID: nil, discoverRoots: { pid, title in
+            discovered.append(pid)
+            expect(title == "Fixture", "listRoots preserves the title filter")
+            return ["roots": []]
+        }) as! [String: Any]
+    }
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":null}"#)
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture"}"#)
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":"not numeric"}"#)
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":1234}"#)
+    try actionFailure("invalid_args") {
+        try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":4294968530}"#)
+    }
+    try actionFailure("invalid_args") {
+        try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":18446744073709551615}"#)
+    }
+    expect(discovered == [nil, nil, nil, 1234], "listRoots discovers unfiltered for null, missing and nonnumeric PIDs, and never discovers for out-of-range PIDs")
+}
+
 private func runEventAssertions() throws {
     struct Event: Equatable {
         let type: CGEventType
@@ -398,6 +423,7 @@ private func runEventAssertions() throws {
     var events: [Event] = []
     var delays: [useconds_t] = []
     var rejectDragAt: CGPoint?
+    var cancelAfterFirstDrag = false
     var rejectNextMouseType: CGEventType?
     var rejectWheel = false
     var keyAllocations = 0
@@ -441,7 +467,10 @@ private func runEventAssertions() throws {
         postToPid: { record($0, pid: $1, delivery: "pid") },
         postHID: { record($0, pid: $1, delivery: "hid") },
         sleep: { delays.append($0) },
-        keyboardInputSource: { KeyboardInputSource(isKeyboardLayout: false, layoutData: nil) }
+        keyboardInputSource: { KeyboardInputSource(isKeyboardLayout: false, layoutData: nil) },
+        checkCancellation: {
+            if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
+        }
     ))
     let world = bridge.actionWorld()
     let start = CGPoint(x: 100, y: 200)
@@ -457,26 +486,28 @@ private func runEventAssertions() throws {
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
     events = []; delays = []
     rejectDragAt = end
-    try actionFailure("input_failed") {
+    try actionFailure("input_failed", message: "Failed to create mouse drag event") {
         try world.postMouseDrag([start, end], 1234, "pid")
         return [:]
     }
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseUp, midpoint, 1)], "drag creation failure releases at last posted position")
     events = []; delays = []
-    rejectNextMouseType = .leftMouseUp
-    try actionFailure("input_failed", message: "Failed to create mouse drag event") {
-        try world.postMouseDrag([start, end], 1234, "pid")
-        return [:]
-    }
-    expect(rejectNextMouseType == nil && events.last == mouse(.leftMouseDragged, midpoint, 1), "failed cleanup attempts mouse-up without replacing the original drag error")
-    events = []; delays = []
     rejectDragAt = nil
+    cancelAfterFirstDrag = true
+    do {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        expect(false, "cancelled drag must throw")
+    } catch is CancellationError {
+        expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseUp, midpoint, 1)], "cancelled drag releases once at the last posted position")
+    }
+    cancelAfterFirstDrag = false
+    events = []; delays = []
     rejectNextMouseType = .leftMouseUp
     try actionFailure("input_failed", message: "Failed to create mouse up event") {
         try world.postMouseDrag([start, end], 1234, "pid")
         return [:]
     }
-    expect(rejectNextMouseType == nil && events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1)], "unallocated mouse-up fails the drag after all movement was posted")
+    expect(rejectNextMouseType == nil && events.isEmpty && delays.isEmpty, "failed mouse-up reservation posts no mouse-down or other input")
     events = []; delays = []
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
