@@ -44,8 +44,13 @@ check-ts:  ## Test temp contract, Biome, tsc and Vitest (WORKSPACES can narrow t
 	node scripts/check-test-tempdirs.mjs "$(or $(BASE),origin/main)"
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
+SWEEP_GUARD := ../packages/preset/skills/ship-issue/sweep_guard.py
+
 check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
+	cd scripts && uv run --locked --project ../tests/integration ruff format --check --line-length 88 --target-version py38 $(SWEEP_GUARD)
+	cd scripts && uv run --locked --project ../tests/integration ruff check --config pyproject.toml --no-fix --ignore-noqa --target-version py38 $(SWEEP_GUARD)
+	cd scripts && uv run --locked --project ../tests/integration ty check --python-version 3.8 $(SWEEP_GUARD)
 	$(call PY_GATE,scripts,--project ../tests/integration,,. --cov=../packages/preset/skills/ship-issue)
 	mkdir -p packages/preset/coverage/sweep-guard
 	cd scripts && uv run --locked --project ../tests/integration coverage lcov --include='*/ship-issue/sweep_guard.py' -o ../packages/preset/coverage/sweep-guard/lcov.info
