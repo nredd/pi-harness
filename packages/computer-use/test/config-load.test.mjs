@@ -2,7 +2,6 @@
 import assert from "node:assert/strict";
 import * as nodeFs from "node:fs";
 import { mkdirSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
@@ -60,7 +59,7 @@ afterEach(() => {
 	}
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	loadComputerUseConfig(path.join(os.tmpdir(), "cu-config-reset"));
+	loadComputerUseConfig(path.join(root, "reset"));
 });
 
 describe("defaults", () => {
