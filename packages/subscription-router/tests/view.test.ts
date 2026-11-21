@@ -112,6 +112,16 @@ it("projects readonly arrays without sharing mutable input data", () => {
 	expect(view).toStrictEqual(expected);
 });
 
+it("selects the latest snapshot per provider, keeping the first on ties", () => {
+	const base = { provider: "faux", status: "available", retrievedAt: 1, expiresAt: 10, windows: [] } as const;
+	const older = { ...base, windows: [] };
+	const newest = { ...older, retrievedAt: 3, message: "first at 3" };
+	const tied = { ...newest, message: "second at 3" };
+	const other = { ...older, provider: "other", retrievedAt: 4 };
+	const [view] = describe(["faux"], [older, newest, tied, other, older], []);
+	expect(view?.snapshot).toStrictEqual(newest);
+});
+
 it("prefers a supplied display and preserves explicit subscription access", () => {
 	const reading = {
 		provider: "anthropic",

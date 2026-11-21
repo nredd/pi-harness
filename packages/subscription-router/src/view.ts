@@ -46,6 +46,7 @@ function defaultDisplay(provider: string): ProviderDisplay {
 
 /**
  * Project providers in caller order, with their latest snapshots and already-active marks.
+ * For equal retrievedAt values, keep the first snapshot in input order.
  * Copy the view data without changing readings (including assumed spans and stale/error status)
  * so consumers can retain legacy rendering. Never infer access from a provider id or a mark.
  */
@@ -55,8 +56,15 @@ export function describe(
 	marks: readonly ExhaustionMark[],
 	displays?: ReadonlyMap<string, ProviderDisplay>,
 ): readonly ProviderView[] {
+	const latest = new Map<string, ViewSnapshot>();
+	for (const reading of snapshots) {
+		const previous = latest.get(reading.provider);
+		if (previous === undefined || reading.retrievedAt > previous.retrievedAt) {
+			latest.set(reading.provider, reading);
+		}
+	}
 	return providers.map((provider) => {
-		const snapshot = snapshots.find((reading) => reading.provider === provider);
+		const snapshot = latest.get(provider);
 		return structuredClone({
 			provider,
 			display: displays?.get(provider) ?? defaultDisplay(provider),
