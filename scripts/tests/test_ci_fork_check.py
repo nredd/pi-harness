@@ -128,14 +128,20 @@ def test_bash_parity(toolchain: Path, suffix: str, fail: list[str], status: int,
     assert execute([sys.executable, str(SCRIPT)], toolchain, fail) == oracle
 
 
-@pytest.mark.parametrize(("name", "status", "count"), [("node", 127, 0), ("npm", 126, 3)])
-def test_tool_lookup_failure(toolchain: Path, name: str, status: int, count: int) -> None:
+@pytest.mark.parametrize(
+    ("name", "status", "bash_statuses", "count"),
+    [("node", 127, (127,), 0), ("npm", 126, (1, 126), 3)],
+)
+def test_tool_lookup_failure(
+    toolchain: Path, name: str, status: int, bash_statuses: tuple[int, ...], count: int
+) -> None:
     """Match the oracle's exact launch diagnostic, exit, and preceding commands.
 
     Parameters:
         toolchain (Path): Stub toolchain and checkout.
         name (str): Tool whose launch should fail.
-        status (int): Expected shell exit status.
+        status (int): Expected CLI exit status.
+        bash_statuses (tuple[int, ...]): Shell exit statuses across Bash versions.
         count (int): Expected number of invocations before failure.
     """
     tool = toolchain / name
@@ -146,10 +152,7 @@ def test_tool_lookup_failure(toolchain: Path, name: str, status: int, count: int
     write_probe(toolchain, "")
     oracle = execute([BASH, "-e", "fork-check"], toolchain, [])
     # macOS system Bash 3.2 exits 1 for EACCES; the hosted Bash exits 126.
-    if sys.platform == "darwin" and BASH == "/bin/bash" and name == "npm":
-        assert oracle[0] == 1
-    else:
-        assert oracle[0] == status
+    assert oracle[0] in bash_statuses
     assert len(oracle[3].splitlines()) == count
     assert execute([sys.executable, str(SCRIPT)], toolchain, []) == (status, *oracle[1:])
 
