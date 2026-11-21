@@ -43,6 +43,10 @@ def test_publisher_plan_excludes_windows_only_signals(host: str) -> None:
 
     Parameters:
         host (str): Publisher artifact host.
+    Returns:
+        None: The host plan excludes Windows evidence.
+    Raises:
+        AssertionError: A Windows-only signal appears in the plan.
     """
     policy = pub.read_summary(POLICY)
     plan = pub.host_plan(policy, host, "available")

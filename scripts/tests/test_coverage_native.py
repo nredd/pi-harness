@@ -373,6 +373,8 @@ def alter_windows_counters(lcov: str, files: list[dict[str, Any]], signal: Signa
     """
     if case == "stale-totals":
         files[0]["summary"]["lines"]["covered"] = 0
+    if case == "stale-function-totals":
+        files[0]["summary"]["functions"]["covered"] = 0
     if case == "forged-hits":
         for file in files[:-1]:
             for metric in ("lines", "functions"):
@@ -399,6 +401,7 @@ def alter_windows_counters(lcov: str, files: list[dict[str, Any]], signal: Signa
         ("older-inputs", "metadata source hashes differ"),
         ("missing-source", "source lists differ"),
         ("stale-totals", "counters differ"),
+        ("stale-function-totals", "counters differ"),
         ("forged-hits", "Inconsistent LLVM LCOV line detail"),
         ("stripped-detail", "Inconsistent LLVM LCOV line detail"),
         ("over-budget", "Budget exceeded"),
