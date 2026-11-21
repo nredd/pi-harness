@@ -421,7 +421,7 @@
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 930, "functions": 125 } },
+          "max_uncovered": { "linux": { "lines": 930, "functions": 123 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
