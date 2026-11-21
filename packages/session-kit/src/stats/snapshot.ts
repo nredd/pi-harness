@@ -958,14 +958,13 @@ export async function exportStats(
 		const old = carried(previous, h);
 		// A harness that cannot be read, or that vanished while we hold data for it, keeps its last published
 		// contents: it must not take the pi export down, nor be replaced by an empty or partial scan.
+		const wasLost = state.lostHarnesses.includes(h);
 		const gone =
 			!scan.found &&
 			!options.replaceHarnesses &&
-			(old === null
-				? (state.historyHarnesses?.includes(h) ?? false)
-				: old.calls.length + old.quota.length > 0 || state.lostHarnesses.includes(h));
-		const missingHistory =
-			old === null || (state.lostHarnesses.includes(h) && old.calls.length === 0 && old.quota.length === 0);
+			(wasLost ||
+				(old === null ? (state.historyHarnesses?.includes(h) ?? false) : old.calls.length + old.quota.length > 0));
+		const missingHistory = old === null || (wasLost && old.calls.length === 0 && old.quota.length === 0);
 		const failed = scan.problems.some(fatalProblem) || gone;
 		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
 		const problems = [
@@ -976,7 +975,7 @@ export async function exportStats(
 		if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
 		// Carried data is as fresh as it was: the previous snapshot's own mark, else when it was published.
 		const was = previous !== null && previous !== "unreadable" ? previous.manifest : undefined;
-		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? (missingHistory ? undefined : was?.exportedAt)) : exportedAt;
+		const lastGood = !failed ? exportedAt : missingHistory ? undefined : (was?.lastGoodAt?.[h] ?? was?.exportedAt);
 		// Never after the export itself: a carried mark from a snapshot written under a faster clock must stay valid.
 		if (lastGood !== undefined) lastGoodAt[h] = Math.min(lastGood, exportedAt);
 		report[h] = {
