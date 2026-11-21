@@ -2,7 +2,68 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { CONFIG_FILE, loadConfig, parseConfig } from "../src/config.ts";
+import { CONFIG_FILE, parseConfig as currentParseConfig, loadConfig, parseConfigDocument } from "../src/config.ts";
+import { loadConfig as baseLoadConfig, parseConfig as baseParseConfig } from "./fixtures/base-config-parser.ts";
+import { POLICY_CASES } from "./fixtures/policy-cases.ts";
+
+function outcome(parse: typeof currentParseConfig, input: unknown) {
+	try {
+		const profiles = parse(input);
+		return { profiles, serialized: JSON.stringify(profiles) };
+	} catch (error) {
+		return { error: (error as Error).message };
+	}
+}
+
+// Run every pre-provider parser case against the pinned base as well as its explicit expectations.
+function parseConfig(input: unknown) {
+	const actual = currentParseConfig(input);
+	const base = baseParseConfig(input);
+	expect(actual).toStrictEqual(base);
+	expect(JSON.stringify(actual)).toBe(JSON.stringify(base));
+	return actual;
+}
+
+async function loadLegacyConfig(dir: string) {
+	const result = await loadConfig(dir);
+	expect(result).toStrictEqual(await baseLoadConfig(dir));
+	return result;
+}
+
+function expectLegacyProfiles(document: unknown): void {
+	expect(parseConfigDocument(document)).toStrictEqual({ profiles: parseConfig(document) });
+}
+
+it.each(["subscription-router", "policies"])("preserves the existing %s config example", async (name) => {
+	expectLegacyProfiles(JSON.parse(await readFile(new URL(`../examples/${name}.json`, import.meta.url), "utf8")));
+});
+
+it.each(POLICY_CASES)("preserves the existing policy config fixture $policy", ({ policy, valid }) => {
+	const document = { profiles: { test: { policy, chain: [{ model: "p/a" }] } } };
+	if (valid) expectLegacyProfiles(document);
+	else {
+		const actual = outcome(currentParseConfig, document);
+		expect(actual).toStrictEqual(outcome(baseParseConfig, document));
+		expect(actual.error).toMatch(/^profiles\.test\.policy/);
+	}
+});
+
+it("keeps unknown root, profile and chain keys ignored and omits missing providers", () => {
+	const document = { unknown: true, profiles: { a: { chain: [{ model: "p/a", unknown: true }], unknown: true } } };
+	expectLegacyProfiles(document);
+});
+
+it("keeps provider IDs and model limits independent of Object.prototype", () => {
+	const raw = JSON.parse(
+		'{"profiles":{},"providers":{"__proto__":{"label":{"full":"New Provider","compact":"New"},"windows":[{"name":"quota","kind":"rolling","durationMinutes":1,"scope":"model","unit":"tokens","limits":{"__proto__":25}}]}}}',
+	);
+	const { providers } = parseConfigDocument(raw);
+	expect(Object.getPrototypeOf(providers)).toBeNull();
+	expect(providers?.constructor).toBeUndefined();
+	const limits = Object.values(providers ?? {})[0]?.windows?.[0]?.limits;
+	expect(Object.getPrototypeOf(limits)).toBeNull();
+	expect(limits).toEqual(JSON.parse('{"__proto__":25}'));
+});
 
 describe("parseConfig", () => {
 	it("ships valid opt-in cheap and frontier profiles rather than registering implicit defaults", async () => {
@@ -101,16 +162,74 @@ describe("parseConfig", () => {
 		[{ profiles: { a: { chain: [{ model: "a/b" }, { model: "a/b" }] } } }, /a\/b is listed twice/],
 		[{ profiles: { a: { name: 3, chain: [{ model: "a/b" }] } } }, /profiles.a.name/],
 	])("rejects %j", (raw, message) => {
-		expect(() => parseConfig(raw)).toThrow(message);
+		const actual = outcome(currentParseConfig, raw);
+		expect(actual).toStrictEqual(outcome(baseParseConfig, raw));
+		expect(actual.error).toMatch(message);
 	});
 });
 
 describe("loadConfig", () => {
+	it("loads arbitrary provider and collector IDs from disk without registering profiles or inserting defaults", async () => {
+		const dir = makeTestTempDir("router-config-", onTestFinished);
+		const raw = await readFile(new URL("../examples/providers.json", import.meta.url), "utf8");
+		await writeFile(join(dir, CONFIG_FILE), raw);
+		const result = await loadConfig(dir);
+		expect(result).toEqual({ ok: true, ...JSON.parse(raw), profiles: [] });
+	});
+
+	it("rejects the whole file when a provider declaration fails", async () => {
+		const dir = makeTestTempDir("router-config-", onTestFinished);
+		const path = join(dir, CONFIG_FILE);
+		await writeFile(
+			path,
+			JSON.stringify({ profiles: { a: { chain: [{ model: "p/a" }] } }, providers: { p: { typo: 1 } } }),
+		);
+		expect(await loadConfig(dir)).toEqual({ ok: false, error: `${path}: providers.p.typo: unknown key` });
+	});
+
+	it("rejects the whole file and returns no profiles when the newly reserved providers key is null", async () => {
+		const dir = makeTestTempDir("router-config-", onTestFinished);
+		const path = join(dir, CONFIG_FILE);
+		await writeFile(path, JSON.stringify({ profiles: { a: { chain: [{ model: "p/a" }] } }, providers: null }));
+		expect(await baseLoadConfig(dir)).toEqual({
+			ok: true,
+			profiles: [{ id: "a", name: "Router a", chain: [{ provider: "p", id: "a" }] }],
+		});
+		expect(await loadConfig(dir)).toStrictEqual({ ok: false, error: `${path}: providers: expected an object` });
+	});
+
+	it("rejects a syntactically valid but unknown IANA zone", () => {
+		expect(() =>
+			currentParseConfig({
+				profiles: {},
+				providers: {
+					p: {
+						windows: [
+							{
+								name: "daily",
+								unit: "requests",
+								scope: "model",
+								kind: "calendar",
+								resetRule: { at: "00:00", timeZone: "Unknown/Nowhere", every: "day" },
+							},
+						],
+					},
+				},
+			}),
+		).toThrow('providers.p.windows[0].resetRule.timeZone: unknown IANA time zone "Unknown/Nowhere"');
+	});
+
+	it("rejects limits that overflow to infinity when decoded", () => {
+		const raw = JSON.parse(
+			'{"profiles":{},"providers":{"p":{"windows":[{"name":"spend","kind":"rolling","durationMinutes":10,"unit":"usd","scope":"provider","limits":1e999}]}}}',
+		);
+		expect(() => currentParseConfig(raw)).toThrow("providers.p.windows[0].limits: expected a finite positive number");
+	});
 	it("treats a missing file as no profiles and reports invalid JSON with the path", async () => {
 		const dir = makeTestTempDir("router-config-", onTestFinished);
-		expect(await loadConfig(dir)).toEqual({ ok: true, profiles: [] });
+		expect(await loadLegacyConfig(dir)).toEqual({ ok: true, profiles: [] });
 		await writeFile(join(dir, CONFIG_FILE), "{ nope");
-		const result = await loadConfig(dir);
+		const result = await loadLegacyConfig(dir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toContain(join(dir, CONFIG_FILE));
 	});
@@ -118,7 +237,7 @@ describe("loadConfig", () => {
 	it("reports filesystem errors other than a missing config", async () => {
 		const dir = makeTestTempDir("router-config-", onTestFinished);
 		await mkdir(join(dir, CONFIG_FILE));
-		const result = await loadConfig(dir);
+		const result = await loadLegacyConfig(dir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error.startsWith(`${join(dir, CONFIG_FILE)}: EISDIR`)).toBe(true);
 	});
@@ -126,7 +245,7 @@ describe("loadConfig", () => {
 	it("reports a well-formed document that fails validation with the path and the validation error", async () => {
 		const dir = makeTestTempDir("router-config-", onTestFinished);
 		await writeFile(join(dir, CONFIG_FILE), JSON.stringify({ profiles: { a: { chain: [] } } }));
-		expect(await loadConfig(dir)).toEqual({
+		expect(await loadLegacyConfig(dir)).toEqual({
 			ok: false,
 			error: `${join(dir, CONFIG_FILE)}: profiles.a.chain: expected a non-empty array`,
 		});
