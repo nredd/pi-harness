@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Bound Linux AT-SPI2 D-Bus requests so an unresponsive accessibility peer cannot leave a request pending indefinitely (#1167).
 - On macOS, recheck blocked apps before publishing a paste, reject out-of-range PIDs before any batch action runs, and reserve drag mouse-up before sending input so an allocation failure reports `input_failed` without leaving the button held (#1164).
 
 ### Removed
