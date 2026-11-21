@@ -274,7 +274,7 @@ def test_artifact_transport_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert pub.fetch_evidence(api, pub.Run.parse(api.data), tmp_path) == "unavailable"
 
 
-def unavailable_download(*args: object) -> None:
+def unavailable_download(*args: object, **kwargs: object) -> None:
     """Simulate expiry between listing and download.
 
     Parameters:
@@ -537,7 +537,7 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "userinfo": "https://u@artifact.example/a",
     }.get(case, "https://artifact.example/a")
 
-    def request(self: pub.GitHub, path: str) -> None:
+    def request(self: pub.GitHub, path: str, *, timeout: float) -> None:
         """Simulate GitHub's signed redirect response.
 
         Parameters:
@@ -549,6 +549,7 @@ def test_signed_download(case: str, tmp_path: Path, monkeypatch: pytest.MonkeyPa
             AssertionError: An expected contract does not hold.
         """
         assert path == "actions/artifacts/8/zip"
+        assert timeout == 30
         if case != "no-redirect":
             headers = Message()
             headers["Location"] = url

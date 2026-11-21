@@ -12,12 +12,15 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.client import HTTPException
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
@@ -56,6 +59,9 @@ ORDER = re.compile(r"<!-- ci:([1-9][0-9]{0,19}):([1-9][0-9]{0,19}) -->")
 BOT_ID = 41898282  # github-actions[bot] user ID from GET /users/github-actions%5Bbot%5D.
 MAX_METADATA_BYTES = 8 * 1024 * 1024
 MAX_MAIN_RUNS = 10
+MAIN_LOOKUP_SECONDS = 90
+REQUEST_SECONDS = 30
+BUDGET_NOTICE = "Main baseline lookup exhausted its 90-second budget."
 BASELINE_NOTICE = "Main baselines are selected by CI run recency, not the PR merge base."
 PR_NOTICE = (
     "Coverage numbers come from this PR's own CI run (PR-controlled code) and are not independently "
@@ -71,6 +77,47 @@ class NoRedirect(HTTPRedirectHandler):
         """Return None so urllib surfaces the redirect without contacting its target."""
 
 
+class BaselineTimeout(Exception):
+    """Main baseline lookup exhausted its separate wall-clock budget."""
+
+
+def expire_baselines(_signum: int, _frame: object) -> None:
+    """Interrupt baseline work even when an HTTP peer keeps the socket active.
+
+    Parameters:
+        _signum (int): Alarm signal number.
+        _frame (object): Interrupted frame, unused.
+    Returns:
+        None.
+    Raises:
+        BaselineTimeout: The publisher's baseline alarm expired.
+    """
+    raise BaselineTimeout
+
+
+@dataclass(frozen=True)
+class BaselineDeadline:
+    """Absolute monotonic deadline for baseline requests."""
+
+    end: float
+    clock: Callable[[], float]
+
+    def timeout(self) -> float:
+        """Cap the next request's timeout by the remaining baseline budget.
+
+        Parameters:
+            None.
+        Returns:
+            float: Positive socket timeout in seconds.
+        Raises:
+            BaselineTimeout: No baseline time remains.
+        """
+        remaining = self.end - self.clock()
+        if remaining <= 0:
+            raise BaselineTimeout
+        return min(REQUEST_SECONDS, remaining)
+
+
 @dataclass(frozen=True)
 class GitHub:
     """Repository-scoped GitHub API and anonymous signed-download transport."""
@@ -78,13 +125,21 @@ class GitHub:
     repository: str
     token: str
 
-    def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
+    def request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+        *,
+        timeout: float = REQUEST_SECONDS,
+    ) -> Any:
         """Read a bounded repository API response or surface its HTTP error.
 
         Parameters:
             path (str): Repository-relative API route.
             method (str): HTTP method.
             body (dict[str, Any] | None): Optional JSON write payload.
+            timeout (float): Maximum socket wait in seconds.
         Returns:
             Any: Decoded response.
         Raises:
@@ -102,7 +157,7 @@ class GitHub:
             },
             method=method,
         )
-        with build_opener(NoRedirect()).open(req, timeout=30) as response:
+        with build_opener(NoRedirect()).open(req, timeout=timeout) as response:
             raw = response.read(MAX_METADATA_BYTES + 1)
         if len(raw) > MAX_METADATA_BYTES:
             raise ValueError("GitHub response exceeds size limit")
@@ -132,21 +187,28 @@ class GitHub:
                 return rows
         raise ValueError("GitHub census exceeds page limit")
 
-    def download(self, artifact_id: int, destination: Path) -> None:
+    def download(
+        self, artifact_id: int, destination: Path, *, deadline: BaselineDeadline | None = None
+    ) -> None:
         """Write bounded ZIP bytes, never extract, and keep the token off the signed URL.
 
         Parameters:
             artifact_id (int): GitHub artifact identity.
             destination (Path): Private path for the ZIP.
+            deadline (BaselineDeadline | None): Optional shared main lookup budget.
         Returns:
             None: Downloaded ZIP is present.
         Raises:
             OSError: GitHub or storage request failed.
             ValueError: Download exceeded its bound or lacked a signed redirect.
+            BaselineTimeout: The baseline lookup budget expired.
         """
         try:
             try:
-                self.request(f"actions/artifacts/{artifact_id}/zip")
+                self.request(
+                    f"actions/artifacts/{artifact_id}/zip",
+                    timeout=REQUEST_SECONDS if deadline is None else deadline.timeout(),
+                )
             except HTTPError as error:
                 url = error.headers.get("Location", "")
                 error.close()
@@ -155,7 +217,12 @@ class GitHub:
                     raise
             else:
                 raise ValueError("Expected a signed artifact redirect")
-            with build_opener(NoRedirect()).open(url, timeout=30) as response, destination.open("wb") as out:
+            with (
+                build_opener(NoRedirect()).open(
+                    url, timeout=REQUEST_SECONDS if deadline is None else deadline.timeout()
+                ) as response,
+                destination.open("wb") as out,
+            ):
                 remaining = MAX_ARCHIVE_BYTES
                 while chunk := response.read(min(remaining + 1, 1024 * 1024)):
                     remaining -= len(chunk)
@@ -321,6 +388,7 @@ def fetch_evidence(
     *,
     census: Census | None = None,
     repository_id: int | None = None,
+    deadline: BaselineDeadline | None = None,
 ) -> str:
     """Determine NOT RUN from the attempt job, or download its unique bounded artifact.
 
@@ -335,6 +403,7 @@ def fetch_evidence(
         census (Census | None): Preloaded attempt jobs and run-wide artifacts; otherwise fetch on demand.
         repository_id (int | None): For main pushes, require a successful producer and bind the
             artifact to this repository ID, head repository ID, run, branch and head SHA.
+        deadline (BaselineDeadline | None): Optional shared main lookup budget.
     Returns:
         str: One of `available`, `NOT RUN` or `unavailable`.
     Raises:
@@ -342,6 +411,7 @@ def fetch_evidence(
         KeyError: Required metadata is missing.
         TypeError: Metadata has an unexpected shape.
         ValueError: Metadata or the main producer binding is invalid.
+        BaselineTimeout: The baseline lookup budget expired.
     """
     jobs = (
         api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
@@ -388,7 +458,7 @@ def fetch_evidence(
     ):
         raise ValueError("Main coverage artifact does not belong to its producer")
     try:
-        api.download(positive_id(row["id"]), directory / f"{artifact}.zip")
+        api.download(positive_id(row["id"]), directory / f"{artifact}.zip", deadline=deadline)
     except (OSError, ValueError):
         # Signed URLs can expire and downloads can race artifact deletion. Never log the URL.
         LOGGER.warning("Coverage artifact download unavailable")
@@ -429,12 +499,12 @@ def host_plan(policy: dict[str, object], host: str, state: str) -> dict[str, obj
     signals = {}
     for name, raw_package in object_value(policy["packages"]).items():
         package: Any = raw_package
-        for label, signal in package.get("signals", {}).items():
-            skipped = os_name in (*signal.get("skip_hosts", []), *signal.get("skip_os", []))
+        for label, cfg in package.get("signals", {}).items():
+            skipped = os_name in (*cfg.get("skip_hosts", []), *cfg.get("skip_os", []))
             signals[f"{name}/{label}"] = {
-                "enforcement": signal.get("enforcement", "enforced"),
-                "reason": signal.get("reason", ""),
-                "semantics": signal.get("producer", "lcov"),
+                "enforcement": cfg.get("enforcement", "enforced"),
+                "reason": cfg.get("reason", ""),
+                "semantics": cfg.get("producer", "lcov"),
                 "state": "NOT RUN" if skipped else "planned",
                 "source_root": "" if package["root"] == "." else package["root"],
             }
@@ -480,9 +550,13 @@ def render(api: GitHub, run: Run, number: int, tested: str | None, policy: Path)
         state = fetch_evidence(api, run, directory)
         write_plan(policy, manifest, state)
         evidence = load_evidence(directory, manifest, provenance)
-        baselines = main_baselines(api, run, read_summary(policy)) if state == "available" else {}
+        baselines = {}
         if state == "available":
             prefix += BASELINE_NOTICE + "\n\n"
+            try:
+                baselines = main_baselines(api, run, read_summary(policy))
+            except BaselineTimeout:
+                prefix += BUDGET_NOTICE + "\n\n"
             for host in COVERAGE_HOSTS:
                 entry = baselines.get(host)
                 if entry is None:
@@ -610,13 +684,16 @@ def main_run(api: GitHub, data: Any, trigger: Run) -> tuple[Run, int]:
     return run, repo_id
 
 
-def main_page(api: GitHub, path: str, key: str, *, limit: int = 100, **params: str) -> list[Any]:
+def main_page(
+    api: GitHub, path: str, key: str, deadline: BaselineDeadline, *, limit: int = 100, **params: str
+) -> list[Any]:
     """Read one bounded page, requiring the full census for jobs and artifacts.
 
     Parameters:
         api (GitHub): Repository-scoped transport.
         path (str): Repository-relative listing route.
         key (str): GitHub list envelope key.
+        deadline (BaselineDeadline): Shared main lookup budget.
         limit (int): Page size; the default of 100 requires a complete census.
         **params (str): Collection filters.
     Returns:
@@ -626,8 +703,12 @@ def main_page(api: GitHub, path: str, key: str, *, limit: int = 100, **params: s
         KeyError: The response is missing envelope fields.
         TypeError: The response does not have the expected shape.
         ValueError: The census is invalid or truncated.
+        BaselineTimeout: The baseline lookup budget expired.
     """
-    data = api.request(f"{path}?{urlencode(params | {'per_page': limit, 'page': 1})}")
+    data = api.request(
+        f"{path}?{urlencode(params | {'per_page': limit, 'page': 1})}", timeout=deadline.timeout()
+    )
+    deadline.timeout()
     rows = data[key]
     if not isinstance(rows, list) or len(rows) > limit or (limit == 100 and data["total_count"] != len(rows)):
         raise ValueError("Invalid or truncated main coverage census")
@@ -642,6 +723,7 @@ def main_cell(
     census: Census,
     *,
     policy: dict[str, object],
+    deadline: BaselineDeadline,
 ) -> Evidence | None:
     """Read the main artifact through the same attempt, ZIP and sidecar validation as the PR.
 
@@ -652,10 +734,11 @@ def main_cell(
         host (str): Coverage artifact host.
         census (Census): Attempt jobs and run-wide artifacts for `source`.
         policy (dict[str, object]): Trusted policy used to describe comparable signals.
+        deadline (BaselineDeadline): Shared main lookup budget.
     Returns:
         Evidence | None: Validated measurement, or None for unavailable evidence.
     Raises:
-        None.
+        BaselineTimeout: The baseline lookup budget expired.
     """
     provenance = Provenance(
         api.repository,
@@ -670,7 +753,9 @@ def main_cell(
         with TemporaryDirectory() as temp:
             directory = Path(temp)
             if (
-                fetch_evidence(api, source, directory, host, census=census, repository_id=repo_id)
+                fetch_evidence(
+                    api, source, directory, host, census=census, repository_id=repo_id, deadline=deadline
+                )
                 != "available"
             ):
                 return None
@@ -705,24 +790,34 @@ def macos_cancelled(jobs: list[Any]) -> bool:
     )
 
 
-def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict[str, tuple[Run, Evidence]]:
-    """Select by push run recency; allow a missing macOS artifact only after cancellation.
+def main_baselines(
+    api: GitHub, trigger: Run, policy: dict[str, object], *, clock: Callable[[], float] | None = None
+) -> dict[str, tuple[Run, Evidence]]:
+    """Select baselines by push recency under a publisher-only POSIX alarm.
+
+    Called on the workflow's main thread; the publisher owns `ITIMER_REAL`.
 
     Parameters:
         api (GitHub): Repository-scoped transport.
         trigger (Run): PR execution identifying the CI workflow independently of its base branch.
         policy (dict[str, object]): Trusted signal policy.
+        clock (Callable[[], float] | None): Monotonic clock; defaults to `monotonic`.
     Returns:
         dict[str, tuple[Run, Evidence]]: Validated main baselines keyed by coverage host.
     Raises:
-        None.
+        BaselineTimeout: The baseline lookup budget expired.
     """
+    clock = monotonic if clock is None else clock
+    deadline = BaselineDeadline(clock() + MAIN_LOOKUP_SECONDS, clock)
+    previous_handler = signal.signal(signal.SIGALRM, expire_baselines)
     baselines = {}
     try:
+        signal.setitimer(signal.ITIMER_REAL, MAIN_LOOKUP_SECONDS)
         rows = main_page(
             api,
             f"actions/workflows/{trigger.workflow_id}/runs",
             "workflow_runs",
+            deadline,
             limit=MAX_MAIN_RUNS,
             event="push",
             branch="main",
@@ -737,11 +832,12 @@ def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict
         hosts = tuple(COVERAGE_HOSTS)
         for source, repo_id in sorted(runs, key=lambda entry: entry[0].order, reverse=True):
             route = f"actions/runs/{source.id}"
-            jobs = main_page(api, f"{route}/attempts/{source.attempt}/jobs", "jobs")
-            artifacts = main_page(api, f"{route}/artifacts", "artifacts")
+            jobs = main_page(api, f"{route}/attempts/{source.attempt}/jobs", "jobs", deadline)
+            artifacts = main_page(api, f"{route}/artifacts", "artifacts", deadline)
             census = Census(jobs=jobs, artifacts=artifacts)
             for host in hosts:
-                cell = main_cell(api, source, repo_id, host, census, policy=policy)
+                cell = main_cell(api, source, repo_id, host, census, policy=policy, deadline=deadline)
+                deadline.timeout()
                 if cell is not None:
                     baselines[host] = source, cell
             # The artifact endpoint is run-wide. Only the selected attempt's upload window
@@ -757,8 +853,12 @@ def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict
             if hosts != ("macos-14",) and not macos_cancelled(jobs):
                 break
             hosts = ("macos-14",)
-    except (KeyError, OSError, TypeError, ValueError):
+    except (KeyError, OSError, HTTPException, TypeError, ValueError):
+        deadline.timeout()
         LOGGER.warning("Main coverage census unavailable")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
     return baselines
 
 

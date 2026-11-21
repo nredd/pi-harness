@@ -596,7 +596,9 @@ Limits:
 - Baselines follow CI run recency, not the PR merge base. A newer successful push can change the
   baseline for an unchanged PR.
 - The search uses one page of up to 10 successful runs. It shares one jobs and one artifacts listing
-  per inspected run (at most 21 baseline list requests, no per-file API reads).
+  per inspected run (at most 21 baseline list requests, no per-file API reads). A separate
+  90-second wall-clock budget caps listings and downloads to leave time for the freshness
+  checks and comment write. If it expires, the comment reports baselines unavailable.
 - The publisher runs default-branch code and never executes anything from artifacts. It has
   `actions: read`, `contents: read` for checkout and `pull-requests: write` for the sticky comment.
 - The fingerprint hashes whole files: even a comment-only change in `workflow-examples.test.ts`

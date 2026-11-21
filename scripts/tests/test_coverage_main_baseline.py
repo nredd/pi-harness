@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import signal
 from email.message import Message
 from http.client import IncompleteRead
 from pathlib import Path
@@ -151,7 +152,14 @@ class MainGitHub(RecordingGitHub):
         self.listed[f"{route}/artifacts"] = {"artifacts": artifacts}
         return jobs, artifacts
 
-    def request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
+    def request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+        *,
+        timeout: float = pub.REQUEST_SECONDS,
+    ) -> Any:
         """Check query bounds and reject any unexpected read or non-comment write.
 
         Parameters:
@@ -183,7 +191,9 @@ class MainGitHub(RecordingGitHub):
         (rows,) = listing.values()
         return {"total_count": len(rows), **listing}
 
-    def download(self, artifact_id: int, destination: Path) -> None:
+    def download(
+        self, artifact_id: int, destination: Path, *, deadline: pub.BaselineDeadline | None = None
+    ) -> None:
         """Write a producer ZIP or simulate one selected archive failure.
 
         Parameters:
@@ -511,7 +521,7 @@ def test_bad_census(failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
     api.add(main_push(20))
     read = MainGitHub.request
 
-    def request(self: MainGitHub, path: str) -> Any:
+    def request(self: MainGitHub, path: str, *, timeout: float) -> Any:
         """Corrupt the requested bounded response.
 
         Parameters:
@@ -521,7 +531,7 @@ def test_bad_census(failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
         Raises:
             HTTPError: Injected transport failure.
         """
-        data = read(self, path)
+        data = read(self, path, timeout=timeout)
         if failure == "http":
             raise HTTPError(path, 403, "denied", Message(), None)
         if failure == "bad-list":
@@ -589,11 +599,66 @@ def test_cancellation_bound() -> None:
     for number in range(30, 20, -1):
         api.add(main_push(number), cancelled=True)
     api.add(main_push(20))
-    baselines = pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY))
+    baselines = pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY), clock=lambda: 0)
     assert set(baselines) == {UBUNTU}
     assert baselines[UBUNTU][0].id == 230
     assert len(api.reads) == 21
     assert api.downloads == [2300]
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_slow_main_lookup_still_posts(
+    interrupt: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Leave time to recheck freshness and post despite a slow baseline census.
+
+    Parameters:
+        interrupt (bool): Fire the hard alarm mid-request instead of advancing the clock.
+        tmp_path (Path): Isolated summary directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped clock and transport overrides.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The budget did not cap the lookup or prevent a stale alarm.
+    """
+    api = MainGitHub()
+    for number in range(30, 20, -1):
+        api.add(main_push(number), cancelled=True)
+    elapsed = 0
+    timeouts: list[float] = []
+    request = MainGitHub.request
+    handler = signal.getsignal(signal.SIGALRM)
+
+    def slow_request(
+        self: MainGitHub,
+        path: str,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+        *,
+        timeout: float = 30,
+    ) -> Any:
+        """Charge 15 seconds for each baseline listing, not for PR requests."""
+        nonlocal elapsed
+        if "?" in path:
+            timeouts.append(timeout)
+            if interrupt:
+                assert signal.getitimer(signal.ITIMER_REAL)[0] > 0
+                signal.raise_signal(signal.SIGALRM)
+            elapsed += 15
+        return request(self, path, method, body, timeout=timeout)
+
+    monkeypatch.setattr(pub, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(MainGitHub, "request", slow_request)
+    summary = tmp_path / "summary.md"
+    pub.publish(api, pub.Run.parse(api.data), POLICY, summary)
+    (write,) = api.writes
+    assert timeouts == ([30] if interrupt else [30, 30, 30, 30, 30, 15])
+    assert signal.getsignal(signal.SIGALRM) == handler
+    assert signal.getitimer(signal.ITIMER_REAL) == (0, 0)
+    assert "Main baseline lookup exhausted its 90-second budget." in write[2]["body"]
+    for host in ("Ubuntu", "macOS"):
+        assert f"{host} measured main baseline: unavailable." in write[2]["body"]
+    assert summary.read_text() == write[2]["body"] + "\n"
 
 
 def test_legacy_baseline_still_has_identity() -> None:

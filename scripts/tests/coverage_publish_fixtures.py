@@ -118,7 +118,14 @@ class RecordingGitHub(pub.GitHub):
         self.record = dict(run.record(producer_job("ubuntu-24.04", shard=False), ARTIFACT))
         self.fingerprint = None
 
-    def request(self, path: str, method: str = "GET", body: dict[str, str] | None = None) -> Any:
+    def request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict[str, str] | None = None,
+        *,
+        timeout: float = pub.REQUEST_SECONDS,
+    ) -> Any:
         """Return resource data and apply sticky writes to the recording store.
 
         Parameters:
@@ -171,7 +178,9 @@ class RecordingGitHub(pub.GitHub):
             "issues/4/comments": self.comments,
         }[path]
 
-    def download(self, artifact_id: int, destination: Path) -> None:
+    def download(
+        self, artifact_id: int, destination: Path, *, deadline: pub.BaselineDeadline | None = None
+    ) -> None:
         """Package real fixture counts with the synthetic attempt metadata.
 
         Parameters:
