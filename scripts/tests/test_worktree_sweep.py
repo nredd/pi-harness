@@ -694,7 +694,7 @@ def test_submodule_work_is_kept(wt: Worktrees, state: str) -> None:
 @pytest.mark.parametrize(
     ("states", "reason"),
     [
-        ("[]", "no unique merged PR"),
+        ("[]", "upstream not checked"),
         ('[{"state":"CLOSED"}]', "no unique merged PR"),
         ('[{"state":"MERGED","number":123},{"state":"OPEN","number":456}]', "open PR"),
     ],
@@ -773,54 +773,45 @@ def test_command_diagnostics_including_whitespace_keep(wt: Worktrees) -> None:
     keep(wt, "failed (0)", SWEEP_WARNING=" \n")
 
 
-@pytest.mark.parametrize("state", ["current", "missing", "stale", "ahead"])
-def test_future_seam_needs_live_current_upstream_containing_head(wt: Worktrees, state: str) -> None:
-    upstream = wt.repo.parent / "upstream.git"
-    upstream.mkdir()
-    git(upstream, "init", "--bare", "--template=")
-    git(wt.path, "remote", "add", "parked", str(upstream))
-    git(wt.path, "push", "-u", "parked", "merged")
-    if state == "missing":
-        git(upstream, "update-ref", "-d", "refs/heads/merged")
-    elif state == "stale":
-        git(wt.repo, "commit", "--allow-empty", "-m", "Remote change")
-        git(wt.repo, "push", str(upstream), "HEAD:refs/heads/merged")
-    elif state == "ahead":
-        git(wt.path, "commit", "--allow-empty", "-m", "Unpushed")
+@pytest.mark.parametrize(
+    ("url", "pr_list", "reason"),
+    [
+        ("git@github.com:source/project.git", "[]", "upstream not checked"),
+        ("https://github.com/source/project.git", "[]", "upstream not checked"),
+        (
+            "git@github.com:source/project.git",
+            '[{"number": 123, "state": "MERGED"}]',
+            "tracked worktree changes were not compared",
+        ),
+    ],
+)
+def test_remote_bearing_candidate_never_runs_configured_programs(
+    wt: Worktrees, url: str, pr_list: str, reason: str
+) -> None:
+    git(wt.path, "remote", "set-url", "origin", url)
+    git(wt.path, "config", "branch.merged.remote", "origin")
+    git(wt.path, "config", "branch.merged.merge", "refs/heads/merged")
+    markers = []
+    for key in ("core.sshCommand", "credential.helper", "core.fsmonitor"):
+        marker = wt.bin / f"{key}.ran"
+        markers.append(marker)
+        adapter(
+            wt.bin,
+            key,
+            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+        )
+        git(wt.path, "config", key, str(wt.bin / key))
     quiet(wt)
-    code, (result,) = run(wt, "--no-pr", variables={"SWEEP_LIST": "[]"}, borrower_gitdirs=())
+    code, (result,) = run(wt, variables={"SWEEP_LIST": pr_list})
+    assert not [marker for marker in markers if marker.exists()]
     assert code == 0
-    if state == "current":
-        assert result["verdict"] == "eligible", result
-    else:
-        assert result["verdict"] == "keep", result
-        assert {"missing": "ls-remote", "stale": "local upstream is stale", "ahead": "unpushed commits"}[
-            state
-        ] in str(result["reasons"])
-    assert wt.admin.is_dir()
+    assert result["verdict"] == "keep"
+    assert reason in str(result["reasons"])
 
 
-def test_no_pr_never_ignores_open_pr(wt: Worktrees) -> None:
+def test_open_pr_remains_a_hold(wt: Worktrees) -> None:
     quiet(wt)
-    keep(wt, "open PR", "--no-pr", SWEEP_LIST='[{"state":"OPEN"}]')
-
-
-def test_no_pr_without_configured_upstream(wt: Worktrees) -> None:
-    quiet(wt)
-    keep(wt, "missing configured remote upstream", "--no-pr", SWEEP_LIST="[]")
-
-
-def test_no_pr_requires_scope(wt: Worktrees) -> None:
-    done = subprocess.run(
-        [sys.executable, str(GUARD), str(wt.repo), BASE, "--no-pr"],
-        env=git_env(),
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=TIMEOUT,
-    )
-    assert done.returncode == 2
-    assert "--no-pr requires --worktree" in done.stderr
+    keep(wt, "open PR", SWEEP_LIST='[{"state":"OPEN"}]')
 
 
 def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -853,8 +844,6 @@ def test_malformed_evidence_parsers() -> None:
     guard = runpy.run_path(str(GUARD))
     with pytest.raises(guard["KeepError"], match="malformed attribute scan"):
         guard["check_attributes"](b"broken\0")
-    with pytest.raises(guard["KeepError"], match="upstream is unverifiable"):
-        guard["advertised_tip"](b"broken", "refs/heads/main")
 
 
 def test_incomplete_borrower_scan_keeps(wt: Worktrees, monkeypatch: pytest.MonkeyPatch) -> None:

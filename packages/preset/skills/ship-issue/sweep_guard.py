@@ -138,6 +138,7 @@ def out(
             env={
                 **os.environ,
                 "GIT_NO_LAZY_FETCH": "1",
+                "GIT_ALLOW_PROTOCOL": "",
                 "GIT_NO_REPLACE_OBJECTS": "1",
                 "GIT_TERMINAL_PROMPT": "0",
                 "GH_PROMPT_DISABLED": "1",
@@ -156,7 +157,14 @@ def out(
 def git(
     path: Path, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False
 ) -> bytes:
-    """Run Git without optional writes (including status index refresh).
+    """Run local Git reads without optional writes or configured helpers.
+
+    The fixed builtins read refs, config, worktree inventory and the raw index;
+    prune is dry-run only. Attribute and EOL queries do not run filters, the
+    reflog is read directly, and remote get-url only resolves config. No status,
+    diff/textconv, signature checks or submodule commands run. Transport (even
+    for a missing promisor object) and paging are disabled; Git never needs
+    SSH, credentials or askpass. Only the explicit gh PR queries use the network.
 
     Parameters:
         path: Path, Candidate checkout.
@@ -173,6 +181,9 @@ def git(
         GIT_BINARY.get() or binary(GIT_LOCATIONS, "git"),
         "git " + " ".join(args[:2]),
         "--no-optional-locks",
+        "--no-pager",
+        "-c",
+        "core.hooksPath=/dev/null",
         "-c",
         "core.fsmonitor=false",
         "-c",
@@ -704,57 +715,14 @@ def check_attributes(attrs: bytes) -> None:
         raise KeepError("built-in conversion attributes on tracked paths")
 
 
-def check_upstream(path: Path, branch: str) -> None:
-    """Require the configured upstream to exist live at the local tracking tip.
-
-    Parameters:
-        path: Path, Path being checked or reported.
-        branch: str, Checked-out branch name.
-    Returns:
-        None.
-    Raises:
-        KeepError: The evidence is unsafe or incomplete.
-    """
-    remote = config(path, f"branch.{branch}.remote")
-    merge = config(path, f"branch.{branch}.merge")
-    if not remote or remote == "." or not merge.startswith("refs/heads/"):
-        raise KeepError("missing configured remote upstream")
-    live = git(path, "ls-remote", "--exit-code", "--refs", "--", remote, merge)
-    if (
-        advertised_tip(live, merge)
-        != git(path, "rev-parse", "--verify", "@{upstream}").strip()
-    ):
-        raise KeepError("local upstream is stale")
-    if git(path, "rev-list", "@{upstream}..HEAD"):
-        raise KeepError("unpushed commits")
-
-
-def advertised_tip(live: bytes, merge: str) -> bytes:
-    """Require one well-formed remote advertisement for the exact upstream ref.
-
-    Parameters:
-        live: bytes, Raw remote advertisement.
-        merge: str, Exact upstream ref name.
-    Returns:
-        bytes: Remote object ID
-    Raises:
-        KeepError: The advertisement does not match the upstream ref.
-    """
-    tip, separator, ref = live.rstrip(b"\n").partition(b"\t")
-    if not separator or not OID.fullmatch(tip) or ref != merge.encode():
-        raise KeepError("upstream is unverifiable")
-    return tip
-
-
-def check_remote(path: Path, branch: str, base: str, gh: Path, *, no_pr: bool) -> str:
-    """Require exact merged PR identity, or live upstream proof for an explicit no-PR candidate.
+def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
+    """Require exact merged PR identity without probing the upstream transport.
 
     Parameters:
         path: Path, Path being checked or reported.
         branch: str, Checked-out branch name.
         base: str, GitHub repository to query.
         gh: Path, Absolute GitHub evidence command.
-        no_pr: bool, Permit upstream proof instead of a merged PR.
     Returns:
         str: Description of remote proof
     Raises:
@@ -786,9 +754,8 @@ def check_remote(path: Path, branch: str, base: str, gh: Path, *, no_pr: bool) -
         raise KeepError("PR list is incomplete or invalid")
     if any(pr["state"] == "OPEN" for pr in prs):
         raise KeepError("open PR")
-    if not prs and no_pr:
-        check_upstream(path, branch)
-        return "no PR and live upstream contains HEAD"
+    if not prs:
+        raise KeepError("no PR; upstream not checked")
     merged = [pr["number"] for pr in prs if pr["state"] == "MERGED"]
     if len(merged) != 1:
         raise KeepError("no unique merged PR")
@@ -880,7 +847,6 @@ def assess(
         branch_ref[len(b"refs/heads/") :].decode("utf-8"),
         opts.base_repo,
         opts.gh,
-        no_pr=opts.no_pr,
     )
     fresh = inventory(opts.repo)
     if fresh != records or head != git(path, "rev-parse", "--verify", "HEAD"):
@@ -949,16 +915,9 @@ def main(
         default=[],
         help="exact worktree with a known owner or retained claimed directory; repeatable",
     )
-    parser.add_argument(
-        "--no-pr",
-        action="store_true",
-        help="allow live upstream proof for a worktree with no PR; requires --worktree",
-    )
     opts = parser.parse_args()
     opts.borrower_gitdirs = borrower_gitdirs
     scope_known = borrower_gitdirs is not None
-    if opts.no_pr and opts.worktree is None:
-        parser.error("--no-pr requires --worktree")
     try:
         overrides = sorted(REPO_ENV.intersection(os.environ))
         if overrides:

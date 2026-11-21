@@ -187,8 +187,8 @@ spawned by a parent for this issue. Never hand off to yourself.
   `readlink` bytes (no added newline). The record identifies scratch; it does not authorize
   deletion. Report other changes separately; do not claim them.
 - For work where no PR will ever exist, the parent may request a verdict with
-  `--no-pr --worktree <path>`. Report the verdict and owner. During rollout, no-PR removal
-  is not automated by these skills; leave the worktree and both branches in place
+  `--worktree <path>`. The keep-only guard does not probe upstream; report its verdict and the
+  owner. Leave the worktree and both branches in place
 - Without native monitors, the parent follows `/skill:get-it-merged` step 1's bounded foreground fallback. Workers never poll. Report the next owner and exact resume command rather than claiming a continuation monitor exists
 
 ## 10. Report
