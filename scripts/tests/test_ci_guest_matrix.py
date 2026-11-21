@@ -666,6 +666,8 @@ def test_only_macos_execution_jobs_share_push_concurrency_groups() -> None:
             plan[cell_key]["run"] = False
             for report in (
                 later | classify_context(Trigger(event="push", classify_result="failure")),
+                # The final reporting step can fail after the executing plan has been published.
+                later | {"needs.classify.result": "failure"},
                 later | {"needs.classify.outputs.plan": json.dumps(plan)},
             ):
                 assert bool(evaluate(cfg[name]["if"], report)) is (name != "owned-shards-macos")
