@@ -151,6 +151,33 @@ with `strategy`. Semantics, schema and cached `/router explain <profile> [--json
 [here](#routing-policies-v1); opt-in examples are [here](examples/policies.json). Existing examples and
 legacy strategies keep their behavior and serialized decisions.
 
+### Provider declarations
+
+Optional top-level `providers` entries are keyed by Pi provider ID. Merge declarations from
+[here](examples/providers.json) into an existing config, keeping its `profiles`. The example's
+`profiles: {}` registers nothing. No declarations are installed by default.
+
+- `label` takes both `full` and `compact` display names. `quotaGroup` opts providers into shared
+  exhaustion marks: set the same group on each provider that really shares quota. Leave it unset
+  to keep marks separate, including API-key and Vertex identities.
+- `windows` declare `requests`, `tokens` or `usd` limits. A rolling window needs positive
+  `durationMinutes`; a calendar window needs `resetRule` with `at` (24-hour `HH:MM`),
+  `timeZone` (a named IANA zone) and `every` (`day` or `week`). Use a number for
+  provider-scope `limits` or an object keyed by exact model ID for model scope. Omit the limit
+  if unknown. The Google example declares no project-specific limits and no Vertex windows.
+- `collector.id` names a registered collector, not a URL or a module path. Omit it to select
+  by provider ID. `collector.options` is an opaque object for that collector. No Google
+  subscription collector or OAuth client is shipped.
+- `evidence` lists unique adapter IDs in order: `read`, `failure` and `observed`.
+  `fallbackOnReadError` opts in to continuing after a failed read; `failure` can declare
+  `parser`, `minHintSeconds`, `repeat` (`count` and `withinMinutes`) and
+  `maxBlockMinutes` (at most 1440).
+
+The [schema](schemas/subscription-router.schema.json) rejects unknown keys inside provider
+settings except inside `collector.options`. The loader also checks that `timeZone` is known
+by `Intl`. Unrelated root and legacy profile keys keep their existing behavior. This release
+validates and loads declarations but does not apply them to routing, usage reads or display yet.
+
 Routing (legacy strategies):
 
 - Ordered `user`, `direct`: first eligible entry, unchanged

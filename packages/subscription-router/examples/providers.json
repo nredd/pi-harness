@@ -1,0 +1,105 @@
+{
+	"providers": {
+		"google": {
+			"label": {
+				"full": "Google",
+				"compact": "Goog"
+			},
+			"evidence": ["failure", "observed"],
+			"failure": {
+				"parser": "google-rpc",
+				"minHintSeconds": 60,
+				"repeat": {
+					"count": 2,
+					"withinMinutes": 10
+				},
+				"maxBlockMinutes": 1440
+			},
+			"windows": [
+				{
+					"name": "rpd",
+					"kind": "calendar",
+					"unit": "requests",
+					"scope": "model",
+					"resetRule": {
+						"at": "00:00",
+						"timeZone": "America/Los_Angeles",
+						"every": "day"
+					}
+				},
+				{
+					"name": "spend-10m",
+					"kind": "rolling",
+					"durationMinutes": 10,
+					"unit": "usd",
+					"scope": "provider"
+				}
+			]
+		},
+		"google-vertex": {
+			"label": {
+				"full": "Google Vertex",
+				"compact": "Vertex"
+			},
+			"evidence": ["failure"],
+			"failure": {
+				"parser": "google-rpc"
+			}
+		},
+		"example-metered": {
+			"label": {
+				"full": "Example Metered",
+				"compact": "Example"
+			},
+			"quotaGroup": "example-shared",
+			"evidence": ["read", "failure", "observed"],
+			"fallbackOnReadError": true,
+			"windows": [
+				{
+					"name": "rpd",
+					"kind": "calendar",
+					"unit": "requests",
+					"scope": "model",
+					"resetRule": {
+						"at": "00:00",
+						"timeZone": "America/Los_Angeles",
+						"every": "day"
+					},
+					"limits": {
+						"sample/model": 250
+					}
+				},
+				{
+					"name": "tokens-week",
+					"kind": "calendar",
+					"unit": "tokens",
+					"scope": "provider",
+					"resetRule": {
+						"at": "00:00",
+						"timeZone": "UTC",
+						"every": "week"
+					},
+					"limits": 1000000
+				},
+				{
+					"name": "spend-10m",
+					"kind": "rolling",
+					"durationMinutes": 10,
+					"unit": "usd",
+					"scope": "provider",
+					"limits": 10.5
+				}
+			],
+			"collector": {
+				"id": "example-reader",
+				"options": {
+					"bucket": "example"
+				}
+			}
+		},
+		"example-metered-alt": {
+			"quotaGroup": "example-shared"
+		}
+	},
+	"profiles": {}
+}

@@ -74,8 +74,188 @@ export interface Profile {
 	exhaustion?: Exhaustion;
 }
 
+type EvidenceSource = "read" | "failure" | "observed";
+
+interface FailureConfig {
+	parser?: "generic" | "google-rpc";
+	minHintSeconds?: number;
+	repeat?: { count: number; withinMinutes: number };
+	maxBlockMinutes?: number;
+}
+
+/** Locally declared quota, not a collector reading. An absent limit is unknown. */
+export type WindowConfig = { name: string; unit: "requests" | "tokens" | "usd" } & (
+	| { scope: "model"; limits?: Readonly<Record<string, number>> }
+	| { scope: "provider"; limits?: number }
+) &
+	(
+		| { kind: "rolling"; durationMinutes: number }
+		| { kind: "calendar"; resetRule: { at: string; timeZone: string; every: "day" | "week" } }
+	);
+
+/** Provider IDs and collector IDs are data, not a built-in list or module paths. */
+export interface ProviderConfig {
+	label?: { full: string; compact: string };
+	quotaGroup?: string;
+	evidence?: EvidenceSource[];
+	fallbackOnReadError?: boolean;
+	failure?: FailureConfig;
+	windows?: WindowConfig[];
+	collector?: { id?: string; options?: Record<string, unknown> };
+}
+
+interface ConfigDocument {
+	profiles: Profile[];
+	/** Absent in legacy documents. Only explicit declarations are returned. */
+	providers?: Readonly<Record<string, ProviderConfig>>;
+}
+
 /** Loaded config, or the reason it was rejected. */
-export type ConfigResult = { ok: true; profiles: Profile[] } | { ok: false; error: string };
+export type ConfigResult = ({ ok: true } & ConfigDocument) | { ok: false; error: string };
+
+const ID = /^[^\s/]+$/;
+const NON_BLANK = /\S/;
+const RESET_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+const ZONE_NAME = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
+const EVIDENCE = ["read", "failure", "observed"] as const;
+
+function object(value: unknown, where: string, keys?: readonly string[]): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${where}: expected an object`);
+	if (keys) {
+		for (const key of Object.keys(value)) {
+			if (!keys.includes(key)) throw new Error(`${where}.${key}: unknown key`);
+		}
+	}
+	return value as Record<string, unknown>;
+}
+
+function textField(value: unknown, pattern: RegExp, where: string, expected: string): asserts value is string {
+	if (typeof value !== "string" || !pattern.test(value)) throw new Error(`${where}: expected ${expected}`);
+}
+
+function positive(value: unknown, where: string): asserts value is number {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		throw new Error(`${where}: expected a finite positive number`);
+	}
+}
+
+function oneOf(value: unknown, choices: readonly string[], where: string): void {
+	if (!(choices as readonly unknown[]).includes(value))
+		throw new Error(`${where}: expected one of ${choices.join(", ")}`);
+}
+
+function validateFailure(raw: unknown, where: string): void {
+	const { parser, minHintSeconds, repeat, maxBlockMinutes } = object(raw, where, [
+		"parser",
+		"minHintSeconds",
+		"repeat",
+		"maxBlockMinutes",
+	]);
+	if (parser !== undefined) oneOf(parser, ["generic", "google-rpc"], `${where}.parser`);
+	if (minHintSeconds !== undefined) positive(minHintSeconds, `${where}.minHintSeconds`);
+	if (maxBlockMinutes !== undefined) {
+		positive(maxBlockMinutes, `${where}.maxBlockMinutes`);
+		if (maxBlockMinutes > 1440) throw new Error(`${where}.maxBlockMinutes: must not exceed 1440`);
+	}
+	if (repeat !== undefined) {
+		const { count, withinMinutes } = object(repeat, `${where}.repeat`, ["count", "withinMinutes"]);
+		positive(count, `${where}.repeat.count`);
+		if (!Number.isSafeInteger(count)) throw new Error(`${where}.repeat.count: expected a safe integer`);
+		positive(withinMinutes, `${where}.repeat.withinMinutes`);
+	}
+}
+
+function validateReset(raw: unknown, where: string): void {
+	const { at, timeZone, every } = object(raw, where, ["at", "timeZone", "every"]);
+	textField(at, RESET_TIME, `${where}.at`, "24-hour HH:MM");
+	textField(timeZone, ZONE_NAME, `${where}.timeZone`, "an IANA time zone name");
+	try {
+		new Intl.DateTimeFormat("en", { timeZone });
+	} catch {
+		throw new Error(`${where}.timeZone: unknown IANA time zone ${JSON.stringify(timeZone)}`);
+	}
+	oneOf(every, ["day", "week"], `${where}.every`);
+}
+
+function parseWindow(raw: unknown, where: string): WindowConfig {
+	const window = object(raw, where);
+	const { name, kind, unit, scope, limits, durationMinutes, resetRule } = window;
+	oneOf(kind, ["rolling", "calendar"], `${where}.kind`);
+	object(window, where, [
+		"name",
+		"kind",
+		"unit",
+		"scope",
+		"limits",
+		kind === "calendar" ? "resetRule" : "durationMinutes",
+	]);
+	textField(name, NON_BLANK, `${where}.name`, "a non-blank string");
+	oneOf(unit, ["requests", "tokens", "usd"], `${where}.unit`);
+	oneOf(scope, ["model", "provider"], `${where}.scope`);
+	if (kind === "calendar") validateReset(resetRule, `${where}.resetRule`);
+	else positive(durationMinutes, `${where}.durationMinutes`);
+	if (limits === undefined) return window as WindowConfig;
+	if (scope === "provider") {
+		positive(limits, `${where}.limits`);
+		return window as WindowConfig;
+	}
+	const byModel: Record<string, number> = Object.create(null);
+	for (const [id, limit] of Object.entries(object(limits, `${where}.limits`))) {
+		textField(id, NON_BLANK, `${where}.limits`, "non-blank model-id keys");
+		positive(limit, `${where}.limits[${JSON.stringify(id)}]`);
+		byModel[id] = limit;
+	}
+	return { ...(window as WindowConfig), scope: "model", limits: byModel };
+}
+
+function parseProvider(raw: unknown, where: string): ProviderConfig {
+	const provider = object(raw, where, [
+		"label",
+		"quotaGroup",
+		"evidence",
+		"fallbackOnReadError",
+		"failure",
+		"windows",
+		"collector",
+	]);
+	const { label, quotaGroup, evidence, fallbackOnReadError, failure, windows, collector } = provider;
+	if (label !== undefined) {
+		const { full, compact } = object(label, `${where}.label`, ["full", "compact"]);
+		textField(full, NON_BLANK, `${where}.label.full`, "a non-blank string");
+		textField(compact, NON_BLANK, `${where}.label.compact`, "a non-blank string");
+	}
+	if (quotaGroup !== undefined) textField(quotaGroup, NON_BLANK, `${where}.quotaGroup`, "a non-blank string");
+	if (evidence !== undefined) {
+		if (!Array.isArray(evidence)) throw new Error(`${where}.evidence: expected an array`);
+		for (const [index, source] of evidence.entries()) oneOf(source, EVIDENCE, `${where}.evidence[${index}]`);
+		if (new Set(evidence).size !== evidence.length) throw new Error(`${where}.evidence: duplicate source`);
+	}
+	if (fallbackOnReadError !== undefined && typeof fallbackOnReadError !== "boolean") {
+		throw new Error(`${where}.fallbackOnReadError: expected a boolean`);
+	}
+	if (failure !== undefined) validateFailure(failure, `${where}.failure`);
+	if (collector !== undefined) {
+		const { id, options } = object(collector, `${where}.collector`, ["id", "options"]);
+		if (id !== undefined) textField(id, ID, `${where}.collector.id`, "a non-blank id without spaces or slashes");
+		if (options !== undefined) object(options, `${where}.collector.options`);
+	}
+	if (windows === undefined) return provider as ProviderConfig;
+	if (!Array.isArray(windows)) throw new Error(`${where}.windows: expected an array`);
+	return {
+		...provider,
+		windows: windows.map((entry, index) => parseWindow(entry, `${where}.windows[${index}]`)),
+	} as ProviderConfig;
+}
+
+function parseProviders(raw: unknown): Readonly<Record<string, ProviderConfig>> {
+	// A provider named "constructor" is data, not an inherited property.
+	const providers: Record<string, ProviderConfig> = Object.create(null);
+	for (const [id, value] of Object.entries(object(raw, "providers"))) {
+		textField(id, ID, "providers", "non-blank provider ids without spaces or slashes");
+		providers[id] = parseProvider(value, `providers.${id}`);
+	}
+	return providers;
+}
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9._-]*$/;
 
@@ -110,10 +290,7 @@ function parseExhaustion(policy: unknown, maxWaitMinutes: unknown, where: string
 	};
 }
 
-/** Validate a parsed config document. Throws with a path-qualified message. */
-export function parseConfig(raw: unknown): Profile[] {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("expected a JSON object");
-	const profiles = (raw as Record<string, unknown>).profiles;
+function parseProfiles(profiles: unknown): Profile[] {
 	if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
 		throw new Error("profiles: expected an object of id -> profile");
 	}
@@ -154,6 +331,19 @@ export function parseConfig(raw: unknown): Profile[] {
 	});
 }
 
+/** Validate a parsed config document. Throws with a path-qualified message. */
+export function parseConfigDocument(raw: unknown): ConfigDocument {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("expected a JSON object");
+	const { profiles, providers } = raw as Record<string, unknown>;
+	const parsed = parseProfiles(profiles);
+	return providers === undefined ? { profiles: parsed } : { profiles: parsed, providers: parseProviders(providers) };
+}
+
+/** Keep the legacy profile-array API while validating the whole document. */
+export function parseConfig(raw: unknown): Profile[] {
+	return parseConfigDocument(raw).profiles;
+}
+
 /** Read `<agentDir>/subscription-router.json`. A missing file is an empty config. */
 export async function loadConfig(agentDir: string): Promise<ConfigResult> {
 	const path = join(agentDir, CONFIG_FILE);
@@ -167,7 +357,7 @@ export async function loadConfig(agentDir: string): Promise<ConfigResult> {
 		return { ok: false, error: `${path}: ${message}` };
 	}
 	try {
-		return { ok: true, profiles: parseConfig(JSON.parse(text)) };
+		return { ok: true, ...parseConfigDocument(JSON.parse(text)) };
 	} catch (error) {
 		// `JSON.parse` throws a `SyntaxError` and `parseConfig` an `Error`.
 		return { ok: false, error: `${path}: ${(error as Error).message}` };
