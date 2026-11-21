@@ -68,6 +68,7 @@ async function observePage(onTestFinished, { nodes = PAGE, text = "Hello page" }
 	return {
 		desktop,
 		cdp,
+		root,
 		page,
 		stateId,
 		refs: refsOf(stateId),
@@ -151,16 +152,48 @@ test("browser states refuse paste, selectText and secondaryAction before the epo
 	assert.match((await act({ stateId, actions: [{ action: "press", ref: refs.Save }] })).details.stateId, /./);
 });
 
-test("browser-state act_ui dispatches CDP input even with headless enabled, as documented", async ({
+test("refuses saved CDP state after browser_use is disabled", async ({ onTestFinished }) => {
+	const { desktop, cdp, root, act, stateId, refs } = await observePage(onTestFinished);
+	const { executeObserve, executeWaitFor, executeNavigateBrowser, executeEvaluateBrowser, executeLaunchBrowser } =
+		desktop.bridge;
+	const count = cdp.commands.length;
+	vi.stubEnv("PI_COMPUTER_USE_BROWSER_USE", "0");
+	for (const run of [
+		() => act({ stateId, actions: [{ action: "press", ref: refs.Save }] }),
+		() => desktop.call(executeObserve, { root }),
+		() => desktop.call(executeWaitFor, { stateId, text: "Save" }),
+		() => desktop.call(executeNavigateBrowser, { stateId, url: "https://example.test/" }),
+		() => desktop.call(executeEvaluateBrowser, { stateId, expression: "42" }),
+		() => desktop.call(executeLaunchBrowser, {}),
+	])
+		await assert.rejects(run, /Browser use is disabled/);
+	assert.equal(cdp.commands.length, count);
+});
+
+test("README scopes strict headless input to native delivery and links the CDP exception", () => {
+	const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+	const prohibitions = readme
+		.split("\n")
+		.filter((line) => line.startsWith("With `headless: true`") && line.includes("post synthesized input"));
+	assert.ok(prohibitions.length > 0);
+	for (const line of prohibitions) {
+		assert.match(line, /native[^.]*post synthesized input/i);
+		assert.match(line, /\[CDP exception\]\(#input-delivery-safety-contract\)/);
+	}
+	assert.match(readme, /^\| CDP\/browser \| .*synthesized .*even with `headless: true`/m);
+});
+
+test("browser-state act_ui dispatches CDP input despite Windows admission and headless mode", async ({
 	onTestFinished,
 }) => {
+	const { currentPlatformBackend } = await import("../src/platform/index.ts");
+	const originalName = currentPlatformBackend.name;
+	onTestFinished(() => {
+		currentPlatformBackend.name = originalName;
+	});
+	currentPlatformBackend.name = "windows";
 	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
-	const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-	assert.match(readme, /^\| Rules \| (?:[a-z]+ native desktop delivery \| ?){3}$/im);
-	assert.match(
-		readme,
-		/^\| CDP\/browser \| .*even with `headless: true`: the desktop `ax_only` gate does not apply\./m,
-	);
+	vi.stubEnv("PI_COMPUTER_USE_BLOCKED_APPS", "Browser,chrome.exe");
 	const { act, stateId, refs, paramsOf } = await observePage(onTestFinished);
 	const { getComputerUseConfig } = await import("../src/config.ts");
 	assert.equal(getComputerUseConfig().headless, true);

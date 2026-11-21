@@ -3667,6 +3667,17 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 
 type PolicyPreflightParams = SearchUiParams & { root?: unknown; ref?: string };
 
+function assertCdpUseAllowed(tool: string, params: PolicyPreflightParams): void {
+	const root = params?.root;
+	const contextId =
+		tool === "observe_ui" && typeof root === "string"
+			? runtimeState.browserContextByRoot.get(root)
+			: operationState().contextId;
+	if ((tool === "launch_browser" || isBrowserContextId(contextId)) && !isBrowserUseEnabled()) {
+		throw new Error("Browser use is disabled by pi-computer-use config. Enable browser_use to use CDP.");
+	}
+}
+
 /** A known blocked root must not even reach helper readiness for a live operation. */
 function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, outputRef: boolean): void {
 	const root = params?.root;
@@ -3725,6 +3736,7 @@ async function executeTool<P, T>(
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
 			await ensureReady(ctx, signal, () => {
+				assertCdpUseAllowed(tool, params as PolicyPreflightParams);
 				assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef);
 			});
 			throwIfAborted(signal);
