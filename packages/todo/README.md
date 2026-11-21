@@ -143,7 +143,9 @@ settles outside Plan mode (default 10) between nudges. Continuation boundaries a
 aborted or failed runs do not count toward the cooldown. On resume or `/reload`, a
 restored nudge waits for new human input and starts a fresh cooldown. The hidden
 marker is persisted bookkeeping visible in `/tree` and in JSON/RPC `entry_appended`
-events when emitted.
+events when emitted. An earlier extension handler that delays only a `todo`
+completion can reorder the reset, making the nudge late or missed until the next
+tool call, but cannot cause an extra nudge.
 
 ### Session switches and survivors
 

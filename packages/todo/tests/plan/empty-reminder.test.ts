@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionContext, SessionEntry, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, expect, it, vi } from "vitest";
 import { EMPTY_REMINDER_MARKER } from "../../src/plan/hooks.ts";
 import { EMPTY_REMINDER_MESSAGE_TYPE } from "../../src/tool/types.ts";
@@ -24,6 +25,7 @@ async function setup({
 	branch = [],
 	mode = "tui",
 	reason = "startup",
+	importOverlay,
 }: {
 	calls?: number;
 	cooldown?: number;
@@ -31,12 +33,13 @@ async function setup({
 	branch?: SessionEntry[];
 	mode?: ExtensionContext["mode"];
 	reason?: SessionStartEvent["reason"];
+	importOverlay?: Parameters<typeof registerTodo>[1];
 } = {}) {
 	mkdirSync(dirname(config), { recursive: true });
 	writeFileSync(config, JSON.stringify({ emptyAfterToolCalls: calls, emptyReminderCooldownSettles: cooldown }));
 	const ctx = createTodoCtx({ sessionId: "s1", branch, mode });
 	const { pi, captured } = createTodoPi();
-	const register = () => registerTodo(pi, undefined, { homeDir: TEST_HOME });
+	const register = () => registerTodo(pi, importOverlay, { homeDir: TEST_HOME });
 	if (child) {
 		const context = new AsyncLocalStorage<boolean>();
 		vi.stubGlobal(Symbol.for("pi-subagents:child-session-context"), context);
@@ -229,12 +232,33 @@ it.each(["rpc", "json", "print"] as const)("suppresses both empty-list triggers 
 	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 });
 
+it("evicts the tracker on a same-session RPC rebind", async () => {
+	const { emit, tool, settle } = await setup();
+	const rpc = createTodoCtx({ sessionId: "s1", mode: "rpc" });
+	await emit("session_start", { reason: "startup" }, rpc);
+	await tool("Agent", false, rpc);
+	expect(await settle("completed", rpc)).toBeUndefined();
+});
+
 it("counts a read that completes while the todo overlay refresh is pending", async () => {
-	const { tool, settle, callTodo } = await setup({ calls: 1 });
-	await callTodo({ action: "list" });
-	const todoCompletion = tool("todo");
-	const readCompletion = tool("read");
-	await Promise.all([todoCompletion, readCompletion]);
+	const overlay = await import("../../src/todo-overlay.ts");
+	const releaseImport = deferred<typeof overlay>();
+	const importOverlay = vi.fn(() => releaseImport.promise);
+	const { tool, settle, callTodo } = await setup({ calls: 1, importOverlay });
+	await callTodo({ action: "create", subject: "Visible todo" });
+	const refreshed = vi.fn();
+	const firstRefresh = tool("todo").then(refreshed);
+	try {
+		await callTodo({ action: "clear" });
+		await tool("todo");
+		// Clear needs no new overlay, but the first completion still awaits the import.
+		expect(importOverlay).toHaveBeenCalledTimes(1);
+		expect(refreshed).not.toHaveBeenCalled();
+		await tool("read");
+	} finally {
+		releaseImport.resolve(overlay);
+		await firstRefresh;
+	}
 	expect(await settle()).toEqual(reminder);
 });
 

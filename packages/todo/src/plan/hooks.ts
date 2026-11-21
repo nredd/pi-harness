@@ -602,6 +602,8 @@ export function registerPlanHooks(
 					(entry) => entry.type === "custom_message" && entry.customType === EMPTY_REMINDER_MESSAGE_TYPE,
 				);
 				emptyTrackers.set(sessionId, trackEmptyReminder(emptyConfig, previouslyReminded));
+			} else {
+				emptyTrackers.delete(sessionId);
 			}
 			if (resumed)
 				resumedOwners.set(
