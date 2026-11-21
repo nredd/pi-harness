@@ -575,9 +575,10 @@ from another test file.
 
 The trusted `workflow_run` publisher reads coverage artifacts from the newest successful CI
 push to `main` in this repository. It checks producer job, upload timing, run, attempt and SHA,
-using the same ZIP and sidecar validation as for PR coverage. The comment and step summary link to
-the baseline commit and CI attempt for each host. If the macOS push shards were cancelled and
-their fan-in did not upload an artifact, the publisher looks back to the first earlier successful run
+using the same ZIP and sidecar validation as for PR coverage. The comment and step summary link only
+validated baselines, and omit the baseline section when the PR artifact was not fetched or the tested
+SHA is unavailable. A PR targeting another branch in this repository still compares to `main`.
+If the macOS push shards were cancelled and their fan-in did not upload an artifact, the publisher looks back to the first earlier successful run
 listing a macOS artifact from its selected attempt, for macOS only. Earlier attempts' retained
 artifacts do not stop the search. No successful run, an expired artifact (90-day retention),
 or missing or invalid evidence outside that exception leaves the affected host `unavailable`.

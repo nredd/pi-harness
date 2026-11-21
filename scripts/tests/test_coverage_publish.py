@@ -311,7 +311,9 @@ def test_malformed_pr_summary_still_posts(tmp_path: Path, monkeypatch: pytest.Mo
     assert "Ubuntu enforced signals: unavailable" in write[2]["body"]
 
 
-@pytest.mark.parametrize("case", ["old-attempt", "different-tested-sha", "missing-record", "no-merge-sha"])
+@pytest.mark.parametrize(
+    "case", ["old-attempt", "different-tested-sha", "missing-record", "no-merge-sha", "missing-artifact"]
+)
 def test_artifact_sidecar_fails_closed(case: str) -> None:
     """An acceptable upload timestamp is not provenance.
 
@@ -330,7 +332,10 @@ def test_artifact_sidecar_fails_closed(case: str) -> None:
         api.record["tested_sha"] = HEAD
     elif case == "missing-record":
         api.record = None
+    elif case == "missing-artifact":
+        api.artifacts.clear()
     body = pub.render(api, pub.Run.parse(api.data), 4, None if case == "no-merge-sha" else TESTED, POLICY)
+    assert (pub.BASELINE_NOTICE in body) == (case not in {"no-merge-sha", "missing-artifact"})
     assert "Ubuntu enforced signals: unavailable" in body
     assert "zero uncovered" not in body
     assert pub.PR_NOTICE in body.splitlines()
