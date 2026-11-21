@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use linux_bridge::atspi::{
-    outline_json, root_json, AccessibleRef, AtspiClient, NodeSnapshot, Rect, RootSnapshot, TEXT,
+    outline_json, root_json, AccessibleRef, AtspiClient, NodeSnapshot, Rect, RootSnapshot,
+    Snapshot, TEXT,
 };
 use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::state::{fresh_state_id, HelperState};
@@ -85,6 +86,15 @@ fn extract_id(line: &str) -> Option<String> {
 }
 
 async fn handle_request(state: &Arc<Mutex<HelperState>>, request: &Request) -> Response {
+    handle_request_with(state, request, AtspiClient::connect, physical_act).await
+}
+
+async fn handle_request_with(
+    state: &Arc<Mutex<HelperState>>,
+    request: &Request,
+    connect: impl AsyncFn() -> Result<AtspiClient, ProtocolError>,
+    physical: PhysicalAct,
+) -> Response {
     if request.protocol_version != PROTOCOL_VERSION {
         return Response::err(
             &request.id,
@@ -97,17 +107,26 @@ async fn handle_request(state: &Arc<Mutex<HelperState>>, request: &Request) -> R
     let result = match request.cmd.as_str() {
         "diagnostics" => Ok(diagnostics().await),
         "listRoots" | "listWindows" => list_roots(state, &request.args).await,
-        "look" | "screenshot" => look(state, &request.args).await,
+        "look" | "screenshot" => {
+            look_with(state, &request.args, &connect, x11::capture_window).await
+        }
         "act" => {
             let _transaction = action_lock().lock().await;
-            act(state, &request.args).await
+            act(state, &request.args, &connect, physical).await
         }
         "actBatch" => {
             let _transaction = action_lock().lock().await;
-            act_batch(state, &request.args).await
+            act_batch_with(&request.args, |args| act(state, args, &connect, physical)).await
         }
-        "atspiReadText" | "uiaReadText" | "axReadText" => read_text(state, &request.args).await,
-        "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => wait_for(state, &request.args).await,
+        "atspiReadText" | "uiaReadText" | "axReadText" => {
+            read_text_with(state, &request.args, async |accessible| {
+                connect().await?.read_text(accessible).await
+            })
+            .await
+        }
+        "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
+            wait_for(state, &request.args, &connect).await
+        }
         "focusWindow" => focus_window(state, &request.args),
         "openBrowserLocation" => open_browser_location(&request.args),
         other => Err(ProtocolError::new(
@@ -281,12 +300,8 @@ impl SnapshotSource for AtspiClient {
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
-        self.snapshot_from(start, max_nodes, max_depth).await
+        Ok(self.snapshot_from(start, max_nodes, max_depth).await?.nodes)
     }
-}
-
-async fn look(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
-    look_with(state, args, AtspiClient::connect, x11::capture_window).await
 }
 
 /// Assemble and store an observation using the selected accessibility and capture backends.
@@ -446,7 +461,21 @@ fn open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
     Ok(json!({"opened": true, "delivery": "xdg-open"}))
 }
 
-async fn act(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
+type PhysicalAct = fn(
+    &str,
+    &Value,
+    PhysicalPolicy,
+    u32,
+    (i32, i32),
+    ActionGeometry,
+) -> Result<Value, ProtocolError>;
+
+async fn act(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
+    physical: PhysicalAct,
+) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "act requires lookId")?;
     let action = required_str(args, "action", "act requires action")?;
     let target = args
@@ -455,25 +484,34 @@ async fn act(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, Pro
     let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
     let policy = PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?;
     let record = lock(state)?.look(look_id)?;
-    let client = AtspiClient::connect().await?;
+    let client = connect().await?;
 
     if let Some(reference) = target.get("ref").and_then(Value::as_str) {
         let node = lock(state)?.element(look_id, reference)?;
-        match action {
-            "press" | "click" => {
-                if let Ok(worked) = client.press(&node).await {
-                    return Ok(
-                        json!({"outcome":if worked{"worked"}else{"didnt"},"performed":semantic_performed()}),
-                    );
+        let text = params.get("text").and_then(Value::as_str).unwrap_or("");
+        let semantic = match action {
+            "press" | "click" => Some(client.press(&node).await.map(|worked| (worked, None))),
+            "setText" | "typeText" => Some(
+                client
+                    .set_text(&node, text)
+                    .await
+                    .map(|worked| (worked, Some(json!({"value":text})))),
+            ),
+            _ => None,
+        };
+        match semantic {
+            Some(Ok((worked, evidence))) => {
+                let mut result = json!({"outcome": if worked {"worked"} else {"didnt"}, "performed": semantic_performed()});
+                if let Some(evidence) = evidence {
+                    result["evidence"] = evidence;
                 }
+                return Ok(result);
             }
-            "setText" | "typeText" => {
-                let text = params.get("text").and_then(Value::as_str).unwrap_or("");
-                if let Ok(worked) = client.set_text(&node, text).await {
-                    return Ok(
-                        json!({"outcome":if worked{"worked"}else{"didnt"},"performed":semantic_performed(),"evidence":{"value":text}}),
-                    );
-                }
+            Some(Err(error)) if error.code == ErrorCode::Timeout => {
+                return Err(ProtocolError::new(
+                    format!("{}; semantic action outcome is unknown", error.message),
+                    ErrorCode::Timeout,
+                ));
             }
             _ => {}
         }
@@ -494,7 +532,7 @@ async fn act(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, Pro
         let owning_window = record.root.x11_window.ok_or_else(|| {
             capability("Observed root is not correlated with an owning X11 window")
         })?;
-        return physical_act(
+        return physical(
             action,
             &params,
             policy,
@@ -527,7 +565,7 @@ async fn act(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, Pro
     })?;
     let (screen_x, screen_y) =
         image_point_to_screen(&frame, record.image_width, record.image_height, x, y)?;
-    physical_act(
+    physical(
         action,
         &params,
         policy,
@@ -680,10 +718,6 @@ fn physical_act(
     )
 }
 
-async fn act_batch(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
-    act_batch_with(args, |action| act(state, action)).await
-}
-
 /// Validate the entire batch before executing any step, then stop at the first failure.
 async fn act_batch_with<'args, F>(
     args: &'args Value,
@@ -708,6 +742,7 @@ where
     }
     let mut steps = Vec::new();
     let mut stopped_at = None;
+    let mut timed_out = false;
     for (index, action) in actions.iter().enumerate() {
         match perform(action).await {
             Ok(step) => {
@@ -719,13 +754,19 @@ where
                 }
             }
             Err(error) => {
-                steps.push(json!({"outcome":"didnt","error":{"code":error.code.to_string(),"message":error.message}}));
+                timed_out = error.code == ErrorCode::Timeout;
+                let outcome = if timed_out { "unknown" } else { "didnt" };
+                steps.push(json!({"outcome":outcome,"error":{"code":error.code.to_string(),"message":error.message}}));
                 stopped_at = Some(index);
                 break;
             }
         }
     }
-    let outcome = batch_outcome(&steps, stopped_at.is_some());
+    let outcome = if timed_out {
+        "unknown"
+    } else {
+        batch_outcome(&steps, stopped_at.is_some())
+    };
     let mut response = json!({
         "outcome": outcome,
         "performed":{"transaction":true,"actionCount":steps.len(),"deltaSource":"snapshot"},
@@ -748,13 +789,6 @@ fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
     } else {
         "worked"
     }
-}
-
-async fn read_text(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
-    read_text_with(state, args, async |accessible| {
-        AtspiClient::connect().await?.read_text(accessible).await
-    })
-    .await
 }
 
 /// Resolve and authorize a text read before requesting its content from accessibility.
@@ -791,7 +825,11 @@ async fn read_text_with(
     )
 }
 
-async fn wait_for(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
+async fn wait_for(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
+) -> Result<Value, ProtocolError> {
     let text = args
         .get("text")
         .and_then(Value::as_str)
@@ -836,10 +874,14 @@ async fn wait_for(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value
         .unwrap_or(10_000)
         .clamp(100, 60_000);
     let deadline = Instant::now() + Duration::from_millis(timeout);
-    let client = AtspiClient::connect().await?;
+    let client = connect().await?;
     let mut node_count = 0;
     while Instant::now() < deadline {
-        let nodes = match &scope {
+        let Snapshot {
+            nodes,
+            incomplete,
+            root_fields_incomplete,
+        } = match &scope {
             Some(scope) => {
                 client
                     .snapshot_from(&scope.accessible, DEFAULT_MAX_NODES, 20)
@@ -851,6 +893,19 @@ async fn wait_for(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value
         let found = nodes
             .iter()
             .any(|node| matches_scoped_node(node, scope_exact, &text, &role, &value));
+        if gone
+            && !found
+            && if scope_exact {
+                root_fields_incomplete
+            } else {
+                incomplete
+            }
+        {
+            return Err(ProtocolError::new(
+                "Cannot confirm absence in an incomplete AT-SPI2 snapshot",
+                ErrorCode::Timeout,
+            ));
+        }
         if found != gone {
             return Ok(
                 json!({"found":true,"gone":if gone {Some(true)} else {None::<bool>},"nodeCount":node_count}),
@@ -926,9 +981,16 @@ fn capability(message: impl Into<String>) -> ProtocolError {
 }
 
 #[cfg(test)]
+#[path = "tests.rs"]
+mod test_peer;
+
+#[cfg(test)]
 mod tests {
+    use super::test_peer::{with_peer, StalledReply};
     use super::*;
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use zbus::{zvariant::OwnedObjectPath, Connection};
 
     fn node() -> NodeSnapshot {
         NodeSnapshot {
@@ -1224,15 +1286,315 @@ mod tests {
         display.interfaces.insert("org.a11y.atspi.Action".into());
         let state = Arc::new(Mutex::new(HelperState::default()));
         let (look_id, nodes) = lock(&state).unwrap().insert_look(root, vec![display], None);
-        let result = read_text(
+        let result = read_text_with(
             &state,
             &json!({"lookId": look_id, "elementRef": nodes[0].reference}),
+            async |_| panic!("non-text node requested text"),
         )
         .await
         .unwrap();
         assert_eq!(result["text"], "");
         assert_eq!(result["totalChars"], 0);
         assert_eq!(result["hasMore"], false);
+    }
+
+    async fn peer_request(
+        state: &Arc<Mutex<HelperState>>,
+        connection: &Connection,
+        cmd: &str,
+        args: Value,
+    ) -> Response {
+        handle_request_with(
+            state,
+            &Request {
+                protocol_version: PROTOCOL_VERSION,
+                id: "peer".into(),
+                cmd: cmd.into(),
+                args,
+            },
+            async || {
+                Ok(AtspiClient::from_connection(
+                    connection.clone(),
+                    Duration::from_millis(250),
+                ))
+            },
+            |_, _, _, _, _, _| panic!("attempted physical fallback"),
+        )
+        .await
+    }
+
+    struct PeerNode {
+        name: &'static str,
+        role: &'static str,
+        stalled_role: Option<StalledReply>,
+        stalled_children: Option<StalledReply>,
+        child: Option<&'static str>,
+        text: bool,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl PeerNode {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        async fn get_role_name(&self) -> &str {
+            if let Some(stall) = &self.stalled_role {
+                return stall.wait().await;
+            }
+            self.role
+        }
+
+        async fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            if let Some(stall) = &self.stalled_children {
+                return stall.wait().await;
+            }
+            self.child
+                .iter()
+                .map(|path| (":1.1", OwnedObjectPath::try_from(*path).unwrap()))
+                .collect()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            if self.text {
+                vec![TEXT]
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    struct PeerText(Arc<AtomicUsize>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl PeerText {
+        fn get_text(&self, _start: i32, _end: i32) -> &str {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            "private fixture text"
+        }
+    }
+
+    fn peer_root_state() -> (Arc<Mutex<HelperState>>, String) {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let root_ref = lock(&state).unwrap().replace_roots(vec![observed_root()])[0]
+            .0
+            .clone();
+        (state, root_ref)
+    }
+
+    #[tokio::test]
+    async fn unknown_role_never_reads_or_exposes_text() {
+        let (stall, mut requests) = StalledReply::new();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Password",
+                        role: "password text",
+                        stalled_role: Some(stall),
+                        stalled_children: None,
+                        child: None,
+                        text: true,
+                    },
+                )?
+                .serve_at("/window", PeerText(Arc::clone(&reads)))
+            },
+            async |connection| {
+                let look = peer_request(
+                    &state,
+                    &connection,
+                    "look",
+                    json!({"rootRef":root_ref,"includeImage":false}),
+                )
+                .await
+                .result
+                .unwrap();
+                assert_eq!(requests.try_recv(), Ok(()));
+                assert_eq!(look["outline"]["title"], "Password");
+                assert_eq!(look["outline"]["value"], "");
+                assert_eq!(reads.load(Ordering::SeqCst), 0);
+                let reply = peer_request(
+                    &state,
+                    &connection,
+                    "atspiReadText",
+                    json!({"lookId":look["lookId"],"elementRef":look["outline"]["ref"]}),
+                )
+                .await;
+                assert_eq!(reply.error.unwrap().code, ErrorCode::SecureTextUnreadable);
+                assert_eq!(reads.load(Ordering::SeqCst), 0);
+            },
+        )
+        .await;
+    }
+
+    struct StalledMutation {
+        stall: StalledReply,
+        mutations: Arc<AtomicUsize>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Action")]
+    impl StalledMutation {
+        #[zbus(property, name = "NActions")]
+        fn n_actions(&self) -> i32 {
+            1
+        }
+
+        async fn do_action(&self, index: i32) -> bool {
+            assert_eq!(index, 0);
+            self.mutations.fetch_add(1, Ordering::SeqCst);
+            self.stall.wait().await
+        }
+    }
+
+    struct StalledEdit(StalledMutation);
+
+    #[zbus::interface(name = "org.a11y.atspi.EditableText")]
+    impl StalledEdit {
+        async fn set_text_contents(&self, text: &str) -> bool {
+            assert_eq!(text, "replacement");
+            self.0.mutations.fetch_add(1, Ordering::SeqCst);
+            self.0.stall.wait().await
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_action_timeout_does_not_fall_back() {
+        let (action_stall, mut actions) = StalledReply::new();
+        let (edit_stall, mut edits) = StalledReply::new();
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let (state, _) = peer_root_state();
+        let mut target = node();
+        target.bounds = Some(Rect {
+            x: 130,
+            y: 70,
+            width: 40,
+            height: 20,
+        });
+        target.interfaces.extend([
+            "org.a11y.atspi.Action".into(),
+            "org.a11y.atspi.EditableText".into(),
+        ]);
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![target], None);
+        with_peer(
+            |peer| peer.serve_at("/node", StalledMutation {stall:action_stall, mutations:Arc::clone(&mutations)})?
+                .serve_at("/node", StalledEdit(StalledMutation {stall:edit_stall, mutations:Arc::clone(&mutations)})),
+            async |connection| {
+                let step = |action| json!({"lookId":look_id,"action":action,"target":{"ref":nodes[0].reference},"policy":"foreground","params":{"text":"replacement"}});
+                let reply = peer_request(&state, &connection, "act", step("press")).await;
+                assert_eq!(actions.try_recv(), Ok(()));
+                assert!(!reply.ok);
+                assert_eq!(reply.error.unwrap().code, ErrorCode::Timeout);
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+                let batch = peer_request(&state, &connection, "actBatch", json!({"actions":[step("setText"),step("setText")]})).await.result.unwrap();
+                assert_eq!(edits.try_recv(), Ok(()));
+                assert_eq!(batch["outcome"], "unknown");
+                assert_eq!(batch["stoppedAt"], 0);
+                assert_eq!(batch["steps"].as_array().unwrap().len(), 1);
+                assert_eq!(batch["steps"][0]["outcome"], "unknown");
+                assert_eq!(batch["steps"][0]["error"]["code"], "timeout");
+                assert_eq!(mutations.load(Ordering::SeqCst), 2);
+            },
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_gone_rejects_incomplete_snapshot() {
+        let (stall, mut requests) = StalledReply::new();
+        let (state, root_ref) = peer_root_state();
+        for stalled in [None, Some(stall)] {
+            let incomplete = stalled.is_some();
+            with_peer(
+                |peer| {
+                    peer.serve_at(
+                        "/window",
+                        PeerNode {
+                            name: "Window",
+                            role: "frame",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: Some("/window/parent"),
+                            text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/parent",
+                        PeerNode {
+                            name: "Parent",
+                            role: "panel",
+                            stalled_role: None,
+                            stalled_children: stalled,
+                            child: Some("/window/parent/match"),
+                            text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/parent/match",
+                        PeerNode {
+                            name: "Matching child",
+                            role: "label",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: None,
+                            text: false,
+                        },
+                    )
+                },
+                async |connection| {
+                    if incomplete {
+                        let reply = peer_request(
+                            &state,
+                            &connection,
+                            "atspiWaitFor",
+                            json!({"rootRef":root_ref,"text":"Matching child","gone":true}),
+                        )
+                        .await;
+                        assert_eq!(requests.try_recv(), Ok(()));
+                        assert!(!reply.ok);
+                        assert_eq!(reply.error.unwrap().code, ErrorCode::Timeout);
+                        let look = peer_request(
+                            &state,
+                            &connection,
+                            "look",
+                            json!({"rootRef":root_ref,"includeImage":false}),
+                        )
+                        .await
+                        .result
+                        .unwrap();
+                        assert_eq!(look["outline"]["title"], "Window");
+                    } else {
+                        let reply = peer_request(
+                            &state,
+                            &connection,
+                            "atspiWaitFor",
+                            json!({"rootRef":root_ref,"text":"Matching child"}),
+                        )
+                        .await;
+                        assert_eq!(reply.result.unwrap()["found"], true);
+                        let gone = peer_request(
+                            &state,
+                            &connection,
+                            "atspiWaitFor",
+                            json!({"rootRef":root_ref,"text":"Absent child","gone":true}),
+                        )
+                        .await;
+                        assert_eq!(gone.result.unwrap()["gone"], true);
+                    }
+                },
+            )
+            .await;
+        }
     }
 
     #[test]

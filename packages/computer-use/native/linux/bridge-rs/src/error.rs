@@ -13,6 +13,8 @@ pub enum ErrorCode {
     TargetNotFound,
     #[serde(rename = "internal_error")]
     InternalError,
+    #[serde(rename = "timeout")]
+    Timeout,
     #[serde(rename = "unsupported_platform")]
     UnsupportedPlatform,
     #[serde(rename = "capture_failed")]

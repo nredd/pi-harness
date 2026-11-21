@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 const homeProbe = vi.hoisted(() => ({ home: "", injected: "", globError: "" }));
 vi.mock("node:fs", async (importOriginal) => {
@@ -71,7 +72,7 @@ describe("readKnownHosts", () => {
 	});
 
 	it("uses the injected home for recursive tilde Includes without probing the real home", () => {
-		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const home = makeTestTempDir("pi-dev-tools-home-", onTestFinished);
 		const config = join(home, ".ssh", "config");
 		const first = join(home, ".ssh", "first.conf");
 		const second = join(home, ".ssh", "second.conf");
@@ -88,12 +89,11 @@ describe("readKnownHosts", () => {
 		} finally {
 			homeProbe.home = "";
 			homeProbe.injected = "";
-			rmSync(home, { recursive: true, force: true });
 		}
 	});
 
 	it("still rejects a real-home probe while an injected home is active", () => {
-		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const home = makeTestTempDir("pi-dev-tools-home-", onTestFinished);
 		homeProbe.home = homedir();
 		homeProbe.injected = home;
 		try {
@@ -102,28 +102,23 @@ describe("readKnownHosts", () => {
 		} finally {
 			homeProbe.home = "";
 			homeProbe.injected = "";
-			rmSync(home, { recursive: true, force: true });
 		}
 	});
 
 	it("follows only glob matches for an Include, like OpenSSH's glob(3)", () => {
 		// `ssh -G` with `Include inc[1].conf` reads `inc1.conf` and skips a file literally named `inc[1].conf`.
-		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const home = makeTestTempDir("pi-dev-tools-home-", onTestFinished);
 		const config = join(home, ".ssh", "config");
 		mkdirSync(join(home, ".ssh"), { recursive: true });
 		writeFileSync(config, "Include ~/.ssh/inc[1].conf\n");
 		writeFileSync(join(home, ".ssh", "inc[1].conf"), "Host literal\n");
-		try {
-			expect(readKnownHosts(config, { homeDir: home }).size).toBe(0);
-			writeFileSync(join(home, ".ssh", "inc1.conf"), "Host matched\n");
-			expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["matched"]);
-		} finally {
-			rmSync(home, { recursive: true, force: true });
-		}
+		expect(readKnownHosts(config, { homeDir: home }).size).toBe(0);
+		writeFileSync(join(home, ".ssh", "inc1.conf"), "Host matched\n");
+		expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["matched"]);
 	});
 
 	it("skips an Include whose glob fails, like OpenSSH, even when the literal path exists", () => {
-		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		const home = makeTestTempDir("pi-dev-tools-home-", onTestFinished);
 		const config = join(home, ".ssh", "config");
 		const broken = join(home, ".ssh", "broken.conf");
 		mkdirSync(join(home, ".ssh"), { recursive: true });
@@ -134,7 +129,6 @@ describe("readKnownHosts", () => {
 			expect([...readKnownHosts(config, { homeDir: home })]).toEqual(["kept"]);
 		} finally {
 			homeProbe.globError = "";
-			rmSync(home, { recursive: true, force: true });
 		}
 	});
 });

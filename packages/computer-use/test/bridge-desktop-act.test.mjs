@@ -39,6 +39,34 @@ test("a step the helper reports as didnt stops the transaction and only the exec
 	assert.match(fake.text(result), /^Executed 1 checked UI action in/);
 });
 
+test.for([
+	{ code: "app_blocked", evidence: undefined, posted: "" },
+	{ code: "app_blocked", evidence: { postedUnits: 1 }, posted: " 1 key pair posted." },
+	{ code: "input_deadline_expired", evidence: { postedUnits: 2 }, posted: " 2 key pairs posted." },
+])(
+	"keyboard stop ($code, $posted) keeps the completed prefix and does not retry",
+	async ({ code, evidence, posted }, { onTestFinished }) => {
+		const { fake, act } = await observed(onTestFinished);
+		const { HelperCommandError } = await import("../src/platform/macos/helper.ts");
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			if (fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "pid" } };
+			throw new HelperCommandError("keyboard stop fixture", code, evidence);
+		};
+		const result = await act([press, { action: "keypress", ref: "@e2", keys: ["tab", "tab", "enter"] }, press]);
+		const { execution } = result.details;
+		assert.equal(fake.actCalls.length, 2);
+		assert.equal(execution.stoppedAt, 1);
+		assert.deepEqual(
+			execution.steps.map(({ outcome }) => outcome),
+			["worked", "didnt"],
+		);
+		assert.deepEqual(execution.steps[1].evidence, evidence);
+		assert.equal(execution.error.code, code);
+		assert.ok(fake.text(result).startsWith(`Stopped at action 2 (${code}).${posted} Do not replay the transaction.`));
+	},
+);
+
 test("an unknown step makes the transaction unknown, and all-worked steps make it worked", async ({
 	onTestFinished,
 }) => {
@@ -73,7 +101,7 @@ test("an observed setText value turns an unknown helper outcome into worked", as
 
 test("a strict-headless batch with no checked steps is an error", async ({ onTestFinished }) => {
 	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
-	const { fake, act } = await observed(onTestFinished);
+	const { fake } = await observed(onTestFinished);
 	for (const steps of [undefined, []]) {
 		const { stateId } = await fake.observe();
 		fake.actBatchResult = { outcome: "worked", performed: { delivery: "ax" }, steps };
@@ -102,6 +130,25 @@ test("a strict-headless batch aggregates its checked steps and the batch root de
 	assert.equal(result.details.execution.stoppedAt, 1);
 	assert.equal(result.details.execution.actionCount, 2);
 });
+
+test.for([false, true])(
+	"a native batch reports a keyboard stop without inventing an action index (batch error: %s)",
+	async (batchError, { onTestFinished }) => {
+		vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+		const { fake, act } = await observed(onTestFinished);
+		const error = { code: "app_blocked", message: "Blocked by the native helper" };
+		fake.actBatchResult = {
+			outcome: "didnt",
+			error: batchError ? error : undefined,
+			steps: [{ outcome: "worked" }, { outcome: "didnt", error: batchError ? undefined : error }],
+		};
+		const result = await act([press, press, press]);
+		assert.equal(fake.actBatchCalls.length, 1);
+		assert.equal(result.details.execution.stoppedAt, undefined);
+		assert.deepEqual(result.details.execution.error, error);
+		assert.ok(fake.text(result).startsWith("Stopped (app_blocked). Do not replay the transaction."));
+	},
+);
 
 test("a batch result without an outcome is treated as unknown, with or without a postcondition or a capture failure", async ({
 	onTestFinished,

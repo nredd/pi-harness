@@ -1,9 +1,9 @@
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { withFileLock } from "../../src/core/filelock.ts";
 import { run } from "../../src/core/process.ts";
 
@@ -21,15 +21,12 @@ vi.mock("node:child_process", async (original) => ({
 	...(await original<typeof import("node:child_process")>()),
 	spawn: vi.fn(),
 }));
-const roots: string[] = [];
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.useRealTimers();
-	for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 function lock() {
-	const root = fs.mkdtempSync(join(tmpdir(), "dev-tools-lock-failure-"));
-	roots.push(root);
+	const root = makeTestTempDir("dev-tools-lock-failure-", onTestFinished);
 	return join(root, "lock");
 }
 
