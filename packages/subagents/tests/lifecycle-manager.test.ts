@@ -337,11 +337,14 @@ describe("resumed-turn lifecycle", () => {
 });
 
 describe("workflow host lifecycle", () => {
-	const workflowCtx = {
-		...ctx,
-		cwd: process.cwd(),
-		sessionManager: { getSessionId: () => "root" },
-	} as ExtensionContext;
+	let workflowCtx: ExtensionContext;
+	beforeEach(() => {
+		workflowCtx = {
+			...ctx,
+			cwd: makeTestTempDir("workflow-roster-", onTestFinished),
+			sessionManager: { getSessionId: () => "root" },
+		} as ExtensionContext;
+	});
 	const allowed = new Set(["general-purpose"]);
 	const readRoster = (manager: AgentManager, id: string) => manager.roster.child(id, allowed).agents;
 
