@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_provenance as producer
 import coverage_report as report
 from coverage_provenance_record import (
-    COVERAGE_HOSTS,
     MAX_PROVENANCE_BYTES,
     Provenance,
     ProvenanceRecord,
@@ -261,13 +260,12 @@ def test_only_current_producer_cells_are_eligible(tmp_path: Path, event: str, ho
     manifest.write_text(json.dumps({host: plan()}))
     cell = f"coverage-{host}"
     summary = document()
-    if host == "macos-14":
-        summary["os"] = "darwin"
-        for row in summary["files"]:
-            row["os"] = "darwin"
+    summary["os"] = "darwin"
+    for row in summary["files"]:
+        row["os"] = "darwin"
     with zipfile.ZipFile(tmp_path / f"{cell}.zip", "w") as archive:
         archive.writestr("coverage/summary.json", json.dumps(summary))
-        job = producer_job(host, shard=False) if host in COVERAGE_HOSTS else "owned-ubuntu"
+        job = producer_job(host, shard=False)
         archive.writestr("coverage/provenance.json", json.dumps(run.record(job, cell)))
     evidence = report.load_evidence(tmp_path, manifest, run)[0]
     assert evidence.state == state, evidence.reason
