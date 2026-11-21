@@ -49,6 +49,9 @@ OPERATIONS = (
 SOURCE = re.compile(
     r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$"
 )
+GIT_VERSION = re.compile(
+    rb"git version ([0-9]{1,3})\.([0-9]{1,3})\.[0-9]+(?: \([^\r\n]+\))?\n?"
+)
 EOL_HEADER = re.compile(rb"i/([^ ]*) +w/([^ ]*) +attr/[^\t]*")
 OID = re.compile(rb"(?:[a-f0-9]{40}|[a-f0-9]{64})")
 REFLOG = re.compile(
@@ -128,6 +131,8 @@ def out(
     Raises:
         KeepError: The command times out, fails or emits diagnostics.
     """
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    child_path = [entry for entry in path_entries if Path(entry).is_absolute()]
     try:
         done = subprocess.run(
             [str(executable), *args],
@@ -137,6 +142,7 @@ def out(
             timeout=TIMEOUT,
             env={
                 **os.environ,
+                "PATH": os.pathsep.join(child_path or map(str, BIN_DIRS)),
                 "GIT_NO_LAZY_FETCH": "1",
                 "GIT_ALLOW_PROTOCOL": "",
                 "GIT_NO_REPLACE_OBJECTS": "1",
@@ -177,6 +183,7 @@ def git(
     Raises:
         KeepError: Git cannot establish the requested evidence.
     """
+    # The version gate makes this a boolean, not a hook command.
     return out(
         GIT_BINARY.get() or binary(GIT_LOCATIONS, "git"),
         "git " + " ".join(args[:2]),
@@ -924,9 +931,13 @@ def main(
             raise KeepError(
                 f"unexpected Git repository overrides: {', '.join(overrides)}"
             )
-        GIT_BINARY.set(
-            binary(GIT_LOCATIONS if git_binary is None else (git_binary,), "git")
+        executable = binary(
+            GIT_LOCATIONS if git_binary is None else (git_binary,), "git"
         )
+        version = GIT_VERSION.fullmatch(out(executable, "git --version", "--version"))
+        if version is None or (int(version[1]), int(version[2])) < (2, 36):
+            raise KeepError("git too old to neutralize fsmonitor safely")
+        GIT_BINARY.set(executable)
         opts.gh = binary(
             tuple(str(path / "gh") for path in BIN_DIRS)
             if gh_binary is None

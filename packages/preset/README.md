@@ -268,7 +268,8 @@ Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
 Before creating an issue worktree and after merge, the parent follows the
 [guarded sweep](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep). The preset ships
 [`sweep_guard.py`](skills/ship-issue/sweep_guard.py) beside `ship-issue`. It needs Python 3.8+,
-Git, `gh` and `lsof`. This rollout is keep-only: the shipped CLI never emits `eligible` and
+Git 2.36+, `gh` and `lsof`. The guard keeps without reading the candidate if the Git version
+is too old or cannot be parsed. This rollout is keep-only: the shipped CLI never emits `eligible` and
 never authorizes removing a worktree or even one claimed scratch file. Supply known
 ownership and retained directory holds with `--hold`; `lsof` only sees processes visible to the
 caller. The guard requires one hour of quiet on the checkout and Git activity markers. Exit `0`

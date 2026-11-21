@@ -865,6 +865,47 @@ def test_open_pr_remains_a_hold(wt: Worktrees) -> None:
     keep(wt, "open PR", SWEEP_LIST='[{"state":"OPEN"}]')
 
 
+@pytest.mark.parametrize("version", ["git version 2.35.1", "unknown"])
+def test_unsafe_git_keeps_before_inventory(
+    wt: Worktrees,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    version: str,
+) -> None:
+    guard = runpy.run_path(str(GUARD))
+    calls = wt.bin / "git-calls"
+    adapter(
+        wt.bin,
+        "git",
+        "import json, sys\nfrom pathlib import Path\n"
+        f"with Path({str(calls)!r}).open('a') as receipt:\n"
+        "    receipt.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        f"print({version!r})\n",
+    )
+    monkeypatch.setattr(os, "environ", git_env())
+    monkeypatch.setattr(sys, "argv", [str(GUARD), str(wt.repo), BASE, "--worktree", str(wt.path)])
+    assert (
+        guard["main"](
+            git_binary=str(wt.bin / "git"),
+            gh_binary=str(wt.bin / "gh"),
+            lsof_binary=str(wt.bin / "lsof"),
+        )
+        == 1
+    )
+    assert [json.loads(line) for line in calls.read_text().splitlines()] == [["--version"]]
+    record = json.loads(capsys.readouterr().out)
+    assert record["verdict"] == "keep"
+    assert "git too old to neutralize fsmonitor safely" in str(record["reasons"])
+
+
+def test_child_path_contains_only_absolute_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", os.pathsep.join((".", "/usr/bin", "", "tools", "/usr/sbin")))
+    value = GUARD_MODULE["out"](
+        Path(sys.executable), "capture child PATH", "-c", "import os; print(os.environ['PATH'])"
+    )
+    assert value.decode().strip() == os.pathsep.join(("/usr/bin", "/usr/sbin"))
+
+
 def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     guard = runpy.run_path(str(GUARD))
     with pytest.raises(guard["KeepError"], match="missing"):
