@@ -540,13 +540,21 @@ fn atspi_error(error: impl std::fmt::Display) -> ProtocolError {
 // Keep the shared test module here so `lib.rs` remains a declaration-only
 // module that the native coverage accountant can validate without an LLVM map.
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "../tests/support/peer.rs"]
 pub(crate) mod test_peer;
 
 #[cfg(test)]
 mod tests {
     use super::test_peer::with_peer;
     use super::*;
+    use std::{
+        future::pending,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+    use tokio::sync::mpsc;
+
+    const FIXTURE_REGISTRY_ROOT: &str = "/org/a11y/atspi/accessible/root";
 
     #[test]
     fn activation_action_selection_prefers_semantics_over_index_zero() {
@@ -699,13 +707,20 @@ mod tests {
         }
     }
 
-    struct WindowExtents(i32);
+    struct WindowExtents {
+        width: i32,
+        coordinate_requests: Arc<Mutex<Vec<u32>>>,
+    }
 
     #[zbus::interface(name = "org.a11y.atspi.Component")]
     impl WindowExtents {
         fn get_extents(&self, coordinate_type: u32) -> (i32, i32, i32, i32) {
             assert_eq!(coordinate_type, 0, "use screen coordinates");
-            (-20, 40, self.0, 480)
+            self.coordinate_requests
+                .lock()
+                .unwrap()
+                .push(coordinate_type);
+            (-20, 40, self.width, 480)
         }
     }
 
@@ -715,6 +730,7 @@ mod tests {
         const APP: &str = "/app";
         const WINDOW: &str = "/app/window";
         const DIALOG: &str = "/app/dialog";
+        let dialog_coordinate_requests = Arc::new(Mutex::new(Vec::new()));
 
         with_peer(
             |server| {
@@ -727,7 +743,7 @@ mod tests {
                 server
                     .serve_at(DBUS_ROOT, MockBus)?
                     .serve_at(
-                        REGISTRY_ROOT,
+                        FIXTURE_REGISTRY_ROOT,
                         node("Registry", "desktop", &[(DESTINATION, APP)]),
                     )?
                     .serve_at(
@@ -739,9 +755,21 @@ mod tests {
                         ),
                     )?
                     .serve_at(WINDOW, node("Notes", "frame", &[]))?
-                    .serve_at(WINDOW, WindowExtents(640))?
+                    .serve_at(
+                        WINDOW,
+                        WindowExtents {
+                            width: 640,
+                            coordinate_requests: Arc::default(),
+                        },
+                    )?
                     .serve_at(DIALOG, node("", "dialog", &[]))?
-                    .serve_at(DIALOG, WindowExtents(0))
+                    .serve_at(
+                        DIALOG,
+                        WindowExtents {
+                            width: 0,
+                            coordinate_requests: Arc::clone(&dialog_coordinate_requests),
+                        },
+                    )
             },
             async |connection| {
                 let client = AtspiClient { connection };
@@ -770,6 +798,7 @@ mod tests {
                 assert_eq!(dialog.accessible.path, DIALOG);
                 assert_eq!(dialog.name, "Editor");
                 assert_eq!(dialog.role, "dialog");
+                assert_eq!(*dialog_coordinate_requests.lock().unwrap(), [0]);
                 assert_eq!(dialog.frame, None);
 
                 let matching = client.list_roots(Some(25361)).await.unwrap();
@@ -784,6 +813,95 @@ mod tests {
             },
         )
         .await;
+    }
+
+    struct DisconnectingRegistry;
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl DisconnectingRegistry {
+        async fn get_children(
+            &self,
+            #[zbus(connection)] connection: &Connection,
+        ) -> Vec<(String, OwnedObjectPath)> {
+            connection.clone().close().await.unwrap();
+            pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_reports_registry_disconnect() {
+        with_peer(
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, DisconnectingRegistry),
+            async |connection| {
+                let error = AtspiClient { connection }
+                    .list_roots(None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InternalError);
+                assert_eq!(
+                    error.message,
+                    "AT-SPI2 request failed: I/O error: failed to read from socket"
+                );
+            },
+        )
+        .await;
+    }
+
+    struct MalformedRegistry;
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl MalformedRegistry {
+        fn get_children(&self) -> u32 {
+            42
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_reports_malformed_registry_reply() {
+        with_peer(
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, MalformedRegistry),
+            async |connection| {
+                let error = AtspiClient { connection }
+                    .list_roots(None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InternalError);
+                assert_eq!(
+                    error.message,
+                    "AT-SPI2 request failed: Signature mismatch: got `u`, expected `a(so)`"
+                );
+            },
+        )
+        .await;
+    }
+
+    struct StalledRegistry(mpsc::UnboundedSender<()>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl StalledRegistry {
+        async fn get_children(&self) -> Vec<(String, OwnedObjectPath)> {
+            self.0.send(()).unwrap();
+            pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_stays_pending_when_registry_never_replies() {
+        let (started, mut requests) = mpsc::unbounded_channel();
+        with_peer(
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, StalledRegistry(started)),
+            async |connection| {
+                let client = AtspiClient { connection };
+                let request = client.list_roots(None);
+                tokio::pin!(request);
+                tokio::select! {
+                    received = requests.recv() => assert_eq!(received, Some(())),
+                    result = &mut request => panic!("list_roots completed before the registry stalled: {result:?}"),
+                }
+                // Production has no per-request timeout. The caller's deadline cancels the wait.
+                assert!(tokio::time::timeout(Duration::from_millis(100), request).await.is_err());
+            },
+        ).await;
     }
 
     /// Record calls so a password read fails even if its result is subsequently discarded.
