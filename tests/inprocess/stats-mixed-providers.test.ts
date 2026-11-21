@@ -12,6 +12,7 @@ import { isolateStackHome } from "./support.ts";
 it("counts three providers in one session with thinking included in output", async () => {
 	const home = await isolateStackHome();
 	const fixture = new TerminalFixture();
+	const registered: { unregister(): void }[] = [];
 	const anthropic = registerFauxProvider({
 		api: "fixture-anthropic",
 		provider: "anthropic",
@@ -23,10 +24,11 @@ it("counts three providers in one session with thinking included in output", asy
 		models: [{ id: "gpt-6.1-sol" }],
 	});
 	const google = registerGoogleFauxProvider();
+	registered.push(anthropic, codex, google);
 	const turns = [
-		[anthropic, 10, 20, 0, 30, 0.12, 3],
-		[codex, 11, 21, 0, 31, 0.23, 2],
-		[google, 12, 22, 7, 42, 0.34, 1],
+		{ mock: anthropic, input: 10, output: 20, reasoning: 0, cacheRead: 30, costUsd: 0.12, daysAgo: 3 },
+		{ mock: codex, input: 11, output: 21, reasoning: 0, cacheRead: 31, costUsd: 0.23, daysAgo: 2 },
+		{ mock: google, input: 12, output: 22, reasoning: 7, cacheRead: 42, costUsd: 0.34, daysAgo: 1 },
 	] as const;
 	try {
 		const host = await fixture.startTerminal(configFor("stats"), {
@@ -47,9 +49,9 @@ it("counts three providers in one session with thinking included in output", asy
 					// Script recorded usage at the public persistence seam: the faux transport estimates its own tokens.
 					pi.on("message_end", ({ message }) => {
 						if (message.role !== "assistant" || message.stopReason !== "stop") return;
-						const turn = turns.find(([mock]) => mock.getModel().provider === message.provider);
+						const turn = turns.find(({ mock }) => mock.getModel().provider === message.provider);
 						if (!turn) return;
-						const [, input, output, reasoning, cacheRead, total, daysAgo] = turn;
+						const { input, output, reasoning, cacheRead, costUsd, daysAgo } = turn;
 						return {
 							message: {
 								...message,
@@ -61,7 +63,7 @@ it("counts three providers in one session with thinking included in output", asy
 									cacheRead,
 									cacheWrite: 0,
 									totalTokens: input + output + cacheRead,
-									cost: { ...message.usage.cost, total },
+									cost: { ...message.usage.cost, total: costUsd },
 								},
 							},
 						};
@@ -70,7 +72,7 @@ it("counts three providers in one session with thinking included in output", asy
 			],
 		});
 		const session = host.harness.session;
-		for (const [mock] of turns) {
+		for (const { mock } of turns) {
 			const model = mock.getModel();
 			mock.setResponses([fauxAssistantMessage("Offline fixture", { timestamp: fixture.clock.now() })]);
 			await session.setModel(model);
@@ -99,7 +101,7 @@ it("counts three providers in one session with thinking included in output", asy
 		try {
 			await fixture.dispose();
 		} finally {
-			for (const mock of [anthropic, codex, google]) mock.unregister();
+			for (const mock of registered) mock.unregister();
 			await home.cleanup();
 		}
 	}
