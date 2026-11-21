@@ -1,5 +1,6 @@
 // `act_ui`, `navigate_browser` and `evaluate_browser` on CDP browser states through the real `cdp.ts` over the scriptable fake CDP (nredd/pi-harness#712, Refs #645).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, test, vi } from "vitest";
 import { cdpError, startFakeCdp } from "./fixtures/fake-cdp.mjs";
 import { installFakeDesktop } from "./support/fake-desktop.mjs";
@@ -150,8 +151,19 @@ test("browser states refuse paste, selectText and secondaryAction before the epo
 	assert.match((await act({ stateId, actions: [{ action: "press", ref: refs.Save }] })).details.stateId, /./);
 });
 
-test("act_ui coordinate input reaches the page through CDP input events", async ({ onTestFinished }) => {
+test("browser-state act_ui dispatches CDP input even with headless enabled, as documented", async ({
+	onTestFinished,
+}) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+	assert.match(readme, /^\| Rules \| (?:[a-z]+ native desktop delivery \| ?){3}$/im);
+	assert.match(
+		readme,
+		/^\| CDP\/browser \| .*even with `headless: true`: the desktop `ax_only` gate does not apply\./m,
+	);
 	const { act, stateId, refs, paramsOf } = await observePage(onTestFinished);
+	const { getComputerUseConfig } = await import("../src/config.ts");
+	assert.equal(getComputerUseConfig().headless, true);
 	await act({
 		stateId,
 		actions: [

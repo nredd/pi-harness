@@ -203,14 +203,18 @@ These rules apply to every OS and transport. They describe required behavior, no
 
 Current implementation:
 
-| Rules | macOS | Windows | Linux |
+| Rules | macOS native desktop delivery | Windows native desktop delivery | Linux native desktop delivery |
 | --- | --- | --- | --- |
 | 1, 2, 8: admission, stop and routing | PID delivery targets the selected process. HID checks focus and blocked apps, but web text fallback and multi-key input have stale-check gaps (#1173). | UIA and HWND delivery resolve the selected root; foreground `SendInput` uses target/focus guards but has no helper blocklist. | AT-SPI is target-scoped; X11 XTEST is global and checks the active window, not the blocklist. Per-unit conformance is unproven; #1183 tracks the test seam. |
-| 3, 4: cleanup and partial delivery | Paste restores the clipboard and drag reserves mouse-up. Release timestamps and unmatched-release coverage are open (#1174); no general partial-delivery count guarantee. | Cleanup paths exist for pressed inputs and clipboard handling; no general partial-delivery count guarantee. | X11 can leave held inputs on error (#1181) and report partial delivery as `didnt` (#1182). |
+| 3, 4: cleanup and partial delivery | Paste restores the temporary pasteboard contents and drag reserves mouse-up. Release timestamps and unmatched-release coverage are open (#1174); no general partial-delivery count guarantee. | The helper cleans up pressed keys and buttons; it does not handle the clipboard. No general partial-delivery count guarantee. | X11 can leave held inputs on error (#1181) and report partial delivery as `didnt` (#1182). |
 | 5: retry | The bridge still retries some foreground refusals and checked `didnt` results outside strict headless; uncertain delivery is not blindly replayed. | Shared fallback; no conformance guarantee. | Shared fallback; #1182 means `didnt` does not always prove no input posted. |
 | 6: strict headless | Prohibits synthesized input, focus and cursor movement; input requiring foreground returns `foreground_required`. | Prohibits raw input and forced focus; raw-input refusal can be `coordinate_blocked`. | Prohibits XTEST and EWMH focus. Physical fallback refusal can be `coordinate_blocked` (X11 or no graphical session) or `capability_deferred` (Wayland). |
 | 7: root selection | Enforced by bundle id. | Enforced by executable basename. Unidentified roots are listed as blocked and refused with `app_blocked`. | Disabled: helper `processName` is the app-supplied AT-SPI accessible Name, not an executable basename or `WM_CLASS` (#1180). |
 | 9: codes | Uses contract codes where applicable. | Platform-specific codes remain, including the strict-headless divergence above. | Platform-specific codes remain, including the strict-headless divergence above. |
+
+| Separate transport | Current delivery |
+| --- | --- |
+| CDP/browser | Browser-state `act_ui` uses page-scoped DOM methods and CDP `Input` commands, not native desktop input. It dispatches synthesized page mouse and key events even with `headless: true`: the desktop `ax_only` gate does not apply. Native app selection policy does not apply to CDP pages. Press/release commands are paired on success, but there is no general owed-release or partial-delivery count guarantee. |
 
 On Windows, `blocked_apps` matches the **window owner process**, not a shell, launch alias, or
 hosted app. Match the exact executable basename, case-insensitively: `powershell.exe` matches

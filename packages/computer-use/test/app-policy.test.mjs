@@ -757,6 +757,16 @@ function policyRoot(pid, appName, processName, bundleId) {
 	};
 }
 
+test("The delivery contract distinguishes Windows input cleanup from macOS pasteboard restoration", () => {
+	const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+	const [, , macOS, windows] = readme
+		.split("\n")
+		.find((line) => line.startsWith("| 3, 4:"))
+		.split("|");
+	assert.match(macOS, /Paste restores the temporary pasteboard contents/);
+	assert.match(windows, /cleans up pressed keys and buttons; it does not handle the clipboard/);
+});
+
 test("Windows blocks known roots by executable before helper calls, not by display name or bundle id", async ({
 	onTestFinished,
 }) => {
