@@ -988,6 +988,7 @@ TODO_CONTRACT = PackageContract(
         "src/locales/uk.json",
         "src/locales/zh.json",
         "package.json",
+        "src/plan/empty-reminder.ts",
         "src/plan/hooks.ts",
         "src/agents.ts",
         "src/state/i18n-bridge.ts",
