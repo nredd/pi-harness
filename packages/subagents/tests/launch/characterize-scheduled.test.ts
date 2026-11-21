@@ -58,11 +58,6 @@ it("char:8 #1176: a quota-parked fire shows thinking without the live tool or tu
 });
 
 async function expectUntrackedSchedule(stack: Awaited<ReturnType<typeof bootLaunchStack>>, id: string) {
-	const row = stack.renderRow(id);
-	expect(row.widget).toContain("thinking…");
-	expect(row.widget).not.toContain(heldTool.tool);
-	expect(row.widget).not.toContain("↻");
-	expect(row.fleet).toMatch(/running/i);
-	expect(await stack.openViewer(id)).toContain(`[Tool: ${heldTool.tool}]`);
+	await stack.expectUntrackedTopLevel(id, heldTool);
 	expect(stack.manager.getRecord(id)?.outputFile).toBeUndefined();
 }

@@ -227,6 +227,14 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		expect(viewer.constructor.name).toBe("ConversationViewer");
 		return viewer.render(WIDTH).join("\n");
 	}
+	async function expectUntrackedTopLevel(id: string, { tool }: { tool: string }) {
+		const row = renderRow(id);
+		expect(row.widget).toContain("thinking…");
+		expect(row.widget).not.toContain(tool);
+		expect(row.widget).not.toContain("↻");
+		expect(row.fleet).toMatch(/running/i);
+		expect(await openViewer(id)).toContain(`[Tool: ${tool}]`);
+	}
 	const registry = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as {
 		spawn: typeof manager.spawn;
 		getRecord: typeof manager.getRecord;
@@ -256,6 +264,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		execute,
 		expectOwnerScoped,
 		expectTracked,
+		expectUntrackedTopLevel,
 		fleet,
 		holdAt,
 		input,
