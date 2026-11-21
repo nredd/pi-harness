@@ -464,9 +464,9 @@ jobs:
   # an isolated real-verifier comparison failed without it and verified the original signer/ref policy
   # with only that OS-runtime key restored ([receipt](https://github.com/nredd/pi-harness/actions/runs/43362875064)).
   # No token, profile/cache state or tool-injection variables are admitted by that correction.
-  # It uploads source-bound metadata
-  # and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
-  # job and refuses any non-success outcome when computer-use is selected.
+  # It uploads source-bound metadata and raw reports as `computer-use-rust-windows-x64-<attempt>`.
+  # The Ubuntu fan-in requires this job to succeed when computer-use is selected; on a partial rerun
+  # it uses the artifact ID from the successful producer, even when that job was carried over.
   # The Ubuntu fan-in checks the independent Windows x64 line/function caps from these artifacts.
   # This is not live desktop evidence; absent branches/statements stay unmeasured.
 
@@ -476,6 +476,8 @@ jobs:
     if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run && contains(toJSON(fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
     runs-on: windows-2025
     timeout-minutes: 25
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     defaults:
       run:
         shell: pwsh
@@ -533,10 +535,11 @@ jobs:
         working-directory: packages/computer-use
         run: node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs test/rust-coverage.test.mjs --coverage.enabled=false
       - name: Preserve Windows source-bound native reports
+        id: upload
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: computer-use-rust-windows-x64
+          name: computer-use-rust-windows-x64-${{ github.run_attempt }}
           path: |
             packages/computer-use/coverage/native-windows/compiler.log
             packages/computer-use/coverage/native-windows/coverage.json
@@ -616,6 +619,7 @@ jobs:
       SHARDS_RESULT: ${{ needs.owned-shards-ubuntu.result }}
       WINDOWS_REQUIRED: ${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
       WINDOWS_RESULT: ${{ needs.computer-use-windows.result }}
+      WINDOWS_ARTIFACT_ID: ${{ needs.computer-use-windows.outputs.artifact-id }}
     runs-on: ubuntu-24.04
     timeout-minutes: &owned-timeout 15
     steps: &owned-steps
@@ -691,7 +695,9 @@ jobs:
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && env.WINDOWS_REQUIRED == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: computer-use-rust-windows-x64
+          # An empty input would download all artifacts; an invalid ID fails closed.
+          artifact-ids: ${{ env.WINDOWS_ARTIFACT_ID || 'missing' }}
+          merge-multiple: true
           path: ${{ runner.temp }}/windows-coverage
       - name: Account for Windows x64 coverage separately
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && env.WINDOWS_REQUIRED == 'true' }}
@@ -701,8 +707,12 @@ jobs:
           reports="$RUNNER_TEMP/windows-coverage"
           destination="$reports/packages/computer-use/coverage/native-windows"
           mkdir -p "$destination"
-          cp "$reports"/windows-*/lcov.info "$destination/lcov.info"
-          cp "$reports/coverage.json" "$destination/coverage.json"
+          set -- "$reports"/windows-*
+          if [ "$#" -ne 1 ]; then
+            echo '::error::Expected exactly one Windows coverage producer directory'
+            exit 1
+          fi
+          cp "$1"/{lcov.info,coverage.json,metadata.json} "$destination/"
           uv run --locked --project tests/integration python scripts/coverage_accounting.py \
             --os win32 --base "$BASE" --reports-root "$reports" --summary coverage/windows-x64-summary.json
       # Keep accounting and artifact retention independent from presentation provenance. An older or

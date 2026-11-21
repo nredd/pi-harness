@@ -51,6 +51,8 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
         step for step in steps if step.get("name") == "Preserve Windows source-bound native reports"
     )
     assert upload["if"] == "always()"
+    assert upload["with"]["name"] == "computer-use-rust-windows-x64-${{ github.run_attempt }}"
+    assert producer["outputs"]["artifact-id"] == f"${{{{ steps.{upload['id']}.outputs.artifact-id }}}}"
     assert upload["with"]["if-no-files-found"] == "error"
     assert "provenance.json" not in upload["with"]["path"]
     for report in ("lcov.info", "coverage.json", "metadata.json", "summary.txt", "*.log", "compiler.log"):
@@ -77,12 +79,17 @@ def test_required_fan_in_accounts_the_windows_artifact_separately() -> None:
     account = by_name["Account for Windows x64 coverage separately"]
     required = by_name["Require every planned shard to succeed"]
     assert steps.index(required) < steps.index(download) < steps.index(account)
-    assert download["with"]["name"] == "computer-use-rust-windows-x64"
+    assert ubuntu["env"]["WINDOWS_ARTIFACT_ID"] == "${{ needs.computer-use-windows.outputs.artifact-id }}"
+    assert download["with"] == {
+        "artifact-ids": "${{ env.WINDOWS_ARTIFACT_ID || 'missing' }}",
+        "merge-multiple": True,
+        "path": "${{ runner.temp }}/windows-coverage",
+    }
     assert download["if"] == account["if"]
     assert "steps.plan.outputs.run == 'true' && env.WINDOWS_REQUIRED == 'true'" in account["if"]
     assert jobs["owned-macos"]["env"]["WINDOWS_REQUIRED"] == "false"
     assert "--os win32 --base" in account["run"]
-    assert 'cp "$reports"/windows-*/lcov.info "$destination/lcov.info"' in account["run"]
+    assert 'cp "$1"/{lcov.info,coverage.json,metadata.json} "$destination/"' in account["run"]
     assert "coverage/windows-x64-summary.json" in account["run"]
     assert (
         "coverage/windows-x64-summary.json"

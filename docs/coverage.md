@@ -434,9 +434,11 @@ and the native coverage owners.
 generators were retired (#870), not left as unmeasured source.
 
 The native Windows x64 Rust signal, `computer-use-windows-native` (#696), uses the headless
-`computer-use-rust-windows-x64` artifact. When the CI plan selects computer-use, the required
-Ubuntu fan-in downloads it and writes `coverage/windows-x64-summary.json` separately from the
-Ubuntu counters. Missing or invalid LCOV or raw LLVM JSON fails the check. LLVM reports source
+`computer-use-rust-windows-x64-<attempt>` artifact. When the CI plan selects computer-use, the
+required Ubuntu fan-in downloads the successful producer's artifact by ID, including when the
+producer is carried over on a partial rerun. It writes `coverage/windows-x64-summary.json`
+separately from the Ubuntu counters. Missing or invalid LCOV, raw LLVM JSON or metadata fails
+the check. The recorded source hashes must match the checkout. LLVM reports source
 line and function totals in `LF/LH` and `FNF/FNH`, not one unit per `DA` or `FNDA` row. Accounting
 checks those summaries against the paired JSON and keeps regions from JSON only. The two hosted
 main runs [here](https://github.com/nredd/pi-harness/actions/runs/44914453077) and
@@ -445,8 +447,8 @@ uncovered lines / functions / regions across the crate's `src/` inventory. Only 
 are capped and ratcheted. Integration tests and sysroot files are outside the denominator, but
 inline source tests count. This is not Windows ARM64 or live desktop evidence.
 
-To replay with the matching source checkout, download the named Windows artifact, copy the
-single `windows-*/lcov.info` and top-level `coverage.json` into
+To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
+`coverage.json` and `metadata.json` from its single `windows-*` directory into
 `<reports-root>/packages/computer-use/coverage/native-windows/`, and run
 `uv run --locked --project tests/integration python scripts/coverage_accounting.py --os win32 --base HEAD --reports-root <reports-root>`.
 

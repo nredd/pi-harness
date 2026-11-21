@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal, cast
 
@@ -44,8 +45,9 @@ FACADE_EXPORT = re.compile(
 RUST_DECLARATIONS = re.compile(
     r"(?:\s|//[^\n]*|/\*(?:(?!/\*|\*/)[\s\S])*\*/|pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;)*"
 )
-# Windows LLVM resolves remapped standard-library sources relative to the crate.
-RUST_SYSROOT = re.compile(r"native/windows/bridge-rs/rustc/[a-f0-9]{40}/library/.+")
+# The paired LLVM producer covers this crate; LLVM resolves remapped sysroot paths relative to it.
+WINDOWS_CRATE = "native/windows/bridge-rs"
+RUST_SYSROOT = re.compile(rf"{WINDOWS_CRATE}/rustc/[a-f0-9]{{40}}/library/.+")
 CoverageOS = Literal["darwin", "linux", "win32"]
 COVERAGE_OSES = ("darwin", "linux", "win32")
 LCOV_TOTALS = ("LF", "LH", "FNF", "FNH")
@@ -1265,6 +1267,37 @@ def read_llvm_reports(path: Path, signal: Signal) -> tuple[LLVMReport, dict[str,
     return report, lcov
 
 
+class LLVMSourceMetadata(BaseModel):
+    source_hashes: dict[str, str] = Field(
+        alias="sourceHashes", description="Crate-relative SHA-256 digests from the producer."
+    )
+
+
+def verify_llvm_source_hashes(metadata: Path, crate: Path) -> None:
+    """Match the Windows producer's complete native inputs against the checkout.
+
+    Parameters:
+        metadata (Path): Producer metadata beside the paired reports.
+        crate (Path): Source checkout's native crate root.
+    Returns:
+        None.
+    Raises:
+        ValueError: Metadata is missing, invalid, or describes different crate inputs.
+        OSError: A checkout input cannot be read.
+    """
+    try:
+        recorded = LLVMSourceMetadata.model_validate_json(metadata.read_bytes()).source_hashes
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Cannot read Windows coverage metadata '{metadata}': {error}") from error
+    # Match collectSourceHashes in packages/computer-use/scripts/rust-coverage.mjs.
+    inputs = [crate / "Cargo.toml", crate / "Cargo.lock"]
+    for directory in ("src", "tests"):
+        inputs.extend(file for file in (crate / directory).rglob("*") if file.is_file())
+    current = {file.relative_to(crate).as_posix(): sha256(file.read_bytes()).hexdigest() for file in inputs}
+    if recorded != current:
+        raise ValueError("Windows coverage metadata source hashes differ from the checkout")
+
+
 def llvm_records(
     root: Path, package: Package, signal: Signal, expected: set[str], reports_root: Path | None
 ) -> dict[str, FileCoverage]:
@@ -1283,6 +1316,8 @@ def llvm_records(
         OSError: A report or classified source cannot be read.
     """
     path = (reports_root or root) / package.root / signal.report
+    if signal.producer == "llvm-lcov":
+        verify_llvm_source_hashes(path.with_name("metadata.json"), root / package.root / WINDOWS_CRATE)
     report, lcov = read_llvm_reports(path, signal)
     records: dict[str, NativeFileCoverage] = {}
     marker = f"/{package.root}/"

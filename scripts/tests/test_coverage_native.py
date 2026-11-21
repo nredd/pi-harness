@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -301,7 +302,7 @@ def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Pa
     cfg.packages["windows"] = package
     signal = Signal(
         report="coverage/native-windows/lcov.info",
-        max_uncovered={"win32": Counts(lines=6, functions=6)},
+        max_uncovered={"win32": Counts(lines=7, functions=7)},
         reporters=["text", "lcov", "json"],
         producer="llvm-lcov",
         platforms=["win32"],
@@ -310,7 +311,36 @@ def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Pa
     reports = tmp_path / "download"
     path = reports / package.root / signal.report
     path.parent.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text('[package]\nname = "fixture"\n')
+    (crate / "Cargo.lock").write_text("version = 4\n")
+    (crate / "tests").mkdir()
+    (crate / "tests/protocol.rs").write_text("#[test] fn protocol() {}\n")
+    source_hashes = {
+        name: sha256((crate / name).read_bytes()).hexdigest()
+        for name in (
+            "Cargo.toml",
+            "Cargo.lock",
+            "src/lib.rs",
+            "src/main.rs",
+            "src/policy_tests.rs",
+            "src/tests/mod.rs",
+            "tests/protocol.rs",
+        )
+    }
+    path.with_name("metadata.json").write_text(json.dumps({"sourceHashes": source_hashes}))
     return cfg, report, path, reports
+
+
+def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
+    """Simulate missing, malformed, or stale producer metadata in a valid report pair."""
+    metadata = path.with_name("metadata.json")
+    if case == "missing-metadata":
+        metadata.unlink()
+    if case == "malformed-metadata":
+        metadata.write_text("{}")
+    if case == "older-inputs":
+        # The source paths and executable counters still match after this edit.
+        source.write_text(source.read_text() + "// Changed after the older report pair.\n")
 
 
 @pytest.mark.parametrize(
@@ -319,6 +349,9 @@ def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Pa
         ("valid", ""),
         ("missing-lcov", "No such file"),
         ("missing-json", "No such file"),
+        ("missing-metadata", "Cannot read Windows coverage metadata"),
+        ("malformed-metadata", "Cannot read Windows coverage metadata"),
+        ("older-inputs", "metadata source hashes differ"),
         ("missing-source", "source lists differ"),
         ("missing-totals", "Missing LLVM LCOV totals"),
         ("impossible-totals", "Inconsistent LLVM LCOV totals"),
@@ -368,6 +401,9 @@ def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, cas
         signal.max_uncovered["win32"].lines = 5
     if case == "missing-floor":
         del signal.max_uncovered["win32"]
+    alter_windows_metadata(
+        path, tmp_path / "packages/computer-use/native/windows/bridge-rs/src/main.rs", case
+    )
     if case != "missing-lcov":
         path.write_text(lcov)
     if case != "missing-json":
