@@ -125,7 +125,7 @@ once per human prompt, independently of the plan reminder. The context hook subs
 list only on that request, and only if the work remains held and unarmed. A wake is not proof of
 completion; only the parent changes todo status with evidence.
 
-An unchanged list with `pending` or `in_progress` todos adds a hidden
+In TUI only, an unchanged list with `pending` or `in_progress` todos adds a hidden
 `rpiv-todo-stale-reminder` after `staleAfterSettles` completed settles (default 10, set in
 `~/.config/rpiv-todo/config.json`; a non-positive-integer value falls back to the default) that would otherwise stop, even when a
 background agent is armed. It asks the parent to run `todo list` and reconcile actual progress.
@@ -141,9 +141,12 @@ trigger it. Any `todo` call resets the work count. The nudge requires fresh tool
 a new human prompt after the last nudge, and `emptyReminderCooldownSettles` completed
 settles outside Plan mode (default 10) between nudges. Continuation boundaries and
 aborted or failed runs do not count toward the cooldown. On resume or `/reload`, a
-restored nudge waits for new human input and starts a fresh cooldown. The hidden
-marker is persisted bookkeeping visible in `/tree` and in JSON/RPC `entry_appended`
-events when emitted. An earlier extension handler that delays only a `todo`
+restored nudge waits for new human input and starts a fresh cooldown. Both nudges
+expand into instructions only on the immediate follow-up request. A restored
+marker does not expand again. Core still needs a persisted `custom_message` to
+continue after an assistant reply, so these markers remain visible in `/tree` and
+in the generic `entry_appended` event. JSON, RPC and print sessions do not emit
+either nudge. An earlier extension handler that delays only a `todo`
 completion can reorder the reset, making the nudge late or missed until the next
 tool call, but cannot cause an extra nudge.
 

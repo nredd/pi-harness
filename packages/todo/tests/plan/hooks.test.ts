@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -531,11 +531,14 @@ describe("settling with nothing armed to wake the parent", () => {
 		beforeStart?: (bus: Map<string, Handler[]>) => void,
 		/** The session file this session was forked from (its header's `parentSession`), if any. */
 		parentSession?: string,
+		mode: ExtensionContext["mode"] = "tui",
 	) {
 		const s = setup();
 		beforeStart?.(s.bus);
 		const ctx = createTodoCtx({
 			sessionId: "s1",
+			mode,
+			hasUI: false,
 			branch: [{ type: "custom", customType: STATE_ENTRY_TYPE, data: snapshot }] as never,
 		});
 		Object.assign(ctx.sessionManager, {
@@ -649,6 +652,23 @@ describe("settling with nothing armed to wake the parent", () => {
 			}
 		});
 
+		it.each(["json", "rpc", "print"] as const)("never continues a %s session for a stale list", async (mode) => {
+			const { handler, ctx } = await start(tasks({ id: 1 }), "resume", undefined, undefined, mode);
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 11);
+		});
+
+		it("evicts stale eligibility on a same-session non-TUI rebind", async () => {
+			const { handler, ctx } = await start(tasks({ id: 1 }));
+			armWorker();
+			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant]), ctx), 9);
+			const rpc = createTodoCtx({ sessionId: "s1", mode: "rpc", hasUI: false, branch: ctx.sessionManager.getBranch() });
+			await handler("session_start")({ reason: "resume" }, rpc);
+			armWorker();
+			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant]), rpc), 11);
+		});
+
 		it("nudges at the threshold with an armed worker and rearms only on human input", async () => {
 			const { handler, ctx, call } = await start(tasks({ id: 1 }));
 			armWorker();
@@ -667,6 +687,7 @@ describe("settling with nothing armed to wake the parent", () => {
 				messages: [user, assistant, { customType, content: expect.stringContaining("action `list`") }],
 			});
 			expect(marker.content).not.toContain("action `list`");
+			expect(await handler("context")({ messages }, ctx)).toBeUndefined();
 			expect(await handler("context")({ messages: [...messages, assistant] }, ctx)).toBeUndefined();
 			await expectQuiet(() => settle([...messages, assistant]), 10);
 			await handler("input")({ source: "extension" }, ctx);
