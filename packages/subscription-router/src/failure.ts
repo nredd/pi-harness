@@ -34,7 +34,9 @@ export function nextPacificMidnight(now: number): number {
 }
 
 const LEADING_STATUS = /^(?:HTTP(?:\/\d(?:\.\d)?)?\s+)?([45]\d{2})(?=$|\s|:)(?!\s+(?:tokens?|bytes?|requests?)\b)/i;
-const BODY_STATUS = /[{,]\s*"code"\s*:\s*([45]\d{2})(?=$|\s|[,}])/i;
+const JSON_TOKEN =
+	/\s*(?:"(?:[^"\\\r\n]|\\.)*"|[{}[\],:]|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.+-]))/y;
+const CUT_MESSAGE = /^\s*,?\s*"message"\s*:\s*"(?:[^"\\\r\n]|\\.)*$/;
 const NON_QUOTA =
 	/\b(?:Provider stopped with:|SAFETY\b|blocked\b|unauthorized\b|unauthenticated\b|forbidden\b|permission[ _]denied\b|overloaded\b|model_capacity_exhausted\b|unavailable\b|network\b|ECONNRESET\b|ECONNREFUSED\b|ENOTFOUND\b|ETIMEDOUT\b|fetch failed\b|socket hang up\b)/i;
 const VERDICT = /\b(?:RESOURCE_EXHAUSTED|rate_limit_error|rate_limit_exceeded|too_many_requests|QUOTA_EXHAUSTED)\b/i;
@@ -62,15 +64,47 @@ function list(value: unknown): unknown[] {
 	return Array.isArray(value) ? value : [];
 }
 
-function parseBody(text: string): Record<string, unknown> | undefined {
-	const start = text.indexOf("{");
-	if (start < 0) return undefined;
+function parseJson(text: string): Record<string, unknown> | undefined {
 	try {
-		return record(JSON.parse(text.slice(start)));
+		return record(JSON.parse(text));
 	} catch {
-		// Core can truncate the response body. Fall back to the intact fields in the text.
 		return undefined;
 	}
+}
+
+// Complete the longest token prefix we can close. JSON.parse checks the recovered
+// structure; RPC fields still have to pass the same path and type checks as full JSON.
+function recoverBody(text: string): Record<string, unknown> | undefined {
+	const closers: string[] = [];
+	let end = 0;
+	let suffix = "";
+	let pending = "";
+	JSON_TOKEN.lastIndex = 0;
+	for (let match = JSON_TOKEN.exec(text); match; match = JSON_TOKEN.exec(text)) {
+		const token = match[0].trimStart();
+		if (token === "{" || token === "[") closers.unshift(token === "{" ? "}" : "]");
+		if ((token === "}" || token === "]") && closers.shift() !== token) break;
+		if (token !== "," && token !== ":" && !(token.startsWith('"') && closers[0] === "}" && pending !== ":")) {
+			end = JSON_TOKEN.lastIndex;
+			suffix = closers.join("");
+		}
+		if (!closers.length) break;
+		pending = token;
+	}
+	// Only top-level/error message prose may be partial. Quote completion here
+	// cannot manufacture a quotaId, retryDelay or type from a cut string.
+	if (CUT_MESSAGE.test(text.slice(end))) {
+		const prose = parseJson(`${text}"${suffix}`);
+		if (prose) return prose;
+	}
+	return parseJson(`${text.slice(0, end)}${suffix}`);
+}
+
+function parseBody(text: string): Record<string, unknown> {
+	const start = text.indexOf("{");
+	if (start < 0) return {};
+	const body = text.slice(start);
+	return parseJson(body) ?? recoverBody(body) ?? {};
 }
 
 function rpcSignals(body: Record<string, unknown>) {
@@ -81,11 +115,11 @@ function rpcSignals(body: Record<string, unknown>) {
 	for (const value of list(error.details)) {
 		const detail = record(value);
 		const type = string(detail["@type"]);
-		if (/(?:^|[./])QuotaFailure$/.test(type)) {
+		if (/^(?:type\.googleapis\.com\/google\.rpc\.|google\.rpc\.)?QuotaFailure$/.test(type)) {
 			for (const violation of list(detail.violations)) quotaIds.push(string(record(violation).quotaId));
-		} else if (/(?:^|[./])RetryInfo$/.test(type)) {
+		} else if (/^(?:type\.googleapis\.com\/google\.rpc\.|google\.rpc\.)?RetryInfo$/.test(type)) {
 			delays.push(string(detail.retryDelay));
-		} else if (/(?:^|[./])ErrorInfo$/.test(type)) {
+		} else if (/^(?:type\.googleapis\.com\/google\.rpc\.|google\.rpc\.)?ErrorInfo$/.test(type)) {
 			codes.push(string(detail.reason));
 			quotaIds.push(string(record(detail.metadata).quota_limit));
 		}
@@ -95,19 +129,6 @@ function rpcSignals(body: Record<string, unknown>) {
 
 function isNonQuotaStatus(status: unknown): boolean {
 	return status === 401 || status === 403 || (typeof status === "number" && status >= 500 && status < 600);
-}
-
-function rawSignals(text: string) {
-	return {
-		status: Number(BODY_STATUS.exec(text)?.[1]),
-		codes: [...text.matchAll(/[{,]\s*"(?:status|type|code|reason)"\s*:\s*"(\w+)"/g)].map((match) => match[1]),
-		// Do not treat arbitrary JSON values (or a cut-off quotaId) as prose window markers.
-		prose: string(/[{,]\s*"message"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(text)?.[1]),
-		quotaIds: [...text.matchAll(/[{,]\s*"(?:quotaId|quota_limit)"\s*:\s*"([^"\r\n]*)"/g)].map((match) =>
-			string(match[1]),
-		),
-		delays: [...text.matchAll(/[{,]\s*"retryDelay"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map((match) => string(match[1])),
-	};
 }
 
 function retryHint(delays: string[], prose: string): number | undefined {
@@ -127,8 +148,7 @@ function retryHint(delays: string[], prose: string): number | undefined {
 export function classify(errorMessage: string | undefined, now: number): FailureClassification {
 	const text = (errorMessage ?? "").trim();
 	const leading = LEADING_STATUS.exec(text);
-	const body = parseBody(text);
-	const { status, codes, prose, quotaIds, delays } = body ? rpcSignals(body) : rawSignals(text);
+	const { status, codes, prose, quotaIds, delays } = rpcSignals(parseBody(text));
 	const http = leading ? Number(leading[1]) : status;
 	const prefix = string(text.split("{", 1)[0]);
 	const message = `${prefix} ${prose}`.trim();
