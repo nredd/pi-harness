@@ -12,6 +12,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -538,7 +539,14 @@ def test_code_change_runs_ubuntu_with_its_gates(repo: Path) -> None:
     plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
     ubuntu = plan["owned (ubuntu-24.04)"]
     assert ubuntu == ci_paths.CellPlan(
-        True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards, guest="linux", coverage_os="linux"
+        True,
+        True,
+        ALL_NATIVE_GATES,
+        "",
+        shards=ubuntu.shards,
+        guest="linux",
+        coverage_os="linux",
+        windows_native_required=True,
     )
     assert len(ubuntu.shards) == 4
     assert plan["stack (ubuntu-24.04, local)"].scenarios
@@ -833,6 +841,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
         ],
         "guest": "macos",
         "coverage_os": "darwin",
+        "windows_native_required": False,
         "skipped_gates": "",
     }
     assert plan["contracts (macos-14)"]["shards"] == []
@@ -1249,6 +1258,48 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     assert all((cell.guest, cell.coverage_os) == ("", "") for cell in docs.values())
     blocked = ci_paths.plan_cells(classify_change(repo, {"b.txt": "x\n"}), PULL_REQUEST, "too long")
     assert all(cell.shards == () for cell in blocked.values())
+
+
+@pytest.mark.parametrize(
+    "workspace", ["packages/computer-use", "packages/dev-tools", "packages/computer-use-extra"]
+)
+def test_windows_native_decision_uses_exact_shard_workspace(
+    monkeypatch: pytest.MonkeyPatch, workspace: str
+) -> None:
+    """Resolve from selected workspaces, not the shard name or a path containing the target."""
+    os_name = "ubuntu-24.04"
+    monkeypatch.setitem(ci_paths.OWNED_SHARDS, os_name, (ci_paths.Shard("computer-use", ("check-ts",)),))
+    result = ci_paths.ChangeClassification(paths=(), docs_only=False, inputs={})
+    cell = ci_paths.native_plan("owned", os_name, result, PUSH, (workspace,))
+    assert cell.run
+    assert cell.shards[0].workspaces == (workspace,)
+    assert cell.to_output()["windows_native_required"] is (workspace == "packages/computer-use")
+
+
+@pytest.mark.parametrize(
+    ("event", "docs_only", "stack_inputs", "title_problem"),
+    list(product((PULL_REQUEST, PUSH, "workflow_dispatch"), (False, True), (False, True), ("", "bad title"))),
+)
+def test_windows_native_decision_preserves_workflow_parity(
+    event: str, docs_only: bool, stack_inputs: bool, title_problem: str
+) -> None:
+    """Match the old workflow predicates across PR, push and dispatch plan shapes."""
+    result = ci_paths.ChangeClassification(
+        paths=(), docs_only=docs_only, inputs={"stack_inputs": stack_inputs}
+    )
+    # Pool admission changes only the serialized runner label, not the workspace set.
+    for capacity in ({}, dict.fromkeys(runner_pools.POOLS, 10)):
+        cells = ci_paths.plan_cells(result, event, title_problem, capacity)
+        for name, cell in cells.items():
+            serialized = json.loads(json.dumps(cell.to_output()))
+            if name == "owned (ubuntu-24.04)":
+                # Old fan-in: contains(toJSON(fromJSON(plan || '{}')[cell].shards), 'packages/computer-use').
+                old_required = "packages/computer-use" in json.dumps(serialized["shards"]).casefold()
+                # Old producer: fromJSON(plan || '{}')[cell].run && <the same contains predicate>.
+                assert serialized["windows_native_required"] is (serialized["run"] and old_required)
+                assert serialized["windows_native_required"] is old_required
+            else:
+                assert serialized["windows_native_required"] is False
 
 
 def write_workspace(root: Path, relative: str) -> None:
