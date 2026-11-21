@@ -1,17 +1,8 @@
 import { execFileSync } from "node:child_process";
-import {
-	chmodSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { HOOK_RUNNER, prepareMerge } from "../../src/git/merge.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
@@ -30,16 +21,13 @@ function git(cwd: string, args: string[]): string {
 
 const mock = createToolHost();
 beforeAll(() => registerGitTools(mock.pi));
-const roots: string[] = [];
 afterEach(() => {
 	vi.unstubAllEnvs();
-	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 /** A real repository paused at a content-conflicting merge, with its conflict resolved but unstaged. */
 function mergeFixture(): { root: string; repo: string } {
-	const root = mkdtempSync(join(tmpdir(), "pi-dev-tools-merge-"));
-	roots.push(root);
+	const root = makeTestTempDir("pi-dev-tools-merge-", onTestFinished);
 	const repo = join(root, "repo");
 	git(root, ["init", "-q", "-b", "main", repo]);
 	git(repo, ["config", "user.name", "fixture"]);
@@ -469,8 +457,7 @@ describe("git_commit merge approval", () => {
 	});
 
 	it("keeps ordinary-commit failures at the add stage outside a repository", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-dev-tools-nogit-"));
-		roots.push(dir);
+		const dir = makeTestTempDir("pi-dev-tools-nogit-", onTestFinished);
 		const result = await mock.call("git_commit", { subject: "Add nothing here", paths: ["a.txt"], push: false }, dir);
 		expect(result.isError).toBe(true);
 		expect((result.structuredContent as { stage: string }).stage).toBe("add");
@@ -561,8 +548,7 @@ describe("git_commit merge approval", () => {
 	])("matches plain Git when %s is a directory (blocks: %s)", async (hook, blocks) => {
 		// Observed on Apple Git 2.54.0: a `pre-commit/` directory is `cannot exec ... Permission denied` and
 		// refuses the commit; a `post-commit/` directory prints the same error but the commit still lands.
-		const plain = mkdtempSync(join(tmpdir(), "pi-dev-tools-plain-"));
-		roots.push(plain);
+		const plain = makeTestTempDir("pi-dev-tools-plain-", onTestFinished);
 		git(plain, ["init", "-q", "-b", "main"]);
 		git(plain, ["config", "user.name", "fixture"]);
 		git(plain, ["config", "user.email", "fixture@example.invalid"]);

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
 const spawned = vi.hoisted(() => ({
@@ -45,7 +46,7 @@ const FAKE_BROWSER = fileURLToPath(new URL("../test/fixtures/fake-browser.mjs", 
 let scratch: string;
 let profile: string;
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	spawned.onSpawn = undefined;
 	// Platform seam: POSIX validation runs on every host.
 	vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -54,12 +55,12 @@ beforeEach(() => {
 		spawned.safeAncestors.add(ancestor);
 		if (path.dirname(ancestor) === ancestor) break;
 	}
-	scratch = fs.realpathSync(fs.mkdtempSync(path.join(temp, "pi-cu-persistent-stuck-")));
+	scratch = fs.realpathSync(makeTestTempDir("pi-cu-persistent-stuck-", onTestFinished, { baseDir: temp }));
 	vi.stubEnv("TMPDIR", scratch);
 	vi.stubEnv("FAKE_BROWSER_LOG", path.join(scratch, "launch.json"));
 	vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", FAKE_BROWSER);
 	vi.stubEnv("PI_COMPUTER_USE_CDP_PORT", "");
-	profile = fs.realpathSync(fs.mkdtempSync(path.join(scratch, "persistent-")));
+	profile = fs.realpathSync(makeTestTempDir("persistent-", onTestFinished, { baseDir: scratch }));
 	const agent = path.join(scratch, "agent");
 	fs.mkdirSync(path.join(agent, "extensions"), { recursive: true });
 	fs.writeFileSync(
@@ -75,7 +76,6 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	vi.restoreAllMocks();
 	loadComputerUseConfig(scratch);
-	fs.rmSync(scratch, { recursive: true, force: true });
 });
 
 /** Advance both bounded shutdown waits without spending ten real seconds. */

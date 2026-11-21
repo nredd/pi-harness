@@ -6,7 +6,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { loadComputerUseConfig } from "../src/config.ts";
 import { browserSnapshot } from "../test/support/fake-browser.mjs";
@@ -89,7 +90,7 @@ describe("persistent profile opt-in", () => {
 		loadComputerUseConfig(root);
 	}
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		gate.afterMkdir = undefined;
 		gate.afterLstatSync = undefined;
 		gate.afterStat = undefined;
@@ -101,7 +102,7 @@ describe("persistent profile opt-in", () => {
 		}
 		saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
 		for (const key of keys) delete process.env[key];
-		root = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-persistent-")));
+		root = fs.realpathSync(makeTestTempDir("cu-persistent-", onTestFinished, { baseDir: secureTemp }));
 		home = path.join(root, "home");
 		fs.mkdirSync(home);
 		vi.spyOn(os, "homedir").mockReturnValue(home);
@@ -123,7 +124,6 @@ describe("persistent profile opt-in", () => {
 			else process.env[key] = value;
 		}
 		loadComputerUseConfig(path.join(root, "reset"));
-		fs.rmSync(root, { recursive: true, force: true });
 	});
 
 	describe("persistent managed profile", () => {
@@ -521,51 +521,45 @@ describe("persistent profile opt-in", () => {
 		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME", "HOME"])(
 			"preserves %s alias-parent ancestry",
 			async (variable) => {
-				const external = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-alias-parent-")));
+				const external = fs.realpathSync(makeTestTempDir("cu-alias-parent-", onTestFinished, { baseDir: secureTemp }));
 				const originalParent = path.join(root, "alias-parent");
 				fs.mkdirSync(originalParent, { mode: 0o700 });
 				const alias = path.join(originalParent, "linked-root");
 				fs.symlinkSync(external, alias);
-				try {
-					if (variable === "HOME") vi.spyOn(os, "homedir").mockReturnValue(alias);
-					else process.env[variable] = alias;
-					await assert.rejects(testing.persistentBrowserProfile(originalParent), /default browser/);
-					const dedicated = path.join(external, "fresh-profile");
-					fs.mkdirSync(dedicated, { mode: 0o700 });
-					if (variable === "HOME") assert.equal(await testing.persistentBrowserProfile(dedicated), dedicated);
-					else assert.equal(await testing.persistentBrowserProfile(profile), profile);
-				} finally {
-					fs.rmSync(external, { recursive: true, force: true });
-				}
+				if (variable === "HOME") vi.spyOn(os, "homedir").mockReturnValue(alias);
+				else process.env[variable] = alias;
+				await assert.rejects(testing.persistentBrowserProfile(originalParent), /default browser/);
+				const dedicated = path.join(external, "fresh-profile");
+				fs.mkdirSync(dedicated, { mode: 0o700 });
+				if (variable === "HOME") assert.equal(await testing.persistentBrowserProfile(dedicated), dedicated);
+				else assert.equal(await testing.persistentBrowserProfile(profile), profile);
 			},
 		);
 
 		test("refuses HOME ancestors even when all default browser directories point outside them", async () => {
-			const external = fs.realpathSync(fs.mkdtempSync(path.join(secureTemp, "cu-external-defaults-")));
-			try {
-				const defaults = [
-					".config/google-chrome",
-					".config/google-chrome-beta",
-					".config/google-chrome-unstable",
-					".config/chromium",
-					".config/helium",
-					"Library/Application Support/Google/Chrome",
-					"Library/Application Support/Google/Chrome Canary",
-					"Library/Application Support/Google/Chrome Beta",
-					"Library/Application Support/Google/Chrome Dev",
-					"Library/Application Support/Chromium",
-					"Library/Application Support/net.imput.helium",
-				];
-				for (const relative of defaults) {
-					const directory = path.join(home, relative);
-					fs.mkdirSync(path.dirname(directory), { recursive: true });
-					fs.symlinkSync(external, directory);
-				}
-				await assert.rejects(testing.persistentBrowserProfile(root), /default browser/);
-				assert.equal(await testing.persistentBrowserProfile(profile), profile);
-			} finally {
-				fs.rmSync(external, { recursive: true, force: true });
+			const external = fs.realpathSync(
+				makeTestTempDir("cu-external-defaults-", onTestFinished, { baseDir: secureTemp }),
+			);
+			const defaults = [
+				".config/google-chrome",
+				".config/google-chrome-beta",
+				".config/google-chrome-unstable",
+				".config/chromium",
+				".config/helium",
+				"Library/Application Support/Google/Chrome",
+				"Library/Application Support/Google/Chrome Canary",
+				"Library/Application Support/Google/Chrome Beta",
+				"Library/Application Support/Google/Chrome Dev",
+				"Library/Application Support/Chromium",
+				"Library/Application Support/net.imput.helium",
+			];
+			for (const relative of defaults) {
+				const directory = path.join(home, relative);
+				fs.mkdirSync(path.dirname(directory), { recursive: true });
+				fs.symlinkSync(external, directory);
 			}
+			await assert.rejects(testing.persistentBrowserProfile(root), /default browser/);
+			assert.equal(await testing.persistentBrowserProfile(profile), profile);
 		});
 
 		test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])(

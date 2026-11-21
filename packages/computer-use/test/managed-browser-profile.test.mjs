@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, afterEach, beforeAll, describe, onTestFinished, test, vi } from "vitest";
 import { executeFind, executeLaunchBrowser, shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { currentPlatformBackend } from "../src/platform/index.ts";
 import { ResourceScheduler } from "../src/runtime.ts";
@@ -175,7 +175,6 @@ describe("temporary profile cleanup race", () => {
 			vi.unstubAllEnvs();
 			if (scratch) {
 				fs.chmodSync(scratch, 0o700);
-				fs.rmSync(scratch, { recursive: true, force: true });
 			}
 			gate.outcomes = [];
 			gate.spawnParent = "";
@@ -189,7 +188,7 @@ describe("temporary profile cleanup race", () => {
 
 	/** Launch the existing POSIX fake-browser executable in an owned temporary parent. */
 	async function launch() {
-		scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-owned-race-")));
+		scratch = fs.realpathSync(makeTestTempDir("cu-owned-race-", onTestFinished));
 		const log = path.join(scratch, "launch.json");
 		vi.stubEnv("TMPDIR", scratch);
 		vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", executable);
@@ -273,7 +272,7 @@ describe("temporary profile cleanup race", () => {
 	test.skipIf(process.platform === "win32")(
 		"a failed real spawn preserves error identity when profile cleanup also fails",
 		async () => {
-			scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cu-owned-spawn-")));
+			scratch = fs.realpathSync(makeTestTempDir("cu-owned-spawn-", onTestFinished));
 			vi.stubEnv("TMPDIR", scratch);
 			vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", executable);
 			vi.stubEnv("PI_COMPUTER_USE_CDP_PORT", "");
@@ -301,8 +300,11 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	let tmp;
 	let log;
 
+	let dispose;
 	beforeAll(() => {
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-cdp-profile-"));
+		scratch = makeTestTempDir("pi-computer-use-cdp-profile-", (cleanup) => {
+			dispose = cleanup;
+		});
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		log = path.join(scratch, "argv.json");
@@ -333,8 +335,8 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		if (scratch) {
 			fs.chmodSync(tmp, 0o755);
 			for (const entry of fs.readdirSync(tmp)) fs.chmodSync(path.join(tmp, entry), 0o755);
-			fs.rmSync(scratch, { recursive: true, force: true });
 		}
+		dispose?.();
 	});
 
 	test("launch uses a private profile dir that ignores a squatted fixed name and is removed on shutdown", async () => {

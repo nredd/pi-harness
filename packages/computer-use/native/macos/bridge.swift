@@ -10,6 +10,13 @@ import Carbon.HIToolbox
 struct BridgeFailure: Error {
 	let message: String
 	let code: String
+	var evidence: [String: Int]? = nil
+
+	var wireError: [String: Any] {
+		var result: [String: Any] = ["message": message, "code": code]
+		if let evidence { result["evidence"] = evidence }
+		return result
+	}
 }
 
 private struct CGWindowCandidate {
@@ -409,6 +416,12 @@ func keyboardTargetRefusalPid(frontmostPid: Int32?, focusedPid: Int32?, isBlocke
 	return nil
 }
 
+/// Probe AX first: it may stall while the frontmost app changes.
+func sampleKeyboardTargets(frontmostPid: () -> Int32?, focusedPid: () -> Int32?) -> (Int32?, Int32?) {
+	let focused = focusedPid()
+	return (frontmostPid(), focused)
+}
+
 /// The blocked pid a pointer event at `point` would reach: a blocked window above the first normal-layer window
 /// (`blockedWindowOwnerPid`), or the pid of the accessibility hit (`hitPid`, ignoring `excludingPid`), or nil.
 func coordinateTargetRefusalPid(windows: [[String: Any]], at point: CGPoint, hitPid: Int32?, excludingPid: Int32, isBlockedPid: (Int32) -> Bool) -> Int32? {
@@ -614,6 +627,61 @@ struct ActScrollRequest {
 	let point: CGPoint?
 }
 
+// True invalidates cached focus after an operation that can stall.
+typealias FocusCheck = (Bool) throws -> Void
+// The second argument marks a real down, not an early check after a layout query.
+typealias BeforeKeyDown = (Bool, Bool) throws -> Void
+
+private func trackKeyboardPosts(_ check: @escaping FocusCheck) -> BeforeKeyDown {
+	var postedUnits = 0
+	return { force, posting in
+		do {
+			try check(force)
+		} catch var failure as BridgeFailure {
+			failure.evidence = ["postedUnits": postedUnits]
+			throw failure
+		}
+		// Posting the down and release cannot throw after admission succeeds.
+		if posting { postedUnits += 1 }
+	}
+}
+
+final class KeyboardAdmission {
+	private var lastProbe: TimeInterval = -.infinity
+	private var probedFrontmost: Int32?
+	private var unitsSinceProbe = 0
+	private let now: () -> TimeInterval
+	private let deadline: TimeInterval
+
+	init(now: @escaping () -> TimeInterval, deadline: TimeInterval) {
+		self.now = now
+		self.deadline = deadline
+	}
+
+	func checkDeadline() throws {
+		if now() >= deadline {
+			throw BridgeFailure(message: "Keyboard delivery deadline expired", code: "input_deadline_expired")
+		}
+	}
+
+	func check(force: Bool, frontmostPid: () -> Int32?, focusedPid: () -> Int32?, refuse: (Int32) throws -> Void) throws {
+		try checkDeadline()
+		let frontmost = frontmostPid()
+		if let frontmost { try refuse(frontmost) }
+		if force || frontmost == nil || frontmost != probedFrontmost || unitsSinceProbe >= 8 || now() - lastProbe >= 0.064 {
+			let (freshFrontmost, focused) = sampleKeyboardTargets(frontmostPid: frontmostPid, focusedPid: focusedPid)
+			if let freshFrontmost { try refuse(freshFrontmost) }
+			if let focused, focused != freshFrontmost { try refuse(focused) }
+			// An unknown or disagreeing AX target is not a cache hit on the next unit.
+			probedFrontmost = focused == frontmost && frontmost == freshFrontmost ? freshFrontmost : nil
+			lastProbe = now()
+			unitsSinceProbe = 0
+		}
+		try checkDeadline()
+		if !force { unitsSinceProbe += 1 }
+	}
+}
+
 /// Native boundaries for an action. The headless world supplies every operation, with no live fallback.
 struct ActWorld {
 	typealias ScrollBarWrite = (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)
@@ -637,7 +705,7 @@ struct ActWorld {
 	let raiseWindow: (Int32, LookRecord) -> Bool?
 	let animateCursor: (CGPoint, UInt32) -> Void
 	let requireTargetFocus: (Int32) throws -> Void
-	let refuseBlockedKeyboard: ([String]) throws -> Void
+	let keyboardAdmission: ([String]?, TimeInterval) -> FocusCheck
 	let refuseBlockedPoints: ([CGPoint], [String]) throws -> Void
 	let beginRootDelta: (Int32) -> ([String: Any]) -> [String: Any]
 	let lockInput: () -> Void
@@ -650,10 +718,10 @@ struct ActWorld {
 	let postMouseMove: (CGPoint, Int32, String) throws -> Void
 	let postScrollWheel: (CGPoint, Int, Int, Int32, String) throws -> Void
 	let postMouseDrag: ([CGPoint], Int32, String) throws -> Void
-	let postKeyPress: ([String], Int32, String) throws -> Void
-	let postKeyCode: (CGKeyCode, CGEventFlags, Int32, String) throws -> Void
-	let postUnicodeText: (String, Int32, String) throws -> Void
-	let postAtomicUnicodeText: (String, Int32, String) throws -> Void
+	let postKeyPress: ([String], Int32, String, BeforeKeyDown) throws -> Void
+	let postKeyCode: (CGKeyCode, CGEventFlags, Int32, String, BeforeKeyDown) throws -> Void
+	let postUnicodeText: (String, Int32, String, BeforeKeyDown) throws -> Void
+	let postAtomicUnicodeText: (String, Int32, String, BeforeKeyDown) throws -> Void
 	let snapshotClipboard: (String) -> (write: () throws -> Void, restore: () -> Bool)
 	let pasteKeyCode: () -> UInt16?
 }
@@ -676,6 +744,7 @@ struct NativeInputSink {
 	let wheelEvent: (Int32, Int32) -> CGEvent?
 	let keyEvent: (CGKeyCode, Bool) -> CGEvent?
 	let postToPid: (CGEvent, Int32) -> Void
+	let prepareHID: (Int32) -> Bool
 	let postHID: (CGEvent, Int32) -> Void
 	let sleep: (useconds_t) -> Void
 	let keyboardInputSource: () -> KeyboardInputSource
@@ -703,7 +772,7 @@ struct NativeInputSink {
 		wheelEvent: createWheelEvent,
 		keyEvent: createKeyEvent,
 		postToPid: { $0.postToPid($1) },
-		postHID: { event, pid in
+		prepareHID: { pid in
 			// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
 			// target frontmost when posting at the HID event tap instead.
 			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
@@ -713,9 +782,11 @@ struct NativeInputSink {
 					_ = app.activate(options: [.activateIgnoringOtherApps])
 				}
 				usleep(20_000)
+				return true
 			}
-			event.post(tap: .cghidEventTap)
+			return false
 		},
+		postHID: { event, _ in event.post(tap: .cghidEventTap) },
 		sleep: { _ = usleep($0) },
 		keyboardInputSource: currentKeyboardInputSource
 	)
@@ -1163,10 +1234,7 @@ final class Bridge {
 				send([
 					"id": id,
 					"ok": false,
-					"error": [
-						"message": failure.message,
-						"code": failure.code,
-					],
+					"error": failure.wireError,
 				], to: responseSocket)
 			} catch {
 				send([
@@ -1182,10 +1250,7 @@ final class Bridge {
 			send([
 				"id": fallbackId,
 				"ok": false,
-				"error": [
-					"message": failure.message,
-					"code": failure.code,
-				],
+				"error": failure.wireError,
 			], to: responseSocket)
 		} catch {
 			send([
@@ -2571,7 +2636,7 @@ final class Bridge {
 				return AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
 			},
 			animateCursor: { point, windowId in Task { @MainActor in AgentCursor.shared.animate(to: point, above: windowId) } },
-			requireTargetFocus: requireTargetFocus(pid:), refuseBlockedKeyboard: refuseBlockedKeyboardTarget(blocked:),
+			requireTargetFocus: requireTargetFocus(pid:), keyboardAdmission: keyboardAdmission(blocked:deadline:),
 			refuseBlockedPoints: refuseBlockedPoints(_:blocked:), beginRootDelta: beginActRootDelta(pid:),
 			lockInput: physicalInputLock.lock, unlockInput: physicalInputLock.unlock, sleep: { _ = usleep($0) },
 			scrollSignature: scrollPositionSignature,
@@ -2579,8 +2644,10 @@ final class Bridge {
 			scrollBar: { self.setScrollBarValueOrAncestor(startingAt: $0, request: $1, world: scroll) },
 			postMouseClick: postMouseClick(at:pid:button:clickCount:delivery:), postMouseMove: postMouseMove(to:pid:delivery:),
 			postScrollWheel: postScrollWheel(at:deltaX:deltaY:pid:delivery:), postMouseDrag: postMouseDrag(points:pid:delivery:),
-			postKeyPress: postKeyPress(keys:pid:delivery:), postKeyCode: postKeyCode(_:flags:pid:delivery:),
-			postUnicodeText: postUnicodeText(_:pid:delivery:), postAtomicUnicodeText: postAtomicUnicodeText(_:pid:delivery:),
+			postKeyPress: postKeyPress(keys:pid:delivery:beforeKeyDown:),
+			postKeyCode: { try self.postKeyCode($0, flags: $1, pid: $2, delivery: $3, beforeKeyDown: $4) },
+			postUnicodeText: postUnicodeText(_:pid:delivery:beforeKeyDown:),
+			postAtomicUnicodeText: postAtomicUnicodeText(_:pid:delivery:beforeKeyDown:),
 			snapshotClipboard: snapshotClipboard, pasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }
 		)
 	}
@@ -2601,6 +2668,7 @@ final class Bridge {
 	}
 
 	func act(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
+		let deadline = keyboardDeadline(request)
 		let lookId = try stringArg(request, "lookId")
 		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
@@ -2718,6 +2786,11 @@ final class Bridge {
 			try world.refuseBlockedPoints(points, blockedBundleIdList(request))
 		}
 
+		let admitKeyboard = trackKeyboardPosts(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
+		func recheckBlockedKeyboard() throws {
+			try admitKeyboard(true, false)
+		}
+
 		/// HID keys reach the focused app: settle focus on the target first, then refuse a blocked focused app.
 		func refuseBlockedKeyboardAfterFocus(preserveFocus: Bool) throws {
 			guard delivery == "hid" else { return }
@@ -2725,7 +2798,7 @@ final class Bridge {
 				focusTargetForPhysicalInput()
 				try world.requireTargetFocus(pid)
 			}
-			try world.refuseBlockedKeyboard(blockedBundleIdList(request))
+			try recheckBlockedKeyboard()
 		}
 
 		func executeCoordinates(_ point: CGPoint) throws {
@@ -2816,16 +2889,20 @@ final class Bridge {
 				// HID keys follow (cmd+a, text): the same focus wait and blocked-app check as typeText/keypress.
 				if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }
 				_ = world.setAttribute(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				try recheckBlockedKeyboard()
 				let currentValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
+				try recheckBlockedKeyboard()
 				var range = CFRange(location: 0, length: (currentValue as NSString).length)
 				let selected = AXValueCreate(.cfRange, &range).map {
 					world.setAttribute(element, kAXSelectedTextRangeAttribute as CFString, $0) == .success
 				} ?? false
 				if !selected {
-					try world.postKeyPress(["cmd", "a"], pid, delivery)
+					try recheckBlockedKeyboard()
+					try world.postKeyPress(["cmd", "a"], pid, delivery, admitKeyboard)
 					world.sleep(20_000)
 				}
-				try world.postAtomicUnicodeText(text, pid, delivery)
+				try recheckBlockedKeyboard()
+				try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard)
 				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
 				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
@@ -2861,7 +2938,7 @@ final class Bridge {
 			// HID keys reach the focused app, which a non-activating panel of a blocked app can be.
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			let text = params["text"] as? String ?? ""
-			try world.postUnicodeText(text, pid, delivery)
+			try world.postUnicodeText(text, pid, delivery, admitKeyboard)
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
 				world.sleep(30_000)
@@ -2941,15 +3018,14 @@ final class Bridge {
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			let clipboard = world.snapshotClipboard(text)
 			// Lazy pasteboard data can stall the snapshot while focus moves. Do not publish if it moved to a blocked app.
-			if delivery == "hid" { try world.refuseBlockedKeyboard(blockedBundleIdList(request)) }
+			try recheckBlockedKeyboard()
 			let restored = try withRestoredClipboard(write: clipboard.write, restore: clipboard.restore) {
 				// Looked up first, inside the clipboard: activating the target can switch the input source, and the lookup
 				// (a main-queue hop plus layout translation) must not sit between the last focus check and the post. Throwing restores the clipboard.
 				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				if delivery == "hid" { try world.refuseBlockedKeyboard(blockedBundleIdList(request)) }
-				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery)
+				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) })
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
 					world.sleep(30_000)
@@ -2990,7 +3066,7 @@ final class Bridge {
 			}
 			acquirePhysicalInputIfNeeded()
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
-			try world.postKeyPress(keys, pid, delivery)
+			try world.postKeyPress(keys, pid, delivery, admitKeyboard)
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
 			let cursorPoint = try? coordinatePoint()
@@ -3132,12 +3208,15 @@ final class Bridge {
 		for (index, action) in actions.enumerated() {
 			var deferred = action
 			deferred["deferRootDelta"] = true
+			deferred["keyboardDeadlineMs"] = request["keyboardDeadlineMs"]
 			do {
 				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
 				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {
-				steps.append(["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]])
+				var step: [String: Any] = ["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]]
+				if let evidence = failure.evidence { step["evidence"] = evidence }
+				steps.append(step)
 				stoppedAt = index
 				break
 			}
@@ -3791,12 +3870,23 @@ final class Bridge {
 
 	/// Throws `app_blocked` when keyboard input would reach a blocked app: the frontmost one, or the system-wide
 	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
-	private func refuseBlockedKeyboardTarget(blocked: [String]) throws {
-		let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
-		if let pid = keyboardTargetRefusalPid(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), isBlockedPid: isBlockedPid) {
-			let app = NSRunningApplication(processIdentifier: pid)
-			throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
+	private func keyboardAdmission(blocked: [String]?, deadline: TimeInterval) -> FocusCheck {
+		let gate = KeyboardAdmission(now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
+		return { force in
+			guard let blocked else { return try gate.checkDeadline() }
+			try gate.check(force: force, frontmostPid: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, focusedPid: self.systemFocusedPid) { pid in
+				let app = NSRunningApplication(processIdentifier: pid)
+				if isBlockedBundleId(app?.bundleIdentifier, blocked: blocked) {
+					throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
+				}
+			}
 		}
+	}
+
+	private func keyboardDeadline(_ request: [String: Any]) -> TimeInterval {
+		let now = ProcessInfo.processInfo.systemUptime
+		guard let wallMs = (request["keyboardDeadlineMs"] as? NSNumber)?.doubleValue, wallMs.isFinite else { return now + 30 }
+		return now + (wallMs / 1000 - Date().timeIntervalSince1970)
 	}
 
 	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
@@ -3926,12 +4016,10 @@ final class Bridge {
 		func refuseBlockedWindow(at point: CGPoint) throws {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
-		func refuseBlockedKeyboard() throws {
-			try refuseBlockedKeyboardTarget(blocked: blocked)
-		}
+		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request)))
 		switch action {
 		case "type", "key":
-			try refuseBlockedKeyboard()
+			try refuseBlockedKeyboard(true, false)
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
@@ -3985,12 +4073,12 @@ final class Bridge {
 			}
 			try postMouseDrag(points: points, pid: 0)
 		case "type":
-			try postUnicodeText(try stringArg(request, "text"), pid: 0)
+			try postUnicodeText(try stringArg(request, "text"), pid: 0, beforeKeyDown: refuseBlockedKeyboard)
 		case "key":
 			guard let keys = request["keys"] as? [String], !keys.isEmpty else {
 				throw BridgeFailure(message: "keypress requires keys", code: "invalid_args")
 			}
-			try postKeyPress(keys: keys, pid: 0)
+			try postKeyPress(keys: keys, pid: 0, beforeKeyDown: refuseBlockedKeyboard)
 		default:
 			throw BridgeFailure(message: "Unknown desktop action '\(action)'", code: "invalid_args")
 		}
@@ -4616,6 +4704,11 @@ final class Bridge {
 		optionalStringArg(request, "delivery") == "pid" ? "pid" : "hid"
 	}
 
+	private func postPointerEvent(_ event: CGEvent, pid: Int32, delivery: String) {
+		if delivery == "hid" { _ = inputSink.prepareHID(pid) }
+		postEvent(event, pid: pid, delivery: delivery)
+	}
+
 	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid") {
 		if delivery == "pid" {
 			inputSink.postToPid(event, pid)
@@ -4630,7 +4723,7 @@ final class Bridge {
 		guard let move = inputSink.mouseEvent(.mouseMoved, point, .left) else {
 			throw BridgeFailure(message: "Failed to create mouse move event", code: "input_failed")
 		}
-		postEvent(move, pid: pid, delivery: delivery)
+		postPointerEvent(move, pid: pid, delivery: delivery)
 	}
 
 	private func mouseButton(_ name: String) -> CGMouseButton {
@@ -4689,9 +4782,9 @@ final class Bridge {
 			}
 			down.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
-			postEvent(down, pid: pid, delivery: delivery)
+			postPointerEvent(down, pid: pid, delivery: delivery)
 			inputSink.sleep(12_000)
-			postEvent(up, pid: pid, delivery: delivery)
+			postPointerEvent(up, pid: pid, delivery: delivery)
 			if index < clickCount {
 				inputSink.sleep(70_000)
 			}
@@ -4714,12 +4807,12 @@ final class Bridge {
 			throw BridgeFailure(message: "Failed to create mouse down event", code: "input_failed")
 		}
 		down.setIntegerValueField(.mouseEventClickState, value: 1)
-		postEvent(down, pid: pid, delivery: delivery)
+		postPointerEvent(down, pid: pid, delivery: delivery)
 		var releasePosition = first
 		defer {
 			up.location = releasePosition
 			up.setIntegerValueField(.mouseEventClickState, value: 1)
-			postEvent(up, pid: pid, delivery: delivery)
+			postPointerEvent(up, pid: pid, delivery: delivery)
 		}
 		inputSink.sleep(30_000)
 
@@ -4736,7 +4829,7 @@ final class Bridge {
 					throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
 				}
 				drag.setIntegerValueField(.mouseEventClickState, value: 1)
-				postEvent(drag, pid: pid, delivery: delivery)
+				postPointerEvent(drag, pid: pid, delivery: delivery)
 				releasePosition = step
 				inputSink.sleep(8_000)
 			}
@@ -4754,7 +4847,7 @@ final class Bridge {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
 		}
 		event.location = point
-		postEvent(event, pid: pid, delivery: delivery)
+		postPointerEvent(event, pid: pid, delivery: delivery)
 	}
 
 	private func modifierFlag(_ key: String) -> CGEventFlags? {
@@ -4806,11 +4899,11 @@ final class Bridge {
 		return (flags, keys.last ?? "")
 	}
 
-	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid") throws {
+	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		if let chord = keyChord(keys) {
-			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery)
+			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 			return
 		}
 
@@ -4820,27 +4913,27 @@ final class Bridge {
 				.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
 				.filter { !$0.isEmpty }
 			if let chord = keyChord(parts) {
-				try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery)
+				try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 			} else {
-				try postKey(key, flags: [], pid: pid, delivery: delivery)
+				try postKey(key, flags: [], pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 			}
 		}
 	}
 
-	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
+	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		guard let code = keyCode(key) else {
 			if key.count == 1 {
-				try postUnicodeText(key, pid: pid, delivery: delivery)
+				try postUnicodeText(key, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 				return
 			}
 			throw BridgeFailure(message: "Unsupported key '\(key)'", code: "invalid_args")
 		}
-		try postKeyCode(code, flags: flags, pid: pid, delivery: delivery)
+		try postKeyCode(code, flags: flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 	}
 
-	private func postKeyCode(_ code: CGKeyCode, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
+	private func postKeyCode(_ code: CGKeyCode, flags: CGEventFlags, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		guard let down = inputSink.keyEvent(code, true), let up = inputSink.keyEvent(code, false)
@@ -4849,19 +4942,18 @@ final class Bridge {
 		}
 		down.flags = flags
 		up.flags = flags
-		postEvent(down, pid: pid, delivery: delivery)
-		postEvent(up, pid: pid, delivery: delivery)
-		inputSink.sleep(8_000)
+		try postKeyPair(down, up, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 	}
 
-	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		let inputSource = inputSink.keyboardInputSource()
+		try beforeKeyDown(true, false)
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
-				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery)
+				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 				continue
 			}
 			guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
@@ -4870,22 +4962,28 @@ final class Bridge {
 			}
 			setUnicodeString(event: down, text: char)
 			setUnicodeString(event: up, text: char)
-			postEvent(down, pid: pid, delivery: delivery)
-			postEvent(up, pid: pid, delivery: delivery)
-			inputSink.sleep(8_000)
+			try postKeyPair(down, up, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 		}
 	}
 
-	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
 		else { throw BridgeFailure(message: "Failed to create unicode text event", code: "input_failed") }
 		setUnicodeString(event: down, text: text)
 		setUnicodeString(event: up, text: text)
+		try postKeyPair(down, up, pid: pid, delivery: delivery, hold: true, beforeKeyDown: beforeKeyDown)
+	}
+
+	private func postKeyPair(_ down: CGEvent, _ up: CGEvent, pid: Int32, delivery: String, hold: Bool = false, beforeKeyDown: BeforeKeyDown) throws {
+		let prepared = delivery == "hid" && inputSink.prepareHID(pid)
+		try beforeKeyDown(prepared, true)
 		postEvent(down, pid: pid, delivery: delivery)
-		inputSink.sleep(8_000)
+		// Release directly, without another activation or refusal.
+		if hold { inputSink.sleep(8_000) }
 		postEvent(up, pid: pid, delivery: delivery)
+		if !hold { inputSink.sleep(8_000) }
 	}
 
 	/// Prefer physical key codes for characters represented by the US layout.

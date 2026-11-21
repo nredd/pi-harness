@@ -367,7 +367,68 @@ describe("fuzzy resolution ranks by version, then score", () => {
 		expect(parseModelVersion("anthropic/claude-opus-4.6")).toEqual([4, 6]);
 		expect(parseModelVersion("gpt-6.1-sol")).toEqual([6, 1]);
 		expect(parseModelVersion("gpt-6-mini")).toEqual([6, 0]);
-		expect(parseModelVersion("gemini-2.5-pro")).toBeUndefined();
+	});
+
+	it.each([
+		["gemini-2.5-pro", [2, 5]],
+		["gemini-3.8-flash", [3, 8]],
+		["gemini-3.5-flash-lite", [3, 5]],
+		["google/gemini-4-carbon", [4, 0]],
+		["gemini-4-krypton", [4, 0]],
+		["gemini-pro-latest", undefined],
+		["gemini-4-20261110", undefined],
+	] as const)("parses Gemini version from %s", (id, version) => {
+		expect(parseModelVersion(id)).toEqual(version);
+	});
+
+	it.each(["gemini-4-carbon!", "gemini-4-carbon-", "gemini-4--carbon", "gemini-4-Carbon.x", "gemini-4-"])(
+		"does not parse a malformed Gemini id: %s",
+		(id) => {
+			expect(parseModelVersion(id)).toBeUndefined();
+		},
+	);
+
+	it("breaks equal Gemini versions by provider/model identity, not registry order", () => {
+		const neon = { id: "gemini-4-neon", name: "Gemini 4 Neon", provider: "google" };
+		const lead = { id: "gemini-4-lead", name: "Gemini 4 Lead", provider: "google" };
+		setModelScopeProvider(() => new Set(["google/gemini-4-lead", "google/gemini-4-neon"]));
+		for (const order of [
+			[neon, lead],
+			[lead, neon],
+		]) {
+			expect(resolveModel("gemini", makeRegistry(order, order))).toEqual(lead);
+		}
+	});
+
+	it("ranks enabled Gemini models by major and minor, not match score", () => {
+		const neon = { id: "gemini-4-neon", name: "Gemini 4 Neon", provider: "google" };
+		const krypton = { id: "gemini-4-krypton", name: "Gemini 4 Krypton", provider: "google" };
+		const flash = { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", provider: "google" };
+		const pro = { id: "gemini-3.5-pro", name: "Gemini 3.5 Pro", provider: "google" };
+		const unavailable = { id: "gemini-5-silicon", name: "Gemini 5 Silicon", provider: "google" };
+		const available = [pro, flash, krypton, neon, ...FAMILY];
+		const registry = makeRegistry([unavailable, ...available], available);
+		setModelScopeProvider(
+			() =>
+				new Set([
+					"google/gemini-5-silicon",
+					"google/gemini-4-krypton",
+					"google/gemini-3.8-flash",
+					"google/gemini-3.5-pro",
+					"openai/gpt-6.1-sol",
+				]),
+		);
+		expect(resolveModel("gemini", registry)).toEqual(krypton);
+		setModelScopeProvider(() => new Set(["google/gemini-3.8-flash", "google/gemini-3.5-pro"]));
+		expect(resolveModel("gemini", registry)).toEqual(flash);
+	});
+
+	it("compares Gemini, Claude and GPT versions for a query shared across families", () => {
+		const gpt = { id: "gpt-4.1-mini", name: "Shared GPT", provider: "openai" };
+		const gemini = { id: "gemini-4-carbon", name: "Shared Gemini", provider: "google" };
+		const claude = { id: "claude-sonnet-3-7", name: "Shared Claude", provider: "anthropic" };
+		expect(resolveModel("shared", makeRegistry([claude, gemini, gpt]))).toEqual(gpt);
+		expect(resolveModel("shared", makeRegistry([claude, gemini]))).toEqual(gemini);
 	});
 
 	it("a bare family name picks the newest version, not the shortest id", () => {
