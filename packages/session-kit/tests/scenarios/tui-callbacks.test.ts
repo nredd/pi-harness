@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { deferred } from "@nredd/pi-test-lib/deferred";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerMon } from "../../src/mon/index.ts";
 import { snapshot } from "../fixtures/mon/fixtures.ts";
 import { configFor } from "../fixtures/session.ts";
@@ -64,7 +64,7 @@ function overlayProbe(admission?: { entered: () => void; wait: Promise<void> }) 
 
 /** Unsigned Git fixture with child-only scratch HOME/config and explicit empty hooks/templates. */
 function dirtyRepo(root: string, inherited: NodeJS.ProcessEnv = process.env): void {
-	const home = mkdtempSync(join(tmpdir(), "psk-git-home-"));
+	const home = makeTestTempDir("psk-git-home-", onTestFinished);
 	const hooks = join(home, "hooks");
 	const templates = join(home, "templates");
 	mkdirSync(hooks);
@@ -97,15 +97,11 @@ function dirtyRepo(root: string, inherited: NodeJS.ProcessEnv = process.env): vo
 			],
 			{ cwd: root, env },
 		);
-	try {
-		git("init", "-q");
-		writeFileSync(join(root, "tracked.txt"), "before\n");
-		git("add", "tracked.txt");
-		git("commit", "-qm", "fixture");
-		writeFileSync(join(root, "tracked.txt"), "after\n");
-	} finally {
-		rmSync(home, { recursive: true, force: true });
-	}
+	git("init", "-q");
+	writeFileSync(join(root, "tracked.txt"), "before\n");
+	git("add", "tracked.txt");
+	git("commit", "-qm", "fixture");
+	writeFileSync(join(root, "tracked.txt"), "after\n");
 }
 
 describe("mounted public command callback outcomes", () => {

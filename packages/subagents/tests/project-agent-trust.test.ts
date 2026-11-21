@@ -5,9 +5,9 @@
 // agents and globally configured packages stay available either way; packages
 // configured only by the project are gated by the same decision.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCustomAgents } from "../src/custom-agents.ts";
 import { resetPackageState, setProjectTrusted } from "../src/package-resources.ts";
@@ -21,9 +21,9 @@ describe("project agent trust", () => {
 	let pkgDir: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		resetPackageState();
-		root = mkdtempSync(join(tmpdir(), "pi-agent-trust-"));
+		root = makeTestTempDir("pi-agent-trust-", onTestFinished);
 		cwd = join(root, "project");
 		agentDir = join(root, "agent");
 		pkgDir = join(root, "pkg", "agents");
@@ -37,7 +37,6 @@ describe("project agent trust", () => {
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		resetPackageState();
 		vi.restoreAllMocks();
-		rmSync(root, { recursive: true, force: true });
 	});
 
 	function write(where: "global" | "package" | ".pi" | ".agents", name: string, content: string): string {

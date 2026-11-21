@@ -67,7 +67,7 @@ describe("overlay refresh failures", () => {
 		const ctx = createTodoCtx({ hasUI: true, sessionId: "s1" });
 		await handler("session_start")({ reason: "startup" }, ctx);
 		await create(ctx);
-		await expect(handler("tool_execution_end")({ toolName: "todo", isError: false })).resolves.toBeUndefined();
+		await expect(handler("tool_execution_end")({ toolName: "todo", isError: false }, ctx)).resolves.toBeUndefined();
 		expect(warn).toHaveBeenCalledWith("[rpiv-todo] overlay refresh failed (will retry on next update): plain failure");
 	});
 });
@@ -82,9 +82,9 @@ describe("tool_execution_end", () => {
 		const ctx = createTodoCtx({ hasUI: true, sessionId: "s1" });
 		await handler("session_start")({ reason: "startup" }, ctx);
 		await create(ctx);
-		await handler("tool_execution_end")(event);
+		await handler("tool_execution_end")(event, ctx);
 		expect(importer).not.toHaveBeenCalled();
-		await handler("tool_execution_end")({ toolName: "todo", isError: false });
+		await handler("tool_execution_end")({ toolName: "todo", isError: false }, ctx);
 		expect(importer).toHaveBeenCalledTimes(1);
 	});
 });

@@ -13,11 +13,11 @@
  * reconciled with the merged #164 frontmatter contract (`allowed_subagents`
  * opt-in; no nested tools injected at the depth cap).
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Context, getCurrentTools, type ToolCall } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerAgents } from "../../src/agent-types.ts";
 import { loadCustomAgents } from "../../src/custom-agents.ts";
 import { agentCall, type FauxResponder, type PrintModeRun, runPrintMode } from "../fixtures/print-mode-runner.ts";
@@ -87,10 +87,10 @@ async function runWithAgents(
 	options: { prompt: string; maxModelCalls?: number; hold?: boolean } = {
 		prompt: "root",
 	},
-): Promise<{ run: PrintModeRun; cwd: string }> {
-	const cwd = mkdtempSync(join(tmpdir(), "subagents-nested-e2e-"));
+): Promise<PrintModeRun> {
+	const cwd = makeTestTempDir("subagents-nested-e2e-", onTestFinished);
 	writeAgents(cwd, agents);
-	const run = await runPrintMode({
+	return await runPrintMode({
 		...options,
 		cwd,
 		respond,
@@ -99,23 +99,19 @@ async function runWithAgents(
 		live: false,
 		beforeRun: () => registerAgents(loadCustomAgents(cwd)),
 	});
-	return { run, cwd };
 }
 
 describe("PR #164 nested agents through the real print-mode boundary", () => {
 	let run: PrintModeRun | undefined;
-	let cwd: string | undefined;
 
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
-		if (cwd) rmSync(cwd, { recursive: true, force: true });
-		cwd = undefined;
 	});
 
 	it("does not inject nested orchestration tools into a custom agent by default", async () => {
 		const observed = new Map<string, string[]>();
-		({ run, cwd } = await runWithAgents(
+		run = await runWithAgents(
 			{ plain: "" },
 			(ctx) => {
 				const route = userPrompt(ctx);
@@ -134,7 +130,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 				return lastToolResult(ctx, "Agent");
 			},
 			{ prompt: "root-default" },
-		));
+		);
 
 		expect(run.responseText).toContain("PLAIN_CHILD_RESULT");
 		expect(observed.get("plain-child")).toBeDefined();
@@ -146,7 +142,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 		// #164 injects nested tools only while depth < max, so the agent at the cap
 		// never sees Agent/get/steer even when it opts in via allowed_subagents.
 		const observed = new Map<string, string[]>();
-		({ run, cwd } = await runWithAgents(
+		run = await runWithAgents(
 			{
 				level_one: "allowed_subagents: level_two\n",
 				level_two: "allowed_subagents: level_three\n",
@@ -183,7 +179,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 				return lastToolResult(ctx, "Agent");
 			},
 			{ prompt: "root-depth", maxModelCalls: 24 },
-		));
+		);
 
 		expect(run.responseText).toContain("AT_CAP tools=none");
 		expect(observed.get("level_one-child")).toEqual(expect.arrayContaining(NESTED_TOOLS));
@@ -193,7 +189,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 
 	it("holds a background child while it performs real nested delegation", async () => {
 		const calls = new Map<string, number>();
-		({ run, cwd } = await runWithAgents(
+		run = await runWithAgents(
 			{
 				background_delegator: "allowed_subagents: background_grandchild\n",
 				background_grandchild: "",
@@ -233,7 +229,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 				return lastToolResult(ctx, "get_subagent_result");
 			},
 			{ prompt: "root-background", maxModelCalls: 24 },
-		));
+		);
 
 		expect(run.responseText).toContain("BACKGROUND_NESTED_RESULT");
 		expect(calls.get("background-delegator-child")).toBe(2);
@@ -249,7 +245,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 
 	it("refuses a nested background launch with an explanation the model can act on", async () => {
 		let refusal = "";
-		({ run, cwd } = await runWithAgents(
+		run = await runWithAgents(
 			{ delegator: "allowed_subagents: all\n", leaf: "" },
 			async (ctx) => {
 				const route = userPrompt(ctx);
@@ -278,7 +274,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
 				return lastToolResult(ctx, "Agent");
 			},
 			{ prompt: "root-nested-background", maxModelCalls: 16 },
-		));
+		);
 
 		expect(refusal).toContain("Background agents are not available inside a subagent");
 		expect(run.responseText).toContain("DELEGATOR_DONE");

@@ -1,12 +1,13 @@
 /** Keep exact project path assertions independent of a symlinked OS temp root. */
-import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { hermeticDir } from "./fixtures/boot-extension.ts";
 
 it("canonicalizes hermetic roots before exposing paths or changing cwd", () => {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-hermetic-link-")));
+	const root = realpathSync(makeTestTempDir("pi-hermetic-link-", onTestFinished));
 	const alias = join(root, "alias");
 	symlinkSync(root, alias, "dir");
 	vi.stubEnv("TMPDIR", alias);
@@ -22,6 +23,5 @@ it("canonicalizes hermetic roots before exposing paths or changing cwd", () => {
 		}
 	} finally {
 		vi.unstubAllEnvs();
-		rmSync(root, { recursive: true, force: true });
 	}
 });

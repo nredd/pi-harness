@@ -7,9 +7,8 @@
  * here and not only in the router's repo.
  */
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -235,10 +234,10 @@ describe("SubagentScheduler — quota-parked jobs", () => {
 		});
 	}
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		vi.useFakeTimers();
 		scheduled = [];
-		tmp = mkdtempSync(join(tmpdir(), "scheduler-quota-"));
+		tmp = makeTestTempDir("scheduler-quota-", onTestFinished);
 		store = new ScheduleStore(join(tmp, "s.json"));
 		scheduler = new SubagentScheduler();
 		manager = {
@@ -251,7 +250,6 @@ describe("SubagentScheduler — quota-parked jobs", () => {
 	afterEach(() => {
 		scheduler.stop();
 		vi.useRealTimers();
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	it("starts once the router admits it", async () => {

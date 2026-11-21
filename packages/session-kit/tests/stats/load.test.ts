@@ -1,6 +1,6 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentDir } from "../../src/agent-dir.ts";
 import {
@@ -19,12 +19,11 @@ import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
 let dir: string;
 let root: string;
 let cache: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "psk-stats-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("psk-stats-", onTestFinished);
 	root = join(dir, "sessions");
 	cache = join(dir, "cache", "stats-cache.json");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 afterEach(() => vi.unstubAllEnvs());
 
 const opus = (day: string, input: number, output: number, extra = {}) =>

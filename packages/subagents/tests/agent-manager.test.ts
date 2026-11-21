@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.ts";
 import { registerAgents } from "../src/agent-types.ts";
 import type { AgentRecord } from "../src/types.ts";
@@ -1632,15 +1632,14 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
 	describe("unreadable cwd fails fast", () => {
 		const skip = process.getuid?.() === 0 || process.platform === "win32";
 		const locked = (mode = 0o000): { root: string; dir: string } => {
-			const root = mkdtempSync(join(tmpdir(), "subagents-unreadable-"));
+			const root = makeTestTempDir("subagents-unreadable-", onTestFinished);
 			const dir = join(root, "locked");
 			mkdirSync(dir);
 			chmodSync(dir, mode);
 			return { root, dir };
 		};
-		const unlock = ({ root, dir }: { root: string; dir: string }) => {
+		const unlock = ({ dir }: { dir: string }) => {
 			chmodSync(dir, 0o700);
-			rmSync(root, { recursive: true, force: true });
 		};
 
 		it.skipIf(skip)("rejects an explicit cwd the process cannot read, with an actionable message", () => {
@@ -2407,7 +2406,7 @@ describe("AgentManager — drainQueue failure handling", () => {
 		);
 
 		const firstId = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
-		const goneDir = mkdtempSync(join(tmpdir(), "pi-mgr-gone-"));
+		const goneDir = makeTestTempDir("pi-mgr-gone-", onTestFinished);
 		const goneId = manager.spawn(mockPi, mockCtx, "X", "gone", {
 			description: "gone",
 			isBackground: true,

@@ -528,8 +528,13 @@ allowed_subagents: code-reviewer, Explore
 ```
 
 The parameterless tool binds the caller internally and returns JSON metadata for its root
-orchestrator, itself, and same-root agents whose enabled types pass its effective
-`allowed_subagents` list. No other root, process, user, payload, transcript or result is queried.
+orchestrator and the caller itself. Immediate siblings and direct children appear only if their
+enabled types pass the caller's effective `allowed_subagents` list. Standalone top-level agents
+are siblings only of other standalone top-level agents; parentless workflow workers are siblings
+only within the same workflow run. Nested agents share only the parent run that spawned them,
+not cousins or descendants of their siblings. A missing, settled, or replaced parent run makes a
+nested caller's roster unavailable. No other root, process, user, payload, transcript or result is
+queried.
 Entries contain `id`, opaque `run` (renewed on resume), `handle` (type label for unnamed nested
 children), `type`, `status` (`queued`, `running`, `finished`, `error`), and `assignment`.
 Discovery still works at the nesting depth cap; it grants no delegation, sibling steering,
@@ -547,8 +552,8 @@ source metadata needed for admission. Read-only metadata does not override that 
 Hosts without the root-scoped roster API or an active caller/root identity return an explicit
 `Agent roster unavailable` error rather than inspecting a global registry.
 
-The parent uses `/agents roster` for the same bounded metadata, without adding another model
-tool schema. `/agents audit` inspects the retained audit suffix as `{events, truncated}`, capped at the same 16 KiB (oldest events dropped, `truncated: true`). Both cause no model turn. The caller's own row is listed right after the root row and counts against the caps. A child resolves its type grants once per run (re-resolved on resume), so agent files edited mid-run apply to the next run.
+The root orchestrator uses `/agents roster` for bounded metadata across its root, without
+adding another model tool schema. `/agents audit` inspects the retained audit suffix as `{events, truncated}`, capped at the same 16 KiB (oldest events dropped, `truncated: true`). Both cause no model turn. The caller's own row is listed right after the root row and counts against the caps. A child resolves its type grants once per run (re-resolved on resume), so agent files edited mid-run apply to the next run.
 Interactive inspection uses notifications; headless inspection appends a visible custom snapshot
 with `triggerTurn: false` (available to a later explicitly requested turn). Existing interactive
 `/agents` menus are unchanged.

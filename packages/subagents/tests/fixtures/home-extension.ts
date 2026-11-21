@@ -1,7 +1,5 @@
 /** Bind real extension activation to a disposable home, never a runtime HOME mutation. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll } from "vitest";
 import { createSubagentsExtension as createAtHome, type SubagentsExtensionOptions } from "../../src/index.ts";
 
@@ -17,8 +15,7 @@ export {
 	workflowEntryData,
 } from "../../src/index.ts";
 
-const fallbackHome = mkdtempSync(join(tmpdir(), "subagents-extension-home-"));
-afterAll(() => rmSync(fallbackHome, { recursive: true, force: true }));
+const fallbackHome = makeTestTempDir("subagents-extension-home-", afterAll);
 
 export function createSubagentsExtension(options: SubagentsExtensionOptions = {}) {
 	return createAtHome({ homeDir: process.env.PI_CODING_AGENT_DIR || fallbackHome, ...options });

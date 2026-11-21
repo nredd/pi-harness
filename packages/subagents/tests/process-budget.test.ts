@@ -8,13 +8,13 @@
  * A separate static-import fixture checks shared state across module copies.
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { transformSync } from "esbuild";
 import { build } from "vite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 // TypeScript 7 ships no JS compiler API, so the fixture source is stripped with esbuild instead.
 const transpile = (source: string): string => transformSync(source, { loader: "ts", format: "esm" }).code;
@@ -299,52 +299,48 @@ describe("process budget across managers", () => {
 	});
 
 	it("settles an old manager to wake a genuine reloaded manager's waiter", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "manager-reload-"));
-		try {
-			// Bundle the real manager's import closure once, natively, and write it
-			// as two ESM identities. The LLM runner is scripted, as in the manager
-			// tests above, and the host SDK the scenario never calls is stubbed
-			// (`fixtures/budget-host-sdk.mjs`). Transpiling the whole source
-			// tree and cold-booting the real SDK cost seconds of CPU under the test
-			// deadline, which timed out under load after every assertion passed.
-			// Rolldown fails the build on a missing named export (`MISSING_EXPORT`)
-			// even at `logLevel: "silent"`, so a new SDK import cannot stub to undefined.
-			const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
-			const manager = realpathSync(new URL("../src/agent-manager.ts", import.meta.url));
-			symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
-			await build({
-				configFile: false,
-				root: fileURLToPath(new URL("../", import.meta.url)),
-				logLevel: "silent",
-				// Script only the manager's own runner import, nothing else that happens to share the specifier.
-				plugins: [
-					{
-						name: "scripted-runner",
-						enforce: "pre",
-						resolveId: (source, importer) =>
-							source === "./agent-runner.ts" && importer === manager ? fixture("budget-scripted-runner.mjs") : null,
-					},
-				],
-				resolve: {
-					alias: [{ find: /^@earendil-works\/pi-coding-agent$/, replacement: fixture("budget-host-sdk.mjs") }],
+		const dir = makeTestTempDir("manager-reload-", onTestFinished);
+		// Bundle the real manager's import closure once, natively, and write it
+		// as two ESM identities. The LLM runner is scripted, as in the manager
+		// tests above, and the host SDK the scenario never calls is stubbed
+		// (`fixtures/budget-host-sdk.mjs`). Transpiling the whole source
+		// tree and cold-booting the real SDK cost seconds of CPU under the test
+		// deadline, which timed out under load after every assertion passed.
+		// Rolldown fails the build on a missing named export (`MISSING_EXPORT`)
+		// even at `logLevel: "silent"`, so a new SDK import cannot stub to undefined.
+		const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+		const manager = realpathSync(new URL("../src/agent-manager.ts", import.meta.url));
+		symlinkSync(fileURLToPath(new URL("../../../node_modules", import.meta.url)), join(dir, "node_modules"), "dir");
+		await build({
+			configFile: false,
+			root: fileURLToPath(new URL("../", import.meta.url)),
+			logLevel: "silent",
+			// Script only the manager's own runner import, nothing else that happens to share the specifier.
+			plugins: [
+				{
+					name: "scripted-runner",
+					enforce: "pre",
+					resolveId: (source, importer) =>
+						source === "./agent-runner.ts" && importer === manager ? fixture("budget-scripted-runner.mjs") : null,
 				},
-				build: {
-					ssr: fixture("budget-manager-reload-entry.ts"),
-					outDir: dir,
-					emptyOutDir: false,
-					minify: false,
-					rolldownOptions: { output: { entryFileNames: "old.mjs" } },
-				},
-			});
-			// The stub makes `BUILTIN_TOOL_NAMES` empty. Rolldown drops a binding nothing
-			// reads, so no declaration proves no bundled code depends on the tool names.
-			expect(readFileSync(join(dir, "old.mjs"), "utf8")).not.toMatch(/\bBUILTIN_TOOL_NAMES\s*=/);
-			copyFileSync(join(dir, "old.mjs"), join(dir, "fresh.mjs"));
-			copyFileSync(fixture("budget-manager-reload.mjs"), join(dir, "check.mjs"));
-			expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+			],
+			resolve: {
+				alias: [{ find: /^@earendil-works\/pi-coding-agent$/, replacement: fixture("budget-host-sdk.mjs") }],
+			},
+			build: {
+				ssr: fixture("budget-manager-reload-entry.ts"),
+				outDir: dir,
+				emptyOutDir: false,
+				minify: false,
+				rolldownOptions: { output: { entryFileNames: "old.mjs" } },
+			},
+		});
+		// The stub makes `BUILTIN_TOOL_NAMES` empty. Rolldown drops a binding nothing
+		// reads, so no declaration proves no bundled code depends on the tool names.
+		expect(readFileSync(join(dir, "old.mjs"), "utf8")).not.toMatch(/\bBUILTIN_TOOL_NAMES\s*=/);
+		copyFileSync(join(dir, "old.mjs"), join(dir, "fresh.mjs"));
+		copyFileSync(fixture("budget-manager-reload.mjs"), join(dir, "check.mjs"));
+		expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
 	});
 
 	it("shares the cap and waiters with a separately loaded copy of the budget module", () => {
@@ -352,25 +348,21 @@ describe("process budget across managers", () => {
 		// process. Static imports in the fixture give distinct module instances,
 		// not two references to one cached module, without keeping a source fork.
 		// Real managers' admission/release wiring is exercised by the tests above.
-		const dir = mkdtempSync(join(tmpdir(), "budget-reload-"));
-		try {
-			const source = readFileSync(new URL("../src/process-budget.ts", import.meta.url), "utf8");
-			const outputText = transpile(source);
-			writeFileSync(join(dir, "old.mjs"), outputText);
-			writeFileSync(join(dir, "fresh.mjs"), outputText);
-			// Model a reload onto the next incompatible state version, using the
-			// same source apart from its version marker, not a handwritten budget.
-			const incompatibleSource = source.replace(
-				/const BUDGET_VERSION = (\d+);/,
-				(_, version: string) => `const BUDGET_VERSION = ${Number(version) + 1};`,
-			);
-			expect(incompatibleSource).not.toBe(source);
-			writeFileSync(join(dir, "incompatible.mjs"), transpile(incompatibleSource));
-			copyFileSync(new URL("./fixtures/process-budget-reload.mjs", import.meta.url), join(dir, "check.mjs"));
-			expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		const dir = makeTestTempDir("budget-reload-", onTestFinished);
+		const source = readFileSync(new URL("../src/process-budget.ts", import.meta.url), "utf8");
+		const outputText = transpile(source);
+		writeFileSync(join(dir, "old.mjs"), outputText);
+		writeFileSync(join(dir, "fresh.mjs"), outputText);
+		// Model a reload onto the next incompatible state version, using the
+		// same source apart from its version marker, not a handwritten budget.
+		const incompatibleSource = source.replace(
+			/const BUDGET_VERSION = (\d+);/,
+			(_, version: string) => `const BUDGET_VERSION = ${Number(version) + 1};`,
+		);
+		expect(incompatibleSource).not.toBe(source);
+		writeFileSync(join(dir, "incompatible.mjs"), transpile(incompatibleSource));
+		copyFileSync(new URL("./fixtures/process-budget-reload.mjs", import.meta.url), join(dir, "check.mjs"));
+		expect(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8", timeout: 10_000 })).toBe("");
 	});
 });
 
@@ -830,7 +822,7 @@ describe("process budget lease release", () => {
 		setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
 		const m = newManager();
 		const blocker = bg(m);
-		const dir = mkdtempSync(join(tmpdir(), "budget-cwd-"));
+		const dir = makeTestTempDir("budget-cwd-", onTestFinished);
 		const doomed = bg(m, { cwd: dir });
 		const next = bg(m);
 		await flush();
@@ -849,7 +841,7 @@ describe("process budget lease release", () => {
 		}, 10);
 		managers.push(m);
 		const blocker = bg(m);
-		const dir = mkdtempSync(join(tmpdir(), "budget-cwd-"));
+		const dir = makeTestTempDir("budget-cwd-", onTestFinished);
 		const doomed = bg(m, { cwd: dir });
 		const next = bg(m);
 		await flush();

@@ -103,6 +103,9 @@ export const PLAN_REMINDER_MESSAGE_TYPE = "rpiv-todo-plan-reminder";
  */
 export const HELD_REMINDER_MESSAGE_TYPE = "rpiv-todo-held-reminder";
 
+/** Hidden settle marker for autonomous work without a todo list. */
+export const EMPTY_REMINDER_MESSAGE_TYPE = "rpiv-todo-empty-reminder";
+
 // ---------------------------------------------------------------------------
 // Public domain types
 // ---------------------------------------------------------------------------

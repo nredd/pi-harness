@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentDir } from "../src/agent-dir.ts";
 import { CHILD_ENTRY, isChildSession, isChildSessionName, registerChildIdentity } from "../src/child.ts";
 import {
@@ -53,13 +54,9 @@ describe("parseConfig", () => {
 		expect(parseConfig({ titles: { model: 5 } }).titleModel).toBeUndefined();
 	});
 	it("loads the default path only under the explicitly disposable agent directory", () => {
-		const dir = mkdtempSync(join(tmpdir(), "kit-default-config-"));
+		const dir = makeTestTempDir("kit-default-config-", onTestFinished);
 		vi.stubEnv("PI_CODING_AGENT_DIR", dir);
-		try {
-			expect(loadConfig()).toEqual(defaultConfig());
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		expect(loadConfig()).toEqual(defaultConfig());
 	});
 	it("returns defaults for non-objects and a missing file", () => {
 		expect(parseConfig(null)).toEqual(defaultConfig());
@@ -132,7 +129,7 @@ describe("child identity", () => {
 
 describe("loadConfig failure paths", () => {
 	it("reports invalid JSON on stderr and falls back to defaults", () => {
-		const dir = mkdtempSync(join(tmpdir(), "kit-config-"));
+		const dir = makeTestTempDir("kit-config-", onTestFinished);
 		const path = join(dir, "pi-session-kit.json");
 		writeFileSync(path, "{ not json");
 		const err = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -142,7 +139,7 @@ describe("loadConfig failure paths", () => {
 	});
 	it("reports an unreadable path (a directory) and falls back to defaults", () => {
 		const err = vi.spyOn(console, "error").mockImplementation(() => {});
-		expect(loadConfig(mkdtempSync(join(tmpdir(), "kit-config-")))).toEqual(defaultConfig());
+		expect(loadConfig(makeTestTempDir("kit-config-", onTestFinished))).toEqual(defaultConfig());
 		expect(err).toHaveBeenCalledWith(expect.stringContaining("cannot read"));
 		err.mockRestore();
 	});
@@ -150,7 +147,7 @@ describe("loadConfig failure paths", () => {
 
 describe("createSessionKit", () => {
 	it("loads the agent directory's config when none is injected and registers only enabled features", () => {
-		const dir = mkdtempSync(join(tmpdir(), "kit-agent-"));
+		const dir = makeTestTempDir("kit-agent-", onTestFinished);
 		const disabled = Object.fromEntries(FEATURES.map((feature) => [feature, { enabled: feature === "diff" }]));
 		writeFileSync(join(dir, "pi-session-kit.json"), JSON.stringify(disabled));
 		const fake = createGoalHost();

@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readClaude } from "../../../src/stats/harness/claude.ts";
 import { claudeRow, writeLines } from "../../fixtures/stats/harness/fixtures.ts";
@@ -18,12 +18,11 @@ vi.mock("../../../src/stats/jsonl.ts", async (importOriginal) => {
 });
 
 let root: string;
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "psk-vanished-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("psk-vanished-", onTestFinished);
 });
 afterEach(() => {
 	listing.extra = [];
-	rmSync(root, { recursive: true, force: true });
 });
 
 it("treats a transcript pruned between listing and reading as gone, not as an unreadable file", async () => {

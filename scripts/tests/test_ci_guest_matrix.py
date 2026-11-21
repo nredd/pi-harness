@@ -1132,7 +1132,10 @@ def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards()
             assert fan_in["env"]["WINDOWS_RESULT"] == "${{ needs.computer-use-windows.result }}"
             assert "packages/computer-use" in fan_in["env"]["WINDOWS_REQUIRED"]
         else:
-            assert set(fan_in["env"]) == {"SHARDS_RESULT"}
+            assert fan_in["env"] == {
+                "SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}",
+                "WINDOWS_REQUIRED": "false",
+            }
         assert fan_in["runs-on"] == "ubuntu-24.04"
 
 
@@ -1221,14 +1224,18 @@ def test_fan_in_requires_every_planned_shard(tmp_path: Path, result: str, passes
     """
     step = fan_in_step("Require every planned shard to succeed")
     assert step["if"] == "steps.plan.outputs.run == 'true'"
+    assert step["run"] == "python3 scripts/ci_require_shards.py"
+    assert not step.get("continue-on-error")
     script = tmp_path / "require.sh"
     script.write_text(step["run"])
     completed = subprocess.run(
         ["/bin/bash", "-e", str(script)],
-        env=os.environ | {"SHARDS_RESULT": result, "CELL": "owned (macos-14)"},
+        cwd=ROOT,
+        env=os.environ | {"SHARDS_RESULT": result, "CELL": "owned (macos-14)", "WINDOWS_REQUIRED": "false"},
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
     assert (completed.returncode == 0) is passes
     if passes:

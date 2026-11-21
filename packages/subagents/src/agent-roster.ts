@@ -89,13 +89,37 @@ export class AgentRoster {
 		return this.read(root, `root:${root}`, `root:${root}`, undefined);
 	}
 
-	/** Read as a bound child record. Missing identity or a settled caller fails closed. */
+	/** Read as a bound child record. Settled callers and stale parent runs fail closed. */
 	child(id: string, allowed: ReadonlySet<string>): { agents: RosterEntry[]; truncated: boolean } {
-		const caller = this.records().find((record) => record.id === id);
+		const records = this.records();
+		const caller = records.find((record) => record.id === id);
 		if (!caller?.rosterRootId || !caller.runId || (caller.status !== "running" && caller.status !== "queued")) {
 			throw new Error("Agent roster unavailable: caller has no active root-scoped run identity.");
 		}
-		return this.read(caller.rosterRootId, caller.id, caller.runId, allowed);
+		if (caller.parentAgentId !== undefined) {
+			const parent = records.find((record) => record.id === caller.parentAgentId);
+			if (
+				!parent?.runId ||
+				parent.runId !== caller.rosterParentRunId ||
+				parent.rosterRootId !== caller.rosterRootId ||
+				parent.status !== "running"
+			) {
+				throw new Error("Agent roster unavailable: caller has no active immediate parent run.");
+			}
+		}
+		// A workflow id identifies one run, not the workflow definition. Parentless
+		// records share a sibling group only within that run (or outside workflows).
+		return this.read(
+			caller.rosterRootId,
+			caller.id,
+			caller.runId,
+			(record) =>
+				allowed.has(record.type) &&
+				((record.parentAgentId === caller.parentAgentId &&
+					record.rosterParentRunId === caller.rosterParentRunId &&
+					(caller.parentAgentId !== undefined || record.workflowId === caller.workflowId)) ||
+					(record.parentAgentId === caller.id && record.rosterParentRunId === caller.runId)),
+		);
 	}
 
 	/** The current run identity of a record, or undefined when unknown. */
@@ -120,7 +144,7 @@ export class AgentRoster {
 		return { events, truncated };
 	}
 
-	private read(root: string, caller: string, run: string, allowed: ReadonlySet<string> | undefined) {
+	private read(root: string, caller: string, run: string, visible?: (record: AgentRecord) => boolean) {
 		assertRoot(root);
 		let log = this.logs.get(root);
 		if (!log) {
@@ -143,11 +167,7 @@ export class AgentRoster {
 		const records = this.records();
 		const ordered = [...records.filter((r) => r.id === caller), ...records.filter((r) => r.id !== caller)];
 		for (const record of ordered) {
-			if (
-				record.rosterRootId !== root ||
-				!record.runId ||
-				(allowed && record.id !== caller && !allowed.has(record.type))
-			)
+			if (record.rosterRootId !== root || !record.runId || (visible && record.id !== caller && !visible(record)))
 				continue;
 			if (agents.length === ROSTER_LIMIT) {
 				truncated = true;

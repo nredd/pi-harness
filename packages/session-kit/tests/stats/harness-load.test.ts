@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 import { freshnessLines } from "../../src/stats/freshness.ts";
 import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
@@ -25,8 +25,8 @@ let dir: string;
 let repo: string;
 let viewer: string;
 let home: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "stats-harness-load-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("stats-harness-load-", onTestFinished);
 	repo = join(dir, "repo");
 	viewer = join(dir, "viewer");
 	home = join(dir, "home");
@@ -35,7 +35,6 @@ beforeEach(() => {
 		lines: [assistantLine({ ms: OCT, provider: "pi-provider", model: "pi-model", input: 5, cost: 0.5 })],
 	});
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function files(root: string): Record<string, [string, number]> {
 	const out: Record<string, [string, number]> = {};

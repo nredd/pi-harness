@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 import { encodeCwd, streamToOutputFile, writeInitialEntry } from "../src/output-file.ts";
 
 describe("encodeCwd", () => {
@@ -87,13 +87,11 @@ describe("streamToOutputFile", () => {
 	let tmp: string;
 	let outPath: string;
 
-	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "stream-out-test-"));
+	beforeEach(({ onTestFinished }) => {
+		tmp = makeTestTempDir("stream-out-test-", onTestFinished);
 		outPath = join(tmp, "agent.output");
 		writeInitialEntry(outPath, "agent-1", "do the thing", "/work");
 	});
-
-	afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 	function readEntries(): Record<string, unknown>[] {
 		return readFileSync(outPath, "utf-8")

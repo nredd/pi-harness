@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_AGENTS } from "../src/default-agents.ts";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../src/memory.ts";
 import { buildAgentPrompt } from "../src/prompts.ts";
@@ -2138,10 +2139,8 @@ describe("extensionCanonicalName", () => {
 });
 
 describe("extensionCanonicalNames (#143 — package short name alias)", () => {
-	const tmpDirs: string[] = [];
 	function pkgDir(name: string, piExtensions: unknown): string {
-		const dir = mkdtempSync(join(tmpdir(), "subagents-pkg-"));
-		tmpDirs.push(dir);
+		const dir = makeTestTempDir("subagents-pkg-", onTestFinished);
 		const manifest: Record<string, unknown> = { name };
 		if (piExtensions !== undefined) manifest.pi = { extensions: piExtensions };
 		writeFileSync(join(dir, "package.json"), JSON.stringify(manifest));
@@ -2149,9 +2148,6 @@ describe("extensionCanonicalNames (#143 — package short name alias)", () => {
 		writeFileSync(join(dir, "src", "index.ts"), "export default () => {};");
 		return dir;
 	}
-	afterEach(() => {
-		while (tmpDirs.length) rmSync(tmpDirs.pop()!, { recursive: true, force: true });
-	});
 
 	it("aliases a package-declared index.ts entry to the unscoped, lowercased package name", () => {
 		// Without this, `pi.extensions: ["./src/index.ts"]` only ever matches as "src".
@@ -2173,8 +2169,7 @@ describe("extensionCanonicalNames (#143 — package short name alias)", () => {
 	});
 
 	it("adds no alias for a loose file with no enclosing package.json", () => {
-		const dir = mkdtempSync(join(tmpdir(), "subagents-loose-"));
-		tmpDirs.push(dir);
+		const dir = makeTestTempDir("subagents-loose-", onTestFinished);
 		writeFileSync(join(dir, "foo.ts"), "export default () => {};");
 		expect(extensionCanonicalNames(join(dir, "foo.ts"))).toEqual(["foo"]);
 	});
@@ -2200,8 +2195,7 @@ describe("extensionCanonicalNames (#143 — package short name alias)", () => {
 	it("does not climb past a node_modules boundary into a consumer's manifest", () => {
 		// A consumer that *declares* a dependency's entry must not lend its name to
 		// that dependency: the walk stops at node_modules before reading it.
-		const root = mkdtempSync(join(tmpdir(), "subagents-consumer-"));
-		tmpDirs.push(root);
+		const root = makeTestTempDir("subagents-consumer-", onTestFinished);
 		writeFileSync(
 			join(root, "package.json"),
 			JSON.stringify({ name: "consumer", pi: { extensions: ["./node_modules/inner-ext/index.ts"] } }),
@@ -2322,29 +2316,25 @@ describe("agent-runner extension allowlist", () => {
 	it("matches a package-installed extension by its package short name, not just its src dir (#143)", async () => {
 		// A package whose entry is `src/index.ts` canonicalizes to "src"; a child
 		// agent must still be able to allowlist it by the package name.
-		const dir = mkdtempSync(join(tmpdir(), "subagents-match-"));
-		try {
-			writeFileSync(
-				join(dir, "package.json"),
-				JSON.stringify({ name: "@tintinweb/pi-subagents", pi: { extensions: ["./src/index.ts"] } }),
-			);
-			mkdirSync(join(dir, "src"));
-			writeFileSync(join(dir, "src", "index.ts"), "export default () => {};");
-			const entry = join(dir, "src", "index.ts");
+		const dir = makeTestTempDir("subagents-match-", onTestFinished);
+		writeFileSync(
+			join(dir, "package.json"),
+			JSON.stringify({ name: "@tintinweb/pi-subagents", pi: { extensions: ["./src/index.ts"] } }),
+		);
+		mkdirSync(join(dir, "src"));
+		writeFileSync(join(dir, "src", "index.ts"), "export default () => {};");
+		const entry = join(dir, "src", "index.ts");
 
-			setupArrayAgent(["pi-subagents"]);
-			withExtensions({ [entry]: ["pkg_tool"] });
-			const { session } = createSession("OK");
-			createAgentSession.mockResolvedValue({ session });
+		setupArrayAgent(["pi-subagents"]);
+		withExtensions({ [entry]: ["pkg_tool"] });
+		const { session } = createSession("OK");
+		createAgentSession.mockResolvedValue({ session });
 
-			await runAgent(ctx, "Explore", "go", { pi });
+		await runAgent(ctx, "Explore", "go", { pi });
 
-			// Before the fix keepNames={pi-subagents} but the extension only answered
-			// to "src", so it was filtered out and pkg_tool never reached the allowlist.
-			expect(lastToolsPassed()).toContain("pkg_tool");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+		// Before the fix keepNames={pi-subagents} but the extension only answered
+		// to "src", so it was filtered out and pkg_tool never reached the allowlist.
+		expect(lastToolsPassed()).toContain("pkg_tool");
 	});
 
 	it("an absolute path is added to additionalExtensionPaths and its extension survives", async () => {
@@ -3508,8 +3498,8 @@ describe("agent-runner injected home forwarding", () => {
 	let previousAgentDir: string | undefined;
 	let previousSessionDir: string | undefined;
 
-	beforeEach(() => {
-		homeDir = mkdtempSync(join(tmpdir(), "runner-home-"));
+	beforeEach(({ onTestFinished }) => {
+		homeDir = makeTestTempDir("runner-home-", onTestFinished);
 		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 		previousSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 		delete process.env.PI_CODING_AGENT_DIR;
@@ -3522,7 +3512,6 @@ describe("agent-runner injected home forwarding", () => {
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		if (previousSessionDir === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
 		else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDir;
-		rmSync(homeDir, { recursive: true, force: true });
 	});
 
 	it("forwards the home to skill preloading", async () => {

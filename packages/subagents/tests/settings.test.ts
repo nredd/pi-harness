@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	applyAndEmitLoaded,
@@ -28,9 +28,9 @@ describe("settings persistence", () => {
 	const globalFile = () => join(globalDir, "subagents.json");
 	const projectFile = () => join(projectDir, ".pi", "subagents.json");
 
-	beforeEach(() => {
-		globalDir = mkdtempSync(join(tmpdir(), "pi-settings-global-"));
-		projectDir = mkdtempSync(join(tmpdir(), "pi-settings-project-"));
+	beforeEach(({ onTestFinished }) => {
+		globalDir = makeTestTempDir("pi-settings-global-", onTestFinished);
+		projectDir = makeTestTempDir("pi-settings-project-", onTestFinished);
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = globalDir;
 	});
@@ -38,8 +38,6 @@ describe("settings persistence", () => {
 	afterEach(() => {
 		if (originalAgentDirEnv == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
-		rmSync(globalDir, { recursive: true, force: true });
-		rmSync(projectDir, { recursive: true, force: true });
 	});
 
 	function writeGlobal(obj: unknown) {
@@ -739,13 +737,9 @@ describe("settings persistence", () => {
 		it("saveSettings returns false when the target dir cannot be created", () => {
 			// Place a regular file where the parent of the settings file would go —
 			// mkdirSync + writeFileSync both fail with ENOTDIR / EEXIST.
-			const filePosingAsCwd = join(tmpdir(), `pi-settings-notdir-${Date.now()}`);
+			const filePosingAsCwd = join(projectDir, "not-a-directory");
 			writeFileSync(filePosingAsCwd, "");
-			try {
-				expect(saveSettings({ maxConcurrent: 1 }, filePosingAsCwd)).toBe(false);
-			} finally {
-				rmSync(filePosingAsCwd, { force: true });
-			}
+			expect(saveSettings({ maxConcurrent: 1 }, filePosingAsCwd)).toBe(false);
 		});
 
 		it("warns to console.warn when an existing file is malformed", () => {
@@ -1141,22 +1135,18 @@ describe("settings persistence", () => {
 		});
 
 		it("emits with persisted=false and returns warning toast on save failure", () => {
-			const filePosingAsCwd = join(tmpdir(), `pi-settings-notdir-${Date.now()}`);
+			const filePosingAsCwd = join(projectDir, "not-a-directory");
 			writeFileSync(filePosingAsCwd, "");
 			const emit = vi.fn();
-			try {
-				const toast = saveAndEmitChanged({ maxConcurrent: 5 }, "Max concurrency set to 5", emit, filePosingAsCwd);
-				expect(emit).toHaveBeenCalledWith("subagents:settings_changed", {
-					settings: { maxConcurrent: 5 },
-					persisted: false,
-				});
-				expect(toast).toEqual({
-					message: "Max concurrency set to 5 (session only; failed to persist)",
-					level: "warning",
-				});
-			} finally {
-				rmSync(filePosingAsCwd, { force: true });
-			}
+			const toast = saveAndEmitChanged({ maxConcurrent: 5 }, "Max concurrency set to 5", emit, filePosingAsCwd);
+			expect(emit).toHaveBeenCalledWith("subagents:settings_changed", {
+				settings: { maxConcurrent: 5 },
+				persisted: false,
+			});
+			expect(toast).toEqual({
+				message: "Max concurrency set to 5 (session only; failed to persist)",
+				level: "warning",
+			});
 		});
 	});
 });

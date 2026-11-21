@@ -6,8 +6,7 @@
  * and drives a REAL session.compact() — no mocked compaction semantics, so
  * this breaks if pi changes how compaction rebuilds session.messages.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
 import {
@@ -17,6 +16,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { streamToOutputFile, writeInitialEntry } from "../../src/output-file.ts";
 import { fauxModelBackend } from "../fixtures/faux-model-backend.ts";
@@ -28,8 +28,8 @@ describe("output-file streaming across a real compaction (#145)", () => {
 	let tmp: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "issue-145-"));
+	beforeEach(({ onTestFinished }) => {
+		tmp = makeTestTempDir("issue-145-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = tmp; // hermetic: no dev-env extensions/themes
 	});
@@ -37,7 +37,6 @@ describe("output-file streaming across a real compaction (#145)", () => {
 	afterEach(() => {
 		if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	it("keeps writing post-compaction messages to the output file", async () => {
