@@ -42,7 +42,9 @@ FACADE_EXPORT = re.compile(
 
 # Deliberately conservative: only module/re-export declarations can validate a missing map.
 # This is not a Rust parser and will reject, never exempt, an unfamiliar source construct.
-RUST_DECLARATIONS = re.compile(
+RUST_DECLARATIONS = re.compile(r"(?:\s*(?:pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;))*\s*")
+RUST_LINE_COMMENT = re.compile(r"//[^\n]*")
+WINDOWS_RUST_DECLARATIONS = re.compile(
     r"(?:\s|//[^\n]*|/\*(?:(?!/\*|\*/)[\s\S])*\*/|pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;)*"
 )
 # The paired LLVM producer covers this crate; LLVM resolves remapped sysroot paths relative to it.
@@ -1372,7 +1374,12 @@ def llvm_records(
         if counters is not None and (counters.lines or counters.functions or counters.regions):
             continue
         source = (root / package.root / relative).read_text()
-        if not RUST_DECLARATIONS.fullmatch(source):
+        declarations = (
+            WINDOWS_RUST_DECLARATIONS.fullmatch(source)
+            if signal.producer == "llvm-lcov"
+            else RUST_DECLARATIONS.fullmatch(RUST_LINE_COMMENT.sub("", source))
+        )
+        if not declarations:
             reason = (
                 "Expected executable LLVM source missing"
                 if counters is None

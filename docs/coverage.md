@@ -447,7 +447,9 @@ main runs [here](https://github.com/nredd/pi-harness/actions/runs/44914453077) a
 [here](https://github.com/nredd/pi-harness/actions/runs/44876056492) agree on **3000 / 324 / 4868**
 uncovered lines / functions / regions across the crate's `src/` inventory. Only lines and functions
 are capped and ratcheted. Integration tests and sysroot files are outside the denominator, but
-inline source tests count. This is not Windows ARM64 or live desktop evidence.
+inline source tests count. Declaration-only Windows modules can lack an LLVM map even if they
+contain block comments; the Linux declaration check is unchanged. This is not Windows ARM64 or
+live desktop evidence.
 
 To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
 `coverage.json` and `metadata.json` from its single `windows-*` directory into

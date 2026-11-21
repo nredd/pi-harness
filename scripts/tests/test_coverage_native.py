@@ -221,7 +221,10 @@ def test_native_dependency_paths_and_declaration_fail_closed(tmp_path: Path) -> 
     files[0]["filename"] = files[0]["filename"].replace("/", "\\")
     output.write_text(json.dumps(report))
     assert not account(tmp_path, cfg, "linux")[1]
-    (tmp_path / "pkg/src/lib.rs").write_text("pub fn not_a_declaration() {}")
+    lib = tmp_path / "pkg/src/lib.rs"
+    lib.write_text(lib.read_text() + "/* Embedded reference: examples can include fn f() {}. */\n")
+    assert "Expected executable LLVM source missing: 'src/lib.rs'" in account(tmp_path, cfg, "linux")[1][0]
+    lib.write_text("pub fn not_a_declaration() {}")
     assert "Expected executable LLVM source missing" in account(tmp_path, cfg, "linux")[1][0]
 
 
