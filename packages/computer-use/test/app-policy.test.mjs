@@ -856,6 +856,11 @@ test("Windows refuses re-blocked saved-state live operations before readiness", 
 	);
 });
 
+test("Windows blocklist lookup does not substitute a macOS bundle alias for a missing executable", async () => {
+	const { blockedAppId } = await import("../src/config.ts");
+	assert.equal(blockedAppId("windows", { bundleId: "consent.exe" }), undefined);
+});
+
 test("Windows defaults and additive project entries match exact owner executable basenames", async ({
 	onTestFinished,
 }) => {
