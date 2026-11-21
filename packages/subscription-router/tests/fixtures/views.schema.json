@@ -1,0 +1,402 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "Shared router views fixture",
+	"type": "object",
+	"required": ["schema", "views"],
+	"properties": {
+		"schema": {
+			"type": "number",
+			"const": 1
+		},
+		"views": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["name", "now", "timeZone", "usage"],
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"now": {
+						"type": "number"
+					},
+					"timeZone": {
+						"type": "string"
+					},
+					"usage": {
+						"type": "object",
+						"required": ["version", "snapshots", "blocks", "views"],
+						"properties": {
+							"version": {
+								"type": "number",
+								"const": 2
+							},
+							"snapshots": {
+								"type": "array",
+								"items": {
+									"$ref": "#/$defs/snapshot"
+								}
+							},
+							"blocks": {
+								"$ref": "#/$defs/marks"
+							},
+							"views": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"required": ["provider", "display", "access", "meters", "pools", "marks"],
+									"properties": {
+										"provider": {
+											"type": "string"
+										},
+										"display": {
+											"$ref": "#/$defs/display"
+										},
+										"access": {
+											"enum": ["subscription", "metered", "unknown"]
+										},
+										"snapshot": {
+											"$ref": "#/$defs/snapshot"
+										},
+										"meters": {
+											"$ref": "#/$defs/meters"
+										},
+										"pools": {
+											"$ref": "#/$defs/pools"
+										},
+										"marks": {
+											"$ref": "#/$defs/marks"
+										}
+									},
+									"additionalProperties": false
+								}
+							}
+						},
+						"additionalProperties": false
+					},
+					"legacyRows": {
+						"type": "object",
+						"required": ["full", "compact"],
+						"properties": {
+							"full": {
+								"type": "string"
+							},
+							"compact": {
+								"type": "string"
+							}
+						},
+						"additionalProperties": false
+					}
+				},
+				"additionalProperties": false
+			},
+			"minItems": 1
+		}
+	},
+	"additionalProperties": false,
+	"$defs": {
+		"quantity": {
+			"type": "object",
+			"required": ["unit"],
+			"properties": {
+				"unit": {
+					"enum": ["requests", "tokens", "usd", "credits"]
+				},
+				"used": {
+					"type": "number"
+				},
+				"limit": {
+					"type": "number"
+				},
+				"remaining": {
+					"type": "number"
+				}
+			},
+			"additionalProperties": false
+		},
+		"snapshot": {
+			"type": "object",
+			"required": ["provider", "status", "windows", "retrievedAt", "expiresAt"],
+			"properties": {
+				"provider": {
+					"type": "string"
+				},
+				"status": {
+					"enum": ["available", "stale", "unavailable", "error"]
+				},
+				"windows": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"required": ["name", "scope", "usedPercent"],
+						"properties": {
+							"name": {
+								"type": "string"
+							},
+							"resetAt": {
+								"type": "number"
+							},
+							"durationMs": {
+								"type": "number"
+							},
+							"spanSource": {
+								"$ref": "#/$defs/spanSource"
+							},
+							"scope": {
+								"enum": ["provider", "model"]
+							},
+							"families": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								}
+							},
+							"kind": {
+								"enum": ["rolling", "calendar"]
+							},
+							"resetRule": {
+								"$ref": "#/$defs/resetRule"
+							},
+							"basis": {
+								"$ref": "#/$defs/basis"
+							},
+							"usedPercent": {
+								"type": "number"
+							},
+							"quantity": {
+								"$ref": "#/$defs/quantity"
+							}
+						},
+						"additionalProperties": false
+					}
+				},
+				"meters": {
+					"$ref": "#/$defs/meters"
+				},
+				"pools": {
+					"$ref": "#/$defs/pools"
+				},
+				"access": {
+					"enum": ["subscription", "metered"]
+				},
+				"credits": {
+					"type": "object",
+					"required": ["available", "unlimited"],
+					"properties": {
+						"available": {
+							"type": "boolean"
+						},
+						"unlimited": {
+							"type": "boolean"
+						},
+						"balance": {
+							"type": "string"
+						}
+					},
+					"additionalProperties": false
+				},
+				"retrievedAt": {
+					"type": "number"
+				},
+				"expiresAt": {
+					"type": "number"
+				},
+				"message": {
+					"type": "string"
+				}
+			},
+			"additionalProperties": false
+		},
+		"meters": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["name", "scope", "quantity"],
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"resetAt": {
+						"type": "number"
+					},
+					"durationMs": {
+						"type": "number"
+					},
+					"spanSource": {
+						"$ref": "#/$defs/spanSource"
+					},
+					"scope": {
+						"enum": ["provider", "model"]
+					},
+					"families": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					},
+					"kind": {
+						"enum": ["rolling", "calendar"]
+					},
+					"resetRule": {
+						"$ref": "#/$defs/resetRule"
+					},
+					"basis": {
+						"$ref": "#/$defs/basis"
+					},
+					"quantity": {
+						"$ref": "#/$defs/quantity"
+					}
+				},
+				"additionalProperties": false
+			}
+		},
+		"pools": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["name", "unit", "role"],
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"unit": {
+						"enum": ["usd", "credits"]
+					},
+					"role": {
+						"enum": ["overage", "prepaid"]
+					},
+					"balance": {
+						"type": "number"
+					},
+					"unlimited": {
+						"type": "boolean"
+					},
+					"appliesAfter": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					}
+				},
+				"additionalProperties": false
+			}
+		},
+		"marks": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["provider", "window", "until", "resetKnown", "confirmations"],
+				"properties": {
+					"provider": {
+						"type": "string"
+					},
+					"families": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					},
+					"window": {
+						"type": "string"
+					},
+					"until": {
+						"type": "number"
+					},
+					"resetKnown": {
+						"type": "boolean"
+					},
+					"confirmations": {
+						"type": "number"
+					},
+					"evidence": {
+						"enum": ["inferred", "observed"]
+					},
+					"expiry": {
+						"enum": ["hinted", "window-reset", "backoff"]
+					},
+					"cause": {
+						"enum": ["quota", "billing"]
+					},
+					"access": {
+						"enum": ["subscription", "metered"]
+					},
+					"markedAt": {
+						"type": "number"
+					}
+				},
+				"additionalProperties": false
+			}
+		},
+		"display": {
+			"type": "object",
+			"required": ["full", "compact"],
+			"properties": {
+				"full": {
+					"type": "string"
+				},
+				"compact": {
+					"type": "string"
+				},
+				"footer": {
+					"type": "object",
+					"properties": {
+						"show": {
+							"type": "array",
+							"items": {
+								"anyOf": [
+									{
+										"type": "object",
+										"required": ["name"],
+										"properties": {
+											"name": {
+												"type": "string"
+											}
+										},
+										"additionalProperties": false
+									},
+									{
+										"type": "object",
+										"required": ["durationMs"],
+										"properties": {
+											"durationMs": {
+												"type": "number"
+											}
+										},
+										"additionalProperties": false
+									}
+								]
+							}
+						},
+						"placeholder": {
+							"type": "boolean"
+						}
+					},
+					"additionalProperties": false
+				}
+			},
+			"additionalProperties": false
+		},
+		"spanSource": {
+			"enum": ["reported", "assumed"]
+		},
+		"resetRule": {
+			"type": "object",
+			"required": ["at", "timeZone", "every"],
+			"properties": {
+				"at": {
+					"type": "string"
+				},
+				"timeZone": {
+					"type": "string"
+				},
+				"every": {
+					"enum": ["day", "week"]
+				}
+			},
+			"additionalProperties": false
+		},
+		"basis": {
+			"enum": ["reported", "observed", "inferred"]
+		}
+	}
+}

@@ -1,104 +1,14 @@
-[
-	{
-		"name": "legacy-reported",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [
-				{
-					"provider": "anthropic",
-					"status": "available",
-					"windows": [
-						{
-							"name": "five_hour",
-							"usedPercent": 25,
-							"scope": "provider",
-							"durationMs": 18000000,
-							"spanSource": "reported",
-							"resetAt": 1768485600000
-						},
-						{
-							"name": "seven_day",
-							"usedPercent": 40,
-							"scope": "provider",
-							"durationMs": 604800000,
-							"spanSource": "reported",
-							"resetAt": 1768737600000
-						},
-						{
-							"name": "seven_day_opus",
-							"usedPercent": 100,
-							"scope": "model",
-							"durationMs": 604800000,
-							"spanSource": "reported",
-							"resetAt": 1768737600000,
-							"families": ["opus"]
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000
-				},
-				{
-					"provider": "openai-codex",
-					"status": "available",
-					"windows": [
-						{
-							"name": "5h",
-							"usedPercent": 99,
-							"scope": "provider",
-							"durationMs": 18000000,
-							"spanSource": "reported",
-							"resetAt": 1768485600000
-						},
-						{
-							"name": "7d",
-							"usedPercent": 65,
-							"scope": "provider",
-							"durationMs": 604800000,
-							"spanSource": "reported",
-							"resetAt": 1768737600000
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000,
-					"credits": {
-						"available": true,
-						"unlimited": false,
-						"balance": "12.50"
-					}
-				}
-			],
-			"blocks": [
-				{
-					"provider": "anthropic",
-					"window": "seven_day_opus",
-					"families": ["opus"],
-					"until": 1768737600000,
-					"resetKnown": true,
-					"confirmations": 1
-				}
-			],
-			"views": [
-				{
-					"provider": "anthropic",
-					"display": {
-						"full": "Anthropic",
-						"compact": "Anth",
-						"footer": {
-							"show": [
-								{
-									"name": "five_hour"
-								},
-								{
-									"name": "seven_day"
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+{
+	"schema": 1,
+	"views": [
+		{
+			"name": "legacy-reported",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
 						"provider": "anthropic",
 						"status": "available",
 						"windows": [
@@ -131,35 +41,7 @@
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478700000
 					},
-					"meters": [],
-					"pools": [],
-					"marks": [
-						{
-							"provider": "anthropic",
-							"window": "seven_day_opus",
-							"families": ["opus"],
-							"until": 1768737600000,
-							"resetKnown": true,
-							"confirmations": 1
-						}
-					]
-				},
-				{
-					"provider": "openai-codex",
-					"display": {
-						"full": "OpenAI",
-						"compact": "OAI",
-						"footer": {
-							"show": [
-								{
-									"durationMs": 604800000
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+					{
 						"provider": "openai-codex",
 						"status": "available",
 						"windows": [
@@ -187,87 +69,146 @@
 							"unlimited": false,
 							"balance": "12.50"
 						}
-					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
-		},
-		"legacyRows": {
-			"full": "Quota left: Anthropic 5h 75% (resets 14:00) weekly 60% (resets Jan 18 12:00) | OpenAI weekly 35% (resets Jan 18 12:00)",
-			"compact": "Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | OAI 7d 35% @Jan 18 12:00"
-		}
-	},
-	{
-		"name": "legacy-assumed",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [
-				{
-					"provider": "anthropic",
-					"status": "available",
-					"windows": [
-						{
-							"name": "seven_day",
-							"usedPercent": 20,
-							"scope": "provider",
-							"durationMs": 604800000,
-							"spanSource": "reported",
-							"resetAt": 1768737600000
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000
-				},
-				{
-					"provider": "openai-codex",
-					"status": "available",
-					"windows": [
-						{
-							"name": "5h",
-							"usedPercent": 10,
-							"scope": "provider",
-							"durationMs": 18000000,
-							"spanSource": "assumed",
-							"resetAt": 1768485600000
+					}
+				],
+				"blocks": [
+					{
+						"provider": "anthropic",
+						"window": "seven_day_opus",
+						"families": ["opus"],
+						"until": 1768737600000,
+						"resetKnown": true,
+						"confirmations": 1
+					}
+				],
+				"views": [
+					{
+						"provider": "anthropic",
+						"display": {
+							"full": "Anthropic",
+							"compact": "Anth",
+							"footer": {
+								"show": [
+									{
+										"name": "five_hour"
+									},
+									{
+										"name": "seven_day"
+									}
+								],
+								"placeholder": true
+							}
 						},
-						{
-							"name": "7d",
-							"usedPercent": 81,
-							"scope": "provider",
-							"durationMs": 604800000,
-							"spanSource": "assumed",
-							"resetAt": 1768737600000
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000
-				}
-			],
-			"blocks": [],
-			"views": [
-				{
-					"provider": "anthropic",
-					"display": {
-						"full": "Anthropic",
-						"compact": "Anth",
-						"footer": {
-							"show": [
+						"access": "unknown",
+						"snapshot": {
+							"provider": "anthropic",
+							"status": "available",
+							"windows": [
 								{
-									"name": "five_hour"
+									"name": "five_hour",
+									"usedPercent": 25,
+									"scope": "provider",
+									"durationMs": 18000000,
+									"spanSource": "reported",
+									"resetAt": 1768485600000
 								},
 								{
-									"name": "seven_day"
+									"name": "seven_day",
+									"usedPercent": 40,
+									"scope": "provider",
+									"durationMs": 604800000,
+									"spanSource": "reported",
+									"resetAt": 1768737600000
+								},
+								{
+									"name": "seven_day_opus",
+									"usedPercent": 100,
+									"scope": "model",
+									"durationMs": 604800000,
+									"spanSource": "reported",
+									"resetAt": 1768737600000,
+									"families": ["opus"]
 								}
 							],
-							"placeholder": true
-						}
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000
+						},
+						"meters": [],
+						"pools": [],
+						"marks": [
+							{
+								"provider": "anthropic",
+								"window": "seven_day_opus",
+								"families": ["opus"],
+								"until": 1768737600000,
+								"resetKnown": true,
+								"confirmations": 1
+							}
+						]
 					},
-					"access": "unknown",
-					"snapshot": {
+					{
+						"provider": "openai-codex",
+						"display": {
+							"full": "OpenAI",
+							"compact": "OAI",
+							"footer": {
+								"show": [
+									{
+										"durationMs": 604800000
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "openai-codex",
+							"status": "available",
+							"windows": [
+								{
+									"name": "5h",
+									"usedPercent": 99,
+									"scope": "provider",
+									"durationMs": 18000000,
+									"spanSource": "reported",
+									"resetAt": 1768485600000
+								},
+								{
+									"name": "7d",
+									"usedPercent": 65,
+									"scope": "provider",
+									"durationMs": 604800000,
+									"spanSource": "reported",
+									"resetAt": 1768737600000
+								}
+							],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000,
+							"credits": {
+								"available": true,
+								"unlimited": false,
+								"balance": "12.50"
+							}
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			},
+			"legacyRows": {
+				"full": "Quota left: Anthropic 5h 75% (resets 14:00) weekly 60% (resets Jan 18 12:00) | OpenAI weekly 35% (resets Jan 18 12:00)",
+				"compact": "Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | OAI 7d 35% @Jan 18 12:00"
+			}
+		},
+		{
+			"name": "legacy-assumed",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
 						"provider": "anthropic",
 						"status": "available",
 						"windows": [
@@ -283,26 +224,7 @@
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478700000
 					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				},
-				{
-					"provider": "openai-codex",
-					"display": {
-						"full": "OpenAI",
-						"compact": "OAI",
-						"footer": {
-							"show": [
-								{
-									"durationMs": 604800000
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+					{
 						"provider": "openai-codex",
 						"status": "available",
 						"windows": [
@@ -325,80 +247,106 @@
 						],
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478700000
-					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
-		},
-		"legacyRows": {
-			"full": "Quota left: Anthropic weekly 80% (resets Jan 18 12:00) | OpenAI quota 19% (resets Jan 18 12:00; window unknown)",
-			"compact": "Left: Anth 7d 80% @Jan 18 12:00 | OAI quota? 19% @Jan 18 12:00"
-		}
-	},
-	{
-		"name": "legacy-name-only",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [
-				{
-					"provider": "openai-codex",
-					"status": "available",
-					"windows": [
-						{
-							"name": "7d",
-							"usedPercent": 20,
-							"scope": "provider",
-							"resetAt": 1768737600000
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000
-				}
-			],
-			"blocks": [],
-			"views": [
-				{
-					"provider": "anthropic",
-					"display": {
-						"full": "Anthropic",
-						"compact": "Anth",
-						"footer": {
-							"show": [
+					}
+				],
+				"blocks": [],
+				"views": [
+					{
+						"provider": "anthropic",
+						"display": {
+							"full": "Anthropic",
+							"compact": "Anth",
+							"footer": {
+								"show": [
+									{
+										"name": "five_hour"
+									},
+									{
+										"name": "seven_day"
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "anthropic",
+							"status": "available",
+							"windows": [
 								{
-									"name": "five_hour"
+									"name": "seven_day",
+									"usedPercent": 20,
+									"scope": "provider",
+									"durationMs": 604800000,
+									"spanSource": "reported",
+									"resetAt": 1768737600000
+								}
+							],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					},
+					{
+						"provider": "openai-codex",
+						"display": {
+							"full": "OpenAI",
+							"compact": "OAI",
+							"footer": {
+								"show": [
+									{
+										"durationMs": 604800000
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "openai-codex",
+							"status": "available",
+							"windows": [
+								{
+									"name": "5h",
+									"usedPercent": 10,
+									"scope": "provider",
+									"durationMs": 18000000,
+									"spanSource": "assumed",
+									"resetAt": 1768485600000
 								},
 								{
-									"name": "seven_day"
+									"name": "7d",
+									"usedPercent": 81,
+									"scope": "provider",
+									"durationMs": 604800000,
+									"spanSource": "assumed",
+									"resetAt": 1768737600000
 								}
 							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"meters": [],
-					"pools": [],
-					"marks": []
-				},
-				{
-					"provider": "openai-codex",
-					"display": {
-						"full": "OpenAI",
-						"compact": "OAI",
-						"footer": {
-							"show": [
-								{
-									"durationMs": 604800000
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			},
+			"legacyRows": {
+				"full": "Quota left: Anthropic weekly 80% (resets Jan 18 12:00) | OpenAI quota 19% (resets Jan 18 12:00; window unknown)",
+				"compact": "Left: Anth 7d 80% @Jan 18 12:00 | OAI quota? 19% @Jan 18 12:00"
+			}
+		},
+		{
+			"name": "legacy-name-only",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
 						"provider": "openai-codex",
 						"status": "available",
 						"windows": [
@@ -411,63 +359,80 @@
 						],
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478700000
+					}
+				],
+				"blocks": [],
+				"views": [
+					{
+						"provider": "anthropic",
+						"display": {
+							"full": "Anthropic",
+							"compact": "Anth",
+							"footer": {
+								"show": [
+									{
+										"name": "five_hour"
+									},
+									{
+										"name": "seven_day"
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"meters": [],
+						"pools": [],
+						"marks": []
 					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
-		},
-		"legacyRows": {
-			"full": "Quota left: Anthropic (stale) weekly -- | OpenAI weekly 80% (resets Jan 18 12:00)",
-			"compact": "Left: Anth (stale) 7d -- | OAI 7d 80% @Jan 18 12:00"
-		}
-	},
-	{
-		"name": "legacy-error-unavailable",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [
-				{
-					"provider": "anthropic",
-					"status": "error",
-					"windows": [],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478400000,
-					"message": "usage request failed"
-				},
-				{
-					"provider": "openai-codex",
-					"status": "unavailable",
-					"windows": [],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478400000,
-					"message": "no supported credential"
-				}
-			],
-			"blocks": [],
-			"views": [
-				{
-					"provider": "anthropic",
-					"display": {
-						"full": "Anthropic",
-						"compact": "Anth",
-						"footer": {
-							"show": [
+					{
+						"provider": "openai-codex",
+						"display": {
+							"full": "OpenAI",
+							"compact": "OAI",
+							"footer": {
+								"show": [
+									{
+										"durationMs": 604800000
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "openai-codex",
+							"status": "available",
+							"windows": [
 								{
-									"name": "five_hour"
-								},
-								{
-									"name": "seven_day"
+									"name": "7d",
+									"usedPercent": 20,
+									"scope": "provider",
+									"resetAt": 1768737600000
 								}
 							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			},
+			"legacyRows": {
+				"full": "Quota left: Anthropic (stale) weekly -- | OpenAI weekly 80% (resets Jan 18 12:00)",
+				"compact": "Left: Anth (stale) 7d -- | OAI 7d 80% @Jan 18 12:00"
+			}
+		},
+		{
+			"name": "legacy-error-unavailable",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
 						"provider": "anthropic",
 						"status": "error",
 						"windows": [],
@@ -475,105 +440,89 @@
 						"expiresAt": 1768478400000,
 						"message": "usage request failed"
 					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				},
-				{
-					"provider": "openai-codex",
-					"display": {
-						"full": "OpenAI",
-						"compact": "OAI",
-						"footer": {
-							"show": [
-								{
-									"durationMs": 604800000
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+					{
 						"provider": "openai-codex",
 						"status": "unavailable",
 						"windows": [],
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478400000,
 						"message": "no supported credential"
+					}
+				],
+				"blocks": [],
+				"views": [
+					{
+						"provider": "anthropic",
+						"display": {
+							"full": "Anthropic",
+							"compact": "Anth",
+							"footer": {
+								"show": [
+									{
+										"name": "five_hour"
+									},
+									{
+										"name": "seven_day"
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "anthropic",
+							"status": "error",
+							"windows": [],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478400000,
+							"message": "usage request failed"
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
 					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
+					{
+						"provider": "openai-codex",
+						"display": {
+							"full": "OpenAI",
+							"compact": "OAI",
+							"footer": {
+								"show": [
+									{
+										"durationMs": 604800000
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "openai-codex",
+							"status": "unavailable",
+							"windows": [],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478400000,
+							"message": "no supported credential"
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			},
+			"legacyRows": {
+				"full": "Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly --",
+				"compact": "Left: Anth (stale) 7d -- | OAI (stale) 7d --"
+			}
 		},
-		"legacyRows": {
-			"full": "Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly --",
-			"compact": "Left: Anth (stale) 7d -- | OAI (stale) 7d --"
-		}
-	},
-	{
-		"name": "legacy-stale-short-only",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [
-				{
-					"provider": "anthropic",
-					"status": "stale",
-					"windows": [
-						{
-							"name": "seven_day",
-							"usedPercent": 20,
-							"scope": "provider",
-							"durationMs": 604800000,
-							"spanSource": "reported",
-							"resetAt": 1768737600000
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478400000
-				},
-				{
-					"provider": "openai-codex",
-					"status": "available",
-					"windows": [
-						{
-							"name": "5h",
-							"usedPercent": 99,
-							"scope": "provider",
-							"durationMs": 18000000,
-							"spanSource": "reported",
-							"resetAt": 1768485600000
-						}
-					],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000
-				}
-			],
-			"blocks": [],
-			"views": [
-				{
-					"provider": "anthropic",
-					"display": {
-						"full": "Anthropic",
-						"compact": "Anth",
-						"footer": {
-							"show": [
-								{
-									"name": "five_hour"
-								},
-								{
-									"name": "seven_day"
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+		{
+			"name": "legacy-stale-short-only",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
 						"provider": "anthropic",
 						"status": "stale",
 						"windows": [
@@ -589,26 +538,7 @@
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478400000
 					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				},
-				{
-					"provider": "openai-codex",
-					"display": {
-						"full": "OpenAI",
-						"compact": "OAI",
-						"footer": {
-							"show": [
-								{
-									"durationMs": 604800000
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"snapshot": {
+					{
 						"provider": "openai-codex",
 						"status": "available",
 						"windows": [
@@ -623,154 +553,155 @@
 						],
 						"retrievedAt": 1768478400000,
 						"expiresAt": 1768478700000
-					},
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
-		},
-		"legacyRows": {
-			"full": "Quota left: Anthropic (stale) weekly 80% (resets Jan 18 12:00) | OpenAI weekly --",
-			"compact": "Left: Anth (stale) 7d 80% @Jan 18 12:00 | OAI 7d --"
-		}
-	},
-	{
-		"name": "legacy-empty",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [],
-			"blocks": [],
-			"views": [
-				{
-					"provider": "anthropic",
-					"display": {
-						"full": "Anthropic",
-						"compact": "Anth",
-						"footer": {
-							"show": [
-								{
-									"name": "five_hour"
-								},
-								{
-									"name": "seven_day"
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"meters": [],
-					"pools": [],
-					"marks": []
-				},
-				{
-					"provider": "openai-codex",
-					"display": {
-						"full": "OpenAI",
-						"compact": "OAI",
-						"footer": {
-							"show": [
-								{
-									"durationMs": 604800000
-								}
-							],
-							"placeholder": true
-						}
-					},
-					"access": "unknown",
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
-		},
-		"legacyRows": {
-			"full": "Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly --",
-			"compact": "Left: Anth (stale) 7d -- | OAI (stale) 7d --"
-		}
-	},
-	{
-		"name": "metered",
-		"now": 1768478400000,
-		"timeZone": "UTC",
-		"usage": {
-			"version": 2,
-			"snapshots": [
-				{
-					"provider": "google",
-					"status": "available",
-					"windows": [],
-					"retrievedAt": 1768478400000,
-					"expiresAt": 1768478700000,
-					"access": "metered",
-					"meters": [
-						{
-							"name": "rpd",
-							"scope": "model",
-							"families": ["faux-fast"],
-							"kind": "calendar",
-							"resetAt": 1768550400000,
-							"resetRule": {
-								"at": "00:00",
-								"timeZone": "America/Los_Angeles",
-								"every": "day"
-							},
-							"basis": "observed",
-							"quantity": {
-								"unit": "requests",
-								"used": 37,
-								"limit": 250
+					}
+				],
+				"blocks": [],
+				"views": [
+					{
+						"provider": "anthropic",
+						"display": {
+							"full": "Anthropic",
+							"compact": "Anth",
+							"footer": {
+								"show": [
+									{
+										"name": "five_hour"
+									},
+									{
+										"name": "seven_day"
+									}
+								],
+								"placeholder": true
 							}
 						},
-						{
-							"name": "spend-10m",
-							"scope": "provider",
-							"kind": "rolling",
-							"durationMs": 600000,
-							"quantity": {
-								"unit": "usd",
-								"used": 1.24
-							},
-							"basis": "observed"
-						}
-					],
-					"pools": [
-						{
-							"name": "prepaid-credits",
-							"unit": "credits",
-							"role": "prepaid",
-							"balance": 12
-						}
-					]
-				}
-			],
-			"blocks": [
-				{
-					"provider": "google",
-					"families": ["faux-fast"],
-					"window": "inferred:daily",
-					"until": 1768550400000,
-					"resetKnown": true,
-					"confirmations": 1,
-					"evidence": "inferred",
-					"expiry": "window-reset",
-					"cause": "quota",
-					"access": "metered",
-					"markedAt": 1768478400000
-				}
-			],
-			"views": [
-				{
-					"provider": "google",
-					"display": {
-						"full": "Google",
-						"compact": "Goog"
+						"access": "unknown",
+						"snapshot": {
+							"provider": "anthropic",
+							"status": "stale",
+							"windows": [
+								{
+									"name": "seven_day",
+									"usedPercent": 20,
+									"scope": "provider",
+									"durationMs": 604800000,
+									"spanSource": "reported",
+									"resetAt": 1768737600000
+								}
+							],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478400000
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
 					},
-					"access": "metered",
-					"snapshot": {
+					{
+						"provider": "openai-codex",
+						"display": {
+							"full": "OpenAI",
+							"compact": "OAI",
+							"footer": {
+								"show": [
+									{
+										"durationMs": 604800000
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"snapshot": {
+							"provider": "openai-codex",
+							"status": "available",
+							"windows": [
+								{
+									"name": "5h",
+									"usedPercent": 99,
+									"scope": "provider",
+									"durationMs": 18000000,
+									"spanSource": "reported",
+									"resetAt": 1768485600000
+								}
+							],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			},
+			"legacyRows": {
+				"full": "Quota left: Anthropic (stale) weekly 80% (resets Jan 18 12:00) | OpenAI weekly --",
+				"compact": "Left: Anth (stale) 7d 80% @Jan 18 12:00 | OAI 7d --"
+			}
+		},
+		{
+			"name": "legacy-empty",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [],
+				"blocks": [],
+				"views": [
+					{
+						"provider": "anthropic",
+						"display": {
+							"full": "Anthropic",
+							"compact": "Anth",
+							"footer": {
+								"show": [
+									{
+										"name": "five_hour"
+									},
+									{
+										"name": "seven_day"
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"meters": [],
+						"pools": [],
+						"marks": []
+					},
+					{
+						"provider": "openai-codex",
+						"display": {
+							"full": "OpenAI",
+							"compact": "OAI",
+							"footer": {
+								"show": [
+									{
+										"durationMs": 604800000
+									}
+								],
+								"placeholder": true
+							}
+						},
+						"access": "unknown",
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			},
+			"legacyRows": {
+				"full": "Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly --",
+				"compact": "Left: Anth (stale) 7d -- | OAI (stale) 7d --"
+			}
+		},
+		{
+			"name": "metered",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
 						"provider": "google",
 						"status": "available",
 						"windows": [],
@@ -816,74 +747,146 @@
 								"balance": 12
 							}
 						]
-					},
-					"meters": [
-						{
-							"name": "rpd",
-							"scope": "model",
-							"families": ["faux-fast"],
-							"kind": "calendar",
-							"resetAt": 1768550400000,
-							"resetRule": {
-								"at": "00:00",
-								"timeZone": "America/Los_Angeles",
-								"every": "day"
-							},
-							"basis": "observed",
-							"quantity": {
-								"unit": "requests",
-								"used": 37,
-								"limit": 250
-							}
+					}
+				],
+				"blocks": [
+					{
+						"provider": "google",
+						"families": ["faux-fast"],
+						"window": "inferred:daily",
+						"until": 1768550400000,
+						"resetKnown": true,
+						"confirmations": 1,
+						"evidence": "inferred",
+						"expiry": "window-reset",
+						"cause": "quota",
+						"access": "metered",
+						"markedAt": 1768478400000
+					}
+				],
+				"views": [
+					{
+						"provider": "google",
+						"display": {
+							"full": "Google",
+							"compact": "Goog"
 						},
-						{
-							"name": "spend-10m",
-							"scope": "provider",
-							"kind": "rolling",
-							"durationMs": 600000,
-							"quantity": {
-								"unit": "usd",
-								"used": 1.24
-							},
-							"basis": "observed"
-						}
-					],
-					"pools": [
-						{
-							"name": "prepaid-credits",
-							"unit": "credits",
-							"role": "prepaid",
-							"balance": 12
-						}
-					],
-					"marks": [
-						{
+						"access": "metered",
+						"snapshot": {
 							"provider": "google",
-							"families": ["faux-fast"],
-							"window": "inferred:daily",
-							"until": 1768550400000,
-							"resetKnown": true,
-							"confirmations": 1,
-							"evidence": "inferred",
-							"expiry": "window-reset",
-							"cause": "quota",
+							"status": "available",
+							"windows": [],
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000,
 							"access": "metered",
-							"markedAt": 1768478400000
-						}
-					]
-				},
-				{
-					"provider": "google-vertex",
-					"display": {
-						"full": "google-vertex",
-						"compact": "google-vertex"
+							"meters": [
+								{
+									"name": "rpd",
+									"scope": "model",
+									"families": ["faux-fast"],
+									"kind": "calendar",
+									"resetAt": 1768550400000,
+									"resetRule": {
+										"at": "00:00",
+										"timeZone": "America/Los_Angeles",
+										"every": "day"
+									},
+									"basis": "observed",
+									"quantity": {
+										"unit": "requests",
+										"used": 37,
+										"limit": 250
+									}
+								},
+								{
+									"name": "spend-10m",
+									"scope": "provider",
+									"kind": "rolling",
+									"durationMs": 600000,
+									"quantity": {
+										"unit": "usd",
+										"used": 1.24
+									},
+									"basis": "observed"
+								}
+							],
+							"pools": [
+								{
+									"name": "prepaid-credits",
+									"unit": "credits",
+									"role": "prepaid",
+									"balance": 12
+								}
+							]
+						},
+						"meters": [
+							{
+								"name": "rpd",
+								"scope": "model",
+								"families": ["faux-fast"],
+								"kind": "calendar",
+								"resetAt": 1768550400000,
+								"resetRule": {
+									"at": "00:00",
+									"timeZone": "America/Los_Angeles",
+									"every": "day"
+								},
+								"basis": "observed",
+								"quantity": {
+									"unit": "requests",
+									"used": 37,
+									"limit": 250
+								}
+							},
+							{
+								"name": "spend-10m",
+								"scope": "provider",
+								"kind": "rolling",
+								"durationMs": 600000,
+								"quantity": {
+									"unit": "usd",
+									"used": 1.24
+								},
+								"basis": "observed"
+							}
+						],
+						"pools": [
+							{
+								"name": "prepaid-credits",
+								"unit": "credits",
+								"role": "prepaid",
+								"balance": 12
+							}
+						],
+						"marks": [
+							{
+								"provider": "google",
+								"families": ["faux-fast"],
+								"window": "inferred:daily",
+								"until": 1768550400000,
+								"resetKnown": true,
+								"confirmations": 1,
+								"evidence": "inferred",
+								"expiry": "window-reset",
+								"cause": "quota",
+								"access": "metered",
+								"markedAt": 1768478400000
+							}
+						]
 					},
-					"access": "unknown",
-					"meters": [],
-					"pools": [],
-					"marks": []
-				}
-			]
+					{
+						"provider": "google-vertex",
+						"display": {
+							"full": "google-vertex",
+							"compact": "google-vertex"
+						},
+						"access": "unknown",
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			}
 		}
-	}
-]
+	]
+}
