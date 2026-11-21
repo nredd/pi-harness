@@ -187,6 +187,17 @@ describe("loadConfig", () => {
 		expect(await loadConfig(dir)).toEqual({ ok: false, error: `${path}: providers.p.typo: unknown key` });
 	});
 
+	it("rejects the whole file and returns no profiles when the newly reserved providers key is null", async () => {
+		const dir = makeTestTempDir("router-config-", onTestFinished);
+		const path = join(dir, CONFIG_FILE);
+		await writeFile(path, JSON.stringify({ profiles: { a: { chain: [{ model: "p/a" }] } }, providers: null }));
+		expect(await baseLoadConfig(dir)).toEqual({
+			ok: true,
+			profiles: [{ id: "a", name: "Router a", chain: [{ provider: "p", id: "a" }] }],
+		});
+		expect(await loadConfig(dir)).toStrictEqual({ ok: false, error: `${path}: providers: expected an object` });
+	});
+
 	it("rejects a syntactically valid but unknown IANA zone", () => {
 		expect(() =>
 			currentParseConfig({

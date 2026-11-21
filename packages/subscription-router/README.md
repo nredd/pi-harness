@@ -177,7 +177,9 @@ Optional top-level `providers` entries are keyed by Pi provider ID. Merge declar
 
 The [schema](schemas/subscription-router.schema.json) rejects unknown keys inside provider
 settings except inside `collector.options`. The loader also checks that `timeZone` is known
-by `Intl`. Unrelated root and legacy profile keys keep their existing behavior. This release
+by `Intl`. Configs that omit `providers` keep their existing behavior. `providers` is now a
+reserved root key: an invalid value such as `null` rejects the whole file, so no profiles
+register. Other unknown root keys are still ignored. This release
 validates and loads declarations but does not apply them to routing, usage reads or display yet.
 
 Routing (legacy strategies):

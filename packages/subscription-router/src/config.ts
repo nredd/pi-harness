@@ -338,7 +338,7 @@ function parseProfiles(profiles: unknown): Profile[] {
 	});
 }
 
-/** Validate a parsed config document. Throws with a path-qualified message. */
+/** Validate a parsed config document. `providers` is reserved; invalid values reject the whole file. */
 export function parseConfigDocument(raw: unknown): ConfigDocument {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("expected a JSON object");
 	const { profiles, providers } = raw as Record<string, unknown>;
