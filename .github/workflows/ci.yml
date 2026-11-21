@@ -634,16 +634,7 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         env:
           CELL: ${{ format('owned ({0})', matrix.os) }}
-        run: |
-          if [ "$SHARDS_RESULT" != success ]; then
-            echo "::error title=$CELL shards $SHARDS_RESULT::The plan runs this cell, but its shard jobs finished '$SHARDS_RESULT'; see the 'owned shard' jobs"
-            exit 1
-          fi
-          if [ "${WINDOWS_REQUIRED:-false}" = true ] && [ "$WINDOWS_RESULT" != success ]; then
-            echo "::error title=Windows native producer $WINDOWS_RESULT::Native Windows x64 compiler, tests, reports and build scripts must succeed"
-            exit 1
-          fi
-          echo "Every planned shard of $CELL succeeded"
+        run: python3 scripts/ci_require_shards.py
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
         with:
@@ -750,6 +741,7 @@ jobs:
         os: [macos-14]
     env:
       SHARDS_RESULT: ${{ needs.owned-shards-macos.result }}
+      WINDOWS_REQUIRED: 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: *owned-timeout
     steps: *owned-steps

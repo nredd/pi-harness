@@ -1,0 +1,9 @@
+if [ "$SHARDS_RESULT" != success ]; then
+  echo "::error title=$CELL shards $SHARDS_RESULT::The plan runs this cell, but its shard jobs finished '$SHARDS_RESULT'; see the 'owned shard' jobs"
+  exit 1
+fi
+if [ "${WINDOWS_REQUIRED:-false}" = true ] && [ "$WINDOWS_RESULT" != success ]; then
+  echo "::error title=Windows native producer $WINDOWS_RESULT::Native Windows x64 compiler, tests, reports and build scripts must succeed"
+  exit 1
+fi
+echo "Every planned shard of $CELL succeeded"
