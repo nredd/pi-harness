@@ -4,7 +4,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { expect, onTestFinished, vi } from "vitest";
-import { resumeAgent, runAgent } from "../../src/agent-runner.ts";
+import { resumeAgent, runAgent, type ToolActivity } from "../../src/agent-runner.ts";
 import { createSubagentsExtension } from "../../src/index.ts";
 import { SubagentScheduler } from "../../src/schedule.ts";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../../src/ui/fleet-state.ts";
@@ -123,7 +123,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 	function holdAt({ turn, tool }: { turn: number; tool: string }) {
 		if (pending) throw new Error("Previous launch never reached the runner");
 		const release = deferred<void>();
-		const started = deferred<{ id: string; turnMessages: AgentSession["messages"] }>();
+		const started = deferred<{ id: string; dispatchToolActivity: (activity: ToolActivity) => void }>();
 		held.push(release);
 		const gate = { turn, tool, started, release: () => release.resolve(), released: release.promise };
 		pending = gate;
@@ -142,15 +142,16 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		const messages = session.messages;
 		messages.push({ role: "user", content: prompt, timestamp: clock.now() });
 		options.onTurnEnd?.(gate.turn);
-		const turnStart = messages.length;
 		messages.push({
 			role: "assistant",
 			content: [{ type: "toolCall", id: gate.tool, name: gate.tool, arguments: {} }],
 		} as AgentSession["messages"][number]);
-		options.onToolActivity?.({ type: "start", toolName: gate.tool });
-		gate.started.resolve({ id, turnMessages: messages.slice(turnStart) });
+		// Record dispatch before the manager forwards activity to any tracker.
+		const dispatchToolActivity = vi.fn(options.onToolActivity);
+		dispatchToolActivity({ type: "start", toolName: gate.tool });
+		gate.started.resolve({ id, dispatchToolActivity });
 		await gate.released;
-		options.onToolActivity?.({ type: "end", toolName: gate.tool });
+		dispatchToolActivity({ type: "end", toolName: gate.tool });
 	}
 
 	vi.mocked(runAgent).mockImplementation(async (_ctx, type, prompt, options) => {
@@ -269,11 +270,9 @@ export const heldTool = { turn: 3, tool: "inspect_fixture" };
 
 export async function expectHeld(gate: ReturnType<Awaited<ReturnType<typeof bootLaunchStack>>["holdAt"]>) {
 	const attempt = await gate.started.promise;
-	expect(attempt.turnMessages, "runner must reach the held tool, even for untracked launches").toContainEqual(
-		expect.objectContaining({
-			role: "assistant",
-			content: [expect.objectContaining({ type: "toolCall", name: gate.tool })],
-		}),
-	);
+	expect(attempt.dispatchToolActivity, "runner must dispatch the held tool start").toHaveBeenCalledWith({
+		type: "start",
+		toolName: gate.tool,
+	});
 	return attempt.id;
 }
