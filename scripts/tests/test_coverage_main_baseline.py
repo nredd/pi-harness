@@ -205,7 +205,8 @@ def test_recency_and_cancelled_mac_walkback(tmp_path: Path) -> None:
         ]
     )
     api.add(newest, cancelled=True)
-    api.add(main_push(19), cancelled=True)
+    _, gap = api.add(main_push(19))
+    gap.pop()  # No macOS artifact, even though this intermediate run has no cancellation.
     api.add(older)
     # The new success finished first, and the current PR tested a different SHA.
     assert newest["updated_at"] < older["updated_at"]
@@ -341,6 +342,30 @@ def test_bad_census(failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(MainGitHub, "request", request)
     assert not pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY))
     assert not api.downloads
+
+
+def test_missing_mac_without_cancellation_does_not_walk_back() -> None:
+    """Missing macOS evidence alone does not allow an older baseline."""
+    api = MainGitHub()
+    _, artifacts = api.add(main_push(20))
+    artifacts.pop()
+    api.add(main_push(19))
+    baselines = pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY))
+    assert set(baselines) == {UBUNTU}
+    assert len(api.reads) == 3
+
+
+def test_walkback_does_not_reuse_evidence_past_an_expired_artifact() -> None:
+    """The first earlier listing with a macOS artifact is authoritative even if expired."""
+    api = MainGitHub()
+    api.add(main_push(20), cancelled=True)
+    _, artifacts = api.add(main_push(19))
+    artifacts[-1]["expired"] = True
+    api.add(main_push(18))
+    baselines = pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY))
+    assert set(baselines) == {UBUNTU}
+    assert len(api.reads) == 5
+    assert api.downloads == [2200]
 
 
 def test_cancellation_bound() -> None:

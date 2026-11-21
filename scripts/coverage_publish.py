@@ -603,15 +603,15 @@ def main_cell(
         return None
 
 
-def macos_cancelled(jobs: list[Any], artifacts: list[Any]) -> bool:
-    """Recognize a missing macOS fan-in caused by cancelled main-push shards."""
-    return not any(row["name"] == "coverage-macos-14" for row in artifacts) and any(
+def macos_cancelled(jobs: list[Any]) -> bool:
+    """Recognize macOS main-push shard cancellation before fan-in."""
+    return any(
         job["name"].startswith("owned shard (macos-14, ") and job["conclusion"] == "cancelled" for job in jobs
     )
 
 
 def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict[str, tuple[Run, Evidence]]:
-    """Select per-host evidence by push run recency; walk back only past cancelled macOS cells."""
+    """Select by push run recency; allow a missing macOS artifact only after cancellation."""
     baselines = {}
     try:
         rows = main_page(
@@ -638,7 +638,9 @@ def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict
                 cell = main_cell(api, source, repo_id, host, (jobs, artifacts), policy=policy)
                 if cell is not None:
                     baselines[host] = source, cell
-            if "macos-14" in baselines or not macos_cancelled(jobs, artifacts):
+            if any(row["name"] == ARTIFACT.format(host="macos-14") for row in artifacts):
+                break
+            if hosts != ("macos-14",) and not macos_cancelled(jobs):
                 break
             hosts = ("macos-14",)
     except (KeyError, OSError, TypeError, ValueError):
