@@ -235,8 +235,13 @@ This does not run the live overlay suite or prove physical pointer behavior.
 `native/macos/headless_tests.swift` directly asserts complete `appBlockedMessage` literals for a
 named bundle, nil (`unknown bundle id`), an empty bundle and a quoted Unicode application name.
 These pure string checks do not discover applications or exercise live refusal callers, UI,
-capture, input or permissions. All five production Swift sources stay unchanged. LLVM regions
-are not branch outcomes or statements; the full-source producer retains unexecuted live code.
+capture, input or permissions. LLVM regions are not branch outcomes or statements; the
+full-source producer retains unexecuted live code.
+
+`native/macos/act_tests.swift` drives action dispatch and AX scroll traversal through fake
+worlds and records constructed `CGEvent`s instead of posting them. It checks transaction
+stopping, foreground retry and refusal order, scroll fallback, and pointer and keyboard event
+sequences. It does not install a live input-suppression tap or exercise real application delivery.
 
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
 `native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
