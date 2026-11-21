@@ -42,7 +42,14 @@ const CODEX_JWT_CLAIM_PATH = "https://api.openai.com/auth";
 /** `available`: fresh data. `stale`: old data kept after an expiry or failed refresh. */
 export type UsageStatus = "available" | "stale" | "unavailable" | "error";
 
-/** One normalized quota window. */
+export interface Quantity {
+	unit: "requests" | "tokens" | "usd" | "credits";
+	used?: number;
+	limit?: number;
+	remaining?: number;
+}
+
+/** One normalized quota window with a truthful percentage. */
 export interface UsageWindow {
 	/** Provider-native window name, e.g. `five_hour`, `seven_day_opus`, `5h`. */
 	name: string;
@@ -62,6 +69,27 @@ export interface UsageWindow {
 	scope: "provider" | "model";
 	/** Family tokens a `model`-scoped window applies to, e.g. `["opus"]`. See `modelMatchesFamily`. */
 	families?: string[];
+	/** Absent on legacy windows. */
+	kind?: "rolling" | "calendar";
+	/** For calendar windows only; `at` is local HH:mm in `timeZone`. */
+	resetRule?: { at: string; timeZone: string; every: "day" | "week" };
+	/** Display and evidence only; never read by scoring. */
+	quantity?: Quantity;
+	/** Absent means reported. */
+	basis?: "reported" | "observed" | "inferred";
+}
+
+/** A bucket without a truthful percentage. An absent limit is unknown. */
+export type UsageMeter = Omit<UsageWindow, "usedPercent"> & { quantity: Quantity };
+
+/** Display only; a balance never bypasses a quota window. */
+export interface CreditPool {
+	name: string;
+	unit: "usd" | "credits";
+	role: "overage" | "prepaid";
+	balance?: number;
+	unlimited?: boolean;
+	appliesAfter?: string[];
 }
 
 /** Normalized quota state for one provider at one point in time. */
@@ -69,6 +97,9 @@ export interface UsageSnapshot {
 	provider: string;
 	status: UsageStatus;
 	windows: UsageWindow[];
+	meters?: UsageMeter[];
+	pools?: CreditPool[];
+	access?: "subscription" | "metered";
 	/** Paid credits. Only `unlimited` affects decisions; a balance never bypasses a window. */
 	credits?: { available: boolean; unlimited: boolean; balance?: string };
 	retrievedAt: number;
