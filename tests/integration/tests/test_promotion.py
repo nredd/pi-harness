@@ -312,26 +312,21 @@ def test_stack_runs_match_real_recorded_run() -> None:
     assert registry_stack_runs(runs, artifacts_fixture(), FIXTURE_SHA) == [FIXTURE_RUN]
 
 
-def stack_job_block() -> str:
-    """Return the `stack:` job text from `ci.yml`.
-
-    Returns:
-        str: the job's lines through the end of the workflow.
-    """
-    text = CI_WORKFLOW.read_text()
-    start = text.index("\n  stack:\n")
-    match = re.search(r"\n  [a-z-]+:\n", text[start + 1 :])
-    assert match is None, "`stack` must stay the last job"
-    return text[start:]
-
-
 def test_stack_signal_still_comes_from_ci() -> None:
     """Drift guard: the artifact template and its `steps.plan.outputs.run` gate remain promotion contracts."""
-    block = stack_job_block()
-    upload = block.index("name: stack-${{ matrix.os }}-${{ matrix.stack }}")
-    step = block[block.rindex("- uses:", 0, upload) : upload]
-    assert "actions/upload-artifact@" in step
-    assert "steps.plan.outputs.run == 'true'" in step  # a docs-only or smoke cell never uploads
+    steps = yaml.safe_load(CI_WORKFLOW.read_text())["jobs"]["stack"]["steps"]
+    uploads = [
+        step
+        for step in steps
+        if step.get("with", {}).get("name") == "stack-${{ matrix.os }}-${{ matrix.stack }}"
+    ]
+    (upload,) = uploads
+    assert upload["uses"].startswith("actions/upload-artifact@")
+    condition = upload["if"].strip().removeprefix("${{").removesuffix("}}").strip()
+    condition = condition.replace("steps.plan.outputs.run", "run").replace("always()", "True")
+    condition = condition.replace("&&", " and ").replace("||", " or ")
+    assert eval(condition, {"__builtins__": {}}, {"run": "true", "true": True, "false": False}) is True
+    assert eval(condition, {"__builtins__": {}}, {"run": "false", "true": True, "false": False}) is False
     assert promotion.PERSONAL_STACK_ARTIFACT == "stack-ubuntu-24.04-personal"
 
 

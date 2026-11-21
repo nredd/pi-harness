@@ -411,18 +411,17 @@ def test_workflow_matrix_contract() -> None:
     """
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
     jobs = yaml.safe_load(workflow)["jobs"]
-    owned = jobs["owned-ubuntu"]
-    expected = {
-        owned["name"].replace("${{ matrix.os }}", system) for system in owned["strategy"]["matrix"]["os"]
+    expected = set()
+    for name in ("owned-ubuntu", "contracts"):
+        job = jobs[name]
+        expected |= {
+            job["name"].replace("${{ matrix.os }}", system) for system in job["strategy"]["matrix"]["os"]
+        }
+    stack = jobs["stack"]
+    expected |= {
+        stack["name"].replace("${{ matrix.os }}", row["os"]).replace("${{ matrix.stack }}", row["stack"])
+        for row in stack["strategy"]["matrix"]["include"]
     }
-    for name in ("contracts", "stack"):
-        matrix = jobs[name]["strategy"]["matrix"]
-        pr_json = next(iter(matrix.values())).split(" && ", 1)[1].split("'")[1]
-        rows = json.loads(pr_json)
-        if name == "stack":
-            expected |= {f"stack ({row['os']}, {row['stack']})" for row in rows}
-        else:
-            expected |= {f"{name} ({system})" for system in rows}
     assert expected == checks.EXPECTED_MATRIX
     names = {job.get("name") for job in jobs.values()}
     assert set(checks.MATRIX) <= names

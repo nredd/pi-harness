@@ -179,7 +179,9 @@ Required checks on `main`, four contexts:
 - `stack (ubuntu-24.04, personal)`
 - `stack (ubuntu-24.04, local)`
 
-Docs-only PRs still report the four Ubuntu checks without running their gates. macOS is not required and runs only on main pushes and eligible dispatches. Its owned shards report through a separate fan-in, so their queue and result do not affect `owned (ubuntu-24.04)`.
+Docs-only PRs still report the four Ubuntu checks without running their gates. macOS is not required and runs only on `main` pushes and full dispatches. Overlapping `main` pushes supersede running and older pending macOS jobs per cell, regardless of runner routing; GitHub keeps one pending job per group. Ubuntu jobs still run for every push. The separate macOS owned fan-in skips cancelled push shards rather than reporting them as failed or NOT RUN. Report-only macOS jobs cannot displace executing cells. `CI` workflow admission and macOS job groups are private per dispatch attempt, but `release-core` calls `forks.yml`, where same-SHA dispatches still share a group and can replace a pending call. Push workflow admission stays keyed by SHA. Promotion still requires the full executed evidence.
+
+GitHub does not order job admission by push age: a delayed or re-run older push can cancel a newer push’s macOS cell. A tip check cannot make admission atomic with `main` moving. These are not required checks; the cancelled cell is visible, and the next push or an eligible dispatch re-measures it.
 
 For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. Ubuntu requires a successful Windows native producer when the plan includes `packages/computer-use`; macOS explicitly does not require that producer.
 
