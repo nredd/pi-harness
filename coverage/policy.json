@@ -293,6 +293,14 @@
         }
       }
     },
+    "preset-sweep-guard": {
+      "root": "packages/preset/skills/ship-issue",
+      "owned": ["sweep_guard.py"],
+      "exclusions": [],
+      "status": "pending",
+      "note": "The three previously unmeasured skill blocks are now an inventoried command. Real-Git subprocess and mutation tests run in check-scripts. Follow-up: instrument the shipped CLI subprocesses in a dedicated Python coverage signal without changing the existing scripts floors.",
+      "signals": {}
+    },
     "resource-sampler": {
       "root": "packages/resource-sampler",
       "owned": ["src/**/*.ts"],
