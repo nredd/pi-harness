@@ -33,6 +33,9 @@ TIMEOUT = 30
 MAX_TREE_ENTRIES = 100_000
 QUIET_SECONDS = 3600
 UNKNOWN_SCOPE = "cannot establish a complete external borrower scope"
+STATUS_NOT_COLLECTED = (
+    "status not collected: tracked worktree changes were not compared"
+)
 PR_FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
 OPERATIONS = (
     "rebase-apply",
@@ -888,9 +891,7 @@ def assess(
     check_history(path, admin, len(head.strip()))
     check_status(path, admin)
     if opts.borrower_gitdirs is None:
-        raise KeepError(
-            "status not collected: tracked worktree changes were not compared"
-        )
+        raise KeepError(STATUS_NOT_COLLECTED)
     return reason
 
 
@@ -899,7 +900,7 @@ def verdict(path: Path, decision: str, reason: str, *, scope_known: bool) -> Non
 
     Parameters:
         path: Path, Path being checked or reported.
-        decision: str, Verdict classification.
+        decision: str, Internal classification, never a deletion authorization.
         reason: str, Explanation of the result.
         scope_known: bool, Whether the caller supplied a closed borrower scope.
     Returns:
@@ -907,9 +908,11 @@ def verdict(path: Path, decision: str, reason: str, *, scope_known: bool) -> Non
     Raises:
         OSError: The output stream cannot be written.
     """
+    if decision == "eligible":
+        reason = STATUS_NOT_COLLECTED
     reasons = [reason] if scope_known else list(dict.fromkeys((UNKNOWN_SCOPE, reason)))
     sys.stdout.write(
-        json.dumps({"worktree": str(path), "verdict": decision, "reasons": reasons})
+        json.dumps({"worktree": str(path), "verdict": "keep", "reasons": reasons})
         + "\n"
     )
 

@@ -42,7 +42,17 @@ class Worktrees(NamedTuple):
 
 
 def git(path: Path, *args: str) -> bytes:
-    """Run real Git with disposable identity and no inherited repository."""
+    """Run real Git with disposable identity and no inherited repository.
+
+    Parameters:
+        path: Path, Directory to run Git in.
+        args: str, Git arguments.
+    Returns:
+        bytes: Combined stdout and stderr.
+    Raises:
+        subprocess.CalledProcessError: Git failed.
+        subprocess.TimeoutExpired: Git exceeded the fixture timeout.
+    """
     return subprocess.check_output(
         [str(GIT), *GIT_IDENTITY, "-C", str(path), *args],
         env=git_env(),
@@ -52,7 +62,16 @@ def git(path: Path, *args: str) -> bytes:
 
 
 def init(path: Path) -> None:
-    """Create a repository with a tracked file and an ignored path."""
+    """Create a repository with a tracked file and an ignored path.
+
+    Parameters:
+        path: Path, New fixture repository root.
+    Returns:
+        None.
+    Raises:
+        OSError: The fixture paths could not be created.
+        subprocess.SubprocessError: Git setup failed.
+    """
     path.mkdir()
     git(path, "init", "--template=")
     (path / "tracked").write_text("saved\n")
@@ -62,7 +81,17 @@ def init(path: Path) -> None:
 
 
 def adapter(path: Path, name: str, body: str) -> None:
-    """Install a disposable non-Git evidence provider."""
+    """Install a disposable non-Git evidence provider.
+
+    Parameters:
+        path: Path, Directory for the executable.
+        name: str, Executable name.
+        body: str, Python source after the shebang.
+    Returns:
+        None.
+    Raises:
+        OSError: The adapter could not be written or made executable.
+    """
     cmd = path / name
     cmd.write_text(f"#!{sys.executable}\n" + dedent(body))
     cmd.chmod(0o755)
@@ -70,7 +99,16 @@ def adapter(path: Path, name: str, body: str) -> None:
 
 @pytest.fixture
 def wt(tmp_path: Path) -> Worktrees:
-    """Create a linked worktree with a strict GH CLI adapter and a process snapshot."""
+    """Create a linked worktree with a strict GH CLI adapter and a process snapshot.
+
+    Parameters:
+        tmp_path: Path, Disposable fixture root.
+    Returns:
+        Worktrees: Paths and merged PR evidence.
+    Raises:
+        OSError: A fixture file could not be prepared.
+        subprocess.SubprocessError: Git setup failed.
+    """
     repo = tmp_path / "repo"
     init(repo)
     git(repo, "remote", "add", "origin", "git@github.com:source/project.git")
@@ -129,7 +167,15 @@ def wt(tmp_path: Path) -> Worktrees:
 
 
 def quiet(wt: Worktrees) -> None:
-    """Set activity markers far outside the quiet period without waiting on the clock."""
+    """Set activity markers far outside the quiet period without sleeping.
+
+    Parameters:
+        wt: Worktrees, Candidate checkout and metadata.
+    Returns:
+        None.
+    Raises:
+        OSError: A fixture timestamp could not be changed.
+    """
     for path in (wt.path, wt.admin / "index", wt.admin / "HEAD", wt.admin / "logs/HEAD"):
         if path.exists():
             os.utime(path, (1, 1))
@@ -142,11 +188,28 @@ def run(
     cwd: Path | None = None,
     base: str = BASE,
     variables: dict[str, str] | None = None,
-    borrower_gitdirs: tuple[Path, ...] | None = (),
+    borrower_gitdirs: tuple[Path, ...] | None = None,
     inventory_suffix: bytes = b"",
 ) -> tuple[int, list[dict[str, object]]]:
-    """Run the CLI with evidence adapters and optionally inject a closed scope."""
-    env = git_env()
+    """Run with evidence adapters; expose the future assessment seam only with explicit scope.
+
+    Parameters:
+        wt: Worktrees, Checkout and evidence fixture.
+        args: str, Extra CLI arguments.
+        all_paths: bool, Scan all registered paths instead of just the candidate.
+        cwd: Path | None, Override the process working directory.
+        base: str, Base GitHub repository identity.
+        variables: dict[str, str] | None, Explicit fixture controls.
+        borrower_gitdirs: tuple[Path, ...] | None, Closed scope for internal assessment only.
+        inventory_suffix: bytes, Optional corruption appended to the inventory record.
+    Returns:
+        tuple[int, list[dict[str, object]]]: Exit status and decoded verdict records.
+    Raises:
+        subprocess.TimeoutExpired: The guard exceeded the fixture timeout.
+        AssertionError: The child wrote unexpected diagnostics.
+        json.JSONDecodeError: A record is not JSON.
+    """
+    env = {key: value for key, value in git_env().items() if not key.startswith("SWEEP_")}
     env.pop("GH_HOST", None)
     env |= {
         "PATH": f"{wt.bin}{os.pathsep}{env['PATH']}",
@@ -183,6 +246,11 @@ def run(
             "globals_['check_status'] = check_status if attrs is None else "
             "lambda path, admin: (Path(attrs).write_text('tracked filter=mark\\n'), "
             "check_status(path, admin))[1]; "
+            "if_fixture = (lambda path, decision, reason, **_: "
+            "print(json.dumps(dict(worktree=str(path), verdict=decision, reasons=[reason])))); "
+            "globals_['verdict'] = if_fixture if scope_kwargs else globals_['verdict']; "
+            "globals_['assess'] = (lambda *args: 'eligible') "
+            "if os.getenv('SWEEP_FORCE_ASSESS') else globals_['assess']; "
             "sys.exit(main(git_binary=git, gh_binary=gh, lsof_binary=lsof, **scope_kwargs))",
             str(GUARD),
             str(GIT),
@@ -205,7 +273,18 @@ def run(
 
 
 def keep(wt: Worktrees, reason: str, *args: str, **variables: str) -> None:
-    """Assert the scoped candidate has a specific keep reason, not an unrelated failure."""
+    """Assert the selected candidate has a specific keep reason, not an unrelated failure.
+
+    Parameters:
+        wt: Worktrees, Candidate and evidence fixture.
+        reason: str, Required fragment of a keep reason.
+        args: str, Extra CLI arguments.
+        variables: str, Explicit fixture controls.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The expected keep verdict was not reported.
+    """
     code, (result,) = run(wt, *args, variables=variables)
     assert code == 0
     assert Path(str(result["worktree"])).resolve() == wt.path.resolve()
@@ -221,10 +300,10 @@ def keep(wt: Worktrees, reason: str, *args: str, **variables: str) -> None:
         "ssh://git@github.com:2222/source/project.git",
     ],
 )
-def test_injected_scope_allows_clean_merged_tree_without_upstream(wt: Worktrees, url: str) -> None:
+def test_future_seam_allows_clean_merged_tree_without_upstream(wt: Worktrees, url: str) -> None:
     git(wt.path, "remote", "set-url", "origin", url)
     quiet(wt)
-    code, (main, result) = run(wt, all_paths=True)
+    code, (main, result) = run(wt, all_paths=True, borrower_gitdirs=())
     assert code == 0
     assert main["verdict"] == "keep"
     assert "main or bare" in str(main["reasons"])
@@ -236,7 +315,7 @@ def test_injected_scope_allows_clean_merged_tree_without_upstream(wt: Worktrees,
 
 
 @pytest.mark.parametrize("case", ["clean", "borrowed scratch", "inventory error", "no match"])
-def test_shipped_cli_is_keep_only(wt: Worktrees, case: str) -> None:
+def test_unknown_scope_is_keep_only_with_fixture_evidence(wt: Worktrees, case: str) -> None:
     args = ()
     variables = {}
     if case == "borrowed scratch":
@@ -255,7 +334,7 @@ def test_shipped_cli_is_keep_only(wt: Worktrees, case: str) -> None:
     elif case == "no match":
         args = ("--worktree", str(wt.bin))
     quiet(wt)
-    code, results = run(wt, *args, all_paths=case == "clean", variables=variables, borrower_gitdirs=None)
+    code, results = run(wt, *args, all_paths=case == "clean", variables=variables)
     assert code == (1 if case in {"inventory error", "no match"} else 0)
     assert len(results) == (2 if case == "clean" else 1)
     for result in results:
@@ -270,6 +349,43 @@ def test_shipped_cli_is_keep_only(wt: Worktrees, case: str) -> None:
     if case == "borrowed scratch":
         assert "untracked or ignored paths" in str(results[0]["reasons"])
         assert "cache.git/" in str(results[0]["reasons"])
+
+
+def test_shipped_cli_is_keep_only(wt: Worktrees, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWEEP_SCOPE", "[]")
+    monkeypatch.setenv("SWEEP_FORCE_ASSESS", "1")
+    done = subprocess.run(
+        [sys.executable, str(GUARD), str(wt.repo), BASE, "--worktree", str(wt.repo)],
+        cwd=wt.repo,
+        env={key: value for key, value in git_env().items() if not key.startswith("SWEEP_")},
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=TIMEOUT,
+    )
+    assert done.returncode == 0
+    assert not done.stderr
+    assert (
+        done.stdout
+        == json.dumps(
+            {
+                "worktree": str(wt.repo.resolve()),
+                "verdict": "keep",
+                "reasons": ["cannot establish a complete external borrower scope", "main or bare checkout"],
+            }
+        )
+        + "\n"
+    )
+
+
+def test_cli_output_cannot_emit_eligible_when_assess_returns_eligible(wt: Worktrees) -> None:
+    code, (result,) = run(wt, variables={"SWEEP_FORCE_ASSESS": "1"})
+    assert code == 0
+    assert result["verdict"] == "keep"
+    assert result["reasons"] == [
+        "cannot establish a complete external borrower scope",
+        "status not collected: tracked worktree changes were not compared",
+    ]
 
 
 def test_worktree_scope_never_accepts_unregistered_directory(wt: Worktrees) -> None:
@@ -507,10 +623,10 @@ def test_inventory_without_any_linked_worktrees(wt: Worktrees) -> None:
     assert "main or bare" in str(result["reasons"])
 
 
-def test_git_prune_is_only_ever_called_in_dry_run_mode(wt: Worktrees) -> None:
+def test_future_seam_calls_git_prune_only_in_dry_run_mode(wt: Worktrees) -> None:
     trace = wt.bin / "commands.jsonl"
     quiet(wt)
-    code, (result,) = run(wt, variables={"GIT_TRACE2_EVENT": str(trace)})
+    code, (result,) = run(wt, variables={"GIT_TRACE2_EVENT": str(trace)}, borrower_gitdirs=())
     assert code == 0
     assert result["verdict"] == "eligible", result
     starts = [
@@ -634,11 +750,11 @@ def test_actual_push_host_not_fetch_host_is_checked(wt: Worktrees) -> None:
 @pytest.mark.parametrize(
     ("base", "variables"), [("forge.example/owner/project", {}), (BASE, {"GH_HOST": "forge.example"})]
 )
-def test_enterprise_pr_host(wt: Worktrees, base: str, variables: dict[str, str]) -> None:
+def test_future_seam_accepts_enterprise_pr_host(wt: Worktrees, base: str, variables: dict[str, str]) -> None:
     git(wt.path, "remote", "set-url", "origin", "git@forge.example:source/project.git")
     wt.pr["url"] = "https://forge.example/owner/project/pull/123"
     quiet(wt)
-    code, (result,) = run(wt, base=base, variables=variables)
+    code, (result,) = run(wt, base=base, variables=variables, borrower_gitdirs=())
     assert code == 0
     assert result["verdict"] == "eligible", result
 
@@ -658,7 +774,7 @@ def test_command_diagnostics_including_whitespace_keep(wt: Worktrees) -> None:
 
 
 @pytest.mark.parametrize("state", ["current", "missing", "stale", "ahead"])
-def test_no_pr_needs_live_current_upstream_containing_head(wt: Worktrees, state: str) -> None:
+def test_future_seam_needs_live_current_upstream_containing_head(wt: Worktrees, state: str) -> None:
     upstream = wt.repo.parent / "upstream.git"
     upstream.mkdir()
     git(upstream, "init", "--bare", "--template=")
@@ -672,7 +788,7 @@ def test_no_pr_needs_live_current_upstream_containing_head(wt: Worktrees, state:
     elif state == "ahead":
         git(wt.path, "commit", "--allow-empty", "-m", "Unpushed")
     quiet(wt)
-    code, (result,) = run(wt, "--no-pr", variables={"SWEEP_LIST": "[]"})
+    code, (result,) = run(wt, "--no-pr", variables={"SWEEP_LIST": "[]"}, borrower_gitdirs=())
     assert code == 0
     if state == "current":
         assert result["verdict"] == "eligible", result
@@ -715,6 +831,16 @@ def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         guard["out"](Path(sys.executable), "explicit label", "-c", "print(' ')", silent=True)
 
     def timed_out(*args: object, **kwargs: object) -> None:
+        """Simulate a timeout at the subprocess boundary.
+
+        Parameters:
+            args: object, Ignored positional arguments.
+            kwargs: object, Ignored keyword arguments.
+        Returns:
+            None.
+        Raises:
+            subprocess.TimeoutExpired: Always.
+        """
         raise subprocess.TimeoutExpired(sys.executable, 30)
 
     with monkeypatch.context() as patch:
@@ -752,11 +878,11 @@ def test_borrower_named_in_disconnected_module_config(wt: Worktrees) -> None:
     keep(wt, "another checkout uses gitdir")
 
 
-def test_valid_nonborrowing_alternate_does_not_block(wt: Worktrees) -> None:
+def test_future_seam_accepts_valid_nonborrowing_alternate(wt: Worktrees) -> None:
     info = wt.repo / ".git/objects/info"
     (info / "alternates").write_text(f"{wt.bin}\n")
     quiet(wt)
-    code, (result,) = run(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
     assert code == 0
     assert result["verdict"] == "eligible", result
 
@@ -777,11 +903,11 @@ def test_unrecognized_inventory_evidence_keeps(wt: Worktrees, suffix: bytes) -> 
     assert "inventory" in str(result["reasons"])
 
 
-def test_git_resolution_never_uses_path(wt: Worktrees) -> None:
+def test_future_seam_git_resolution_never_uses_path(wt: Worktrees) -> None:
     marker = wt.bin / "fake-git-ran"
     adapter(wt.bin, "git", f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
     quiet(wt)
-    code, (result,) = run(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
     assert not marker.exists()
     assert code == 0
     assert result["verdict"] == "eligible", result
