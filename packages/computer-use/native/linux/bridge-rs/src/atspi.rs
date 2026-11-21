@@ -556,6 +556,8 @@ mod tests {
 
     const FIXTURE_REGISTRY_ROOT: &str = "/org/a11y/atspi/accessible/root";
 
+    const FIXTURE_DBUS_ROOT: &str = "/org/freedesktop/DBus";
+
     #[test]
     fn activation_action_selection_prefers_semantics_over_index_zero() {
         let row = ["expand or contract", "edit", "activate"].map(str::to_owned);
@@ -741,7 +743,7 @@ mod tests {
                     has_text: false,
                 };
                 server
-                    .serve_at(DBUS_ROOT, MockBus)?
+                    .serve_at(FIXTURE_DBUS_ROOT, MockBus)?
                     .serve_at(
                         FIXTURE_REGISTRY_ROOT,
                         node("Registry", "desktop", &[(DESTINATION, APP)]),
