@@ -265,10 +265,14 @@ the continuing parent runs its independent final critic after exact-HEAD review.
 Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
 only when applicable protection is readable, effective and not bypassable by the merging caller.
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
-Before creating an issue worktree, after merge, and before any no-PR removal, the parent follows
-the [guarded sweep checks](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep).
-After merge, the PR's recorded head can prove the checked-out commit was pushed even if the remote
-branch is gone. A matching commit does not override any worktree safety check.
+Before creating an issue worktree and after merge, the parent follows the
+[guarded sweep](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep). The preset ships
+[`sweep_guard.py`](skills/ship-issue/sweep_guard.py) beside `ship-issue`. It needs Python 3.8+,
+Git, `gh` and `lsof`; it reports `keep` or `eligible` without removing anything. Supply known
+ownership and retained directory holds with `--hold`. Only a fresh scoped merged-PR verdict
+can lead to non-forced removal. No-PR mode is verdict-only; initialized submodules stay put.
+No automatic prune or branch deletion. The installed `git prune-merged-worktrees` command and
+older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently

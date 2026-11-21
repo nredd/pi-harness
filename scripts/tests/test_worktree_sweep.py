@@ -1,759 +1,523 @@
-"""Run the shipped worktree sweep blocks (scan, identity check, prune guard) in disposable repos.
+"""Exercise the shipped sweep verdict command against disposable Git repositories.
 
 References:
-    https://git-scm.com/docs/git-worktree
-    https://git-scm.com/docs/git-check-attr
+- https://git-scm.com/docs/git-worktree
+- https://cli.github.com/manual/gh_pr_view
 """
 
 from __future__ import annotations
 
 import ast
-import errno
-import fnmatch
 import json
 import os
-import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 from typing import NamedTuple
 
 import pytest
 
-SKILL = Path(__file__).resolve().parents[2] / "packages/preset/skills/get-it-merged/SKILL.md"
-HEADINGS = ("PR identity check", "Prune guard", "Ref, reflog and filter scan")
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.append(str(ROOT / "tests/integration"))
+from harness.git_fixture import GIT_IDENTITY, git_env
+
+GUARD = ROOT / "packages/preset/skills/ship-issue/sweep_guard.py"
+BASE = "owner/project"
+TIMEOUT = 45
 
 
-class LinkedWorktree(NamedTuple):
-    """Paths to a disposable repository and its linked worktree."""
+class Worktrees(NamedTuple):
+    """Real Git paths plus external evidence provided by fixture adapters."""
 
     repo: Path
-    worktree: Path
+    path: Path
+    admin: Path
+    bin: Path
+    pr: dict[str, object]
 
 
-class Mutation(NamedTuple):
-    """An exact source substitution in a shipped script under test."""
-
-    original: str
-    replacement: str
-
-    def apply(self, script: str) -> str:
-        """Replace the unique mutation site, failing if the shipped text changed."""
-        assert script.count(self.original) == 1, f"expected one mutation site: {self.original!r}"
-        return script.replace(self.original, self.replacement)
+def git(path: Path, *args: str) -> bytes:
+    """Run real Git with disposable identity and no inherited repository."""
+    return subprocess.check_output(
+        ["git", *GIT_IDENTITY, "-C", str(path), *args],
+        env=git_env(),
+        timeout=TIMEOUT,
+        stderr=subprocess.STDOUT,
+    )
 
 
-SKIP_PR_URL_HOST = Mutation(
-    'if parsed.scheme not in ("https", "http") or pr_host != source[1].lower():',
-    'if parsed.scheme not in ("https", "http"):',
-)
-RESTORE_LEXISTS = Mutation(
-    """    try:
-        os.stat(marker, follow_symlinks=False)
-    except OSError as exc:
-        if exc.errno == errno.ENOENT:
-            continue
-        sys.exit(f"keep: cannot stat in-progress operation marker {marker!r}: {exc}")""",
-    "    if not os.path.lexists(marker):\n        continue",
-)
-DRIFT_OUT_WRAPPER = Mutation("if done.returncode or done.stderr:", "if done.returncode:")
-STRIP_DRY_RUN_STDERR = Mutation(
-    'dry = git("worktree", "prune", "--dry-run", "--verbose")',
-    """done = subprocess.run(
-    ["git", "-C", repo, "worktree", "prune", "--dry-run", "--verbose"], capture_output=True, check=False
-)
-if done.returncode or done.stderr.strip():
-    sys.exit("keep: dry run failed")
-dry = done.stdout""",
-)
+def init(path: Path) -> None:
+    """Create a repository with a tracked file and an ignored path."""
+    path.mkdir()
+    git(path, "init", "--template=")
+    (path / "tracked").write_text("saved\n")
+    (path / ".gitignore").write_text("/ignored\n")
+    git(path, "add", ".")
+    git(path, "commit", "-m", "Base")
 
 
-def git_env() -> dict[str, str]:
-    """Prevent ambient Git routing and global config from affecting fixtures."""
-    keys = os.environ.keys() - fnmatch.filter(os.environ, "GIT_*")
-    return {key: os.environ[key] for key in keys} | {
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-    }
-
-
-def git(repo: Path, *args: str) -> str:
-    """Run real Git in the named disposable repository."""
-    return subprocess.check_output(["git", "-C", str(repo), *args], env=git_env(), text=True, timeout=30)
+def adapter(path: Path, name: str, body: str) -> None:
+    """Install a disposable non-Git evidence provider."""
+    cmd = path / name
+    cmd.write_text(f"#!{sys.executable}\n" + dedent(body))
+    cmd.chmod(0o755)
 
 
 @pytest.fixture
-def linked(tmp_path: Path) -> LinkedWorktree:
-    """Create a branch already at its upstream tip, isolated from ambient Git config."""
+def wt(tmp_path: Path) -> Worktrees:
+    """Create a linked worktree with a strict GH CLI adapter and a process snapshot."""
     repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init", "--template=", "-b", "main")
-    git(repo, "config", "user.name", "Fixture")
-    git(repo, "config", "user.email", "fixture@example.invalid")
-    git(repo, "commit", "--allow-empty", "-m", "Base")
-    worktree = tmp_path / "linked worktree"
-    git(repo, "worktree", "add", "-b", "merged", str(worktree))
-    git(worktree, "branch", "--set-upstream-to=main")
-    return LinkedWorktree(repo, worktree)
+    init(repo)
+    git(repo, "remote", "add", "origin", "git@github.com:source/project.git")
+    path = tmp_path / "linked worktree"
+    git(repo, "worktree", "add", "-b", "merged", str(path))
+    admin = Path(os.fsdecode(git(path, "rev-parse", "--absolute-git-dir").strip()))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    adapter(
+        bin_dir,
+        "gh",
+        """
+        import os
+        import sys
+
+        base = os.environ["SWEEP_BASE"]
+        args = sys.argv[1:]
+        list_args = ["pr", "list", "--repo", base, "--state", "all", "--head", "merged",
+                     "--limit", "100", "--json", "number,state"]
+        view_fields = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
+        if args == list_args:
+            print(os.environ["SWEEP_LIST"])
+        elif args == ["pr", "view", "123", "--repo", base, "--json", view_fields]:
+            print(os.environ["SWEEP_PR"])
+        else:
+            sys.exit(f"unexpected arguments: {args!r}")
+        sys.stderr.write(os.environ.get("SWEEP_WARNING", ""))
+        """,
+    )
+    adapter(
+        bin_dir,
+        "lsof",
+        'import os, sys\nsys.stdout.buffer.write(b"p123\\0\\nn" + os.environb[b"SWEEP_CWD"] + b"\\0\\n")\n',
+    )
+    return Worktrees(
+        repo,
+        path,
+        admin,
+        bin_dir,
+        {
+            "state": "MERGED",
+            "headRefName": "merged",
+            "headRepositoryOwner": {"login": "source"},
+            "headRepository": {"name": "project"},
+            "headRefOid": git(path, "rev-parse", "HEAD").decode().strip(),
+            "url": "https://github.com/owner/project/pull/123",
+        },
+    )
 
 
-def block_source(heading: str) -> str:
-    """Extract the shell block shipped under `heading`."""
-    text = SKILL.read_text(encoding="utf-8")
-    marker = f"#### {heading}\n"
-    assert marker in text, f"`{marker.strip()}` heading missing from {SKILL}; update the test with the skill"
-    fence = text.split(marker, 1)[1].split("```sh\n", 1)
-    assert len(fence) == 2, f"no `sh` block under `{heading}`"
-    assert "\n```" in fence[1], f"unterminated `sh` block under `{heading}`"
-    return fence[1].split("\n```", 1)[0]
+def quiet(wt: Worktrees) -> None:
+    """Set activity markers far outside the quiet period without waiting on the clock."""
+    for path in (wt.path, wt.admin / "index", wt.admin / "HEAD", wt.admin / "logs/HEAD"):
+        if path.exists():
+            os.utime(path, (1, 1))
 
 
-def block(
-    heading: str, path: str | None = None, mutate: Mutation | None = None, **variables: str
-) -> subprocess.CompletedProcess[str]:
-    """Run the shipped shell block with its documented variables set."""
-    script = block_source(heading)
-    if mutate:
-        script = mutate.apply(script)
+def run(
+    wt: Worktrees,
+    *args: str,
+    all_paths: bool = False,
+    cwd: Path | None = None,
+    base: str = BASE,
+    variables: dict[str, str] | None = None,
+) -> tuple[int, list[dict[str, object]]]:
+    """Run the shipped CLI without a real GitHub or process lookup."""
     env = git_env()
     env.pop("GH_HOST", None)
-    return subprocess.run(
-        ["/bin/sh", "-c", script],
-        env=env | ({"PATH": path} if path else {}) | variables,
-        text=True,
+    env |= {
+        "PATH": f"{wt.bin}{os.pathsep}{env['PATH']}",
+        "SWEEP_BASE": base,
+        "SWEEP_LIST": '[{"number": 123, "state": "MERGED"}]',
+        "SWEEP_PR": json.dumps(wt.pr),
+        "SWEEP_CWD": str(wt.repo),
+        **(variables or {}),
+    }
+    scope = [] if all_paths else ["--worktree", str(wt.path)]
+    done = subprocess.run(
+        [sys.executable, str(GUARD), str(wt.repo), base, *scope, *args],
+        cwd=cwd or wt.repo,
+        env=env,
+        timeout=TIMEOUT,
         capture_output=True,
         check=False,
-        timeout=30,
-    )
-
-
-def scan(worktree: Path, mutate: Mutation | None = None, **env: str) -> subprocess.CompletedProcess[str]:
-    """Execute the shipped ref, reflog and filter scan, without any removal step."""
-    return block("Ref, reflog and filter scan", mutate=mutate, worktree=str(worktree), **env)
-
-
-def dry_prune(repo: Path) -> str:
-    """Return what `git worktree prune --dry-run --verbose` reports (Git writes it to stderr)."""
-    done = subprocess.run(
-        ["git", "-C", str(repo), "worktree", "prune", "--dry-run", "--verbose"],
-        env=git_env(),
         text=True,
-        capture_output=True,
-        check=True,
     )
-    return done.stdout + done.stderr
+    assert not done.stderr, done.stderr
+    return done.returncode, [json.loads(line) for line in done.stdout.splitlines()]
 
 
-def assert_looks_clean(worktree: Path) -> None:
-    """Establish that the old HEAD, status and index checks would not detect the loss."""
-    assert git(worktree, "rev-parse", "HEAD") == git(worktree, "rev-parse", "@{u}")
-    assert git(worktree, "status", "--porcelain", "--ignored", "--untracked-files=all") == ""
-    assert all(line.startswith("H ") for line in git(worktree, "ls-files", "-v").splitlines())
-
-
-@pytest.mark.parametrize("preserve", [False, True], ids=["reflog-only", "shared-ref"])
-def test_detached_commit_in_head_reflog(linked: LinkedWorktree, preserve: bool) -> None:
-    """Retain an unanchored detached commit; allow an operator to anchor it and retry."""
-    repo, worktree = linked
-    git(worktree, "switch", "--detach")
-    git(worktree, "commit", "--allow-empty", "-m", "Detached work")
-    detached = git(worktree, "rev-parse", "HEAD").strip()
-    git(worktree, "switch", "merged")
-    assert_looks_clean(worktree)
-    assert detached in git(worktree, "reflog", "show", "--format=%H", "HEAD").splitlines()
-    assert detached not in git(worktree, "rev-list", "--all").splitlines()
-
-    if preserve:
-        git(repo, "branch", "saved", detached)
-    result = scan(worktree)
-    if preserve:
-        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
-    else:
-        assert result.returncode != 0
-        assert f"keep: HEAD reflog commits outside refs: [b'{detached}']" in result.stderr
-    assert worktree.is_dir()
-
-    # Reproduce the old fallback on purpose, only inside the disposable repository.
-    git(repo, "worktree", "remove", str(worktree))
-    assert not worktree.exists()
-    assert (detached in git(repo, "rev-list", "--all", "--reflog").splitlines()) == preserve
-
-
-@pytest.mark.parametrize("namespace", ["worktree", "bisect", "rewritten"])
-def test_local_ref_blocks_even_when_its_commit_is_already_shared(
-    linked: LinkedWorktree, namespace: str
-) -> None:
-    """Keep the local ref name even when there is no reflog-only commit to protect."""
-    repo, worktree = linked
-    ref = f"refs/{namespace}/sweep-fixture"
-    git(worktree, "update-ref", ref, "HEAD")
-    assert git(repo, "for-each-ref", ref) == ""
-    assert_looks_clean(worktree)
-
-    result = scan(worktree)
-    assert result.returncode != 0
-    assert "keep: worktree-local refs:" in result.stderr
-    assert ref in result.stderr
-    assert git(worktree, "rev-parse", ref) == git(worktree, "rev-parse", "HEAD")
-
-
-def test_clean_filter_hides_raw_bytes_on_unusual_path(linked: LinkedWorktree) -> None:
-    """Keep bytes that a real clean filter strips, even on a path with whitespace."""
-    repo, worktree = linked
-    git(repo, "config", "filter.strip.clean", "sed 's/^scratch$/tracked/'")
-    git(repo, "config", "filter.strip.smudge", "cat")
-    git(repo, "config", "filter.strip.required", "true")
-    name = "-note with\nspace.txt"
-    (worktree / ".gitattributes").write_text("*.txt filter=strip\n", encoding="utf-8")
-    path = worktree / name
-    path.write_bytes(b"tracked\n")
-    git(worktree, "add", "--", ".gitattributes", name)
-    git(worktree, "commit", "-m", "Track filtered file")
-    git(repo, "merge", "--ff-only", "merged")
-    raw = b"scratch\n"
-    path.write_bytes(raw)
-    assert git(worktree, "show", f":{name}") == "tracked\n"
-    assert git(worktree, "-c", "filter.strip.clean=cat", "status", "--porcelain").startswith(" M ")
-    assert_looks_clean(worktree)
-
-    result = scan(worktree)
-    assert result.returncode != 0
-    assert "keep: filter attributes on tracked paths:" in result.stderr
-    assert repr(os.fsencode(name)) in result.stderr
-    assert "scratch" not in result.stderr
-    assert path.read_bytes() == raw
-
-    # The old fallback deletes the raw bytes despite status being empty.
-    git(repo, "worktree", "remove", str(worktree))
-    assert not path.exists()
-
-
-def prune_guard(repo: Path) -> subprocess.CompletedProcess[str]:
-    """Run the shipped prune guard against `repo`."""
-    return block("Prune guard", repo=str(repo))
-
-
-@pytest.mark.parametrize("mutate", [None, STRIP_DRY_RUN_STDERR], ids=["shipped", "strip-stderr"])
-def test_prune_dry_run_with_stderr_keeps(
-    tmp_path: Path, linked: LinkedWorktree, mutate: Mutation | None
-) -> None:
-    """The shipped guard rejects even whitespace on dry-run stderr; the old guard lets it pass."""
-    real_git = shutil.which("git")
-    assert real_git is not None
-    stub = tmp_path / "git"
-    stub.write_text(
-        dedent(f"""\
-            #!/bin/sh
-            if [ "$#" -eq 6 ] && [ "$3 $4 $5 $6" = 'worktree prune --dry-run --verbose' ]; then
-                printf '\\n' >&2
-            fi
-            exec {shlex.quote(real_git)} "$@"
-            """),
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-    result = block(
-        "Prune guard",
-        path=f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
-        mutate=mutate,
-        repo=str(linked.repo),
-    )
-    if mutate is None:
-        assert result.returncode != 0
-        assert "keep: git failed (exit 0): b'\\n'" in result.stderr
-    else:
-        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
-
-
-def registered(repo: Path) -> bool:
-    """Whether Git still has admin data for the linked worktree."""
-    return any((repo / ".git/worktrees").glob("*/HEAD"))
-
-
-def test_unmounted_worktree_is_kept_and_unguarded_prune_loses_it(linked: LinkedWorktree) -> None:
-    """Refuse to prune when a registered worktree directory vanished, as with an unmounted volume."""
-    repo, worktree = linked
-    assert prune_guard(repo).returncode == 0
-    git(worktree, "update-ref", "refs/worktree/saved", "HEAD")
-    worktree.rename(repo.parent / "unmounted")
-
-    listing = git(repo, "worktree", "list", "--porcelain", "-z").split("\0")
-    assert any(field.startswith("worktree ") and field.endswith("linked worktree") for field in listing)
-    assert "prunable gitdir file points to non-existent location" in listing
-    guard = prune_guard(repo)
-    assert guard.returncode != 0
-    assert "keep: Git reports" in guard.stderr
-    dry = dry_prune(repo)
-    assert "Removing worktrees/linked-worktree: gitdir file points to non-existent location" in dry
-    assert registered(repo)
-
-    # The loss the guard prevents: an unguarded prune deletes the admin dir with its local refs and reflog.
-    git(repo, "worktree", "prune")
-    assert not registered(repo)
-    assert git(repo, "for-each-ref", "refs/worktree") == ""
-
-
-def test_directory_without_dot_git_passes_test_d_but_not_the_guard(linked: LinkedWorktree) -> None:
-    """Reproduce a surviving directory with no `.git` file, which `test -d` cannot see."""
-    repo, worktree = linked
-    (worktree / ".git").unlink()
-    assert subprocess.run(["/bin/sh", "-c", 'test -d "$1"', "sh", str(worktree)], check=False).returncode == 0
-    listing = git(repo, "worktree", "list", "--porcelain", "-z")
-    assert "prunable gitdir file points to non-existent location" in listing
-
-    guard = prune_guard(repo)
-    assert guard.returncode != 0
-    assert "keep: Git reports" in guard.stderr
-    assert registered(repo)
-
-
-def test_guard_rejects_unreadable_dot_git_without_a_prunable_record(linked: LinkedWorktree) -> None:
-    """Keep when `.git` is absent even if Git has no prunable record for it (e.g. a locked worktree)."""
-    repo, worktree = linked
-    git(repo, "worktree", "lock", str(worktree))
-    (worktree / ".git").unlink()
-    guard = prune_guard(repo)
-    assert guard.returncode != 0
-    assert "keep:" in guard.stderr
-
-
-FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
-PR_FIELDS = FIELDS.split(",")
-
-
-def stub_gh(tmp_path: Path, script: str) -> str:
-    """Install a `gh` running `script` and return a PATH that finds it first."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    stub = bin_dir / "gh"
-    stub.write_text(f"#!/bin/sh\n{script}\n")
-    stub.chmod(0o755)
-    return f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
-
-
-def strict_gh(payload: dict[str, object], base_repo: str, *, warn: bool = False) -> str:
-    """A `gh` that emits `payload` (and optionally a warning) only with the expected repo and fields."""
-    diagnostic = "echo 'incomplete metadata' >&2" if warn else ""
-    return f"""repo= fields= prev=
-for arg; do
-  [ "$prev" = --repo ] && repo=$arg
-  [ "$prev" = --json ] && fields=$arg
-  prev=$arg
-done
-[ "$repo" = {base_repo} ] || {{ echo "bad --repo: $repo" >&2; exit 2; }}
-for need in {" ".join(PR_FIELDS)}; do
-  case ",$fields," in *",$need,"*) ;; *) echo "missing --json field $need" >&2; exit 2 ;; esac
-done
-cat <<'JSON'
-{json.dumps(payload)}
-JSON
-{diagnostic}"""
-
-
-def identity(
-    tmp_path: Path,
-    linked: LinkedWorktree,
-    *,
-    url: str = "https://github.com/acme/widgets.git",
-    mutate: Mutation | None = None,
-    script: str | None = None,
-    warn: bool = False,
-    overrides: dict[str, object] | None = None,
-    base_repo: str = "acme/widgets",
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run the shipped identity block for a worktree whose branch is `merged` from `acme/widgets`."""
-    repo, worktree = linked
-    git(repo, "remote", "add", "origin", url)
-    parts = base_repo.split("/")
-    host = parts[0] if len(parts) == 3 else (env or {}).get("GH_HOST", "github.com")
-    payload: dict[str, object] = {
-        "state": "MERGED",
-        "url": f"https://{host}/acme/widgets/pull/7",
-        "headRefName": "merged",
-        "headRefOid": git(worktree, "rev-parse", "HEAD").strip(),
-        "headRepository": {"name": "widgets"},
-        "headRepositoryOwner": {"login": "acme"},
-    } | (overrides or {})
-    payload = {key: value for key, value in payload.items() if value is not None}
-    return block(
-        "PR identity check",
-        path=stub_gh(tmp_path, script or strict_gh(payload, base_repo, warn=warn)),
-        mutate=mutate,
-        pr="7",
-        base_repo=base_repo,
-        worktree=str(worktree),
-        remote="origin",
-        **(env or {}),
-    )
+def keep(wt: Worktrees, reason: str, *args: str, **variables: str) -> None:
+    """Assert the scoped candidate has a specific keep reason, not an unrelated failure."""
+    code, (result,) = run(wt, *args, variables=variables)
+    assert code == 0
+    assert Path(str(result["worktree"])).resolve() == wt.path.resolve()
+    assert result["verdict"] == "keep"
+    assert reason in str(result["reasons"])
 
 
 @pytest.mark.parametrize(
     "url",
     [
-        "https://github.com/acme/widgets.git",
-        "git@github.com:acme/widgets.git",
-        "ssh://git@github.com:22/acme/widgets",
+        "git@github.com:source/project.git",
+        "https://github.com/source/project",
+        "ssh://git@github.com:2222/source/project.git",
     ],
-    ids=["https", "scp", "ssh-port"],
 )
-def test_matching_pr_identity_proceeds(tmp_path: Path, linked: LinkedWorktree, url: str) -> None:
-    """A merged PR from this branch, host, owner, repository and commit passes."""
-    result = identity(tmp_path, linked, url=url)
-    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+def test_clean_merged_tree_is_eligible_without_upstream(wt: Worktrees, url: str) -> None:
+    git(wt.path, "remote", "set-url", "origin", url)
+    quiet(wt)
+    code, (main, result) = run(wt, all_paths=True)
+    assert code == 0
+    assert main["verdict"] == "keep"
+    assert "main or bare" in str(main["reasons"])
+    assert result["verdict"] == "eligible", result
+    assert "#123" in str(result["reasons"])
+    assert wt.path.is_dir()
+    assert wt.admin.is_dir()
+    assert git(wt.repo, "show-ref", "--verify", "refs/heads/merged")
+
+
+def test_worktree_scope_never_accepts_unregistered_directory(wt: Worktrees) -> None:
+    code, (result,) = run(wt, "--worktree", str(wt.bin))
+    assert code == 1
+    assert result["verdict"] == "keep"
+    assert "no matching" in str(result["reasons"])
+
+
+def test_locked(wt: Worktrees) -> None:
+    git(wt.repo, "worktree", "lock", "--reason", "Retain", str(wt.path))
+    quiet(wt)
+    keep(wt, "locked")
+
+
+def test_detached(wt: Worktrees) -> None:
+    git(wt.path, "switch", "--detach")
+    quiet(wt)
+    keep(wt, "detached HEAD")
+
+
+@pytest.mark.parametrize("name", ["tracked", "untracked", "ignored"])
+def test_dirty_or_ignored(wt: Worktrees, name: str) -> None:
+    (wt.path / name).write_text("unsaved\n")
+    quiet(wt)
+    keep(wt, name)
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_hidden_index_edit(wt: Worktrees, flag: str) -> None:
+    git(wt.path, "update-index", flag, "tracked")
+    (wt.path / "tracked").write_text("hidden\n")
+    quiet(wt)
+    keep(wt, "index flags")
+
+
+@pytest.mark.parametrize("key", ["core.sparseCheckout", "core.ignoreStat"])
+def test_hidden_status_configuration(wt: Worktrees, key: str) -> None:
+    git(wt.path, "config", key, "true")
+    quiet(wt)
+    keep(wt, key)
+
+
+def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
+    (wt.path / "retained-empty").mkdir()
+    quiet(wt)
+    assert git(wt.path, "status", "--porcelain", "--ignored") == b""
+    keep(wt, "recorded owner or retained claimed directory", "--hold", str(wt.path))
+
+
+def test_live_cwd(wt: Worktrees) -> None:
+    nested = wt.path / "deep\npath"
+    nested.mkdir()
+    quiet(wt)
+    keep(wt, "a process has its cwd inside", SWEEP_CWD=str(nested))
+    code, (result,) = run(wt, cwd=nested)
+    assert code == 0
+    assert result["verdict"] == "keep"
+    assert "current directory" in str(result["reasons"])
+
+
+def test_recent_activity(wt: Worktrees) -> None:
+    quiet(wt)
+    os.utime(wt.admin / "index", (4_102_444_800, 4_102_444_800))
+    keep(wt, "recent activity")
+
+
+@pytest.mark.parametrize("ref", ["refs/worktree/wip", "refs/bisect/wip", "refs/rewritten/wip"])
+def test_local_ref(wt: Worktrees, ref: str) -> None:
+    git(wt.path, "update-ref", ref, "HEAD")
+    quiet(wt)
+    keep(wt, "worktree-local refs")
+
+
+def test_reflog_only_commit(wt: Worktrees) -> None:
+    git(wt.path, "switch", "--detach")
+    git(wt.path, "commit", "--allow-empty", "-m", "Reflog only")
+    git(wt.path, "switch", "merged")
+    quiet(wt)
+    keep(wt, "HEAD reflog commits outside refs")
+
+
+def test_empty_reflog(wt: Worktrees) -> None:
+    (wt.admin / "logs/HEAD").unlink()
+    quiet(wt)
+    keep(wt, "'reflog', 'exists'")
 
 
 @pytest.mark.parametrize(
-    "override",
+    "marker",
     [
-        {"headRefName": "someone-elses-branch"},
-        {"headRepositoryOwner": {"login": "fork-owner"}},
-        {"headRepository": {"name": "other-repo"}},
-        {"state": "OPEN"},
-        {"headRefOid": "0" * 40},
-        {"headRefName": None},
-        {"headRepositoryOwner": None},
-        {"headRepository": None},
-        {"headRefOid": None},
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
     ],
-    ids=["branch", "owner", "repo", "state", "oid", "no-branch", "no-owner", "no-repo", "no-oid"],
 )
-def test_mismatched_or_missing_pr_identity_keeps(
-    tmp_path: Path, linked: LinkedWorktree, override: dict[str, object]
-) -> None:
-    """Any wrong or absent identity field keeps the worktree."""
-    result = identity(tmp_path, linked, overrides=override)
-    assert result.returncode != 0
-    assert "keep: PR identity mismatch" in result.stderr
-    assert linked.worktree.is_dir()
+def test_dangling_operation_marker(wt: Worktrees, marker: str) -> None:
+    (wt.admin / marker).symlink_to("missing")
+    quiet(wt)
+    keep(wt, f"in-progress operation `{marker}`")
 
 
-def test_push_remote_on_another_host_keeps(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """Same owner and repository on a different host is a different repository."""
-    result = identity(tmp_path, linked, url="https://git.example.invalid/acme/widgets.git")
-    assert result.returncode != 0
-    assert "keep: PR identity mismatch" in result.stderr
-    assert "git.example.invalid" in result.stderr
-
-
-@pytest.mark.parametrize("field", PR_FIELDS)
-def test_dropping_a_shipped_json_field_is_caught(tmp_path: Path, linked: LinkedWorktree, field: str) -> None:
-    """A `--json` list missing a field fails the strict `gh`, so the original defect cannot return."""
-    kept = ",".join(name for name in PR_FIELDS if name != field)
-    result = identity(tmp_path, linked, mutate=Mutation(f'"{FIELDS}"', f'"{kept}"'))
-    assert result.returncode != 0
-    assert f"missing --json field {field}" in result.stderr
-
-
-def test_gh_failure_keeps(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """A failing `gh` is unknown, never a pass."""
-    result = identity(
-        tmp_path, linked, url="git@github.com:acme/widgets.git", script="echo 'HTTP 502' >&2\nexit 1"
-    )
-    assert result.returncode != 0
-    assert "keep: gh failed" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("pr_url", "diagnostic"),
-    [
-        ("https://git.example.invalid/acme/widgets/pull/7", "PR URL host mismatch"),
-        (None, "missing or invalid PR URL"),
-        ("https://[bad/acme/widgets/pull/7", "invalid PR URL"),
-        ("/acme/widgets/pull/7", "PR URL host mismatch"),
-    ],
-    ids=["enterprise-default", "missing", "malformed", "relative"],
-)
-def test_pr_url_must_verify_the_push_host(
-    tmp_path: Path, linked: LinkedWorktree, pr_url: str | None, diagnostic: str
-) -> None:
-    """Even with a matching branch and OID, a bare GH repo can query another host."""
-    result = identity(tmp_path, linked, overrides={"url": pr_url})
-    assert result.returncode != 0
-    assert f"keep: {diagnostic}" in result.stderr
-
-
-def test_without_pr_url_host_comparison_wrong_host_passes(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """Dropping only the host comparison defeats the guard even with a strict `gh`."""
-    result = identity(
-        tmp_path,
-        linked,
-        overrides={"url": "https://git.example.invalid/acme/widgets/pull/7"},
-        mutate=SKIP_PR_URL_HOST,
-    )
-    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
-
-
-def test_successful_gh_with_stderr_keeps(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """A valid identity payload is not proof if `gh` also emitted a warning."""
-    result = identity(tmp_path, linked, warn=True)
-    assert result.returncode != 0
-    assert "keep: gh failed (exit 0): b'incomplete metadata" in result.stderr
-
-
-def python_block(heading: str, mutate: Mutation | None = None) -> ast.Module:
-    """Parse the Python heredoc under `heading` using the Python 3.8 grammar."""
-    script = block_source(heading).split("\n", 1)[1].removesuffix("\nPY")
-    return ast.parse(mutate.apply(script) if mutate else script, feature_version=(3, 8))
-
-
-@pytest.mark.parametrize("heading", HEADINGS)
-def test_shipped_block_supports_python_38_syntax(heading: str) -> None:
-    """PEP 604 unions parse even with the 3.8 grammar, so check annotation ASTs too."""
-    for node in ast.walk(python_block(heading)):
-        if isinstance(node, (ast.AnnAssign, ast.arg)):
-            annotation = node.annotation
-        elif isinstance(node, ast.FunctionDef):
-            annotation = node.returns
-        else:
-            continue
-        assert annotation is None or not any(isinstance(part, ast.BitOr) for part in ast.walk(annotation))
-
-
-def command_wrappers(
-    name: str, headings: tuple[str, ...], *, mutate_last: Mutation | None = None
-) -> dict[str, str]:
-    """Return normalized ASTs for the named helper, optionally mutating the last copy."""
-    wrappers = {}
-    for index, heading in enumerate(headings):
-        tree = python_block(heading, mutate_last if index == len(headings) - 1 else None)
-        matches = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
-        assert len(matches) == 1, f"expected one `{name}` helper under `{heading}`"
-        wrappers[heading] = ast.dump(matches[0])
-    return wrappers
-
-
-@pytest.mark.parametrize(("name", "headings"), [("out", HEADINGS), ("git", HEADINGS[1:])])
-def test_command_wrappers_are_identical(name: str, headings: tuple[str, ...]) -> None:
-    """The standalone blocks must agree on command execution and failure handling."""
-    wrappers = command_wrappers(name, headings)
-    assert len(set(wrappers.values())) == 1, wrappers
-
-
-def test_command_wrapper_pin_detects_one_drifted_copy() -> None:
-    """Ignoring stderr in just one block produces a second wrapper AST."""
-    wrappers = command_wrappers("out", HEADINGS, mutate_last=DRIFT_OUT_WRAPPER)
-    assert len(set(wrappers.values())) == 2, wrappers
-
-
-def test_missing_skill_heading_fails_clearly() -> None:
-    """A reformatted skill gives an actionable failure, not an IndexError."""
-    with pytest.raises(AssertionError, match="heading missing"):
-        block("No such heading")
-
-
-def test_prunable_record_alone_keeps(linked: LinkedWorktree) -> None:
-    """Keep when `.git` exists but the admin dir's `gitdir` points nowhere, so Git reports it prunable."""
-    repo, worktree = linked
-    (gitdir,) = (repo / ".git/worktrees").glob("*/gitdir")
-    gitdir.write_text(f"{worktree}-moved/.git\n", encoding="utf-8")
-    assert (worktree / ".git").exists()
-    assert "prunable gitdir file points to non-existent location" in git(
-        repo, "worktree", "list", "--porcelain"
-    )
-    guard = prune_guard(repo)
-    assert guard.returncode != 0
-    assert "keep: Git reports" in guard.stderr
-
-
-def test_hidden_worktree_with_empty_admin_gitdir_is_kept(linked: LinkedWorktree) -> None:
-    """`git worktree list` omits a worktree whose admin `gitdir` is empty, but prune still deletes it."""
-    repo, worktree = linked
-    git(worktree, "update-ref", "refs/worktree/x", "HEAD")
-    (admin,) = (repo / ".git/worktrees").iterdir()
-    assert (admin / "refs/worktree/x").is_file()
-    (admin / "gitdir").write_bytes(b"")
-    assert (worktree / ".git").is_file()
-
-    listing = git(repo, "worktree", "list", "--porcelain", "-z")
-    assert "linked worktree" not in listing
-    dry = dry_prune(repo)
-    assert "Removing worktrees/linked-worktree: invalid gitdir file" in dry
-
-    # The previous guard looked only at the list: nothing prunable, every listed `.git` present.
-    assert "prunable" not in listing
-    assert all(
-        Path(line.removeprefix("worktree ")).exists()
-        for line in listing.split("\0")
-        if line.startswith("worktree ")
-    )
-    guard = prune_guard(repo)
-    assert guard.returncode != 0
-    assert "keep:" in guard.stderr
-    assert admin.is_dir()
-
-    git(repo, "worktree", "prune")
-    assert not admin.exists()
-
-
-def test_dot_git_file_pointing_at_another_admin_dir_is_kept(linked: LinkedWorktree) -> None:
-    """Keep when the worktree's `.git` file names a different admin dir than the one registered for it."""
-    repo, worktree = linked
-    (worktree / ".git").write_text(f"gitdir: {repo}/.git/worktrees/other\n", encoding="utf-8")
-    assert git(repo, "worktree", "list", "--porcelain", "-z").count("prunable") == 0
-    guard = prune_guard(repo)
-    assert guard.returncode != 0
-    assert "no matching `.git` file" in guard.stderr
-
-
-HOST = "git.example.invalid"
-
-
-def test_base_repo_with_host_prefix_matches_remote_host(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """`<host>/<owner>/<repo>` names the expected host explicitly."""
-    ok = identity(tmp_path, linked, url=f"https://{HOST}/acme/widgets.git", base_repo=f"{HOST}/acme/widgets")
-    assert (ok.returncode, ok.stdout, ok.stderr) == (0, "", "")
-
-
-def test_base_repo_with_host_prefix_rejects_github_remote(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """A github.com push remote does not satisfy a `<host>/<owner>/<repo>` base."""
-    bad = identity(tmp_path, linked, base_repo=f"{HOST}/acme/widgets")
-    assert bad.returncode != 0
-    assert "keep: PR identity mismatch" in bad.stderr
-
-
-def test_gh_host_environment_names_the_expected_host(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """`GH_HOST` replaces the `github.com` default for a bare `<owner>/<repo>`."""
-    ok = identity(tmp_path, linked, url=f"https://{HOST}/acme/widgets.git", env={"GH_HOST": HOST})
-    assert (ok.returncode, ok.stdout, ok.stderr) == (0, "", "")
-
-
-def test_gh_host_environment_rejects_github_remote(tmp_path: Path, linked: LinkedWorktree) -> None:
-    """With `GH_HOST` set, a github.com push remote is a different host."""
-    bad = identity(tmp_path, linked, env={"GH_HOST": HOST})
-    assert bad.returncode != 0
-    assert "keep: PR identity mismatch" in bad.stderr
-
-
-SKIP_OPERATION_CHECK = Mutation("for name in operations:", "for name in ():")
-FAILING_PATCH = """From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001
-From: Fixture <fixture@example.invalid>
-Date: Mon, 1 Jan 2024 00:00:00 +0000
-Subject: [PATCH] Unappliable
-
----
- missing.txt | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
-
-diff --git a/missing.txt b/missing.txt
---- a/missing.txt
-+++ b/missing.txt
-@@ -1 +1 @@
--old
-+new
---\x20
-2.0.0
-"""
-
-
-def test_stopped_git_am_is_kept_though_status_is_clean(linked: LinkedWorktree) -> None:
-    """A failed `git am` leaves `rebase-apply/` in the admin dir, which worktree removal deletes."""
-    _, worktree = linked
-    am = subprocess.run(
-        ["git", "-C", str(worktree), "am"],
-        input=FAILING_PATCH,
+def test_non_enoent_marker_error(wt: Worktrees) -> None:
+    # A non-directory intermediate component reproduces ENOTDIR even when run as root.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys; from pathlib import Path; "
+            "runpy.run_path(sys.argv[1])['present'](Path(sys.argv[2]))",
+            str(GUARD),
+            str(wt.admin / "HEAD/marker"),
+        ],
         env=git_env(),
+        capture_output=True,
         text=True,
-        capture_output=True,
+        timeout=TIMEOUT,
         check=False,
     )
-    assert am.returncode != 0
-    assert_looks_clean(worktree)
-    assert (Path(git(worktree, "rev-parse", "--absolute-git-dir").strip()) / "rebase-apply").is_dir()
-
-    assert scan(worktree, mutate=SKIP_OPERATION_CHECK).returncode == 0
-    result = scan(worktree)
     assert result.returncode != 0
-    assert "keep: in-progress operation `rebase-apply`" in result.stderr
+    assert "cannot stat" in result.stderr
 
 
-@pytest.mark.parametrize("mutate", [None, RESTORE_LEXISTS], ids=["shipped", "lexists"])
-@pytest.mark.parametrize(
-    "err",
-    [errno.EACCES, errno.EIO, errno.ELOOP, errno.ENOTDIR],
-    ids=["permission-denied", "io-error", "symlink-loop", "not-a-directory"],
-)
-def test_operation_marker_stat_error_keeps(
-    tmp_path: Path, linked: LinkedWorktree, err: int, mutate: Mutation | None
-) -> None:
-    """Inject an admin lookup failure independently of privileges, while Git still runs normally."""
-    worktree = linked.worktree
-    git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir").strip())
-    marker = os.fsencode(git_dir / "rebase-apply")
-    trace = tmp_path / "stat-hit"
-    regular_file = tmp_path / "admin-file"
-    regular_file.touch()
-    (tmp_path / "sitecustomize.py").write_text(
-        dedent(f"""\
-            import os
+def test_stopped_am(wt: Worktrees) -> None:
+    base = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    (wt.repo / "tracked").write_text("patch\n")
+    git(wt.repo, "commit", "-am", "Patch")
+    patch = wt.repo / "patch.mbox"
+    patch.write_bytes(git(wt.repo, "format-patch", "--stdout", "-1"))
+    (wt.path / "tracked").write_text("conflict\n")
+    git(wt.path, "commit", "-am", "Conflict")
+    with pytest.raises(subprocess.CalledProcessError):
+        git(wt.path, "am", str(patch))
+    assert git(wt.path, "status", "--porcelain") == b""
+    quiet(wt)
+    assert git(wt.path, "rev-parse", "HEAD").decode().strip() != base
+    keep(wt, "in-progress operation `rebase-apply`")
 
-            def fail_marker_lookup(stat):
-                def checked(path, *args, **kwargs):
-                    if path != {marker!r}:
-                        return stat(path, *args, **kwargs)
-                    try:
-                        if {err} == {errno.ENOTDIR}:
-                            return stat({os.fsencode(regular_file / "rebase-apply")!r}, *args, **kwargs)
-                        raise OSError({err}, os.strerror({err}), path)
-                    except OSError as exc:
-                        with open({str(trace)!r}, "w", encoding="utf-8") as handle:
-                            handle.write(str(exc.errno))
-                        raise
-                return checked
 
-            os.stat = fail_marker_lookup(os.stat)
-            os.lstat = fail_marker_lookup(os.lstat)
-            """),
-        encoding="utf-8",
-    )
-    result = scan(worktree, mutate=mutate, PYTHONPATH=str(tmp_path))
-    assert trace.is_file(), f"stat injection not reached: {result.stderr}"
-    assert trace.read_text(encoding="utf-8") == str(err)
-    if mutate is None:
-        assert result.returncode != 0
-        assert f"keep: cannot stat in-progress operation marker {marker!r}" in result.stderr
-        assert os.strerror(err) in result.stderr
+def test_filter_hides_raw_bytes(wt: Worktrees) -> None:
+    name = "filtered\nname.txt"
+    (wt.path / ".gitattributes").write_text("*.txt filter=constant\n")
+    git(wt.path, "config", "filter.constant.clean", "sed 's/^scratch$/tracked/'")
+    (wt.path / name).write_text("tracked\n")
+    git(wt.path, "add", ".")
+    git(wt.path, "commit", "-m", "Filter")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    (wt.path / name).write_text("scratch\n")
+    assert git(wt.path, "status", "--porcelain", "--ignored") == b""
+    quiet(wt)
+    keep(wt, "filter attributes")
+
+
+@pytest.mark.parametrize("kind", ["missing-tree", "missing-dotgit", "empty-admin", "wrong-target"])
+def test_prune_keeps_unsafe_registration(wt: Worktrees, kind: str) -> None:
+    other = wt.repo.parent / "other checkout"
+    git(wt.repo, "worktree", "add", "-b", "other", str(other))
+    gitdir = Path(os.fsdecode(git(other, "rev-parse", "--absolute-git-dir").strip())) / "gitdir"
+    if kind == "missing-tree":
+        other.rename(wt.repo.parent / "unmounted")
+    elif kind == "missing-dotgit":
+        (other / ".git").unlink()
+    elif kind == "empty-admin":
+        gitdir.write_bytes(b"")
     else:
-        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+        (other / ".git").write_text(f"gitdir: {wt.admin}\n")
+    quiet(wt)
+    keep(wt, "cannot verify prune safety")
+    assert gitdir.exists()
 
 
-def test_dangling_operation_marker_keeps(linked: LinkedWorktree) -> None:
-    """A dangling operation marker is still present and must not be treated as absent."""
-    worktree = linked.worktree
-    git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir").strip())
-    (git_dir / "rebase-apply").symlink_to("missing")
-    result = scan(worktree)
-    assert result.returncode != 0
-    assert "keep: in-progress operation `rebase-apply`" in result.stderr
+def test_git_prune_is_only_ever_called_in_dry_run_mode(wt: Worktrees) -> None:
+    trace = wt.bin / "commands.jsonl"
+    quiet(wt)
+    code, (result,) = run(wt, variables={"GIT_TRACE2_EVENT": str(trace)})
+    assert code == 0
+    assert result["verdict"] == "eligible", result
+    starts = [
+        event["argv"]
+        for line in trace.read_text().splitlines()
+        if (event := json.loads(line))["event"] == "start"
+    ]
+    assert [argv[-4:] for argv in starts if "prune" in argv] == [
+        ["worktree", "prune", "--dry-run", "--verbose"]
+    ]
 
 
-def test_stopped_cherry_pick_is_kept(linked: LinkedWorktree) -> None:
-    """A conflicted multi-commit cherry-pick leaves `sequencer/` and `CHERRY_PICK_HEAD`."""
-    _, worktree = linked
-    (worktree / "f").write_text("a\n", encoding="utf-8")
-    git(worktree, "add", "f")
-    git(worktree, "commit", "-m", "A")
-    git(worktree, "switch", "-c", "side", "HEAD~1")
-    (worktree / "f").write_text("b\n", encoding="utf-8")
-    git(worktree, "add", "f")
-    git(worktree, "commit", "-m", "B")
-    (worktree / "g").write_text("g\n", encoding="utf-8")
-    git(worktree, "add", "g")
-    git(worktree, "commit", "-m", "C")
-    git(worktree, "switch", "merged")
-    pick = subprocess.run(
-        ["git", "-C", str(worktree), "cherry-pick", "side~1", "side"],
-        env=git_env(),
-        capture_output=True,
-        check=False,
+def test_borrowed_submodule_objects(wt: Worktrees) -> None:
+    other = wt.repo.parent / "borrowing checkout"
+    git(wt.repo, "worktree", "add", "-b", "borrowing", str(other))
+    info = (
+        Path(os.fsdecode(git(other, "rev-parse", "--absolute-git-dir").strip())) / "modules/sub/objects/info"
     )
-    assert pick.returncode != 0
-    git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir").strip())
-    assert (git_dir / "sequencer").is_dir()
-    assert (git_dir / "CHERRY_PICK_HEAD").is_file()
+    info.mkdir(parents=True)
+    objects = wt.admin / "objects"
+    objects.mkdir()
+    (info / "alternates").write_text(f"{objects}\n")
+    quiet(wt)
+    keep(wt, "another checkout borrows objects")
 
-    assert scan(worktree, mutate=SKIP_OPERATION_CHECK).returncode == 0
-    result = scan(worktree)
-    assert result.returncode != 0
-    assert "keep: in-progress operation" in result.stderr
+
+@pytest.mark.parametrize("state", ["dirty", "clean", "deinitialized"])
+def test_submodule_work_is_kept(wt: Worktrees, state: str) -> None:
+    source = wt.repo.parent / "module-source"
+    init(source)
+    sub = wt.path / "sub"
+    git(wt.path, "-c", "protocol.file.allow=always", "submodule", "add", str(source), "sub")
+    git(wt.path, "commit", "-m", "Add module")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    if state == "dirty":
+        (sub / "tracked").write_text("dirty\n")
+    elif state == "deinitialized":
+        git(wt.path, "submodule", "deinit", "sub")
+    quiet(wt)
+    expected = {
+        "dirty": "submodule dirty",
+        "clean": "submodule may contain unpushed commits",
+        "deinitialized": "retained submodule gitdir",
+    }
+    keep(wt, expected[state])
+
+
+@pytest.mark.parametrize(
+    ("states", "reason"),
+    [
+        ("[]", "no unique merged PR"),
+        ('[{"state":"CLOSED"}]', "no unique merged PR"),
+        ('[{"state":"MERGED","number":123},{"state":"OPEN","number":456}]', "open PR"),
+    ],
+)
+def test_only_a_unique_merged_pr_can_authorize(wt: Worktrees, states: str, reason: str) -> None:
+    quiet(wt)
+    keep(wt, reason, SWEEP_LIST=states)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("state", "CLOSED"),
+        ("headRefName", "another"),
+        ("headRepository", {"name": "another"}),
+        ("headRepositoryOwner", {"login": "fork"}),
+        ("headRefOid", "bad-oid"),
+    ],
+)
+def test_pr_identity_mismatch(wt: Worktrees, field: str, value: object) -> None:
+    wt.pr[field] = value
+    quiet(wt)
+    keep(wt, "PR identity mismatch")
+
+
+@pytest.mark.parametrize(
+    "field", ["state", "headRefName", "headRepository", "headRepositoryOwner", "headRefOid", "url"]
+)
+def test_pr_identity_missing_field(wt: Worktrees, field: str) -> None:
+    del wt.pr[field]
+    quiet(wt)
+    keep(wt, field)
+
+
+def test_pr_head_cannot_hide_unpushed_commit(wt: Worktrees) -> None:
+    git(wt.path, "commit", "--allow-empty", "-m", "Not pushed")
+    quiet(wt)
+    keep(wt, "PR identity mismatch")
+
+
+def test_pr_url_host_must_agree(wt: Worktrees) -> None:
+    wt.pr["url"] = "https://another.example/owner/project/pull/123"
+    quiet(wt)
+    keep(wt, "PR URL host mismatch")
+
+
+def test_actual_push_host_not_fetch_host_is_checked(wt: Worktrees) -> None:
+    git(wt.path, "remote", "set-url", "--push", "origin", "git@another.example:source/project.git")
+    quiet(wt)
+    keep(wt, "PR identity mismatch")
+
+
+@pytest.mark.parametrize(
+    ("base", "variables"), [("forge.example/owner/project", {}), (BASE, {"GH_HOST": "forge.example"})]
+)
+def test_enterprise_pr_host(wt: Worktrees, base: str, variables: dict[str, str]) -> None:
+    git(wt.path, "remote", "set-url", "origin", "git@forge.example:source/project.git")
+    wt.pr["url"] = "https://forge.example/owner/project/pull/123"
+    quiet(wt)
+    code, (result,) = run(wt, base=base, variables=variables)
+    assert code == 0
+    assert result["verdict"] == "eligible", result
+
+
+def test_command_diagnostics_including_whitespace_keep(wt: Worktrees) -> None:
+    quiet(wt)
+    keep(wt, "failed (0)", SWEEP_WARNING=" \n")
+
+
+@pytest.mark.parametrize("state", ["current", "missing", "stale", "ahead"])
+def test_no_pr_needs_live_current_upstream_containing_head(wt: Worktrees, state: str) -> None:
+    upstream = wt.repo.parent / "upstream.git"
+    upstream.mkdir()
+    git(upstream, "init", "--bare", "--template=")
+    git(wt.path, "remote", "add", "parked", str(upstream))
+    git(wt.path, "push", "-u", "parked", "merged")
+    if state == "missing":
+        git(upstream, "update-ref", "-d", "refs/heads/merged")
+    elif state == "stale":
+        git(wt.repo, "commit", "--allow-empty", "-m", "Remote change")
+        git(wt.repo, "push", str(upstream), "HEAD:refs/heads/merged")
+    elif state == "ahead":
+        git(wt.path, "commit", "--allow-empty", "-m", "Unpushed")
+    quiet(wt)
+    code, (result,) = run(wt, "--no-pr", variables={"SWEEP_LIST": "[]"})
+    assert code == 0
+    if state == "current":
+        assert result["verdict"] == "eligible", result
+    else:
+        assert result["verdict"] == "keep", result
+        assert {"missing": "ls-remote", "stale": "local upstream is stale", "ahead": "unpushed commits"}[
+            state
+        ] in str(result["reasons"])
+    assert wt.admin.is_dir()
+
+
+def test_no_pr_never_ignores_open_pr(wt: Worktrees) -> None:
+    quiet(wt)
+    keep(wt, "open PR", "--no-pr", SWEEP_LIST='[{"state":"OPEN"}]')
+
+
+def test_shipped_program_uses_python_38_grammar() -> None:
+    ast.parse(GUARD.read_text(), feature_version=(3, 8))
+    assert shutil.which("git")
