@@ -183,6 +183,22 @@ test("README scopes strict headless input to native delivery and links the CDP e
 	assert.match(readme, /^\| CDP\/browser \| .*synthesized .*even with `headless: true`/m);
 });
 
+test.for(["macOS", "Windows"])("README documents %s cleanup limits", (platform) => {
+	const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+	const cleanup = readme.split("\n").find((line) => /^\| 3, 4:/.test(line));
+	assert.ok(cleanup, "the cleanup and partial delivery row must exist");
+	const [, , macos, windows] = cleanup.split("|");
+	if (platform === "macOS") {
+		assert.match(macos, /\bprevious\b.*\bpasteboard\b/i);
+		assert.match(macos, /\bonly if\b.*\bno newer write\b/i);
+		return;
+	}
+	assert.match(windows, /\battempts?\b.*\brelease\b/i);
+	for (const action of [/\bclicks?\b/i, /\bdrags?\b/i, /\bchords?\b/i]) assert.match(windows, action);
+	assert.match(windows, /\bUnicode\b.*\bbatch\b/i);
+	assert.match(windows, /\bdoes not\b.*\brelease\b.*\bpartial\b/i);
+});
+
 test("browser-state act_ui dispatches CDP input despite Windows admission and headless mode", async ({
 	onTestFinished,
 }) => {
