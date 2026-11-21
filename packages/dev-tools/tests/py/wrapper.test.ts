@@ -1,20 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
-import { afterEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { withLock } from "../../src/core/index.ts";
 import { findProjectRoot, registerPyTools } from "../../src/py/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 import { wrapperFixture } from "../fixtures/wrapper.ts";
 
-const fixtures: ReturnType<typeof wrapperFixture>[] = [];
-afterEach(() => {
-	for (const fixture of fixtures.splice(0)) fixture.cleanup();
-});
 function setup() {
 	const fixture = wrapperFixture("pyproject.toml");
-	fixtures.push(fixture);
 	const mock = createToolHost();
 	registerPyTools(mock.pi, { uvBin: fixture.bin });
 	return { ...fixture, ...mock };
@@ -141,14 +137,10 @@ describe("uv executable boundary", () => {
 	});
 
 	it("stops the project walk at a repository boundary", () => {
-		const repo = mkdtempSync(join(tmpdir(), "dev-tools-git-boundary-"));
-		try {
-			mkdirSync(join(repo, ".git"));
-			mkdirSync(join(repo, "pkg", "src"), { recursive: true });
-			expect(findProjectRoot(join(repo, "pkg", "src"))).toBeUndefined();
-		} finally {
-			rmSync(repo, { recursive: true, force: true });
-		}
+		const repo = makeTestTempDir("dev-tools-git-boundary-", onTestFinished);
+		mkdirSync(join(repo, ".git"));
+		mkdirSync(join(repo, "pkg", "src"), { recursive: true });
+		expect(findProjectRoot(join(repo, "pkg", "src"))).toBeUndefined();
 	});
 
 	it("maps paths and every optional flag to uv's argv", async () => {

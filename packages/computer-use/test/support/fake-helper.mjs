@@ -13,11 +13,11 @@
 // A handler is an action, a function `(request, context) => action | Promise<action>`, or an array of
 // those consumed one per call (the last entry sticks). Actions come from the constructors below.
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished } from "vitest";
 
 /** Success reply carrying `result`. */
 export const ok = (result = {}) => ({ kind: "reply", body: { ok: true, result } });
@@ -238,8 +238,7 @@ function serveStream(engine, input, io) {
  * `dispose` removes the directory.
  */
 export function shortSocketPath(name = "h.sock") {
-	const dir = mkdtempSync(path.join(os.tmpdir(), "fh-"));
-	return { socketPath: path.join(dir, name), dispose: () => rmSync(dir, { recursive: true, force: true }) };
+	return path.join(makeTestTempDir("fh-", onTestFinished), name);
 }
 
 /**

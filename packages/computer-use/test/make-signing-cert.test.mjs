@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, onTestFinished, test, vi } from "vitest";
 import {
 	CERT_CONFIG,
 	commandStatus,
@@ -25,8 +25,7 @@ afterEach(async () => {
 
 /** Disposable real files, no OpenSSL or credential prompts; every argv is recorded. */
 async function fixture(failureAt = -1, failure = { status: 9 }) {
-	const base = await fs.mkdtemp(path.join(os.tmpdir(), "cu-cert-"));
-	scratch.push(base);
+	const base = makeTestTempDir("cu-cert-", onTestFinished);
 	const out = path.join(base, "dir with spaces");
 	const calls = [];
 	const messages = [];

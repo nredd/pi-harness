@@ -1,8 +1,9 @@
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { findWorkspaceRoot, registerCargoTools } from "../../src/cargo/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -19,8 +20,8 @@ const mock = createToolHost();
 let root: string;
 
 /** Two crates: `good` (pedantic lint, one failing test, a doctest, a bin) and `bad` (type error). */
-function buildWorkspace(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-dev-tools-cargo-"));
+function buildWorkspace(onCleanup: (cleanup: () => void) => void): string {
+	const dir = makeTestTempDir("pi-dev-tools-cargo-", onCleanup);
 	writeFileSync(join(dir, "Cargo.toml"), '[workspace]\nmembers = ["good", "bad"]\nresolver = "3"\n');
 	mkdirSync(join(dir, "good", "src", "bin"), { recursive: true });
 	writeFileSync(join(dir, "good", "Cargo.toml"), '[package]\nname = "good"\nversion = "0.1.0"\nedition = "2024"\n');
@@ -80,9 +81,13 @@ it("annotates check/test/doc read-only and the rest not", () => {
 describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 	"cargo tools against a real workspace",
 	() => {
+		let dispose: (() => void) | undefined;
+		afterAll(() => dispose?.());
 		beforeAll(() => {
 			registerCargoTools(mock.pi);
-			root = buildWorkspace();
+			root = buildWorkspace((cleanup) => {
+				dispose = cleanup;
+			});
 		});
 
 		it("finds the workspace root from a member crate", () => {
@@ -167,7 +172,7 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 			mkdirSync(join(root, ".config"), { recursive: true });
 			writeFileSync(join(root, ".config", "nextest.toml"), "[profile.default]\nretries = 1\n");
 			// A private TMPDIR: concurrent runs share the real tmpdir, so counting it races (#302).
-			const own = mkdtempSync(join(tmpdir(), "pi-dev-tools-cargo-tmp-"));
+			const own = makeTestTempDir("pi-dev-tools-cargo-tmp-", onTestFinished);
 			const nextestDirs = () => readdirSync(own).filter((d) => d.startsWith("pi-dev-tools-nextest-"));
 			const seen = new Set<string>();
 			vi.stubEnv("TMPDIR", own);
@@ -196,15 +201,14 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 				clearInterval(poll);
 				vi.unstubAllEnvs();
 				rmSync(join(root, ".config"), { recursive: true, force: true });
-				rmSync(own, { recursive: true, force: true });
 			}
 		}, 180_000);
 
 		it.each(["absolute", "relative"])(
 			"reads junit with an external %s Cargo target and custom nextest store",
 			async (kind) => {
-				const dir = buildWorkspace();
-				const target = mkdtempSync(join(tmpdir(), "pi-dev-tools-cargo-target-"));
+				const dir = buildWorkspace(onTestFinished);
+				const target = makeTestTempDir("pi-dev-tools-cargo-target-", onTestFinished);
 				try {
 					mkdirSync(join(dir, ".config"));
 					writeFileSync(join(dir, ".config", "nextest.toml"), '[store]\ndir = "custom nextest store"\n');
@@ -226,8 +230,6 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 					});
 				} finally {
 					vi.unstubAllEnvs();
-					rmSync(dir, { recursive: true, force: true });
-					rmSync(target, { recursive: true, force: true });
 				}
 			},
 			180_000,

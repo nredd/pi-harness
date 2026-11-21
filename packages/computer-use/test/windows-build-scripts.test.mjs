@@ -19,7 +19,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, onTestFinished, test } from "vitest";
 
 const SCRIPTS_DIR = fileURLToPath(new URL("../scripts", import.meta.url));
 const ROOT = path.resolve(SCRIPTS_DIR, "..");
@@ -190,15 +191,6 @@ describe("script failure diagnostics", () => {
 	});
 });
 
-/** Remove a path recursively, ignoring errors. */
-function rmSilent(p) {
-	try {
-		fs.rmSync(p, { recursive: true, force: true });
-	} catch {
-		/* ok */
-	}
-}
-
 function isWin32() {
 	return process.platform === "win32";
 }
@@ -211,14 +203,17 @@ function isDarwin() {
 describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 	"Windows build/install script routing (PI_CU_WINDOWS_SCRIPTS=1)",
 	() => {
+		let dispose;
 		beforeAll(() => {
-			TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-script-test-"));
+			TEST_ROOT = makeTestTempDir("pi-computer-use-script-test-", (cleanup) => {
+				dispose = cleanup;
+			});
 			TEST_HELPER_APP = path.join(TEST_ROOT, "pi-computer-use.app");
 			TEST_WINDOWS_HELPER = path.join(TEST_ROOT, "windows-bridge.exe");
 			liveHelperBefore = fileFingerprint(LIVE_HELPER);
 			armPrebuiltBefore = fileFingerprint(path.join(ROOT, "prebuilt", "macos", "arm64", "bridge"));
 		});
-		afterAll(() => rmSilent(TEST_ROOT));
+		afterAll(() => dispose?.());
 
 		test("path alignment", () => {
 			assert.equal(
@@ -242,27 +237,19 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")(
 			"build-native.mjs --platform windows (output to tmpdir)",
 			async () => {
 				// Use a temp output path so we never pollute prebuilt/windows/ during tests.
-				const tmpBuildOut = path.join(
-					fs.mkdtempSync(path.join(os.tmpdir(), "pi-windows-smoke-")),
-					"windows-bridge.exe",
-				);
-				try {
-					const result = await runScript("build-native.mjs", ["--platform", "windows", "--output", tmpBuildOut]);
-					if (isWin32()) {
-						assertScriptCode(result, 0, "build-native.mjs --platform windows --output <tmp> exits 0 on Windows");
-						assert.match(result.stdout, /Building Windows helper/, "prints build start message");
-					} else {
-						assertScriptCode(result, 1, "host build is rejected instead of being renamed to .exe");
-						assert.match(
-							result.stderr,
-							/Refusing to label a host binary as Windows/,
-							"explains that a Windows host or target is required",
-						);
-					}
-				} finally {
-					rmSilent(path.dirname(tmpBuildOut));
+				const tmpBuildOut = path.join(makeTestTempDir("pi-windows-smoke-", onTestFinished), "windows-bridge.exe");
+				const result = await runScript("build-native.mjs", ["--platform", "windows", "--output", tmpBuildOut]);
+				if (isWin32()) {
+					assertScriptCode(result, 0, "build-native.mjs --platform windows --output <tmp> exits 0 on Windows");
+					assert.match(result.stdout, /Building Windows helper/, "prints build start message");
+				} else {
+					assertScriptCode(result, 1, "host build is rejected instead of being renamed to .exe");
+					assert.match(
+						result.stderr,
+						/Refusing to label a host binary as Windows/,
+						"explains that a Windows host or target is required",
+					);
 				}
-				assert.equal(!fs.existsSync(tmpBuildOut), true, "temporary Windows build output is cleaned up");
 			},
 			SCRIPT_CASE_TIMEOUT_MS,
 		);

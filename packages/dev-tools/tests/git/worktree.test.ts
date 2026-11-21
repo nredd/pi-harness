@@ -1,8 +1,9 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { branchSlug, formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
@@ -61,7 +62,6 @@ afterEach(() => {
 		} catch {
 			// already gone
 		}
-		rmSync(root, { recursive: true, force: true });
 	}
 });
 function alive(pid: number): boolean {
@@ -73,8 +73,8 @@ function alive(pid: number): boolean {
 	}
 }
 /** A fresh repo named `repo` under a fresh temp dir, so default sibling paths never collide. */
-beforeEach(() => {
-	root = realpathSync(mkdtempSync(join(tmpdir(), "pi-dev-tools-wt-")));
+beforeEach(({ onTestFinished }) => {
+	root = realpathSync(makeTestTempDir("pi-dev-tools-wt-", onTestFinished));
 	repo = join(root, "repo");
 	mkdirSync(repo);
 	sh(repo, "init", "-q");

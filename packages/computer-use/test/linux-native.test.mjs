@@ -8,7 +8,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeAll, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeAll, describe, onTestFinished, test, vi } from "vitest";
 import {
 	COMMAND_KILL_WAIT_MS,
 	COMMAND_TERM_WAIT_MS,
@@ -195,7 +196,7 @@ describe.skipIf(process.platform !== "linux")(
 		test(
 			"locked crate tests, packed-source setup contract and helper diagnostics",
 			async () => {
-				const work = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-native-"));
+				const work = makeTestTempDir("pi-computer-use-linux-native-", onTestFinished);
 				const archName = { x64: "x86_64", arm64: "aarch64" }[process.arch];
 				assert.ok(archName, `unsupported host architecture ${process.arch}`);
 
@@ -458,8 +459,6 @@ describe.skipIf(process.platform !== "linux")(
 									label: "restore native scratch permissions",
 									timeoutMs: PERMISSION_CHANGE_TIMEOUT_MS,
 								}),
-							/** @returns {Promise<void>} Removes scratch state independently. @throws {Error} On removal failure. */
-							() => fs.rm(work, { recursive: true, force: true }),
 						],
 						nativeFailure,
 					);
@@ -472,29 +471,25 @@ describe.skipIf(process.platform !== "linux")(
 		test.skipIf(process.env.PI_CU_LINUX_ARM64_CHECK !== "1")(
 			"aarch64-unknown-linux-gnu cargo check --locked (compile-only; ARM64 runtime NOT RUN)",
 			async () => {
-				const work = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-arm64-"));
-				try {
-					await runCheckCommand(
-						"cargo",
-						[
-							"check",
-							"--locked",
-							"--target",
-							"aarch64-unknown-linux-gnu",
-							"--manifest-path",
-							crateManifest,
-							"--target-dir",
-							path.join(work, "arm64-target"),
-						],
-						{
-							label: "ARM64 native compile-only cargo check",
-							timeoutMs: ARM64_CHECK_TIMEOUT_MS,
-							maxBuffer: NATIVE_MAX_OUTPUT_BYTES,
-						},
-					);
-				} finally {
-					await fs.rm(work, { recursive: true, force: true });
-				}
+				const work = makeTestTempDir("pi-computer-use-linux-arm64-", onTestFinished);
+				await runCheckCommand(
+					"cargo",
+					[
+						"check",
+						"--locked",
+						"--target",
+						"aarch64-unknown-linux-gnu",
+						"--manifest-path",
+						crateManifest,
+						"--target-dir",
+						path.join(work, "arm64-target"),
+					],
+					{
+						label: "ARM64 native compile-only cargo check",
+						timeoutMs: ARM64_CHECK_TIMEOUT_MS,
+						maxBuffer: NATIVE_MAX_OUTPUT_BYTES,
+					},
+				);
 			},
 			ARM64_CASE_TIMEOUT_MS,
 		);

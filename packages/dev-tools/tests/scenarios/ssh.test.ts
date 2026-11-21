@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Harness } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../src/index.ts";
 import { runTools, startSession } from "../fixtures/session.ts";
@@ -12,8 +12,12 @@ describe("ssh_exec through a real session", () => {
 	let harness: Harness;
 	let work: string;
 
+	let dispose: (() => void) | undefined;
+	afterAll(() => dispose?.());
 	beforeAll(async () => {
-		work = mkdtempSync(join(tmpdir(), "pi-dev-tools-ssh-scenario-"));
+		work = makeTestTempDir("pi-dev-tools-ssh-scenario-", (cleanup) => {
+			dispose = cleanup;
+		});
 		// `down` fails like a dead connection (exit 255, nothing run); any other known host runs locally.
 		harness = await startSession(
 			createDevTools({ ssh: { knownHosts: () => new Set(["home", "down"]), sshBin: FAKE_SSH } }),
@@ -23,7 +27,6 @@ describe("ssh_exec through a real session", () => {
 
 	afterAll(() => {
 		harness.cleanup();
-		rmSync(work, { recursive: true, force: true });
 	});
 
 	it("validates the host, runs the script, and separates remote from ssh failures", async () => {

@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
-import { beforeAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -10,8 +10,12 @@ const FIXTURES = join(import.meta.dirname, "..", "fixtures", "ssh");
 const mock = createToolHost();
 let work: string;
 
+let dispose: (() => void) | undefined;
+afterAll(() => dispose?.());
 beforeAll(() => {
-	work = mkdtempSync(join(tmpdir(), "pi-dev-tools-ssh-"));
+	work = makeTestTempDir("pi-dev-tools-ssh-", (cleanup) => {
+		dispose = cleanup;
+	});
 	registerSshTools(mock.pi, {
 		knownHosts: () => new Set(["home", "down"]),
 		sshBin: join(FIXTURES, "fake-ssh"),

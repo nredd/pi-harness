@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -25,9 +26,13 @@ let repo: string;
 let remote: string;
 const mock = createToolHost();
 
+let dispose: (() => void) | undefined;
+afterAll(() => dispose?.());
 beforeAll(() => {
 	registerGitTools(mock.pi);
-	const root = mkdtempSync(join(tmpdir(), "pi-dev-tools-git-"));
+	const root = makeTestTempDir("pi-dev-tools-git-", (cleanup) => {
+		dispose = cleanup;
+	});
 	remote = join(root, "remote.git");
 	repo = join(root, "repo");
 	execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);

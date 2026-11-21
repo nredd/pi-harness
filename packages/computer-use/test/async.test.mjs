@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test, vi } from "vitest";
 import {
 	COMMAND_KILL_WAIT_MS,
 	COMMAND_TERM_WAIT_MS,
@@ -57,7 +57,7 @@ async function verifyCompletionWatchdog() {
 
 /** @returns {Promise<void>} Verifies post-registration readiness. @throws {Error} On fixture or assertion failure. */
 async function verifySignalObserverReadiness() {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-signal-observer-"));
+	const dir = makeTestTempDir("pi-signal-observer-", onTestFinished);
 	const marker = path.join(dir, "wrapper.pid");
 	const observer = path.join(dir, "observer.mjs");
 	let child;
@@ -146,13 +146,12 @@ process.send("entered");
 	} finally {
 		stopPolling = true;
 		child?.kill("SIGKILL");
-		await fs.rm(dir, { recursive: true, force: true });
 	}
 }
 
 /** @returns {Promise<void>} Verifies missing-handler deadline diagnostics. @throws {Error} On fixture or assertion failure. */
 async function verifyMissingHandlers() {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-signal-observer-missing-"));
+	const dir = makeTestTempDir("pi-signal-observer-missing-", onTestFinished);
 	const observer = path.join(dir, "observer.mjs");
 	const marker = path.join(dir, "wrapper.pid");
 	let child;
@@ -207,7 +206,6 @@ async function verifyMissingHandlers() {
 		);
 	} finally {
 		child?.kill("SIGKILL");
-		await fs.rm(dir, { recursive: true, force: true });
 	}
 }
 

@@ -1,9 +1,10 @@
 // Drives `MacosHelperClient` and the activity-glow connection against `support/fake-helper.mjs`: real
 // unix socket and NDJSON framing, faked `spawn` (ps, open, setup script). No Swift helper runs.
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
 import {
@@ -31,11 +32,10 @@ let tmp;
 let appPath;
 let executable;
 
-beforeEach(() => {
-	tmp = mkdtempSync(path.join(os.tmpdir(), "mhc-"));
+beforeEach(({ onTestFinished }) => {
+	tmp = makeTestTempDir("mhc-", onTestFinished);
 	appPath = path.join(tmp, "pi-computer-use.app");
 	executable = path.join(appPath, "Contents", "MacOS", "bridge");
-	cleanups.push(() => rmSync(tmp, { recursive: true, force: true }));
 });
 
 afterEach(async () => {
@@ -80,11 +80,10 @@ async function load({ external, fake, spawn }) {
 }
 
 async function fakeOn({ protocol = 7, ...options } = {}) {
-	const { socketPath, dispose } = shortSocketPath();
+	const socketPath = shortSocketPath();
 	const fake = await startFakeHelper({ socketPath, protocolVersion: protocol, ...options });
 	cleanups.push(async () => {
 		await fake.stop();
-		dispose();
 	});
 	return fake;
 }

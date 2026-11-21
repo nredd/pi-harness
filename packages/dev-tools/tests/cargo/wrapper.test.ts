@@ -2,22 +2,19 @@ import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerCargoTools } from "../../src/cargo/index.ts";
 import { withLock } from "../../src/core/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 import { wrapperFixture } from "../fixtures/wrapper.ts";
 
-const fixtures: ReturnType<typeof wrapperFixture>[] = [];
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
-	for (const fixture of fixtures.splice(0)) fixture.cleanup();
 });
 function setup() {
 	vi.stubEnv("CARGO_TARGET_DIR", "");
 	const fixture = wrapperFixture("Cargo.toml");
-	fixtures.push(fixture);
 	const mock = createToolHost();
 	registerCargoTools(mock.pi, { cargoBin: fixture.bin, rustupBin: fixture.bin });
 	return { ...fixture, ...mock };
@@ -41,6 +38,13 @@ if (a[0] === "nextest") {
 ${doc}`;
 const TOOLS = ["check", "clippy", "fmt", "test", "build", "run", "doc", "bench", "add"] as const;
 const minimal = (name: string) => (name === "add" ? { crates: ["local"] } : {});
+
+it("removes wrapper scratch at test completion", () => {
+	let root: string;
+	onTestFinished(() => expect(existsSync(root)).toBe(false));
+	({ root } = wrapperFixture("Cargo.toml"));
+	expect(existsSync(join(root, "Cargo.toml"))).toBe(true);
+});
 
 describe("cargo executable boundary", () => {
 	it("maps abnormal exits and noncompiler failures for every wrapper", async () => {
