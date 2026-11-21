@@ -184,11 +184,11 @@ function assertLiveActionBindings(swift) {
 		["requireTargetFocus", "requireTargetFocus(pid:)"],
 		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
 		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
-		["withClipboard", "withTemporaryClipboard"],
+		["snapshotClipboard", "snapshotClipboard"],
 		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
 	]) {
 		const value = args.match(
-			new RegExp(`^\\t{3}(?:(?:requireTargetFocus|withClipboard): [^,\\n]+, )?${binding}: ([^,\\n]+)`, "m"),
+			new RegExp(`^\\t{3}(?:(?:requireTargetFocus|snapshotClipboard): [^,\\n]+, )?${binding}: ([^,\\n]+)`, "m"),
 		)?.[1];
 		assert.equal(value?.trimEnd(), helper, `live actionWorld must bind ${binding} to ${helper}`);
 	}
@@ -202,7 +202,7 @@ test("Swift live binding check rejects helpers left only in comments", () => {
 		"\t\t\trequireTargetFocus: requireTargetFocus(pid:),",
 		`\t\t\t${original}`,
 		"\t\t\trefuseBlockedPoints: refuseBlockedPoints(_:blocked:),",
-		"\t\t\twithClipboard: withTemporaryClipboard,",
+		"\t\t\tsnapshotClipboard: snapshotClipboard,",
 		"\t\t\tpasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }",
 		"\t\t)",
 		"\t}",
@@ -248,10 +248,13 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try world\.withClipboard/,
+		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let clipboard = world\.snapshotClipboard/,
 		"paste must refuse a blocked focused app before it touches the clipboard",
 	);
-	const pasteBody = swift.match(/let restored = try world\.withClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
+	const pasteBody =
+		swift.match(
+			/let restored = try withRestoredClipboard\(write: clipboard\.write, restore: clipboard\.restore\) \{[\s\S]*?\n\t\t\t\}\n/,
+		)?.[0] ?? "";
 	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
@@ -273,11 +276,6 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		swift,
 		/else \{ return false \}\n\t+\/\/ Always host-only[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/,
 		"the restore must be host-only so a host-only secret is never republished as syncable",
-	);
-	assert.match(
-		swift,
-		/return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/,
-		"the temporary clipboard must restore on every exit, including a refusal in the body",
 	);
 	const restoreHelper = swift.match(/func withRestoredClipboard[\s\S]*?\n\}\n/)?.[0] ?? "";
 	assert.match(

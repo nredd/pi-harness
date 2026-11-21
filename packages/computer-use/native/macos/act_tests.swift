@@ -18,8 +18,8 @@ private final class ActFixture {
     var scrollPositions = ["before", "after"]
     var bar: ActWorld.ScrollBarWrite?
     var blocked = false
-    var refuseKeyboardAt: Int?
-    var keyboardChecks = 0
+    var blockDuringSnapshot = false
+    var blockDuringLayout = false
     var focusFails = false
     var pasteCode: UInt16? = 9
     var range: CFTypeRef?
@@ -79,10 +79,6 @@ private final class ActFixture {
             refuseBlockedKeyboard: { blocked in
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "keyboard refusal receives request and built-in blocks")
                 self.trace.append("keyboard")
-                self.keyboardChecks += 1
-                if self.keyboardChecks == self.refuseKeyboardAt {
-                    throw BridgeFailure(message: "blocked fixture", code: "app_blocked")
-                }
                 try self.checkBlocked()
             },
             refuseBlockedPoints: { points, blocked in
@@ -131,13 +127,19 @@ private final class ActFixture {
                 self.trace.append("atomic:\(text):\(pid):\(delivery)")
                 self.value = text
             },
-            withClipboard: { text, body in
-                self.trace.append("clipboard:\(text)")
-                defer { self.trace.append("restore") }
-                try body()
-                return true
+            snapshotClipboard: { text in
+                self.trace.append("snapshot")
+                if self.blockDuringSnapshot { self.blocked = true }
+                return (write: { self.trace.append("clipboard:\(text)") }, restore: {
+                    self.trace.append("restore")
+                    return true
+                })
             },
-            pasteKeyCode: { self.trace.append("layout"); return self.pasteCode }
+            pasteKeyCode: {
+                self.trace.append("layout")
+                if self.blockDuringLayout { self.blocked = true }
+                return self.pasteCode
+            }
         )
     }
 
@@ -173,6 +175,7 @@ func runActAssertions() throws {
     try runScrollAssertions()
     runAXScrollAssertions()
     try runBatchAssertions()
+    try runRootPIDAssertions()
     expect(suppressionTapShouldReenable(.tapDisabledByTimeout) && suppressionTapShouldReenable(.tapDisabledByUserInput), "re-enable the tap on either disable notification")
     expect(!suppressionTapShouldReenable(.keyDown) && !suppressionTapShouldReenable(.mouseMoved), "ordinary user events stay suppressed")
     try runEventAssertions()
@@ -243,7 +246,7 @@ private func runKeyboardActionAssertions() throws {
     expect(keys.trace.contains("atomic:new:1234:pid"), "web replacement posts atomic text after selecting the original value")
     keys.trace = []
     _ = try keys.act("paste", coords: true, params: ["text": "temporary", "preserveFocus": true])
-    expect(Array(keys.trace.prefix(7)) == ["begin:1234", "lock", "keyboard", "clipboard:temporary", "layout", "keyboard", "keyCode:9:1234:hid"], "paste refuses before clipboard and rechecks focus after layout lookup")
+    expect(Array(keys.trace.prefix(9)) == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "clipboard:temporary", "layout", "keyboard", "keyCode:9:1234:hid"], "paste checks focus before reading, before writing and after layout lookup")
     expect(keys.trace.suffix(3) == ["restore", "finish", "unlock"], "paste restores before finish and unlock")
     keys.trace = []
     keys.statuses = [.cannotComplete]
@@ -254,21 +257,26 @@ private func runKeyboardActionAssertions() throws {
 private func runPasteFailureAssertions() throws {
     let params: [String: Any] = ["text": "temporary", "preserveFocus": true]
     let first = ActFixture()
-    first.refuseKeyboardAt = 1
+    first.blocked = true
     try actionFailure("app_blocked") { try first.act("paste", coords: true, params: params) }
     expect(first.trace == ["begin:1234", "lock", "keyboard", "unlock"], "first refusal never touches the clipboard or posts")
 
     let second = ActFixture()
-    second.refuseKeyboardAt = 2
+    second.blockDuringSnapshot = true
     try actionFailure("app_blocked") { try second.act("paste", coords: true, params: params) }
-    expect(second.trace == ["begin:1234", "lock", "keyboard", "clipboard:temporary", "layout", "keyboard", "restore", "unlock"], "second refusal restores the clipboard without posting Cmd+V")
+    expect(second.trace == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "unlock"], "focus change during snapshot refuses without publishing, restoring or posting Cmd+V")
+
+    let third = ActFixture()
+    third.blockDuringLayout = true
+    try actionFailure("app_blocked") { try third.act("paste", coords: true, params: params) }
+    expect(third.trace == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "clipboard:temporary", "layout", "keyboard", "restore", "unlock"], "post-layout refusal restores the clipboard without posting Cmd+V")
 
     let layout = ActFixture()
     layout.pasteCode = nil
     try actionFailure("layout_unsupported", message: "The active keyboard layout is unreadable, so cmd+v cannot be sent") {
         try layout.act("paste", coords: true, params: params)
     }
-    expect(layout.trace == ["begin:1234", "lock", "keyboard", "clipboard:temporary", "layout", "restore", "unlock"], "unreadable layout restores without rechecking or posting")
+    expect(layout.trace == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "clipboard:temporary", "layout", "restore", "unlock"], "unreadable layout restores without rechecking or posting")
 
     let focus = ActFixture()
     focus.focusFails = true
@@ -362,10 +370,43 @@ private func runBatchAssertions() throws {
     expect(result["outcome"] as? String == "didnt" && result["stoppedAt"] as? Int == 1 && steps?.count == 2, "batch stops at the failed step")
     expect(fixture.trace == ["begin:1234", "lock", "move:1234:pid", "lock", "activate", "raise", "sleep:20000", "unlock", "finish", "unlock"], "batch keeps the outer lock through finish and does not execute the trailing press")
     fixture.trace = []
+    let aliasedPid = 1234 + (1 << 32)
+    for pid in [aliasedPid, Int(Int32.min) - 1, Int(Int32.max) + 1, Int.max] {
+        var invalid = press
+        invalid["pid"] = NSNumber(value: pid)
+        try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [press, invalid]], world: fixture.world, supportsAgentCursor: false) }
+        try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [invalid, press]], world: fixture.world, supportsAgentCursor: false) }
+        try actionFailure("invalid_args") { try fixture.bridge.act(invalid, world: fixture.world, supportsAgentCursor: false) }
+        expect(fixture.trace.isEmpty, "an invalid PID must not start or execute any action")
+    }
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [press, press.merging(["pid": 999]) { _, new in new }]], world: fixture.world, supportsAgentCursor: false) }
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [press, press.merging(["lookId": "unrelated"]) { _, new in new }]], world: fixture.world, supportsAgentCursor: false) }
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": Array(repeating: press, count: 21)], world: fixture.world, supportsAgentCursor: false) }
     expect(fixture.trace.isEmpty, "invalid batches have no root or input side effects")
+}
+
+private func runRootPIDAssertions() throws {
+    let bridge = Bridge(activityGlow: nil, readSession: { nil })
+    var discovered: [Int32?] = []
+    func listRoots(_ json: String) throws -> [String: Any] {
+        let request = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+        return try bridge.handleRequest(request, clientID: nil, discoverRoots: { pid, title in
+            discovered.append(pid)
+            expect(title == "Fixture", "listRoots preserves the title filter")
+            return ["roots": []]
+        }) as! [String: Any]
+    }
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":null}"#)
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture"}"#)
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":"not numeric"}"#)
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":1234}"#)
+    try actionFailure("invalid_args") {
+        try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":4294968530}"#)
+    }
+    try actionFailure("invalid_args") {
+        try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":18446744073709551615}"#)
+    }
+    expect(discovered == [nil, nil, nil, 1234], "listRoots discovers unfiltered for null, missing and nonnumeric PIDs, and never discovers for out-of-range PIDs")
 }
 
 private func runEventAssertions() throws {
@@ -382,6 +423,7 @@ private func runEventAssertions() throws {
     var events: [Event] = []
     var delays: [useconds_t] = []
     var rejectDragAt: CGPoint?
+    var cancelAfterFirstDrag = false
     var rejectNextMouseType: CGEventType?
     var rejectWheel = false
     var keyAllocations = 0
@@ -425,7 +467,10 @@ private func runEventAssertions() throws {
         postToPid: { record($0, pid: $1, delivery: "pid") },
         postHID: { record($0, pid: $1, delivery: "hid") },
         sleep: { delays.append($0) },
-        keyboardInputSource: { KeyboardInputSource(isKeyboardLayout: false, layoutData: nil) }
+        keyboardInputSource: { KeyboardInputSource(isKeyboardLayout: false, layoutData: nil) },
+        checkCancellation: {
+            if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
+        }
     ))
     let world = bridge.actionWorld()
     let start = CGPoint(x: 100, y: 200)
@@ -441,11 +486,28 @@ private func runEventAssertions() throws {
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
     events = []; delays = []
     rejectDragAt = end
-    try actionFailure("input_failed") {
+    try actionFailure("input_failed", message: "Failed to create mouse drag event") {
         try world.postMouseDrag([start, end], 1234, "pid")
         return [:]
     }
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseUp, midpoint, 1)], "drag creation failure releases at last posted position")
+    events = []; delays = []
+    rejectDragAt = nil
+    cancelAfterFirstDrag = true
+    do {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        expect(false, "cancelled drag must throw")
+    } catch is CancellationError {
+        expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseUp, midpoint, 1)], "cancelled drag releases once at the last posted position")
+    }
+    cancelAfterFirstDrag = false
+    events = []; delays = []
+    rejectNextMouseType = .leftMouseUp
+    try actionFailure("input_failed", message: "Failed to create mouse up event") {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        return [:]
+    }
+    expect(rejectNextMouseType == nil && events.isEmpty && delays.isEmpty, "failed mouse-up reservation posts no mouse-down or other input")
     events = []; delays = []
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
