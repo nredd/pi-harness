@@ -659,7 +659,7 @@ struct ActWorld {
 	let postScrollWheel: (CGPoint, Int, Int, Int32, String) throws -> Void
 	let postMouseDrag: ([CGPoint], Int32, String) throws -> Void
 	let postKeyPress: ([String], Int32, String, BeforeKeyDown) throws -> Void
-	let postKeyCode: (CGKeyCode, CGEventFlags, Int32, String) throws -> Void
+	let postKeyCode: (CGKeyCode, CGEventFlags, Int32, String, BeforeKeyDown) throws -> Void
 	let postUnicodeText: (String, Int32, String, BeforeKeyDown) throws -> Void
 	let postAtomicUnicodeText: (String, Int32, String, BeforeKeyDown) throws -> Void
 	let snapshotClipboard: (String) -> (write: () throws -> Void, restore: () -> Bool)
@@ -684,6 +684,7 @@ struct NativeInputSink {
 	let wheelEvent: (Int32, Int32) -> CGEvent?
 	let keyEvent: (CGKeyCode, Bool) -> CGEvent?
 	let postToPid: (CGEvent, Int32) -> Void
+	let prepareHID: (Int32) -> Bool
 	let postHID: (CGEvent, Int32) -> Void
 	let sleep: (useconds_t) -> Void
 	let keyboardInputSource: () -> KeyboardInputSource
@@ -711,7 +712,7 @@ struct NativeInputSink {
 		wheelEvent: createWheelEvent,
 		keyEvent: createKeyEvent,
 		postToPid: { $0.postToPid($1) },
-		postHID: { event, pid in
+		prepareHID: { pid in
 			// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
 			// target frontmost when posting at the HID event tap instead.
 			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
@@ -721,9 +722,11 @@ struct NativeInputSink {
 					_ = app.activate(options: [.activateIgnoringOtherApps])
 				}
 				usleep(20_000)
+				return true
 			}
-			event.post(tap: .cghidEventTap)
+			return false
 		},
+		postHID: { event, _ in event.post(tap: .cghidEventTap) },
 		sleep: { _ = usleep($0) },
 		keyboardInputSource: currentKeyboardInputSource
 	)
@@ -2588,7 +2591,7 @@ final class Bridge {
 			postMouseClick: postMouseClick(at:pid:button:clickCount:delivery:), postMouseMove: postMouseMove(to:pid:delivery:),
 			postScrollWheel: postScrollWheel(at:deltaX:deltaY:pid:delivery:), postMouseDrag: postMouseDrag(points:pid:delivery:),
 			postKeyPress: postKeyPress(keys:pid:delivery:beforeKeyDown:),
-			postKeyCode: { try self.postKeyCode($0, flags: $1, pid: $2, delivery: $3, beforeKeyDown: {}) },
+			postKeyCode: { try self.postKeyCode($0, flags: $1, pid: $2, delivery: $3, beforeKeyDown: $4) },
 			postUnicodeText: postUnicodeText(_:pid:delivery:beforeKeyDown:),
 			postAtomicUnicodeText: postAtomicUnicodeText(_:pid:delivery:beforeKeyDown:),
 			snapshotClipboard: snapshotClipboard, pasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }
@@ -2965,8 +2968,7 @@ final class Bridge {
 				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				if delivery == "hid" { try world.refuseBlockedKeyboard(blockedBundleIdList(request)) }
-				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery)
+				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, recheckBlockedKeyboard)
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
 					world.sleep(30_000)
@@ -4633,6 +4635,11 @@ final class Bridge {
 		optionalStringArg(request, "delivery") == "pid" ? "pid" : "hid"
 	}
 
+	private func postPointerEvent(_ event: CGEvent, pid: Int32, delivery: String) {
+		if delivery == "hid" { _ = inputSink.prepareHID(pid) }
+		postEvent(event, pid: pid, delivery: delivery)
+	}
+
 	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid") {
 		if delivery == "pid" {
 			inputSink.postToPid(event, pid)
@@ -4647,7 +4654,7 @@ final class Bridge {
 		guard let move = inputSink.mouseEvent(.mouseMoved, point, .left) else {
 			throw BridgeFailure(message: "Failed to create mouse move event", code: "input_failed")
 		}
-		postEvent(move, pid: pid, delivery: delivery)
+		postPointerEvent(move, pid: pid, delivery: delivery)
 	}
 
 	private func mouseButton(_ name: String) -> CGMouseButton {
@@ -4706,9 +4713,9 @@ final class Bridge {
 			}
 			down.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
-			postEvent(down, pid: pid, delivery: delivery)
+			postPointerEvent(down, pid: pid, delivery: delivery)
 			inputSink.sleep(12_000)
-			postEvent(up, pid: pid, delivery: delivery)
+			postPointerEvent(up, pid: pid, delivery: delivery)
 			if index < clickCount {
 				inputSink.sleep(70_000)
 			}
@@ -4731,12 +4738,12 @@ final class Bridge {
 			throw BridgeFailure(message: "Failed to create mouse down event", code: "input_failed")
 		}
 		down.setIntegerValueField(.mouseEventClickState, value: 1)
-		postEvent(down, pid: pid, delivery: delivery)
+		postPointerEvent(down, pid: pid, delivery: delivery)
 		var releasePosition = first
 		defer {
 			up.location = releasePosition
 			up.setIntegerValueField(.mouseEventClickState, value: 1)
-			postEvent(up, pid: pid, delivery: delivery)
+			postPointerEvent(up, pid: pid, delivery: delivery)
 		}
 		inputSink.sleep(30_000)
 
@@ -4753,7 +4760,7 @@ final class Bridge {
 					throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
 				}
 				drag.setIntegerValueField(.mouseEventClickState, value: 1)
-				postEvent(drag, pid: pid, delivery: delivery)
+				postPointerEvent(drag, pid: pid, delivery: delivery)
 				releasePosition = step
 				inputSink.sleep(8_000)
 			}
@@ -4771,7 +4778,7 @@ final class Bridge {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
 		}
 		event.location = point
-		postEvent(event, pid: pid, delivery: delivery)
+		postPointerEvent(event, pid: pid, delivery: delivery)
 	}
 
 	private func modifierFlag(_ key: String) -> CGEventFlags? {
@@ -4866,11 +4873,7 @@ final class Bridge {
 		}
 		down.flags = flags
 		up.flags = flags
-		try beforeKeyDown()
-		// A successful down always gets its up, even if focus changes during the post.
-		postEvent(down, pid: pid, delivery: delivery)
-		postEvent(up, pid: pid, delivery: delivery)
-		inputSink.sleep(8_000)
+		try postKeyPair(down, up, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 	}
 
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
@@ -4890,10 +4893,7 @@ final class Bridge {
 			}
 			setUnicodeString(event: down, text: char)
 			setUnicodeString(event: up, text: char)
-			try beforeKeyDown()
-			postEvent(down, pid: pid, delivery: delivery)
-			postEvent(up, pid: pid, delivery: delivery)
-			inputSink.sleep(8_000)
+			try postKeyPair(down, up, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 		}
 	}
 
@@ -4904,10 +4904,17 @@ final class Bridge {
 		else { throw BridgeFailure(message: "Failed to create unicode text event", code: "input_failed") }
 		setUnicodeString(event: down, text: text)
 		setUnicodeString(event: up, text: text)
+		try postKeyPair(down, up, pid: pid, delivery: delivery, hold: true, beforeKeyDown: beforeKeyDown)
+	}
+
+	private func postKeyPair(_ down: CGEvent, _ up: CGEvent, pid: Int32, delivery: String, hold: Bool = false, beforeKeyDown: BeforeKeyDown) throws {
+		if delivery == "hid" { _ = inputSink.prepareHID(pid) }
 		try beforeKeyDown()
 		postEvent(down, pid: pid, delivery: delivery)
-		inputSink.sleep(8_000)
+		// Release directly, without another activation or refusal.
+		if hold { inputSink.sleep(8_000) }
 		postEvent(up, pid: pid, delivery: delivery)
+		if !hold { inputSink.sleep(8_000) }
 	}
 
 	/// Prefer physical key codes for characters represented by the US layout.

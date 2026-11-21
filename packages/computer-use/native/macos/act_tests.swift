@@ -139,7 +139,9 @@ private final class ActFixture {
                 try beforeKeyDown()
                 self.trace.append("key:\(keys.joined(separator: "+")):\(pid):\(delivery)")
             },
-            postKeyCode: { code, flags, pid, delivery in
+            postKeyCode: { code, flags, pid, delivery, beforeKeyDown in
+                if let keyboard { return try keyboard.postKeyCode(code, flags, pid, delivery, beforeKeyDown) }
+                try beforeKeyDown()
                 expect(flags == .maskCommand, "paste posts command modifier")
                 self.trace.append("keyCode:\(code):\(pid):\(delivery)")
             },
@@ -458,6 +460,7 @@ private func runEventAssertions() throws {
     var rejectKeyAllocation: Int?
     var onLayoutLookup: () -> Void = {}
     var onInputSleep: () -> Void = {}
+    var onHIDPrepare: () -> Bool = { false }
     var onHIDPost: (CGEventType) -> Void = { _ in }
     func record(_ event: CGEvent, pid: Int32, delivery: String) {
         var entry = Event(type: event.type, pid: pid, delivery: delivery)
@@ -496,6 +499,7 @@ private func runEventAssertions() throws {
             return keyAllocations == rejectKeyAllocation ? nil : NativeInputSink.createKeyEvent(code, down)
         },
         postToPid: { record($0, pid: $1, delivery: "pid") },
+        prepareHID: { _ in onHIDPrepare() },
         postHID: { record($0, pid: $1, delivery: "hid"); onHIDPost($0.type) },
         sleep: { delays.append($0); onInputSleep() },
         keyboardInputSource: {
@@ -598,7 +602,7 @@ private func runEventAssertions() throws {
 
     rejectKeyAllocation = nil
     keyAllocations = 0
-    try world.postKeyCode(9, .maskCommand, 1234, "pid")
+    try world.postKeyCode(9, .maskCommand, 1234, "pid", {})
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [9, 9], "direct paste chord still posts a pair")
 
     let typing = ActFixture(inputSink: sink)
@@ -615,10 +619,22 @@ private func runEventAssertions() throws {
     onInputSleep = {}
 
     let keys = ActFixture(inputSink: sink)
-    events = []
+    events = []; delays = []
+    onHIDPrepare = {
+        delays.append(20_000)
+        keys.blocked = true
+        return true
+    }
+    try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["tab"]]) }
+    expect(delays == [20_000] && events.isEmpty, "activation wait finishes before admission and no key posts after focus flips")
+    var preparations = 0
+    onHIDPrepare = { preparations += 1; return false }
+    keys.blocked = false
     onHIDPost = { if $0 == .keyDown { keys.blocked = true } }
     try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd+a", "tab", "b"]]) }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && events.map(\.flags) == [.maskCommand, .maskCommand], "keypress releases the posted chord after focus moves and refuses the next key")
+    expect(preparations == 2, "prepare each attempted key-down but never prepare its owed release")
+    onHIDPrepare = { false }
     onHIDPost = { _ in }
 
     events = []
