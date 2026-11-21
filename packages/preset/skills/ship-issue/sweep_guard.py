@@ -69,7 +69,9 @@ SCAN_ERRORS = (
 )
 
 
-def out(tool: str, *args: str, data: bytes = b"", missing: int = 0) -> bytes:
+def out(
+    tool: str, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False
+) -> bytes:
     """Run a bounded command; diagnostics or unexpected exit codes require keeping."""
     executable = shutil.which(tool)
     if executable is None:
@@ -91,14 +93,17 @@ def out(tool: str, *args: str, data: bytes = b"", missing: int = 0) -> bytes:
         )
     except subprocess.TimeoutExpired as exc:
         raise KeepError(f"`{tool}` timed out") from exc
-    if done.stderr or done.returncode not in (0, missing):
+    if done.stderr or done.returncode not in (0, missing) or (silent and done.stdout):
         raise KeepError(
             f"`{tool}` {args[5:7] if tool == 'git' else args[:2]} failed ({done.returncode}): {done.stderr!r}"
+            + (f" {done.stdout!r}" if silent else "")
         )
     return done.stdout
 
 
-def git(path: Path, *args: str, data: bytes = b"", missing: int = 0) -> bytes:
+def git(
+    path: Path, *args: str, data: bytes = b"", missing: int = 0, silent: bool = False
+) -> bytes:
     """Run Git without optional writes (including status index refresh)."""
     return out(
         "git",
@@ -110,6 +115,7 @@ def git(path: Path, *args: str, data: bytes = b"", missing: int = 0) -> bytes:
         *args,
         data=data,
         missing=missing,
+        silent=silent,
     )
 
 
@@ -168,8 +174,7 @@ def check_admin(
                 != admin.resolve()
             ):
                 raise KeepError(f"admin dir {str(admin)!r} has no matching `.git` file")
-    if git(repo, "worktree", "prune", "--dry-run", "--verbose"):
-        raise KeepError("prune dry-run reported output")
+    git(repo, "worktree", "prune", "--dry-run", "--verbose", silent=True)
 
 
 def check_activity(path: Path, admin: Path, holds: set[Path], now: float) -> None:
@@ -275,8 +280,6 @@ def check_borrowed(
         raise error
 
     for root in dict.fromkeys(roots):
-        if not present(root):
-            continue
         for directory, dirs, names in os.walk(root, onerror=fail):
             current = Path(directory)
             # Only Git metadata directories are relevant below a recognized gitdir.
@@ -326,24 +329,29 @@ def check_history(path: Path, admin: Path) -> None:
     for name in OPERATIONS:
         if present(admin / name):
             raise KeepError(f"in-progress operation `{name}`")
-    git(path, "reflog", "exists", "HEAD")
-    reflog = set(git(path, "reflog", "show", "--format=%H", "HEAD").splitlines())
-    if not reflog:
+    # `reflog show HEAD` can fall back to the branch log even when this file is empty.
+    log = admin / "logs" / "HEAD"
+    if not log.stat().st_size:
         raise KeepError("empty HEAD reflog")
+    reflog = set(git(path, "reflog", "show", "--format=%H", "HEAD").splitlines())
     missing = sorted(reflog.difference(git(path, "rev-list", "--all").splitlines()))
     if missing:
         raise KeepError(f"HEAD reflog commits outside refs: {missing!r}")
     attrs = git(
         path, "check-attr", "-z", "--stdin", "-a", data=git(path, "ls-files", "-z")
     )
-    if attrs:
-        fields = attrs.split(b"\0")
-        if fields[-1] or (len(fields) - 1) % 3:
-            raise KeepError("malformed attribute scan")
-        filters = list(zip(fields[0:-1:3], fields[1::3], fields[2::3]))
-        filtered = [(name, value) for name, attr, value in filters if attr == b"filter"]
-        if filtered:
-            raise KeepError(f"filter attributes on tracked paths: {filtered!r}")
+    check_attributes(attrs)
+
+
+def check_attributes(attrs: bytes) -> None:
+    """Reject invalid NUL-delimited attribute records or any filter attribute."""
+    fields = attrs.split(b"\0")
+    if fields[-1] or (len(fields) - 1) % 3:
+        raise KeepError("malformed attribute scan")
+    filters = zip(fields[0:-1:3], fields[1::3], fields[2::3])
+    filtered = [(name, value) for name, attr, value in filters if attr == b"filter"]
+    if filtered:
+        raise KeepError(f"filter attributes on tracked paths: {filtered!r}")
 
 
 def check_upstream(path: Path, branch: str) -> None:
@@ -353,13 +361,21 @@ def check_upstream(path: Path, branch: str) -> None:
     if not remote or remote == "." or not merge.startswith("refs/heads/"):
         raise KeepError("missing configured remote upstream")
     live = git(path, "ls-remote", "--exit-code", "--refs", "--", remote, merge)
-    tip, separator, ref = live.rstrip(b"\n").partition(b"\t")
-    if not separator or not OID.fullmatch(tip) or ref != merge.encode():
-        raise KeepError("upstream is unverifiable")
-    if tip != git(path, "rev-parse", "--verify", "@{upstream}").strip():
+    if (
+        advertised_tip(live, merge)
+        != git(path, "rev-parse", "--verify", "@{upstream}").strip()
+    ):
         raise KeepError("local upstream is stale")
     if git(path, "rev-list", "@{upstream}..HEAD"):
         raise KeepError("unpushed commits")
+
+
+def advertised_tip(live: bytes, merge: str) -> bytes:
+    """Require one well-formed remote advertisement for the exact upstream ref."""
+    tip, separator, ref = live.rstrip(b"\n").partition(b"\t")
+    if not separator or not OID.fullmatch(tip) or ref != merge.encode():
+        raise KeepError("upstream is unverifiable")
+    return tip
 
 
 def check_remote(path: Path, branch: str, base: str, *, no_pr: bool) -> str:

@@ -46,7 +46,9 @@ check-ts:  ## Test temp contract, Biome, tsc and Vitest (WORKSPACES can narrow t
 
 check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
-	$(call PY_GATE,scripts,--project ../tests/integration,,.)
+	$(call PY_GATE,scripts,--project ../tests/integration,,. --cov=../packages/preset/skills/ship-issue)
+	mkdir -p packages/preset/coverage/sweep-guard
+	cd scripts && uv run --locked --project ../tests/integration coverage lcov --include='*/ship-issue/sweep_guard.py' -o ../packages/preset/coverage/sweep-guard/lcov.info
 	uv run --locked --project tests/integration python scripts/package_contracts.py --packed-files-only
 	uv run --locked --project tests/integration python scripts/package_layout.py --compare-ref "$(or $(BASE),origin/main)"
 	$(MAKE) check-import-audit

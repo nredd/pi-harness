@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -256,6 +257,11 @@ def test_live_cwd(wt: Worktrees) -> None:
     assert "current directory" in str(result["reasons"])
 
 
+def test_unusable_process_snapshot_does_not_allow_removal(wt: Worktrees) -> None:
+    quiet(wt)
+    keep(wt, "no process cwd evidence", SWEEP_CWD="")
+
+
 def test_recent_activity(wt: Worktrees) -> None:
     quiet(wt)
     os.utime(wt.admin / "index", (4_102_444_800, 4_102_444_800))
@@ -277,10 +283,15 @@ def test_reflog_only_commit(wt: Worktrees) -> None:
     keep(wt, "HEAD reflog commits outside refs")
 
 
-def test_empty_reflog(wt: Worktrees) -> None:
-    (wt.admin / "logs/HEAD").unlink()
+@pytest.mark.parametrize("absent", [True, False], ids=["absent", "empty"])
+def test_empty_reflog(wt: Worktrees, absent: bool) -> None:
+    path = wt.admin / "logs/HEAD"
+    if absent:
+        path.unlink()
+    else:
+        path.write_bytes(b"")
     quiet(wt)
-    keep(wt, "'reflog', 'exists'")
+    keep(wt, "/logs/HEAD" if absent else "empty HEAD reflog")
 
 
 @pytest.mark.parametrize(
@@ -377,6 +388,14 @@ def test_prune_keeps_unsafe_registration(wt: Worktrees, kind: str) -> None:
     assert gitdir.exists()
 
 
+def test_inventory_without_any_linked_worktrees(wt: Worktrees) -> None:
+    git(wt.repo, "worktree", "remove", str(wt.path))
+    code, (result,) = run(wt, all_paths=True)
+    assert code == 0
+    assert result["verdict"] == "keep"
+    assert "main or bare" in str(result["reasons"])
+
+
 def test_git_prune_is_only_ever_called_in_dry_run_mode(wt: Worktrees) -> None:
     trace = wt.bin / "commands.jsonl"
     quiet(wt)
@@ -403,7 +422,7 @@ def test_borrowed_submodule_metadata(wt: Worktrees, dependency: str) -> None:
     if dependency == "alternates":
         objects = wt.admin / "objects"
         objects.mkdir()
-        (admin / "objects/info/alternates").write_text(f"{objects}\n")
+        (admin / "objects/info/alternates").write_text(f"\n{admin / 'objects'}\n{objects}\n")
         reason = "another checkout borrows objects"
     else:
         target = wt.admin / "borrowed-submodule"
@@ -504,6 +523,15 @@ def test_enterprise_pr_host(wt: Worktrees, base: str, variables: dict[str, str])
     assert result["verdict"] == "eligible", result
 
 
+@pytest.mark.parametrize(
+    ("states", "reason"),
+    [("{}", "PR list is incomplete"), ('[{"state":"MERGED","number":0}]', "invalid PR number")],
+)
+def test_unverifiable_pr_info_keeps(wt: Worktrees, states: str, reason: str) -> None:
+    quiet(wt)
+    keep(wt, reason, SWEEP_LIST=states)
+
+
 def test_command_diagnostics_including_whitespace_keep(wt: Worktrees) -> None:
     quiet(wt)
     keep(wt, "failed (0)", SWEEP_WARNING=" \n")
@@ -539,6 +567,84 @@ def test_no_pr_needs_live_current_upstream_containing_head(wt: Worktrees, state:
 def test_no_pr_never_ignores_open_pr(wt: Worktrees) -> None:
     quiet(wt)
     keep(wt, "open PR", "--no-pr", SWEEP_LIST='[{"state":"OPEN"}]')
+
+
+def test_no_pr_without_configured_upstream(wt: Worktrees) -> None:
+    quiet(wt)
+    keep(wt, "missing configured remote upstream", "--no-pr", SWEEP_LIST="[]")
+
+
+def test_no_pr_requires_scope(wt: Worktrees) -> None:
+    done = subprocess.run(
+        [sys.executable, str(GUARD), str(wt.repo), BASE, "--no-pr"],
+        env=git_env(),
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=TIMEOUT,
+    )
+    assert done.returncode == 2
+    assert "--no-pr requires --worktree" in done.stderr
+
+
+def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    guard = runpy.run_path(str(GUARD))
+    with pytest.raises(guard["KeepError"], match="missing"):
+        guard["out"](str(tmp_path / "not-installed"))
+    with pytest.raises(guard["KeepError"], match=r"failed \(0\)"):
+        guard["out"](sys.executable, "-c", "print(' ')", silent=True)
+
+    def timed_out(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(sys.executable, 30)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "run", timed_out)
+        with pytest.raises(guard["KeepError"], match="timed out"):
+            guard["out"](sys.executable, "-V")
+
+
+def test_malformed_evidence_parsers() -> None:
+    guard = runpy.run_path(str(GUARD))
+    with pytest.raises(guard["KeepError"], match="malformed attribute scan"):
+        guard["check_attributes"](b"broken\0")
+    with pytest.raises(guard["KeepError"], match="upstream is unverifiable"):
+        guard["advertised_tip"](b"broken", "refs/heads/main")
+
+
+def test_incomplete_borrower_scan_keeps(wt: Worktrees, monkeypatch: pytest.MonkeyPatch) -> None:
+    guard = runpy.run_path(str(GUARD))
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "environ", git_env())
+        with pytest.raises(OSError, match="No such file or directory"):
+            guard["check_borrowed"](wt.path, wt.admin, wt.bin / "missing", [])
+        records = [(wt.repo, []), (wt.repo, []), (wt.path, [])]
+        guard["check_borrowed"](wt.path, wt.admin, wt.repo / ".git", records)
+        with pytest.raises(guard["KeepError"], match="not a linked worktree"):
+            guard["assess"](wt.path, wt.bin, records, None, 0)
+
+
+def test_borrower_named_in_disconnected_module_config(wt: Worktrees) -> None:
+    module = wt.admin / "modules/disconnected"
+    module.mkdir(parents=True)
+    git(module, "init", "--bare", "--template=")
+    git(module, "config", "core.worktree", str(wt.repo))
+    quiet(wt)
+    keep(wt, "another checkout uses gitdir")
+
+
+def test_valid_nonborrowing_alternate_does_not_block(wt: Worktrees) -> None:
+    info = wt.repo / ".git/objects/info"
+    (info / "alternates").write_text(f"{wt.bin}\n")
+    quiet(wt)
+    code, (result,) = run(wt)
+    assert code == 0
+    assert result["verdict"] == "eligible", result
+
+
+def test_symlinked_borrower_store_keeps(wt: Worktrees) -> None:
+    (wt.admin / "modules").symlink_to(wt.bin)
+    quiet(wt)
+    keep(wt, "cannot verify symlinked Git metadata")
 
 
 def test_shipped_program_uses_python_38_grammar() -> None:

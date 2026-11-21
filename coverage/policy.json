@@ -294,12 +294,20 @@
       }
     },
     "preset-sweep-guard": {
-      "root": "packages/preset/skills/ship-issue",
-      "owned": ["sweep_guard.py"],
+      "root": "packages/preset",
+      "owned": ["skills/ship-issue/sweep_guard.py"],
       "exclusions": [],
-      "status": "pending",
-      "note": "The three previously unmeasured skill blocks are now an inventoried command. Real-Git subprocess and mutation tests run in check-scripts. Follow-up: instrument the shipped CLI subprocesses in a dedicated Python coverage signal without changing the existing scripts floors.",
-      "signals": {}
+      "status": "measured",
+      "note": "Real-Git CLI tests under check-scripts; filtered LCOV from the scripts branch coverage run.",
+      "signals": {
+        "primary": {
+          "report": "coverage/sweep-guard/lcov.info",
+          "producer": "coverage.py",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "gate": "check-scripts",
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "resource-sampler": {
       "root": "packages/resource-sampler",
