@@ -105,9 +105,9 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 
 	// Observe the real scheduler's lifecycle call to obtain its real manager, including owned records.
 	const start = vi.spyOn(SubagentScheduler.prototype, "start");
-	createSubagentsExtension({ clock })(boot.pi);
 	const startup = await (async () => {
 		try {
+			createSubagentsExtension({ clock })(boot.pi);
 			await boot.lifecycle.get("session_start")!({ type: "session_start", reason: "startup" }, context);
 			const scheduler = start.mock.contexts[0];
 			const call = start.mock.calls[0];
