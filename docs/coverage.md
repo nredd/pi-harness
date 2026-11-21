@@ -442,7 +442,9 @@ producer are not downloaded or accounted for. The fan-in writes `coverage/window
 separately from the Ubuntu counters. Missing or invalid LCOV, raw LLVM JSON or metadata fails
 the check. The recorded source hashes must match the checkout. LLVM reports source
 line and function totals in `LF/LH` and `FNF/FNH`, not one unit per `DA` or `FNDA` row. Accounting
-checks those summaries against the paired JSON and keeps regions from JSON only. The two hosted
+checks those summaries against the paired JSON and rejects missing or contradictory line and
+function detail. It uses bounds, not row-count equality: `DA` merges overlapping lines and
+`FNDA` includes instantiations. Regions come from JSON only. The two hosted
 main runs [here](https://github.com/nredd/pi-harness/actions/runs/44914453077) and
 [here](https://github.com/nredd/pi-harness/actions/runs/44876056492) agree on **3000 / 324 / 4868**
 uncovered lines / functions / regions across the crate's `src/` inventory. Only lines and functions

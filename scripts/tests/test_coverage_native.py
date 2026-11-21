@@ -358,6 +358,36 @@ def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
         source.write_text(source.read_text() + "// Changed after the older report pair.\n")
 
 
+def alter_windows_counters(lcov: str, files: list[dict[str, Any]], signal: Signal, case: str) -> str:
+    """Corrupt detail or covered totals without changing source membership or denominators.
+
+    Parameters:
+        lcov (str): Matching LCOV export.
+        files (list[dict[str, Any]]): JSON records, with ignored sysroot last.
+        signal (Signal): Policy signal whose cap is tightened in the forged case.
+        case (str): Fixture corruption, if any.
+    Returns:
+        str: LCOV text for the selected case.
+    Raises:
+        None.
+    """
+    if case == "stale-totals":
+        files[0]["summary"]["lines"]["covered"] = 0
+    if case == "forged-hits":
+        for file in files[:-1]:
+            for metric in ("lines", "functions"):
+                summary = file["summary"][metric]
+                summary["covered"] = summary["count"]
+        lcov = lcov.replace("LH:1", "LH:3").replace("FNH:1", "FNH:3")
+        lcov = lcov.replace("FNDA:1,first", "FNDA:0,first").replace("DA:1,1", "DA:1,0")
+        signal.max_uncovered["win32"] = Counts(lines=0, functions=0)
+    if case == "stripped-detail":
+        lcov = "".join(
+            row for row in lcov.splitlines(keepends=True) if not row.startswith(("DA:", "FN:", "FNDA:"))
+        )
+    return lcov
+
+
 @pytest.mark.parametrize(
     ("case", "error"),
     [
@@ -369,6 +399,8 @@ def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
         ("older-inputs", "metadata source hashes differ"),
         ("missing-source", "source lists differ"),
         ("stale-totals", "counters differ"),
+        ("forged-hits", "Inconsistent LLVM LCOV line detail"),
+        ("stripped-detail", "Inconsistent LLVM LCOV line detail"),
         ("over-budget", "Budget exceeded"),
         ("missing-floor", "Missing OS floor"),
         ("sysroot-lookalike", "LLVM source outside inventory"),
@@ -398,14 +430,14 @@ def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, cas
         sysroot = sysroot.replace("library", "src")
     files.append({"filename": prefix + sysroot, "summary": {}})
     rows = (
-        "\nFN:1,first\nFN:1,second\nFNDA:1,first\nFNDA:0,second\nDA:1,1\n"
+        "\nFN:1,first\nFN:1,second\nFN:2,third\nFN:2,fourth\n"
+        "FNDA:1,first\nFNDA:0,second\nFNDA:0,third\nFNDA:0,fourth\nDA:1,1\n"
         "LF:3\nLH:1\nFNF:3\nFNH:1\nBRF:0\nBRH:0\nend_of_record\n"
     )
     lcov = "".join(f"SF:{file['filename']}{rows}" for file in files)
     if case == "missing-source":
         lcov = lcov.split("end_of_record\n", 1)[1]
-    if case == "stale-totals":
-        lcov = lcov.replace("LH:1", "LH:2", 1)
+    lcov = alter_windows_counters(lcov, files, signal, case)
     if case == "over-budget":
         signal.max_uncovered["win32"].lines = 5
     if case == "missing-floor":
@@ -456,6 +488,33 @@ def test_llvm_rejects_each_missing_or_impossible_total(original: str, replacemen
     lcov = "SF:src/main.rs\nLF:3\nLH:1\nFNF:3\nFNH:1\nend_of_record\n"
     with pytest.raises(ValueError, match=error):
         parse_lcov(lcov.replace(original, replacement), llvm=True)
+
+
+@pytest.mark.parametrize(
+    ("totals", "detail", "metric"),
+    [
+        ("LF:2\nLH:1\nFNF:1\nFNH:1", "DA:1,0\n", "line"),
+        ("LF:1\nLH:1\nFNF:1\nFNH:1", "DA:1,1\nDA:2,1\n", "line"),
+        ("LF:2\nLH:2\nFNF:1\nFNH:1", "DA:1,1\nDA:2,0\n", "line"),
+        ("LF:1\nLH:1\nFNF:1\nFNH:1", "DA:1,1\nFN:1,f\nFNDA:0,f\n", "function"),
+        ("LF:1\nLH:1\nFNF:3\nFNH:1", "DA:1,1\nFN:1,f\nFNDA:1,f\n", "function"),
+        ("LF:1\nLH:1\nFNF:1\nFNH:1", "DA:1,1\n", "function"),
+    ],
+)
+def test_llvm_rejects_inconsistent_detail(totals: str, detail: str, metric: str) -> None:
+    """Check each kind of contradiction independently, in LLVM's distinct row and summary units.
+
+    Parameters:
+        totals (str): LLVM summary rows.
+        detail (str): LLVM detailed rows.
+        metric (str): Metric with contradictory evidence.
+    Returns:
+        None: The contradiction is rejected.
+    Raises:
+        AssertionError: Inconsistent detail is accepted.
+    """
+    with pytest.raises(ValueError, match=f"Inconsistent LLVM LCOV {metric} detail"):
+        parse_lcov(f"SF:src/main.rs\n{detail}{totals}\nend_of_record\n", llvm=True)
 
 
 @pytest.mark.parametrize(

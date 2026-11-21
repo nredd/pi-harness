@@ -541,7 +541,8 @@ class LcovRecord:
             bare_source (bool): Accept a record with no rows at all, as coverage.py writes for a source
                 without executable lines, and a record with no function rows or totals, as it writes for a
                 module without functions. Other producers must emit totals, so either is truncation.
-            llvm (bool): Use LLVM summary units; the native reader checks them against raw JSON.
+            llvm (bool): Validate Windows LLVM summary units against the detailed rows; the
+                native reader also checks the summaries against raw JSON.
         Returns:
             FileCoverage: Validated executable line, function and branch counters.
         Raises:
@@ -564,11 +565,8 @@ class LcovRecord:
         if llvm:
             if not set(LCOV_TOTALS) <= self.summaries.keys():
                 raise ValueError("Missing LLVM LCOV totals")
-            # LLVM emits per-instantiation FN/FNDA and a different line map in DA. Neither
-            # represents the source-summary denominator used by llvm-cov report/JSON.
+            self.validate_llvm_detail(totals)
             totals |= {key: self.summaries[key] for key in LCOV_TOTALS}
-            if totals["LH"] > totals["LF"] or totals["FNH"] > totals["FNF"]:
-                raise ValueError("Inconsistent LLVM LCOV totals")
         # LCOV also permits aggregate-only function counters outside LLVM.
         elif not self.functions and not self.definitions:
             totals["FNF"] = self.summaries.get("FNF", 0)
@@ -588,6 +586,30 @@ class LcovRecord:
             totals["BRF"] - totals["BRH"],
         )
 
+    def validate_llvm_detail(self, detail: dict[str, int]) -> None:
+        """Cross-check the Windows export without equating distinct LLVM counting units.
+
+        Parameters:
+            detail (dict[str, int]): Counts of detailed rows and positive hit rows.
+        Returns:
+            None: The evidence is consistent with the summaries.
+        Raises:
+            ValueError: Summaries or detailed rows contradict one another.
+        """
+        lf, lh, fnf, fnh = (self.summaries[key] for key in LCOV_TOTALS)
+        if lh > lf or fnh > fnf:
+            raise ValueError("Inconsistent LLVM LCOV totals")
+        # DA merges per-file lines; the summary can count overlapping function lines
+        # separately. A mapped line needs evidence, and each unhit DA line costs a miss.
+        if bool(lf) != bool(detail["LF"]) or detail["LF"] > lf or detail["LF"] - detail["LH"] > lf - lh:
+            raise ValueError("Inconsistent LLVM LCOV line detail")
+        if lh and not detail["LH"]:
+            raise ValueError("Inconsistent LLVM LCOV line detail")
+        # FN/FNDA list instantiations. Each hit source function needs a positive
+        # instantiation; each missed source function needs an unhit instantiation.
+        if detail["FNH"] < fnh or detail["FNF"] - detail["FNH"] < fnf - fnh:
+            raise ValueError("Inconsistent LLVM LCOV function detail")
+
 
 def parse_lcov(text: str, *, bare_sources: bool = False, llvm: bool = False) -> dict[str, FileCoverage]:
     """Parse LCOV strictly, checking counters rather than trusting summary fields.
@@ -596,7 +618,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False, llvm: bool = False) -> 
         text (str): Complete LCOV document.
         bare_sources (bool): Read coverage.py's dialect: a bare `SF`/`end_of_record` pair is an empty
             source, a module without functions omits FN totals, and branches are named, not numbered.
-        llvm (bool): Read source summaries without counting instantiations as functions.
+        llvm (bool): Validate Windows source summaries without counting instantiations as functions.
     Returns:
         dict[str, FileCoverage]: Records keyed by the original source path.
     Raises:
