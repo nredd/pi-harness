@@ -5,7 +5,21 @@ private final class ActFixture {
     // Opaque handles only. No AX query is made on either handle.
     let element = AXUIElementCreateApplication(1234)
     let other = AXUIElementCreateApplication(1235)
-    let bridge = Bridge(activityGlow: nil)
+    let bridge: Bridge
+    let useNativeKeyboard: Bool
+    var onValueRead: () -> Void = {}
+    var onAttributeWrite: (String) -> Void = { _ in }
+    var rejectSelection = false
+    var onSleep: (useconds_t) -> Void = { _ in }
+
+    init(inputSink: NativeInputSink? = nil) {
+        useNativeKeyboard = inputSink != nil
+        if let inputSink {
+            bridge = Bridge(activityGlow: nil, inputSink: inputSink)
+        } else {
+            bridge = Bridge(activityGlow: nil)
+        }
+    }
     let point = CGPoint(x: 110, y: 220)
     var hasImage = true
     var web = false
@@ -27,7 +41,8 @@ private final class ActFixture {
     var pointers: [CGPoint] = []
 
     var world: ActWorld {
-        ActWorld(
+        let keyboard = useNativeKeyboard ? bridge.actionWorld() : nil
+        return ActWorld(
             lookRecord: { id in
                 guard id == "look" else { return nil }
                 return LookRecord(lookId: id, windowId: 8, windowFrame: CGRect(x: 100, y: 200, width: 300, height: 200), imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
@@ -41,7 +56,9 @@ private final class ActFixture {
             stringAttribute: { _, attribute in
                 switch attribute as String {
                 case kAXRoleAttribute: return "AXButton"
-                case kAXValueAttribute: return self.value
+                case kAXValueAttribute:
+                    self.onValueRead()
+                    return self.value
                 default: return nil
                 }
             },
@@ -56,9 +73,12 @@ private final class ActFixture {
             },
             setAttribute: { _, attribute, raw in
                 self.trace.append("set:\(attribute)")
+                self.onAttributeWrite(attribute as String)
                 switch attribute as String {
                 case kAXValueAttribute: self.value = raw as? String ?? ""
-                case kAXSelectedTextRangeAttribute: self.range = raw
+                case kAXSelectedTextRangeAttribute:
+                    if self.rejectSelection { return .cannotComplete }
+                    self.range = raw
                 default: break
                 }
                 return .success
@@ -92,7 +112,7 @@ private final class ActFixture {
                 return { self.trace.append("finish"); return $0 }
             },
             lockInput: { self.trace.append("lock") }, unlockInput: { self.trace.append("unlock") },
-            sleep: { self.trace.append("sleep:\($0)") },
+            sleep: { self.trace.append("sleep:\($0)"); self.onSleep($0) },
             scrollSignature: { _ in self.scrollPositions.isEmpty ? "after" : self.scrollPositions.removeFirst() },
             scrollAction: { _, request in
                 expect(request.point == self.point, "scroll dispatch passes the grounded point to AX actions")
@@ -114,16 +134,24 @@ private final class ActFixture {
                 expect(points == [self.point, CGPoint(x: 130, y: 240), CGPoint(x: 150, y: 260)], "ground every drag vertex")
                 self.trace.append("drag:\(pid):\(delivery)")
             },
-            postKeyPress: { keys, pid, delivery in self.trace.append("key:\(keys.joined(separator: "+")):\(pid):\(delivery)") },
+            postKeyPress: { keys, pid, delivery, beforeKeyDown in
+                if let keyboard { return try keyboard.postKeyPress(keys, pid, delivery, beforeKeyDown) }
+                try beforeKeyDown()
+                self.trace.append("key:\(keys.joined(separator: "+")):\(pid):\(delivery)")
+            },
             postKeyCode: { code, flags, pid, delivery in
                 expect(flags == .maskCommand, "paste posts command modifier")
                 self.trace.append("keyCode:\(code):\(pid):\(delivery)")
             },
-            postUnicodeText: { text, pid, delivery in
+            postUnicodeText: { text, pid, delivery, beforeKeyDown in
+                if let keyboard { return try keyboard.postUnicodeText(text, pid, delivery, beforeKeyDown) }
+                try beforeKeyDown()
                 self.trace.append("type:\(text):\(pid):\(delivery)")
                 self.value = text
             },
-            postAtomicUnicodeText: { text, pid, delivery in
+            postAtomicUnicodeText: { text, pid, delivery, beforeKeyDown in
+                if let keyboard { return try keyboard.postAtomicUnicodeText(text, pid, delivery, beforeKeyDown) }
+                try beforeKeyDown()
                 self.trace.append("atomic:\(text):\(pid):\(delivery)")
                 self.value = text
             },
@@ -230,7 +258,7 @@ private func runKeyboardActionAssertions() throws {
     keys.blocked = false
     let typed = try keys.act("typeText", params: ["text": "🙂", "preserveFocus": true])
     expect(typed["outcome"] as? String == "worked", "typing checks the value changed")
-    expect(keys.trace == ["begin:1234", "set:AXFocused", "lock", "keyboard", "type:🙂:1234:hid", "sleep:30000", "finish", "unlock"], "preserveFocus skips activation, not the blocked-keyboard check")
+    expect(keys.trace == ["begin:1234", "set:AXFocused", "lock", "keyboard", "keyboard", "type:🙂:1234:hid", "sleep:30000", "finish", "unlock"], "preserveFocus skips activation, not the blocked-keyboard check")
     keys.trace = []
     _ = try keys.act("keypress", policy: "background", params: ["keys": ["cmd", "a"]])
     expect(keys.trace == ["begin:1234", "set:AXFocused", "set:AXSelectedTextRange", "key:cmd+a:1234:pid", "finish"], "PID cmd+a primes AX selection before the chord")
@@ -428,6 +456,9 @@ private func runEventAssertions() throws {
     var rejectWheel = false
     var keyAllocations = 0
     var rejectKeyAllocation: Int?
+    var onLayoutLookup: () -> Void = {}
+    var onInputSleep: () -> Void = {}
+    var onHIDPost: (CGEventType) -> Void = { _ in }
     func record(_ event: CGEvent, pid: Int32, delivery: String) {
         var entry = Event(type: event.type, pid: pid, delivery: delivery)
         switch event.type {
@@ -448,7 +479,7 @@ private func runEventAssertions() throws {
         }
         events.append(entry)
     }
-    let bridge = Bridge(activityGlow: nil, inputSink: NativeInputSink(
+    let sink = NativeInputSink(
         mouseEvent: { type, point, button in
             if type == rejectNextMouseType {
                 rejectNextMouseType = nil
@@ -465,14 +496,17 @@ private func runEventAssertions() throws {
             return keyAllocations == rejectKeyAllocation ? nil : NativeInputSink.createKeyEvent(code, down)
         },
         postToPid: { record($0, pid: $1, delivery: "pid") },
-        postHID: { record($0, pid: $1, delivery: "hid") },
-        sleep: { delays.append($0) },
-        keyboardInputSource: { KeyboardInputSource(isKeyboardLayout: false, layoutData: nil) },
+        postHID: { record($0, pid: $1, delivery: "hid"); onHIDPost($0.type) },
+        sleep: { delays.append($0); onInputSleep() },
+        keyboardInputSource: {
+            onLayoutLookup()
+            return KeyboardInputSource(isKeyboardLayout: false, layoutData: nil)
+        },
         checkCancellation: {
             if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
         }
-    ))
-    let world = bridge.actionWorld()
+    )
+    let world = Bridge(activityGlow: nil, inputSink: sink).actionWorld()
     let start = CGPoint(x: 100, y: 200)
     let midpoint = CGPoint(x: 112, y: 200)
     let end = CGPoint(x: 124, y: 200)
@@ -512,14 +546,14 @@ private func runEventAssertions() throws {
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
     events = []; delays = []
-    try world.postKeyPress([" Cmd + Shift + a ", "tab"], 1234, "pid")
+    try world.postKeyPress([" Cmd + Shift + a ", "tab"], 1234, "pid", {})
     let flags: CGEventFlags = [.maskCommand, .maskShift]
     expect(events.map(\.type) == [.keyDown, .keyUp, .keyDown, .keyUp] && events.map(\.data) == [0, 0, 48, 48] && events.map(\.flags) == [flags, flags, [], []] && events.allSatisfy { $0.pid == 1234 && $0.delivery == "pid" } && delays == [8_000, 8_000], "key sequence preserves chord flags and keycode order: \(events)")
     events = []; delays = []
-    try world.postUnicodeText("a🙂", 1234, "pid")
+    try world.postUnicodeText("a🙂", 1234, "pid", {})
     expect(events.map(\.type) == [.keyDown, .keyUp, .keyDown, .keyUp] && events.map(\.text) == ["a", "a", "🙂", "🙂"] && delays == [8_000, 8_000], "unreadable keyboard layout delivers one UTF-16 pair per scalar")
     events = []; delays = []
-    try world.postAtomicUnicodeText("a🙂", 1234, "pid")
+    try world.postAtomicUnicodeText("a🙂", 1234, "pid", {})
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a🙂", "a🙂"] && delays == [8_000], "atomic replacement delivers the whole text in one pair")
 
     events = []; delays = []
@@ -542,14 +576,14 @@ private func runEventAssertions() throws {
     events = []; delays = []; keyAllocations = 0
     rejectKeyAllocation = 4
     try actionFailure("input_failed", message: "Failed to create key event") {
-        try world.postKeyPress(["a", "tab", "b"], 1234, "pid")
+        try world.postKeyPress(["a", "tab", "b"], 1234, "pid", {})
         return [:]
     }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && keyAllocations == 4 && delays == [8_000], "failed second key pair posts neither a partial pair nor the next key")
 
     events = []; delays = []; keyAllocations = 0
     try actionFailure("input_failed", message: "Failed to create unicode key event") {
-        try world.postUnicodeText("a🙂b", 1234, "pid")
+        try world.postUnicodeText("a🙂b", 1234, "pid", {})
         return [:]
     }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a", "a"] && keyAllocations == 4 && delays == [8_000], "failed second scalar posts neither a partial pair nor the next scalar")
@@ -557,8 +591,74 @@ private func runEventAssertions() throws {
     events = []; delays = []; keyAllocations = 0
     rejectKeyAllocation = 2
     try actionFailure("input_failed", message: "Failed to create unicode text event") {
-        try world.postAtomicUnicodeText("a🙂", 1234, "pid")
+        try world.postAtomicUnicodeText("a🙂", 1234, "pid", {})
         return [:]
     }
     expect(events.isEmpty && keyAllocations == 2 && delays.isEmpty, "failed atomic pair posts nothing")
+
+    rejectKeyAllocation = nil
+    keyAllocations = 0
+    try world.postKeyCode(9, .maskCommand, 1234, "pid")
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [9, 9], "direct paste chord still posts a pair")
+
+    let typing = ActFixture(inputSink: sink)
+    events = []; keyAllocations = 0
+    onLayoutLookup = { typing.blocked = true }
+    try actionFailure("app_blocked") { try typing.act("typeText", coords: true, params: ["text": "a🙂"]) }
+    expect(events.isEmpty && keyAllocations == 0, "layout lookup changes focus before the first typing pair is even allocated")
+    onLayoutLookup = {}
+
+    typing.blocked = false
+    onInputSleep = { typing.blocked = true }
+    try actionFailure("app_blocked") { try typing.act("typeText", coords: true, params: ["text": "a🙂"]) }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a", "a"], "typing stops after focus moves during the inter-key delay")
+    onInputSleep = {}
+
+    let keys = ActFixture(inputSink: sink)
+    events = []
+    onHIDPost = { if $0 == .keyDown { keys.blocked = true } }
+    try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd+a", "tab", "b"]]) }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && events.map(\.flags) == [.maskCommand, .maskCommand], "keypress releases the posted chord after focus moves and refuses the next key")
+    onHIDPost = { _ in }
+
+    events = []
+    try runWebReplacementRefusals(sink: sink) { events.map(\.type) }
+}
+
+private func runWebReplacementRefusals(sink: NativeInputSink, posted: () -> [CGEventType]) throws {
+    let params = ["text": "replacement"]
+
+    let focus = ActFixture(inputSink: sink)
+    focus.web = true
+    focus.onAttributeWrite = { [unowned focus] in if $0 == kAXFocusedAttribute { focus.blocked = true } }
+    try actionFailure("app_blocked") { try focus.act("setText", params: params) }
+    expect(focus.trace.suffix(3) == ["set:AXFocused", "keyboard", "unlock"] && posted().isEmpty, "web focus write refuses before the selection read or any post")
+
+    let value = ActFixture(inputSink: sink)
+    value.web = true
+    value.onValueRead = { [unowned value] in
+        if value.trace.contains("set:AXFocused") { value.blocked = true }
+    }
+    try actionFailure("app_blocked") { try value.act("setText", params: params) }
+    expect(!value.trace.contains("set:AXSelectedTextRange") && posted().isEmpty, "web value read refuses before the selection write or any post")
+
+    for reject in [false, true] {
+        let selection = ActFixture(inputSink: sink)
+        selection.web = true
+        selection.rejectSelection = reject
+        selection.onAttributeWrite = { [unowned selection] in
+            if $0 == kAXSelectedTextRangeAttribute { selection.blocked = true }
+        }
+        try actionFailure("app_blocked") { try selection.act("setText", params: params) }
+        expect(posted().isEmpty, "web selection write refuses both replacement text and fallback Cmd+A (selection rejected: \(reject))")
+    }
+
+    let fallback = ActFixture(inputSink: sink)
+    fallback.web = true
+    fallback.rejectSelection = true
+    fallback.onSleep = { [unowned fallback] in
+        if $0 == 20_000 && fallback.trace.contains("set:AXSelectedTextRange") { fallback.blocked = true }
+    }
+    try actionFailure("app_blocked") { try fallback.act("setText", params: params) }
+    expect(posted() == [.keyDown, .keyUp], "focus moving during fallback wait stops replacement text after the Cmd+A pair: \(posted()), \(fallback.trace)")
 }
