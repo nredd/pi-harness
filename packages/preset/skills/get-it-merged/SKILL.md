@@ -77,7 +77,8 @@ publish/deploy. Do not impose that gate on ordinary PR merges.
 ### Guarded merged-worktree sweep
 
 Parent only. Use the [guard beside ship-issue](../ship-issue/SKILL.md#worktree-sweep-verdicts)
-for candidate decisions. The guard requires Git 2.36+ to disable fsmonitor safely. Supply known ownership and retained directory holds. If anything
+for candidate decisions. Invoke it with `python3 -I -S` using a trusted interpreter. The guard
+requires Git 2.36+ to disable fsmonitor safely. Supply known ownership and retained directory holds. If anything
 is unverifiable, keep the worktree; report only the guard's reasons and any status evidence it already
 collected, not file contents. Never run a standalone `git status` (or `git diff`) on a retained worktree to fill in
 evidence: it can run configured filters. Keep disputed files and refs until the operator preserves or

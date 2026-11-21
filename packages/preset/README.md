@@ -283,6 +283,11 @@ endings also mean keep. The `git ls-files --eol` probe classifies raw bytes with
 filters. Effective
 `core.filemode=false` means keep because Git status can hide executable-bit changes.
 Limits:
+- Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
+  Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
+  receives `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, `HTTPS_PROXY`, `HTTP_PROXY` and
+  `NO_PROXY`. Its local config and proxy settings can still affect routing and authentication.
+  The guard does not sandbox the interpreter, the binaries or their trusted environment.
 - The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate has no other hold. Report only the guard's evidence; delete nothing.

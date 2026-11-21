@@ -56,7 +56,8 @@ Never work in the user's checkout. One issue, one worktree.
 
 ### Worktree sweep verdicts
 
-Run `python3 <this-skill-dir>/sweep_guard.py <repo-path> <owner/repo>` from outside candidates.
+Run `python3 -I -S <this-skill-dir>/sweep_guard.py <repo-path> <owner/repo>` from outside
+candidates, using a trusted Python installation.
 Git 2.36+ is required to disable fsmonitor safely; older or unparseable versions mean keep.
 Use `<host>/<owner>/<repo>` off GitHub.com. Pass a repeatable `--hold <path>` for each worktree
 with a known active owner or retained claimed directory. The guard emits one JSON line per

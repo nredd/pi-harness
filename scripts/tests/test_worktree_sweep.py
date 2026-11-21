@@ -121,34 +121,44 @@ def wt(tmp_path: Path) -> Worktrees:
         bin_dir,
         "gh",
         """
+        import json
         import os
         import sys
         from pathlib import Path
 
-        base = os.environ["SWEEP_BASE"]
+        evidence = json.loads(Path(__file__).with_name("evidence.json").read_text())
+        base = evidence["SWEEP_BASE"]
         args = sys.argv[1:]
         list_args = ["pr", "list", "--repo", base, "--state", "all", "--head", "merged",
                      "--limit", "100", "--json", "number,state"]
         view_fields = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
         if args == list_args:
-            print(os.environ["SWEEP_LIST"])
+            print(evidence["SWEEP_LIST"])
         elif args == ["pr", "view", "123", "--repo", base, "--json", view_fields]:
-            if recovery := os.environ.get("SWEEP_WRITE_DURING_VIEW"):
+            if recovery := evidence.get("SWEEP_WRITE_DURING_VIEW"):
                 target = Path(recovery)
                 target.write_text("recovery")
                 os.utime(target.parent, (1, 1))
-            if locked := os.environ.get("SWEEP_LOCK_DURING_VIEW"):
+            if locked := evidence.get("SWEEP_LOCK_DURING_VIEW"):
                 Path(locked).write_text("locked during remote proof")
-            print(os.environ["SWEEP_PR"])
+            print(evidence["SWEEP_PR"])
         else:
             sys.exit(f"unexpected arguments: {args!r}")
-        sys.stderr.write(os.environ.get("SWEEP_WARNING", ""))
+        sys.stderr.write(evidence.get("SWEEP_WARNING", ""))
         """,
     )
     adapter(
         bin_dir,
         "lsof",
-        'import os, sys\nsys.stdout.buffer.write(b"p123\\0\\nn" + os.environb[b"SWEEP_CWD"] + b"\\0\\n")\n',
+        """
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        evidence = json.loads(Path(__file__).with_name("evidence.json").read_text())
+        sys.stdout.buffer.write(b"p123\\0\\nn" + os.fsencode(evidence["SWEEP_CWD"]) + b"\\0\\n")
+        """,
     )
     return Worktrees(
         repo,
@@ -181,7 +191,7 @@ def quiet(wt: Worktrees) -> None:
             os.utime(path, (1, 1))
 
 
-def evidence_env(wt: Worktrees, base: str) -> dict[str, str]:
+def adapter_evidence(wt: Worktrees, base: str) -> dict[str, str]:
     """Return the explicit evidence used by the disposable gh and lsof adapters."""
     return {
         "SWEEP_BASE": base,
@@ -221,7 +231,19 @@ def run(
     """
     env = {key: value for key, value in git_env().items() if not key.startswith("SWEEP_")}
     env.pop("GH_HOST", None)
-    env |= {"PATH": f"{wt.bin}{os.pathsep}{env['PATH']}"} | evidence_env(wt, base) | (variables or {})
+    env |= {"PATH": f"{wt.bin}{os.pathsep}{env['PATH']}"} | (variables or {})
+    evidence = adapter_evidence(wt, base) | {
+        key: env[key]
+        for key in (
+            "SWEEP_CWD",
+            "SWEEP_LIST",
+            "SWEEP_WARNING",
+            "SWEEP_WRITE_DURING_VIEW",
+            "SWEEP_LOCK_DURING_VIEW",
+        )
+        if key in env
+    }
+    (wt.bin / "evidence.json").write_text(json.dumps(evidence))
     if borrower_gitdirs is not None:
         env["SWEEP_SCOPE"] = json.dumps(list(map(str, borrower_gitdirs)))
     if inventory_suffix:
@@ -230,6 +252,8 @@ def run(
     done = subprocess.run(
         [
             sys.executable,
+            "-I",
+            "-S",
             "-c",
             "import json, os, runpy, sys; from pathlib import Path; "
             "source, git, gh, lsof = sys.argv[1:5]; sys.argv[1:5] = []; "
@@ -381,16 +405,13 @@ def test_shipped_cli_is_keep_only(wt: Worktrees) -> None:
             """
         )
     )
-    env = (
-        git_env()
-        | evidence_env(wt, BASE)
-        | {
-            "PYTHONPATH": str(wt.bin),
-            "GH_HOST": "github.com",
-            "SWEEP_SCOPE": "[]",
-            "SWEEP_FORCE_ASSESS": "1",
-        }
-    )
+    (wt.bin / "evidence.json").write_text(json.dumps(adapter_evidence(wt, BASE)))
+    env = git_env() | {
+        "PYTHONPATH": str(wt.bin),
+        "GH_HOST": "github.com",
+        "SWEEP_SCOPE": "[]",
+        "SWEEP_FORCE_ASSESS": "1",
+    }
     done = subprocess.run(
         [sys.executable, str(GUARD), str(wt.repo), BASE, "--worktree", str(wt.path)],
         cwd=wt.repo,
@@ -904,6 +925,50 @@ def test_child_path_contains_only_absolute_entries(monkeypatch: pytest.MonkeyPat
         Path(sys.executable), "capture child PATH", "-c", "import os; print(os.environ['PATH'])"
     )
     assert value.decode().strip() == os.pathsep.join(("/usr/bin", "/usr/sbin"))
+
+
+@pytest.mark.parametrize("tool", ["git", "gh", "lsof"])
+def test_child_does_not_inherit_injection_variables(monkeypatch: pytest.MonkeyPatch, tool: str) -> None:
+    vars_to_drop = {
+        "GIT_TRACE2_EVENT": "/unused/trace.json",
+        "GIT_EXTERNAL_DIFF": "/unused/diff",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.fsmonitor",
+        "GIT_DIR": "/unused/repo",
+        "GIT_WORK_TREE": "/unused/worktree",
+        "GIT_INDEX_FILE": "/unused/index",
+        "GIT_EXEC_PATH": "/unused/tools",
+        "LD_PRELOAD": "/unused/library.so",
+        "DYLD_INSERT_LIBRARIES": "/unused/library.dylib",
+        "PYTHONPATH": "/unused/python",
+    }
+    common = {"PATH": "/usr/bin", "HOME": "/home/test", "LANG": "C", "LC_ALL": "C", "TMPDIR": "/tmp"}
+    gh_auth = {
+        "GH_TOKEN": "synthetic-token",
+        "GITHUB_TOKEN": "synthetic-fallback",
+        "GH_HOST": "example.invalid",
+        "GH_CONFIG_DIR": "/unused/gh",
+        "HTTPS_PROXY": "http://proxy.invalid",
+        "HTTP_PROXY": "http://proxy.invalid",
+        "NO_PROXY": "localhost",
+    }
+    git_safety = {
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ALLOW_PROTOCOL": "",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    monkeypatch.setattr(os, "environ", common | gh_auth | vars_to_drop | {"GIT_ALLOW_PROTOCOL": "ssh"})
+    extra = {"git": git_safety, "gh": gh_auth | {"GH_PROMPT_DISABLED": "1"}, "lsof": {}}
+
+    def capture_env(
+        cmd: list[str], *, env: dict[str, str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert env == common | extra[tool]
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", capture_env)
+    GUARD_MODULE["out"](Path(sys.executable), "capture child environment", "-V", tool=tool)
 
 
 def test_command_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

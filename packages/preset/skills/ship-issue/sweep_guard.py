@@ -28,6 +28,26 @@ BIN_DIRS = (
     Path("/usr/local/bin"),
     Path("/usr/sbin"),
 )
+CHILD_ENV = ("HOME", "LANG", "LC_ALL", "TMPDIR")
+GH_ENV = (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_HOST",
+    "GH_CONFIG_DIR",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+)
+CHILD_OVERRIDES = {
+    "git": {
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_ALLOW_PROTOCOL": "",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    },
+    "gh": {"GH_PROMPT_DISABLED": "1"},
+    "lsof": {},
+}
 GIT_BINARY: ContextVar[Path | None] = ContextVar("GIT_BINARY", default=None)
 TIMEOUT = 30
 MAX_TREE_ENTRIES = 100_000
@@ -113,6 +133,7 @@ def out(
     executable: Path,
     label: str,
     *args: str,
+    tool: str = "lsof",
     data: bytes = b"",
     missing: int = 0,
     silent: bool = False,
@@ -123,6 +144,7 @@ def out(
         executable: Path, Absolute executable path.
         label: str, Name to use in diagnostics.
         args: str, Positional command arguments.
+        tool: str, Environment policy for Git, gh or lsof.
         data: bytes, Raw evidence or input bytes.
         missing: int, Additional accepted exit status.
         silent: bool, Require empty standard output.
@@ -133,6 +155,10 @@ def out(
     """
     path_entries = os.environ.get("PATH", "").split(os.pathsep)
     child_path = [entry for entry in path_entries if Path(entry).is_absolute()]
+    allowed = CHILD_ENV + (GH_ENV if tool == "gh" else ())
+    env = {key: os.environ[key] for key in allowed if key in os.environ}
+    env["PATH"] = os.pathsep.join(child_path or map(str, BIN_DIRS))
+    env.update(CHILD_OVERRIDES[tool])
     try:
         done = subprocess.run(
             [str(executable), *args],
@@ -140,15 +166,7 @@ def out(
             capture_output=True,
             check=False,
             timeout=TIMEOUT,
-            env={
-                **os.environ,
-                "PATH": os.pathsep.join(child_path or map(str, BIN_DIRS)),
-                "GIT_NO_LAZY_FETCH": "1",
-                "GIT_ALLOW_PROTOCOL": "",
-                "GIT_NO_REPLACE_OBJECTS": "1",
-                "GIT_TERMINAL_PROMPT": "0",
-                "GH_PROMPT_DISABLED": "1",
-            },
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         raise KeepError(f"`{label}` timed out") from exc
@@ -198,6 +216,7 @@ def git(
         "-C",
         str(path),
         *args,
+        tool="git",
         data=data,
         missing=missing,
         silent=silent,
@@ -751,6 +770,7 @@ def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
             "100",
             "--json",
             "number,state",
+            tool="gh",
         )
     )
     if (
@@ -780,6 +800,7 @@ def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
             base,
             "--json",
             PR_FIELDS,
+            tool="gh",
         )
     )
     remote = (
@@ -934,7 +955,9 @@ def main(
         executable = binary(
             GIT_LOCATIONS if git_binary is None else (git_binary,), "git"
         )
-        version = GIT_VERSION.fullmatch(out(executable, "git --version", "--version"))
+        version = GIT_VERSION.fullmatch(
+            out(executable, "git --version", "--version", tool="git")
+        )
         if version is None or (int(version[1]), int(version[2])) < (2, 36):
             raise KeepError("git too old to neutralize fsmonitor safely")
         GIT_BINARY.set(executable)

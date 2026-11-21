@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Use one read-only worktree sweep guard in `ship-issue` and `get-it-merged`. Authorize no deletion of worktrees, branches or claimed scratch. This keep-only rollout supersedes the earlier scratch-removal policy. Keep the legacy command available during rollout. Report upstream as unchecked when no PR exists; never run the checkout's configured transport. Require Git 2.36+ to disable fsmonitor safely. (#1175)
+- Use one read-only worktree sweep guard in `ship-issue` and `get-it-merged`. Authorize no deletion of worktrees, branches or claimed scratch. This keep-only rollout supersedes the earlier scratch-removal policy. Keep the legacy command available during rollout. Report upstream as unchecked when no PR exists; never run the checkout's configured transport. Require Git 2.36+ to disable fsmonitor safely and restrict child environments to an allowlist. (#1175)
 - Restore the `architect` routing hint, cost-ranked survey cards, `shortcut:` decisions, large-repo scoping, grill format and survey length limit. Keep the preset's intentional `codebase-design` preload (the local definition had `skills: false`). ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 - Document that `general-purpose` no longer runs critics; the parent owns the final critic review. ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 
