@@ -101,6 +101,27 @@ describe("daemon commands over the socket", () => {
 		assert.equal(fake.requests[0].cmd, "diagnostics", "command() probes the daemon first");
 	});
 
+	test("keyboard stops carry a deadline and the posted prefix without retry", async () => {
+		const fake = await fakeOn({
+			handlers: {
+				desktopInput: {
+					kind: "reply",
+					body: { ok: false, error: { code: "app_blocked", evidence: { postedUnits: 1 } } },
+				},
+			},
+		});
+		const { MacosHelperClient } = await load({ external: true, fake });
+		const start = Date.now();
+		await assert.rejects(new MacosHelperClient().command("desktopInput", { action: "key" }, { timeoutMs: 30_000 }), {
+			code: "app_blocked",
+			evidence: { postedUnits: 1 },
+		});
+		const requests = fake.requests.filter(({ cmd }) => cmd === "desktopInput");
+		assert.equal(requests.length, 1);
+		assert.ok(requests[0].args.keyboardDeadlineMs >= start + 29_750);
+		assert.ok(requests[0].args.keyboardDeadlineMs <= Date.now() + 29_750);
+	});
+
 	test("error replies become HelperCommandError with the helper's code and message", async () => {
 		const fake = await fakeOn({
 			handlers: {
