@@ -133,14 +133,14 @@ function parseBoolean(value: unknown): boolean | undefined {
 type AppIds = { ids: string[] } | { error: string };
 
 /** Reject invalid arrays whole rather than silently dropping invalid entries. */
-function parseAppIdArray(value: unknown): AppIds {
+function parseAppIdArray(value: unknown, platform: PlatformName): AppIds {
 	if (!Array.isArray(value)) return { error: "blocked_apps must be an array of app id strings" };
 	const bad = value.filter((item) => typeof item !== "string" || !item.trim());
 	if (bad.length)
 		return {
 			error: `blocked_apps has ${bad.length} invalid entr${bad.length === 1 ? "y" : "ies"} (each must be a non-blank string)`,
 		};
-	return { ids: [...new Set((value as string[]).map((item) => item.trim()))] };
+	return { ids: [...new Set((value as string[]).map((item) => (platform === "windows" ? item : item.trim())))] };
 }
 
 /** `PI_COMPUTER_USE_BLOCKED_APPS`: a comma list of ids to ADD to the blocklist; blank is unset. The env can never remove an id (a repo's `.envrc` can set it). */
@@ -186,6 +186,7 @@ function rawBlockedApps(raw: unknown): unknown {
 function readConfigFile(
 	filePath: string,
 	scope: "user" | "project",
+	platform: PlatformName,
 ): ComputerUseConfigSource & { blockedAppsError?: string } {
 	if (!existsSync(filePath)) return { path: filePath, exists: false };
 	try {
@@ -201,7 +202,7 @@ function readConfigFile(
 			out.values = { ...out.values, managed_browser_profile: profile.trim() };
 		const rawList = rawBlockedApps(parsed);
 		if (rawList !== undefined) {
-			const result = parseAppIdArray(rawList);
+			const result = parseAppIdArray(rawList, platform);
 			if ("error" in result) out.blockedAppsError = `${filePath}: ${result.error}; keeping the current list`;
 			// Only the user-global file may replace (or empty) the list; a project file, which a repo or an agent can write, only adds.
 			else if (scope === "user") out.values = { ...out.values, blocked_apps: result.ids };
@@ -232,8 +233,8 @@ function readEnv(): Partial<ComputerUseConfig> {
 
 export function loadComputerUseConfig(cwd: string, platform: PlatformName = hostPlatform()): LoadedComputerUseConfig {
 	const read = [
-		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json"), "user"),
-		readConfigFile(path.join(cwd, ".pi", "computer-use.json"), "project"),
+		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json"), "user", platform),
+		readConfigFile(path.join(cwd, ".pi", "computer-use.json"), "project", platform),
 	];
 	const blockedAppsErrors = read.flatMap((source) => (source.blockedAppsError ? [source.blockedAppsError] : []));
 	const sources: ComputerUseConfigSource[] = read.map(({ blockedAppsError: _ignored, ...source }) => source);

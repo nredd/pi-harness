@@ -20,6 +20,7 @@ interface StateTargetSnapshot {
 export interface CurrentTarget {
 	appName: string;
 	appId?: string;
+	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
 	windowTitle: string;

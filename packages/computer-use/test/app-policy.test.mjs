@@ -731,6 +731,7 @@ async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 				readText: { requested: args.readText, executed: false },
 			};
 		}
+		if (name === "uiaReadText") return { text: "safe", offset: 0, limit: 4, totalChars: 4, hasMore: false };
 		assert.equal(name, "listRoots");
 		assert.deepEqual(Object.keys(args), args.pid ? ["pid"] : [], "never forward the blocklist");
 		return { roots: args.pid ? roots.filter((root) => root.pid === args.pid) : roots };
@@ -741,7 +742,7 @@ async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 	const call = (executor, params) => executor("t", params, undefined, undefined, ctx);
 	const find = async (params = {}) => (await call(executeFind, params)).details.windows;
 	const observe = (root, mode = "semantic") => call(executeObserve, { root, mode });
-	return { bridge, call, calls, find, observe, userFile };
+	return { bridge, call, calls, ctx, find, observe, userFile };
 }
 
 function policyRoot(pid, appName, processName, bundleId) {
@@ -757,14 +758,20 @@ function policyRoot(pid, appName, processName, bundleId) {
 	};
 }
 
-test("The delivery contract distinguishes Windows input cleanup from macOS pasteboard restoration", () => {
-	const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-	const [, , macOS, windows] = readme
-		.split("\n")
-		.find((line) => line.startsWith("| 3, 4:"))
-		.split("|");
-	assert.match(macOS, /Paste restores the temporary pasteboard contents/);
-	assert.match(windows, /cleans up pressed keys and buttons; it does not handle the clipboard/);
+test("macOS blocks a known root before failing readiness", async ({ onTestFinished }) => {
+	const { currentPlatformBackend } = await import("../src/platform/index.ts");
+	const { macosHelper } = await import("../src/platform/macos/helper.ts");
+	const root = policyRoot(101, "Terminal", undefined, "com.apple.Terminal");
+	const { observe, find, calls } = await useRootPolicyFixture("darwin", macosHelper, [root], onTestFinished);
+	const [{ windowRef }] = await find();
+	currentPlatformBackend.ensureReady = async () => {
+		calls.push("ensureReady");
+		throw new Error("readiness failed");
+	};
+	calls.length = 0;
+	await assert.rejects(observe(windowRef), { code: "app_blocked" });
+	assert.deepEqual(calls, []);
+	await assert.rejects(find(), /readiness failed/);
 });
 
 test("Windows blocks known roots by executable before helper calls, not by display name or bundle id", async ({
@@ -853,6 +860,105 @@ test("Windows refuses re-blocked saved-state live operations before readiness", 
 	assert.ok(
 		calls.every((name) => name === "ensureReady"),
 		"cached queries do not look again",
+	);
+});
+
+test.for(["", "CoNsEnT.ExE"])(
+	"Windows re-admits all live saved-state operations after an owner flip to %j",
+	async (owner, { onTestFinished }) => {
+		const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+		const root = { ...policyRoot(101, "Notes", "notes.exe"), windowId: 123 };
+		const { bridge, call, calls, find, observe } = await useRootPolicyFixture(
+			"win32",
+			windowsHelper,
+			[root],
+			onTestFinished,
+		);
+		const [{ windowRef }] = await find();
+		const {
+			details: {
+				capture: { stateId },
+			},
+		} = await observe(windowRef, "fused");
+		const { executeObserve, executeAct, executeReadText, executeWaitFor, executeSearchUi, executeExpandUi } = bridge;
+		const { ref } = (await call(executeSearchUi, { stateId, text: "Save" })).details.matches[0];
+		const input = [
+			[executeObserve, { stateId }],
+			[executeAct, { stateId, actions: [{ action: "press", ref }] }],
+			[executeReadText, { stateId, ref }],
+			[executeWaitFor, { stateId, text: "Save" }],
+			[executeSearchUi, { stateId, text: "missing" }],
+			[executeExpandUi, { stateId, ref: "@e3" }],
+		];
+		root.processName = owner;
+		// Without new discovery, only the fresh identity lookup is allowed, never a look, read or action.
+		for (const [execute, args] of input) {
+			calls.length = 0;
+			await assert.rejects(call(execute, args), { code: "app_blocked" });
+			assert.deepEqual(calls, ["ensureReady", "listRoots"]);
+		}
+		assert.equal((await find())[0].blocked, true);
+		calls.length = 0;
+		for (const [execute, args] of input) await assert.rejects(call(execute, args), { code: "app_blocked" });
+		await assert.rejects(call(executeObserve, { stateId, root: windowRef }), { code: "app_blocked" });
+		assert.deepEqual(calls, []);
+	},
+);
+
+test("restores Windows root identity and refuses title rebinding or legacy records", async ({ onTestFinished }) => {
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const root = policyRoot(101, "Notes", "Notes.exe");
+	const { bridge, call, calls, ctx, observe } = await useRootPolicyFixture(
+		"win32",
+		windowsHelper,
+		[root],
+		onTestFinished,
+	);
+	const found = await call(bridge.executeFind, {});
+	const [{ windowRef }] = found.details.windows;
+	const observed = await observe(windowRef);
+	const {
+		capture: { stateId },
+	} = observed.details;
+	const entry = ({ details }) =>
+		JSON.parse(JSON.stringify({ type: "message", message: { role: "toolResult", toolName: details.tool, details } }));
+	const branch = [entry(found), entry(observed)];
+	ctx.sessionManager.getBranch = () => branch;
+	bridge.reconstructStateFromBranch(ctx);
+	root.processName = "notes.EXE";
+	assert.equal((await call(bridge.executeReadText, { stateId, ref: "@e2" })).details.text, "safe");
+	assert.equal((await observe(windowRef)).details.target.appId, "notes.EXE");
+	root.processName = "consent.exe";
+	const newest = entry(await call(bridge.executeFind, {}));
+	branch.push(newest);
+	bridge.reconstructStateFromBranch(ctx);
+	calls.length = 0;
+	await assert.rejects(observe(windowRef), { code: "app_blocked" });
+	assert.deepEqual(calls, []);
+	branch.pop();
+	bridge.reconstructStateFromBranch(ctx);
+	root.processName = "other.exe";
+	await assert.rejects(observe(windowRef), { code: "app_blocked", message: /owner identity changed/ });
+	root.rootRef = "different";
+	await assert.rejects(observe(windowRef), { code: "root_stale", message: /original owner/ });
+	delete branch[0].message.details.windows[0].appId;
+	delete branch[1].message.details.target.appId;
+	bridge.reconstructStateFromBranch(ctx);
+	calls.length = 0;
+	for (const run of [() => observe(windowRef), () => call(bridge.executeReadText, { stateId, ref: "@e2" })]) {
+		await assert.rejects(run, { code: "root_stale", message: /Rediscover it with find_roots/ });
+	}
+	assert.deepEqual(calls, []);
+});
+
+test("matches a Windows basename with leading whitespace", async ({ onTestFinished }) => {
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const roots = [policyRoot(101, "Spaced", " Vault.exe"), policyRoot(102, "Plain", "Vault.exe")];
+	const { find, userFile } = await useRootPolicyFixture("win32", windowsHelper, roots, onTestFinished);
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: [" VAULT.EXE"] }));
+	assert.deepEqual(
+		(await find()).map(({ blocked }) => blocked),
+		[true, false],
 	);
 });
 

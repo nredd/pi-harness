@@ -1476,11 +1476,12 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
         .ok_or_else(|| invalid("uiaReadText requires elementRef"))?;
     let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(4096) as usize;
-    let element = {
+    let (element, pid) = {
         let state = helper_state()
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
-        state.element_for_look(look_id, element_ref)?
+        let element = state.element_for_look(look_id, element_ref)?;
+        (element, state.looks[look_id].pid)
     };
     if element.is_secure {
         return Err(ProtocolError::new(
@@ -1488,6 +1489,8 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
             ErrorCode::SecureTextUnreadable,
         ));
     }
+    // A recycled HWND must not read from an owner other than the one that issued this look.
+    windows_bridge::desktop::validated_bounds(element.hwnd, Some(pid))?;
     let text = windows_bridge::uia::read_live_text(
         element.hwnd,
         &element.runtime_id,
@@ -2015,6 +2018,23 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    #[test]
+    fn read_text_checks_the_owning_looks_window_before_uia() {
+        let look_id = "read-text-owner-check";
+        let mut look = look_with_element(1.0);
+        look.elements.get_mut("same-ref").unwrap().hwnd = 0;
+        helper_state()
+            .lock()
+            .unwrap()
+            .insert_look(look_id.to_owned(), look);
+        let error =
+            handle_read_text(&json!({"lookId": look_id, "elementRef": "same-ref"})).unwrap_err();
+        #[cfg(windows)]
+        assert_eq!(error.code, ErrorCode::CoordinateBlocked);
+        #[cfg(not(windows))]
+        assert_eq!(error.code, ErrorCode::UnsupportedPlatform);
     }
 
     #[test]

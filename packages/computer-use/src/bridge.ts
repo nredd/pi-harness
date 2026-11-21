@@ -181,6 +181,7 @@ interface ComputerUseDetails {
 	tool: string;
 	target: {
 		app: string;
+		appId?: string;
 		bundleId?: string;
 		pid: number;
 		windowTitle: string;
@@ -259,6 +260,7 @@ interface ListWindowsDetails {
 	hasMore?: boolean;
 	windows: Array<{
 		app: string;
+		appId?: string;
 		bundleId?: string;
 		pid: number;
 		kind: string;
@@ -373,6 +375,7 @@ interface WindowRefRecord {
 	ref: string;
 	appName: string;
 	appId?: string;
+	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
 	windowTitle: string;
@@ -800,7 +803,15 @@ function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: 
 	return blockedAppId(currentPlatformBackend.name, target);
 }
 
-function appPolicyRefusal(target: Pick<HelperApp, "appName"> & PolicyIdentity): ComputerUseError | undefined {
+type AdmissionIdentity = Pick<HelperApp, "appName"> & PolicyIdentity & { legacyIdentity?: true };
+
+function appPolicyRefusal(target: AdmissionIdentity): ComputerUseError | undefined {
+	if (currentPlatformBackend.name === "windows" && target.legacyIdentity) {
+		return new ComputerUseError(
+			"root_stale",
+			"Saved Windows root has no owner identity. Rediscover it with find_roots and observe it again.",
+		);
+	}
 	const id = appBlockReason(target);
 	if (typeof id === "object") {
 		return new ComputerUseError(
@@ -815,7 +826,7 @@ function appPolicyRefusal(target: Pick<HelperApp, "appName"> & PolicyIdentity): 
 	);
 }
 
-function assertAppNotBlocked(target: Pick<HelperApp, "appName"> & PolicyIdentity): void {
+function assertAppNotBlocked(target: AdmissionIdentity): void {
 	const refusal = appPolicyRefusal(target);
 	if (refusal) throw refusal;
 }
@@ -968,6 +979,36 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 	return trimOrUndefined(selector);
 }
 
+/** A Windows look is bound to its original owner and native root, not a matching title. */
+async function resolveWindowsRoot(
+	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
+	signal?: AbortSignal,
+): Promise<ResolvedTarget> {
+	const windows = await listWindows(saved.pid, signal);
+	const match = windows.find(
+		(window) =>
+			window.pid === saved.pid &&
+			(saved.windowId
+				? window.windowId === saved.windowId
+				: saved.nativeWindowRef && window.windowRef === saved.nativeWindowRef),
+	);
+	if (!match)
+		throw new ComputerUseError(
+			"root_stale",
+			"Saved Windows root is no longer available for its original owner. Rediscover it with find_roots.",
+		);
+	assertAppNotBlocked({ appName: saved.appName, appId: match.appId });
+	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
+		throw new ComputerUseError(
+			"app_blocked",
+			"Windows root owner identity changed. Rediscover it with find_roots and observe it again.",
+		);
+	}
+	const target = toResolvedTarget(saved, match);
+	setCurrentTarget(target);
+	return target;
+}
+
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {
 	const current = operationState().currentTarget;
@@ -980,6 +1021,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
 	assertAppNotBlocked(fromRef);
+	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
 	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
 	const match =
@@ -1006,6 +1048,7 @@ async function resolveCurrentTarget(
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
 	assertAppNotBlocked(current);
+	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
 	if (!windows.length) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
@@ -1267,6 +1310,7 @@ async function buildToolResult(
 		tool,
 		target: {
 			app: result.target.appName,
+			appId: result.target.appId,
 			bundleId: result.target.bundleId,
 			pid: result.target.pid,
 			windowTitle: result.target.windowTitle,
@@ -1502,6 +1546,7 @@ function windowDetails(
 	const blockReason = appBlockReason(storedRef);
 	return {
 		app: app.appName,
+		appId: storedRef.appId,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		kind: window.kind,
@@ -1802,8 +1847,6 @@ async function performReadText(
 	}
 
 	currentCaptureOrThrow();
-	// A hydrated state restores its target without resolving it, so re-check the policy before the live read.
-	assertAppNotBlocked(operationState().currentTarget!);
 	if (!ref)
 		throw new Error(
 			"read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.",
@@ -1811,20 +1854,18 @@ async function performReadText(
 	const node = outlineNodeByRef(ref);
 	const state = operationState();
 	const raw = (
-		await resourceScheduler.readAt(
-			state.resourceKey!,
-			state.epoch!,
-			async () =>
-				await currentPlatformBackend.readText(
-					{
-						lookId: state.currentOutline!.lookId,
-						elementRef: wireRefForNode(node),
-						offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),
-						limit: UI_TEXT_PAGE_CHARS,
-					},
-					{ signal, timeoutMs: COMMAND_TIMEOUT_MS },
-				),
-		)
+		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
+			if (currentPlatformBackend.name === "windows") await resolveCurrentTarget(signal);
+			return await currentPlatformBackend.readText(
+				{
+					lookId: state.currentOutline!.lookId,
+					elementRef: wireRefForNode(node),
+					offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),
+					limit: UI_TEXT_PAGE_CHARS,
+				},
+				{ signal, timeoutMs: COMMAND_TIMEOUT_MS },
+			);
+		})
 	).value;
 	const text = raw.text;
 	const details: ReadTextDetails = {
@@ -3636,11 +3677,18 @@ function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, 
 	}
 	const { currentTarget } = operationState();
 	if (!currentTarget) return;
+	const refusalForState = () => {
+		const savedRef = currentTarget.windowRef;
+		const latest =
+			currentPlatformBackend.name === "windows" && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
+		return appPolicyRefusal(currentTarget) ?? (latest && appPolicyRefusal(latest));
+	};
 	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {
-		assertAppNotBlocked(currentTarget);
+		const refusal = refusalForState();
+		if (refusal) throw refusal;
 	} else if (tool === "search_ui" || tool === "expand_ui") {
 		// Reuse the live-path predicates; cached queries do not require policy admission.
-		const refusal = appPolicyRefusal(currentTarget);
+		const refusal = refusalForState();
 		if (!refusal) return;
 		const currentOutline = currentOutlineOrThrow();
 		if (tool === "search_ui") {
@@ -3676,7 +3724,9 @@ async function executeTool<P, T>(
 	const operation = savedStates.hydrate(stateRecord);
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
-			await ensureReady(ctx, signal, () => assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef));
+			await ensureReady(ctx, signal, () => {
+				assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef);
+			});
 			throwIfAborted(signal);
 			// Start the tool before releasing readiness: launch_browser joins its lifecycle
 			// synchronously, so shutdown cannot drain readiness and overtake that launch.
@@ -3743,9 +3793,13 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 		if (rawDetails?.tool === "find_roots" && Array.isArray(rawDetails.windows)) {
 			for (const window of rawDetails.windows) {
 				if (typeof window?.windowRef !== "string" || !Number.isFinite(window?.pid)) continue;
+				// Results are newest first; older discoveries must not overwrite a more recent refusal.
+				if (runtimeState.windowRefs.has(window.windowRef)) continue;
 				const record: WindowRefRecord = {
 					ref: window.windowRef,
 					appName: typeof window.app === "string" ? window.app : "Unknown App",
+					appId: typeof window.appId === "string" ? window.appId : undefined,
+					legacyIdentity: !window.appId && window.identityUnresolved !== true ? true : undefined,
 					bundleId: typeof window.bundleId === "string" ? window.bundleId : undefined,
 					pid: Math.trunc(window.pid),
 					windowTitle: typeof window.windowTitle === "string" ? window.windowTitle : "(untitled)",
@@ -3782,6 +3836,8 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 
 		const target: CurrentTarget = {
 			appName: app,
+			appId: details.target.appId,
+			legacyIdentity: !details.target.appId ? true : undefined,
 			bundleId: details.target.bundleId,
 			pid: Math.trunc(details.target.pid),
 			windowTitle: details.target.windowTitle ?? "(untitled)",
