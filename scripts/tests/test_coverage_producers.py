@@ -8,14 +8,17 @@ References:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from shlex import quote
+from textwrap import dedent
 from typing import Any
 
+import pytest
 import yaml
 
 from coverage import CoverageData
@@ -77,6 +80,70 @@ def test_script_lcov_replays_from_a_different_checkout(tmp_path: Path) -> None:
         files = [line.removeprefix("SF:") for line in report if line.startswith("SF:")]
         assert files == [source]
         assert (replay_root / files[0]).resolve(strict=True) == replay_root / source
+
+
+@pytest.mark.parametrize("assertion", ["False", "True"])
+def test_script_gate_publishes_both_reports_after_pytest_failure(tmp_path: Path, assertion: str) -> None:
+    """Run miniature scripts gates with a failed test or missed coverage threshold."""
+    shutil.copyfile(ROOT / "Makefile", tmp_path / "Makefile")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "example.py").write_text("def example():\n    return 1\ndef uncovered():\n    return 2\n")
+    guard = tmp_path / "packages/preset/skills/ship-issue/sweep_guard.py"
+    guard.parent.mkdir(parents=True)
+    guard.write_text("value = 1\n")
+    tests = scripts / "tests"
+    tests.mkdir()
+    (tests / "test_sample.py").write_text(
+        f"import example, sweep_guard\ndef test_example():\n"
+        f"    assert example.example() == sweep_guard.value and {assertion}\n"
+    )
+    uv = tmp_path / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        + dedent(
+            """\
+            import os
+            import sys
+
+            tool, *args = sys.argv[5:]
+            if tool == "pytest":
+                os.execv(sys.executable, [sys.executable, "-m", tool, *args])
+            assert tool in {"ruff", "ty"}, tool
+            """
+        )
+    )
+    uv.chmod(0o755)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("COVERAGE_", "PYTEST_", "MAKE"))
+    } | {
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "PYTHONPATH": os.pathsep.join(map(str, (scripts, guard.parent))),
+    }
+    done = subprocess.run(
+        [
+            "/usr/bin/make",
+            "check-scripts-python",
+            f"COVERAGE_REPORT={quote(sys.executable)} -m coverage",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=45,
+    )
+    assert done.returncode != 0
+    assert "Error 1" in done.stderr, (done.stdout, done.stderr)
+    expected = "1 failed" if assertion == "False" else "1 passed"
+    assert expected in done.stdout
+    assert "Required test coverage of 100% not reached" in done.stdout
+    scripts_report = scripts / "coverage/python/lcov.info"
+    guard_report = tmp_path / "packages/preset/coverage/sweep-guard/lcov.info"
+    assert "SF:example.py\n" in scripts_report.read_text()
+    assert "SF:skills/ship-issue/sweep_guard.py\n" in guard_report.read_text()
 
 
 def launch_bun(tmp_path: Path, *args: str) -> list[str]:
@@ -195,11 +262,11 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     primary = sweep["signals"]["primary"]
     assert f"--cov=../{sweep['root']}/{Path(guard).parent}" in sources["scripts"].split()
     recipe = makefile.split("\nreport-script-coverage:\n", 1)[1].split("\n\n", 1)[0]
-    scripts_report, sweep_report = recipe.strip().splitlines()
-    assert scripts_report.strip().startswith("cd scripts && ")
-    assert scripts_report.endswith(f"-o {python['python-scripts']['signals']['primary']['report']}")
-    assert sweep_report.strip().startswith(f"cd {sweep['root']} && ")
-    assert sweep_report.endswith(f"-o {primary['report']}")
+    scripts_report, sweep_report = [line.strip() for line in recipe.splitlines() if " lcov " in line]
+    assert scripts_report.startswith("(cd scripts && ")
+    assert f"-o {python['python-scripts']['signals']['primary']['report']})" in scripts_report
+    assert sweep_report.startswith(f"(cd {sweep['root']} && ")
+    assert f"-o {primary['report']})" in sweep_report
     assert f"--include='*/{Path(guard).parent.name}/{Path(guard).name}'" in sweep_report
 
 
