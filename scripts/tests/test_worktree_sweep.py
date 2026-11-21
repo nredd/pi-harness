@@ -181,6 +181,16 @@ def quiet(wt: Worktrees) -> None:
             os.utime(path, (1, 1))
 
 
+def evidence_env(wt: Worktrees, base: str) -> dict[str, str]:
+    """Return the explicit evidence used by the disposable gh and lsof adapters."""
+    return {
+        "SWEEP_BASE": base,
+        "SWEEP_LIST": '[{"number": 123, "state": "MERGED"}]',
+        "SWEEP_PR": json.dumps(wt.pr),
+        "SWEEP_CWD": str(wt.repo),
+    }
+
+
 def run(
     wt: Worktrees,
     *args: str,
@@ -211,14 +221,7 @@ def run(
     """
     env = {key: value for key, value in git_env().items() if not key.startswith("SWEEP_")}
     env.pop("GH_HOST", None)
-    env |= {
-        "PATH": f"{wt.bin}{os.pathsep}{env['PATH']}",
-        "SWEEP_BASE": base,
-        "SWEEP_LIST": '[{"number": 123, "state": "MERGED"}]',
-        "SWEEP_PR": json.dumps(wt.pr),
-        "SWEEP_CWD": str(wt.repo),
-        **(variables or {}),
-    }
+    env |= {"PATH": f"{wt.bin}{os.pathsep}{env['PATH']}"} | evidence_env(wt, base) | (variables or {})
     if borrower_gitdirs is not None:
         env["SWEEP_SCOPE"] = json.dumps(list(map(str, borrower_gitdirs)))
     if inventory_suffix:
@@ -351,31 +354,79 @@ def test_unknown_scope_is_keep_only_with_fixture_evidence(wt: Worktrees, case: s
         assert "cache.git/" in str(results[0]["reasons"])
 
 
-def test_shipped_cli_is_keep_only(wt: Worktrees, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SWEEP_SCOPE", "[]")
-    monkeypatch.setenv("SWEEP_FORCE_ASSESS", "1")
+def test_shipped_cli_is_keep_only(wt: Worktrees) -> None:
+    quiet(wt)
+    receipt = wt.bin / "gh-calls"
+    # Enter through the real __main__; replace only the two external evidence
+    # providers. Git, argument parsing, assessment and verdict output stay real.
+    (wt.bin / "sitecustomize.py").write_text(
+        dedent(
+            """\
+            import subprocess
+            from pathlib import Path
+
+            run = subprocess.run
+            fixtures = Path(__file__).parent
+
+            def with_evidence_provider(cmd, *args, **kwargs):
+                name = Path(cmd[0]).name
+                if name in {"gh", "lsof"}:
+                    if name == "gh":
+                        with (fixtures / "gh-calls").open("a") as receipt:
+                            receipt.write(cmd[2] + "\\n")
+                    cmd = [str(fixtures / name), *cmd[1:]]
+                return run(cmd, *args, **kwargs)
+
+            subprocess.run = with_evidence_provider
+            """
+        )
+    )
+    env = (
+        git_env()
+        | evidence_env(wt, BASE)
+        | {
+            "PYTHONPATH": str(wt.bin),
+            "GH_HOST": "github.com",
+            "SWEEP_SCOPE": "[]",
+            "SWEEP_FORCE_ASSESS": "1",
+        }
+    )
     done = subprocess.run(
-        [sys.executable, str(GUARD), str(wt.repo), BASE, "--worktree", str(wt.repo)],
+        [sys.executable, str(GUARD), str(wt.repo), BASE, "--worktree", str(wt.path)],
         cwd=wt.repo,
-        env={key: value for key, value in git_env().items() if not key.startswith("SWEEP_")},
+        env=env,
         capture_output=True,
         check=False,
         text=True,
         timeout=TIMEOUT,
     )
-    assert done.returncode == 0
+    assert done.returncode == 0, done.stderr
     assert not done.stderr
-    assert (
-        done.stdout
-        == json.dumps(
-            {
-                "worktree": str(wt.repo.resolve()),
-                "verdict": "keep",
-                "reasons": ["cannot establish a complete external borrower scope", "main or bare checkout"],
-            }
-        )
-        + "\n"
-    )
+    assert json.loads(done.stdout) == {
+        "worktree": str(wt.path.resolve()),
+        "verdict": "keep",
+        "reasons": [
+            "cannot establish a complete external borrower scope",
+            "status not collected: tracked worktree changes were not compared",
+        ],
+    }
+    assert receipt.read_text().splitlines() == ["list", "view"]
+
+
+def test_fixture_launcher_scrubs_inherited_assessment_controls(
+    wt: Worktrees, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SWEEP_SCOPE", "[]")
+    monkeypatch.setenv("SWEEP_FORCE_ASSESS", "1")
+    (wt.path / "untracked").touch()
+    quiet(wt)
+    code, (result,) = run(wt)
+    assert code == 0
+    assert result["verdict"] == "keep"
+    reasons = result["reasons"]
+    assert isinstance(reasons, list)
+    assert reasons[0] == "cannot establish a complete external borrower scope"
+    assert "untracked or ignored paths" in str(reasons)
 
 
 def test_cli_output_cannot_emit_eligible_when_assess_returns_eligible(wt: Worktrees) -> None:
