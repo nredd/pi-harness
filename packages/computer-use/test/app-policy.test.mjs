@@ -905,6 +905,39 @@ test.for(["", "CoNsEnT.ExE"])(
 	},
 );
 
+test("Windows refuses an explicitly selected blocked saved owner before failing readiness", async ({
+	onTestFinished,
+}) => {
+	const { currentPlatformBackend } = await import("../src/platform/index.ts");
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const root = { ...policyRoot(101, "Notes", "notes.exe"), windowId: 123 };
+	const other = policyRoot(102, "Mail", "mail.exe");
+	const { bridge, call, calls, find, observe, userFile } = await useRootPolicyFixture(
+		"win32",
+		windowsHelper,
+		[root, other],
+		onTestFinished,
+	);
+	const [{ windowRef }, { windowRef: otherRef }] = await find();
+	const { stateId } = (await observe(windowRef)).details.capture;
+	root.processName = "other.exe";
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["notes.exe"] }));
+	const [latest] = await find();
+	assert.equal(latest.windowRef, windowRef);
+	assert.equal(latest.appId, "other.exe");
+	assert.equal(latest.blocked, false);
+
+	currentPlatformBackend.ensureReady = async () => {
+		calls.push("ensureReady");
+		throw new Error("readiness failed");
+	};
+	calls.length = 0;
+	await assert.rejects(call(bridge.executeObserve, { stateId, root: windowRef }), { code: "app_blocked" });
+	assert.deepEqual(calls, [], "the blocked saved owner must not reach readiness or the helper");
+	await assert.rejects(call(bridge.executeObserve, { stateId, root: otherRef }), /readiness failed/);
+	assert.deepEqual(calls, ["ensureReady"], "an explicitly selected different root does not use the saved owner");
+});
+
 test("restores Windows root identity and refuses title rebinding or legacy records", async ({ onTestFinished }) => {
 	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
 	const root = policyRoot(101, "Notes", "Notes.exe");

@@ -3681,12 +3681,13 @@ function assertCdpUseAllowed(tool: string, params: PolicyPreflightParams): void 
 /** A known blocked root must not even reach helper readiness for a live operation. */
 function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, outputRef: boolean): void {
 	const root = params?.root;
+	const { currentTarget } = operationState();
 	if (tool === "observe_ui" && root !== undefined) {
 		const known = typeof root === "string" ? runtimeState.windowRefs.get(root) : undefined;
 		if (known) assertAppNotBlocked(known);
+		if (currentTarget && currentTarget.windowRef === root) assertAppNotBlocked(currentTarget);
 		return;
 	}
-	const { currentTarget } = operationState();
 	if (!currentTarget) return;
 	const refusalForState = () => {
 		const savedRef = currentTarget.windowRef;

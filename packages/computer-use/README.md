@@ -225,7 +225,9 @@ no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, 
 Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. The Windows helper checks the owning look's PID before a live UIA text read; this does not make TypeScript admission atomic with native delivery.
 
 Known blocked desktop roots fail before helper readiness for live operations, including
-`search_ui` OCR and `expand_ui` scoped looks. On macOS this is an intentional ordering change:
+`search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
+state's `@r`, this check covers both the saved owner and the latest root record.
+On macOS this is an intentional ordering change:
 `app_blocked` wins even if helper readiness would also fail. The macOS lists, matching, and
 helper payloads are unchanged. Cached searches and expansions that need no new look remain available.
 
