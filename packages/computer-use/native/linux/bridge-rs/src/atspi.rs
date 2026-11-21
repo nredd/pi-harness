@@ -540,7 +540,7 @@ fn atspi_error(error: impl std::fmt::Display) -> ProtocolError {
 // Keep the shared test module here so `lib.rs` remains a declaration-only
 // module that the native coverage accountant can validate without an LLVM map.
 #[cfg(test)]
-#[path = "../tests/support/peer.rs"]
+#[path = "tests.rs"]
 pub(crate) mod test_peer;
 
 #[cfg(test)]
