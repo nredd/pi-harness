@@ -695,6 +695,61 @@
 			}
 		},
 		{
+			"name": "inferred-span",
+			"now": 1768478400000,
+			"timeZone": "UTC",
+			"usage": {
+				"version": 2,
+				"snapshots": [
+					{
+						"provider": "faux-subscription",
+						"status": "available",
+						"retrievedAt": 1768478400000,
+						"expiresAt": 1768478700000,
+						"windows": [
+							{
+								"name": "short-quota",
+								"scope": "provider",
+								"usedPercent": 100,
+								"basis": "reported",
+								"kind": "rolling",
+								"durationMs": 600000,
+								"spanSource": "inferred"
+							}
+						]
+					}
+				],
+				"blocks": [],
+				"views": [
+					{
+						"provider": "faux-subscription",
+						"display": { "full": "faux-subscription", "compact": "faux-subscription" },
+						"access": "unknown",
+						"snapshot": {
+							"provider": "faux-subscription",
+							"status": "available",
+							"retrievedAt": 1768478400000,
+							"expiresAt": 1768478700000,
+							"windows": [
+								{
+									"name": "short-quota",
+									"scope": "provider",
+									"usedPercent": 100,
+									"basis": "reported",
+									"kind": "rolling",
+									"durationMs": 600000,
+									"spanSource": "inferred"
+								}
+							]
+						},
+						"meters": [],
+						"pools": [],
+						"marks": []
+					}
+				]
+			}
+		},
+		{
 			"name": "metered",
 			"now": 1768478400000,
 			"timeZone": "UTC",

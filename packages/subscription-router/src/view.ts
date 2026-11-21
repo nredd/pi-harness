@@ -1,5 +1,5 @@
 import type { ExhaustionMark } from "./exhaustion.ts";
-import type { CreditPool, UsageMeter, UsageSnapshot } from "./usage.ts";
+import type { CreditPool, UsageMeter, UsageSnapshot, UsageSpanSource } from "./usage.ts";
 
 export interface ProviderDisplay {
 	full: string;
@@ -7,11 +7,13 @@ export interface ProviderDisplay {
 	footer?: { show?: Array<{ name: string } | { durationMs: number }>; placeholder?: boolean };
 }
 
+type ViewSnapshot = UsageSnapshot<UsageSpanSource>;
+
 export interface ProviderView {
 	provider: string;
 	display: ProviderDisplay;
 	access: "subscription" | "metered" | "unknown";
-	snapshot?: UsageSnapshot;
+	snapshot?: ViewSnapshot;
 	meters: UsageMeter[];
 	pools: CreditPool[];
 	marks: ExhaustionMark[];
@@ -20,7 +22,7 @@ export interface ProviderView {
 /** RPC data, inside the existing success envelope. The legacy fields retain their shape and order. */
 export interface UsageReplyV2 {
 	version: 2;
-	snapshots: UsageSnapshot[];
+	snapshots: ViewSnapshot[];
 	blocks: ExhaustionMark[];
 	views: ProviderView[];
 }
@@ -47,7 +49,7 @@ function defaultDisplay(provider: string): ProviderDisplay {
  */
 export function describe(
 	providers: readonly string[],
-	snapshots: readonly UsageSnapshot[],
+	snapshots: readonly ViewSnapshot[],
 	marks: readonly ExhaustionMark[],
 	displays?: ReadonlyMap<string, ProviderDisplay>,
 ): ProviderView[] {

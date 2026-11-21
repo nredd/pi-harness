@@ -377,7 +377,7 @@
 			"additionalProperties": false
 		},
 		"spanSource": {
-			"enum": ["reported", "assumed"]
+			"enum": ["reported", "assumed", "inferred"]
 		},
 		"resetRule": {
 			"type": "object",

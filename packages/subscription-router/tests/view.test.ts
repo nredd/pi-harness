@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { Check, type XSchema } from "typebox/schema";
-import { expect, it } from "vitest";
+import { expect, expectTypeOf, it } from "vitest";
 import { formatQuotaRow, parseUsageReply } from "../../preset/src/footer-quota.ts";
 import { describe, type UsageReplyV2 } from "../src/view.ts";
 
@@ -61,6 +61,16 @@ it.each(fixture.views)(
 		}
 	},
 );
+
+it("can report a usage percentage independently of an inferred span", () => {
+	type SpanSource = UsageReplyV2["snapshots"][number]["windows"][number]["spanSource"];
+	expectTypeOf<"inferred">().toExtend<SpanSource>();
+	const row = fixture.views.find(({ name }) => name === "inferred-span");
+	expect(row?.usage.views[0]?.snapshot?.windows[0]).toMatchObject({
+		spanSource: "inferred",
+		basis: "reported",
+	});
+});
 
 it("prefers a supplied display and preserves explicit subscription access", () => {
 	const reading = {
