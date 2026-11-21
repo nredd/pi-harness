@@ -565,6 +565,7 @@ CONTRACTS = (
             "src/router.ts",
             "src/selection.ts",
             "src/usage.ts",
+            "src/view.ts",
         ),
         required=(
             "LICENSE",

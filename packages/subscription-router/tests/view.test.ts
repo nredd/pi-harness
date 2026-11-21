@@ -1,13 +1,10 @@
 import { readFileSync } from "node:fs";
 import { Check, type XSchema } from "typebox/schema";
 import { expect, expectTypeOf, it } from "vitest";
-import { formatQuotaRow, parseUsageReply } from "../../preset/src/footer-quota.ts";
 import { describe, type UsageReplyV2 } from "../src/view.ts";
 
 type Fixture = {
 	name: string;
-	now: number;
-	timeZone: string;
 	usage: UsageReplyV2;
 	legacyRows?: { full: string; compact: string };
 };
@@ -36,31 +33,18 @@ it.each([
 	expect(Check(fixtureSchema, { ...fixture, views: [{ ...row, usage: { ...row.usage, views } }] })).toBe(false);
 });
 
-it.each(fixture.views)(
-	"builds $name without altering readings or mixing marks",
-	({ usage, now, timeZone, legacyRows }) => {
-		const providers = usage.views.map(({ provider }) => provider);
-		const displays = new Map([["google", { full: "Google", compact: "Goog" }]]);
-		// Snapshot collection order need not match the requested view order.
-		const views = describe(
-			providers,
-			[...usage.snapshots].reverse(),
-			[...usage.blocks].reverse(),
-			legacyRows ? undefined : displays,
-		);
-		expect(views).toStrictEqual(usage.views);
-
-		// Legacy byte baseline: the footer slice must reuse these golden rows against the v2 renderer.
-		if (legacyRows) {
-			const snapshots = views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
-			const state = parseUsageReply({ success: true, data: { snapshots } }, now);
-			if (!state) throw new Error("Expected a valid legacy footer reply");
-			for (const tier of ["full", "compact"] as const) {
-				expect(formatQuotaRow(state, tier, (_color, value) => value, { now, timeZone })).toBe(legacyRows[tier]);
-			}
-		}
-	},
-);
+it.each(fixture.views)("builds $name without altering readings or mixing marks", ({ usage, legacyRows }) => {
+	const providers = usage.views.map(({ provider }) => provider);
+	const displays = new Map([["google", { full: "Google", compact: "Goog" }]]);
+	// Snapshot collection order need not match the requested view order.
+	const views = describe(
+		providers,
+		[...usage.snapshots].reverse(),
+		[...usage.blocks].reverse(),
+		legacyRows ? undefined : displays,
+	);
+	expect(views).toStrictEqual(usage.views);
+});
 
 it("can report a usage percentage independently of an inferred span", () => {
 	type SpanSource = UsageReplyV2["snapshots"][number]["windows"][number]["spanSource"];

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test, vi } from "vitest";
 import * as q from "../src/footer-quota.ts";
 
@@ -20,6 +21,29 @@ const snap = (provider: string, windows: unknown[], extra: Record<string, unknow
 	...extra,
 });
 const plain = (_c: string, t: string): string => t;
+
+// Share the router's golden data, not its implementation. The router suite checks the projected views.
+const fixture = JSON.parse(
+	readFileSync(new URL("../../subscription-router/tests/fixtures/views.json", import.meta.url), "utf8"),
+) as {
+	views: {
+		name: string;
+		now: number;
+		timeZone: string;
+		usage: { views: { snapshot?: unknown }[] };
+		legacyRows?: { full: string; compact: string };
+	}[];
+};
+const legacyFixtures = fixture.views.flatMap((row) => (row.legacyRows ? [{ ...row, legacyRows: row.legacyRows }] : []));
+
+test.each(legacyFixtures)("preserves the legacy footer bytes for $name", ({ usage, now, timeZone, legacyRows }) => {
+	const snapshots = usage.views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
+	const state = q.parseUsageReply({ success: true, data: { snapshots } }, now);
+	assert.ok(state);
+	for (const tier of ["full", "compact"] as const) {
+		assert.equal(q.formatQuotaRow(state, tier, plain, { now, timeZone }), legacyRows[tier]);
+	}
+});
 
 /** Assert a fixture result exists before using it. */
 function present<T>(value: T | undefined): T {
