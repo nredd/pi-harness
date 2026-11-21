@@ -1246,6 +1246,17 @@ class LLVMReport(BaseModel):
     )
 
 
+def is_llvm_producer(producer: str) -> bool:
+    """Whether the declared producer uses LLVM source counters and region units.
+
+    Parameters:
+        producer (str): Producer name from the signal declaration.
+    Returns:
+        bool: True for raw LLVM JSON or paired LCOV and JSON.
+    """
+    return producer in {"llvm-cov", "llvm-lcov"}
+
+
 def read_llvm_reports(path: Path, signal: Signal) -> tuple[LLVMReport, dict[str, FileCoverage] | None]:
     """Read the raw export and require a matching source map for a paired LCOV signal.
 
@@ -1306,7 +1317,7 @@ def llvm_records(
     Parameters:
         root (Path): Source checkout, used to validate map-free declaration modules.
         package (Package): Structurally scoped native source inventory.
-        signal (Signal): Raw LLVM JSON producer declaration.
+        signal (Signal): Raw LLVM JSON or paired LCOV and JSON producer declaration.
         expected (set[str]): Every owned Rust source, including separately named test modules in src.
         reports_root (Path | None): Downloaded artifact root, otherwise the checkout.
     Returns:
@@ -1499,7 +1510,7 @@ def scoped_records(
         OSError: A report or source cannot be read.
         ValueError: Report or inventory validation fails.
     """
-    if signal.producer.startswith("llvm-"):
+    if is_llvm_producer(signal.producer):
         expected = set(signal.files) if signal.files is not None else inventory(root, package)
         return llvm_records(root, package, signal, expected, reports_root)
     return scoped_lcov_records(root, policy, package, signal, reports_root)
@@ -1792,14 +1803,14 @@ def account(
                             if key not in {"branches", "uncovered_branches"}
                         }
                         | {"branch_metric": "not-produced"}
-                        if signal.producer.startswith("llvm-")
+                        if is_llvm_producer(signal.producer)
                         else item
                     )
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
                     f"{label}/{runner_os} ({signal.enforcement}): "
                     f"uncovered lines={uncovered_lines}, functions={uncovered_functions}"
-                    + ("" if signal.producer.startswith("llvm-") else f", branches={uncovered_branches}")
+                    + ("" if is_llvm_producer(signal.producer) else f", branches={uncovered_branches}")
                     + (f", statements={uncovered_statements}" if reads_statements(signal) else "")
                 )
                 reference = signal.max_uncovered.get(runner_os)

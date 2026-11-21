@@ -27,6 +27,7 @@ from coverage_accounting import (
     Signal,
     account,
     check_signal_ratchet,
+    is_llvm_producer,
     parse_lcov,
 )
 
@@ -432,6 +433,21 @@ def test_llvm_rejects_each_missing_or_impossible_total(original: str, replacemen
     lcov = "SF:src/main.rs\nLF:3\nLH:1\nFNF:3\nFNH:1\nend_of_record\n"
     with pytest.raises(ValueError, match=error):
         parse_lcov(lcov.replace(original, replacement), llvm=True)
+
+
+@pytest.mark.parametrize(
+    ("producer", "uses_llvm"),
+    [
+        ("llvm-cov", True),
+        ("llvm-lcov", True),
+        ("llvm-unknown", False),
+        ("lcov", False),
+        ("coverage.py", False),
+    ],
+)
+def test_llvm_producer_selection_is_explicit(producer: str, uses_llvm: bool) -> None:
+    """Do not infer LLVM report semantics from a shared name prefix."""
+    assert is_llvm_producer(producer) is uses_llvm
 
 
 def test_windows_native_policy_cannot_loosen_or_remove_platform() -> None:
