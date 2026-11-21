@@ -174,7 +174,7 @@ def test_cli_without_badges(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         AssertionError: The boundary contract regresses.
     """
     manifest = tmp_path / "manifest.json"
-    manifest.write_text('{"wsl2":{"state":"NOT RUN","signals":{}}}')
+    manifest.write_text('{"macos-14":{"state":"NOT RUN","signals":{}}}')
     args = [
         "--artifacts",
         str(tmp_path),
@@ -198,6 +198,6 @@ def test_cli_without_badges(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         str(tmp_path / "report.md"),
     ]
     assert report.main(args) == 0
-    assert "WSL enforced signals: NOT RUN" in (tmp_path / "report.md").read_text()
+    assert "macOS enforced signals: NOT RUN" in (tmp_path / "report.md").read_text()
     assert report.main(args[:-2]) == 0
-    assert "WSL enforced signals: NOT RUN" in capsys.readouterr().out
+    assert "macOS enforced signals: NOT RUN" in capsys.readouterr().out

@@ -46,9 +46,9 @@ put the why in the commit.
     are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,
     `--event-name`, `--workflow-ref` and (on PRs only) `--head-sha`; measured-main comparison also
     requires `--baseline-identity SHA RUN ATTEMPT EVENT WORKFLOW_REF` independently of the PR inputs.
-    Fan-in evidence is Ubuntu-only on PRs; macOS is eligible on pushes and dispatches. There is no
-    WSL2 producer. Matching a record is not authentication; the caller must authenticate the run and
-    artifacts.
+    Renderer plans accept `ubuntu-24.04` and `macos-14` only. Fan-in evidence is Ubuntu-only on PRs;
+    macOS is eligible on pushes and dispatches. Matching a record is not authentication; the caller
+    must authenticate the run and artifacts.
 - `coverage/policy.json`: enforced coverage policy
 - `releases/`: generated release manifests
 
@@ -423,7 +423,7 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 - Deferred, review statuses (`migration-review/standards`, `migration-review/spec`): they are no longer required checks and the merge flow posts no commit statuses (`.github/workflows/ci.yml`), so there is nothing to read; reviews stay a process step.
 - Deferred, tap readiness when core changes: not implemented; the core release's asset digests and attestation are the only core gate, and a tap bump is gated by its own green CI.
 - Registry-stack evidence: the exact full `workflow_dispatch` run validated by `pi_release.release_gate`. Every owned and contracts cell, each stack cell that runs a stack, and the core gate must actually execute, with retained nonempty per-cell artifacts whose `workflow_run` id and `head_sha` match. Both step names and artifact templates are bounded producer contracts guarded by tests; update the verifier alongside producer renames. The personal stack installs the explicit sources from the registry and the core release into a disposable tree.
-- Why the artifact: a skipped cell still reports its job as `success` (recorded run `39545048647` shows `stack (macos-14, personal)` green on a main push though it ran nothing). `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`, so PR bypass cells never produce it. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
+- Why the artifact: a green job context does not prove the scenario ran. `ci.yml` uploads `stack-<os>-<stack>` only when `steps.plan.outputs.run == 'true'`. On PRs only Ubuntu cells exist, and bypassed Ubuntu cells do not produce the artifact. The verifier matches only the exact artifact name, and a test guards that template in `ci.yml`.
 - Push, PR and docs-only runs never qualify: only a full `ci.yml` dispatch of the exact SHA does, and it skips no docs or stack-input shortcut, so a docs-only candidate is promotable once dispatched; see [release verification](#frozen-release-verification). Differently named artifacts are not promotion substitutes. Artifacts expire with CI retention, so an old SHA must be dispatched again before it can be promoted.
 - Owned packages: `scripts/npm_release.py stack-check` runs per `@nredd/` source against a worktree of its exact tag: registry presence, npm `audit signatures` (signature and attestation), and the SLSA provenance binding to `publish.yml`, the tag and the commit. The registry lookup (`npm view`) runs in a fresh empty directory with `NPM_CONFIG_USERCONFIG=/dev/null` and `--registry https://registry.npmjs.org`, so a `.npmrc` in the selected tag's tree cannot steer it.
 - Core: asset digests are compared with the release's `SHA256SUMS`. For non-legacy tags `SHA256SUMS` is a mutable release asset, so each recorded asset is also downloaded, hashed against the recorded digest, and verified read-only with `gh attestation verify --repo nredd/pi --signer-workflow nredd/pi/.github/workflows/fork-release.yml --source-ref refs/tags/<tag>`. Legacy tags `v1.3.0-nredd.3` through `.7` predate that workflow and rely on the frozen `LEGACY_CHECKSUMS` hashes.
@@ -440,7 +440,7 @@ The CI evidence is the only coupling to CI: run IDs are read with `gh run list/v
 
 ### Required-check visibility
 
-The four required checks live in ruleset `main required checks` (id `25524267`, non-strict). See [CI](.github/workflows/ci.yml) for which of them are bypass cells: a green bypass cell is a reported name, not evidence, which is why the registry-stack artifact below is the evidence. The verifier discovers the live contexts rather than hard-coding eight, nine or twelve, so `GET /repos/nredd/pi-harness/rules/branches/main` returns them to `GITHUB_TOKEN` with no extra token. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
+The required checks live in ruleset `main required checks` (id `25524267`, non-strict). The verifier discovers the live contexts via `GET /repos/nredd/pi-harness/rules/branches/main` with `GITHUB_TOKEN`. Green required checks do not replace evidence from the full dispatch. Classic branch protection is not read: if the rules API yields no check, `verify_required_checks` fails closed.
 
 ### Operations
 

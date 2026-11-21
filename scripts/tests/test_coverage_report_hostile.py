@@ -229,11 +229,13 @@ def test_stored_member_declared_just_over_json_limit_is_refused(tmp_path: Path) 
         report.read_summary(path)
 
 
-def test_one_bad_host_degrades_only_that_host(tmp_path: Path) -> None:
+@pytest.mark.parametrize("bad_zip", [True, False])
+def test_one_bad_host_degrades_only_that_host(tmp_path: Path, bad_zip: bool) -> None:
     """A malformed ZIP or summary for one OS leaves it unavailable with a bounded reason, others render.
 
     Parameters:
         tmp_path (Path): Scratch directory.
+        bad_zip (bool): Supply a malformed ZIP instead of malformed summary JSON.
 
     Returns:
         None: The boundary contract is satisfied.
@@ -242,28 +244,31 @@ def test_one_bad_host_degrades_only_that_host(tmp_path: Path) -> None:
         AssertionError: The boundary contract regresses.
     """
     manifest = tmp_path / "plan.json"
-    manifest.write_text(json.dumps({host: plan_document() for host in ("ubuntu-24.04", "macos-14", "wsl2")}))
+    manifest.write_text(json.dumps({host: plan_document() for host in ("ubuntu-24.04", "macos-14")}))
     good = tmp_path / "coverage-ubuntu-24.04" / "coverage" / "summary.json"
     good.parent.mkdir(parents=True)
     good.write_text(json.dumps(summary_document()))
     good.with_name("provenance.json").write_text(
         json.dumps(PROVENANCE.record("owned-ubuntu", "coverage-ubuntu-24.04"))
     )
-    (tmp_path / "coverage-macos-14.zip").write_text("not a zip")
-    bad = tmp_path / "coverage-wsl2" / "coverage" / "summary.json"
-    bad.parent.mkdir(parents=True)
-    bad.write_text('{"x":1,"' + "k" * 1000 + '":1,"' + "k" * 1000 + '":2}')
+    if bad_zip:
+        (tmp_path / "coverage-macos-14.zip").write_text("not a zip")
+    else:
+        bad = tmp_path / "coverage-macos-14" / "coverage" / "summary.json"
+        bad.parent.mkdir(parents=True)
+        bad.write_text('{"x":1,"' + "k" * 1000 + '":1,"' + "k" * 1000 + '":2}')
+        bad.with_name("provenance.json").write_text(
+            json.dumps(PROVENANCE.record("owned-macos", "coverage-macos-14"))
+        )
     cells = {cell.host: cell for cell in report.load_evidence(tmp_path, manifest, PROVENANCE)}
     assert cells["ubuntu-24.04"].summary is not None
-    for host in ("macos-14", "wsl2"):
-        assert cells[host].summary is None
-        assert cells[host].state == "unavailable"
-        assert 0 < len(cells[host].reason) <= report.MAX_REASON
+    assert cells["macos-14"].summary is None
+    assert cells["macos-14"].state == "unavailable"
+    assert 0 < len(cells["macos-14"].reason) <= report.MAX_REASON
     markdown = report.render_markdown(tuple(cells.values()), PROVENANCE)
     assert "Ubuntu enforced signals: 1/1 zero uncovered" in markdown
     assert "macOS enforced signals: unavailable" in markdown
-    assert "WSL enforced signals: unavailable" in markdown
-    assert markdown.count("Unavailable:") == 2
+    assert markdown.count("Unavailable:") == 1
     assert "pkg&#47;primary | unavailable | unavailable | unavailable | unavailable" in markdown
     assert "pkg&#47;primary | 4/4 (0)" in markdown
 
@@ -335,8 +340,24 @@ def test_bad_manifest_still_fails_the_report(tmp_path: Path) -> None:
         AssertionError: The boundary contract regresses.
     """
     manifest = tmp_path / "plan.json"
-    manifest.write_text(json.dumps({"wsl2": plan_document() | {"signals": {"pkg/primary": {}}}}))
+    manifest.write_text(json.dumps({"ubuntu-24.04": plan_document() | {"signals": {"pkg/primary": {}}}}))
     with pytest.raises(ValueError, match=r"^Expected bounded text without control or format characters$"):
+        report.load_evidence(tmp_path, manifest, PROVENANCE)
+
+
+def test_retired_host_fails_the_report(tmp_path: Path) -> None:
+    """Reject a retired host even if the manifest requests no artifact for it.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+    Returns:
+        None: The retired host cannot render.
+    Raises:
+        AssertionError: The retired host renders as NOT RUN.
+    """
+    manifest = tmp_path / "plan.json"
+    manifest.write_text(json.dumps({"wsl2": {"state": "NOT RUN", "signals": {}}}))
+    with pytest.raises(ValueError, match=r"^Invalid evidence host$"):
         report.load_evidence(tmp_path, manifest, PROVENANCE)
 
 
