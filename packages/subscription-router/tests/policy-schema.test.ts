@@ -28,6 +28,52 @@ const rolling = { name: "roll", kind: "rolling", durationMinutes: 10, unit: "usd
 const resetRule = { at: "00:00", timeZone: "America/Los_Angeles", every: "day" };
 const calendar = { name: "daily", kind: "calendar", resetRule, unit: "requests", scope: "model" };
 
+it("accepts the section 7 Google subscription config and its worked collector declaration", () => {
+	// The spec's literal JSON contains only labels; its surrounding worked example describes the windows.
+	const document = JSON.parse(
+		readFileSync(new URL("./fixtures/google-subscription-config.json", import.meta.url), "utf8"),
+	);
+	const providers = {
+		"google-subscription": {
+			...document.providers["google-subscription"],
+			collector: { id: "google-subscription" },
+			evidence: ["read", "failure"],
+			windows: [
+				{ name: "5h", kind: "rolling", durationMinutes: 300, unit: "requests", scope: "provider" },
+				{ name: "7d", kind: "rolling", durationMinutes: 10080, unit: "requests", scope: "provider" },
+				calendar,
+			],
+		},
+	};
+	const profiles = [
+		{
+			id: "deep",
+			name: "Router deep",
+			strategy: "balanced",
+			chain: [
+				{ provider: "anthropic", id: "claude-sonnet-5-5" },
+				{ provider: "google-subscription", id: "gemini-4-neon" },
+				{ provider: "google", id: "gemini-4-neon" },
+			],
+		},
+	];
+	for (const worked of [document, { ...document, providers }]) {
+		expect(Check(schema, worked)).toBe(true);
+		expect(parseConfigDocument(worked)).toEqual({ profiles, providers: worked.providers });
+	}
+});
+
+it("accepts Unknown/Nowhere in the schema shape but rejects it in the loader via Intl", () => {
+	const document = {
+		profiles: {},
+		providers: { p: { windows: [{ ...calendar, resetRule: { ...resetRule, timeZone: "Unknown/Nowhere" } }] } },
+	};
+	expect(Check(schema, document)).toBe(true);
+	expect(() => parseConfigDocument(document)).toThrow(
+		'providers.p.windows[0].resetRule.timeZone: unknown IANA time zone "Unknown/Nowhere"',
+	);
+});
+
 it("accepts the shipped provider declarations in the schema and parser", () => {
 	const document = JSON.parse(readFileSync(new URL("../examples/providers.json", import.meta.url), "utf8"));
 	expect(Check(schema, document)).toBe(true);
