@@ -1,9 +1,9 @@
 // A managed browser that survives SIGKILL is reported and its profile is still removed (nredd/pi-harness#712, Refs #645).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 
 const spawned = vi.hoisted(() => ({ children: /** @type {import('node:child_process').ChildProcess[]} */ ([]) }));
@@ -26,8 +26,8 @@ const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import
 describe.skipIf(process.platform === "win32")("managed browser that outlives SIGKILL", () => {
 	let scratch;
 
-	beforeEach(() => {
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cu-stuck-"));
+	beforeEach(({ onTestFinished }) => {
+		scratch = makeTestTempDir("pi-cu-stuck-", onTestFinished);
 		vi.stubEnv("TMPDIR", scratch);
 		vi.stubEnv("FAKE_BROWSER_LOG", path.join(scratch, "launch.json"));
 		vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", FAKE_BROWSER);
@@ -36,7 +36,6 @@ describe.skipIf(process.platform === "win32")("managed browser that outlives SIG
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.unstubAllEnvs();
-		fs.rmSync(scratch, { recursive: true, force: true });
 	});
 
 	test("shutdown gives up after SIGTERM and SIGKILL both go unanswered, and still removes the profile", async () => {

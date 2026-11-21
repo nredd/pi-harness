@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -18,11 +18,9 @@ const sh = (cwd: string, args: string[], env: NodeJS.ProcessEnv = ENV): string =
 
 const mock = createToolHost();
 beforeAll(() => registerGitTools(mock.pi));
-const roots: string[] = [];
 const oldPath = process.env.PATH;
 afterEach(() => {
 	process.env.PATH = oldPath;
-	for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
 });
 
 /**
@@ -30,8 +28,7 @@ afterEach(() => {
  * `a.txt`, then `Second` by `bob` touching `b.txt`.
  */
 function fixture(): { root: string; repo: string; origin: string } {
-	const root = mkdtempSync(join(tmpdir(), "pi-dev-tools-branches-"));
-	roots.push(root);
+	const root = makeTestTempDir("pi-dev-tools-branches-", onTestFinished);
 	const origin = join(root, "origin.git");
 	const repo = join(root, "repo");
 	execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);

@@ -23,6 +23,7 @@ import coverage_provenance as producer
 import coverage_report as report
 from coverage_provenance_record import (
     MAX_PROVENANCE_BYTES,
+    SEMANTICS_FIELD,
     Provenance,
     ProvenanceRecord,
     producer_job,
@@ -350,7 +351,10 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_h
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     fixture_git(checkout, "-c", "init.templateDir=", "init", "--quiet")
-    fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "--allow-empty", "-m", "Producer commit")
+    cfg = checkout / "vitest.config.ts"
+    cfg.write_text("export default { test: { coverage: { provider: 'v8' } } }\n")
+    fixture_git(checkout, "add", cfg.name)
+    fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "-m", "Producer commit")
     tested_sha = fixture_git(checkout, "rev-parse", "HEAD").strip()
     fixture_git(checkout, "update-ref", "refs/heads/HEAD", tested_sha)
     fixture_git(checkout, "config", "core.warnAmbiguousRefs", "true")
@@ -360,24 +364,38 @@ def test_producer_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, from_h
     env = git_env()
     assert env["GIT_CONFIG_GLOBAL"] == os.devnull
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts/coverage_provenance.py"),
-            "--cell",
-            CELL,
-            "--output",
-            str(output),
-        ],
-        cwd=checkout,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "refname 'HEAD' is ambiguous" in result.stderr
-    assert json.loads(output.read_text()) == RECORD | {"tested_sha": tested_sha}
+    summary = checkout / "summary.json"
+    summary.write_text('{"packages":{}}\n')
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts/coverage_provenance.py"),
+        "--cell",
+        CELL,
+        "--output",
+        str(output),
+        "--summary",
+        str(summary),
+    ]
+    stamped = []
+    for name, content in [("src.ts", "first"), ("src.ts", "second"), (cfg.name, "other provider")]:
+        (checkout / name).write_text(content)
+        fixture_git(checkout, "add", name)
+        fixture_git(checkout, "-c", no_hooks, "commit", "--quiet", "-m", "Change input")
+        tested_sha = fixture_git(checkout, "-c", "core.warnAmbiguousRefs=false", "rev-parse", "HEAD").strip()
+        result = subprocess.run(
+            cmd, cwd=checkout, env=env, capture_output=True, text=True, check=False, timeout=30
+        )
+        assert result.returncode == 0, result.stderr
+        assert "refname 'HEAD' is ambiguous" in result.stderr
+        payload = json.loads(summary.read_text())
+        fingerprint = payload[producer.SEMANTICS_FIELD]
+        assert payload == {"packages": {}, producer.SEMANTICS_FIELD: fingerprint}
+        assert json.loads(output.read_text()) == RECORD | {
+            "tested_sha": tested_sha,
+            producer.SEMANTICS_FIELD: fingerprint,
+        }
+        stamped.append(fingerprint)
+    assert stamped[0] == stamped[1] != stamped[2]
     assert fixture_git(caller, "rev-parse", "HEAD").strip() == caller_sha
     assert fixture_git(caller, "show-ref", "--heads") == caller_refs
 
@@ -430,6 +448,141 @@ def test_invalid_checkout_or_job_does_not_leave_a_sidecar(
     assert producer.main(["--cell", CELL, "--output", str(output)]) == 1
     assert not output.exists()
     assert message in caplog.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".node-version",
+        ".bun-version",
+        ".python-version",
+        ".npmrc",
+        ".github/actions/setup/action.yml",
+        ".github/workflows/ci.yml",
+        "coverage/policy.json",
+        "scripts/run-vitest.ts",
+        "scripts/.coveragerc",
+        "scripts/setup.cfg",
+        "scripts/tox.ini",
+        "scripts/pyproject.toml",
+        "release/.coveragerc",
+        "release/setup.cfg",
+        "release/tox.ini",
+        "release/pyproject.toml",
+        "tests/integration/.coveragerc",
+        "tests/integration/setup.cfg",
+        "tests/integration/tox.ini",
+        "tests/integration/pyproject.toml",
+        "tests/integration/uv.lock",
+        "tests/integration/probes/vitest.config.ts",
+        "packages/subagents/vitest.workflow-examples.config.ts",
+        "packages/session-kit/tests/fixtures/monitor/worker-death.vitest.config.ts",
+        "packages/subagents/vite.config.ts",
+        "packages/subagents/istanbul.config.js",
+        "packages/subagents/nyc.config.js",
+        "packages/subagents/tsconfig.json",
+        "tsconfig.base.json",
+        "scripts/vitest-package.ts",
+        "tests/lib/src/isolated-home.ts",
+        "tests/lib/src/home-setup.ts",
+        "tests/lib/src/home-guard.ts",
+        "tests/lib/src/sandbox.ts",
+        "packages/plan-mode/tests/fixtures/vitest.global-setup.ts",
+        "packages/plan-mode/tests/fixtures/vitest.setup.ts",
+        "packages/plan-mode/tests/fixtures/vitest.runner.ts",
+        "packages/plan-mode/tests/fixtures/test-timeout-policy.ts",
+        "packages/todo/tests/fixtures/setup.ts",
+        "packages/subagents/tests/fixtures/tmp-root-setup.ts",
+        "packages/subagents/tests/workflow/workflow-examples.test.ts",
+        "packages/subagents/src/workflow/runtime.ts",
+        "packages/subagents/src/workflow/worker-source.ts",
+        "package-lock.json",
+        "packages/computer-use/Makefile",
+        "packages/computer-use/scripts/swift-coverage.mjs",
+        "packages/computer-use/scripts/rust-coverage.mjs",
+        "packages/computer-use/native/Bridge.xcconfig",
+        "packages/computer-use/native/Package.swift",
+        "packages/computer-use/native/Package.resolved",
+        "packages/computer-use/native/.swiftpm/settings.json",
+        "packages/computer-use/native/linux/bridge-rs/Cargo.toml",
+        "packages/computer-use/native/linux/bridge-rs/Cargo.lock",
+        "packages/computer-use/native/linux/bridge-rs/build.rs",
+        "packages/computer-use/native/linux/bridge-rs/.cargo/settings.toml",
+        "rust-toolchain.toml",
+    ],
+)
+def test_each_instrumentation_input_suppresses_delta(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Change exactly one Git tree entry and require incompatible measured-main deltas.
+
+    Parameters:
+        path (str): A committed producer input or discoverable configuration path.
+        monkeypatch (pytest.MonkeyPatch): Scoped Git tree response.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Changing the input did not suppress the delta.
+    """
+    fixed = b"100644 blob 1111\tMakefile\0"
+    entry = b"\t" + path.encode() + b"\0"
+    tree = Mock(side_effect=[fixed + b"100644 blob 2222" + entry, fixed + b"100644 blob 3333" + entry])
+    monkeypatch.setattr(producer.subprocess, "check_output", tree)
+    before = producer.semantics_fingerprint(RUN.tested_sha)
+    after = producer.semantics_fingerprint(RUN.tested_sha)
+    assert before != after
+    manifest = plan()
+    signals = tuple(report.Signal.parse(name, value) for name, value in manifest["signals"].items())
+    baseline = report.Evidence(
+        HOST, "available", signals, report.Summary.parse(document() | {SEMANTICS_FIELD: before})
+    )
+    current = report.Evidence(
+        HOST, "available", signals, report.Summary.parse(document() | {SEMANTICS_FIELD: after})
+    )
+    assert (
+        report.measured_delta(current, baseline, signals[0])
+        == "not comparable: instrumentation fingerprints differ"
+    )
+
+
+@pytest.mark.parametrize("package", ["todo", "session-kit", "subagents"])
+def test_application_config_preserves_fingerprint(package: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not treat an application file named `config.ts` as coverage configuration.
+
+    Parameters:
+        package (str): Package whose application configuration changes.
+        monkeypatch (pytest.MonkeyPatch): Scoped Git tree response.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The application edit changed the instrumentation fingerprint.
+    """
+    fixed = b"100644 blob 1111\tMakefile\0"
+    entry = f"\tpackages/{package}/src/config.ts\0".encode()
+    tree = Mock(side_effect=[fixed + b"100644 blob 2222" + entry, fixed + b"100644 blob 3333" + entry])
+    monkeypatch.setattr(producer.subprocess, "check_output", tree)
+    assert producer.semantics_fingerprint(RUN.tested_sha) == producer.semantics_fingerprint(RUN.tested_sha)
+
+
+@pytest.mark.parametrize("failure", ["no-git", "git-failed", "no-inputs"])
+def test_unavailable_fingerprint(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
+    """Do not generate a compatibility fingerprint without instrumentation evidence.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Scoped subprocess overrides.
+        failure (str): Missing instrumentation case.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Invalid evidence generated a stamp.
+    """
+    monkeypatch.setattr(producer.shutil, "which", lambda _: None if failure == "no-git" else "/git")
+    git = Mock(return_value=b"100644 blob deadbeef\tscripts/tests/fixture.py\0")
+    if failure == "git-failed":
+        git.side_effect = subprocess.TimeoutExpired("git", 30)
+    monkeypatch.setattr(producer.subprocess, "check_output", git)
+    with pytest.raises(
+        (FileNotFoundError, ValueError), match=r"locate `git`|coverage instrumentation inputs"
+    ):
+        producer.semantics_fingerprint(RUN.tested_sha)
 
 
 def test_ci_wires_receipts_to_existing_uploads() -> None:

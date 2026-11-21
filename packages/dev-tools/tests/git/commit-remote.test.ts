@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
@@ -22,15 +22,10 @@ const sh = (cwd: string, args: string[]): string =>
 
 const mock = createToolHost();
 beforeAll(() => registerGitTools(mock.pi));
-const roots: string[] = [];
-afterEach(() => {
-	for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
-});
 
 /** A clone with `upstream` and `fork` bare remotes, one initial commit on `main` pushed to both. */
 function fixture(): { repo: string; upstream: string; fork: string; root: string } {
-	const root = mkdtempSync(join(tmpdir(), "pi-dev-tools-remote-"));
-	roots.push(root);
+	const root = makeTestTempDir("pi-dev-tools-remote-", onTestFinished);
 	const upstream = join(root, "upstream.git");
 	const fork = join(root, "fork.git");
 	const repo = join(root, "repo");

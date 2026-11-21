@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { existsSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { parseArgs, runCoverage, TOOL_VERSION } from "../scripts/rust-coverage.mjs";
 
@@ -14,14 +14,13 @@ const goodLcov = `SF:${source}\nend_of_record\n`;
 
 let output;
 let logged;
-beforeEach(() => {
-	output = mkdtempSync(path.join(os.tmpdir(), "cu-rust-cov-errors-"));
+beforeEach(({ onTestFinished }) => {
+	output = makeTestTempDir("cu-rust-cov-errors-", onTestFinished);
 	logged = vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterEach(() => {
 	logged.mockRestore();
 	vi.unstubAllEnvs();
-	rmSync(output, { recursive: true, force: true });
 });
 
 /** Fake `cargo`: answers `--version`, then writes (or withholds) each report. */

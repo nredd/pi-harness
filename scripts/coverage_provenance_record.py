@@ -22,6 +22,8 @@ CI_EVENTS = {"pull_request", "push", "workflow_dispatch"}
 MAX_INT_DIGITS = 20
 FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+SEMANTICS_FIELD = "counter_semantics_v1"
+SEMANTICS_ID = re.compile(r"[0-9a-f]{64}\Z")
 SAFE_REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
@@ -241,6 +243,24 @@ def read_record(path: Path) -> dict[str, object]:
         return decode_record(stream.read(MAX_PROVENANCE_BYTES + 1))
 
 
+def counter_semantics(value: dict[str, object]) -> str | None:
+    """Read the versioned counter fingerprint; legacy data has no compatibility evidence.
+
+    Parameters:
+        value (dict[str, object]): Producer summary or provenance record.
+    Returns:
+        str | None: Validated producer fingerprint, if present.
+    Raises:
+        ValueError: The fingerprint is present but invalid.
+    """
+    if SEMANTICS_FIELD not in value:
+        return None
+    fingerprint = text_value(value[SEMANTICS_FIELD])
+    if not SEMANTICS_ID.fullmatch(fingerprint):
+        raise ValueError("Invalid counter semantics fingerprint")
+    return fingerprint
+
+
 def validate_record(record: dict[str, object], expected: ProvenanceRecord) -> None:
     """Require exact fields, JSON types and values, with no identity inferred from artifact metadata.
 
@@ -252,7 +272,8 @@ def validate_record(record: dict[str, object], expected: ProvenanceRecord) -> No
     Raises:
         ValueError: The record lacks a field, has a wrong type or disagrees with the trusted identity.
     """
-    if record.keys() != expected.keys() or any(
+    counter_semantics(record)
+    if record.keys() - {SEMANTICS_FIELD} != expected.keys() or any(
         type(record[key]) is not type(value) or record[key] != value for key, value in expected.items()
     ):
         raise ValueError("Coverage provenance does not match the expected run and producer")

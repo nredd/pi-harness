@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished, vi } from "vitest";
 
 const failing = vi.hoisted(() => ({ on: false }));
 vi.mock("node:fs", async (importOriginal) => {
@@ -29,8 +29,8 @@ const git = (cwd: string, args: string[]) =>
 	execFileSync("git", ["-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: ENV });
 
 it("removes the proxy directory when writing the hook proxy fails", async () => {
-	const repo = mkdtempSync(join(tmpdir(), "pi-dev-tools-merge-fail-"));
-	const scratch = mkdtempSync(join(tmpdir(), "pi-dev-tools-merge-scratch-"));
+	const repo = makeTestTempDir("pi-dev-tools-merge-fail-", onTestFinished);
+	const scratch = makeTestTempDir("pi-dev-tools-merge-scratch-", onTestFinished);
 	const originalTmp = process.env.TMPDIR;
 	try {
 		git(repo, ["init", "-q", "-b", "main"]);
@@ -53,7 +53,5 @@ it("removes the proxy directory when writing the hook proxy fails", async () => 
 		failing.on = false;
 		if (originalTmp === undefined) delete process.env.TMPDIR;
 		else process.env.TMPDIR = originalTmp;
-		rmSync(scratch, { recursive: true, force: true });
-		rmSync(repo, { recursive: true, force: true });
 	}
 });
