@@ -1,7 +1,8 @@
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, expect, test } from "vitest";
-import { nextEvent, outcomes, settled, text, toolCall, toolCalls } from "../src/faux.ts";
+import { nextEvent, outcomes, registerGoogleFauxProvider, settled, text, toolCall, toolCalls } from "../src/faux.ts";
 import { createHarness, fauxAssistantMessage, type Harness } from "../src/harness.ts";
 
 const factory: ExtensionFactory = (pi) => {
@@ -27,6 +28,17 @@ async function start(): Promise<Harness> {
 	harnesses.push(harness);
 	return harness;
 }
+
+test("registers a faux Gemini model under the Google provider id", () => {
+	const google = registerGoogleFauxProvider();
+	try {
+		expect(getApiProvider(google.api)).toBeDefined();
+		expect(google.getModel()).toMatchObject({ provider: "google", id: "gemini-4-carbon" });
+	} finally {
+		google.unregister();
+	}
+	expect(getApiProvider(google.api)).toBeUndefined();
+});
 
 test("builders script real tool-use turns", () => {
 	const one = toolCall("echo", { value: "a" });
