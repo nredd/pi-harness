@@ -1,5 +1,5 @@
 /** Shipped JSON Schema and runtime parser share the same policy acceptance fixtures. */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
@@ -16,12 +16,24 @@ it.each(POLICY_CASES)("schema/runtime acceptance parity: $policy", ({ policy, va
 	if (valid) expect(() => parseConfig(document)).not.toThrow();
 	else expect(() => parseConfig(document)).toThrow();
 });
-it("ships valid opt-in examples without migrating legacy profile membership", () => {
-	for (const name of ["subscription-router", "policies"]) {
-		const document = JSON.parse(readFileSync(new URL(`../examples/${name}.json`, import.meta.url), "utf8"));
-		expect(Check(schema, document)).toBe(true);
-		expect(parseConfig(document).length).toBeGreaterThan(0);
-	}
+const examples = new URL("../examples/", import.meta.url);
+const exampleFiles = readdirSync(examples)
+	.filter((name) => name.endsWith(".json"))
+	.sort();
+
+it.each(exampleFiles)("accepts shipped example %s in both validators", (name) => {
+	const document = JSON.parse(readFileSync(new URL(name, examples), "utf8"));
+	expect(Check(schema, document)).toBe(true);
+	expect(() => parseConfigDocument(document)).not.toThrow();
+});
+
+it.each([
+	["subscription-router.json", 2],
+	["policies.json", 3],
+	["providers.json", 0],
+] as const)("keeps %s profile membership at %i", (name, count) => {
+	const document = JSON.parse(readFileSync(new URL(name, examples), "utf8"));
+	expect(parseConfig(document)).toHaveLength(count);
 });
 
 const rolling = { name: "roll", kind: "rolling", durationMinutes: 10, unit: "usd", scope: "provider" };
@@ -72,12 +84,6 @@ it("accepts Unknown/Nowhere in the schema shape but rejects it in the loader via
 	expect(() => parseConfigDocument(document)).toThrow(
 		'providers.p.windows[0].resetRule.timeZone: unknown IANA time zone "Unknown/Nowhere"',
 	);
-});
-
-it("accepts the shipped provider declarations in the schema and parser", () => {
-	const document = JSON.parse(readFileSync(new URL("../examples/providers.json", import.meta.url), "utf8"));
-	expect(Check(schema, document)).toBe(true);
-	expect(parseConfigDocument(document)).toEqual({ ...document, profiles: [] });
 });
 
 it.each([
