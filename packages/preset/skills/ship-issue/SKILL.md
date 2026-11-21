@@ -194,8 +194,9 @@ spawned by a parent for this issue. Never hand off to yourself.
 ## 10. Report
 
 Short. Issue -> branch -> PR URL -> gate result -> review outcome -> guarded sweep report. For each
-retained worktree report the path, reason, and actual `git status --porcelain --ignored --untracked-files=all`
-output (or the scan error). No closing summary paragraph, no restating the plan back.
+retained worktree report the path and only the guard's reasons and any status evidence it already
+collected. Never run a standalone `git status` (or `git diff`) on a retained worktree to fill in
+evidence: it can run configured filters. No closing summary paragraph, no restating the plan back.
 
 ## Guardrails
 

@@ -78,9 +78,10 @@ publish/deploy. Do not impose that gate on ordinary PR merges.
 
 Parent only. Use the [guard beside ship-issue](../ship-issue/SKILL.md#worktree-sweep-verdicts)
 for the candidate decisions. Supply known ownership and retained directory holds. If anything
-is unverifiable, keep the worktree; report the guard reason and the actual status output (or scan
-error), not file contents. Keep disputed files and refs until the operator preserves or resolves them,
-then rerun the guard. Do not bypass a keep verdict.
+is unverifiable, keep the worktree; report only the guard's reasons and any status evidence it already
+collected, not file contents. Never run a standalone `git status` (or `git diff`) on a retained worktree to fill in
+evidence: it can run configured filters. Keep disputed files and refs until the operator preserves or
+resolves them, then rerun the guard. Do not bypass a keep verdict.
 
 This rollout is keep-only: the shipped CLI cannot prove a closed borrower scope and never emits
 `eligible`. Do not remove worktrees, branches or scratch. No automatic prune and no call to the

@@ -926,6 +926,17 @@ def test_shipped_skills_keep_claimed_scratch_at_handback() -> None:
     assert "Before handback, remove" not in worker
     assert "With the shipped guard, do not delete scratch" in parent
 
+    for skill in (worker, parent):
+        prose = " ".join(skill.replace("`", "").split())
+        warning = (
+            "Never run a standalone git status (or git diff) on a retained worktree to fill in "
+            "evidence: it can run configured filters."
+        )
+        assert warning in prose
+        remaining = prose.replace(warning, "")
+        assert "git status" not in remaining
+        assert "git diff" not in remaining
+
 
 def test_shipped_program_uses_python_38_grammar() -> None:
     ast.parse(GUARD.read_text(), feature_version=(3, 8))
