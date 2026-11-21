@@ -166,6 +166,7 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
         "contains": lambda haystack, needle: needle in haystack,
         "cancelled": lambda: context.get("cancelled") == "true",
         "always": lambda: True,
+        "false": False,
     }
     return eval(body.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}} | functions)
 
@@ -572,6 +573,24 @@ def test_main_pushes_never_share_a_concurrency_group() -> None:
     )
 
 
+def test_dispatch_admission_is_private_even_at_the_same_sha() -> None:
+    """Do not let a same-SHA push or dispatch evict a pending dispatch."""
+    group = yaml.safe_load(WORKFLOW.read_text())["concurrency"]["group"]
+    push = {"github.event_name": "push", "github.sha": "abc", "github.run_id": "1", "github.run_attempt": "1"}
+    dispatch = push | {"github.event_name": "workflow_dispatch", "github.run_id": "2"}
+    assert (
+        len(
+            {
+                render(group, push),
+                render(group, dispatch),
+                render(group, dispatch | {"github.run_id": "3"}),
+                render(group, dispatch | {"github.run_attempt": "2"}),
+            }
+        )
+        == 4
+    )
+
+
 def test_only_macos_execution_jobs_share_push_concurrency_groups() -> None:
     """Supersede the same macOS cell across pushes, never a sibling, PR or dispatch."""
     cells = {
@@ -593,14 +612,18 @@ def test_only_macos_execution_jobs_share_push_concurrency_groups() -> None:
         assert matrix
         concurrency = cfg[name]["concurrency"]
         for cell in matrix:
-            context = {f"matrix.{key}": value for key, value in cell.items()} | {
-                "github.workflow": "CI",
-                "github.ref": "refs/heads/main",
-                "github.event_name": "push",
-                "github.run_id": "1",
-                "github.run_attempt": "1",
-                "github.sha": "abc",
-            }
+            context = (
+                classify_context(Trigger(event="push"))
+                | {f"matrix.{key}": value for key, value in cell.items()}
+                | {
+                    "github.workflow": "CI",
+                    "github.ref": "refs/heads/main",
+                    "github.event_name": "push",
+                    "github.run_id": "1",
+                    "github.run_attempt": "1",
+                    "github.sha": "abc",
+                }
+            )
             group = concurrency["group"]
             cancel = concurrency["cancel-in-progress"]
             push = render(group, context)
@@ -609,7 +632,9 @@ def test_only_macos_execution_jobs_share_push_concurrency_groups() -> None:
             assert evaluate(cancel, context) is evaluate(cancel, later) is True
             assert push not in groups
             groups.add(push)
-            assert render(group, context | {"github.ref": "refs/heads/other"}) != push
+            other_branch = context | {"github.ref": "refs/heads/other"}
+            assert evaluate(cancel, other_branch) is False
+            assert render(group, other_branch) != push
             assert render(group, context | {"github.workflow": "other"}) != push
             if name == "stack-macos":
                 assert render(group, context | {"matrix.stack": "personal"}) != push
@@ -626,7 +651,36 @@ def test_only_macos_execution_jobs_share_push_concurrency_groups() -> None:
                 )
                 == 4
             )
-            assert evaluate(cancel, context | {"github.event_name": "pull_request"}) is False
+            pr = context | {"github.event_name": "pull_request", "github.ref": "refs/pull/42/merge"}
+            # Keep an executing plan here so the event guard is tested independently of classification.
+            assert not evaluate(cfg[name]["if"], pr)
+            assert evaluate(cancel, pr) is False
+            assert len({push, render(group, pr), render(group, pr | {"github.run_id": "2"})}) == 3
+            # Main normally executes all cells. Model a bypass for this cell without changing its key.
+            cell_key = {
+                "owned-shards-macos": "owned (macos-14)",
+                "contracts-macos": "contracts (macos-14)",
+                "stack-macos": "stack (macos-14, local)",
+            }[name]
+            plan = json.loads(later["needs.classify.outputs.plan"])
+            plan[cell_key]["run"] = False
+            for report in (
+                later | classify_context(Trigger(event="push", classify_result="failure")),
+                later | {"needs.classify.outputs.plan": json.dumps(plan)},
+            ):
+                assert bool(evaluate(cfg[name]["if"], report)) is (name != "owned-shards-macos")
+                assert evaluate(cancel, report) is False
+                assert (
+                    len(
+                        {
+                            push,
+                            render(group, report),
+                            render(group, report | {"github.run_id": "3"}),
+                            render(group, report | {"github.run_attempt": "2"}),
+                        }
+                    )
+                    == 4
+                )
 
 
 @pytest.mark.parametrize(

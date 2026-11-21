@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && format('dispatch-{0}-{1}', github.run_id, github.run_attempt) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -75,9 +75,9 @@ jobs:
   # dispatch also runs the Gitlink gate and qualifies for release evidence.
   # Only macOS execution jobs share a per-cell concurrency group across main pushes. GitHub keeps
   # only one pending job per group and replaces older pending jobs; that is intentional here.
-  # Group by cell, not runner, so changes in pool routing do not prevent supersession. Non-push
-  # groups include the run and attempt so dispatch evidence cannot be displaced by a push or
-  # another dispatch. Ubuntu execution and reporting jobs have no job-level concurrency.
+  # Group by cell, not runner, so changes in pool routing do not prevent supersession. Dispatches
+  # get a run/attempt key at both levels in this workflow. Report-only macOS jobs get private job
+  # groups so they cannot displace executing cells. Ubuntu jobs have no job-level concurrency.
 
   # Policy: Self-hosted routing policy
   # ## Self-hosted pools
@@ -436,7 +436,7 @@ jobs:
           if-no-files-found: ignore
 
   owned-shards-macos:
-    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (macos-14)'].run }}
+    if: ${{ github.event_name != 'pull_request' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')['owned (macos-14)'].run }}
     name: *owned-shard-name
     needs: classify
     strategy:
@@ -444,8 +444,8 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.classify.outputs.plan)['owned (macos-14)'].shards }}
     concurrency:
-      group: ${{ github.workflow }}-owned-shards-macos-${{ matrix.os }}-${{ matrix.shard }}-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
-      cancel-in-progress: ${{ github.event_name == 'push' }}
+      group: ${{ github.workflow }}-owned-shards-macos-${{ matrix.os }}-${{ matrix.shard }}-${{ github.ref }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')['owned (macos-14)'].run && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')['owned (macos-14)'].run || false }}
     runs-on: *owned-shard-runner
     defaults: *owned-shard-defaults
     timeout-minutes: *owned-shard-timeout
@@ -855,8 +855,8 @@ jobs:
       matrix:
         os: [macos-14]
     concurrency:
-      group: ${{ github.workflow }}-contracts-macos-${{ matrix.os }}-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
-      cancel-in-progress: ${{ github.event_name == 'push' }}
+      group: ${{ github.workflow }}-contracts-macos-${{ matrix.os }}-${{ github.ref }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run || false }}
     runs-on: *contracts-runner
     defaults: *contracts-defaults
     timeout-minutes: *contracts-timeout
@@ -1309,8 +1309,8 @@ jobs:
         include:
           - {os: macos-14, stack: local, runner: xcode-27, platform: darwin-arm64}
     concurrency:
-      group: ${{ github.workflow }}-stack-macos-${{ matrix.os }}-${{ matrix.stack }}-${{ github.ref }}-${{ github.event_name == 'push' && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
-      cancel-in-progress: ${{ github.event_name == 'push' }}
+      group: ${{ github.workflow }}-stack-macos-${{ matrix.os }}-${{ matrix.stack }}-${{ github.ref }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run && 'push' || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.classify.result == 'success' && fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run || false }}
     runs-on: *stack-runner
     defaults: *stack-defaults
     timeout-minutes: *stack-timeout

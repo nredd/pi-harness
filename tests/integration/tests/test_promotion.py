@@ -322,7 +322,11 @@ def test_stack_signal_still_comes_from_ci() -> None:
     ]
     (upload,) = uploads
     assert upload["uses"].startswith("actions/upload-artifact@")
-    assert "steps.plan.outputs.run == 'true'" in upload["if"]  # a docs-only or smoke cell never uploads
+    condition = upload["if"].strip().removeprefix("${{").removesuffix("}}").strip()
+    condition = condition.replace("steps.plan.outputs.run", "run").replace("always()", "True")
+    condition = condition.replace("&&", " and ").replace("||", " or ")
+    assert eval(condition, {"__builtins__": {}}, {"run": "true", "true": True, "false": False}) is True
+    assert eval(condition, {"__builtins__": {}}, {"run": "false", "true": True, "false": False}) is False
     assert promotion.PERSONAL_STACK_ARTIFACT == "stack-ubuntu-24.04-personal"
 
 
