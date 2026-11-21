@@ -37,5 +37,8 @@
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
     "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:bun"
+  },
+  "devDependencies": {
+    "@nredd/pi-test-lib": "0.0.0"
   }
 }

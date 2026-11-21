@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, onTestFinished, test, vi } from "vitest";
 
 // The probe is a CLI script: its body runs at import, reading `process.argv`. Each test re-imports it
 // in process (so V8 coverage sees it) with a fresh module registry and its own argv.
@@ -17,7 +17,7 @@ let root = "";
 beforeEach(() => {
 	exitCode = process.exitCode;
 	process.exitCode = 0;
-	root = mkdtempSync(join(tmpdir(), "anthropic-block-types-"));
+	root = makeTestTempDir("anthropic-block-types-", onTestFinished);
 	vi.resetModules();
 });
 
@@ -26,7 +26,6 @@ afterEach(() => {
 	// Bun does not clear a sticky failure when assigned undefined.
 	process.exitCode = exitCode ?? 0;
 	vi.restoreAllMocks();
-	rmSync(root, { recursive: true, force: true });
 });
 
 /** Import the probe as `node anthropic-block-types.mjs ...roots`, capturing its console output. */

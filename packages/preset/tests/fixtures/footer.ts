@@ -1,6 +1,5 @@
 /** Real core host and deterministic ports shared by Vitest and Bun footer scenarios. */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
@@ -10,6 +9,8 @@ import {
 } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { fauxAssistantMessage } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished } from "vitest";
 import { createExpandedFooter } from "../../src/index.ts";
 
 import { UsageBus } from "./usage.ts";
@@ -50,7 +51,7 @@ export const DROP_SWITCH: Turn[] = [
 
 /** Caller-owned scratch history and one real interactive host. */
 export class FooterFixture {
-	readonly root = realpathSync(mkdtempSync(join(tmpdir(), "pi-footer-")));
+	readonly root = realpathSync(makeTestTempDir("pi-footer-", onTestFinished));
 	readonly clock = new FakeClock(Date.parse("2026-10-19T12:00:00Z"));
 	readonly usage = new UsageBus(this.clock);
 	host: InteractiveHarness | undefined;
@@ -131,10 +132,9 @@ export class FooterFixture {
 		return this.host;
 	}
 
-	/** Real lifecycle disposal before removing caller-owned session files. */
+	/** Dispose the host before the test's scratch cleanup runs. */
 	async dispose(): Promise<void> {
 		await this.host?.dispose();
-		rmSync(this.root, { recursive: true, force: true });
 	}
 }
 

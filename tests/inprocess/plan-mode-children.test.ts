@@ -7,12 +7,12 @@
  * No child loads pi-plan-mode itself (the hermetic agent dir has no
  * extensions), which is the case that must fail closed rather than open.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Context, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerAgents } from "../../packages/subagents/src/agent-types.ts";
 import { loadCustomAgents } from "../../packages/subagents/src/custom-agents.ts";
 import {
@@ -72,11 +72,9 @@ interface Seen {
 
 describe("children spawned during Plan mode (#437)", () => {
 	let run: PrintModeRun | undefined;
-	const tmpDirs: string[] = [];
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
-		for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 	});
 
 	async function play(scenario: Scenario): Promise<Seen> {
@@ -149,8 +147,7 @@ describe("children spawned during Plan mode (#437)", () => {
 	});
 
 	it("a nested allowed_subagents child inherits the restriction", async () => {
-		const cwd = mkdtempSync(join(tmpdir(), "plan-nested-"));
-		tmpDirs.push(cwd);
+		const cwd = makeTestTempDir("plan-nested-", onTestFinished);
 		mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
 		writeFileSync(
 			join(cwd, ".pi", "agents", "orchestrator.md"),

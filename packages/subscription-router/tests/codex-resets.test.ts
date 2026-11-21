@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CodexResetError, codexIdentity } from "../src/codex-contract.ts";
 import { CodexResets } from "../src/codex-resets.ts";
 import type { CodexSession } from "../src/codex-session.ts";
@@ -13,12 +13,11 @@ import { NOW, payload, token } from "./fixtures/codex.ts";
 
 let root: string;
 beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "codex-service-test-"));
+	root = makeTestTempDir("codex-service-test-", onTestFinished);
 });
 afterEach(async () => {
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
-	await rm(root, { recursive: true, force: true });
 });
 function stored() {
 	const identity = codexIdentity(token());

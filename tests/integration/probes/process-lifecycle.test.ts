@@ -1,9 +1,7 @@
 /** Shared lifecycle contracts for the real exported runners, without unifying their capture APIs. */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { type TestContext, test } from "vitest";
 import { run } from "../../../packages/dev-tools/src/core/process.ts";
 import { spawnMonitor } from "../../../packages/session-kit/src/monitor/process.ts";
@@ -192,11 +190,7 @@ for (const runner of runners) {
 		 * @throws On fixture or assertion failure.
 		 */
 		const verifyDescendantCleanup = async (context: TestContext) => {
-			const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-			context.onTestFinished(
-				/** @returns Removes the disposable directory. @throws On removal failure. */
-				() => rm(cwd, { recursive: true, force: true }),
-			);
+			const cwd = makeTestTempDir("pi-lifecycle-", context.onTestFinished);
 			const script = `
 const { spawn } = require('node:child_process');
 const child = spawn(process.execPath, ['-e', 'setTimeout(/** @returns {void} Bounds descendant lifetime after failed cleanup. @throws {never} No errors. */ () => {}, ${FIXTURE_LIFETIME_MS}); process.send("descendant-ready");'], { stdio: ${inheritPipes ? '["ignore", "inherit", "inherit", "ipc"]' : '["ignore", "ignore", "ignore", "ipc"]'} });
@@ -241,11 +235,7 @@ child.once("message", /** @returns {void} Releases the acknowledged leader. @thr
 	 * @throws On runner or assertion failure.
 	 */
 	const verifySeparateStreams = async (context: TestContext) => {
-		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-		context.onTestFinished(
-			/** @returns Removes the disposable directory. @throws On removal failure. */
-			() => rm(cwd, { recursive: true, force: true }),
-		);
+		const cwd = makeTestTempDir("pi-lifecycle-", context.onTestFinished);
 		const result = await runner.execute(
 			`setTimeout(() => { process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exitCode = 7; }, ${STARTUP_DELAY_MS});`,
 			cwd,
@@ -272,11 +262,7 @@ child.once("message", /** @returns {void} Releases the acknowledged leader. @thr
 	 * @throws On runner or assertion failure.
 	 */
 	const verifyEscalation = async (context: TestContext) => {
-		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-		context.onTestFinished(
-			/** @returns Removes the disposable directory. @throws On removal failure. */
-			() => rm(cwd, { recursive: true, force: true }),
-		);
+		const cwd = makeTestTempDir("pi-lifecycle-", context.onTestFinished);
 		const result = await runner.execute(
 			`process.on("SIGTERM", () => {}); process.stderr.write("ready\\n"); setTimeout(() => {}, ${FIXTURE_LIFETIME_MS});`,
 			cwd,

@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { type AgentRunState, applyAgentEvent } from "../../src/agents.ts";
 import {
 	formatHeldReminder,
@@ -546,10 +546,6 @@ describe("settling with nothing armed to wake the parent", () => {
 		return { ...s, ctx };
 	}
 	const CURRENT_FILE = "current.jsonl";
-	const dirs: string[] = [];
-	afterAll(() => {
-		for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-	});
 	/**
 	 * A stand-in for pi-subagents' process-wide registry of detached survivors, each registered under
 	 * the session file whose spool it wakes (see `packages/subagents/tests/extension-final-lifecycle.test.ts`
@@ -1058,8 +1054,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 
 	it("keeps the survivor elsewhere after a fork of a fork, via the ancestry chain", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "todo-lineage-"));
-		dirs.push(dir);
+		const dir = makeTestTempDir("todo-lineage-", onTestFinished);
 		const header = (parentSession?: string) => `${JSON.stringify({ type: "session", id: "x", parentSession })}\n{}\n`;
 		const a = join(dir, "a.jsonl");
 		const b = join(dir, "b.jsonl");
@@ -1071,8 +1066,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 
 	it("stops walking the ancestry at a cycle, an unreadable file or a headerless one", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "todo-lineage-"));
-		dirs.push(dir);
+		const dir = makeTestTempDir("todo-lineage-", onTestFinished);
 		const a = join(dir, "a.jsonl");
 		const b = join(dir, "b.jsonl");
 		const junk = join(dir, "junk.jsonl");

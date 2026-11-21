@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	Api,
@@ -16,20 +15,20 @@ import type {
 	ExtensionVirtualModel,
 	ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, onTestFinished, test, vi } from "vitest";
 import harnessFaux from "./faux.ts";
 
 let root = "";
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "faux-provider-"));
+	root = makeTestTempDir("faux-provider-", onTestFinished);
 	vi.useFakeTimers();
 });
 
 afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllEnvs();
-	rmSync(root, { recursive: true, force: true });
 });
 
 /** The model fields `faux.ts` sets; `ProviderModelConfig` is a union over model kinds. */

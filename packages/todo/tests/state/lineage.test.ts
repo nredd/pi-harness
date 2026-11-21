@@ -1,11 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, describe, expect, it } from "vitest";
 import { forkAncestry } from "../../src/state/lineage.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "todo-lineage-unit-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+const dir = makeTestTempDir("todo-lineage-unit-", afterAll);
 
 const session = (name: string, parentSession?: unknown): string => {
 	const path = join(dir, name);

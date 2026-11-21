@@ -1,10 +1,11 @@
 /** Offline merge policy tests: actual disposable transcripts and recording child boundary, no GitHub. */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { makeTestTempDir } from "../tests/lib/src/temp-dir.ts";
 import { command, executable, gitEvidence, main, merge, otherChecks, receipt } from "./merge-pr.ts";
 
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
@@ -37,7 +38,7 @@ function transcript(axis: string, content: object[] = [tool({ base: "main...HEAD
 	return path;
 }
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "merge-test-"));
+	root = makeTestTempDir("merge-test-", onTestFinished);
 	mkdirSync(join(root, "session", "tasks"), { recursive: true });
 	const gh = join(root, "gh");
 	writeFileSync(gh, "synthetic");
@@ -51,7 +52,6 @@ beforeEach(() => {
 	vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
-	rmSync(root, { recursive: true, force: true });
 	vi.restoreAllMocks();
 	process.exitCode = 0;
 });

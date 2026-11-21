@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, onTestFinished, test, vi } from "vitest";
 import latencyProbe from "./latency.ts";
 
 // Only the probe's `/proc` reads are faked, so the Linux and non-Linux paths both run on every OS.
@@ -41,7 +41,7 @@ let stdinData: (() => void) | undefined;
 let stalled = 0;
 
 beforeEach(() => {
-	root = fs.mkdtempSync(join(tmpdir(), "latency-probe-"));
+	root = makeTestTempDir("latency-probe-", onTestFinished);
 	for (const name of ENV) delete process.env[name];
 	proc.files.clear();
 	// Real stdin is never put into flowing mode; the probe's listener is captured instead.
@@ -75,7 +75,6 @@ afterEach(() => {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
 	}
-	fs.rmSync(root, { recursive: true, force: true });
 });
 
 /** The exit flush the probe registered in this test, if any. */
