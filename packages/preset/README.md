@@ -268,20 +268,21 @@ Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
 Before creating an issue worktree and after merge, the parent follows the
 [guarded sweep](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep). The preset ships
 [`sweep_guard.py`](skills/ship-issue/sweep_guard.py) beside `ship-issue`. It needs Python 3.8+,
-Git, `gh` and `lsof`; it reports `keep` or `eligible` without removing anything. Supply known
+Git, `gh` and `lsof`. This rollout is keep-only: the shipped CLI never emits `eligible` and
+never authorizes removing a worktree or even one claimed scratch file. Supply known
 ownership and retained directory holds with `--hold`; `lsof` only sees processes visible to the
-caller. The guard requires one hour of quiet on the checkout and Git activity markers. Only a fresh
-scoped merged-PR verdict can lead to non-forced removal. The CLI keeps otherwise clean worktrees
-when it cannot prove a complete external borrower scope: Git cannot enumerate independent clones,
-alternate stores or unmounted checkouts. No-PR mode is verdict-only. Gitlinks and retained submodule
+caller. The guard requires one hour of quiet on the checkout and Git activity markers. Exit `0`
+means a scan produced verdicts; unreadable inventory or no matching worktree exits `1`.
+Gitlinks and retained submodule
 metadata stay put without running submodule status. Nested `.git` files or directories, incomplete
 walks, malformed inventory or HEAD logs, unreachable old or new HEAD log IDs, and conversion
 attributes (including `text=auto`) or conversion configuration also mean keep.
-A verdict is a snapshot. Local checks follow remote proof, but another process can still write
-before removal. If removal is permitted, run it immediately after the scoped verdict;
-`git worktree remove` does not protect ignored files.
-No automatic prune or branch deletion. The installed `git prune-merged-worktrees` command and
-older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
+Limits:
+- The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
+  alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
+  candidate is otherwise clean. Report holds and scratch; delete nothing.
+- A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
+  older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently

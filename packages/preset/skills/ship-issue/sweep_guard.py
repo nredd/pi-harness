@@ -32,6 +32,7 @@ GIT_BINARY: ContextVar[Path | None] = ContextVar("GIT_BINARY", default=None)
 TIMEOUT = 30
 MAX_TREE_ENTRIES = 100_000
 QUIET_SECONDS = 3600
+UNKNOWN_SCOPE = "cannot establish a complete external borrower scope"
 PR_FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
 OPERATIONS = (
     "rebase-apply",
@@ -840,24 +841,26 @@ def assess(
     check_history(path, admin)
     check_status(path, admin)
     if opts.borrower_gitdirs is None:
-        raise KeepError("cannot establish a complete external borrower scope")
+        raise KeepError(UNKNOWN_SCOPE)
     return reason
 
 
-def verdict(path: Path, decision: str, reason: str) -> None:
+def verdict(path: Path, decision: str, reason: str, *, scope_known: bool) -> None:
     """Write one machine-readable verdict, escaping unusual path characters.
 
     Parameters:
         path: Path, Path being checked or reported.
         decision: str, Verdict classification.
         reason: str, Explanation of the result.
+        scope_known: bool, Whether the caller supplied a closed borrower scope.
     Returns:
         None.
     Raises:
         OSError: The output stream cannot be written.
     """
+    reasons = [reason] if scope_known else list(dict.fromkeys((UNKNOWN_SCOPE, reason)))
     sys.stdout.write(
-        json.dumps({"worktree": str(path), "verdict": decision, "reasons": [reason]})
+        json.dumps({"worktree": str(path), "verdict": decision, "reasons": reasons})
         + "\n"
     )
 
@@ -901,6 +904,7 @@ def main(
     )
     opts = parser.parse_args()
     opts.borrower_gitdirs = borrower_gitdirs
+    scope_known = borrower_gitdirs is not None
     if opts.no_pr and opts.worktree is None:
         parser.error("--no-pr requires --worktree")
     try:
@@ -932,7 +936,12 @@ def main(
         opts.hold = {path.resolve() for path in opts.hold}
         selected = opts.worktree.resolve() if opts.worktree is not None else None
     except SCAN_ERRORS as exc:
-        verdict(opts.worktree or opts.repo, "keep", f"cannot read inventory: {exc}")
+        verdict(
+            opts.worktree or opts.repo,
+            "keep",
+            f"cannot read inventory: {exc}",
+            scope_known=scope_known,
+        )
         return 1
     global_hold = None
     try:
@@ -956,11 +965,16 @@ def main(
                 raise KeepError(global_hold)
             reason = assess(path.resolve(strict=True), common, records, opts, now)
         except SCAN_ERRORS as exc:
-            verdict(path, "keep", str(exc))
+            verdict(path, "keep", str(exc), scope_known=scope_known)
         else:
-            verdict(path, "eligible", reason)
+            verdict(path, "eligible", reason, scope_known=scope_known)
     if not matched:
-        verdict(opts.worktree or opts.repo, "keep", "no matching registered worktree")
+        verdict(
+            opts.worktree or opts.repo,
+            "keep",
+            "no matching registered worktree",
+            scope_known=scope_known,
+        )
         return 1
     return 0
 

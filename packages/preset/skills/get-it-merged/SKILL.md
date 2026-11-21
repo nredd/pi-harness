@@ -68,11 +68,7 @@ For the next unblocked PR in the order:
 - On `MERGED`: record the merge commit, apply the "Before stopping" cleanup below, then return to step 3 for the next unblocked PR. A PR that depended on it is now unblocked; update it only if there is a real conflict (disable auto-merge before any HEAD change and renew all reviews)
 - On failure: diagnose the real cause. Fix through a delegated worker or inline, renew reviews on the new HEAD, and continue. Rerun only per the repository's flake policy
 - Keep a heartbeat monitor linked to the tracked todos (`todo: [<id>, ...]`) while any PR remains so the loop continues unprompted. Without native monitors, continue the bounded foreground waits from step 1
-- Before stopping, apply the "Guarded merged-worktree sweep" below, then consider claimed scratch separately:
-  - Consider only worktrees for known merged PRs. Rerun the scoped guard with all known holds and consider claimed scratch only when the guard reports `dirty or ignored paths`. That verdict is not permission to remove the worktree.
-  - Remove only regular files and symlinks claimed in the handback and listed as `??` in THAT worktree's `git status --porcelain --untracked-files=all`, on an exact type and hash match. Use the same method as the worker in `ship-issue`: SHA-256 of a regular file's bytes or a symlink's raw `readlink` bytes (no added newline). Require the real path of a regular file, or the real path of a symlink's parent directory joined with the link name, to be inside the worktree. Never resolve the link itself; unlink only the link and leave its target untouched.
-  - Never remove modified tracked files, ignored files or unclaimed paths as scratch. Keep and report directories; never recursively delete contents as scratch.
-  - After scratch removal, rerun the full guarded sweep on that same worktree before any worktree removal. Report each retained worktree's path, reason, and actual `git status --porcelain --ignored --untracked-files=all` output (or the scan error)
+- Before stopping, apply the "Guarded merged-worktree sweep" below. Any scratch deletion, even one claimed file, requires a verdict that proves a closed borrower scope. A `keep` verdict, including `dirty or ignored paths`, never authorizes deletion. An exact `??` path and hash match identifies a file, not whether another repository depends on it. With the shipped guard, do not delete scratch: report it and keep the worktree.
 - Stop only when every requested PR is merged, or the remaining ones have a genuine external blocker (e.g. required human approval, an outage) with a named owner and a continuation monitor armed and linked to its todo (without native monitors: the exact resume command). Ordinary docs, test, or conflict work is not a blocker
 
 A release or deployment is different: run the repository's frozen combined gate immediately before
@@ -86,10 +82,9 @@ is unverifiable, keep the worktree; report the guard reason and the actual statu
 error), not file contents. Keep disputed files and refs until the operator preserves or resolves them,
 then rerun the guard. Do not bypass a keep verdict.
 
-Only consider non-forced removal of the exact linked path after an immediate successful scoped
-recheck returns `eligible` for a merged PR. Run `git worktree remove <path>` immediately from
-outside that path. The verdict is a snapshot, not a lock; non-forced removal can delete ignored files. Leave branches alone. No automatic prune and no call to the legacy mutating helper from
-this skill. A report alone is never permission to remove another worker's files as scratch.
+This rollout is keep-only: the shipped CLI cannot prove a closed borrower scope and never emits
+`eligible`. Do not remove worktrees, branches or scratch. No automatic prune and no call to the
+legacy mutating helper from this skill.
 
 ## 5. Report
 

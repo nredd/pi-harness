@@ -145,7 +145,7 @@ def run(
     borrower_gitdirs: tuple[Path, ...] | None = (),
     inventory_suffix: bytes = b"",
 ) -> tuple[int, list[dict[str, object]]]:
-    """Run the shipped CLI without a real GitHub or process lookup."""
+    """Run the CLI with evidence adapters and optionally inject a closed scope."""
     env = git_env()
     env.pop("GH_HOST", None)
     env |= {
@@ -168,7 +168,8 @@ def run(
             "import json, os, runpy, sys; from pathlib import Path; "
             "source, git, gh, lsof = sys.argv[1:5]; sys.argv[1:5] = []; "
             "scope = os.getenv('SWEEP_SCOPE'); "
-            "roots = None if scope is None else tuple(map(Path, json.loads(scope))); "
+            "scope_kwargs = {} if scope is None else "
+            "{'borrower_gitdirs': tuple(map(Path, json.loads(scope)))}; "
             "module = runpy.run_path(source); main = module['main']; "
             "parse = module['parse_inventory']; "
             "globals_ = main.__globals__; "
@@ -177,7 +178,7 @@ def run(
             "suffix = bytes.fromhex(os.getenv('SWEEP_INVENTORY_SUFFIX', '')); "
             "main.__globals__['parse_inventory'] = "
             "lambda raw: parse(raw[:-1] + suffix if suffix else raw); "
-            "sys.exit(main(git_binary=git, gh_binary=gh, lsof_binary=lsof, borrower_gitdirs=roots))",
+            "sys.exit(main(git_binary=git, gh_binary=gh, lsof_binary=lsof, **scope_kwargs))",
             str(GUARD),
             str(GIT),
             str(wt.bin / "gh"),
@@ -215,7 +216,7 @@ def keep(wt: Worktrees, reason: str, *args: str, **variables: str) -> None:
         "ssh://git@github.com:2222/source/project.git",
     ],
 )
-def test_clean_merged_tree_is_eligible_without_upstream(wt: Worktrees, url: str) -> None:
+def test_injected_scope_allows_clean_merged_tree_without_upstream(wt: Worktrees, url: str) -> None:
     git(wt.path, "remote", "set-url", "origin", url)
     quiet(wt)
     code, (main, result) = run(wt, all_paths=True)
@@ -227,6 +228,40 @@ def test_clean_merged_tree_is_eligible_without_upstream(wt: Worktrees, url: str)
     assert wt.path.is_dir()
     assert wt.admin.is_dir()
     assert git(wt.repo, "show-ref", "--verify", "refs/heads/merged")
+
+
+@pytest.mark.parametrize("case", ["clean", "borrowed scratch", "inventory error", "no match"])
+def test_shipped_cli_is_keep_only(wt: Worktrees, case: str) -> None:
+    args = ()
+    variables = {}
+    if case == "borrowed scratch":
+        cache = wt.path / "cache.git"
+        git(wt.path, "init", "--bare", "--template=", str(cache))
+        borrower = wt.repo.parent / "borrower"
+        init(borrower)
+        (borrower / ".git/objects/info/alternates").write_text(f"{cache / 'objects'}\n")
+        unique = wt.repo.parent / "unique"
+        unique.write_text("Only stored in the bare cache\n")
+        oid = git(cache, "hash-object", "-w", str(unique)).decode().strip()
+        git(borrower, "tag", "borrowed", oid)
+        assert git(borrower, "cat-file", "blob", "borrowed") == unique.read_bytes()
+    elif case == "inventory error":
+        variables["GIT_INDEX_FILE"] = str(wt.repo / ".git/index")
+    elif case == "no match":
+        args = ("--worktree", str(wt.bin))
+    quiet(wt)
+    code, results = run(wt, *args, all_paths=case == "clean", variables=variables, borrower_gitdirs=None)
+    assert code == (1 if case in {"inventory error", "no match"} else 0)
+    assert len(results) == (2 if case == "clean" else 1)
+    for result in results:
+        assert result["verdict"] == "keep"
+        reasons = tuple(map(str, result["reasons"])) if isinstance(result["reasons"], list) else ()
+        assert reasons[0] == "cannot establish a complete external borrower scope"
+    if case == "clean":
+        assert results[-1]["reasons"] == ["cannot establish a complete external borrower scope"]
+    if case == "borrowed scratch":
+        assert "dirty or ignored paths" in str(results[0]["reasons"])
+        assert "cache.git/objects/" in str(results[0]["reasons"])
 
 
 def test_worktree_scope_never_accepts_unregistered_directory(wt: Worktrees) -> None:
