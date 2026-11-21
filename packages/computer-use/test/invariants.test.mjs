@@ -3,6 +3,8 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, beforeAll, describe, test } from "vitest";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import {
 	countOutlineNodes,
@@ -13,7 +15,6 @@ import {
 	renderInteractiveControls,
 } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
-import { afterAll, beforeAll, describe, test } from "vitest";
 import { runCheckCommand } from "../tests/fixtures/check-async.mjs";
 import { prepareSwiftSdk, runPreparedSwift, SDK_HOOK_TIMEOUT_MS, SDK_IMPORTS } from "./support/swift-sdk.mjs";
 
@@ -637,9 +638,12 @@ describeMacosOnly("swiftc", () => {
 	// One private, owned scratch dir per file run. Both swiftc cases share its module cache, and
 	// `TMPDIR` points at it so `os.tmpdir()` holds an unwritable squat at every retired shared name:
 	// a case that falls back to a fixed shared path fails here exactly as it did on the shared host.
+	let dispose;
 	beforeAll(async () => {
 		savedTmpdir = process.env.TMPDIR;
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-swift-"));
+		scratch = makeTestTempDir("pi-computer-use-swift-", (cleanup) => {
+			dispose = cleanup;
+		});
 		for (const name of retiredSharedCacheNames) {
 			const squat = path.join(scratch, name);
 			fs.mkdirSync(squat, { mode: 0o555 });
@@ -655,7 +659,7 @@ describeMacosOnly("swiftc", () => {
 	afterAll(() => {
 		if (savedTmpdir === undefined) delete process.env.TMPDIR;
 		else process.env.TMPDIR = savedTmpdir;
-		if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+		dispose?.();
 	});
 
 	// SDK-only preparation is bounded and reported separately; it never compiles repository source.

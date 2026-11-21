@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, test } from "vitest";
 
 // The launcher's whole-session budget. Its own deadline still bounds startup and teardown around this case.
@@ -36,7 +34,6 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")(
 				];
 				for (const executable of required) await fs.access(executable, fsConstants.X_OK);
 
-				const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-live-"));
 				const processes = [];
 				const display = await unusedDisplay();
 				const env = {
@@ -393,7 +390,6 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")(
 				} finally {
 					await shutdownComputerUseSession().catch(() => {});
 					for (const child of processes.reverse()) stop(child);
-					await fs.rm(tempDir, { recursive: true, force: true });
 				}
 			},
 			LIVE_SCENARIO_TIMEOUT_MS,

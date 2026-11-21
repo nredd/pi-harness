@@ -206,7 +206,7 @@ function assertLiveActionBindings(swift) {
 	assert.ok(args, "expected the live actionWorld ActWorld initializer");
 	for (const [binding, helper] of [
 		["requireTargetFocus", "requireTargetFocus(pid:)"],
-		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
+		["keyboardAdmission", "keyboardAdmission(blocked:deadline:)"],
 		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
 		["snapshotClipboard", "snapshotClipboard"],
 		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
@@ -219,7 +219,7 @@ function assertLiveActionBindings(swift) {
 }
 
 test("Swift live binding check rejects helpers left only in comments", () => {
-	const original = "refuseBlockedKeyboard: refuseBlockedKeyboardTarget(blocked:),";
+	const original = "keyboardAdmission: keyboardAdmission(blocked:deadline:),";
 	const fixture = [
 		"\tfunc actionWorld() -> ActWorld {",
 		"\t\treturn ActWorld(",
@@ -233,8 +233,8 @@ test("Swift live binding check rejects helpers left only in comments", () => {
 	].join("\n");
 	assertLiveActionBindings(fixture);
 	for (const comment of [`// ${original}`, `/*\n\t\t\t${original}\n\t\t\t*/`]) {
-		const mutant = fixture.replace(original, `${comment}\n\t\t\trefuseBlockedKeyboard: { _ in },`);
-		assert.throws(() => assertLiveActionBindings(mutant), /live actionWorld must bind refuseBlockedKeyboard to/);
+		const mutant = fixture.replace(original, `${comment}\n\t\t\tkeyboardAdmission: { _, _ in { _ in } },`);
+		assert.throws(() => assertLiveActionBindings(mutant), /live actionWorld must bind keyboardAdmission to/);
 	}
 });
 
@@ -257,12 +257,12 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/,
+		/gate\.check\(force: force, frontmostPid: \{ NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier \}, focusedPid: self\.systemFocusedPid/,
 		"helper must refuse blocked frontmost or focused apps for keys",
 	);
 	assert.match(
 		swift,
-		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/,
+		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(true, false\)/,
 		"helper must refuse blocked apps before typing or keys",
 	);
 	assert.equal(
@@ -279,16 +279,16 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		swift.match(
 			/let restored = try withRestoredClipboard\(write: clipboard\.write, restore: clipboard\.restore\) \{[\s\S]*?\n\t\t\t\}\n/,
 		)?.[0] ?? "";
-	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
+	const recheckAt = pasteBody.indexOf("try admitKeyboard(true, posting)", postAt);
 	assertLiveActionBindings(swift);
 	assert.ok(
-		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
+		lookupAt > 0 && postAt > lookupAt && recheckAt > postAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",
 	);
 	assert.ok(
-		!/(?:currentKeyboardInputSource|pasteKeyCode)\(/.test(pasteBody.slice(recheckAt, postAt)),
+		!/(?:currentKeyboardInputSource|pasteKeyCode)\(/.test(pasteBody.slice(postAt, recheckAt)),
 		"nothing slow may sit between the last blocked-app check and the post",
 	);
 	assert.match(
@@ -317,7 +317,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		'guard delivery == "hid"',
 		"focusTargetForPhysicalInput()",
 		"try world.requireTargetFocus(pid)",
-		"try world.refuseBlockedKeyboard(",
+		"try recheckBlockedKeyboard()",
 	].map((needle) => keyboardHelper.indexOf(needle));
 	assert.ok(
 		keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]),
@@ -325,7 +325,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		keyboardHelper,
-		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry world\.refuseBlockedKeyboard/,
+		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry recheckBlockedKeyboard\(\)/,
 		"preserveFocus skips only the focus wait, never the blocked-app check",
 	);
 	assert.match(

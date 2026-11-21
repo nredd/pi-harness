@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import {
 	finishCheckCleanup,
 	SIGNAL_READINESS_POLL_MS as POLL_INTERVAL_MS,
@@ -12,7 +13,6 @@ import {
 	within,
 	writeSignalReadinessObserver,
 } from "../tests/fixtures/check-async.mjs";
-import { test } from "vitest";
 
 test("Linux build/setup scripts and process lifetime", async () => {
 	const SETUP_COMPLETION_TIMEOUT_MS = 30_000;
@@ -98,7 +98,8 @@ test("Linux build/setup scripts and process lifetime", async () => {
 	assert.match(linuxDoc, /cargo/);
 	assert.equal(pkg.scripts["build:linux"], "node scripts/build-native.mjs --platform linux");
 
-	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-scripts-"));
+	const root = makeTestTempDir("pi-computer-use-linux-scripts-", onTestFinished);
+	const tempDir = path.join(root, "fixture");
 	const helperDest = path.join(tempDir, "linux-bridge");
 	let setupChild;
 	try {
@@ -116,7 +117,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 			),
 		]);
 		let fixtureEntry = path.join(fixtureScriptsDir, "setup-helper.mjs");
-		const linkedTempDir = `${tempDir}-link`;
+		const linkedTempDir = path.join(root, "fixture-link");
 		if (process.platform !== "win32") {
 			await fs.symlink(tempDir, linkedTempDir);
 			fixtureEntry = path.join(linkedTempDir, "scripts", "setup-helper.mjs");
@@ -170,8 +171,6 @@ test("Linux build/setup scripts and process lifetime", async () => {
 		);
 	} finally {
 		setupChild?.kill("SIGKILL");
-		await fs.rm(`${tempDir}-link`, { force: true });
-		await fs.rm(tempDir, { recursive: true, force: true });
 	}
 
 	// ---- runCancellable reaps its whole process group, even descendants that ignore SIGTERM (POSIX) ----
@@ -203,7 +202,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 			/remained non-empty after SIGKILL cleanup/,
 		);
 		assert.deepEqual(persistentSignals, ["SIGTERM", "SIGKILL"]);
-		const groupDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-cancel-"));
+		const groupDir = makeTestTempDir("pi-computer-use-cancel-", onTestFinished);
 		const setupUrl = pathToFileURL(path.join(scriptsDir, "setup-helper.mjs")).href;
 
 		const { GROUP_TERM_GRACE_MS, GROUP_KILL_WAIT_MS, reapProcessGroup, runCancellable } = await import(setupUrl);
@@ -519,8 +518,6 @@ await running;
 							() =>
 								stopCheckChild(child, closed, `failed ${name} fixture`),
 					),
-					/** @returns {Promise<void>} Removes disposable fixture state. @throws {Error} On removal failure. */
-					() => fs.rm(groupDir, { recursive: true, force: true }),
 				],
 				fixtureFailure,
 			);
