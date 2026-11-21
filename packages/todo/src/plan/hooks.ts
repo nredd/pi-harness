@@ -15,7 +15,9 @@ import type {
 	AgentBeforeSettleEvent,
 	AgentBeforeSettleEventResult,
 	ExtensionAPI,
+	ExtensionContext,
 	SessionBoundaryDraft,
+	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentRunState,
@@ -27,12 +29,14 @@ import {
 	ownerKey,
 	ownerLabel,
 } from "../agents.ts";
-import { getStaleAfterSettles } from "../config.ts";
+import { getEmptyReminderConfig, getStaleAfterSettles } from "../config.ts";
 import { monitorsByTodo } from "../monitors.ts";
+import { selectVisibleTasks } from "../state/selectors.ts";
 import type { TaskState } from "../state/state.ts";
 import { commitState, getState, sid } from "../state/store.ts";
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
 import {
+	EMPTY_REMINDER_MESSAGE_TYPE,
 	HELD_REMINDER_MESSAGE_TYPE,
 	PLAN_APPROVED_EVENT,
 	PLAN_APPROVED_VERSION,
@@ -42,6 +46,7 @@ import {
 	type Task,
 	type TaskSnapshot,
 } from "../tool/types.ts";
+import { isChildActivation, trackEmptyReminder } from "./empty-reminder.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./reconcile.ts";
 
 /** Persisted marker text; the `context` hook expands it on the request right after it. */
@@ -53,6 +58,12 @@ export const HELD_REMINDER_MARKER =
 
 const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
 export const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
+
+export const EMPTY_REMINDER_MARKER = "[rpiv-todo] Autonomous work continued without a todo list.";
+
+function hasEmptyList(state: TaskState): boolean {
+	return selectVisibleTasks(state).length === 0;
+}
 
 function hasOpenTodos(state: TaskState): boolean {
 	return state.tasks.some((task) => task.status === "pending" || task.status === "in_progress");
@@ -403,11 +414,18 @@ export function formatInProgressNotice(
  *   changed that session's list.
  */
 export interface PlanSessionHooks {
+	/** Track tool completions synchronously, before refreshing the overlay. */
+	toolFinished(event: ToolExecutionEndEvent, ctx: ExtensionContext): void;
 	/**
 	 * Call from `session_start` after replay: binds the session and applies a pending approval.
 	 * `resumed` is true only for a process `startup`: `/new`, `/resume`, `/fork` and `/reload` detach live agents instead, so no owner is provably lost.
 	 */
-	sessionStarted(sessionId: string, resumed: boolean): Promise<void>;
+	sessionStarted(
+		sessionId: string,
+		resumed: boolean,
+		branch: ReturnType<ExtensionContext["sessionManager"]["getBranch"]>,
+		mode: ExtensionContext["mode"],
+	): Promise<void>;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
 }
@@ -474,12 +492,21 @@ export function registerPlanHooks(
 	// The age follows the snapshot, while the reminder budget follows human input.
 	const staleAge = new WeakMap<TaskState, number>();
 	const staleReminded = new Set<string>();
+	const emptyConfig = getEmptyReminderConfig(options.homeDir);
+	const emptyEnabled = emptyConfig.toolCalls > 0 && !isChildActivation();
+	const emptyTrackers = new Map<string, ReturnType<typeof trackEmptyReminder>>();
+
 	const onSettle: SettleHandler = (event, ctx) => {
 		const messages = event.context.contextMessages;
-		if (event.outcome !== "completed" || isPlanning(ctx, messages)) return undefined;
+		const completed = event.outcome === "completed";
+		const planning = completed && isPlanning(ctx, messages);
 		const id = sid(ctx);
-		refreshSurvivors(id);
+		if (completed && !planning) refreshSurvivors(id);
 		const state = getState(id);
+		if (emptyTrackers.get(id)?.beforeSettle(completed, planning, hasEmptyList(state))) {
+			return reminderDraft(event, EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER, {});
+		}
+		if (!completed || planning) return undefined;
 		if (!remindedSinceLastPrompt(messages)) {
 			const open = selectOpenPlanItems(state);
 			if (open.length)
@@ -517,10 +544,13 @@ export function registerPlanHooks(
 		const id = sid(ctx);
 		reported.delete(id);
 		staleReminded.delete(id);
+		emptyTrackers.get(id)?.humanInput();
 	});
-	pi.on("agent_settled", (_event, ctx) => {
-		if (isPlanning(ctx, [])) return;
+	pi.on("agent_settled", (event, ctx) => {
+		const planning = isPlanning(ctx, []);
 		const id = sid(ctx);
+		emptyTrackers.get(id)?.settled(event.aborted, planning);
+		if (planning) return;
 		refreshSurvivors(id);
 		const notice = formatInProgressNotice(getState(id), agentLookup(id), settleFacts(id));
 		if (notice?.level === "info") {
@@ -548,6 +578,10 @@ export function registerPlanHooks(
 			if (!hasOpenTodos(state)) return undefined;
 			content =
 				"The open todo list has not changed for several settles. Run `todo` with action `list` and reconcile it with what actually happened. Complete only with evidence, defer with a reason, and leave work that is still running open.";
+		} else if (isReminder(last, EMPTY_REMINDER_MESSAGE_TYPE)) {
+			if (!emptyTrackers.has(id) || !hasEmptyList(state)) return undefined;
+			content =
+				"You have been working without a todo list. If this work has multiple steps, use `todo` to record what is still open before continuing. Do not create tasks for a simple request that is already done.";
 		} else return undefined;
 		const messages = [...event.messages];
 		messages[messages.length - 1] = { ...(last as object), content } as (typeof messages)[number];
@@ -555,8 +589,22 @@ export function registerPlanHooks(
 	});
 
 	return {
-		async sessionStarted(sessionId, resumed) {
+		toolFinished(event, ctx) {
+			const id = sid(ctx);
+			emptyTrackers.get(id)?.toolFinished(event, hasEmptyList(getState(id)) && !isPlanning(ctx, []));
+		},
+		async sessionStarted(sessionId, resumed, branch, mode) {
 			live.add(sessionId);
+			if (emptyEnabled && mode === "tui") {
+				// A persisted user message could be an extension prompt; only a live
+				// human input event can safely rearm after restoring a reminder.
+				const previouslyReminded = branch.some(
+					(entry) => entry.type === "custom_message" && entry.customType === EMPTY_REMINDER_MESSAGE_TYPE,
+				);
+				emptyTrackers.set(sessionId, trackEmptyReminder(emptyConfig, previouslyReminded));
+			} else {
+				emptyTrackers.delete(sessionId);
+			}
 			if (resumed)
 				resumedOwners.set(
 					sessionId,
@@ -576,6 +624,7 @@ export function registerPlanHooks(
 			reported.delete(sessionId);
 			resumedOwners.delete(sessionId);
 			staleReminded.delete(sessionId);
+			emptyTrackers.delete(sessionId);
 		},
 	};
 }
