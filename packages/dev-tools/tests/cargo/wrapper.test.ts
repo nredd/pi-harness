@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerCargoTools } from "../../src/cargo/index.ts";
 import { withLock } from "../../src/core/index.ts";
@@ -210,12 +210,12 @@ console.log(${JSON.stringify(JSON.stringify(diagnostic("error", "error")))});`);
 	it("names a missing workspace from either cwd and rejects option-shaped values on every wrapper", async () => {
 		const f = setup();
 		f.script('require("node:fs").writeFileSync("started", "wrong");', "/bin/sh");
-		// `tmpdir()` has no Cargo.toml at or above it, so both the explicit and the session cwd miss.
+		const outside = makeTestTempDir("pi-dev-tools-no-cargo-", onTestFinished);
 		for (const name of TOOLS) {
-			const explicit = await f.call(`cargo_${name}`, { ...minimal(name), cwd: tmpdir() }, f.root);
-			expect(f.text(explicit), name).toBe(`no Cargo.toml found at or above ${tmpdir()}`);
-			const session = await f.call(`cargo_${name}`, minimal(name), tmpdir());
-			expect(f.text(session), name).toBe(`no Cargo.toml found at or above ${tmpdir()}`);
+			const explicit = await f.call(`cargo_${name}`, { ...minimal(name), cwd: outside }, f.root);
+			expect(f.text(explicit), name).toBe(`no Cargo.toml found at or above ${outside}`);
+			const session = await f.call(`cargo_${name}`, minimal(name), outside);
+			expect(f.text(session), name).toBe(`no Cargo.toml found at or above ${outside}`);
 			const bad = await f.call(`cargo_${name}`, { ...minimal(name), package: "--config=evil" }, f.root);
 			expect(bad.isError, name).toBe(true);
 			expect(f.text(bad), name).toBe("value '--config=evil' is not a plain value");

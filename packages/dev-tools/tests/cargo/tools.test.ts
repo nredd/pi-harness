@@ -92,7 +92,8 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 
 		it("finds the workspace root from a member crate", () => {
 			expect(findWorkspaceRoot(join(root, "good", "src"))).toBe(root);
-			expect(findWorkspaceRoot(tmpdir())).toBeUndefined();
+			const outside = makeTestTempDir("pi-dev-tools-no-cargo-", onTestFinished);
+			expect(findWorkspaceRoot(outside)).toBeUndefined();
 		});
 
 		it("cargo_check reports the type error once with its suggestion, and warnings-only as clean exit", async () => {
@@ -264,7 +265,8 @@ describe.skipIf(!have("cargo --version") || !have("cargo nextest --version"))(
 			const r = await mock.call("cargo_check", { package: "--config=evil" }, root);
 			expect(r.isError).toBe(true);
 			expect(mock.text(r)).toContain("not a plain value");
-			const none = await mock.call("cargo_check", {}, tmpdir());
+			const outside = makeTestTempDir("pi-dev-tools-no-cargo-", onTestFinished);
+			const none = await mock.call("cargo_check", {}, outside);
 			expect(mock.text(none)).toContain("no Cargo.toml");
 			const flt = await mock.call("cargo_test", { filter: "--nocapture" }, root);
 			expect(mock.text(flt)).toContain("must be a plain value");

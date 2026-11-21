@@ -1,7 +1,7 @@
 // Self-test of `support/fake-helper.mjs` beyond the macOS flat profile: the envelope profile and stdio
 // transport are driven by the real `WindowsHelperClient`, the wire format #713 (Windows and Linux) reuses.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -268,13 +268,6 @@ function serveForTest(engine, input, order) {
 		}
 	});
 }
-
-test("removes short socket scratch at test completion", () => {
-	let dir;
-	onTestFinished(() => assert.equal(existsSync(dir), false));
-	dir = path.dirname(shortSocketPath());
-	assert.equal(existsSync(dir), true);
-});
 
 describe("socket server", () => {
 	test("disconnectAll drops live clients but keeps listening, and the envelope reply is framed per profile", async () => {

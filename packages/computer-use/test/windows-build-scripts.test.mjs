@@ -175,7 +175,7 @@ describe("script failure diagnostics", () => {
 	});
 
 	test("missing executable reports spawn provenance and error", async () => {
-		const missing = path.join(os.tmpdir(), `missing-script-command-${process.pid}`, "node");
+		const missing = path.join(makeTestTempDir("missing-script-command-", onTestFinished), "node");
 		const result = await runCommand(missing, [], 5000);
 		assert.equal(result.code, -1);
 		assert.throws(() => assertScriptCode(result, 0, "build must succeed"), /outcome: spawn-error/);

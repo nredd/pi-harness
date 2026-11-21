@@ -1,6 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -164,7 +163,7 @@ describe("git_worktree_list", () => {
 	});
 
 	it("names a non-repo", async () => {
-		const r = await mock.call("git_worktree_list", {}, tmpdir());
+		const r = await mock.call("git_worktree_list", {}, root);
 		expect(r.isError).toBe(true);
 		expect(mock.text(r)).toMatch(/^git worktree list: not a git repository/);
 	});
@@ -220,7 +219,7 @@ describe("git_worktree_add", () => {
 		expect(mock.text(badBase)).toMatch(/^git worktree add: unknown revision 'nope'/);
 		const badName = await mock.call("git_worktree_add", { branch: "a..b" }, repo);
 		expect(mock.text(badName)).toMatch(/invalid branch name/);
-		for (const params of [{ branch: "--detach" }, { branch: "x", base: "--output=/tmp/x" }]) {
+		for (const params of [{ branch: "--detach" }, { branch: "x", base: `--output=${join(root, "rejected-output")}` }]) {
 			const r = await mock.call("git_worktree_add", params, repo);
 			expect(r.isError).toBe(true);
 			expect(mock.text(r)).toMatch(/must not start with '-'/);

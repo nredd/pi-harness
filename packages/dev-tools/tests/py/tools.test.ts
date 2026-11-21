@@ -1,6 +1,5 @@
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -78,7 +77,8 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 
 	it("finds the project root from a subdirectory and fails cleanly outside one", async () => {
 		expect(findProjectRoot(join(root, "src", "pt"))).toBe(realpathSync(root));
-		const r = await mock.call("py_typecheck", {}, tmpdir());
+		const outside = makeTestTempDir("pi-dev-tools-no-pyproject-", onTestFinished);
+		const r = await mock.call("py_typecheck", {}, outside);
 		expect(r.isError).toBe(true);
 		expect(mock.text(r)).toMatch(/no pyproject\.toml/);
 	});
@@ -168,7 +168,7 @@ describe.skipIf(!haveUv())("py tools against a real uv project", () => {
 			["py_lint", { select: ["--fix"] }],
 			["py_format", { paths: ["--config=/evil"] }],
 			["py_typecheck", { paths: ["--exit-zero"] }],
-			["py_test", { targets: ["--basetemp=/tmp/victim"] }],
+			["py_test", { targets: [`--basetemp=${join(root, "rejected-basetemp")}`] }],
 		] as const) {
 			const r = await mock.call(tool, params, root);
 			expect(r.isError, tool).toBe(true);

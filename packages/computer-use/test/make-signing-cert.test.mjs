@@ -17,11 +17,7 @@ import {
 	PASSWORD_READER,
 } from "../scripts/make-signing-cert.mjs";
 
-const scratch = [];
-afterEach(async () => {
-	vi.restoreAllMocks();
-	await Promise.all(scratch.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+afterEach(() => vi.restoreAllMocks());
 
 /** Disposable real files, no OpenSSL or credential prompts; every argv is recorded. */
 async function fixture(failureAt = -1, failure = { status: 9 }) {

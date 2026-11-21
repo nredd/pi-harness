@@ -234,8 +234,8 @@ function serveStream(engine, input, io) {
 }
 
 /**
- * Short, unique unix socket path (macOS `sun_path` is 104 bytes). Returns `{ socketPath, dispose }`;
- * `dispose` removes the directory.
+ * @returns {string} Short, unique Unix socket path (macOS `sun_path` is 104 bytes). The owning
+ * test must stop the listener before its finish hook removes the directory.
  */
 export function shortSocketPath(name = "h.sock") {
 	return path.join(makeTestTempDir("fh-", onTestFinished), name);

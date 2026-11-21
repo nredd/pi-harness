@@ -2,16 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
-import { afterEach, onTestFinished, test } from "vitest";
+import { onTestFinished, test } from "vitest";
 import { prepareSwiftSdk, runPreparedSwift } from "./support/swift-sdk.mjs";
 
 // POSIX orchestration fixtures require executable shebangs, UID ownership and process groups.
 // Keep macOS/Linux coverage; native Windows reports NOT RUN, never a fixture pass.
 const testPosixOnly = test.skipIf(process.platform === "win32");
-const dirs = [];
-afterEach(async () => {
-	await Promise.all(dirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 /** Build an executable compiler fixture; this tests orchestration, not Swift semantics. */
 async function fixture(mode = "success") {

@@ -204,7 +204,7 @@ describe("ssh_pull and ssh_push", () => {
 	});
 
 	it("rejects remote paths the remote shell would interpret", async () => {
-		for (const remote_path of ["/etc/hostname;touch /tmp/pwn", "$(id)", "a b", "~/x"]) {
+		for (const remote_path of [`/etc/hostname;touch ${join(work, "rejected-output")}`, "$(id)", "a b", "~/x"]) {
 			const pull = await mock.call("ssh_pull", { host: "home", remote_path, local_path: "y.txt" }, work);
 			expect(pull.isError, remote_path).toBe(true);
 			expect(mock.text(pull)).toContain("remote_path may only contain");

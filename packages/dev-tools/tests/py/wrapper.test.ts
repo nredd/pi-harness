@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -127,11 +126,11 @@ describe("uv executable boundary", () => {
 	it("names a missing project from either cwd without starting uv", async () => {
 		const f = setup();
 		f.script("touch started", "/bin/sh");
-		// `tmpdir()` has no pyproject.toml at or above it, so both the explicit and the session cwd miss.
-		const message = `no pyproject.toml found at or above ${tmpdir()} (within the repository)`;
+		const outside = makeTestTempDir("pi-dev-tools-no-pyproject-", onTestFinished);
+		const message = `no pyproject.toml found at or above ${outside} (within the repository)`;
 		for (const name of TOOLS) {
-			expect(f.text(await f.call(name, { ...minimal(name), cwd: tmpdir() }, f.root)), name).toBe(message);
-			expect(f.text(await f.call(name, minimal(name), tmpdir())), name).toBe(message);
+			expect(f.text(await f.call(name, { ...minimal(name), cwd: outside }, f.root)), name).toBe(message);
+			expect(f.text(await f.call(name, minimal(name), outside)), name).toBe(message);
 		}
 		expect(existsSync(join(f.root, "started"))).toBe(false);
 	});
