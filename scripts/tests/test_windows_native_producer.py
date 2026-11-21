@@ -98,6 +98,25 @@ def test_required_fan_in_accounts_the_windows_artifact_separately() -> None:
     assert not account.get("continue-on-error")
 
 
+def test_windows_coverage_docs_keep_replay_separate() -> None:
+    """Keep replay from overwriting the default Ubuntu accounting summary."""
+    docs = (ROOT / "docs/coverage.md").read_text()
+    replay = next(block for block in docs.split("```") if "--os win32 --base HEAD" in block)
+    assert "--summary coverage/windows-x64-summary.json" in replay
+
+
+def test_coverage_overviews_include_windows() -> None:
+    """Keep the platform and native signal overviews consistent with the required fan-in."""
+    docs = (ROOT / "docs/coverage.md").read_text()
+    assert "`win32`" in docs.split("Schema version 2", 1)[1].split("Unsupported OSes", 1)[0]
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    overview = workflow.split("# Policy: Fan-in and independent coverage accounting", 1)[1].split(
+        "\n  owned-ubuntu:", 1
+    )[0]
+    assert "Windows x64 Rust" in overview
+    assert "documentation site" not in overview
+
+
 def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> None:
     """Execute the workflow's actual CA producer and validate the resulting TLS roots offline.
 

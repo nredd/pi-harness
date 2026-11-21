@@ -18,8 +18,9 @@ coverage-maintenance exclusion. Both require a nonblank
 base read alike; an enforced `excluded` signal is the only nonzero floor and can only tighten.
 
 Raw-JSON-only LLVM signals declare `producer: "llvm-cov"` and remain report-only until runtime
-attribution is resolved. The paired Windows `llvm-lcov` signal enforces headless x64 line/function caps. `computer-use-linux-native/primary` reads raw JSON rather than inventing LCOV branch
-rows: its summary carries lines/functions/regions and explicitly omits unproduced branch counts.
+attribution is resolved. The paired Windows `llvm-lcov` signal enforces headless x64 line/function
+caps. `computer-use-linux-native/primary` reads raw JSON rather than inventing LCOV branch rows:
+its summary carries lines/functions/regions and explicitly omits unproduced branch counts.
 Rust modules anywhere under `src`, including nested test/fixture modules, remain in the complete
 source inventory. Only conservative module/re-export-only source can validate an absent LLVM map.
 `platforms` defaults to `darwin` and `linux`; Windows opts into `win32` instead. Explicit `skip_os`
@@ -119,10 +120,10 @@ tests now pin all three. Caps are references, not waivers: they never rise, and 
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
 zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's `max_uncovered`
-integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
-`linux` (`ubuntu-24.04`), never rounded
-percentages or platform averages. The macOS fan-in selects the Darwin floors from the plan. Unsupported OSes and missing selected-OS floors
-fail closed, including when the global target is enabled. With `enforce_target: true`, the target
+integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`),
+`linux` (`ubuntu-24.04`), and `win32` (the native Windows x64 signal), never rounded percentages
+or platform averages. The macOS fan-in selects the Darwin floors from the plan. Unsupported OSes
+and missing selected-OS floors fail closed, including when the global target is enabled. With `enforce_target: true`, the target
 overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
 use their explicit per-OS caps, not that target override. Enforced Bun signals have zero uncovered
 lines/functions/branches/statements and measure their full owned inventory. Computer-use starts
@@ -449,8 +450,14 @@ inline source tests count. This is not Windows ARM64 or live desktop evidence.
 
 To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
 `coverage.json` and `metadata.json` from its single `windows-*` directory into
-`<reports-root>/packages/computer-use/coverage/native-windows/`, and run
-`uv run --locked --project tests/integration python scripts/coverage_accounting.py --os win32 --base HEAD --reports-root <reports-root>`.
+`<reports-root>/packages/computer-use/coverage/native-windows/`, and run:
+
+```sh
+uv run --locked --project tests/integration python scripts/coverage_accounting.py \
+  --os win32 --base HEAD --reports-root "$reports" --summary coverage/windows-x64-summary.json
+```
+
+Set `reports` to `<reports-root>`. The separate summary preserves any Ubuntu accounting output.
 
 Native Ubuntu Linux Rust is measured separately by the
 report-only/excluded `computer-use-linux-native` signal (#758); regions are not branches or statements,
