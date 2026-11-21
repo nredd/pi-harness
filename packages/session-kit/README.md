@@ -558,7 +558,8 @@ CLI results:
   `failed: "lost"` (diagnostic `<harness>: last published contents unreadable`): it is missing
   from this snapshot, and stderr says so. While the harness is still missing, further unreadable
   manifests do not mark it fresh. A lost harness with no data to carry gets no `lastGoodAt` stamp,
-  even if the previous manifest stamped it. Pi itself still fails closed.
+  even if the previous manifest stamped it. A clean scan of a reappearing harness clears its loss
+  marker; recovery files still require explicit replacement. Pi itself still fails closed.
   `consecutiveFailures` counts failed exports of a harness in a row (kept in `export-state.json`,
   reset by a clean one). It never changes the exit code (see below): a caller that wants to warn
   about a harness stuck on carried data reads `failed`, `consecutiveFailures` and, on import,

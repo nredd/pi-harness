@@ -959,12 +959,12 @@ export async function exportStats(
 		// A harness that cannot be read, or that vanished while we hold data for it, keeps its last published
 		// contents: it must not take the pi export down, nor be replaced by an empty or partial scan.
 		const wasLost = state.lostHarnesses.includes(h);
+		const hasCarriedHistory = old !== null && old.calls.length + old.quota.length > 0;
 		const gone =
 			!scan.found &&
 			!options.replaceHarnesses &&
-			(wasLost ||
-				(old === null ? (state.historyHarnesses?.includes(h) ?? false) : old.calls.length + old.quota.length > 0));
-		const missingHistory = old === null || (wasLost && old.calls.length === 0 && old.quota.length === 0);
+			(wasLost || (old === null ? (state.historyHarnesses?.includes(h) ?? false) : hasCarriedHistory));
+		const missingHistory = old === null || (wasLost && !hasCarriedHistory);
 		const failed = scan.problems.some(fatalProblem) || gone;
 		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
 		const problems = [
@@ -994,7 +994,11 @@ export async function exportStats(
 	const reportedLost = EXTERNAL_HARNESSES.filter((h) => report[h]?.failed === "lost");
 	const lostHarnesses = options.replaceHarnesses
 		? []
-		: HARNESSES.filter((h) => state.lostHarnesses.includes(h) || reportedLost.some((lost) => lost === h));
+		: HARNESSES.filter(
+				(h) =>
+					reportedLost.some((lost) => lost === h) ||
+					(state.lostHarnesses.includes(h) && (h === "pi" || !(report[h]?.found && !report[h]?.failed))),
+			);
 	const recoveryPending =
 		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
 	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));

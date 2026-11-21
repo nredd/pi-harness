@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -179,6 +179,38 @@ it("preserves recovery files and keeps a vanished harness lost across repeated u
 	expect(readdirSync(first.snapshotDir)).not.toContain(ref.file);
 	expect(readdirSync(first.snapshotDir)).not.toContain(valid.file);
 	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryPending).toBe(false);
+});
+
+it("clears a lost harness after a clean reappearance before a later absence", async () => {
+	const home = join(root, "home");
+	const roots = seedHarnessHome(home);
+	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
+	const first = await exportStats(agent, out, undefined, options);
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	writeFileSync(manifestPath, "corrupt");
+	rmSync(roots.claude, { recursive: true });
+	const lost = await exportStats(agent, out, undefined, options);
+	expect(lost.harnesses?.claude).toMatchObject({ failed: "lost", consecutiveFailures: 1 });
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
+
+	rmSync(join(agent, "pi-session-kit", "stats-harness-cache.json"), { force: true });
+	mkdirSync(roots.claude, { recursive: true });
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	const restored = await exportStats(agent, out, undefined, options);
+	expect(restored.harnesses?.claude).toEqual({ found: true, problems: [] });
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBe(Date.now());
+	const state = JSON.parse(readFileSync(statePath, "utf8"));
+	expect(state.lostHarnesses).not.toContain("claude");
+	expect(state.failures.claude).toBeUndefined();
+
+	// No rows survive the clean scan, and the next manifest is unreadable.
+	rmSync(roots.claude, { recursive: true });
+	writeFileSync(manifestPath, "corrupt");
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-04"));
+	const absent = await exportStats(agent, out, undefined, options);
+	expect(absent.harnesses?.claude).toEqual({ found: false, problems: [] });
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBe(Date.now());
 });
 
 it("does not carry a freshness mark from an older export that stamped a lost harness", async () => {
