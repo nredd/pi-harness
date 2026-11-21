@@ -786,6 +786,42 @@ test("Windows blocks known roots by executable before helper calls, not by displ
 	assert.equal(byPid(configured, 104).blocked, false, "neither the title nor the bundle id is a Windows identity");
 });
 
+test("Windows defaults and additive project entries match exact owner executable basenames", async ({
+	onTestFinished,
+}) => {
+	const { windowsHelper } = await import("../src/platform/windows/helper.ts");
+	const hosts = ["CONHOST.EXE", "openconsole.exe", "WT.EXE", "wsl.exe"];
+	const roots = [...hosts, "consent.exe", "PowerShell.EXE", "vault.exe"].map((exe, i) =>
+		policyRoot(101 + i, "Window label", exe),
+	);
+	const { find, userFile } = await useRootPolicyFixture("win32", windowsHelper, roots, onTestFinished);
+	const blocked = async () =>
+		(await find())
+			.filter((root) => root.blocked)
+			.map((root) => root.pid)
+			.sort();
+	assert.deepEqual(await blocked(), [101, 102, 103, 104, 105, 106]);
+
+	const projectDir = path.join(path.dirname(userFile), "..", ".pi");
+	mkdirSync(projectDir);
+	const projectFile = path.join(projectDir, "computer-use.json");
+	writeFileSync(projectFile, JSON.stringify({ blocked_apps: ["VAULT.exe"] }));
+	assert.deepEqual(await blocked(), [101, 102, 103, 104, 105, 106, 107], "projects only add to defaults");
+
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: [] }));
+	assert.deepEqual(
+		await blocked(),
+		[105, 107],
+		"an empty user list replaces defaults, not always-blocked or project entries",
+	);
+	writeFileSync(projectFile, JSON.stringify({ blocked_apps: [] }));
+	assert.deepEqual(await blocked(), [105], "an empty project list cannot remove always-blocked entries");
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["powershell", "C:\\Windows\\System32\\powershell.exe"] }));
+	assert.deepEqual(await blocked(), [105], "configuration entries are opaque strings");
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["powershell.exe"] }));
+	assert.deepEqual(await blocked(), [105, 106], "exact basename matching ignores case");
+});
+
 test("Linux maps the helper name but never treats it as a policy identity", async ({ onTestFinished }) => {
 	const { linuxHelper } = await import("../src/platform/linux/helper.ts");
 	const { linuxBackend } = await import("../src/platform/linux/backend.ts");

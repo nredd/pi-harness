@@ -212,6 +212,12 @@ Current implementation:
 | 7: root selection | Enforced by bundle id. | Enforced by executable basename. Unidentified roots are listed as blocked and refused with `app_blocked`. | Disabled: helper `processName` is the app-supplied AT-SPI accessible Name, not an executable basename or `WM_CLASS` (#1180). |
 | 9: codes | Uses contract codes where applicable. | Platform-specific codes remain, including the strict-headless divergence above. | Platform-specific codes remain, including the strict-headless divergence above. |
 
+On Windows, `blocked_apps` matches the **window owner process**, not a shell, launch alias, or
+hosted app. Match the exact executable basename, case-insensitively: `powershell.exe` matches
+`POWERSHELL.EXE`; `powershell` and `C:\Windows\System32\powershell.exe` do not. Entries are opaque:
+no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, `OpenConsole.exe`,
+`wt.exe`, and `wsl.exe` when those processes own a root.
+
 The cross-OS conformance suite and Linux keyboard-at-coordinate refusal are separate work.
 
 ## Documentation

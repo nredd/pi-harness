@@ -52,6 +52,10 @@ const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string
 	windows: {
 		defaults: [
 			"WindowsTerminal.exe",
+			"conhost.exe",
+			"OpenConsole.exe",
+			"wt.exe",
+			"wsl.exe",
 			"cmd.exe",
 			"powershell.exe",
 			"pwsh.exe",
