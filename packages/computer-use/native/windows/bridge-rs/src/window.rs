@@ -91,7 +91,9 @@ use std::{thread, time::Duration};
 #[cfg(windows)]
 use windows::core::PWSTR;
 #[cfg(windows)]
-use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Foundation::{
+    CloseHandle, BOOL, ERROR_INSUFFICIENT_BUFFER, HWND, LPARAM, RECT, TRUE,
+};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -325,22 +327,26 @@ unsafe fn get_process_name_by_pid(pid: u32) -> String {
         Err(_) => return String::new(),
     };
 
-    let mut buf = [0u16; 260];
-    let mut size = buf.len() as u32;
-    let ok = QueryFullProcessImageNameW(
-        handle,
-        Default::default(),
-        PWSTR(buf.as_mut_ptr()),
-        &mut size,
-    )
-    .is_ok();
+    let query = |buf: &mut [u16]| {
+        let mut size = buf.len() as u32;
+        QueryFullProcessImageNameW(
+            handle,
+            Default::default(),
+            PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        )?;
+        Ok::<_, windows::core::Error>(String::from_utf16_lossy(&buf[..size as usize]))
+    };
+    let path = query(&mut [0u16; 260]).or_else(|err| {
+        if err.code() == windows::core::HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) {
+            query(&mut vec![0u16; 32_767])
+        } else {
+            Err(err)
+        }
+    });
     let _ = CloseHandle(handle);
 
-    if !ok || size == 0 {
-        return String::new();
-    }
-
-    let full_path = String::from_utf16_lossy(&buf[..size as usize]);
+    let full_path = path.unwrap_or_default();
     std::path::Path::new(&full_path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())

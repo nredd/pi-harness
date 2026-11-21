@@ -280,6 +280,7 @@ interface ListWindowsDetails {
 		zOrder: number;
 		browserUseAllowed: boolean;
 		blocked: boolean;
+		identityUnresolved?: true;
 		score: number;
 		url?: string;
 	}>;
@@ -755,6 +756,7 @@ function formatWindowLine(window: ListWindowsDetails["windows"][number]): string
 		window.isMinimized ? "minimized" : undefined,
 		window.browserUseAllowed ? undefined : "browser_use_disabled",
 		window.blocked ? "blocked" : undefined,
+		window.identityUnresolved ? "unidentified" : undefined,
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -791,9 +793,22 @@ class ComputerUseError extends Error {
 	}
 }
 
-/** Fail closed with `app_blocked` for password managers, credential UIs, terminals and system auth agents. */
-function assertAppNotBlocked(target: Pick<HelperApp, "appName" | "appId" | "bundleId">): void {
-	const id = blockedAppId(currentPlatformBackend.name, target);
+type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId">;
+
+function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: true } | undefined {
+	if (currentPlatformBackend.name === "windows" && !target.appId) return { identityUnresolved: true };
+	return blockedAppId(currentPlatformBackend.name, target);
+}
+
+/** Fail closed with `app_blocked` for denied or unresolved identities. */
+function assertAppNotBlocked(target: Pick<HelperApp, "appName"> & PolicyIdentity): void {
+	const id = appBlockReason(target);
+	if (typeof id === "object") {
+		throw new ComputerUseError(
+			"app_blocked",
+			`app_blocked: Cannot observe or control '${target.appName}': application identity could not be determined.`,
+		);
+	}
 	if (!id) return;
 	throw new ComputerUseError(
 		"app_blocked",
@@ -840,10 +855,15 @@ function storeBrowserRootRef(contextId: string): string {
 	return ref;
 }
 
+function windowAppId(app: HelperApp, window: HelperWindow): string | undefined {
+	// Windows resolves the owner on each root lookup. Never mask a failed lookup with a saved identity.
+	return currentPlatformBackend.name === "windows" ? window.appId : (window.appId ?? app.appId);
+}
+
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
 	return storeWindowRef({
 		appName: app.appName,
-		appId: window.appId ?? app.appId,
+		appId: windowAppId(app, window),
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -892,9 +912,10 @@ function chooseRankedWindowOrUndefined(windows: HelperWindow[]): HelperWindow | 
 }
 
 function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget {
+	const storedRef = storeWindowRefForAppWindow(app, window);
 	const baseTarget = {
 		appName: app.appName,
-		appId: window.appId ?? app.appId,
+		appId: storedRef.appId,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -907,7 +928,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 		isMain: window.isMain,
 		isFocused: window.isFocused,
 	};
-	return { ...baseTarget, windowRef: storeWindowRefForAppWindow(app, window).ref };
+	return { ...baseTarget, windowRef: storedRef.ref };
 }
 
 /** Platform target for a resolved root: `windowId` only when real (> 0), the native ref under both spellings. */
@@ -1474,6 +1495,7 @@ function windowDetails(
 	config: ReturnType<typeof getComputerUseConfig>,
 ): ListWindowsDetails["windows"][number] {
 	const storedRef = storeWindowRefForAppWindow(app, window);
+	const blockReason = appBlockReason(storedRef);
 	return {
 		app: app.appName,
 		bundleId: app.bundleId,
@@ -1496,9 +1518,8 @@ function windowDetails(
 		pairing: platformRootPairing(window),
 		zOrder: window.zOrder,
 		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
-		blocked:
-			blockedAppId(currentPlatformBackend.name, { appId: window.appId ?? app.appId, bundleId: app.bundleId }) !==
-			undefined,
+		blocked: blockReason !== undefined,
+		...(typeof blockReason === "object" ? blockReason : {}),
 		score: scoreWindow(window),
 	};
 }

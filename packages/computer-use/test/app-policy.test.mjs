@@ -750,7 +750,7 @@ test("Windows blocks known roots by executable before helper calls, not by displ
 		policyRoot(102, "Elevated UI", "CoNsEnT.ExE"),
 		policyRoot(103, "Private vault", "Vault.EXE"),
 		policyRoot(104, "Vault.EXE", "safe.exe", "VAULT.exe"),
-		policyRoot(105, "WindowsTerminal.exe", undefined, "WindowsTerminal.exe"),
+		policyRoot(105, "WindowsTerminal.exe", "", "WindowsTerminal.exe"),
 	];
 	const { calls, find, observe, userFile } = await useRootPolicyFixture("win32", windowsHelper, roots, onTestFinished);
 	const byPid = (windows, pid) => windows.find((root) => root.pid === pid);
@@ -758,11 +758,23 @@ test("Windows blocks known roots by executable before helper calls, not by displ
 	assert.equal(byPid(discovered, 101).blocked, true);
 	assert.equal(byPid(discovered, 102).blocked, true);
 	assert.equal(byPid(discovered, 103).blocked, false);
-	assert.equal(byPid(discovered, 105).blocked, false);
+	assert.equal(byPid(discovered, 105).blocked, true);
+	assert.equal(byPid(discovered, 105).identityUnresolved, true);
 	assert.equal(byPid(await find({ pid: 101 }), 101).blocked, true);
 	calls.length = 0;
 	await assert.rejects(observe(byPid(discovered, 101).windowRef), { code: "app_blocked" });
 	assert.deepEqual(calls, [], "blocked selection must not reach readiness, discovery, or observation");
+	const unresolved = { code: "app_blocked", message: /application identity could not be determined/ };
+	await assert.rejects(observe(byPid(discovered, 105).windowRef), unresolved);
+	assert.deepEqual(calls, [], "an unidentified saved root must not reach readiness");
+
+	const vault = roots[2];
+	vault.processName = "";
+	await assert.rejects(observe(byPid(discovered, 103).windowRef), unresolved);
+	assert.deepEqual(calls.splice(0), ["ensureReady", "listRoots"], "a fresh lookup must not reuse the prior identity");
+	vault.processName = "Vault.EXE";
+	await find();
+	calls.length = 0;
 
 	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["vAuLt.exe"] }));
 	await assert.rejects(observe(byPid(discovered, 103).windowRef), { code: "app_blocked" });
