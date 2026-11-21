@@ -388,6 +388,28 @@ describe("the workflow host at its edges", () => {
 		expect(reported).toEqual([{ recordId: "rec-1" }]);
 	});
 
+	it("does not report a model before the manager record is bound", async () => {
+		const getRecord = vi.fn();
+		const manager = {
+			getRecord,
+			async spawnAndWait(
+				_pi: unknown,
+				_ctx: unknown,
+				_type: unknown,
+				_prompt: unknown,
+				opts: { onSessionCreated: () => void },
+			) {
+				opts.onSessionCreated();
+				throw new Error("no record allocated");
+			},
+		} as unknown as AgentManager;
+		const host = createWorkflowHost({ pi: pi(), ctx: ctx(), manager });
+		const onResolved = vi.fn();
+		expect(await host.spawnAgent(request({ onResolved }))).toEqual({ ok: false, error: "no record allocated" });
+		expect(getRecord).not.toHaveBeenCalled();
+		expect(onResolved).not.toHaveBeenCalled();
+	});
+
 	it("returns a non-Error the manager throws as the agent's failure", async () => {
 		const manager = {
 			async spawnAndWait() {

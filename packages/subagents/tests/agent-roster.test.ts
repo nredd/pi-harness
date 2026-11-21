@@ -111,6 +111,7 @@ it("limits discovery to authorized siblings and direct children of the current r
 it.each([
 	["evicted", []],
 	["finished", [record("parent", { status: "completed" })]],
+	["unbound workflow", [record("parent", { workflowId: "wf_shared" })]],
 	["resumed", [record("parent", { runId: "new-run" })]],
 	["unbound", [record("parent", { runId: undefined })]],
 	["cross-root", [record("parent", { rosterRootId: "other" })]],
