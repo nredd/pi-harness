@@ -8,15 +8,17 @@ export interface ProviderDisplay {
 }
 
 type ViewSnapshot = UsageSnapshot<UsageSpanSource>;
+// View data is a wire DTO; recursively map its objects and arrays to readonly types.
+type ReadonlyView<T> = { readonly [K in keyof T]: ReadonlyView<T[K]> };
 
 export interface ProviderView {
-	provider: string;
-	display: ProviderDisplay;
-	access: "subscription" | "metered" | "unknown";
-	snapshot?: ViewSnapshot;
-	meters: UsageMeter[];
-	pools: CreditPool[];
-	marks: ExhaustionMark[];
+	readonly provider: string;
+	readonly display: ReadonlyView<ProviderDisplay>;
+	readonly access: "subscription" | "metered" | "unknown";
+	readonly snapshot?: ReadonlyView<ViewSnapshot>;
+	readonly meters: readonly ReadonlyView<UsageMeter>[];
+	readonly pools: readonly ReadonlyView<CreditPool>[];
+	readonly marks: readonly ReadonlyView<ExhaustionMark>[];
 }
 
 /** RPC data, inside the existing success envelope. The legacy fields retain their shape and order. */
@@ -24,7 +26,7 @@ export interface UsageReplyV2 {
 	version: 2;
 	snapshots: ViewSnapshot[];
 	blocks: ExhaustionMark[];
-	views: ProviderView[];
+	views: readonly ProviderView[];
 }
 
 function defaultDisplay(provider: string): ProviderDisplay {
@@ -44,18 +46,18 @@ function defaultDisplay(provider: string): ProviderDisplay {
 
 /**
  * Project providers in caller order, with their latest snapshots and already-active marks.
- * Keep the original snapshot intact (including assumed spans and stale/error status) so
- * consumers can retain legacy rendering. Never infer access from a provider id or a mark.
+ * Copy the view data without changing readings (including assumed spans and stale/error status)
+ * so consumers can retain legacy rendering. Never infer access from a provider id or a mark.
  */
 export function describe(
 	providers: readonly string[],
 	snapshots: readonly ViewSnapshot[],
 	marks: readonly ExhaustionMark[],
 	displays?: ReadonlyMap<string, ProviderDisplay>,
-): ProviderView[] {
+): readonly ProviderView[] {
 	return providers.map((provider) => {
 		const snapshot = snapshots.find((reading) => reading.provider === provider);
-		return {
+		return structuredClone({
 			provider,
 			display: displays?.get(provider) ?? defaultDisplay(provider),
 			access: snapshot?.access ?? "unknown",
@@ -63,6 +65,6 @@ export function describe(
 			meters: snapshot?.meters ?? [],
 			pools: snapshot?.pools ?? [],
 			marks: marks.filter((mark) => mark.provider === provider),
-		};
+		});
 	});
 }
