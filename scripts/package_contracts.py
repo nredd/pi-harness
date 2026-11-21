@@ -555,6 +555,7 @@ CONTRACTS = (
             "src/codex-session.ts",
             "src/config.ts",
             "src/exhaustion.ts",
+            "src/failure.ts",
             "src/index.ts",
             "src/model-ref.ts",
             "src/policy.ts",
