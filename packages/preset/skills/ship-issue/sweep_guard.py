@@ -36,6 +36,22 @@ SOURCE = re.compile(
     r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/]([^/]+)/([^/]+?)(?:\.git)?/?$"
 )
 OID = re.compile(rb"(?:[a-f0-9]{40}|[a-f0-9]{64})")
+REPO_ENV = {
+    "GIT_DIR",
+    "GIT_COMMON_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_NAMESPACE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_SHALLOW_FILE",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_GRAFT_FILE",
+    "GIT_QUARANTINE_PATH",
+}
 
 
 class KeepError(Exception):
@@ -68,6 +84,7 @@ def out(tool: str, *args: str, data: bytes = b"", missing: int = 0) -> bytes:
             env={
                 **os.environ,
                 "GIT_NO_LAZY_FETCH": "1",
+                "GIT_NO_REPLACE_OBJECTS": "1",
                 "GIT_TERMINAL_PROMPT": "0",
                 "GH_PROMPT_DISABLED": "1",
             },
@@ -231,7 +248,7 @@ def check_borrowed(
     path: Path, admin: Path, common: Path, records: list[tuple[Path, list[bytes]]]
 ) -> None:
     """Inspect registered checkouts and module stores for paths into the candidate."""
-    roots = [common / "worktrees", common / "modules"]
+    roots = [common, common / "worktrees"]
     others = [
         other
         for other, fields in records
@@ -267,6 +284,10 @@ def check_borrowed(
                 dirs[:] = [name for name in dirs if name == "info"]
             elif "HEAD" in names:
                 dirs[:] = [name for name in dirs if name in {"objects", "modules"}]
+            if any((current / name).is_symlink() for name in dirs):
+                raise KeepError(
+                    f"cannot verify symlinked Git metadata under {str(current)!r}"
+                )
             if {"objects", "HEAD", "config"}.issubset(
                 set(dirs) | set(names)
             ) and inside(current.resolve(), admin):
@@ -436,8 +457,8 @@ def assess(
         raise KeepError("not a linked worktree of this repository")
     check_history(path, admin)
     check_borrowed(path, admin, common, records)
-    check_status(path, admin)
     check_activity(path, admin, opts.hold, now)
+    check_status(path, admin)
     return check_remote(
         path,
         os.fsdecode(branch_ref[len(b"refs/heads/") :]),
@@ -478,6 +499,11 @@ def main() -> int:
     if opts.no_pr and opts.worktree is None:
         parser.error("--no-pr requires --worktree")
     try:
+        overrides = sorted(REPO_ENV.intersection(os.environ))
+        if overrides:
+            raise KeepError(
+                f"unexpected Git repository overrides: {', '.join(overrides)}"
+            )
         records = inventory(opts.repo)
         common = (
             opts.repo

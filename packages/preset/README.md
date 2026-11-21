@@ -269,8 +269,10 @@ Before creating an issue worktree and after merge, the parent follows the
 [guarded sweep](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep). The preset ships
 [`sweep_guard.py`](skills/ship-issue/sweep_guard.py) beside `ship-issue`. It needs Python 3.8+,
 Git, `gh` and `lsof`; it reports `keep` or `eligible` without removing anything. Supply known
-ownership and retained directory holds with `--hold`. Only a fresh scoped merged-PR verdict
-can lead to non-forced removal. No-PR mode is verdict-only; initialized submodules stay put.
+ownership and retained directory holds with `--hold`; `lsof` only sees processes visible to the
+caller. The guard requires one hour of quiet on the checkout and Git activity markers. Only a fresh
+scoped merged-PR verdict can lead to non-forced removal. No-PR mode is verdict-only; initialized
+submodules stay put.
 No automatic prune or branch deletion. The installed `git prune-merged-worktrees` command and
 older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound

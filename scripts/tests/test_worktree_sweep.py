@@ -196,6 +196,14 @@ def test_worktree_scope_never_accepts_unregistered_directory(wt: Worktrees) -> N
     assert "no matching" in str(result["reasons"])
 
 
+def test_alternate_index_cannot_hide_edits(wt: Worktrees) -> None:
+    quiet(wt)
+    code, (result,) = run(wt, variables={"GIT_INDEX_FILE": str(wt.repo / ".git/index")})
+    assert code == 1
+    assert result["verdict"] == "keep"
+    assert "unexpected Git repository overrides: GIT_INDEX_FILE" in str(result["reasons"])
+
+
 def test_locked(wt: Worktrees) -> None:
     git(wt.repo, "worktree", "lock", "--reason", "Retain", str(wt.path))
     quiet(wt)
@@ -352,13 +360,20 @@ def test_prune_keeps_unsafe_registration(wt: Worktrees, kind: str) -> None:
     if kind == "missing-tree":
         other.rename(wt.repo.parent / "unmounted")
     elif kind == "missing-dotgit":
+        git(wt.repo, "worktree", "lock", str(other))
         (other / ".git").unlink()
     elif kind == "empty-admin":
         gitdir.write_bytes(b"")
     else:
         (other / ".git").write_text(f"gitdir: {wt.admin}\n")
     quiet(wt)
-    keep(wt, "cannot verify prune safety")
+    expected = {
+        "missing-tree": "prunable",
+        "missing-dotgit": "/.git'",
+        "empty-admin": "empty gitdir",
+        "wrong-target": "no matching `.git` file",
+    }
+    keep(wt, expected[kind])
     assert gitdir.exists()
 
 
@@ -378,18 +393,26 @@ def test_git_prune_is_only_ever_called_in_dry_run_mode(wt: Worktrees) -> None:
     ]
 
 
-def test_borrowed_submodule_objects(wt: Worktrees) -> None:
+@pytest.mark.parametrize("dependency", ["alternates", "gitdir"])
+def test_borrowed_submodule_metadata(wt: Worktrees, dependency: str) -> None:
     other = wt.repo.parent / "borrowing checkout"
     git(wt.repo, "worktree", "add", "-b", "borrowing", str(other))
-    info = (
-        Path(os.fsdecode(git(other, "rev-parse", "--absolute-git-dir").strip())) / "modules/sub/objects/info"
-    )
-    info.mkdir(parents=True)
-    objects = wt.admin / "objects"
-    objects.mkdir()
-    (info / "alternates").write_text(f"{objects}\n")
+    git(other, "-c", "protocol.file.allow=always", "submodule", "add", str(wt.repo), "sub")
+    sub = other / "sub"
+    admin = Path(os.fsdecode(git(sub, "rev-parse", "--absolute-git-dir").strip()))
+    if dependency == "alternates":
+        objects = wt.admin / "objects"
+        objects.mkdir()
+        (admin / "objects/info/alternates").write_text(f"{objects}\n")
+        reason = "another checkout borrows objects"
+    else:
+        target = wt.admin / "borrowed-submodule"
+        git(sub, "config", "core.worktree", str(sub))
+        admin.rename(target)
+        (sub / ".git").write_text(f"gitdir: {target}\n")
+        reason = "another checkout uses gitdir"
     quiet(wt)
-    keep(wt, "another checkout borrows objects")
+    keep(wt, reason)
 
 
 @pytest.mark.parametrize("state", ["dirty", "clean", "deinitialized"])
