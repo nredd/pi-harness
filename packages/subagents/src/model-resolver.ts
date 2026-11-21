@@ -166,15 +166,17 @@ export type ModelVersion = readonly [major: number, minor: number];
  *   - `claude-<family>-<n>[-<n>]`, e.g. `claude-opus-4-6`, `claude-opus-5`
  *   - `claude-<n>[-<n>]-<family>`, e.g. `claude-3-5-sonnet-20241022`
  *   - `gpt-<n>[.<n>]-<variant>`, e.g. `gpt-6.1-sol`
- * A minor is one or two digits, so a trailing `-20250514` date stamp is never
- * read as one. Dots and dashes are interchangeable between the parts.
+ *   - Gemini: a major and optional dotted minor before the variant or element name
+ * For Claude and GPT a minor is one or two digits, so a trailing `-20250514`
+ * date stamp is never read as one. Dots and dashes are interchangeable there.
  */
 export function parseModelVersion(id: string): ModelVersion | undefined {
 	const bare = id.slice(id.lastIndexOf("/") + 1).toLowerCase();
 	const claude =
 		/^claude-[a-z]+-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?(?:-|$)/.exec(bare) ??
 		/^claude-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?-[a-z]/.exec(bare);
-	const match = claude ?? /^gpt-(\d+)(?:[.-](\d{1,2})(?!\d))?(?:-|$)/.exec(bare);
+	const match =
+		claude ?? /^gpt-(\d+)(?:[.-](\d{1,2})(?!\d))?(?:-|$)/.exec(bare) ?? /^gemini-(\d+)(?:\.(\d+))?-[a-z]/.exec(bare);
 	if (!match) return undefined;
 	return [Number(match[1]), Number(match[2] ?? 0)];
 }
