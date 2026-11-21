@@ -54,6 +54,7 @@ describe("classify failure text", () => {
 		],
 		["per-minute prose", "429: PerMinute, Please retry in 95s", perMinute],
 		["long structured hint", `SDK error: ${rpc(retryDelay("95s"))}`, hinted],
+		["bare google.rpc.RetryInfo", rpc({ "@type": "google.rpc.RetryInfo", retryDelay: "95s" }), hinted],
 		["compound minute hint", rpc(retryDelay("1m35s")), hinted],
 		[
 			"hours, minutes and fractional seconds",
