@@ -113,7 +113,8 @@ interface ConfigDocument {
 /** Loaded config, or the reason it was rejected. */
 export type ConfigResult = ({ ok: true } & ConfigDocument) | { ok: false; error: string };
 
-const ID = /^[^\s/]+$/;
+const PROVIDER_ID = /^[^\s/]+$/;
+const COLLECTOR_ID = /^(?=.{1,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const NON_BLANK = /\S/;
 const RESET_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
 const ZONE_NAME = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
@@ -240,7 +241,8 @@ function parseProvider(raw: unknown, where: string): ProviderConfig {
 	if (failure !== undefined) validateFailure(failure, `${where}.failure`);
 	if (collector !== undefined) {
 		const { id, options } = object(collector, `${where}.collector`, ["id", "options"]);
-		if (id !== undefined) textField(id, ID, `${where}.collector.id`, "a non-blank id without spaces or slashes");
+		if (id !== undefined)
+			textField(id, COLLECTOR_ID, `${where}.collector.id`, "a lowercase kebab-case id (1-64 characters)");
 		if (options !== undefined) object(options, `${where}.collector.options`);
 	}
 	if (windows === undefined) return provider as ProviderConfig;
@@ -255,7 +257,7 @@ function parseProviders(raw: unknown): Readonly<Record<string, ProviderConfig>> 
 	// A provider named "constructor" is data, not an inherited property.
 	const providers: Record<string, ProviderConfig> = Object.create(null);
 	for (const [id, value] of Object.entries(object(raw, "providers"))) {
-		textField(id, ID, "providers", "non-blank provider ids without spaces or slashes");
+		textField(id, PROVIDER_ID, "providers", "non-blank provider ids without spaces or slashes");
 		providers[id] = parseProvider(value, `providers.${id}`);
 	}
 	return providers;

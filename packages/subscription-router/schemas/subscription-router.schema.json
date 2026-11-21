@@ -17,6 +17,7 @@
 	},
 	"definitions": {
 		"providerId": { "type": "string", "pattern": "^[^\\s/]+$" },
+		"collectorId": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 64 },
 		"nonBlank": { "type": "string", "pattern": "\\S" },
 		"positive": { "type": "number", "exclusiveMinimum": 0 },
 		"provider": {
@@ -58,7 +59,7 @@
 					"type": "object",
 					"additionalProperties": false,
 					"properties": {
-						"id": { "$ref": "#/definitions/providerId" },
+						"id": { "$ref": "#/definitions/collectorId" },
 						"options": { "type": "object" }
 					}
 				}

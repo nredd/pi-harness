@@ -165,7 +165,8 @@ Optional top-level `providers` entries are keyed by Pi provider ID. Merge declar
   `timeZone` (a named IANA zone) and `every` (`day` or `week`). Use a number for
   provider-scope `limits` or an object keyed by exact model ID for model scope. Omit the limit
   if unknown. The Google example declares no project-specific limits and no Vertex windows.
-- `collector.id` names a registered collector, not a URL or a module path. Omit it to select
+- `collector.id` names a registered collector, not a URL or a module path. Use lowercase
+  kebab-case starting with a letter, at most 64 characters. Omit it to select
   by provider ID. `collector.options` is an opaque object for that collector. No Google
   subscription collector or OAuth client is shipped.
 - `evidence` lists unique adapter IDs in order: `read`, `failure` and `observed`.

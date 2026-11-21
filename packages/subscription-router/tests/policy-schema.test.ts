@@ -79,7 +79,6 @@ it.each([
 		{ p: { failure: { repeat: { count: 2, withinMinutes: 10, typo: 0 } } } },
 		"providers.p.failure.repeat.typo: unknown key",
 	],
-	[{ p: { collector: { id: "https://example.invalid" } } }, "providers.p.collector.id:"],
 	[{ p: { collector: { options: [] } } }, "providers.p.collector.options: expected an object"],
 	[{ p: { collector: { module: "example" } } }, "providers.p.collector.module: unknown key"],
 	[{ p: { windows: {} } }, "providers.p.windows: expected an array"],
@@ -121,6 +120,44 @@ it.each([
 	const document = { profiles: {}, providers };
 	expect(() => parseConfig(document)).toThrow(error);
 	expect(Check(schema, document)).toBe(false);
+});
+
+it.each([
+	"http://x",
+	"https://x",
+	"../x",
+	"..\\x",
+	"file:x",
+	"a/b",
+	"a\\b",
+	".",
+	"..",
+	"",
+	"Upper",
+	"has space",
+	"рrovider",
+	"1reader",
+	"a--b",
+	"a-",
+	"reader\n",
+	"a".repeat(65),
+	null,
+])("rejects invalid collector ID %j in both validators", (id) => {
+	const document = { profiles: {}, providers: { p: { collector: { id } } } };
+	expect(Check(schema, document)).toBe(false);
+	expect(() => parseConfigDocument(document)).toThrow("providers.p.collector.id:");
+});
+
+it("keeps Pi provider IDs independent of collector ID rules", () => {
+	const providers = {
+		"google-vertex": { collector: { id: "google-reader2" } },
+		"openai-codex": {},
+		anthropic: {},
+		"Custom.Provider_1": { collector: { id: "a".repeat(64) } },
+	};
+	const document = { profiles: {}, providers };
+	expect(Check(schema, document)).toBe(true);
+	expect(parseConfigDocument(document)).toEqual({ profiles: [], providers });
 });
 
 it("lets both providers compete in the shipped lexicographic example", () => {
