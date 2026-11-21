@@ -274,6 +274,7 @@ import {
 	resolveResumeTarget,
 	updateWorkflowProgressBatch,
 	type WorkflowTask,
+	workflowHostRun,
 	workflowResultText,
 	workflowRunId,
 } from "./workflow/task.ts";
@@ -1373,6 +1374,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// Internal too: a forged value would hide an RPC-spawned agent inside
 		// someone else's workflow, and take it out of the concurrency pool with it.
 		delete safeOptions.workflowId;
+		delete safeOptions.rosterWorkflowRun;
 		delete safeOptions.depth;
 		delete safeOptions.maxSubagentDepth;
 		delete safeOptions.configCwd;
@@ -3740,9 +3742,8 @@ Terse command-style prompts produce shallow, generic work.
 					pi,
 					ctx,
 					manager,
-					signal: task.abortController.signal,
 					rootSessionId: ctx.sessionManager.getSessionId(),
-					workflowId: task.id,
+					...workflowHostRun(task),
 				}),
 				onProgress: (entries) => updateWorkflowProgressBatch(task, entries),
 				// The dialog's pause / skip / retry keys run through this; it is dropped

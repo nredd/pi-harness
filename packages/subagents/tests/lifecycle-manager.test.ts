@@ -1,4 +1,5 @@
 /** Manager callbacks, resumed-turn ownership and eviction through public APIs. */
+import { getEventListeners } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -11,6 +12,14 @@ import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { streamToOutputFile } from "../src/output-file.ts";
 import * as budget from "../src/process-budget.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
+import { runWorkflow } from "../src/workflow/runtime.ts";
+import {
+	completeWorkflowTask,
+	createWorkflowTask,
+	pauseWorkflowTask,
+	resumeWorkflowTask,
+	workflowHostRun,
+} from "../src/workflow/task.ts";
 import * as worktrees from "../src/worktree.ts";
 
 vi.mock("../src/agent-runner.ts", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
@@ -328,6 +337,192 @@ describe("resumed-turn lifecycle", () => {
 });
 
 describe("workflow host lifecycle", () => {
+	let workflowCtx: ExtensionContext;
+	beforeEach(() => {
+		workflowCtx = {
+			...ctx,
+			cwd: makeTestTempDir("workflow-roster-", onTestFinished),
+			sessionManager: { getSessionId: () => "root" },
+		} as ExtensionContext;
+	});
+	const allowed = new Set(["general-purpose"]);
+	const readRoster = (manager: AgentManager, id: string) => manager.roster.child(id, allowed).agents;
+
+	const request = (label: string) => ({ agentId: label, index: 0, label, prompt: label, agentType: "general-purpose" });
+
+	it("denies roster while paused and restores it after resume", async () => {
+		const { manager } = managerWithClock();
+		const task = createWorkflowTask({ id: "wf_pause", script: "" });
+		task.control = {
+			pause: vi.fn(),
+			resume: vi.fn(),
+			isPaused: () => task.status === "paused",
+			skip: () => false,
+			retry: () => false,
+		};
+		const host = createWorkflowHost({
+			pi,
+			ctx: workflowCtx,
+			manager,
+			...workflowHostRun(task),
+		});
+		await host.spawnAgent(request("sibling"));
+		const done = { responseText: "done", session, aborted: false, steered: false };
+		const held = deferred<typeof done>();
+		vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+		const wait = host.spawnAgent(request("caller"));
+		try {
+			const caller = manager.listAgents().find((record) => record.description === "caller")!;
+			const assignments = () => readRoster(manager, caller.id).map((entry) => entry.assignment);
+			expect(assignments()).toEqual(["", "caller", "sibling"]);
+			expect(pauseWorkflowTask(task, 1)).toBe(true);
+			expect(task.abortController.signal.aborted).toBe(false);
+			expect(caller.status).toBe("running");
+			expect(assignments).toThrow("no active workflow run");
+			expect(manager.roster.audit("root")).toHaveLength(1);
+			expect(resumeWorkflowTask(task, 2)).toBe(true);
+			expect(assignments()).toEqual(["", "caller", "sibling"]);
+		} finally {
+			held.resolve(done);
+			await wait;
+		}
+	}, 10_000);
+
+	it("detaches the workflow abort listener when cancelling a queued worker", async () => {
+		const { manager } = managerWithClock();
+		const policy = budget.getBudgetPolicy();
+		budget.setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+		const signal = new AbortController().signal;
+		const host = createWorkflowHost({
+			pi,
+			ctx: workflowCtx,
+			manager,
+			workflowId: "wf_queued",
+			signal,
+			isRunning: () => true,
+		});
+		const done = { responseText: "done", session, aborted: false, steered: false };
+		const held = deferred<typeof done>();
+		vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+		const blocker = host.spawnAgent(request("blocker"));
+		const listenerCount = () => getEventListeners(signal, "abort").length;
+		const before = listenerCount();
+		const queued = host.spawnAgent(request("queued"));
+		try {
+			expect(manager.listAgents().find((record) => record.description === "queued")?.status).toBe("queued");
+			expect(listenerCount()).toBe(before + 1);
+			host.abortAgent("queued");
+			expect(listenerCount()).toBe(before);
+			expect(await queued).toMatchObject({ skipped: true });
+		} finally {
+			held.resolve(done);
+			await Promise.all([blocker, queued]);
+			budget.setBudgetPolicy(policy);
+		}
+	}, 10_000);
+
+	it("does not publish an inspector id for an unretained startup failure", async () => {
+		const { manager } = managerWithClock();
+		vi.spyOn(worktrees, "createWorktree").mockRejectedValueOnce(new Error("no git repo"));
+		const host = createWorkflowHost({ pi, ctx: workflowCtx, manager });
+		const onResolved = vi.fn();
+		const result = await host.spawnAgent({ ...request("broken"), isolation: "worktree", onResolved });
+		expect(result).toMatchObject({ ok: false, error: expect.stringContaining("no git repo") });
+		expect(manager.listAgents()).toEqual([]);
+		expect(onResolved).not.toHaveBeenCalled();
+	});
+
+	it("denies roster after workflow failure", async () => {
+		const { manager } = managerWithClock();
+		const path = makeTestTempDir("workflow-pending-", onTestFinished);
+		const copy = { path, workPath: path, repoRoot: path, branch: "test", baseSha: "abc" };
+		const pending = deferred<typeof copy>();
+		const create = vi.spyOn(worktrees, "createWorktree").mockReturnValue(pending.promise);
+		const cleanup = vi.spyOn(worktrees, "cleanupWorktree").mockResolvedValue({ hasChanges: false });
+		const task = createWorkflowTask({
+			id: "wf_shared",
+			script: `export const meta = { name: "roster", description: "fixture" };
+				await agent("retained assignment", { label: "retained" });
+				agent("pending worker", { label: "pending", isolation: "worktree" });`,
+		});
+		const host = createWorkflowHost({
+			pi,
+			ctx: workflowCtx,
+			manager,
+			...workflowHostRun(task),
+		});
+		let startup: Promise<void> | undefined;
+		try {
+			const result = await runWorkflow({ script: task.script, host, signal: AbortSignal.timeout(10_000) });
+			completeWorkflowTask(task, result);
+			const worker = manager.listAgents().find((record) => record.description === "pending")!;
+			const retained = manager.listAgents().find((record) => record.description === "retained")!;
+			startup = manager.awaitStartup(worker.id);
+			expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("unawaited agent launch") });
+			expect(create).toHaveBeenCalledOnce();
+			expect(worker.status).toBe("stopped");
+			expect(() => readRoster(manager, worker.id)).toThrow("Agent roster unavailable");
+
+			// Exercise the workflow guard independently of the worker status guard
+			// by reopening a retained worker directly through the manager.
+			const held = deferred<Awaited<ReturnType<typeof resumeAgent>>>();
+			vi.mocked(resumeAgent).mockReturnValueOnce(held.promise);
+			const resume = manager.resume(retained.id, "late turn");
+			try {
+				expect(retained.status).toBe("running");
+				expect(() => readRoster(manager, retained.id)).toThrow("no active workflow run");
+				expect(manager.roster.audit("root")).toEqual([]);
+			} finally {
+				held.resolve({ text: "done", aborted: false, steered: false });
+				await resume;
+			}
+		} finally {
+			pending.resolve(copy);
+			await startup;
+		}
+		expect(cleanup).toHaveBeenCalledOnce();
+		expect(runAgent).toHaveBeenCalledOnce();
+	}, 15_000);
+
+	it("isolates duplicate workflow IDs", async () => {
+		const { manager } = managerWithClock();
+		const host = () =>
+			createWorkflowHost({
+				pi,
+				ctx: workflowCtx,
+				manager,
+				workflowId: "wf_shared",
+				signal: new AbortController().signal,
+				isRunning: () => true,
+			});
+		const [first, second] = [host(), host()];
+		const request = (label: string) => ({
+			agentId: label,
+			index: 0,
+			label,
+			prompt: label,
+			agentType: "general-purpose",
+		});
+		await first.spawnAgent(request("first assignment"));
+		await second.spawnAgent(request("second assignment"));
+		const done = { responseText: "done", session, aborted: false, steered: false };
+		const held = deferred<typeof done>();
+		vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+		const wait = second.spawnAgent(request("caller"));
+		try {
+			const caller = manager.listAgents().find((record) => record.description === "caller")!;
+			expect(manager.listAgents().map((record) => record.workflowId)).toEqual(["wf_shared", "wf_shared", "wf_shared"]);
+			expect(readRoster(manager, caller.id).map((entry) => entry.assignment)).toEqual([
+				"",
+				"caller",
+				"second assignment",
+			]);
+		} finally {
+			held.resolve(done);
+			await wait;
+		}
+	}, 10_000);
+
 	it("reports retained model provenance before resume and resolves an explicit nested script file", async () => {
 		const dir = makeTestTempDir("lifecycle-host-", onTestFinished);
 		const f = managerWithClock((record) => {

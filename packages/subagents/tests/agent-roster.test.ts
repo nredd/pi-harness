@@ -113,6 +113,7 @@ it("limits discovery to authorized siblings and direct children of the current r
 it.each([
 	["evicted", []],
 	["finished", [record("parent", { status: "completed" })]],
+	["unbound workflow", [record("parent", { workflowId: "wf_shared" })]],
 	["resumed", [record("parent", { runId: "new-run" })]],
 	["unbound", [record("parent", { runId: undefined })]],
 	["cross-root", [record("parent", { rosterRootId: "other" })]],
@@ -138,6 +139,14 @@ it("does not restore nested roster membership when a parent is reopened under a 
 		"reopened-parent",
 		"new-child",
 	]);
+});
+
+it("excludes workflow-owned records without an execution binding", () => {
+	const roster = new AgentRoster(() => [record("standalone"), record("unbound", { workflowId: "wf_shared" })]);
+	const allowed = new Set(["Explore"]);
+	expect(() => roster.child("unbound", allowed)).toThrow("no active workflow run");
+	expect(roster.audit("one")).toEqual([]);
+	expect(roster.child("standalone", allowed).agents.map((agent) => agent.id)).toEqual(["root:one", "standalone"]);
 });
 
 it("fails closed for absent, unscoped or settled callers and invalid roots", () => {

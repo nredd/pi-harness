@@ -74,6 +74,10 @@ function entryOf(record: AgentRecord): RosterEntry {
 	}
 }
 
+function hasRequiredWorkflowBinding(record: AgentRecord): boolean {
+	return record.workflowId === undefined || record.rosterWorkflowRun !== undefined;
+}
+
 /** One manager owns this store. No global registry, event emission, timers or disk persistence. */
 export class AgentRoster {
 	private readonly logs = new Map<string, { sequence: number; events: RootAuditEvent[] }>();
@@ -96,28 +100,36 @@ export class AgentRoster {
 		if (!caller?.rosterRootId || !caller.runId || (caller.status !== "running" && caller.status !== "queued")) {
 			throw new Error("Agent roster unavailable: caller has no active root-scoped run identity.");
 		}
+		const workflowRun = caller.rosterWorkflowRun;
+		if (
+			!hasRequiredWorkflowBinding(caller) ||
+			(workflowRun && (workflowRun.signal.aborted || !workflowRun.isRunning()))
+		) {
+			throw new Error("Agent roster unavailable: caller has no active workflow run.");
+		}
 		if (caller.parentAgentId !== undefined) {
 			const parent = records.find((record) => record.id === caller.parentAgentId);
 			if (
 				!parent?.runId ||
 				parent.runId !== caller.rosterParentRunId ||
 				parent.rosterRootId !== caller.rosterRootId ||
+				!hasRequiredWorkflowBinding(parent) ||
+				parent.rosterWorkflowRun !== workflowRun ||
 				parent.status !== "running"
 			) {
 				throw new Error("Agent roster unavailable: caller has no active immediate parent run.");
 			}
 		}
-		// A workflow id identifies one run, not the workflow definition. Parentless
-		// records share a sibling group only within that run (or outside workflows).
+		// Compare execution identity, never the display id, which can collide.
 		return this.read(
 			caller.rosterRootId,
 			caller.id,
 			caller.runId,
 			(record) =>
 				allowed.has(record.type) &&
-				((record.parentAgentId === caller.parentAgentId &&
-					record.rosterParentRunId === caller.rosterParentRunId &&
-					(caller.parentAgentId !== undefined || record.workflowId === caller.workflowId)) ||
+				hasRequiredWorkflowBinding(record) &&
+				record.rosterWorkflowRun === workflowRun &&
+				((record.parentAgentId === caller.parentAgentId && record.rosterParentRunId === caller.rosterParentRunId) ||
 					(record.parentAgentId === caller.id && record.rosterParentRunId === caller.runId)),
 		);
 	}

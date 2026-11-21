@@ -356,9 +356,10 @@ describe("the workflow host at its edges", () => {
 				_ctx: unknown,
 				_type: unknown,
 				_prompt: unknown,
-				opts: Record<string, unknown>,
+				opts: Record<string, unknown> & { onPrepare?: (id: string) => void },
 				onSpawned?: (id: string) => void,
 			) {
+				opts.onPrepare?.(full.id);
 				onSpawned?.(full.id);
 				await during?.(opts);
 				return { id: full.id, record: full };
@@ -384,6 +385,21 @@ describe("the workflow host at its edges", () => {
 		const host = createWorkflowHost({ pi: pi(), ctx: ctx(), manager: managerFor({ modelTier: UNMAPPED }) });
 		await host.spawnAgent(request({ onResolved: (info) => reported.push(info) }));
 		expect(reported).toEqual([{ recordId: "rec-1" }]);
+	});
+
+	it("reports no inspector or model details if allocation rejects", async () => {
+		const getRecord = vi.fn();
+		const manager = {
+			getRecord,
+			async spawnAndWait() {
+				throw new Error("no record allocated");
+			},
+		} as unknown as AgentManager;
+		const host = createWorkflowHost({ pi: pi(), ctx: ctx(), manager });
+		const onResolved = vi.fn();
+		expect(await host.spawnAgent(request({ onResolved }))).toEqual({ ok: false, error: "no record allocated" });
+		expect(getRecord).not.toHaveBeenCalled();
+		expect(onResolved).not.toHaveBeenCalled();
 	});
 
 	it("returns a non-Error the manager throws as the agent's failure", async () => {

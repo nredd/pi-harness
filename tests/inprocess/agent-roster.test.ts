@@ -227,6 +227,8 @@ it("isolates standalone agents from workflow runs and refreshes workflow sibling
 			homeDir: fixture.root,
 			rootSessionId: rootId,
 			workflowId: workflowRunId(),
+			isRunning: () => true,
+			signal: new AbortController().signal,
 		});
 	const first = host();
 	const second = host();
