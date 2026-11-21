@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classify, type FailureClassification, nextPacificMidnight } from "../src/failure.ts";
+import { isQuotaError } from "../src/router.ts";
 
 const NOW = Date.parse("2026-07-01T18:00:00Z");
 const RESET = Date.parse("2026-07-02T07:00:00Z");
@@ -232,6 +233,75 @@ describe("classify failure text", () => {
 	])("%s", (_name, text, expected) => {
 		expect(classify(text, NOW)).toStrictEqual(expected);
 	});
+});
+
+// Distinct provider failure texts from router/exhaustion, policy compatibility/differential,
+// and recovery (including the scenario and ownership fixtures). Keep those suites untouched.
+const legacyFixtures = [
+	"429 Too Many Requests",
+	"429",
+	"429 rate_limit_error",
+	"429 rate limit",
+	"429 Too Many Requests: rate_limit_error",
+	"rate_limit_error",
+	"insufficient_quota",
+	"You exceeded your current quota exceeded",
+	"insufficient_quota: You exceeded your current quota",
+	"subscription_sharing_usage_limit_exceeded",
+	"Your credit balance is too low; check billing",
+	`400 {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."}}`,
+	"billing account disabled",
+	"billing limit",
+	"overloaded_error",
+	"overloaded",
+	"request took 4290ms",
+	"invalid_api_key",
+	"permission denied",
+	"model_not_found",
+	"network unreachable",
+	"prompt is too long",
+	"cancelled",
+	undefined,
+];
+
+function legacyGate(errorMessage: string | undefined): boolean {
+	return isQuotaError({ stopReason: "error", errorMessage });
+}
+
+function expectQuotaClass(text: string | undefined) {
+	expect(["not-quota", "weak"], text).not.toContain(classify(text, NOW).class);
+}
+
+it.each(legacyFixtures)("preserves legacy quota evidence for fixture %s", (text) => {
+	if (legacyGate(text)) expectQuotaClass(text);
+});
+
+// Witness each alternative of QUOTA_ERROR_PATTERN, including zero-width and single-character separators.
+// Assert the gate as well as the classifier so removing a legacy match cannot silently skip parity.
+it.each([
+	"429",
+	"quota",
+	"rate limit",
+	"rate-limit",
+	"rate_limit",
+	"ratelimit",
+	"too many requests",
+	"usage limit",
+	"usage-limit",
+	"usage_limit",
+	"usagelimit",
+	"billing",
+	"out of budget",
+	"extra usage",
+	"extra-usage",
+	"extra_usage",
+	"extrausage",
+	"available balance",
+	"UsageLimitError",
+	"subscription_sharing_usage_limit_exceeded",
+])("preserves the legacy gate phrase %s", (text) => {
+	expect(legacyGate(text)).toBe(true);
+	expectQuotaClass(text);
 });
 
 it.each([

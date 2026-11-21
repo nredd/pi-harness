@@ -42,7 +42,9 @@ const NON_QUOTA =
 const OVERLOAD = /(?:^|[^a-z0-9])overloaded(?![a-z0-9])/i;
 const VERDICT = /\b(?:RESOURCE_EXHAUSTED|rate_limit_error|rate_limit_exceeded|too_many_requests|QUOTA_EXHAUSTED)\b/i;
 const LEGACY_LIMIT =
-	/\b(?:UsageLimitError|subscription_sharing_usage_limit_exceeded|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
+	/\b(?:UsageLimitError|subscription_sharing_usage_limit_exceeded|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|out of extra[ _-]?usage|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
+// Bare labels can be verdicts; the same words in arbitrary prose are only weak signals.
+const LEGACY_LABEL = /^(?:quota|rate.?limit|usage.?limit|extra.?usage|available balance)$/i;
 const BILLING = /\b(?:billing|credits depleted|prepayment credits|payment required)\b/i;
 const WEAK =
 	/\b(?:429|402)\b|quota|rate.?limit|too many requests|usage.?limit|out of budget|extra.?usage|available balance/i;
@@ -161,7 +163,13 @@ export function classify(errorMessage: string | undefined, now: number): Failure
 	}
 	if (http === 402 || BILLING.test(signal)) return { class: "billing", scope: "provider", cause: "billing" };
 	const interactionsDaily = codes.includes("quota_exceeded") || message === "quota_exceeded";
-	if (http === 429 || VERDICT.test(signal) || LEGACY_LIMIT.test(signal) || interactionsDaily) {
+	if (
+		http === 429 ||
+		VERDICT.test(signal) ||
+		LEGACY_LIMIT.test(signal) ||
+		LEGACY_LABEL.test(message) ||
+		interactionsDaily
+	) {
 		const windows = quotaIds.join(" ");
 		// The prose fallback accepts explicit window tokens, not arbitrary mentions of the word daily.
 		if (PER_MINUTE.test(windows) || PER_MINUTE_TOKEN.test(message)) return { class: "per-minute", ...quota };
