@@ -176,7 +176,9 @@ export function parseModelVersion(id: string): ModelVersion | undefined {
 		/^claude-[a-z]+-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?(?:-|$)/.exec(bare) ??
 		/^claude-(\d{1,2})(?:[-.](\d{1,2})(?!\d))?-[a-z]/.exec(bare);
 	const match =
-		claude ?? /^gpt-(\d+)(?:[.-](\d{1,2})(?!\d))?(?:-|$)/.exec(bare) ?? /^gemini-(\d+)(?:\.(\d+))?-[a-z]/.exec(bare);
+		claude ??
+		/^gpt-(\d+)(?:[.-](\d{1,2})(?!\d))?(?:-|$)/.exec(bare) ??
+		/^gemini-(\d+)(?:\.(\d+))?-[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.exec(bare);
 	if (!match) return undefined;
 	return [Number(match[1]), Number(match[2] ?? 0)];
 }

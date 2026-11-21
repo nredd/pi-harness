@@ -381,6 +381,25 @@ describe("fuzzy resolution ranks by version, then score", () => {
 		expect(parseModelVersion(id)).toEqual(version);
 	});
 
+	it.each(["gemini-4-carbon!", "gemini-4-carbon-", "gemini-4--carbon", "gemini-4-Carbon.x", "gemini-4-"])(
+		"does not parse a malformed Gemini id: %s",
+		(id) => {
+			expect(parseModelVersion(id)).toBeUndefined();
+		},
+	);
+
+	it("breaks equal Gemini versions by provider/model identity, not registry order", () => {
+		const neon = { id: "gemini-4-neon", name: "Gemini 4 Neon", provider: "google" };
+		const lead = { id: "gemini-4-lead", name: "Gemini 4 Lead", provider: "google" };
+		setModelScopeProvider(() => new Set(["google/gemini-4-lead", "google/gemini-4-neon"]));
+		for (const order of [
+			[neon, lead],
+			[lead, neon],
+		]) {
+			expect(resolveModel("gemini", makeRegistry(order, order))).toEqual(lead);
+		}
+	});
+
 	it("ranks enabled Gemini models by major and minor, not match score", () => {
 		const neon = { id: "gemini-4-neon", name: "Gemini 4 Neon", provider: "google" };
 		const krypton = { id: "gemini-4-krypton", name: "Gemini 4 Krypton", provider: "google" };
