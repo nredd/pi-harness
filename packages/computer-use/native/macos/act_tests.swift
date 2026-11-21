@@ -630,9 +630,14 @@ private func runWebReplacementRefusals(sink: NativeInputSink, posted: () -> [CGE
 
     let focus = ActFixture(inputSink: sink)
     focus.web = true
-    focus.onAttributeWrite = { [unowned focus] in if $0 == kAXFocusedAttribute { focus.blocked = true } }
+    focus.onAttributeWrite = { [unowned focus] in
+        if $0 == kAXFocusedAttribute { focus.blocked = true }
+    }
+    focus.onValueRead = { [unowned focus] in
+        if focus.blocked { focus.trace.append("read:AXValue") }
+    }
     try actionFailure("app_blocked") { try focus.act("setText", params: params) }
-    expect(focus.trace.suffix(3) == ["set:AXFocused", "keyboard", "unlock"] && posted().isEmpty, "web focus write refuses before the selection read or any post")
+    expect(!focus.trace.contains("read:AXValue") && posted().isEmpty, "web focus write refuses before the selection read or any post")
 
     let value = ActFixture(inputSink: sink)
     value.web = true
