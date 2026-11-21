@@ -18,6 +18,7 @@ import {
 	createWorkflowTask,
 	pauseWorkflowTask,
 	resumeWorkflowTask,
+	workflowHostRun,
 } from "../src/workflow/task.ts";
 import * as worktrees from "../src/worktree.ts";
 
@@ -356,14 +357,11 @@ describe("workflow host lifecycle", () => {
 			skip: () => false,
 			retry: () => false,
 		};
-		const signal = task.abortController.signal;
 		const host = createWorkflowHost({
 			pi,
 			ctx: workflowCtx,
 			manager,
-			workflowId: task.id,
-			signal,
-			isRunning: () => task.status === "running",
+			...workflowHostRun(task),
 		});
 		await host.spawnAgent(request("sibling"));
 		const done = { responseText: "done", session, aborted: false, steered: false };
@@ -375,7 +373,7 @@ describe("workflow host lifecycle", () => {
 			const assignments = () => readRoster(manager, caller.id).map((entry) => entry.assignment);
 			expect(assignments()).toEqual(["", "caller", "sibling"]);
 			expect(pauseWorkflowTask(task, 1)).toBe(true);
-			expect(signal.aborted).toBe(false);
+			expect(task.abortController.signal.aborted).toBe(false);
 			expect(caller.status).toBe("running");
 			expect(assignments).toThrow("no active workflow run");
 			expect(manager.roster.audit("root")).toHaveLength(1);
@@ -444,14 +442,11 @@ describe("workflow host lifecycle", () => {
 				await agent("retained assignment", { label: "retained" });
 				agent("pending worker", { label: "pending", isolation: "worktree" });`,
 		});
-		const signal = task.abortController.signal;
 		const host = createWorkflowHost({
 			pi,
 			ctx: workflowCtx,
 			manager,
-			workflowId: task.id,
-			signal,
-			isRunning: () => task.status === "running",
+			...workflowHostRun(task),
 		});
 		let startup: Promise<void> | undefined;
 		try {

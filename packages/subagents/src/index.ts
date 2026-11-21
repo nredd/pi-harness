@@ -271,6 +271,7 @@ import {
 	resolveResumeTarget,
 	updateWorkflowProgressBatch,
 	type WorkflowTask,
+	workflowHostRun,
 	workflowResultText,
 	workflowRunId,
 } from "./workflow/task.ts";
@@ -3738,10 +3739,8 @@ Terse command-style prompts produce shallow, generic work.
 					pi,
 					ctx,
 					manager,
-					signal: task.abortController.signal,
 					rootSessionId: ctx.sessionManager.getSessionId(),
-					workflowId: task.id,
-					isRunning: () => task.status === "running",
+					...workflowHostRun(task),
 				}),
 				onProgress: (entries) => updateWorkflowProgressBatch(task, entries),
 				// The dialog's pause / skip / retry keys run through this; it is dropped

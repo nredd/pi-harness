@@ -131,6 +131,11 @@ export function createWorkflowTask(init: {
 	};
 }
 
+/** Bind the workflow host to the live status of this task, not its display ID. */
+export function workflowHostRun(task: WorkflowTask) {
+	return { workflowId: task.id, signal: task.abortController.signal, isRunning: () => task.status === "running" };
+}
+
 /**
  * Apply one batch of progress entries.
  *
