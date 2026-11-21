@@ -140,11 +140,17 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     for name, package in python.items():
         primary = package["signals"]["primary"]
         assert f"--cov-report=lcov:{primary['report']}" in recipe, name
-        source = sources[package["root"]]
+        source = sources[package["root"]].split()[0]
         assert {Path(pattern).parent.as_posix() for pattern in package["owned"]} == {source}, name
         assert not primary.get("skip_hosts"), name
         assert primary["producer"] == "coverage.py", name
     assert set(sources) == {"scripts", "tests/integration", "release"}
+    sweep = policy["packages"]["preset-sweep-guard"]
+    (guard,) = sweep["owned"]
+    primary = sweep["signals"]["primary"]
+    assert f"--cov=../{sweep['root']}/{Path(guard).parent}" in sources["scripts"].split()
+    assert f"-o ../{sweep['root']}/{primary['report']}" in makefile
+    assert f"--include='*/{Path(guard).parent.name}/{Path(guard).name}'" in makefile
 
 
 def test_workspace_bun_commands_delegate_coverage_to_the_launcher() -> None:
