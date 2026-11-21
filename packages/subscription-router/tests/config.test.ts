@@ -2,18 +2,36 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { CONFIG_FILE, loadConfig, parseConfig, parseConfigDocument } from "../src/config.ts";
-import { parseConfig as legacyParseConfig } from "./fixtures/legacy-oracle/config.ts";
+import { CONFIG_FILE, parseConfig as currentParseConfig, loadConfig, parseConfigDocument } from "../src/config.ts";
+import { loadConfig as baseLoadConfig, parseConfig as baseParseConfig } from "./fixtures/base-config-parser.ts";
 import { POLICY_CASES } from "./fixtures/policy-cases.ts";
 
-function expectLegacyProfiles(document: { profiles: Record<string, Record<string, unknown>> }): void {
-	// The pre-policy oracle omits policy. Restore that opt-in field verbatim from each fixture.
-	const profiles = legacyParseConfig(document).map(({ exhaustion, ...profile }) => {
-		const policy = document.profiles[profile.id]?.policy;
-		return { ...profile, ...(policy === undefined ? {} : { policy }), ...(exhaustion ? { exhaustion } : {}) };
-	});
-	expect(parseConfigDocument(document)).toStrictEqual({ profiles });
-	expect(JSON.stringify(parseConfig(document))).toBe(JSON.stringify(profiles));
+function outcome(parse: typeof currentParseConfig, input: unknown) {
+	try {
+		const profiles = parse(input);
+		return { profiles, serialized: JSON.stringify(profiles) };
+	} catch (error) {
+		return { error: (error as Error).message };
+	}
+}
+
+// Run every pre-provider parser case against the pinned base as well as its explicit expectations.
+function parseConfig(input: unknown) {
+	const actual = currentParseConfig(input);
+	const base = baseParseConfig(input);
+	expect(actual).toStrictEqual(base);
+	expect(JSON.stringify(actual)).toBe(JSON.stringify(base));
+	return actual;
+}
+
+async function loadLegacyConfig(dir: string) {
+	const result = await loadConfig(dir);
+	expect(result).toStrictEqual(await baseLoadConfig(dir));
+	return result;
+}
+
+function expectLegacyProfiles(document: unknown): void {
+	expect(parseConfigDocument(document)).toStrictEqual({ profiles: parseConfig(document) });
 }
 
 it.each(["subscription-router", "policies"])("preserves the existing %s config example", async (name) => {
@@ -23,7 +41,11 @@ it.each(["subscription-router", "policies"])("preserves the existing %s config e
 it.each(POLICY_CASES)("preserves the existing policy config fixture $policy", ({ policy, valid }) => {
 	const document = { profiles: { test: { policy, chain: [{ model: "p/a" }] } } };
 	if (valid) expectLegacyProfiles(document);
-	else expect(() => parseConfigDocument(document)).toThrow("profiles.test.policy");
+	else {
+		const actual = outcome(currentParseConfig, document);
+		expect(actual).toStrictEqual(outcome(baseParseConfig, document));
+		expect(actual.error).toMatch(/^profiles\.test\.policy/);
+	}
 });
 
 it("keeps unknown root, profile and chain keys ignored and omits missing providers", () => {
@@ -140,7 +162,9 @@ describe("parseConfig", () => {
 		[{ profiles: { a: { chain: [{ model: "a/b" }, { model: "a/b" }] } } }, /a\/b is listed twice/],
 		[{ profiles: { a: { name: 3, chain: [{ model: "a/b" }] } } }, /profiles.a.name/],
 	])("rejects %j", (raw, message) => {
-		expect(() => parseConfig(raw)).toThrow(message);
+		const actual = outcome(currentParseConfig, raw);
+		expect(actual).toStrictEqual(outcome(baseParseConfig, raw));
+		expect(actual.error).toMatch(message);
 	});
 });
 
@@ -165,7 +189,7 @@ describe("loadConfig", () => {
 
 	it("rejects a syntactically valid but unknown IANA zone", () => {
 		expect(() =>
-			parseConfig({
+			currentParseConfig({
 				profiles: {},
 				providers: {
 					p: {
@@ -188,13 +212,13 @@ describe("loadConfig", () => {
 		const raw = JSON.parse(
 			'{"profiles":{},"providers":{"p":{"windows":[{"name":"spend","kind":"rolling","durationMinutes":10,"unit":"usd","scope":"provider","limits":1e999}]}}}',
 		);
-		expect(() => parseConfig(raw)).toThrow("providers.p.windows[0].limits: expected a finite positive number");
+		expect(() => currentParseConfig(raw)).toThrow("providers.p.windows[0].limits: expected a finite positive number");
 	});
 	it("treats a missing file as no profiles and reports invalid JSON with the path", async () => {
 		const dir = makeTestTempDir("router-config-", onTestFinished);
-		expect(await loadConfig(dir)).toEqual({ ok: true, profiles: [] });
+		expect(await loadLegacyConfig(dir)).toEqual({ ok: true, profiles: [] });
 		await writeFile(join(dir, CONFIG_FILE), "{ nope");
-		const result = await loadConfig(dir);
+		const result = await loadLegacyConfig(dir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error).toContain(join(dir, CONFIG_FILE));
 	});
@@ -202,7 +226,7 @@ describe("loadConfig", () => {
 	it("reports filesystem errors other than a missing config", async () => {
 		const dir = makeTestTempDir("router-config-", onTestFinished);
 		await mkdir(join(dir, CONFIG_FILE));
-		const result = await loadConfig(dir);
+		const result = await loadLegacyConfig(dir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) expect(result.error.startsWith(`${join(dir, CONFIG_FILE)}: EISDIR`)).toBe(true);
 	});
@@ -210,7 +234,7 @@ describe("loadConfig", () => {
 	it("reports a well-formed document that fails validation with the path and the validation error", async () => {
 		const dir = makeTestTempDir("router-config-", onTestFinished);
 		await writeFile(join(dir, CONFIG_FILE), JSON.stringify({ profiles: { a: { chain: [] } } }));
-		expect(await loadConfig(dir)).toEqual({
+		expect(await loadLegacyConfig(dir)).toEqual({
 			ok: false,
 			error: `${join(dir, CONFIG_FILE)}: profiles.a.chain: expected a non-empty array`,
 		});
