@@ -66,7 +66,7 @@ async function setup({
 
 const reminder = { continue: true, entries: [{ type: "custom_message", ...marker, details: {} }] };
 
-it("counts work across settles, skips conversation, and expands only the trailing marker", async () => {
+it("counts work across settles, skips conversation, and expands the trailing marker only once", async () => {
 	const { tool, settle, emit, input } = await setup();
 	for (let i = 0; i < 2; i++) {
 		await tool();
@@ -81,6 +81,7 @@ it("counts work across settles, skips conversation, and expands only the trailin
 		messages: [{ ...message, content: expect.stringContaining("use `todo`") }],
 	});
 	expect(message.content).toBe(EMPTY_REMINDER_MARKER);
+	expect(await emit("context", { messages: [message] })).toBeUndefined();
 	expect(await emit("context", { messages: [message, { role: "assistant" }] })).toBeUndefined();
 });
 
@@ -162,6 +163,7 @@ it("resets work on todo activity and skips nonempty lists, including completed t
 	await tool();
 	expect(await settle()).toEqual(reminder);
 	await callTodo({ action: "create", subject: "Tracked work" });
+	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 	await callTodo({ action: "update", id: 1, status: "completed", evidence: "Checked" });
 	await input();
 	for (let i = 0; i < 2; i++) {
@@ -269,6 +271,7 @@ it.each(["resume", "reload"] as const)("restores the prompt budget on %s after c
 		reason,
 		branch: [{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" }],
 	});
+	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 	for (let i = 0; i < 3; i++) {
 		await tool("Agent");
 		expect(await settle()).toBeUndefined();
