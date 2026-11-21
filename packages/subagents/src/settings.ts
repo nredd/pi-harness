@@ -2,7 +2,6 @@
 // - Global:  ~/.pi/agent/subagents.json — manual defaults, except for confirmed tier proposals
 // - Project: <cwd>/.pi/subagents.json — written by /agents → Settings; overrides global on load
 
-import { randomUUID } from "node:crypto";
 import {
 	closeSync,
 	constants,
@@ -12,10 +11,13 @@ import {
 	linkSync,
 	lstatSync,
 	mkdirSync,
+	mkdtempSync,
 	openSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
+	rmdirSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -930,39 +932,67 @@ export async function saveProposedModelTiers(
 			if (overlay && Object.hasOwn(overlay, "modelTiers")) {
 				throw new TierSettingsChangedError("Enterprise modelTiers already exists.");
 			}
-			const temp = join(dir, `.subagents-tiers-${randomUUID()}`);
-			const staging = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+			const container = mkdtempSync(join(dir, ".subagents-tiers-"));
+			const containerIdentity = lstatSync(container, { bigint: true });
+			const temp = join(container, "subagents.json");
 			try {
-				const stagingIdentity = fstatSync(staging, { bigint: true });
+				if (
+					!containerIdentity.isDirectory() ||
+					(process.platform !== "win32" && (containerIdentity.mode & 0o777n) !== 0o700n)
+				) {
+					throw new TierSettingsTargetError("Cannot create a private staging directory");
+				}
+				checkDirectory();
+				const staging = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
 				try {
-					writeFileSync(staging, insertModelTiers(source, modelTiers));
-					if (file) {
-						fchmodSync(staging, file.mode);
-						if (Number(fstatSync(staging, { bigint: true }).mode & 0o7777n) !== file.mode) {
-							throw new TierSettingsTargetError("Cannot preserve the global settings file mode");
+					// Record the entry in our private container before fstat so an fd
+					// metadata failure can still clean up the exclusively created file.
+					const entry = lstatSync(temp, { bigint: true });
+					let stagingIdentity = entry;
+					try {
+						stagingIdentity = fstatSync(staging, { bigint: true });
+						if (!sameIdentity(entry, stagingIdentity)) {
+							throw new TierSettingsChangedError("The staged settings file was replaced.");
+						}
+						writeFileSync(staging, insertModelTiers(source, modelTiers));
+						beforeReplace?.();
+						checkDirectory();
+						if (
+							!sameIdentity(lstatSync(container, { throwIfNoEntry: false, bigint: true }), containerIdentity) ||
+							!sameIdentity(lstatSync(temp, { throwIfNoEntry: false, bigint: true }), stagingIdentity)
+						) {
+							throw new TierSettingsChangedError("The staged settings file was replaced.");
+						}
+						const current = readTierSettingsFile(path, true);
+						if (!sameIdentity(current, file)) {
+							throw new TierSettingsChangedError("The global settings file was replaced.");
+						}
+						if (file && (!current || current.mode !== file.mode || !file.bytes.equals(current.bytes))) {
+							throw new TierSettingsChangedError();
+						}
+						// After target validation, only update the staged descriptor before publication.
+						if (file) {
+							fchmodSync(staging, file.mode);
+							if (Number(fstatSync(staging, { bigint: true }).mode & 0o7777n) !== file.mode) {
+								throw new TierSettingsTargetError("Cannot preserve the global settings file mode");
+							}
+							renameSync(temp, path);
+						} else linkSync(temp, path);
+					} finally {
+						if (sameIdentity(lstatSync(container, { throwIfNoEntry: false, bigint: true }), containerIdentity)) {
+							unlinkOwnedFile(temp, stagingIdentity);
 						}
 					}
-					beforeReplace?.();
-					checkDirectory();
-					if (!sameIdentity(lstatSync(temp, { throwIfNoEntry: false, bigint: true }), stagingIdentity)) {
-						throw new TierSettingsChangedError("The staged settings file was replaced.");
-					}
-					const current = readTierSettingsFile(path, true);
-					if (!sameIdentity(current, file)) {
-						throw new TierSettingsChangedError("The global settings file was replaced.");
-					}
-					if (file && (!current || current.mode !== file.mode || !file.bytes.equals(current.bytes))) {
-						throw new TierSettingsChangedError();
-					}
-					// Keep the target validation last. A non-cooperating editor can still race rename.
-					// For a new file even that window cannot overwrite a concurrent creation.
-					if (file) renameSync(temp, path);
-					else linkSync(temp, path);
 				} finally {
-					unlinkOwnedFile(temp, stagingIdentity);
+					closeSync(staging);
 				}
 			} finally {
-				closeSync(staging);
+				// Leave foreign entries alone, including a replaced payload.
+				if (
+					sameIdentity(lstatSync(container, { throwIfNoEntry: false, bigint: true }), containerIdentity) &&
+					readdirSync(container).length === 0
+				)
+					rmdirSync(container);
 			}
 		} finally {
 			unlinkOwnedFile(lock, lockIdentity);

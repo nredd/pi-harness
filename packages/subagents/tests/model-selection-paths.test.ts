@@ -46,6 +46,7 @@ vi.mock("node:fs", async (importOriginal) => {
 		fchmodSync: vi.fn(fs.fchmodSync),
 		fstatSync: vi.fn(fs.fstatSync),
 		mkdirSync: vi.fn(fs.mkdirSync),
+		lstatSync: vi.fn(fs.lstatSync),
 		openSync: vi.fn(fs.openSync),
 		realpathSync: vi.fn(fs.realpathSync),
 	};
@@ -615,15 +616,16 @@ describe("/agents tier proposals", () => {
 		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
 	});
 
-	it("cleans up its staging file even if creation raced a directory swap", async () => {
+	it("cleans up its staging container even if creation raced a directory swap", async () => {
 		const { snapshot: approved } = settings.loadTierProposalSettings(true);
-		const open = (await vi.importActual<typeof import("node:fs")>("node:fs")).openSync;
-		vi.mocked(fs.openSync)
-			.mockImplementationOnce(open)
-			.mockImplementationOnce((...args) => {
-				swapAgentDirectory();
-				return open(...args);
-			});
+		const stat = (await vi.importActual<typeof import("node:fs")>("node:fs")).lstatSync;
+		const check = vi.mocked(fs.lstatSync);
+		check.mockImplementationOnce(stat).mockImplementationOnce((...args) => {
+			const info = stat(...args);
+			expect(args[0]).toBe(agentDir());
+			swapAgentDirectory();
+			return info;
+		});
 		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
 		expect(readdirSync(agentDir())).toEqual([]);
 	});
@@ -633,13 +635,84 @@ describe("/agents tier proposals", () => {
 		let staged = "";
 		await expect(
 			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
-				staged = join(agentDir(), readdirSync(agentDir()).find((name) => name.startsWith(".subagents-tiers-"))!);
+				const container = readdirSync(agentDir()).find((name) => name.startsWith(".subagents-tiers-"))!;
+				staged = join(agentDir(), container, "subagents.json");
 				renameSync(staged, `${staged}.moved`);
 				writeFileSync(staged, "foreign contents");
 			}),
 		).rejects.toThrow(/staged settings file was replaced/);
 		expect(readFileSync(staged, "utf8")).toBe("foreign contents");
 		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
+	});
+
+	it("flat staging cannot change the approved bytes", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), 0o666);
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		await settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+			for (const name of readdirSync(agentDir()).filter((name) => name.startsWith(".subagents-tiers-"))) {
+				const entry = join(agentDir(), name);
+				const stat = lstatSync(entry);
+				if (!stat.isDirectory()) {
+					if (stat.mode & 0o002) writeFileSync(entry, '{"unapproved":true}\n');
+					continue;
+				}
+				if (process.platform !== "win32") expect(stat.mode & 0o777).toBe(0o700);
+				const payload = join(entry, "subagents.json");
+				if (lstatSync(payload).mode & 0o002 && process.platform !== "win32")
+					writeFileSync(payload, '{"unapproved":true}\n');
+			}
+		});
+		expect(readFileSync(globalSettings(), "utf8")).toBe('{"modelTiers": {"default":["router/default"]}}\n');
+		expect(readdirSync(agentDir())).toEqual(["subagents.json"]);
+	});
+
+	it("refuses to stage in a directory with non-private POSIX permissions", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const stat = (await vi.importActual<typeof import("node:fs")>("node:fs")).lstatSync;
+		vi.mocked(fs.lstatSync)
+			.mockImplementationOnce(stat)
+			.mockImplementationOnce(stat)
+			.mockImplementationOnce((...args) => {
+				const path = String(args[0]);
+				expect(path).toContain(".subagents-tiers-");
+				chmodSync(path, 0o755);
+				return stat(...args);
+			});
+		const save = settings.saveProposedModelTiers(tiers, approved);
+		if (process.platform === "win32") {
+			await save;
+			expect(readdirSync(agentDir())).toEqual(["subagents.json"]);
+		} else {
+			await expect(save).rejects.toThrow(/private staging directory/);
+			expect(readdirSync(agentDir())).toEqual([]);
+		}
+	});
+
+	it("refuses a staged entry that differs from the created descriptor", async () => {
+		const other = join(sandbox.dir, "other-inode");
+		writeFileSync(other, "foreign contents");
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const fstat = (await vi.importActual<typeof import("node:fs")>("node:fs")).fstatSync;
+		vi.mocked(fs.fstatSync)
+			.mockImplementationOnce(fstat)
+			.mockReturnValueOnce(lstatSync(other, { bigint: true }));
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/staged settings file was replaced/);
+		expect(readFileSync(other, "utf8")).toBe("foreign contents");
+		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
+	});
+
+	it("cleans up staging when the payload's first fstat fails", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const fstat = (await vi.importActual<typeof import("node:fs")>("node:fs")).fstatSync;
+		const error = Object.assign(new Error("synthetic payload metadata failure"), { code: "EIO" });
+		vi.mocked(fs.fstatSync)
+			.mockImplementationOnce(fstat)
+			.mockImplementationOnce(() => {
+				throw error;
+			});
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(error);
+		expect(readdirSync(agentDir())).toEqual([]);
 	});
 
 	it("does not unlink a different lock planted in the approved directory", async () => {
