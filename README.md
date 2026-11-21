@@ -161,7 +161,7 @@ make help                    # every target
 - Shared tool and cache setup: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml).
 - Other workflow policy: [installer](.github/workflows/installer.yml), [core forks](.github/workflows/forks.yml),
   [publishing](.github/workflows/publish.yml), [runner rescue](.github/workflows/runner-rescue.yml). Review policy stays [here](#review-and-merge-evidence); flakes follow the comments in `ci.yml`
-- [Publish coverage](.github/workflows/coverage-publish.yml) updates one comment per PR, including forks. It checks the Ubuntu artifact's sidecar for run and SHA consistency, not whether the PR-reported numbers are correct. Missing or mismatched provenance is `unavailable`; macOS is not run on PRs and WSL2 is no longer scheduled. Required checks, not the comment, gate merges.
+- [Publish coverage](.github/workflows/coverage-publish.yml) updates one comment per PR, including forks. It checks producer provenance but does not verify the PR-reported numbers. macOS is not run on PRs; WSL2 is no longer scheduled. The comment and step summary link only validated baseline SHAs and CI attempts from successful `main` pushes. They omit the baseline section if the PR artifact was not fetched or the tested SHA is unavailable. Cancelled macOS cells can use an older successful run (up to 10 runs inspected). Missing, invalid or expired artifacts (90-day retention) are `unavailable`. Baselines are producer-reported, selected by run recency, not the PR merge base. Deltas require matching instrumentation and counters. Required checks, not the comment, gate merges. See [coverage](docs/coverage.md).
 - Owned packages publish through `publish.yml` from a signed tag; core ships through
   `nredd/tap/pi-coding-agent`. Procedure: [releases](docs/releases.md)
 - `promote-stack.yml` attests a gated `main` commit as `stack/<sha>`:
@@ -529,7 +529,7 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 - `sha_pinning_required: true` (every `uses:` is already a full SHA)
 - Fork PR approval: `all_external_contributors`, i.e. EVERY fork PR run waits for the owner. Never use "first-time contributors". Do NOT approve a fork PR run without reading its workflow diff: a fork can rewrite `runs-on` to a self-hosted label
 - Workflow token default `read`, `can_approve_pull_request_reviews: false`
-- No collaborators, no repo or org secrets (environments `npm`, `stack-promotion` are branch-gated), no `pull_request_target`, `workflow_run` or `issue_comment` workflows. Adding any of these with a self-hosted `runs-on` is a blocking change
+- No collaborators, no repo or org secrets (environments `npm`, `stack-promotion` are branch-gated), no `pull_request_target` or `issue_comment` workflows. The `workflow_run` exception is the hosted coverage publisher: it runs reviewed default-branch code and reads artifacts as data, never executing them. The publisher only writes the PR comment. Adding any of these triggers with a self-hosted `runs-on` is a blocking change.
 - Ruleset `main required checks` requires the same names the hosted cells report
 
 ### Threat model
