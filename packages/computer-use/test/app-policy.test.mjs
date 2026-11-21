@@ -152,6 +152,68 @@ test("project config can only add to blocked_apps, never remove", async ({ onTes
 	loadComputerUseConfig(cwd);
 });
 
+function stripSwiftComments(source) {
+	// Skip quoted text; keep newlines so the initializer's argument boundaries stay intact.
+	const tokens = /"(?:\\[^\n]|[^"\\\n])*"|\/\/[^\n]*|\/\*/g;
+	const blockMarkers = /\/\*|\*\//g;
+	let cursor = 0;
+	let result = "";
+	for (let token = tokens.exec(source); token; token = tokens.exec(source)) {
+		if (token[0].startsWith('"')) continue;
+		if (token[0] === "/*") {
+			blockMarkers.lastIndex = tokens.lastIndex;
+			let depth = 1;
+			while (depth) {
+				const marker = blockMarkers.exec(source);
+				assert.ok(marker, "unterminated Swift block comment");
+				depth += marker[0] === "/*" ? 1 : -1;
+			}
+			tokens.lastIndex = blockMarkers.lastIndex;
+		}
+		result += source.slice(cursor, token.index) + source.slice(token.index, tokens.lastIndex).replace(/[^\n]/g, " ");
+		cursor = tokens.lastIndex;
+	}
+	return result + source.slice(cursor);
+}
+
+function assertLiveActionBindings(swift) {
+	const factory = stripSwiftComments(swift).match(/^\tfunc actionWorld\(\) -> ActWorld \{[\s\S]*?^\t\}/m)?.[0];
+	const args = factory?.match(/^\t\treturn ActWorld\(\n([\s\S]*?)^\t\t\)$/m)?.[1];
+	assert.ok(args, "expected the live actionWorld ActWorld initializer");
+	for (const [binding, helper] of [
+		["requireTargetFocus", "requireTargetFocus(pid:)"],
+		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
+		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
+		["withClipboard", "withTemporaryClipboard"],
+		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
+	]) {
+		const value = args.match(
+			new RegExp(`^\\t{3}(?:(?:requireTargetFocus|withClipboard): [^,\\n]+, )?${binding}: ([^,\\n]+)`, "m"),
+		)?.[1];
+		assert.equal(value?.trimEnd(), helper, `live actionWorld must bind ${binding} to ${helper}`);
+	}
+}
+
+test("Swift live binding check rejects helpers left only in comments", () => {
+	const original = "refuseBlockedKeyboard: refuseBlockedKeyboardTarget(blocked:),";
+	const fixture = [
+		"\tfunc actionWorld() -> ActWorld {",
+		"\t\treturn ActWorld(",
+		"\t\t\trequireTargetFocus: requireTargetFocus(pid:),",
+		`\t\t\t${original}`,
+		"\t\t\trefuseBlockedPoints: refuseBlockedPoints(_:blocked:),",
+		"\t\t\twithClipboard: withTemporaryClipboard,",
+		"\t\t\tpasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }",
+		"\t\t)",
+		"\t}",
+	].join("\n");
+	assertLiveActionBindings(fixture);
+	for (const comment of [`// ${original}`, `/*\n\t\t\t${original}\n\t\t\t*/`]) {
+		const mutant = fixture.replace(original, `${comment}\n\t\t\trefuseBlockedKeyboard: { _ in },`);
+		assert.throws(() => assertLiveActionBindings(mutant), /live actionWorld must bind refuseBlockedKeyboard to/);
+	}
+});
+
 test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
@@ -193,17 +255,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
-	const actionWorld = swift.match(/func actionWorld\(\) -> ActWorld \{[\s\S]*?\n\t\}/)?.[0] ?? "";
-	for (const [binding, helper] of [
-		["requireTargetFocus", "requireTargetFocus(pid:)"],
-		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
-		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
-		["withClipboard", "withTemporaryClipboard"],
-		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
-	]) {
-		const value = actionWorld.match(new RegExp(`\\b${binding}: ([^,\\n]+)`))?.[1];
-		assert.equal(value, helper, `live actionWorld must bind ${binding} to ${helper}`);
-	}
+	assertLiveActionBindings(swift);
 	assert.ok(
 		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",

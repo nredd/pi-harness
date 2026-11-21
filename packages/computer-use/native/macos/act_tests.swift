@@ -99,10 +99,15 @@ private final class ActFixture {
             sleep: { self.trace.append("sleep:\($0)") },
             scrollSignature: { _ in self.scrollPositions.isEmpty ? "after" : self.scrollPositions.removeFirst() },
             scrollAction: { _, request in
+                expect(request.point == self.point, "scroll dispatch passes the grounded point to AX actions")
                 self.trace.append("scrollAX:\(request.targetPid):\(request.scrollX):\(request.scrollY):\(request.steps)")
                 return self.scrollResult
             },
-            scrollBar: { _, request in self.trace.append("bar:\(request.scrollX):\(request.scrollY)"); return self.bar },
+            scrollBar: { _, request in
+                expect(request.point == self.point, "scroll dispatch passes the grounded point to AX bars")
+                self.trace.append("bar:\(request.scrollX):\(request.scrollY)")
+                return self.bar
+            },
             postMouseClick: { point, pid, button, count, delivery in
                 expect(point == self.point, "click uses the grounded point")
                 self.trace.append("click:\(pid):\(button.rawValue):\(count):\(delivery)")
@@ -314,7 +319,11 @@ private func runAXScrollAssertions() {
         supportsAction: { $0 === area && ($1 as String).hasPrefix("AXScroll") },
         performAction: { _, action in trace.append(action as String); return .success },
         role: { $0 === area ? kAXScrollAreaRole : kAXGroupRole },
-        hitTest: { _, pid in trace.append("hit:\(pid ?? 0)"); return hit },
+        hitTest: { point, pid in
+            expect(point == fixture.point, "scroll traversal hit-tests the exact grounded point")
+            trace.append("hit:\(pid ?? 0)")
+            return hit
+        },
         sameElement: { $0 === $1 },
         writeBar: { _, attribute, delta, vertical in
             trace.append("\(attribute):\(delta)")
@@ -373,7 +382,7 @@ private func runEventAssertions() throws {
     var events: [Event] = []
     var delays: [useconds_t] = []
     var rejectDragAt: CGPoint?
-    var rejectMouseType: CGEventType?
+    var rejectNextMouseType: CGEventType?
     var rejectWheel = false
     var keyAllocations = 0
     var rejectKeyAllocation: Int?
@@ -399,7 +408,11 @@ private func runEventAssertions() throws {
     }
     let bridge = Bridge(activityGlow: nil, inputSink: NativeInputSink(
         mouseEvent: { type, point, button in
-            guard type != rejectMouseType, type != .leftMouseDragged || point != rejectDragAt else { return nil }
+            if type == rejectNextMouseType {
+                rejectNextMouseType = nil
+                return nil
+            }
+            guard type != .leftMouseDragged || point != rejectDragAt else { return nil }
             return NativeInputSink.createMouseEvent(type, point, button)
         },
         wheelEvent: { vertical, horizontal in
@@ -448,13 +461,13 @@ private func runEventAssertions() throws {
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a🙂", "a🙂"] && delays == [8_000], "atomic replacement delivers the whole text in one pair")
 
     events = []; delays = []
-    rejectMouseType = .rightMouseUp
+    rejectNextMouseType = .rightMouseUp
     try actionFailure("input_failed", message: "Failed to create mouse click event") {
         try world.postMouseClick(start, 1234, .right, 2, "pid")
         return [:]
     }
+    expect(rejectNextMouseType == nil, "click fixture rejects the first right-button-up allocation")
     expect(events == [mouse(.mouseMoved, start)] && delays.isEmpty, "failed click pair posts neither a partial click nor the next click")
-    rejectMouseType = nil
 
     events = []; delays = []
     rejectWheel = true
