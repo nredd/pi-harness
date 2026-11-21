@@ -33,11 +33,10 @@ export function nextPacificMidnight(now: number): number {
 	return probe - (Number(hour) * 60 * MINUTE + Number(minute) * MINUTE + Number(second) * SECOND);
 }
 
-const LEADING_STATUS = /^(?:HTTP(?:\/\d(?:\.\d)?)?\s+)?([45]\d{2})(?=$|\s|:)/i;
+const LEADING_STATUS = /^(?:HTTP(?:\/\d(?:\.\d)?)?\s+)?([45]\d{2})(?=$|\s|:)(?!\s+(?:tokens?|bytes?|requests?)\b)/i;
 const BODY_STATUS = /[{,]\s*"code"\s*:\s*([45]\d{2})(?=$|\s|[,}])/i;
-const STOPPED = /^Provider stopped with:/i;
 const NON_QUOTA =
-	/\b(?:Provider stopped with:|SAFETY\b|blocked\b|blockReason"\s*:|unauthorized\b|unauthenticated\b|forbidden\b|permission[ _]denied\b|overloaded\b|model_capacity_exhausted\b|unavailable\b|network\b|ECONNRESET\b|ECONNREFUSED\b|ENOTFOUND\b|ETIMEDOUT\b|fetch failed\b|socket hang up\b)/i;
+	/\b(?:Provider stopped with:|SAFETY\b|blocked\b|unauthorized\b|unauthenticated\b|forbidden\b|permission[ _]denied\b|overloaded\b|model_capacity_exhausted\b|unavailable\b|network\b|ECONNRESET\b|ECONNREFUSED\b|ENOTFOUND\b|ETIMEDOUT\b|fetch failed\b|socket hang up\b)/i;
 const VERDICT = /\b(?:RESOURCE_EXHAUSTED|rate_limit_error|rate_limit_exceeded|too_many_requests|QUOTA_EXHAUSTED)\b/i;
 const LEGACY_LIMIT =
 	/\b(?:UsageLimitError|subscription_sharing_usage_limit_exceeded|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
@@ -92,6 +91,10 @@ function rpcSignals(body: Record<string, unknown>) {
 	return { status: error.code, codes, prose: string(error.message), quotaIds, delays };
 }
 
+function isNonQuotaStatus(status: unknown): boolean {
+	return status === 401 || status === 403 || (typeof status === "number" && status >= 500 && status < 600);
+}
+
 function rawSignals(text: string) {
 	return {
 		status: Number(BODY_STATUS.exec(text)?.[1]),
@@ -129,13 +132,7 @@ export function classify(errorMessage: string | undefined, now: number): Failure
 	const signal = [...codes, message].join(" ");
 	const quota = { scope: "model", cause: "quota" } as const;
 	// Negative evidence wins even when the message contains quota/billing words or a retry hint.
-	if (
-		STOPPED.test(text) ||
-		http === 401 ||
-		http === 403 ||
-		(typeof http === "number" && http >= 500) ||
-		NON_QUOTA.test(signal)
-	) {
+	if (isNonQuotaStatus(http) || isNonQuotaStatus(status) || NON_QUOTA.test(signal)) {
 		return { class: "not-quota", scope: "model", cause: "other" };
 	}
 	if (http === 402 || BILLING.test(signal)) return { class: "billing", scope: "provider", cause: "billing" };
