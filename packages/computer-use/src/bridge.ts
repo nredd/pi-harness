@@ -2386,9 +2386,21 @@ async function dispatchUiTransaction(
 	const steps: ExecutionTrace[] = [];
 	const actionState: ActionState = { currentFocus: false };
 	for (const action of actions) {
-		const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
-		steps.push(step);
-		if (step.outcome === "didnt") break;
+		try {
+			const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
+			steps.push(step);
+			if (step.outcome === "didnt") break;
+		} catch (error) {
+			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
+			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
+			if (!failure.evidence && steps.length === 0) throw error;
+			const step = executionTraceFromAct(
+				{ outcome: "didnt", error: { code: failure.code, message: failure.message }, evidence: failure.evidence },
+				"foreground",
+			);
+			steps.push(step);
+			return { ...aggregateExecutions(steps), error: step.error, evidence: step.evidence, stoppedAt: steps.length - 1 };
+		}
 	}
 	return aggregateExecutions(steps);
 }
@@ -2612,11 +2624,19 @@ export async function terminalDesktopActionResult(
 		content: [
 			{
 				type: "text",
-				text: `${result}\nNo successor state was created. Call find_roots, then observe_ui to continue.`,
+				text: `${keyboardStopSummary(execution) ?? result}\nNo successor state was created. Call find_roots, then observe_ui to continue.`,
 			},
 		],
 		details,
 	};
+}
+
+function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
+	const code = execution.error?.code;
+	if (code !== "app_blocked" && code !== "input_deadline_expired") return undefined;
+	const units = execution.evidence?.postedUnits;
+	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
+	return `Stopped at action ${(execution.stoppedAt ?? 0) + 1} (${code}).${posted} Do not replay the transaction.`;
 }
 
 async function performDesktopTransaction(
@@ -2641,7 +2661,7 @@ async function performDesktopTransaction(
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
 			try {
-				if (condition) {
+				if (condition && !execution.error) {
 					const {
 						text: expectedText,
 						role: expectedRole,
@@ -2705,7 +2725,8 @@ async function performDesktopTransaction(
 				}
 				const built = await buildToolResult(
 					"act_ui",
-					`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
+					keyboardStopSummary(execution) ??
+						`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
 					capture,
 					execution,
 					signal,

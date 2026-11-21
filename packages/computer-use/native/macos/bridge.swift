@@ -10,6 +10,13 @@ import Carbon.HIToolbox
 struct BridgeFailure: Error {
 	let message: String
 	let code: String
+	var evidence: [String: Int]? = nil
+
+	var wireError: [String: Any] {
+		var result: [String: Any] = ["message": message, "code": code]
+		if let evidence { result["evidence"] = evidence }
+		return result
+	}
 }
 
 private struct CGWindowCandidate {
@@ -621,7 +628,23 @@ struct ActScrollRequest {
 }
 
 // True invalidates cached focus after an operation that can stall.
-typealias BeforeKeyDown = (Bool) throws -> Void
+typealias FocusCheck = (Bool) throws -> Void
+// The second argument marks a real down, not an early check after a layout query.
+typealias BeforeKeyDown = (Bool, Bool) throws -> Void
+
+private func trackKeyboardPosts(_ check: @escaping FocusCheck) -> BeforeKeyDown {
+	var postedUnits = 0
+	return { force, posting in
+		do {
+			try check(force)
+		} catch var failure as BridgeFailure {
+			failure.evidence = ["postedUnits": postedUnits]
+			throw failure
+		}
+		// Posting the down and release cannot throw after admission succeeds.
+		if posting { postedUnits += 1 }
+	}
+}
 
 final class KeyboardAdmission {
 	private var lastProbe: TimeInterval = -.infinity
@@ -682,7 +705,7 @@ struct ActWorld {
 	let raiseWindow: (Int32, LookRecord) -> Bool?
 	let animateCursor: (CGPoint, UInt32) -> Void
 	let requireTargetFocus: (Int32) throws -> Void
-	let keyboardAdmission: ([String]?, TimeInterval) -> BeforeKeyDown
+	let keyboardAdmission: ([String]?, TimeInterval) -> FocusCheck
 	let refuseBlockedPoints: ([CGPoint], [String]) throws -> Void
 	let beginRootDelta: (Int32) -> ([String: Any]) -> [String: Any]
 	let lockInput: () -> Void
@@ -1211,10 +1234,7 @@ final class Bridge {
 				send([
 					"id": id,
 					"ok": false,
-					"error": [
-						"message": failure.message,
-						"code": failure.code,
-					],
+					"error": failure.wireError,
 				], to: responseSocket)
 			} catch {
 				send([
@@ -1230,10 +1250,7 @@ final class Bridge {
 			send([
 				"id": fallbackId,
 				"ok": false,
-				"error": [
-					"message": failure.message,
-					"code": failure.code,
-				],
+				"error": failure.wireError,
 			], to: responseSocket)
 		} catch {
 			send([
@@ -2769,9 +2786,9 @@ final class Bridge {
 			try world.refuseBlockedPoints(points, blockedBundleIdList(request))
 		}
 
-		let admitKeyboard = world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline)
+		let admitKeyboard = trackKeyboardPosts(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
 		func recheckBlockedKeyboard() throws {
-			try admitKeyboard(true)
+			try admitKeyboard(true, false)
 		}
 
 		/// HID keys reach the focused app: settle focus on the target first, then refuse a blocked focused app.
@@ -3008,7 +3025,7 @@ final class Bridge {
 				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _ in try recheckBlockedKeyboard() })
+				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) })
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
 					world.sleep(30_000)
@@ -3197,7 +3214,9 @@ final class Bridge {
 				steps.append(step)
 				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {
-				steps.append(["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]])
+				var step: [String: Any] = ["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]]
+				if let evidence = failure.evidence { step["evidence"] = evidence }
+				steps.append(step)
 				stoppedAt = index
 				break
 			}
@@ -3851,7 +3870,7 @@ final class Bridge {
 
 	/// Throws `app_blocked` when keyboard input would reach a blocked app: the frontmost one, or the system-wide
 	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
-	private func keyboardAdmission(blocked: [String]?, deadline: TimeInterval) -> BeforeKeyDown {
+	private func keyboardAdmission(blocked: [String]?, deadline: TimeInterval) -> FocusCheck {
 		let gate = KeyboardAdmission(now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
 		return { force in
 			guard let blocked else { return try gate.checkDeadline() }
@@ -3997,10 +4016,10 @@ final class Bridge {
 		func refuseBlockedWindow(at point: CGPoint) throws {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
-		let refuseBlockedKeyboard = keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request))
+		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request)))
 		switch action {
 		case "type", "key":
-			try refuseBlockedKeyboard(true)
+			try refuseBlockedKeyboard(true, false)
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
@@ -4930,7 +4949,7 @@ final class Bridge {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		let inputSource = inputSink.keyboardInputSource()
-		try beforeKeyDown(true)
+		try beforeKeyDown(true, false)
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
@@ -4959,7 +4978,7 @@ final class Bridge {
 
 	private func postKeyPair(_ down: CGEvent, _ up: CGEvent, pid: Int32, delivery: String, hold: Bool = false, beforeKeyDown: BeforeKeyDown) throws {
 		let prepared = delivery == "hid" && inputSink.prepareHID(pid)
-		try beforeKeyDown(prepared)
+		try beforeKeyDown(prepared, true)
 		postEvent(down, pid: pid, delivery: delivery)
 		// Release directly, without another activation or refusal.
 		if hold { inputSink.sleep(8_000) }

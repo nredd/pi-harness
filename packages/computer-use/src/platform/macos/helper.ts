@@ -35,11 +35,13 @@ export class HelperTransportError extends Error {
 
 export class HelperCommandError extends Error {
 	readonly code?: string;
+	readonly evidence?: Record<string, unknown>;
 
-	constructor(message: string, code?: string) {
+	constructor(message: string, code?: string, evidence?: Record<string, unknown>) {
 		super(message);
 		this.name = "HelperCommandError";
 		this.code = code;
+		this.evidence = evidence;
 	}
 }
 
@@ -266,6 +268,7 @@ export class MacosHelperClient {
 								new HelperCommandError(
 									parsed?.error?.message ?? `Daemon command '${cmd}' failed.`,
 									parsed?.error?.code,
+									parsed?.error?.evidence,
 								),
 							);
 					} catch (error) {

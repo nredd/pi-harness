@@ -39,6 +39,27 @@ test("a step the helper reports as didnt stops the transaction and only the exec
 	assert.match(fake.text(result), /^Executed 1 checked UI action in/);
 });
 
+test("blocked keyboard delivery keeps the completed prefix and does not retry", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const { HelperCommandError } = await import("../src/platform/macos/helper.ts");
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		if (fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "pid" } };
+		throw new HelperCommandError("blocked fixture", "app_blocked", { postedUnits: 1 });
+	};
+	const result = await act([press, { action: "keypress", ref: "@e2", keys: ["tab", "enter"] }, press]);
+	const { execution } = result.details;
+	assert.equal(fake.actCalls.length, 2);
+	assert.equal(execution.stoppedAt, 1);
+	assert.deepEqual(
+		execution.steps.map(({ outcome }) => outcome),
+		["worked", "didnt"],
+	);
+	assert.deepEqual(execution.steps[1].evidence, { postedUnits: 1 });
+	assert.equal(execution.error.code, "app_blocked");
+	assert.match(fake.text(result), /1 key pair posted/);
+});
+
 test("an unknown step makes the transaction unknown, and all-worked steps make it worked", async ({
 	onTestFinished,
 }) => {

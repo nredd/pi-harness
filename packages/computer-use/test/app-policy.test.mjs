@@ -195,7 +195,7 @@ function assertLiveActionBindings(swift) {
 }
 
 test("Swift live binding check rejects helpers left only in comments", () => {
-	const original = "refuseBlockedKeyboard: refuseBlockedKeyboardTarget(blocked:),";
+	const original = "keyboardAdmission: keyboardAdmission(blocked:deadline:),";
 	const fixture = [
 		"\tfunc actionWorld() -> ActWorld {",
 		"\t\treturn ActWorld(",
@@ -209,8 +209,8 @@ test("Swift live binding check rejects helpers left only in comments", () => {
 	].join("\n");
 	assertLiveActionBindings(fixture);
 	for (const comment of [`// ${original}`, `/*\n\t\t\t${original}\n\t\t\t*/`]) {
-		const mutant = fixture.replace(original, `${comment}\n\t\t\trefuseBlockedKeyboard: { _ in },`);
-		assert.throws(() => assertLiveActionBindings(mutant), /live actionWorld must bind refuseBlockedKeyboard to/);
+		const mutant = fixture.replace(original, `${comment}\n\t\t\tkeyboardAdmission: { _, _ in { _ in } },`);
+		assert.throws(() => assertLiveActionBindings(mutant), /live actionWorld must bind keyboardAdmission to/);
 	}
 });
 
@@ -238,7 +238,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(true\)/,
+		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(true, false\)/,
 		"helper must refuse blocked apps before typing or keys",
 	);
 	assert.equal(
@@ -257,7 +257,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		)?.[0] ?? "";
 	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
-	const recheckAt = pasteBody.indexOf("try recheckBlockedKeyboard()", postAt);
+	const recheckAt = pasteBody.indexOf("try admitKeyboard(true, posting)", postAt);
 	assertLiveActionBindings(swift);
 	assert.ok(
 		lookupAt > 0 && postAt > lookupAt && recheckAt > postAt,

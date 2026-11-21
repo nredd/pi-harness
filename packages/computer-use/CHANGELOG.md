@@ -8,7 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
-- On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events (#1173).
+- On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).
 - On macOS, recheck blocked apps before publishing a paste, reject out-of-range PIDs before any batch action runs, and reserve drag mouse-up before sending input so an allocation failure reports `input_failed` without leaving the button held (#1164).
 
 ### Removed
