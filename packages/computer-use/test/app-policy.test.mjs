@@ -233,7 +233,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/,
+		/sampledKeyboardTargetRefusalPid\(frontmostPid: \{ NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier \}, focusedPid: systemFocusedPid/,
 		"helper must refuse blocked frontmost or focused apps for keys",
 	);
 	assert.match(
@@ -293,7 +293,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		'guard delivery == "hid"',
 		"focusTargetForPhysicalInput()",
 		"try world.requireTargetFocus(pid)",
-		"try world.refuseBlockedKeyboard(",
+		"try recheckBlockedKeyboard()",
 	].map((needle) => keyboardHelper.indexOf(needle));
 	assert.ok(
 		keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]),
@@ -301,7 +301,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		keyboardHelper,
-		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry world\.refuseBlockedKeyboard/,
+		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry recheckBlockedKeyboard\(\)/,
 		"preserveFocus skips only the focus wait, never the blocked-app check",
 	);
 	assert.match(

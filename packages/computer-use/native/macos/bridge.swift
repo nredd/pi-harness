@@ -409,6 +409,12 @@ func keyboardTargetRefusalPid(frontmostPid: Int32?, focusedPid: Int32?, isBlocke
 	return nil
 }
 
+/// Probe AX first: it may stall while the frontmost app changes.
+func sampledKeyboardTargetRefusalPid(frontmostPid: () -> Int32?, focusedPid: () -> Int32?, isBlockedPid: (Int32) -> Bool) -> Int32? {
+	let focused = focusedPid()
+	return keyboardTargetRefusalPid(frontmostPid: frontmostPid(), focusedPid: focused, isBlockedPid: isBlockedPid)
+}
+
 /// The blocked pid a pointer event at `point` would reach: a blocked window above the first normal-layer window
 /// (`blockedWindowOwnerPid`), or the pid of the accessibility hit (`hitPid`, ignoring `excludingPid`), or nil.
 func coordinateTargetRefusalPid(windows: [[String: Any]], at point: CGPoint, hitPid: Int32?, excludingPid: Int32, isBlockedPid: (Int32) -> Bool) -> Int32? {
@@ -2734,7 +2740,7 @@ final class Bridge {
 				focusTargetForPhysicalInput()
 				try world.requireTargetFocus(pid)
 			}
-			try world.refuseBlockedKeyboard(blockedBundleIdList(request))
+			try recheckBlockedKeyboard()
 		}
 
 		func executeCoordinates(_ point: CGPoint) throws {
@@ -3804,7 +3810,7 @@ final class Bridge {
 	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
 	private func refuseBlockedKeyboardTarget(blocked: [String]) throws {
 		let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
-		if let pid = keyboardTargetRefusalPid(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), isBlockedPid: isBlockedPid) {
+		if let pid = sampledKeyboardTargetRefusalPid(frontmostPid: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, focusedPid: systemFocusedPid, isBlockedPid: isBlockedPid) {
 			let app = NSRunningApplication(processIdentifier: pid)
 			throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
 		}
