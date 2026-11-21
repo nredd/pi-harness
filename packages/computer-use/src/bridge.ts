@@ -2636,7 +2636,8 @@ function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	if (code !== "app_blocked" && code !== "input_deadline_expired") return undefined;
 	const units = execution.evidence?.postedUnits;
 	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
-	return `Stopped at action ${(execution.stoppedAt ?? 0) + 1} (${code}).${posted} Do not replay the transaction.`;
+	// Only the interrupted dispatch path sets either error code, together with the stop index.
+	return `Stopped at action ${execution.stoppedAt! + 1} (${code}).${posted} Do not replay the transaction.`;
 }
 
 async function performDesktopTransaction(

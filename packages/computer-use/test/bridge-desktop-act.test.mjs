@@ -39,26 +39,33 @@ test("a step the helper reports as didnt stops the transaction and only the exec
 	assert.match(fake.text(result), /^Executed 1 checked UI action in/);
 });
 
-test("blocked keyboard delivery keeps the completed prefix and does not retry", async ({ onTestFinished }) => {
-	const { fake, act } = await observed(onTestFinished);
-	const { HelperCommandError } = await import("../src/platform/macos/helper.ts");
-	currentPlatformBackend.act = async (request) => {
-		fake.actCalls.push(request);
-		if (fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "pid" } };
-		throw new HelperCommandError("blocked fixture", "app_blocked", { postedUnits: 1 });
-	};
-	const result = await act([press, { action: "keypress", ref: "@e2", keys: ["tab", "enter"] }, press]);
-	const { execution } = result.details;
-	assert.equal(fake.actCalls.length, 2);
-	assert.equal(execution.stoppedAt, 1);
-	assert.deepEqual(
-		execution.steps.map(({ outcome }) => outcome),
-		["worked", "didnt"],
-	);
-	assert.deepEqual(execution.steps[1].evidence, { postedUnits: 1 });
-	assert.equal(execution.error.code, "app_blocked");
-	assert.match(fake.text(result), /1 key pair posted/);
-});
+test.for([
+	{ code: "app_blocked", evidence: undefined, posted: "" },
+	{ code: "app_blocked", evidence: { postedUnits: 1 }, posted: " 1 key pair posted." },
+	{ code: "input_deadline_expired", evidence: { postedUnits: 2 }, posted: " 2 key pairs posted." },
+])(
+	"keyboard stop ($code, $posted) keeps the completed prefix and does not retry",
+	async ({ code, evidence, posted }, { onTestFinished }) => {
+		const { fake, act } = await observed(onTestFinished);
+		const { HelperCommandError } = await import("../src/platform/macos/helper.ts");
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			if (fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "pid" } };
+			throw new HelperCommandError("keyboard stop fixture", code, evidence);
+		};
+		const result = await act([press, { action: "keypress", ref: "@e2", keys: ["tab", "tab", "enter"] }, press]);
+		const { execution } = result.details;
+		assert.equal(fake.actCalls.length, 2);
+		assert.equal(execution.stoppedAt, 1);
+		assert.deepEqual(
+			execution.steps.map(({ outcome }) => outcome),
+			["worked", "didnt"],
+		);
+		assert.deepEqual(execution.steps[1].evidence, evidence);
+		assert.equal(execution.error.code, code);
+		assert.ok(fake.text(result).startsWith(`Stopped at action 2 (${code}).${posted} Do not replay the transaction.`));
+	},
+);
 
 test("an unknown step makes the transaction unknown, and all-worked steps make it worked", async ({
 	onTestFinished,
