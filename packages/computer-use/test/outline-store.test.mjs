@@ -1,8 +1,7 @@
 // Outlines live in the agent-cache store, not the session file (#648).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
 const uiNode = (ref, title, fields = {}) => ({
@@ -77,16 +76,15 @@ async function modules() {
 let savedAgentDir;
 let agentDir;
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-	agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "cu-outline-store-"));
+	agentDir = makeTestTempDir("cu-outline-store-", onTestFinished);
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 });
 
 afterEach(() => {
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
-	fs.rmSync(agentDir, { recursive: true, force: true });
 });
 
 test("store round-trips, replaces a state, and evicts past the newest limit", async () => {

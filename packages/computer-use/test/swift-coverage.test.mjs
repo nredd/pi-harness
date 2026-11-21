@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test, vi } from "vitest";
 import { convert, main, sources, testSources, validateProfile } from "../scripts/swift-coverage.mjs";
 
 const root = "/fixture";
@@ -155,7 +155,7 @@ test("Swift profiles must belong to the unique compiled module, not another buil
 
 test("Swift producer refuses absent, empty, duplicate profiles and tool failure", () => {
 	for (const mode of ["missing", "empty", "duplicate", "tool", "export", "wrong-binary", "success", "inventory"]) {
-		const packageRoot = mkdtempSync(path.join(os.tmpdir(), "cu-swift-producer-"));
+		const packageRoot = makeTestTempDir("cu-swift-producer-", onTestFinished);
 		mkdirSync(path.join(packageRoot, "native/macos"), { recursive: true });
 		for (const source of sources) writeFileSync(path.join(packageRoot, source), "fixture\n");
 		for (const source of testSources) writeFileSync(path.join(packageRoot, source), "fixture");
@@ -189,17 +189,13 @@ test("Swift producer refuses absent, empty, duplicate profiles and tool failure"
 			f.json.data[0].functions = [{ name: `$s${moduleName}` }];
 			return args.includes("-format=lcov") ? f.lcov : JSON.stringify(f.json);
 		};
-		try {
-			if (mode === "success") {
-				main({ platform: "darwin", arch: "x64", packageRoot, run });
-				assert.equal(
-					JSON.parse(readFileSync(path.join(packageRoot, "coverage/swift/summary.json"))).files.length,
-					sources.length,
-				);
-			} else assert.throws(() => main({ platform: "darwin", arch: "arm64", packageRoot, run }));
-		} finally {
-			rmSync(packageRoot, { recursive: true, force: true });
-		}
+		if (mode === "success") {
+			main({ platform: "darwin", arch: "x64", packageRoot, run });
+			assert.equal(
+				JSON.parse(readFileSync(path.join(packageRoot, "coverage/swift/summary.json"))).files.length,
+				sources.length,
+			);
+		} else assert.throws(() => main({ platform: "darwin", arch: "arm64", packageRoot, run }));
 	}
 });
 

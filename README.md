@@ -82,6 +82,8 @@ make help                    # every target
   Plan Mode build fixtures use the real package root only for its builder output path checks or
   workspace module resolution. Standalone validation and self-contained builders use OS temp.
   A killed run can leave in-package fixtures behind: they are outside the launcher's temp sandbox.
+  The dev-tools and computer-use suites remove per-test scratch at test completion and shared
+  scratch at suite teardown. Keep any fixture symlinks and config reset paths inside managed roots.
   `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
   (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
   the merge base is allowed for its initial introduction only.
