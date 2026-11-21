@@ -31,6 +31,7 @@ private final class ActFixture {
     var scrollResult: [String: Any] = [:]
     var scrollPositions = ["before", "after"]
     var bar: ActWorld.ScrollBarWrite?
+    var admissionOverride: BeforeKeyDown?
     var blocked = false
     var blockDuringSnapshot = false
     var blockDuringLayout = false
@@ -96,11 +97,13 @@ private final class ActFixture {
                 self.trace.append("require:\(pid)")
                 if self.focusFails { throw BridgeFailure(message: "focus fixture", code: "focus_not_acquired") }
             },
-            refuseBlockedKeyboard: { blocked in
+            keyboardAdmission: { blocked, _ in { force in
+                if let override = self.admissionOverride { return try override(force) }
+                guard let blocked else { return }
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "keyboard refusal receives request and built-in blocks")
                 self.trace.append("keyboard")
                 try self.checkBlocked()
-            },
+            } },
             refuseBlockedPoints: { points, blocked in
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "pointer refusal receives request and built-in blocks")
                 self.trace.append("pointer")
@@ -136,24 +139,24 @@ private final class ActFixture {
             },
             postKeyPress: { keys, pid, delivery, beforeKeyDown in
                 if let keyboard { return try keyboard.postKeyPress(keys, pid, delivery, beforeKeyDown) }
-                try beforeKeyDown()
+                try beforeKeyDown(false)
                 self.trace.append("key:\(keys.joined(separator: "+")):\(pid):\(delivery)")
             },
             postKeyCode: { code, flags, pid, delivery, beforeKeyDown in
                 if let keyboard { return try keyboard.postKeyCode(code, flags, pid, delivery, beforeKeyDown) }
-                try beforeKeyDown()
+                try beforeKeyDown(false)
                 expect(flags == .maskCommand, "paste posts command modifier")
                 self.trace.append("keyCode:\(code):\(pid):\(delivery)")
             },
             postUnicodeText: { text, pid, delivery, beforeKeyDown in
                 if let keyboard { return try keyboard.postUnicodeText(text, pid, delivery, beforeKeyDown) }
-                try beforeKeyDown()
+                try beforeKeyDown(false)
                 self.trace.append("type:\(text):\(pid):\(delivery)")
                 self.value = text
             },
             postAtomicUnicodeText: { text, pid, delivery, beforeKeyDown in
                 if let keyboard { return try keyboard.postAtomicUnicodeText(text, pid, delivery, beforeKeyDown) }
-                try beforeKeyDown()
+                try beforeKeyDown(false)
                 self.trace.append("atomic:\(text):\(pid):\(delivery)")
                 self.value = text
             },
@@ -550,14 +553,14 @@ private func runEventAssertions() throws {
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
     events = []; delays = []
-    try world.postKeyPress([" Cmd + Shift + a ", "tab"], 1234, "pid", {})
+    try world.postKeyPress([" Cmd + Shift + a ", "tab"], 1234, "pid", { _ in })
     let flags: CGEventFlags = [.maskCommand, .maskShift]
     expect(events.map(\.type) == [.keyDown, .keyUp, .keyDown, .keyUp] && events.map(\.data) == [0, 0, 48, 48] && events.map(\.flags) == [flags, flags, [], []] && events.allSatisfy { $0.pid == 1234 && $0.delivery == "pid" } && delays == [8_000, 8_000], "key sequence preserves chord flags and keycode order: \(events)")
     events = []; delays = []
-    try world.postUnicodeText("a🙂", 1234, "pid", {})
+    try world.postUnicodeText("a🙂", 1234, "pid", { _ in })
     expect(events.map(\.type) == [.keyDown, .keyUp, .keyDown, .keyUp] && events.map(\.text) == ["a", "a", "🙂", "🙂"] && delays == [8_000, 8_000], "unreadable keyboard layout delivers one UTF-16 pair per scalar")
     events = []; delays = []
-    try world.postAtomicUnicodeText("a🙂", 1234, "pid", {})
+    try world.postAtomicUnicodeText("a🙂", 1234, "pid", { _ in })
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a🙂", "a🙂"] && delays == [8_000], "atomic replacement delivers the whole text in one pair")
 
     events = []; delays = []
@@ -580,14 +583,14 @@ private func runEventAssertions() throws {
     events = []; delays = []; keyAllocations = 0
     rejectKeyAllocation = 4
     try actionFailure("input_failed", message: "Failed to create key event") {
-        try world.postKeyPress(["a", "tab", "b"], 1234, "pid", {})
+        try world.postKeyPress(["a", "tab", "b"], 1234, "pid", { _ in })
         return [:]
     }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && keyAllocations == 4 && delays == [8_000], "failed second key pair posts neither a partial pair nor the next key")
 
     events = []; delays = []; keyAllocations = 0
     try actionFailure("input_failed", message: "Failed to create unicode key event") {
-        try world.postUnicodeText("a🙂b", 1234, "pid", {})
+        try world.postUnicodeText("a🙂b", 1234, "pid", { _ in })
         return [:]
     }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a", "a"] && keyAllocations == 4 && delays == [8_000], "failed second scalar posts neither a partial pair nor the next scalar")
@@ -595,14 +598,14 @@ private func runEventAssertions() throws {
     events = []; delays = []; keyAllocations = 0
     rejectKeyAllocation = 2
     try actionFailure("input_failed", message: "Failed to create unicode text event") {
-        try world.postAtomicUnicodeText("a🙂", 1234, "pid", {})
+        try world.postAtomicUnicodeText("a🙂", 1234, "pid", { _ in })
         return [:]
     }
     expect(events.isEmpty && keyAllocations == 2 && delays.isEmpty, "failed atomic pair posts nothing")
 
     rejectKeyAllocation = nil
     keyAllocations = 0
-    try world.postKeyCode(9, .maskCommand, 1234, "pid", {})
+    try world.postKeyCode(9, .maskCommand, 1234, "pid", { _ in })
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [9, 9], "direct paste chord still posts a pair")
 
     let typing = ActFixture(inputSink: sink)
@@ -616,6 +619,26 @@ private func runEventAssertions() throws {
     onInputSleep = { typing.blocked = true }
     try actionFailure("app_blocked") { try typing.act("typeText", coords: true, params: ["text": "a🙂"]) }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a", "a"], "typing stops after focus moves during the inter-key delay")
+    onInputSleep = {}
+
+    let slowTyping = ActFixture(inputSink: sink)
+    var clock = 0.0
+    var probes = 0
+    let admission = KeyboardAdmission(now: { clock }, deadline: 0.15)
+    slowTyping.admissionOverride = { force in
+        try admission.check(force: force, frontmostPid: { 1234 }, focusedPid: {
+            probes += 1
+            if probes == 3 { clock += 0.100 }
+            return 1234
+        }, refuse: { _ in })
+    }
+    events = []
+    onInputSleep = { clock += 0.008 }
+    try actionFailure("input_deadline_expired") {
+        try slowTyping.act("typeText", coords: true, params: ["text": String(repeating: "a", count: 12)])
+    }
+    expect(probes == 3 && events.map(\.type) == Array(repeating: [CGEventType.keyDown, .keyUp], count: 8).flatMap { $0 },
+           "slow cadence probe expires the deadline after eight complete pairs and stops before another down")
     onInputSleep = {}
 
     let keys = ActFixture(inputSink: sink)

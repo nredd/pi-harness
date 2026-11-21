@@ -248,7 +248,10 @@ export class MacosHelperClient {
 					socket.destroy();
 					reject(new Error("Operation aborted."));
 				});
-			const onConnect = () => socket.write(`${JSON.stringify({ id, cmd, ...args })}\n`);
+			// Give the helper a chance to report its posted prefix before the socket timer wins.
+			const keyboardDeadlineMs =
+				cmd === "desktopInput" || cmd === "act" || cmd === "actBatch" ? Date.now() + timeoutMs - 250 : undefined;
+			const onConnect = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
 			const onData = (chunk: string) => {
 				buffer += chunk;
 				const newline = buffer.indexOf("\n");

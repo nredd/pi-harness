@@ -182,7 +182,7 @@ function assertLiveActionBindings(swift) {
 	assert.ok(args, "expected the live actionWorld ActWorld initializer");
 	for (const [binding, helper] of [
 		["requireTargetFocus", "requireTargetFocus(pid:)"],
-		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
+		["keyboardAdmission", "keyboardAdmission(blocked:deadline:)"],
 		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
 		["snapshotClipboard", "snapshotClipboard"],
 		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
@@ -233,12 +233,12 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/sampledKeyboardTargetRefusalPid\(frontmostPid: \{ NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier \}, focusedPid: systemFocusedPid/,
+		/gate\.check\(force: force, frontmostPid: \{ NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier \}, focusedPid: self\.systemFocusedPid/,
 		"helper must refuse blocked frontmost or focused apps for keys",
 	);
 	assert.match(
 		swift,
-		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/,
+		/case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(true\)/,
 		"helper must refuse blocked apps before typing or keys",
 	);
 	assert.equal(
@@ -255,16 +255,16 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		swift.match(
 			/let restored = try withRestoredClipboard\(write: clipboard\.write, restore: clipboard\.restore\) \{[\s\S]*?\n\t\t\t\}\n/,
 		)?.[0] ?? "";
-	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
+	const recheckAt = pasteBody.indexOf("try recheckBlockedKeyboard()", postAt);
 	assertLiveActionBindings(swift);
 	assert.ok(
-		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
+		lookupAt > 0 && postAt > lookupAt && recheckAt > postAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",
 	);
 	assert.ok(
-		!/(?:currentKeyboardInputSource|pasteKeyCode)\(/.test(pasteBody.slice(recheckAt, postAt)),
+		!/(?:currentKeyboardInputSource|pasteKeyCode)\(/.test(pasteBody.slice(postAt, recheckAt)),
 		"nothing slow may sit between the last blocked-app check and the post",
 	);
 	assert.match(
