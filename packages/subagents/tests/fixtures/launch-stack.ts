@@ -90,6 +90,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 	const held: ReturnType<typeof deferred<void>>[] = [];
 	const commands: Promise<unknown>[] = [];
 	let pending: ReturnType<typeof holdAt> | undefined;
+	let waitForAgents: (() => Promise<void>) | undefined;
 	function closeOverlays() {
 		for (const overlay of overlays.splice(0).reverse()) overlay.close();
 	}
@@ -97,8 +98,11 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		try {
 			closeOverlays();
 			for (const gate of held) gate.resolve();
+			// Let completions schedule their notices before shutdown cancels those timers.
+			await waitForAgents?.();
 			await boot.lifecycle.get("session_shutdown")?.({ reason: "quit" }, context);
 			await Promise.allSettled(commands);
+			expect(clock.pending, "launch stack must cancel all fake-clock timers on shutdown").toBe(0);
 		} finally {
 			vi.mocked(runAgent).mockReset();
 			vi.mocked(resumeAgent).mockReset();
@@ -121,6 +125,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 		}
 	})();
 	const { manager, scheduler } = startup;
+	waitForAgents = () => manager.waitForAll();
 
 	/** Arm one attempt; release it explicitly so assertions run while the tool is in flight. */
 	function holdAt({ turn, tool }: { turn: number; tool: string }) {
