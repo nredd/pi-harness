@@ -6,6 +6,7 @@ import {
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
 	DEFAULT_STALE_AFTER_SETTLES,
+	getEmptyReminderConfig,
 	isValidCollapseKeySpec,
 	resolveCollapseKey as readCollapseKey,
 	getCollapseOnResume as readCollapseOnResume,
@@ -33,6 +34,23 @@ function removeConfigFile(): void {
 
 beforeEach(removeConfigFile);
 afterEach(removeConfigFile);
+
+describe("getEmptyReminderConfig", () => {
+	it("defaults both thresholds to 10", () => {
+		expect(getEmptyReminderConfig(TEST_HOME)).toEqual({ toolCalls: 10, cooldownSettles: 10 });
+	});
+
+	it.each([
+		[0, 1, 0, 1],
+		[5, 3, 5, 3],
+		["2", 0, 10, 10],
+		[-1, 1.5, 10, 10],
+		[1.5, Number.MAX_SAFE_INTEGER + 1, 10, 10],
+	])("validates %j tool calls and %j settles", (calls, cooldown, toolCalls, cooldownSettles) => {
+		writeConfigFile(JSON.stringify({ emptyAfterToolCalls: calls, emptyReminderCooldownSettles: cooldown }));
+		expect(getEmptyReminderConfig(TEST_HOME)).toEqual({ toolCalls, cooldownSettles });
+	});
+});
 
 describe("getMaxWidgetLines", () => {
 	it("reads an injected home instead of the runtime home", () => {

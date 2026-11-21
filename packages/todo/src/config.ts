@@ -18,6 +18,8 @@ interface TodoConfig {
 	collapseOnResume?: boolean;
 	/** Completed settles with an unchanged open list before the hidden stale-list reminder. Default 10. */
 	staleAfterSettles?: number;
+	emptyAfterToolCalls?: number;
+	emptyReminderCooldownSettles?: number;
 }
 
 /** Default content-row budget when the config is missing/invalid — the prior
@@ -71,6 +73,19 @@ export function getStaleAfterSettles(homeDir?: string): number {
 	return typeof settles === "number" && Number.isInteger(settles) && settles >= 1
 		? settles
 		: DEFAULT_STALE_AFTER_SETTLES;
+}
+
+/** Empty-list thresholds, read at extension load. Zero tool calls disables the nudge. */
+export function getEmptyReminderConfig(homeDir?: string): { toolCalls: number; cooldownSettles: number } {
+	const { emptyAfterToolCalls, emptyReminderCooldownSettles } = loadConfig(homeDir);
+	return {
+		toolCalls: integerAtLeast(emptyAfterToolCalls, 0, 10),
+		cooldownSettles: integerAtLeast(emptyReminderCooldownSettles, 1, 10),
+	};
+}
+
+function integerAtLeast(value: unknown, minimum: number, fallback: number): number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum ? value : fallback;
 }
 
 /** Content-row budget for the overlay, read fresh on every call (per-render —

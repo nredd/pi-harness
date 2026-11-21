@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { defaultConfig, type KitConfig } from "../../src/config.ts";
 import { createSessionKit } from "../../src/index.ts";
 import { assistantLine } from "../fixtures/stats/fixtures.ts";
@@ -47,7 +47,7 @@ function homeWith(
 		unavailableToolHint: { enabled: false },
 	},
 ): { home: string; agent: string } {
-	const home = mkdtempSync(join(tmpdir(), "pi-session-kit-injected-home-"));
+	const home = makeTestTempDir("pi-session-kit-injected-home-", onTestFinished);
 	const agent = join(home, ".pi", "agent");
 	mkdirSync(agent, { recursive: true });
 	writeFileSync(
@@ -67,7 +67,6 @@ function homeWith(
 	return { home, agent };
 }
 
-const homes: string[] = [];
 const PI_OVERRIDES = ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] as const;
 let savedPiOverrides = new Map<string, string | undefined>();
 beforeEach(() => {
@@ -81,7 +80,6 @@ afterEach(() => {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
 	}
-	for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
 it.each([
@@ -89,7 +87,6 @@ it.each([
 	["omitted", {}, ["tool_not_found"]],
 ] as const)("factory loads its config from the injected home with the hint %s", (_label, hint, handlers) => {
 	const { home } = homeWith("none", hint);
-	homes.push(home);
 	const current = probe();
 	createSessionKit({ homeDir: home })(current.pi as never);
 	expect([...current.handlers.keys()]).toEqual(handlers);
@@ -124,7 +121,6 @@ it.each([
 
 it("factory forwards the injected home to title aliases", async () => {
 	const { home, agent } = homeWith("titles");
-	homes.push(home);
 	writeFileSync(
 		join(agent, "enterprise.local.json"),
 		JSON.stringify({ version: 1, subagents: { modelAliases: { "claude-haiku-5-5": ["isolated/title"] } } }),
@@ -159,7 +155,6 @@ it("factory forwards the injected home to title aliases", async () => {
 
 it("factory forwards the injected home to user rules and tilde paths", () => {
 	const { home, agent } = homeWith("rules");
-	homes.push(home);
 	const rules = join(agent, "rules");
 	mkdirSync(rules, { recursive: true });
 	writeFileSync(join(rules, "isolated.md"), "---\npaths: src/**\n---\nISOLATED RULE\n");
@@ -179,7 +174,6 @@ it("factory forwards the injected home to user rules and tilde paths", () => {
 
 it("factory isolates stats sessions and cache writes under its injected home", async () => {
 	const { home, agent } = homeWith("stats");
-	homes.push(home);
 	const sessions = join(agent, "sessions");
 	mkdirSync(sessions, { recursive: true });
 	writeFileSync(

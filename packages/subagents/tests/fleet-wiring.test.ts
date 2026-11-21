@@ -9,9 +9,9 @@
  * and that `session_shutdown` tears it down. runAgent is mocked (no LLM); the
  * manager, settings load, completion routing, and lifecycle handlers are real.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -59,9 +59,9 @@ describe("FleetView wiring (real extension lifecycle)", () => {
 	let prevCwd: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-fleet-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-fleet-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-fleet-", onTestFinished);
+		agentDir = makeTestTempDir("pi-fleet-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -79,8 +79,6 @@ describe("FleetView wiring (real extension lifecycle)", () => {
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 

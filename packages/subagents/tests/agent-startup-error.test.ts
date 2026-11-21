@@ -7,9 +7,9 @@
  * diagnostic reaches the parent model as a subagent that ran and reported
  * this — and the model retries the same doomed call.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/worktree.ts", async () => {
@@ -63,9 +63,9 @@ function ctx() {
 }
 
 describe("Agent startup failures fail the tool call (#179)", () => {
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		originalCwd = process.cwd();
-		cwd = mkdtempSync(join(tmpdir(), "startup-error-"));
+		cwd = makeTestTempDir("startup-error-", onTestFinished);
 		process.chdir(cwd);
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
@@ -76,7 +76,6 @@ describe("Agent startup failures fail the tool call (#179)", () => {
 		process.chdir(originalCwd);
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	for (const background of [false, true]) {

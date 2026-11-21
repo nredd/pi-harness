@@ -29,7 +29,7 @@ function setup() {
 	registerTodo(pi, undefined, { homeDir: TEST_HOME });
 	const sessionStart = captured.handlers.get("session_start")?.[0];
 	const toolEnd = captured.handlers.get("tool_execution_end")?.[0] as
-		| ((event: { toolName: string; isError: boolean }) => Promise<void>)
+		| ((event: { toolName: string; isError: boolean }, ctx: ReturnType<typeof createTodoCtx>) => Promise<void>)
 		| undefined;
 	const tool = captured.tools.get("todo");
 	if (!sessionStart) throw new Error("session_start handler not registered");
@@ -68,7 +68,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 			undefined as never,
 			ctx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, ctx);
 
 		const handler = captured.shortcuts.get("ctrl+shift+t")?.handler;
 		expect(handler).toBeDefined();
@@ -110,7 +110,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 			undefined as never,
 			ctx as never,
 		);
-		await toolEnd?.({ toolName: "todo", isError: false });
+		await toolEnd?.({ toolName: "todo", isError: false }, ctx);
 
 		const setWidget = ctx.ui.setWidget as ReturnType<typeof vi.fn>;
 		const factory = setWidget.mock.calls[0][1] as (

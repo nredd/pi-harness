@@ -1,18 +1,17 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readClaude } from "../../../src/stats/harness/claude.ts";
 import { probe } from "../../../src/stats/harness/common.ts";
 import { readOpenCode } from "../../../src/stats/harness/opencode.ts";
 
 let dir: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "psk-probe-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("psk-probe-", onTestFinished);
 });
 afterEach(() => {
 	chmodSync(join(dir, "locked"), 0o700);
-	rmSync(dir, { recursive: true, force: true });
 });
 
 /** A path whose parent cannot be searched: `stat` fails with EACCES, not ENOENT. */

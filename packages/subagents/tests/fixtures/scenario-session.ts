@@ -1,6 +1,5 @@
 /** Real parent/child sessions with explicit homes, provider barriers and one extension clock. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
@@ -16,6 +15,7 @@ import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { text } from "@nredd/pi-test-lib/faux";
 import { createHarness, fauxAssistantMessage, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { createSubagentsExtension } from "../../src/index.ts";
 import type { AgentRecord } from "../../src/types.ts";
 import type { InteractiveHarness } from "./scenario-terminal.ts";
@@ -47,7 +47,10 @@ export function notices(h: ScenarioHarness) {
 
 /** Own the global-discovery inputs until every child has settled and shut down. */
 export class ScenarioSession {
-	readonly root = mkdtempSync(join(tmpdir(), "subagent-scenarios-"));
+	private cleanupRoot?: () => void;
+	readonly root = makeTestTempDir("subagent-scenarios-", (cleanup) => {
+		this.cleanupRoot = cleanup;
+	});
 	readonly cwd = join(this.root, "work");
 	readonly agentDir = join(this.root, "agent");
 	readonly clock = new FakeClock();
@@ -261,7 +264,7 @@ export class ScenarioSession {
 			process.chdir(this.previousCwd);
 			if (this.previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = this.previousAgentDir;
-			rmSync(this.root, { recursive: true, force: true });
+			this.cleanupRoot?.();
 		}
 	}
 

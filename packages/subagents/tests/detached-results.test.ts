@@ -6,9 +6,9 @@
  * Now only `quit` aborts; otherwise survivors finish in the orphaned manager and
  * their results are spooled for the session they belong to.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.ts", async () => {
@@ -286,9 +286,9 @@ describe("session switch with a running background agent", () => {
 	let agentDir: string;
 	const sessionFile = `/sessions/switch-${process.pid}-${Date.now()}.jsonl`;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-detach-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-detach-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-detach-", onTestFinished);
+		agentDir = makeTestTempDir("pi-detach-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevCwd = process.cwd();
@@ -303,8 +303,6 @@ describe("session switch with a running background agent", () => {
 		process.chdir(prevCwd);
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
 

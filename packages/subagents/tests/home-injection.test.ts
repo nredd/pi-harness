@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -59,8 +60,8 @@ function write(path: string, content: string) {
 	fs.writeFileSync(path, content);
 }
 
-beforeEach(() => {
-	home = fs.mkdtempSync(join(tmpdir(), "subagents-home-injection-"));
+beforeEach(({ onTestFinished }) => {
+	home = makeTestTempDir("subagents-home-injection-", onTestFinished);
 	cwd = join(home, "project");
 	fs.mkdirSync(cwd);
 	previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -78,7 +79,6 @@ afterEach(() => {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		invalidatePackageCache();
-		fs.rmSync(home, { recursive: true, force: true });
 	}
 });
 

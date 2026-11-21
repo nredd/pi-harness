@@ -1,7 +1,7 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it } from "vitest";
 import { loadHarnesses } from "../../src/stats/harness/index.ts";
 
 let home: string;
@@ -9,11 +9,10 @@ const now = Date.now();
 const observed = now / 1000 - 60;
 const reset = Math.floor(now / 1000) + 3600;
 
-beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "claude-capture-"));
+beforeEach(({ onTestFinished }) => {
+	home = makeTestTempDir("claude-capture-", onTestFinished);
 	mkdirSync(join(home, ".claude"));
 });
-afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 const capture = (value: unknown) => writeFileSync(join(home, ".claude", "rate-limits.json"), JSON.stringify(value));
 const load = () =>

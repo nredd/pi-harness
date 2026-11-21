@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { loadRuleDir, register } from "../../src/rules/index.ts";
@@ -39,8 +39,8 @@ function setup(branch: unknown[] = []) {
 	return { appendEntry, fire, result };
 }
 
-beforeEach(() => {
-	root = mkdtempSync(path.join(tmpdir(), "kit-rules-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("kit-rules-", onTestFinished);
 	cwd = path.join(root, "proj");
 	agent = path.join(root, "agent");
 	mkdirSync(cwd);
@@ -48,7 +48,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	rmSync(root, { recursive: true, force: true });
 	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
 });

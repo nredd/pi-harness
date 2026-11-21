@@ -5,9 +5,8 @@
  * `AgentManager`, so what is asserted is `AgentRecord.modelFallback` as the shared
  * spawn path leaves it, plus what each path's own reporter hands on.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AgentRunner from "../src/agent-runner.ts";
 
@@ -85,8 +84,8 @@ describe("scheduler at fire time", () => {
 	let clock: FakeClock;
 	const emit = vi.fn();
 
-	beforeEach(() => {
-		tmp = mkdtempSync(join(tmpdir(), "config-model-fallback-sched-"));
+	beforeEach(({ onTestFinished }) => {
+		tmp = makeTestTempDir("config-model-fallback-sched-", onTestFinished);
 		clock = new FakeClock();
 		scheduler = new SubagentScheduler({ clock });
 		manager = new AgentManager();
@@ -97,7 +96,6 @@ describe("scheduler at fire time", () => {
 	afterEach(async () => {
 		scheduler.stop();
 		await manager.dispose();
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	async function fire(model?: string) {

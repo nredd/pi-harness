@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/diff/index.ts";
 
@@ -24,14 +24,13 @@ const git = (...a: string[]) =>
 		},
 	});
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "psk-diffcmd-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("psk-diffcmd-", onTestFinished);
 	git("init", "-q", "-b", "main");
 	writeFileSync(join(dir, "a.txt"), "1\n");
 	git("add", "-A");
 	git("commit", "-q", "-m", "c");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function setup(mode: string) {
 	let handler: Any;
@@ -85,19 +84,15 @@ describe("/diff command", () => {
 	});
 
 	it("reports a non-repo", async () => {
-		const plain = mkdtempSync(join(tmpdir(), "psk-nogit-"));
-		try {
-			const { ctx, custom } = setup("tui");
-			ctx.cwd = plain;
-			let handler: Any;
-			const sendMessage = vi.fn();
-			register({ registerCommand: (_n: string, c: Any) => (handler = c.handler), sendMessage } as Any, defaultConfig());
-			await handler("", ctx);
-			expect(custom).not.toHaveBeenCalled();
-			expect(ctx.ui.notify.mock.calls[0]?.[0]).toMatch(/not a git repository/);
-		} finally {
-			rmSync(plain, { recursive: true, force: true });
-		}
+		const plain = makeTestTempDir("psk-nogit-", onTestFinished);
+		const { ctx, custom } = setup("tui");
+		ctx.cwd = plain;
+		let handler: Any;
+		const sendMessage = vi.fn();
+		register({ registerCommand: (_n: string, c: Any) => (handler = c.handler), sendMessage } as Any, defaultConfig());
+		await handler("", ctx);
+		expect(custom).not.toHaveBeenCalled();
+		expect(ctx.ui.notify.mock.calls[0]?.[0]).toMatch(/not a git repository/);
 	});
 
 	it("says there are no changes outside the TUI on a clean tree", async () => {

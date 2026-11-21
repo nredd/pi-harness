@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { isAmbientUserAgentsSkill, preloadSkills } from "../src/skill-loader.ts";
 
 // A directory whose listing fails: Bun's `realpathSync` already rejects a mode-000 directory, so a
@@ -30,7 +30,7 @@ interface Sandbox {
 }
 
 function createSandbox(projectTrusted: boolean): Sandbox {
-	const root = mkdtempSync(join(tmpdir(), "pi-preloaded-skill-"));
+	const root = makeTestTempDir("pi-preloaded-skill-", onTestFinished);
 	const cwd = join(root, "project");
 	const agentDir = join(root, "agent");
 	mkdirSync(cwd, { recursive: true });
@@ -47,15 +47,8 @@ function writeSkill(root: string, name: string, content: string): void {
 }
 
 describe("preloadSkills", () => {
-	const roots: string[] = [];
-
-	afterEach(() => {
-		for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-	});
-
 	it("does not let an untrusted project shadow a trusted global skill", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 		writeSkill(join(box.cwd, ".pi", "skills"), "review", "HOSTILE");
 
@@ -67,7 +60,6 @@ describe("preloadSkills", () => {
 
 	it("gives a trusted project skill precedence over a global skill", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 		writeSkill(join(box.cwd, ".pi", "skills"), "review", "PROJECT");
 
@@ -78,7 +70,6 @@ describe("preloadSkills", () => {
 
 	it("does not let a project filter re-enable a globally disabled native resource", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const review = join(box.agentDir, "skills", "review");
 		writeSkill(join(box.agentDir, "skills"), "review", "DISABLED GLOBAL");
 		box.settingsManager.setProjectSkillPaths([review, `-${review}`]);
@@ -91,7 +82,6 @@ describe("preloadSkills", () => {
 
 	it("does not let a project exclusion resurrect through compatibility lookup", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		writeSkill(join(box.cwd, ".pi", "skills"), "review", "DISABLED PROJECT");
 		box.settingsManager.setProjectSkillPaths(["-skills/review"]);
 
@@ -103,7 +93,6 @@ describe("preloadSkills", () => {
 
 	it("recovers a global skill hidden by a rejected project symlink alias", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const global = join(box.agentDir, "skills", "review");
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 		mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
@@ -116,7 +105,6 @@ describe("preloadSkills", () => {
 
 	it("refuses a project symlink without hiding a package skill alias", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const packageRoot = join(box.root, "package");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -135,7 +123,6 @@ describe("preloadSkills", () => {
 		["explicit allowlist", "absolute", ["skills/review"], true],
 	] as const)("honors a package %s behind a rejected project alias", async (_label, source, skills, allowed) => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const packageRoot = join(box.root, "package");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -172,7 +159,6 @@ describe("preloadSkills", () => {
 
 	it("recovers a package behind a rejected project alias with string sources and install roots", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const packageRoot = join(box.root, "package");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -191,7 +177,6 @@ describe("preloadSkills", () => {
 
 	it("keeps a project package exclusion over the global fallback", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const packageRoot = join(box.root, "package");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -206,7 +191,6 @@ describe("preloadSkills", () => {
 
 	it("does not restore a package excluded by the project behind a rejected alias", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const packageRoot = join(box.root, "package");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -224,7 +208,6 @@ describe("preloadSkills", () => {
 
 	it("refuses a symlinked project skill root before it can shadow a global skill", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 		const external = join(box.root, "external");
 		writeSkill(external, "review", "SYMLINKED PROJECT");
@@ -239,7 +222,6 @@ describe("preloadSkills", () => {
 
 	it("refuses a symlinked project skill file before it can shadow a global skill", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 		const external = join(box.root, "external.md");
 		writeFileSync(external, "---\nname: review\ndescription: review\n---\nSYMLINKED PROJECT\n");
@@ -254,7 +236,6 @@ describe("preloadSkills", () => {
 
 	it("refuses a symlinked .pi parent before it can shadow a global skill", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 		const external = join(box.root, "external");
 		writeSkill(join(external, "skills"), "review", "SYMLINKED PROJECT");
@@ -268,7 +249,6 @@ describe("preloadSkills", () => {
 
 	it("refuses a symlinked ancestor .agents parent before it can shadow a global skill", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const workspace = join(box.root, "workspace");
 		const cwd = join(workspace, "nested");
 		mkdirSync(join(workspace, ".git"), { recursive: true });
@@ -287,7 +267,6 @@ describe("preloadSkills", () => {
 
 	it("refuses a symlinked ancestor .agents skill root before it can shadow a global skill", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const workspace = join(box.root, "workspace");
 		const cwd = join(workspace, "nested");
 		mkdirSync(join(workspace, ".git"), { recursive: true });
@@ -310,7 +289,6 @@ describe("preloadSkills", () => {
 		["directory", "review"],
 	])("refuses a symlinked ancestor .agents skill %s before it can shadow a global skill", async (_kind, entry) => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const workspace = join(box.root, "workspace");
 		const cwd = join(workspace, "nested");
 		mkdirSync(join(workspace, ".git"), { recursive: true });
@@ -331,7 +309,6 @@ describe("preloadSkills", () => {
 
 	it("ignores an ancestor .agents that is a plain file", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const workspace = join(box.root, "workspace");
 		const cwd = join(workspace, "nested");
 		mkdirSync(join(workspace, ".git"), { recursive: true });
@@ -349,7 +326,6 @@ describe("preloadSkills", () => {
 		"never matches the traversal-shaped name %j",
 		async (name) => {
 			const box = createSandbox(true);
-			roots.push(box.root);
 			writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
 			writeFileSync(join(box.root, "escape.md"), "---\nname: escape\ndescription: escape\n---\nESCAPED\n");
 
@@ -362,7 +338,6 @@ describe("preloadSkills", () => {
 
 	it("follows a symlinked user skills root like Pi", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const external = join(box.root, "external");
 		writeSkill(external, "review", "LINKED ROOT");
 		symlinkSync(external, join(box.agentDir, "skills"));
@@ -374,7 +349,6 @@ describe("preloadSkills", () => {
 
 	it("follows a symlinked user skill directory like Pi", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const external = join(box.root, "external");
 		writeSkill(external, "review", "LINKED USER");
 		mkdirSync(join(box.agentDir, "skills"), { recursive: true });
@@ -387,7 +361,6 @@ describe("preloadSkills", () => {
 
 	it("follows a symlinked legacy user flat file", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const external = join(box.root, "review.md");
 		writeFileSync(external, "LINKED LEGACY FLAT");
 		mkdirSync(join(box.homeDir, ".pi", "skills"), { recursive: true });
@@ -400,7 +373,6 @@ describe("preloadSkills", () => {
 
 	it("preserves an injected home's .agents skill root", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		writeSkill(join(box.homeDir, ".agents", "skills"), "review", "INJECTED AGENTS");
 
 		const [skill] = await preloadSkills(["review"], box.cwd, { ...box, homeDir: box.homeDir });
@@ -410,7 +382,6 @@ describe("preloadSkills", () => {
 
 	it("preserves legacy user roots and explicit flat-file lookup", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		mkdirSync(join(box.homeDir, ".pi", "skills"), { recursive: true });
 		writeFileSync(join(box.homeDir, ".pi", "skills", "review.md"), "LEGACY FLAT");
 
@@ -421,7 +392,6 @@ describe("preloadSkills", () => {
 
 	it("walks the legacy user tree through nested, symlinked, dangling and unreadable entries", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		const legacy = join(box.homeDir, ".pi", "skills");
 		// Bare files have no frontmatter, so Pi skips them and only the legacy walk can find them.
 		const bare = (dir: string, content: string): void => {
@@ -457,7 +427,6 @@ describe("preloadSkills", () => {
 
 	it("keeps walking the legacy tree past a directory whose listing fails", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		const legacy = join(box.homeDir, ".pi", "skills");
 		// Sorted first, so only a walk that carries on after the failure reaches the sibling's skill.
 		mkdirSync(join(legacy, "a-unreadable", "deeper"), { recursive: true });
@@ -475,7 +444,6 @@ describe("preloadSkills", () => {
 
 	it("does not search through a symlinked project skill root in the compatibility lookup", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const external = join(box.root, "external");
 		// Bare file: Pi's loader skips it for lacking frontmatter, so only the compatibility walk could find it.
 		mkdirSync(join(external, "review"), { recursive: true });
@@ -494,7 +462,6 @@ describe("preloadSkills", () => {
 
 	it("skips hidden and node_modules directories and survives a symlink cycle in the legacy walk", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		const legacy = join(box.homeDir, ".pi", "skills");
 		const bare = (dir: string, content: string): void => {
 			mkdirSync(dir, { recursive: true });
@@ -519,7 +486,6 @@ describe("preloadSkills", () => {
 
 	it("resolves a bare relative project package source and ignores unresolvable ones", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const packageRoot = join(box.cwd, ".pi", "localpkg");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -539,7 +505,6 @@ describe("preloadSkills", () => {
 
 	it("does not let an untrusted project skill shadow a package skill", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		const packageRoot = join(box.root, "package");
 		mkdirSync(packageRoot, { recursive: true });
 		writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "fixture", pi: { skills: ["./skills"] } }));
@@ -555,7 +520,6 @@ describe("preloadSkills", () => {
 
 	it("does not inject an untrusted project's only skill through the legacy walk", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		writeSkill(join(box.cwd, ".pi", "skills"), "review", "HOSTILE");
 		writeSkill(join(box.cwd, ".agents", "skills"), "lint", "HOSTILE");
 		writeFileSync(join(box.cwd, ".pi", "skills", "flat.md"), "HOSTILE\n");
@@ -570,7 +534,6 @@ describe("preloadSkills", () => {
 
 	it("matches the frontmatter name first and the directory name only in the legacy walk", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		const dir = join(box.agentDir, "skills", "review");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, "SKILL.md"), "---\nname: other\ndescription: other\n---\nRENAMED\n");
@@ -584,7 +547,6 @@ describe("preloadSkills", () => {
 
 	it("ignores a dangling project skill symlink", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		mkdirSync(join(box.cwd, ".pi", "skills"), { recursive: true });
 		symlinkSync(join(box.root, "nowhere"), join(box.cwd, ".pi", "skills", "ghost"), "dir");
 		writeSkill(join(box.agentDir, "skills"), "review", "GLOBAL");
@@ -596,7 +558,6 @@ describe("preloadSkills", () => {
 
 	it("finds a preset-packaged skill with an injected home", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		const home = box.homeDir;
 		box.settingsManager.setPackages([presetRoot]);
 
@@ -607,7 +568,6 @@ describe("preloadSkills", () => {
 
 	it("does not install a missing configured package while discovering skills", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 		box.settingsManager.setPackages(["npm:preload-install-probe-missing"]);
 		let installAttempted = false;
 		const manager = DefaultPackageManager.prototype as unknown as {
@@ -652,7 +612,6 @@ describe("preloadSkills", () => {
 
 	it("skips package discovery when no skills are named", async () => {
 		const box = createSandbox(true);
-		roots.push(box.root);
 		const resolve = vi.spyOn(DefaultPackageManager.prototype, "resolve");
 
 		try {
@@ -665,7 +624,6 @@ describe("preloadSkills", () => {
 
 	it("reports a missing named skill without reading a path", async () => {
 		const box = createSandbox(false);
-		roots.push(box.root);
 
 		const [skill] = await preloadSkills(["missing"], box.cwd, box);
 
