@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -135,7 +135,7 @@ it("rejects a real gzip stream expanding beyond 128 MiB", () => {
 	expect(() => decodeShard(bytes, m, "2026-10")).toThrow();
 });
 
-it("preserves recoverable files when the previous transaction and harness are unreadable", async () => {
+it("preserves recovery files and keeps a vanished harness lost across repeated unreadable manifests", async () => {
 	const home = join(root, "home");
 	const seeded = seedHarnessHome(home);
 	const roots = { ...seeded, codex: join(root, "not-installed") };
@@ -157,13 +157,15 @@ it("preserves recoverable files when the previous transaction and harness are un
 	writeFileSync(path, bytes);
 	rmSync(roots.claude, { recursive: true, force: true });
 	for (let run = 0; run < 3; run++) {
+		// After one recovery export, the active snapshot no longer contains Claude rows.
+		if (run === 1) writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
 		vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + (run + 1) * 60_000);
 		const result = await exportStats(agent, out, undefined, options);
 		expect(readdirSync(first.snapshotDir)).toContain(ref.file);
 		expect(readFileSync(join(first.snapshotDir, valid.file))).toEqual(validBytes);
-		expect(result.harnesses?.claude?.failed).toBe("lost");
-		expect(result.harnesses?.codex?.failed).toBeUndefined();
 		expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
+		expect(result.harnesses?.claude).toMatchObject({ failed: "lost", consecutiveFailures: run + 1 });
+		expect(result.harnesses?.codex?.failed).toBeUndefined();
 		expect(manifest(first.snapshotDir).lastGoodAt?.codex).toBe(Date.now());
 		expect(result.warnings).toContain("recovery files retained: explicit replacement required");
 	}
@@ -177,6 +179,58 @@ it("preserves recoverable files when the previous transaction and harness are un
 	expect(readdirSync(first.snapshotDir)).not.toContain(ref.file);
 	expect(readdirSync(first.snapshotDir)).not.toContain(valid.file);
 	expect(JSON.parse(readFileSync(statePath, "utf8")).recoveryPending).toBe(false);
+});
+
+it("clears a lost harness after a clean reappearance before a later absence", async () => {
+	const home = join(root, "home");
+	const roots = seedHarnessHome(home);
+	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
+	const first = await exportStats(agent, out, undefined, options);
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	writeFileSync(manifestPath, "corrupt");
+	rmSync(roots.claude, { recursive: true });
+	const lost = await exportStats(agent, out, undefined, options);
+	expect(lost.harnesses?.claude).toMatchObject({ failed: "lost", consecutiveFailures: 1 });
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
+
+	rmSync(join(agent, "pi-session-kit", "stats-harness-cache.json"), { force: true });
+	mkdirSync(roots.claude, { recursive: true });
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	const restored = await exportStats(agent, out, undefined, options);
+	expect(restored.harnesses?.claude).toEqual({ found: true, problems: [] });
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBe(Date.now());
+	const state = JSON.parse(readFileSync(statePath, "utf8"));
+	expect(state.lostHarnesses).not.toContain("claude");
+	expect(state.failures.claude).toBeUndefined();
+
+	// No rows survive the clean scan, and the next manifest is unreadable.
+	rmSync(roots.claude, { recursive: true });
+	writeFileSync(manifestPath, "corrupt");
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-04"));
+	const absent = await exportStats(agent, out, undefined, options);
+	expect(absent.harnesses?.claude).toEqual({ found: false, problems: [] });
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBe(Date.now());
+});
+
+it("does not carry a freshness mark from an older export that stamped a lost harness", async () => {
+	const home = join(root, "home");
+	const roots = seedHarnessHome(home);
+	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
+	const first = await exportStats(agent, out, undefined, options);
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	writeFileSync(manifestPath, "corrupt");
+	rmSync(roots.claude, { recursive: true });
+	const lost = await exportStats(agent, out, undefined, options);
+	expect(lost.harnesses?.claude?.failed).toBe("lost");
+
+	const previous = manifest(first.snapshotDir);
+	previous.lastGoodAt = { ...previous.lastGoodAt, claude: previous.exportedAt };
+	writeFileSync(manifestPath, JSON.stringify(previous));
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	const next = await exportStats(agent, out, undefined, options);
+	expect(next.harnesses?.claude?.failed).toBe("lost");
+	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
 });
 
 it("prunes post-recovery active generations while retaining only the frozen recovery files", async () => {
