@@ -534,7 +534,8 @@ are siblings only of other standalone top-level agents; parentless workflow work
 only within the same execution, even if two runs share a displayed workflow ID. Nested agents
 share only the parent run that spawned them, not cousins or descendants of their siblings. A
 missing, settled, or replaced parent run makes a nested caller's roster unavailable. Workflow
-workers and their descendants also need a live workflow execution. When that run settles, workers
+workers and their descendants also need a running workflow execution. Roster reads are denied
+while the workflow is paused and restored on resume. When that run settles, workers
 still in startup are stopped. No other root, process, user, payload, transcript or result is queried.
 Entries contain `id`, opaque `run` (renewed on resume), `handle` (type label for unnamed nested
 children), `type`, `status` (`queued`, `running`, `finished`, `error`), and `assignment`.

@@ -1,4 +1,5 @@
 /** Manager callbacks, resumed-turn ownership and eviction through public APIs. */
+import { getEventListeners } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -12,7 +13,12 @@ import { streamToOutputFile } from "../src/output-file.ts";
 import * as budget from "../src/process-budget.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
 import { runWorkflow } from "../src/workflow/runtime.ts";
-import { completeWorkflowTask, createWorkflowTask } from "../src/workflow/task.ts";
+import {
+	completeWorkflowTask,
+	createWorkflowTask,
+	pauseWorkflowTask,
+	resumeWorkflowTask,
+} from "../src/workflow/task.ts";
 import * as worktrees from "../src/worktree.ts";
 
 vi.mock("../src/agent-runner.ts", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
@@ -330,9 +336,100 @@ describe("resumed-turn lifecycle", () => {
 });
 
 describe("workflow host lifecycle", () => {
-	const workflowCtx = { ...ctx, cwd: tmpdir(), sessionManager: { getSessionId: () => "root" } } as ExtensionContext;
+	const workflowCtx = {
+		...ctx,
+		cwd: process.cwd(),
+		sessionManager: { getSessionId: () => "root" },
+	} as ExtensionContext;
 	const allowed = new Set(["general-purpose"]);
 	const readRoster = (manager: AgentManager, id: string) => manager.roster.child(id, allowed).agents;
+
+	const request = (label: string) => ({ agentId: label, index: 0, label, prompt: label, agentType: "general-purpose" });
+
+	it("denies roster while paused and restores it after resume", async () => {
+		const { manager } = managerWithClock();
+		const task = createWorkflowTask({ id: "wf_pause", script: "" });
+		task.control = {
+			pause: vi.fn(),
+			resume: vi.fn(),
+			isPaused: () => task.status === "paused",
+			skip: () => false,
+			retry: () => false,
+		};
+		const signal = task.abortController.signal;
+		const host = createWorkflowHost({
+			pi,
+			ctx: workflowCtx,
+			manager,
+			workflowId: task.id,
+			signal,
+			isRunning: () => task.status === "running",
+		});
+		await host.spawnAgent(request("sibling"));
+		const done = { responseText: "done", session, aborted: false, steered: false };
+		const held = deferred<typeof done>();
+		vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+		const wait = host.spawnAgent(request("caller"));
+		try {
+			const caller = manager.listAgents().find((record) => record.description === "caller")!;
+			const assignments = () => readRoster(manager, caller.id).map((entry) => entry.assignment);
+			expect(assignments()).toEqual(["", "caller", "sibling"]);
+			expect(pauseWorkflowTask(task, 1)).toBe(true);
+			expect(signal.aborted).toBe(false);
+			expect(caller.status).toBe("running");
+			expect(assignments).toThrow("no active workflow run");
+			expect(manager.roster.audit("root")).toHaveLength(1);
+			expect(resumeWorkflowTask(task, 2)).toBe(true);
+			expect(assignments()).toEqual(["", "caller", "sibling"]);
+		} finally {
+			held.resolve(done);
+			await wait;
+		}
+	}, 10_000);
+
+	it("detaches the workflow abort listener when cancelling a queued worker", async () => {
+		const { manager } = managerWithClock();
+		const policy = budget.getBudgetPolicy();
+		budget.setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+		const signal = new AbortController().signal;
+		const host = createWorkflowHost({
+			pi,
+			ctx: workflowCtx,
+			manager,
+			workflowId: "wf_queued",
+			signal,
+			isRunning: () => true,
+		});
+		const done = { responseText: "done", session, aborted: false, steered: false };
+		const held = deferred<typeof done>();
+		vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+		const blocker = host.spawnAgent(request("blocker"));
+		const listenerCount = () => getEventListeners(signal, "abort").length;
+		const before = listenerCount();
+		const queued = host.spawnAgent(request("queued"));
+		try {
+			expect(manager.listAgents().find((record) => record.description === "queued")?.status).toBe("queued");
+			expect(listenerCount()).toBe(before + 1);
+			host.abortAgent("queued");
+			expect(listenerCount()).toBe(before);
+			expect(await queued).toMatchObject({ skipped: true });
+		} finally {
+			held.resolve(done);
+			await Promise.all([blocker, queued]);
+			budget.setBudgetPolicy(policy);
+		}
+	}, 10_000);
+
+	it("does not publish an inspector id for an unretained startup failure", async () => {
+		const { manager } = managerWithClock();
+		vi.spyOn(worktrees, "createWorktree").mockRejectedValueOnce(new Error("no git repo"));
+		const host = createWorkflowHost({ pi, ctx: workflowCtx, manager });
+		const onResolved = vi.fn();
+		const result = await host.spawnAgent({ ...request("broken"), isolation: "worktree", onResolved });
+		expect(result).toMatchObject({ ok: false, error: expect.stringContaining("no git repo") });
+		expect(manager.listAgents()).toEqual([]);
+		expect(onResolved).not.toHaveBeenCalled();
+	});
 
 	it("denies roster after workflow failure", async () => {
 		const { manager } = managerWithClock();
@@ -348,7 +445,14 @@ describe("workflow host lifecycle", () => {
 				agent("pending worker", { label: "pending", isolation: "worktree" });`,
 		});
 		const signal = task.abortController.signal;
-		const host = createWorkflowHost({ pi, ctx: workflowCtx, manager, workflowId: task.id, signal });
+		const host = createWorkflowHost({
+			pi,
+			ctx: workflowCtx,
+			manager,
+			workflowId: task.id,
+			signal,
+			isRunning: () => task.status === "running",
+		});
 		let startup: Promise<void> | undefined;
 		try {
 			const result = await runWorkflow({ script: task.script, host, signal: AbortSignal.timeout(10_000) });
@@ -391,6 +495,7 @@ describe("workflow host lifecycle", () => {
 				manager,
 				workflowId: "wf_shared",
 				signal: new AbortController().signal,
+				isRunning: () => true,
 			});
 		const [first, second] = [host(), host()];
 		const request = (label: string) => ({

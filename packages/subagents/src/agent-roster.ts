@@ -74,6 +74,10 @@ function entryOf(record: AgentRecord): RosterEntry {
 	}
 }
 
+function hasRequiredWorkflowBinding(record: AgentRecord): boolean {
+	return record.workflowId === undefined || record.rosterWorkflowRun !== undefined;
+}
+
 /** One manager owns this store. No global registry, event emission, timers or disk persistence. */
 export class AgentRoster {
 	private readonly logs = new Map<string, { sequence: number; events: RootAuditEvent[] }>();
@@ -97,7 +101,10 @@ export class AgentRoster {
 			throw new Error("Agent roster unavailable: caller has no active root-scoped run identity.");
 		}
 		const workflowRun = caller.rosterWorkflowRun;
-		if (workflowRun?.aborted || (caller.workflowId !== undefined && workflowRun === undefined)) {
+		if (
+			!hasRequiredWorkflowBinding(caller) ||
+			(workflowRun && (workflowRun.signal.aborted || !workflowRun.isRunning()))
+		) {
 			throw new Error("Agent roster unavailable: caller has no active workflow run.");
 		}
 		if (caller.parentAgentId !== undefined) {
@@ -106,8 +113,8 @@ export class AgentRoster {
 				!parent?.runId ||
 				parent.runId !== caller.rosterParentRunId ||
 				parent.rosterRootId !== caller.rosterRootId ||
+				!hasRequiredWorkflowBinding(parent) ||
 				parent.rosterWorkflowRun !== workflowRun ||
-				(parent.workflowId !== undefined && workflowRun === undefined) ||
 				parent.status !== "running"
 			) {
 				throw new Error("Agent roster unavailable: caller has no active immediate parent run.");
@@ -120,8 +127,8 @@ export class AgentRoster {
 			caller.runId,
 			(record) =>
 				allowed.has(record.type) &&
+				hasRequiredWorkflowBinding(record) &&
 				record.rosterWorkflowRun === workflowRun &&
-				(record.workflowId === undefined || workflowRun !== undefined) &&
 				((record.parentAgentId === caller.parentAgentId && record.rosterParentRunId === caller.rosterParentRunId) ||
 					(record.parentAgentId === caller.id && record.rosterParentRunId === caller.runId)),
 		);

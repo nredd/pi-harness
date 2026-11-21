@@ -64,11 +64,14 @@ function stubManager(
 ): StubManager {
 	const abort = vi.fn();
 	const resume = vi.fn(async () => record({ id: "agent-1", result: "resumed" }));
-	const spawnAndWait = vi.fn(async (_pi: any, _ctx: any, type: string, prompt: string, options: any) => {
-		options.onPrepare?.(id);
-		const settled = await settle(type, prompt, options);
-		return { id: settled.id, record: settled };
-	});
+	const spawnAndWait = vi.fn(
+		async (_pi: any, _ctx: any, type: string, prompt: string, options: any, onSpawned?: (id: string) => void) => {
+			options.onPrepare?.(id);
+			onSpawned?.(id);
+			const settled = await settle(type, prompt, options);
+			return { id: settled.id, record: settled };
+		},
+	);
 	return {
 		manager: { spawnAndWait, abort, resume, getRecord: () => undefined } as unknown as AgentManager,
 		spawnAndWait,
@@ -209,6 +212,7 @@ describe("createWorkflowHost — spawn mapping", () => {
 			ctx: ctx(),
 			manager: stub.manager,
 			workflowId: "wf_run1",
+			isRunning: () => true,
 			signal: new AbortController().signal,
 		});
 

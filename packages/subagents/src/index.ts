@@ -3741,6 +3741,7 @@ Terse command-style prompts produce shallow, generic work.
 					signal: task.abortController.signal,
 					rootSessionId: ctx.sessionManager.getSessionId(),
 					workflowId: task.id,
+					isRunning: () => task.status === "running",
 				}),
 				onProgress: (entries) => updateWorkflowProgressBatch(task, entries),
 				// The dialog's pause / skip / retry keys run through this; it is dropped

@@ -357,8 +357,10 @@ describe("the workflow host at its edges", () => {
 				_type: unknown,
 				_prompt: unknown,
 				opts: Record<string, unknown> & { onPrepare?: (id: string) => void },
+				onSpawned?: (id: string) => void,
 			) {
 				opts.onPrepare?.(full.id);
+				onSpawned?.(full.id);
 				await during?.(opts);
 				return { id: full.id, record: full };
 			},
@@ -385,18 +387,11 @@ describe("the workflow host at its edges", () => {
 		expect(reported).toEqual([{ recordId: "rec-1" }]);
 	});
 
-	it("does not report a model before the manager record is bound", async () => {
+	it("reports no inspector or model details if allocation rejects", async () => {
 		const getRecord = vi.fn();
 		const manager = {
 			getRecord,
-			async spawnAndWait(
-				_pi: unknown,
-				_ctx: unknown,
-				_type: unknown,
-				_prompt: unknown,
-				opts: { onSessionCreated: () => void },
-			) {
-				opts.onSessionCreated();
+			async spawnAndWait() {
 				throw new Error("no record allocated");
 			},
 		} as unknown as AgentManager;

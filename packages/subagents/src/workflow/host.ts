@@ -64,6 +64,7 @@ export type WorkflowHostOptions = {
 			workflowId: string;
 			/** Unique lifetime signal for this execution, not looked up by display ID. */
 			signal: AbortSignal;
+			isRunning: () => boolean;
 	  }
 	| { workflowId?: undefined; signal?: AbortSignal }
 );
@@ -187,6 +188,7 @@ function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): W
 
 export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 	const { pi, ctx, manager } = deps;
+	const workflowRun = deps.workflowId === undefined ? undefined : { signal: deps.signal, isRunning: deps.isRunning };
 	/** Runtime agent id → the manager record it spawned. Never pruned mid-run. */
 	const records = new Map<string, string>();
 	/**
@@ -254,7 +256,8 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 			 * against the wrong tree.
 			 */
 			let gate: WorkflowGateResult | undefined;
-			let spawnedId: string | undefined;
+			// The manager calls onPrepare before the runner or any of its hooks.
+			let spawnedId: string;
 
 			/**
 			 * Hand the child's EFFECTIVE configuration back to the run.
@@ -267,7 +270,6 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 			 */
 			const report = dedupedReporter(request.onResolved);
 			const reportResolved = () => {
-				if (spawnedId === undefined) return;
 				const info = resolvedInfo(manager.getRecord(spawnedId));
 				if (info !== undefined) report(info);
 			};
@@ -285,7 +287,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 					: async (worktreePath: string): Promise<void> => {
 							// A failed child's gate is never consulted — the runtime reports
 							// the child's own failure — so running it would be pure cost.
-							if (spawnedId === undefined || !succeeded(manager.getRecord(spawnedId))) return;
+							if (!succeeded(manager.getRecord(spawnedId))) return;
 							try {
 								gate = await executeGate(command, worktreePath);
 							} catch (error) {
@@ -294,7 +296,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 						};
 
 			try {
-				const { record } = await manager.spawnAndWait(pi, ctx, dispatch.type, request.prompt, {
+				const options: Parameters<AgentManager["spawnAndWait"]>[4] = {
 					description: request.label,
 					modelSelection: selection,
 					// Same as the Agent tool: `isolated` comes off the agent definition.
@@ -307,7 +309,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 					// twice would let one fan-out starve everything else the user is
 					// doing. No `bypassQueue` needed: an agent outside the pool is
 					// never queued behind it.
-					...(deps.workflowId !== undefined ? { workflowId: deps.workflowId, rosterWorkflowRun: deps.signal } : {}),
+					...(deps.workflowId !== undefined ? { workflowId: deps.workflowId, rosterWorkflowRun: workflowRun } : {}),
 					...(model !== undefined ? { model } : {}),
 					// Validated worker-side against the same list pi accepts, so the
 					// cast asserts what the boundary has already checked. Left unset,
@@ -338,8 +340,11 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 					onPrepare: (id) => {
 						spawnedId = id;
 						records.set(request.agentId, id);
-						request.onResolved?.({ recordId: id });
 					},
+				};
+				// The inspector should only link to a record that got past startup.
+				const { record } = await manager.spawnAndWait(pi, ctx, dispatch.type, request.prompt, options, (id) => {
+					request.onResolved?.({ recordId: id });
 				});
 				const finalInfo = resolvedInfo(record);
 				if (finalInfo) report(finalInfo);
