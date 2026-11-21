@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import coverage_publish_fixtures
 from coverage_publish_fixtures import (
     FORK,
     HEAD,
@@ -285,6 +286,29 @@ def unavailable_download(*args: object, **kwargs: object) -> None:
         AssertionError: An expected contract does not hold.
     """
     raise OSError("signed download expired")
+
+
+def test_malformed_pr_summary_still_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a malformed enforcement array as unavailable without aborting publication.
+
+    Parameters:
+        tmp_path (Path): Isolated summary and fixture directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped fixture override.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Publication did not degrade the PR host.
+    """
+    original = pub.read_summary(coverage_publish_fixtures.FIXTURE)
+    signals = pub.object_value(original["signals"])
+    pub.object_value(next(iter(signals.values())))["enforcement"] = []
+    fixture = tmp_path / "malformed.json"
+    fixture.write_text(json.dumps(original))
+    monkeypatch.setattr(coverage_publish_fixtures, "FIXTURE", fixture)
+    api = RecordingGitHub()
+    pub.publish(api, pub.Run.parse(api.data), POLICY, tmp_path / "report.md")
+    (write,) = api.writes
+    assert "Ubuntu enforced signals: unavailable" in write[2]["body"]
 
 
 @pytest.mark.parametrize("case", ["old-attempt", "different-tested-sha", "missing-record", "no-merge-sha"])

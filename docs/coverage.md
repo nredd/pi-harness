@@ -581,6 +581,7 @@ their fan-in did not upload an artifact, the publisher looks back to the first e
 listing a macOS artifact from its selected attempt, for macOS only. Earlier attempts' retained
 artifacts do not stop the search. No successful run, an expired artifact (90-day retention),
 or missing or invalid evidence outside that exception leaves the affected host `unavailable`.
+Malformed PR summaries also leave the affected host `unavailable` without blocking publication.
 
 Numeric deltas require matching OS, signal, supported counters and producer fingerprints in the
 summary and provenance. The versioned fingerprint covers committed policy, CI, measurement

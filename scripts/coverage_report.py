@@ -310,7 +310,7 @@ class Summary:
         signals = {}
         for name, value in object_value(obj.get("signals")).items():
             meta = object_value(value)
-            if meta.get("enforcement") not in {"enforced", "report-only"}:
+            if text_value(meta.get("enforcement")) not in {"enforced", "report-only"}:
                 raise ValueError("Invalid enforcement")
             text_value(meta.get("reason"))
             for key in ("reference", "delta"):
