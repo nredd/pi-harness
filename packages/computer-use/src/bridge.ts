@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
@@ -8,16 +8,18 @@ import path from "node:path";
 import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	type ActionState,
 	canRetryInForeground,
 	outcomeAfterCheck,
 	outcomeAfterObservedValues,
+	type PreparedAction,
 	prepareAction,
 	strictHeadlessRejection,
 	unsupportedActionRejection,
-	type ActionState,
-	type PreparedAction,
 } from "./actions.ts";
 import {
+	type CdpConsoleEntry,
+	type CdpPageSnapshot,
 	cdpClickForContext,
 	cdpDragForContext,
 	cdpEvaluateForContext,
@@ -31,8 +33,6 @@ import {
 	cdpTypeForContext,
 	disconnectCdp,
 	listCdpPageContexts,
-	type CdpConsoleEntry,
-	type CdpPageSnapshot,
 } from "./cdp.ts";
 import {
 	type ComputerUseConfig,
@@ -42,50 +42,15 @@ import {
 	isHeadlessMode,
 	loadComputerUseConfig,
 } from "./config.ts";
-import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
-import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
 import {
-	controlLine,
-	foldToBudget,
-	graftScopedOutline,
-	nodeByRef,
-	outlineNodeLabel,
-	outlineNodePath,
-	rankedTextMatch,
-	renderInteractiveControls,
-	restoreOutline,
-	searchOutline,
-	searchOutlineRanked,
-	serializeOutline,
-	serializeOutlineNodeShallow,
-	serializeOutlineSearchMatch,
-	type LookResponse,
-	type Outline,
-	type OutlineChange,
-	type OutlineDiff,
-	type OutlineNode,
-	type OutlineSearchMatch,
-	type SerializedOutline,
-	type SerializedOutlineNode,
-	type SerializedOutlineSearchMatch,
-} from "./outline.ts";
-import {
-	applyOutputEnvelope,
-	boundToolError,
-	clearStoredOutputs,
-	readStoredOutput,
-	UI_TEXT_PAGE_CHARS,
-} from "./output.ts";
-import {
-	AGENT_TOOL_NAMES,
 	type ActParams,
+	AGENT_TOOL_NAMES,
 	type EvaluateBrowserParams,
 	type ExpandUiParams,
+	type FindParams,
 	type ImageMode,
 	type InspectUiParams,
 	type LaunchBrowserParams,
-	type FindParams,
 	type NavigateBrowserParams,
 	type ObserveDetail,
 	type ObserveParams,
@@ -96,34 +61,70 @@ import {
 	type UiAction,
 	type WaitForParams,
 } from "./contract.ts";
+import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
+import { normalizeFindParams } from "./find-params.ts";
+import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import {
+	controlLine,
+	foldToBudget,
+	graftScopedOutline,
+	type LookResponse,
+	nodeByRef,
+	type Outline,
+	type OutlineChange,
+	type OutlineDiff,
+	type OutlineNode,
+	type OutlineSearchMatch,
+	outlineNodeLabel,
+	outlineNodePath,
+	rankedTextMatch,
+	renderInteractiveControls,
+	restoreOutline,
+	type SerializedOutline,
+	type SerializedOutlineNode,
+	type SerializedOutlineSearchMatch,
+	searchOutline,
+	searchOutlineRanked,
+	serializeOutline,
+	serializeOutlineNodeShallow,
+	serializeOutlineSearchMatch,
+} from "./outline.ts";
+import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
+import {
+	applyOutputEnvelope,
+	boundToolError,
+	clearStoredOutputs,
+	readStoredOutput,
+	UI_TEXT_PAGE_CHARS,
+} from "./output.ts";
+import type { PermissionStatus } from "./permissions.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import type {
 	FramePoints,
+	PlatformFrontmostResult as FrontmostResult,
 	HelperActPerformed,
 	HelperActResult,
+	PlatformApp as HelperApp,
+	PlatformRoot as HelperWindow,
 	NativeInputDelivery,
 	PlatformActRequest,
-	PlatformApp as HelperApp,
 	PlatformDiagnostics,
-	PlatformFrontmostResult as FrontmostResult,
-	PlatformRoot as HelperWindow,
+	PlatformRoot,
 } from "./platform/types.ts";
-import type { PermissionStatus } from "./permissions.ts";
-import { ResourceScheduler } from "./runtime.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
-import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
-import type { PlatformRoot } from "./platform/types.ts";
-import { SavedStates, type CurrentCapture, type CurrentTarget, type OperationState } from "./state.ts";
+import { ResourceScheduler } from "./runtime.ts";
+import { type CurrentCapture, type CurrentTarget, type OperationState, SavedStates } from "./state.ts";
 import { changesBetween, renderChanges, stabilizeRefs } from "./view.ts";
+
 export type {
 	ActParams,
 	EvaluateBrowserParams,
 	ExpandUiParams,
+	FindParams,
 	ImageMode,
 	InspectUiParams,
 	LaunchBrowserParams,
-	FindParams,
 	MouseButtonName,
 	NavigateBrowserParams,
 	ObserveParams,
@@ -2203,7 +2204,7 @@ async function performExpandUi(
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	let outline = currentOutlineOrThrow();
+	const outline = currentOutlineOrThrow();
 	const ref = trimOrUndefined(params.ref);
 	if (!ref) throw new Error("expand_ui.ref is required.");
 	const initialTarget = nodeByRef(outline, ref);
@@ -2381,6 +2382,10 @@ async function dispatchUiTransaction(
 		execution.performed = result.performed;
 		execution.rootDelta = batchTrace.rootDelta;
 		execution.stoppedAt = result.stoppedAt;
+		// Native helpers can report the failure on the last checked step rather than the batch.
+		const failure = result.error ? result : result.steps.at(-1);
+		execution.error = failure?.error;
+		execution.evidence = failure?.evidence;
 		return execution;
 	}
 	const steps: ExecutionTrace[] = [];
@@ -2636,8 +2641,8 @@ function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	if (code !== "app_blocked" && code !== "input_deadline_expired") return undefined;
 	const units = execution.evidence?.postedUnits;
 	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
-	// Only the interrupted dispatch path sets either error code, together with the stop index.
-	return `Stopped at action ${execution.stoppedAt! + 1} (${code}).${posted} Do not replay the transaction.`;
+	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
+	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
 }
 
 async function performDesktopTransaction(
