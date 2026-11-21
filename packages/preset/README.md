@@ -282,11 +282,16 @@ attributes (including `text=auto`) or conversion configuration also mean keep. E
 Limits:
 - The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
-  candidate is otherwise clean. Report holds and scratch; delete nothing.
+  candidate has no other hold. Report only the guard's evidence; delete nothing.
+- The guard omits `git status` and does not compare tracked content or staged changes. Attributes
+  or driver configuration could change after an attribute scan and cause `git status` to run a
+  clean filter. Untracked and ignored paths are reported separately. Never run standalone
+  `git status` or `git diff` on a retained worktree to fill that gap.
 - No raw content hash comparison is performed. With effective `core.trustctime=false`, a same-size
   edit with its original mtime restored can look clean to Git, so the guard keeps the worktree
   without trying to distinguish it from a clean one.
-- A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
+- The guard does not check `core.ignorecase` or `core.symlinks`; the CLI authorizes nothing.
+  A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
   older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a

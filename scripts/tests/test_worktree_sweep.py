@@ -178,6 +178,11 @@ def run(
             "suffix = bytes.fromhex(os.getenv('SWEEP_INVENTORY_SUFFIX', '')); "
             "main.__globals__['parse_inventory'] = "
             "lambda raw: parse(raw[:-1] + suffix if suffix else raw); "
+            "attrs = os.getenv('SWEEP_ACTIVATE_FILTER'); "
+            "check_status = globals_['check_status']; "
+            "globals_['check_status'] = check_status if attrs is None else "
+            "lambda path, admin: (Path(attrs).write_text('tracked filter=mark\\n'), "
+            "check_status(path, admin))[1]; "
             "sys.exit(main(git_binary=git, gh_binary=gh, lsof_binary=lsof, **scope_kwargs))",
             str(GUARD),
             str(GIT),
@@ -258,10 +263,13 @@ def test_shipped_cli_is_keep_only(wt: Worktrees, case: str) -> None:
         reasons = tuple(map(str, result["reasons"])) if isinstance(result["reasons"], list) else ()
         assert reasons[0] == "cannot establish a complete external borrower scope"
     if case == "clean":
-        assert results[-1]["reasons"] == ["cannot establish a complete external borrower scope"]
+        assert results[-1]["reasons"] == [
+            "cannot establish a complete external borrower scope",
+            "status not collected: tracked worktree changes were not compared",
+        ]
     if case == "borrowed scratch":
-        assert "dirty or ignored paths" in str(results[0]["reasons"])
-        assert "cache.git/objects/" in str(results[0]["reasons"])
+        assert "untracked or ignored paths" in str(results[0]["reasons"])
+        assert "cache.git/" in str(results[0]["reasons"])
 
 
 def test_worktree_scope_never_accepts_unregistered_directory(wt: Worktrees) -> None:
@@ -295,7 +303,10 @@ def test_detached(wt: Worktrees) -> None:
 def test_dirty_or_ignored(wt: Worktrees, name: str) -> None:
     (wt.path / name).write_text("unsaved\n")
     quiet(wt)
-    keep(wt, name)
+    code, (result,) = run(wt, borrower_gitdirs=None)
+    assert code == 0
+    assert result["verdict"] == "keep"
+    assert ("status not collected" if name == "tracked" else name) in str(result["reasons"])
 
 
 @pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
@@ -813,6 +824,31 @@ def test_nested_repo_stash_is_not_visible_to_outer_status(wt: Worktrees, kind: s
     keep(wt, "nested Git metadata")
 
 
+def test_filter_activated_after_attribute_scan_is_not_run(wt: Worktrees) -> None:
+    marker = wt.bin / "clean-filter-ran"
+    adapter(
+        wt.bin,
+        "mark-clean",
+        f"import sys\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+    )
+    git(wt.path, "config", "filter.mark.clean", quote(str(wt.bin / "mark-clean")))
+    (wt.path / "tracked").write_text("changed after checkout\n")
+    attributes = wt.repo / ".git/info/attributes"
+    attributes.parent.mkdir(exist_ok=True)
+    quiet(wt)
+    code, (result,) = run(
+        wt,
+        borrower_gitdirs=None,
+        variables={"SWEEP_ACTIVATE_FILTER": str(attributes)},
+    )
+    assert attributes.read_text().strip() == "tracked filter=mark"
+    assert not marker.exists()
+    assert code == 0
+    assert result["verdict"] == "keep"
+    assert "status not collected" in str(result["reasons"])
+
+
 @pytest.mark.parametrize("attr", ["text eol=lf", "text=auto"])
 def test_mixed_endings_are_hidden_by_status(wt: Worktrees, attr: str) -> None:
     attrs = wt.path / ".gitattributes"
@@ -839,7 +875,7 @@ def test_effective_conversion_cfg_keeps(wt: Worktrees, key: str, value: str) -> 
 def test_file_written_during_pr_view_keeps(wt: Worktrees) -> None:
     recovery = wt.path / "ignored"
     quiet(wt)
-    keep(wt, "dirty or ignored paths", SWEEP_WRITE_DURING_VIEW=str(recovery))
+    keep(wt, "untracked or ignored paths", SWEEP_WRITE_DURING_VIEW=str(recovery))
     assert recovery.read_text() == "recovery"
 
 
