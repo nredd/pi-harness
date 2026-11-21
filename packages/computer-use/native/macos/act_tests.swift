@@ -1,4 +1,5 @@
 import ApplicationServices
+import Carbon.HIToolbox
 import Foundation
 
 private final class ActFixture {
@@ -467,6 +468,7 @@ private func runEventAssertions() throws {
     var rejectWheel = false
     var keyAllocations = 0
     var rejectKeyAllocation: Int?
+    var testLayout: Data?
     var onLayoutLookup: () -> Void = {}
     var onInputSleep: () -> Void = {}
     var onHIDPrepare: () -> Bool = { false }
@@ -513,7 +515,7 @@ private func runEventAssertions() throws {
         sleep: { delays.append($0); onInputSleep() },
         keyboardInputSource: {
             onLayoutLookup()
-            return KeyboardInputSource(isKeyboardLayout: false, layoutData: nil)
+            return KeyboardInputSource(isKeyboardLayout: testLayout != nil, layoutData: testLayout)
         },
         checkCancellation: {
             if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
@@ -625,6 +627,24 @@ private func runEventAssertions() throws {
     onInputSleep = { typing.blocked = true }
     try actionFailure("app_blocked", postedUnits: 1) { try typing.act("typeText", coords: true, params: ["text": "a🙂"]) }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.text) == ["a", "a"], "typing stops after focus moves during the inter-key delay")
+    onInputSleep = {}
+
+    let physicalTyping = ActFixture(inputSink: sink)
+    let us = [kTISPropertyInputSourceID as String: "com.apple.keylayout.US"] as CFDictionary
+    guard let sources = TISCreateInputSourceList(us, true)?.takeRetainedValue() as? [TISInputSource],
+          let source = sources.first, let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+        expect(false, "required US keyboard layout is readable")
+        return
+    }
+    testLayout = Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue() as Data
+    events = []
+    onInputSleep = { physicalTyping.blocked = true }
+    try actionFailure("app_blocked", postedUnits: 1) {
+        try physicalTyping.act("typeText", coords: true, params: ["text": "Bc"])
+    }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [11, 11] && events.allSatisfy { $0.flags.contains(.maskShift) },
+           "readable layout posts one physical Shift+B pair and admits no second stroke: \(events)")
+    testLayout = nil
     onInputSleep = {}
 
     let slowTyping = ActFixture(inputSink: sink)
