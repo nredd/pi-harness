@@ -162,8 +162,9 @@ Optional top-level `providers` entries are keyed by Pi provider ID. Merge declar
   to keep marks separate, including API-key and Vertex identities.
 - `windows` declare `requests`, `tokens` or `usd` limits. A rolling window needs positive
   `durationMinutes`; a calendar window needs `resetRule` with `at` (24-hour `HH:MM`),
-  `timeZone` (a named IANA zone) and `every` (`day` or `week`). Use a number for
-  provider-scope `limits` or an object keyed by exact model ID for model scope. Omit the limit
+  `timeZone` (a named zone, not a bare abbreviation except `UTC` or `GMT`) and `every: "day"`.
+  Use a rolling window of `10080` minutes for weekly quotas; weekly calendar resets are deferred.
+  Use a number for provider-scope `limits` or an object keyed by exact model ID for model scope. Omit the limit
   if unknown. The Google example declares no project-specific limits and no Vertex windows.
 - `collector.id` names a registered collector, not a URL or a module path. Use lowercase
   kebab-case starting with a letter, at most 64 characters. Omit it to select

@@ -90,7 +90,7 @@ export type WindowConfig = { name: string; unit: "requests" | "tokens" | "usd" }
 ) &
 	(
 		| { kind: "rolling"; durationMinutes: number }
-		| { kind: "calendar"; resetRule: { at: string; timeZone: string; every: "day" | "week" } }
+		| { kind: "calendar"; resetRule: { at: string; timeZone: string; every: "day" } }
 	);
 
 /** Provider IDs and collector IDs are data, not a built-in list or module paths. */
@@ -117,7 +117,8 @@ const PROVIDER_ID = /^[^\s/]+$/;
 const COLLECTOR_ID = /^(?=.{1,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const NON_BLANK = /\S/;
 const RESET_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
-const ZONE_NAME = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
+// Exclude ambiguous bare abbreviations, but retain UTC, GMT and Intl-recognized regional aliases.
+const ZONE_NAME = /^(?!(?!(?:UTC|GMT)$)[A-Za-z]{2,5}$)[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
 const EVIDENCE = ["read", "failure", "observed"] as const;
 
 function object(value: unknown, where: string, keys?: readonly string[]): Record<string, unknown> {
@@ -179,7 +180,7 @@ function validateReset(raw: unknown, where: string): void {
 	} catch {
 		throw new Error(`${where}.timeZone: unknown IANA time zone ${JSON.stringify(timeZone)}`);
 	}
-	oneOf(every, ["day", "week"], `${where}.every`);
+	oneOf(every, ["day"], `${where}.every`);
 }
 
 function parseWindow(raw: unknown, where: string): WindowConfig {

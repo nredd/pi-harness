@@ -107,10 +107,10 @@
 				"at": { "type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" },
 				"timeZone": {
 					"type": "string",
-					"pattern": "^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$",
+					"pattern": "^(?!(?!(?:UTC|GMT)$)[A-Za-z]{2,5}$)[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*$",
 					"description": "Named IANA time zone. The loader also checks the name against Intl."
 				},
-				"every": { "enum": ["day", "week"] }
+				"every": { "const": "day" }
 			}
 		},
 		"remaining": {

@@ -50,6 +50,22 @@ it.each([
 	expect(parseConfigDocument(document)).toEqual({ profiles: [], providers });
 });
 
+it.each(["UTC", "GMT", "Etc/UTC", "US/Pacific"])("accepts Intl time zone %s in both validators", (timeZone) => {
+	const providers = { p: { windows: [{ ...calendar, resetRule: { ...resetRule, timeZone } }] } };
+	const document = { profiles: {}, providers };
+	expect(Check(schema, document)).toBe(true);
+	expect(parseConfigDocument(document)).toEqual({ profiles: [], providers });
+});
+
+it.each(["PST", "pst", "CET", "EST"])("rejects bare time zone abbreviation %s in both validators", (timeZone) => {
+	const document = {
+		profiles: {},
+		providers: { p: { windows: [{ ...calendar, resetRule: { ...resetRule, timeZone } }] } },
+	};
+	expect(Check(schema, document)).toBe(false);
+	expect(() => parseConfigDocument(document)).toThrow("providers.p.windows[0].resetRule.timeZone:");
+});
+
 it.each([
 	[null, "providers: expected an object"],
 	[[], "providers: expected an object"],
@@ -103,7 +119,7 @@ it.each([
 		"providers.p.windows[0].resetRule.timeZone:",
 	],
 	[
-		{ p: { windows: [{ ...calendar, resetRule: { ...resetRule, every: "month" } }] } },
+		{ p: { windows: [{ ...calendar, resetRule: { ...resetRule, every: "week" } }] } },
 		"providers.p.windows[0].resetRule.every:",
 	],
 	[
