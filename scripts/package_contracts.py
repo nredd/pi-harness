@@ -2469,6 +2469,7 @@ def run_packed_files_gate(
 
     Raises:
         ContractError: If a file contract or production source rule fails.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     sandbox = Sandbox(work / "base", locate_tools())
     tarballs = work / "tarballs"
@@ -3594,6 +3595,7 @@ def scenario_dev_tools(ctx: Context) -> DevToolsEvidence:
 
     Raises:
         ContractError: If the tool misbehaves.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     repo = ctx.work / "repo"
     repo.mkdir()
@@ -4897,6 +4899,7 @@ def run_gate(
 
     Raises:
         ContractError: On the first violated contract or a malformed report, after all static audits ran.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     selected = [contract for contract in contracts if only is None or contract.directory in only]
     if not selected:
@@ -4981,6 +4984,7 @@ def run_audit_gate(
 
     Raises:
         ContractError: If the tarball audit or the clean install fails.
+        ValueError: If `PI_TIMEOUT_SCALE` is set to a value that is not a finite number at least 1.
     """
     tools = locate_tools()
     sandbox = Sandbox(work / "base", tools)
