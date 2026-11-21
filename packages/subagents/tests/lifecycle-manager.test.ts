@@ -5,7 +5,8 @@ import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AgentManager, markConsumed } from "../src/agent-manager.ts";
 import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { streamToOutputFile } from "../src/output-file.ts";
@@ -339,8 +340,7 @@ describe("workflow host lifecycle", () => {
 
 	it("denies roster after workflow failure", async () => {
 		const { manager } = managerWithClock();
-		const path = mkdtempSync(join(tmpdir(), "workflow-pending-"));
-		transcriptRoots.push(path);
+		const path = makeTestTempDir("workflow-pending-", onTestFinished);
 		const copy = { path, workPath: path, repoRoot: path, branch: "test", baseSha: "abc" };
 		const pending = deferred<typeof copy>();
 		const create = vi.spyOn(worktrees, "createWorktree").mockReturnValue(pending.promise);
