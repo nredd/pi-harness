@@ -252,14 +252,16 @@ def run(
     done = subprocess.run(
         [
             sys.executable,
-            "-I",
-            "-S",
             "-c",
-            "import json, os, runpy, sys; from pathlib import Path; "
+            "import json, os, runpy, subprocess, sys; from pathlib import Path; "
             "source, git, gh, lsof = sys.argv[1:5]; sys.argv[1:5] = []; "
             "scope = os.getenv('SWEEP_SCOPE'); "
             "scope_kwargs = {} if scope is None else "
             "{'borrower_gitdirs': tuple(map(Path, json.loads(scope)))}; "
+            "receipt = os.getenv('SWEEP_RECORD_GIT'); run = subprocess.run; "
+            "record = lambda cmd: Path(receipt).open('a').write(json.dumps(cmd) + '\\n'); "
+            "subprocess.run = lambda cmd, *args, **kw: "
+            "((record(cmd) if receipt and cmd[0] == git else None), run(cmd, *args, **kw))[1]; "
             "module = runpy.run_path(source); main = module['main']; "
             "parse = module['parse_inventory']; "
             "globals_ = main.__globals__; "
@@ -698,14 +700,11 @@ def test_inventory_without_any_linked_worktrees(wt: Worktrees) -> None:
 def test_future_seam_calls_git_prune_only_in_dry_run_mode(wt: Worktrees) -> None:
     trace = wt.bin / "commands.jsonl"
     quiet(wt)
-    code, (result,) = run(wt, variables={"GIT_TRACE2_EVENT": str(trace)}, borrower_gitdirs=())
+    code, (result,) = run(wt, variables={"SWEEP_RECORD_GIT": str(trace)}, borrower_gitdirs=())
     assert code == 0
     assert result["verdict"] == "eligible", result
-    starts = [
-        event["argv"]
-        for line in trace.read_text().splitlines()
-        if (event := json.loads(line))["event"] == "start"
-    ]
+    starts = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert starts[0] == [str(GIT), "--version"]
     prunes = [argv[-4:] for argv in starts if "prune" in argv]
     assert prunes
     assert all(argv == ["worktree", "prune", "--dry-run", "--verbose"] for argv in prunes)
