@@ -599,6 +599,7 @@ Limits:
   per inspected run (at most 21 baseline list requests, no per-file API reads). A separate
   90-second wall-clock budget caps listings and downloads to leave time for the freshness
   checks and comment write. If it expires, the comment reports baselines unavailable.
+- The ZIP reader accepts only stored or deflated summary and provenance members.
 - The publisher runs default-branch code and never executes anything from artifacts. It has
   `actions: read`, `contents: read` for checkout and `pull-requests: write` for the sticky comment.
 - The fingerprint hashes whole files: even a comment-only change in `workflow-examples.test.ts`

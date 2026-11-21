@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import html
 import logging
-import lzma
 import stat
 import struct
 import sys
@@ -61,6 +60,21 @@ MAX_COUNT = 10**12
 MAX_REASON = 200
 COUNTERS = ("lines", "functions", "branches", "statements")
 HOSTS = {"ubuntu-24.04": ("Ubuntu", "linux"), "macos-14": ("macOS", "darwin")}
+
+
+def check_compression(member: zipfile.ZipInfo, kind: str) -> None:
+    """Allow only methods whose ZIP reader bounds decompressor output.
+
+    Parameters:
+        member (zipfile.ZipInfo): ZIP member metadata before the stream is opened.
+        kind (str): Producer member label for refusal messages.
+    Returns:
+        None.
+    Raises:
+        ValueError: Compression method is not stored or deflated.
+    """
+    if member.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+        raise ValueError(f"Unsupported coverage {kind} compression")
 
 
 def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[str, object]:
@@ -109,6 +123,7 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
             member = archive.getinfo("coverage/summary.json")
             if member.file_size > MAX_JSON_BYTES or member.is_dir():
                 raise ValueError("Invalid summary member")
+            check_compression(member, "summary")
             with archive.open(member) as stream:
                 summary = decode_json(stream.read(MAX_JSON_BYTES + 1))
             if expected is not None:
@@ -117,6 +132,7 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
                 receipt = archive.getinfo(PROVENANCE_MEMBER)
                 if receipt.file_size > MAX_PROVENANCE_BYTES:
                     raise ValueError("Coverage provenance byte limit exceeded")
+                check_compression(receipt, "provenance")
                 with archive.open(receipt) as stream:
                     validate_summary_record(
                         summary, decode_record(stream.read(MAX_PROVENANCE_BYTES + 1)), expected
@@ -128,7 +144,6 @@ def read_summary(path: Path, expected: ProvenanceRecord | None = None) -> dict[s
         RuntimeError,
         NotImplementedError,
         zlib.error,
-        lzma.LZMAError,
         EOFError,
         struct.error,
         OverflowError,
