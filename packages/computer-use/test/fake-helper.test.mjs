@@ -1,12 +1,12 @@
 // Self-test of `support/fake-helper.mjs` beyond the macOS flat profile: the envelope profile and stdio
 // transport are driven by the real `WindowsHelperClient`, the wire format #713 (Windows and Linux) reuses.
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import {
 	body,
 	createFakeChild,
@@ -25,7 +25,7 @@ let tmp;
 let exe;
 
 beforeEach(() => {
-	tmp = mkdtempSync(path.join(os.tmpdir(), "fht-"));
+	tmp = makeTestTempDir("fht-", onTestFinished);
 	exe = path.join(tmp, "windows-bridge.exe");
 	writeFileSync(exe, "#!/bin/sh\n");
 	chmodSync(exe, 0o755);
@@ -35,7 +35,6 @@ afterEach(() => {
 	vi.doUnmock("node:child_process");
 	vi.unstubAllEnvs();
 	vi.resetModules();
-	rmSync(tmp, { recursive: true, force: true });
 });
 
 function askSocket(socketPath, cmd) {

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AttemptSchema, OutcomeSchema, ResetJournal } from "../src/reset-journal.ts";
 import { NOW } from "./fixtures/codex.ts";
 
@@ -13,11 +13,10 @@ const binding = "a".repeat(64);
 let root: string;
 const path = (name: string) => join(root, "state", binding, name);
 beforeEach(async () => {
-	root = await fs.mkdtemp(join(tmpdir(), "codex-journal-test-"));
+	root = makeTestTempDir("codex-journal-test-", onTestFinished);
 });
 afterEach(async () => {
 	vi.restoreAllMocks();
-	await fs.rm(root, { recursive: true, force: true });
 });
 const journal = () => new ResetJournal(join(root, "state"), binding);
 const put = (name: string, value: unknown) =>

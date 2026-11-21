@@ -537,9 +537,26 @@ fn atspi_error(error: impl std::fmt::Display) -> ProtocolError {
     )
 }
 
+// Keep the shared test module here so `lib.rs` remains a declaration-only
+// module that the native coverage accountant can validate without an LLVM map.
+#[cfg(test)]
+#[path = "tests.rs"]
+pub(crate) mod test_peer;
+
 #[cfg(test)]
 mod tests {
+    use super::test_peer::with_peer;
     use super::*;
+    use std::{
+        future::pending,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+    use tokio::sync::mpsc;
+
+    const FIXTURE_REGISTRY_ROOT: &str = "/org/a11y/atspi/accessible/root";
+
+    const FIXTURE_DBUS_ROOT: &str = "/org/freedesktop/DBus";
 
     #[test]
     fn activation_action_selection_prefers_semantics_over_index_zero() {
@@ -597,37 +614,27 @@ mod tests {
 
     #[tokio::test]
     async fn application_pid_uses_only_accessibility_bus_process_id() {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
-            let guid = zbus::Guid::generate();
-            let server = zbus::connection::Builder::unix_stream(server_socket)
-                .server(guid)
-                .unwrap()
-                .p2p()
-                .serve_at(DBUS_ROOT, MockBus)
-                .unwrap()
-                .serve_at(REGISTRY_ROOT, MockApplication)
-                .unwrap()
-                .build();
-            let client = zbus::connection::Builder::unix_stream(client_socket)
-                .p2p()
-                .build();
-            let (server, connection) = tokio::try_join!(server, client).unwrap();
-            let client = AtspiClient { connection };
-            let app = AccessibleRef {
-                destination: ":1.42".into(),
-                path: REGISTRY_ROOT.into(),
-            };
-            let application = client
-                .proxy(&app, "org.a11y.atspi.Application")
-                .await
-                .unwrap();
-            assert_eq!(application.get_property::<i32>("Id").await.unwrap(), 8);
-            assert_eq!(client.application_pid(&app).await, 25361);
-            drop(server);
-        })
-        .await
-        .expect("mock accessibility bus should respond promptly");
+        with_peer(
+            |server| {
+                server
+                    .serve_at(DBUS_ROOT, MockBus)?
+                    .serve_at(REGISTRY_ROOT, MockApplication)
+            },
+            async |connection| {
+                let client = AtspiClient { connection };
+                let app = AccessibleRef {
+                    destination: ":1.42".into(),
+                    path: REGISTRY_ROOT.into(),
+                };
+                let application = client
+                    .proxy(&app, "org.a11y.atspi.Application")
+                    .await
+                    .unwrap();
+                assert_eq!(application.get_property::<i32>("Id").await.unwrap(), 8);
+                assert_eq!(client.application_pid(&app).await, 25361);
+            },
+        )
+        .await;
     }
 
     struct MockAccessibilityBus(&'static str);
@@ -641,23 +648,11 @@ mod tests {
 
     /// Drive address discovery over a private peer connection, without a session daemon.
     async fn discover_from_peer(reply: &'static str) -> Result<Address, ProtocolError> {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
-            let server = zbus::connection::Builder::unix_stream(server_socket)
-                .server(zbus::Guid::generate())
-                .unwrap()
-                .p2p()
-                .serve_at("/org/a11y/bus", MockAccessibilityBus(reply))
-                .unwrap()
-                .build();
-            let client = zbus::connection::Builder::unix_stream(client_socket)
-                .p2p()
-                .build();
-            let (_server, session) = tokio::try_join!(server, client).unwrap();
-            accessibility_bus_address(&session).await
-        })
+        with_peer(
+            |server| server.serve_at("/org/a11y/bus", MockAccessibilityBus(reply)),
+            async |session| accessibility_bus_address(&session).await,
+        )
         .await
-        .expect("mock session bus should respond promptly")
     }
 
     #[tokio::test]
@@ -676,6 +671,7 @@ mod tests {
 
     /// Accessible properties and edges for a small, cyclic AT-SPI tree.
     struct TreeNode {
+        name: &'static str,
         role: &'static str,
         children: &'static [(&'static str, &'static str)],
         has_text: bool,
@@ -685,7 +681,7 @@ mod tests {
     impl TreeNode {
         #[zbus(property)]
         fn name(&self) -> &str {
-            self.role
+            self.name
         }
 
         #[zbus(property)]
@@ -713,6 +709,203 @@ mod tests {
         }
     }
 
+    struct WindowExtents {
+        width: i32,
+        coordinate_requests: Arc<Mutex<Vec<u32>>>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Component")]
+    impl WindowExtents {
+        fn get_extents(&self, coordinate_type: u32) -> (i32, i32, i32, i32) {
+            assert_eq!(coordinate_type, 0, "use screen coordinates");
+            self.coordinate_requests
+                .lock()
+                .unwrap()
+                .push(coordinate_type);
+            (-20, 40, self.width, 480)
+        }
+    }
+
+    #[tokio::test]
+    async fn lists_atspi_roots_with_pid_filter_title_fallback_and_screen_bounds() {
+        const DESTINATION: &str = ":1.42";
+        const APP: &str = "/app";
+        const WINDOW: &str = "/app/window";
+        const DIALOG: &str = "/app/dialog";
+        let dialog_coordinate_requests = Arc::new(Mutex::new(Vec::new()));
+
+        with_peer(
+            |server| {
+                let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
+                    name,
+                    role,
+                    children,
+                    has_text: false,
+                };
+                server
+                    .serve_at(FIXTURE_DBUS_ROOT, MockBus)?
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        node("Registry", "desktop", &[(DESTINATION, APP)]),
+                    )?
+                    .serve_at(
+                        APP,
+                        node(
+                            "Editor",
+                            "application",
+                            &[(DESTINATION, WINDOW), (DESTINATION, DIALOG)],
+                        ),
+                    )?
+                    .serve_at(WINDOW, node("Notes", "frame", &[]))?
+                    .serve_at(
+                        WINDOW,
+                        WindowExtents {
+                            width: 640,
+                            coordinate_requests: Arc::default(),
+                        },
+                    )?
+                    .serve_at(DIALOG, node("", "dialog", &[]))?
+                    .serve_at(
+                        DIALOG,
+                        WindowExtents {
+                            width: 0,
+                            coordinate_requests: Arc::clone(&dialog_coordinate_requests),
+                        },
+                    )
+            },
+            async |connection| {
+                let client = AtspiClient { connection };
+                let roots = client.list_roots(None).await.unwrap();
+                let [window, dialog] = roots.as_slice() else {
+                    panic!(
+                        "expected one window and one dialog, got {} roots",
+                        roots.len()
+                    );
+                };
+                assert_eq!(window.accessible.path, WINDOW);
+                assert_eq!(window.accessible.destination, DESTINATION);
+                assert_eq!(window.pid, 25361);
+                assert_eq!(window.name, "Notes");
+                assert_eq!(window.app_name, "Editor");
+                assert_eq!(window.role, "frame");
+                assert_eq!(
+                    window.frame,
+                    Some(Rect {
+                        x: -20,
+                        y: 40,
+                        width: 640,
+                        height: 480
+                    })
+                );
+                assert_eq!(dialog.accessible.path, DIALOG);
+                assert_eq!(dialog.name, "Editor");
+                assert_eq!(dialog.role, "dialog");
+                assert_eq!(*dialog_coordinate_requests.lock().unwrap(), [0]);
+                assert_eq!(dialog.frame, None);
+
+                let matching = client.list_roots(Some(25361)).await.unwrap();
+                assert_eq!(
+                    matching
+                        .iter()
+                        .map(|root| root.accessible.path.as_str())
+                        .collect::<Vec<_>>(),
+                    [WINDOW, DIALOG]
+                );
+                assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+            },
+        )
+        .await;
+    }
+
+    struct DisconnectingRegistry;
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl DisconnectingRegistry {
+        async fn get_children(
+            &self,
+            #[zbus(connection)] connection: &Connection,
+        ) -> Vec<(String, OwnedObjectPath)> {
+            connection.clone().close().await.unwrap();
+            pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_reports_registry_disconnect() {
+        with_peer(
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, DisconnectingRegistry),
+            async |connection| {
+                let error = AtspiClient { connection }
+                    .list_roots(None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InternalError);
+                assert_eq!(
+                    error.message,
+                    "AT-SPI2 request failed: I/O error: failed to read from socket"
+                );
+            },
+        )
+        .await;
+    }
+
+    struct MalformedRegistry;
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl MalformedRegistry {
+        fn get_children(&self) -> u32 {
+            42
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_reports_malformed_registry_reply() {
+        with_peer(
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, MalformedRegistry),
+            async |connection| {
+                let error = AtspiClient { connection }
+                    .list_roots(None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InternalError);
+                assert_eq!(
+                    error.message,
+                    "AT-SPI2 request failed: Signature mismatch: got `u`, expected `a(so)`"
+                );
+            },
+        )
+        .await;
+    }
+
+    struct StalledRegistry(mpsc::UnboundedSender<()>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl StalledRegistry {
+        async fn get_children(&self) -> Vec<(String, OwnedObjectPath)> {
+            self.0.send(()).unwrap();
+            pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_stays_pending_when_registry_never_replies() {
+        let (started, mut requests) = mpsc::unbounded_channel();
+        with_peer(
+            |server| server.serve_at(FIXTURE_REGISTRY_ROOT, StalledRegistry(started)),
+            async |connection| {
+                let client = AtspiClient { connection };
+                let request = client.list_roots(None);
+                tokio::pin!(request);
+                tokio::select! {
+                    received = requests.recv() => assert_eq!(received, Some(())),
+                    result = &mut request => panic!("list_roots completed before the registry stalled: {result:?}"),
+                }
+                // Production has no per-request timeout. The caller's deadline cancels the wait.
+                assert!(tokio::time::timeout(Duration::from_millis(100), request).await.is_err());
+            },
+        ).await;
+    }
+
     /// Record calls so a password read fails even if its result is subsequently discarded.
     #[derive(Clone, Default)]
     struct TreeText(std::sync::Arc<std::sync::Mutex<Vec<(i32, i32)>>>);
@@ -727,96 +920,88 @@ mod tests {
 
     #[tokio::test]
     async fn snapshots_bound_tree_traversal_and_never_read_password_text() {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            const DESTINATION: &str = ":1.42";
-            const ROOT: &str = "/window";
-            const PASSWORD: &str = "/window/password";
-            const LABEL: &str = "/window/label";
-            let password_text = TreeText::default();
-            let label_text = TreeText::default();
-            let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
-            let server = zbus::connection::Builder::unix_stream(server_socket)
-                .server(zbus::Guid::generate())
-                .unwrap()
-                .p2p()
-                .serve_at(
-                    ROOT,
-                    TreeNode {
-                        role: "frame",
-                        children: &[
-                            (DESTINATION, PASSWORD),
-                            ("", LABEL),
-                            (DESTINATION, "/"),
-                            (DESTINATION, LABEL),
-                        ],
-                        has_text: false,
-                    },
-                )
-                .unwrap()
-                .serve_at(
-                    PASSWORD,
-                    TreeNode {
-                        role: "PaSsWoRd TeXt",
-                        children: &[],
-                        has_text: true,
-                    },
-                )
-                .unwrap()
-                .serve_at(PASSWORD, password_text.clone())
-                .unwrap()
-                .serve_at(
-                    LABEL,
-                    TreeNode {
-                        role: "label",
-                        children: &[(DESTINATION, ROOT)],
-                        has_text: true,
-                    },
-                )
-                .unwrap()
-                .serve_at(LABEL, label_text.clone())
-                .unwrap()
-                .build();
-            let client = zbus::connection::Builder::unix_stream(client_socket)
-                .p2p()
-                .build();
-            let (_server, connection) = tokio::try_join!(server, client).unwrap();
-            let client = AtspiClient { connection };
-            let root = AccessibleRef {
-                destination: DESTINATION.into(),
-                path: ROOT.into(),
-            };
+        const DESTINATION: &str = ":1.42";
+        const ROOT: &str = "/window";
+        const PASSWORD: &str = "/window/password";
+        const LABEL: &str = "/window/label";
+        let password_text = TreeText::default();
+        let label_text = TreeText::default();
+        with_peer(
+            |server| {
+                server
+                    .serve_at(
+                        ROOT,
+                        TreeNode {
+                            name: "frame",
+                            role: "frame",
+                            children: &[
+                                (DESTINATION, PASSWORD),
+                                ("", LABEL),
+                                (DESTINATION, "/"),
+                                (DESTINATION, LABEL),
+                            ],
+                            has_text: false,
+                        },
+                    )?
+                    .serve_at(
+                        PASSWORD,
+                        TreeNode {
+                            name: "PaSsWoRd TeXt",
+                            role: "PaSsWoRd TeXt",
+                            children: &[],
+                            has_text: true,
+                        },
+                    )?
+                    .serve_at(PASSWORD, password_text.clone())?
+                    .serve_at(
+                        LABEL,
+                        TreeNode {
+                            name: "label",
+                            role: "label",
+                            children: &[(DESTINATION, ROOT)],
+                            has_text: true,
+                        },
+                    )?
+                    .serve_at(LABEL, label_text.clone())
+            },
+            async |connection| {
+                let client = AtspiClient { connection };
+                let root = AccessibleRef {
+                    destination: DESTINATION.into(),
+                    path: ROOT.into(),
+                };
 
-            let nodes = client.snapshot_from(&root, 10, 10).await.unwrap();
-            assert_eq!(nodes.len(), 3);
-            assert_eq!(nodes[0].accessible, root);
-            assert_eq!(nodes[0].parent, None);
-            assert_eq!(nodes[0].depth, 0);
-            assert_eq!(nodes[0].name, "frame");
-            assert_eq!(nodes[0].description, "fixture description");
-            assert_eq!(nodes[0].bounds, None);
-            assert_eq!(nodes[1].accessible.path, PASSWORD);
-            assert_eq!(nodes[2].accessible.path, LABEL);
-            for child in &nodes[1..] {
-                assert_eq!(child.parent.as_ref(), Some(&root));
-                assert_eq!(child.depth, 1);
-                assert!(child.interfaces.contains(TEXT));
-            }
-            assert!(nodes[1].is_secure);
-            assert!(nodes[1].value.is_empty());
-            assert!(!nodes[2].is_secure);
-            assert_eq!(nodes[2].value, "fixture text");
+                let nodes = client.snapshot_from(&root, 10, 10).await.unwrap();
+                assert_eq!(nodes.len(), 3);
+                assert_eq!(nodes[0].accessible, root);
+                assert_eq!(nodes[0].parent, None);
+                assert_eq!(nodes[0].depth, 0);
+                assert_eq!(nodes[0].name, "frame");
+                assert_eq!(nodes[0].description, "fixture description");
+                assert_eq!(nodes[0].bounds, None);
+                assert_eq!(nodes[1].accessible.path, PASSWORD);
+                assert_eq!(nodes[2].accessible.path, LABEL);
+                for child in &nodes[1..] {
+                    assert_eq!(child.parent.as_ref(), Some(&root));
+                    assert_eq!(child.depth, 1);
+                    assert!(child.interfaces.contains(TEXT));
+                }
+                assert!(nodes[1].is_secure);
+                assert!(nodes[1].value.is_empty());
+                assert!(!nodes[2].is_secure);
+                assert_eq!(nodes[2].value, "fixture text");
 
-            let depth_limited = client.snapshot_from(&root, 10, 0).await.unwrap();
-            assert_eq!(depth_limited.len(), 1);
-            assert_eq!(depth_limited[0].accessible, root);
-            let node_limited = client.snapshot_from(&root, 2, 10).await.unwrap();
-            assert_eq!(node_limited.len(), 2);
-            assert_eq!(node_limited[1].accessible.path, PASSWORD);
-            assert!(password_text.0.lock().unwrap().is_empty());
-            assert_eq!(*label_text.0.lock().unwrap(), [(0, -1)]);
-        })
-        .await
-        .expect("snapshot peer handshake and requests timed out");
+                let depth_limited = client.snapshot_from(&root, 10, 0).await.unwrap();
+                assert_eq!(depth_limited.len(), 1);
+                assert_eq!(depth_limited[0].accessible, root);
+                let node_limited = client.snapshot_from(&root, 2, 10).await.unwrap();
+                assert_eq!(node_limited.len(), 2);
+                assert_eq!(node_limited[1].accessible.path, PASSWORD);
+                assert!(password_text.0.lock().unwrap().is_empty());
+                assert_eq!(*label_text.0.lock().unwrap(), [(0, -1)]);
+            },
+        )
+        .await;
     }
 
     #[test]

@@ -1,7 +1,7 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { link, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { opaqueId } from "../../src/stats/load.ts";
 import {
@@ -30,10 +30,10 @@ let dir: string;
 let producer: string;
 let viewer: string;
 let repo: string;
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
 	vi.useFakeTimers({ toFake: ["Date"] });
 	vi.setSystemTime(NOW);
-	dir = mkdtempSync(join(tmpdir(), "psk-snapshot-boundaries-"));
+	dir = makeTestTempDir("psk-snapshot-boundaries-", onTestFinished);
 	producer = join(dir, "producer");
 	viewer = join(dir, "viewer");
 	repo = join(dir, "repo");
@@ -43,7 +43,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	vi.mocked(unlink).mockReset();
 	vi.mocked(link).mockReset();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 /** Write physical usage with preserved identities in the same month as session metadata. */

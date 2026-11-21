@@ -51,6 +51,11 @@ BUILD_AND_NODE = {"Assembled D and E boundaries (explicit stack, no machine conf
 # Each `owned (<os>)` check is its own fan-in job over its own shard job (#350).
 OWNED_FAN_IN = {"ubuntu-24.04": "owned-ubuntu", "macos-14": "owned-macos"}
 OWNED_SHARD_JOBS = {"ubuntu-24.04": "owned-shards-ubuntu", "macos-14": "owned-shards-macos"}
+SPLIT_MATRICES = {
+    "owned": OWNED_FAN_IN,
+    "contracts": {"ubuntu-24.04": "contracts", "macos-14": "contracts-macos"},
+    "stack": {"ubuntu-24.04": "stack", "macos-14": "stack-macos"},
+}
 
 
 @dataclass(frozen=True)
@@ -84,22 +89,28 @@ def jobs() -> dict[str, Any]:
     return yaml.safe_load(WORKFLOW.read_text())["jobs"]
 
 
+def cell_job(name: str, cell: dict[str, str]) -> str:
+    """Resolve a logical matrix and cell to its platform-specific job ID."""
+    return SPLIT_MATRICES[name][cell["os"]]
+
+
 def expand(name: str, event: str = "pull_request") -> dict[str, dict[str, str]]:
-    """Expand the real workflow matrix for an event, keyed by reported check name."""
-    if name == "owned":
-        return {check: cell for job in OWNED_FAN_IN.values() for check, cell in expand(job, event).items()}
+    """Expand all jobs in a logical matrix, keyed by reported check name."""
+    return {
+        check: cell
+        for job in SPLIT_MATRICES.get(name, {"": name}).values()
+        for check, cell in expand_job(job, event).items()
+    }
+
+
+def expand_job(name: str, event: str) -> dict[str, dict[str, str]]:
+    """Expand one job's real matrix when the event admits it."""
     job = jobs()[name]
     context = {"github.event_name": event}
-    if name in OWNED_FAN_IN.values() and not evaluate(job["if"], context):
+    if not evaluate(job["if"], context):
         return {}
     matrix = job["strategy"]["matrix"]
-    if "include" in matrix:
-        records = evaluate(matrix["include"], context)
-    else:
-        systems = matrix["os"]
-        records = [
-            {"os": system} for system in (evaluate(systems, context) if isinstance(systems, str) else systems)
-        ]
+    records = matrix["include"] if "include" in matrix else [{"os": system} for system in matrix["os"]]
     return {
         render(job["name"], {f"matrix.{key}": value for key, value in cell.items()}): cell for cell in records
     }
@@ -145,7 +156,9 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
     """
     body = expression.strip().removeprefix("${{").removesuffix("}}")
     body = re.sub(r"!(?!=)", " not ", body)
-    body = re.sub(r"(?<!['\w])[a-z]+(?:\.[a-z_]+)+", lambda match: repr(context.get(match[0], "")), body)
+    body = re.sub(
+        r"(?<!['\w])[a-z]+(?:\.[a-z_][a-z_0-9-]*)+", lambda match: repr(context.get(match[0], "")), body
+    )
     body = re.sub(r"\]\.(\w+)", r"]['\1']", body)  # `fromJSON(...)[key].property`
     functions = {
         "fromJSON": lambda text: json.loads(text, object_hook=Absent),
@@ -153,6 +166,7 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
         "contains": lambda haystack, needle: needle in haystack,
         "cancelled": lambda: context.get("cancelled") == "true",
         "always": lambda: True,
+        "false": False,
     }
     return eval(body.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}} | functions)
 
@@ -236,8 +250,7 @@ def runner_for(name: str, cell: dict[str, str], trigger: Trigger = PULL_REQUEST)
         str: Selected runner label.
     """
     context = {f"matrix.{key}": value for key, value in cell.items()}
-    job = OWNED_FAN_IN[cell["os"]] if name == "owned" else name
-    return render(jobs()[job]["runs-on"], context | classify_context(trigger))
+    return render(jobs()[cell_job(name, cell)]["runs-on"], context | classify_context(trigger))
 
 
 def report_step() -> dict[str, Any]:
@@ -265,8 +278,7 @@ def run_plan(
         tuple[dict[str, str], str, str]: Step outputs, output text and the step summary.
     """
     cell = expand(name, trigger.event)[check]
-    job = OWNED_FAN_IN[cell["os"]] if name == "owned" else name
-    job_step = next(step for step in jobs()[job]["steps"] if step.get("id") == "plan")
+    job_step = next(step for step in jobs()[cell_job(name, cell)]["steps"] if step.get("id") == "plan")
     assert job_step["uses"] == "./.github/actions/report-plan"
     values = {f"matrix.{key}": value for key, value in cell.items()} | classify_context(trigger)
     inputs = {f"inputs.{key}": render(value, values) for key, value in job_step["with"].items()}
@@ -285,6 +297,7 @@ def run_plan(
         capture_output=True,
         text=True,
         check=check_status,
+        timeout=30,
     )
     outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
     return outputs, result.stdout + result.stderr, summary.read_text()
@@ -310,8 +323,7 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
-    job = OWNED_FAN_IN[cell["os"]] if name == "owned" else name
-    return walk_steps(jobs()[job]["steps"], context)
+    return walk_steps(jobs()[cell_job(name, cell)]["steps"], context)
 
 
 def walk_steps(steps: list[dict[str, Any]], context: dict[str, Any]) -> set[str]:
@@ -535,12 +547,13 @@ def test_standalone_uploads_cannot_collide_between_stack_cells() -> None:
     assert len(names) == len(running) == 3
 
 
-def test_pull_requests_cancel_and_main_runs_complete() -> None:
-    """Supersede stale PR heads only."""
+def test_workflow_cancellation_is_pr_only() -> None:
+    """Supersede stale PR heads, never entire push or dispatch runs."""
     workflow = yaml.safe_load(WORKFLOW.read_text())
     expression = workflow["concurrency"]["cancel-in-progress"]
     assert evaluate(expression, {"github.event_name": "pull_request"}) is True
     assert evaluate(expression, {"github.event_name": "push"}) is False
+    assert evaluate(expression, {"github.event_name": "workflow_dispatch"}) is False
 
 
 def test_main_pushes_never_share_a_concurrency_group() -> None:
@@ -558,6 +571,147 @@ def test_main_pushes_never_share_a_concurrency_group() -> None:
         evaluate(inner, {"github.event_name": "push", "github.ref": "refs/heads/main", "github.sha": "abc"})
         == "abc"
     )
+
+
+def test_dispatch_admission_is_private_even_at_the_same_sha() -> None:
+    """Do not let a same-SHA push or dispatch evict a pending dispatch."""
+    group = yaml.safe_load(WORKFLOW.read_text())["concurrency"]["group"]
+    push = {"github.event_name": "push", "github.sha": "abc", "github.run_id": "1", "github.run_attempt": "1"}
+    dispatch = push | {"github.event_name": "workflow_dispatch", "github.run_id": "2"}
+    assert (
+        len(
+            {
+                render(group, push),
+                render(group, dispatch),
+                render(group, dispatch | {"github.run_id": "3"}),
+                render(group, dispatch | {"github.run_attempt": "2"}),
+            }
+        )
+        == 4
+    )
+
+
+def test_only_macos_execution_jobs_share_push_concurrency_groups() -> None:
+    """Supersede the same macOS cell across pushes, never a sibling, PR or dispatch."""
+    cells = {
+        "owned-shards-macos": shard_entries("macos-14", Trigger(event="push")),
+        **{name: list(expand_job(name, "push").values()) for name in ("contracts-macos", "stack-macos")},
+    }
+    cfg = jobs()
+    assert {name for name, job in cfg.items() if "concurrency" in job} == cells.keys()
+    for kind in ("contracts", "stack"):
+        ubuntu, macos = cfg[kind], cfg[f"{kind}-macos"]
+        for key in ("name", "needs", "runs-on", "steps", "defaults", "timeout-minutes"):
+            assert ubuntu[key] == macos[key]
+        assert ubuntu["strategy"]["fail-fast"] is macos["strategy"]["fail-fast"] is False
+    pr = {check for name in SPLIT_MATRICES for check in expand(name)}
+    assert pr == merge_pr_checks.EXPECTED_MATRIX
+
+    groups: set[str] = set()
+    for name, matrix in cells.items():
+        assert matrix
+        concurrency = cfg[name]["concurrency"]
+        for cell in matrix:
+            context = (
+                classify_context(Trigger(event="push"))
+                | {f"matrix.{key}": value for key, value in cell.items()}
+                | {
+                    "github.workflow": "CI",
+                    "github.ref": "refs/heads/main",
+                    "github.event_name": "push",
+                    "github.run_id": "1",
+                    "github.run_attempt": "1",
+                    "github.sha": "abc",
+                }
+            )
+            group = concurrency["group"]
+            cancel = concurrency["cancel-in-progress"]
+            push = render(group, context)
+            later = context | {"github.run_id": "2", "github.sha": "def", "matrix.runner": "xcode-27"}
+            assert render(group, later) == push
+            assert evaluate(cancel, context) is evaluate(cancel, later) is True
+            assert push not in groups
+            groups.add(push)
+            other_branch = context | {"github.ref": "refs/heads/other"}
+            assert evaluate(cancel, other_branch) is False
+            assert render(group, other_branch) != push
+            assert render(group, context | {"github.workflow": "other"}) != push
+            if name == "stack-macos":
+                assert render(group, context | {"matrix.stack": "personal"}) != push
+            dispatch = later | {"github.event_name": "workflow_dispatch"}
+            assert evaluate(cancel, dispatch) is False
+            assert (
+                len(
+                    {
+                        push,
+                        render(group, dispatch),
+                        render(group, dispatch | {"github.run_id": "3"}),
+                        render(group, dispatch | {"github.run_attempt": "2"}),
+                    }
+                )
+                == 4
+            )
+            pr = context | {"github.event_name": "pull_request", "github.ref": "refs/pull/42/merge"}
+            # Keep an executing plan here so the event guard is tested independently of classification.
+            assert not evaluate(cfg[name]["if"], pr)
+            assert evaluate(cancel, pr) is False
+            assert len({push, render(group, pr), render(group, pr | {"github.run_id": "2"})}) == 3
+            # Main normally executes all cells. Model a bypass for this cell without changing its key.
+            cell_key = {
+                "owned-shards-macos": "owned (macos-14)",
+                "contracts-macos": "contracts (macos-14)",
+                "stack-macos": "stack (macos-14, local)",
+            }[name]
+            plan = json.loads(later["needs.classify.outputs.plan"])
+            plan[cell_key]["run"] = False
+            for report in (
+                later | classify_context(Trigger(event="push", classify_result="failure")),
+                # The final reporting step can fail after the executing plan has been published.
+                later | {"needs.classify.result": "failure"},
+                later | {"needs.classify.outputs.plan": json.dumps(plan)},
+            ):
+                assert bool(evaluate(cfg[name]["if"], report)) is (name != "owned-shards-macos")
+                assert evaluate(cancel, report) is False
+                assert (
+                    len(
+                        {
+                            push,
+                            render(group, report),
+                            render(group, report | {"github.run_id": "3"}),
+                            render(group, report | {"github.run_attempt": "2"}),
+                        }
+                    )
+                    == 4
+                )
+
+
+@pytest.mark.parametrize(
+    ("event", "classify", "shards", "reports"),
+    [
+        ("push", "success", "cancelled", False),
+        ("push", "success", "failure", True),
+        ("push", "success", "success", True),
+        ("push", "success", "skipped", True),
+        ("push", "failure", "skipped", True),
+        ("push", "failure", "cancelled", True),
+        ("workflow_dispatch", "success", "cancelled", True),
+        ("workflow_dispatch", "success", "success", True),
+        ("pull_request", "success", "success", False),
+    ],
+)
+def test_macos_fan_in_skips_only_superseded_push_shards(
+    event: str, classify: str, shards: str, reports: bool
+) -> None:
+    """Skip the reporter before it can publish a red or NOT RUN receipt for superseded shards."""
+    context = {
+        "github.event_name": event,
+        "needs.classify.result": classify,
+        "needs.owned-shards-macos.result": shards,
+    }
+    cfg = jobs()
+    assert evaluate(cfg["owned-macos"]["if"], context) is reports
+    assert evaluate(cfg["owned-macos"]["if"], context | {"cancelled": "true"}) is False
+    assert evaluate(cfg["owned-ubuntu"]["if"], context) is True
 
 
 def test_dispatched_core_gates_never_cancel_each_other() -> None:
@@ -940,7 +1094,7 @@ def test_a_failed_classify_fails_all_four_required_checks_instead_of_skipping_th
     assert not any(shard_entries(os_name, trigger) for os_name in OWNED_SHARD_JOBS)
     for name in ("owned", "contracts", "stack"):
         for check, cell in expand(name, trigger.event).items():
-            job = jobs()[OWNED_FAN_IN[cell["os"]] if name == "owned" else name]
+            job = jobs()[cell_job(name, cell)]
             # The job still starts: its `if` holds when `needs.classify` did not succeed.
             context = {"needs.classify.result": result}
             assert evaluate(job["if"], context) is True
@@ -1132,7 +1286,10 @@ def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards()
             assert fan_in["env"]["WINDOWS_RESULT"] == "${{ needs.computer-use-windows.result }}"
             assert "packages/computer-use" in fan_in["env"]["WINDOWS_REQUIRED"]
         else:
-            assert set(fan_in["env"]) == {"SHARDS_RESULT"}
+            assert fan_in["env"] == {
+                "SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}",
+                "WINDOWS_REQUIRED": "false",
+            }
         assert fan_in["runs-on"] == "ubuntu-24.04"
 
 
@@ -1221,14 +1378,18 @@ def test_fan_in_requires_every_planned_shard(tmp_path: Path, result: str, passes
     """
     step = fan_in_step("Require every planned shard to succeed")
     assert step["if"] == "steps.plan.outputs.run == 'true'"
+    assert step["run"] == "python3 scripts/ci_require_shards.py"
+    assert not step.get("continue-on-error")
     script = tmp_path / "require.sh"
     script.write_text(step["run"])
     completed = subprocess.run(
         ["/bin/bash", "-e", str(script)],
-        env=os.environ | {"SHARDS_RESULT": result, "CELL": "owned (macos-14)"},
+        cwd=ROOT,
+        env=os.environ | {"SHARDS_RESULT": result, "CELL": "owned (macos-14)", "WINDOWS_REQUIRED": "false"},
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
     assert (completed.returncode == 0) is passes
     if passes:
@@ -1330,7 +1491,9 @@ def test_fan_in_refuses_a_report_two_shards_produced(tmp_path: Path) -> None:
         tmp_path (Path): Disposable directory.
     """
     report = "scripts/coverage/primary/lcov.info"
-    completed, workspace = run_merge(tmp_path, {"coverage-wsl2-a": [report], "coverage-wsl2-b": [report]})
+    completed, workspace = run_merge(
+        tmp_path, {"coverage-ubuntu-24.04-a": [report], "coverage-ubuntu-24.04-b": [report]}
+    )
     assert completed.returncode == 1
     assert (
         f"::error title=duplicate shard coverage::More than one shard produced: {report}" in completed.stdout
@@ -1464,8 +1627,8 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         *OWNED_SHARD_JOBS.values(),
         *OWNED_FAN_IN.values(),
         "computer-use-windows",
-        "contracts",
-        "stack",
+        *SPLIT_MATRICES["contracts"].values(),
+        *SPLIT_MATRICES["stack"].values(),
         "release-core",
     }
     assert cfg["release-core"] == {
@@ -1532,7 +1695,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         if path != WORKFLOW:
             # A control-test workflow may name the action in its path filter without invoking guest setup.
             assert "uses: ./.github/actions/setup-ci-wsl" not in path.read_text()
-            assert "wsl2_run.sh" not in path.read_text()
+            assert "scripts/wsl2_" not in path.read_text()
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:

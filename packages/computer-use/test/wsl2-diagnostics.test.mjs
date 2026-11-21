@@ -1,9 +1,9 @@
 // WSL2 guests cannot see Windows host windows; empty-window failures must say so (#672).
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 
 const WSL_TEXT = /Windows host windows are not reachable from the WSL2 guest.*nredd\/pi-harness#668/;
 
@@ -25,7 +25,7 @@ test("WSL detection reads the environment and kernel string", async () => {
 });
 
 test("Linux backend and find_roots explain empty windows under WSL2", async () => {
-	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-wsl2-"));
+	const tempDir = makeTestTempDir("pi-computer-use-wsl2-", onTestFinished);
 	const fakeHelper = path.join(tempDir, "linux-bridge");
 	await fs.writeFile(
 		fakeHelper,
@@ -105,6 +105,5 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	} finally {
 		delete process.env.PI_TEST_WSL_ROOTS_FILE;
 		Object.assign(wslProbe, realProbe);
-		await fs.rm(tempDir, { recursive: true, force: true });
 	}
 });

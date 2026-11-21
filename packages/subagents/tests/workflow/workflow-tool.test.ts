@@ -14,10 +14,10 @@
  * those are what these assertions are about — the mapping is.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../../src/agent-manager.ts";
 import { SUBAGENT_TOOL_NAMES } from "../../src/agent-runner.ts";
@@ -60,13 +60,15 @@ interface StubManager {
 /** A manager that spawns nothing; `settle` decides what each spawn produces. */
 function stubManager(
 	settle: (type: string, prompt: string, options: any) => Promise<AgentRecord> | AgentRecord = () => record(),
+	id = "agent-1",
 ): StubManager {
 	const abort = vi.fn();
 	const resume = vi.fn(async () => record({ id: "agent-1", result: "resumed" }));
 	const spawnAndWait = vi.fn(
 		async (_pi: any, _ctx: any, type: string, prompt: string, options: any, onSpawned?: (id: string) => void) => {
+			options.onPrepare?.(id);
+			onSpawned?.(id);
 			const settled = await settle(type, prompt, options);
-			onSpawned?.(settled.id);
 			return { id: settled.id, record: settled };
 		},
 	);
@@ -210,6 +212,8 @@ describe("createWorkflowHost — spawn mapping", () => {
 			ctx: ctx(),
 			manager: stub.manager,
 			workflowId: "wf_run1",
+			isRunning: () => true,
+			signal: new AbortController().signal,
 		});
 
 		await host.spawnAgent(request({}));
@@ -342,13 +346,13 @@ describe("createWorkflowHost — scopeModels", () => {
 			...overrides,
 		});
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		// `resolveEnabledModels` memoizes on the patterns plus the mtime/size of
 		// both settings files, so one case's allowlist would otherwise be served to
 		// the next — a fresh project dir per test is what invalidates it. Same
 		// harness as test/cross-extension-rpc.test.ts.
-		projectDir = mkdtempSync(join(tmpdir(), "wf-scope-project-"));
-		agentDir = mkdtempSync(join(tmpdir(), "wf-scope-global-"));
+		projectDir = makeTestTempDir("wf-scope-project-", onTestFinished);
+		agentDir = makeTestTempDir("wf-scope-global-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		prevEnabled = isScopeModelsEnabled();
@@ -383,8 +387,6 @@ describe("createWorkflowHost — scopeModels", () => {
 		setScopeModelsEnabled(prevEnabled); // module-global — restore for other suites
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-		rmSync(projectDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 		registerAgents(new Map());
 	});
 
@@ -472,13 +474,9 @@ describe("createWorkflowHost — scopeModels", () => {
 describe("createWorkflowHost — worktree cwd propagation", () => {
 	let worktree: string;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		registerAgents(new Map());
-		worktree = mkdtempSync(join(tmpdir(), "wf-worktree-"));
-	});
-
-	afterEach(() => {
-		rmSync(worktree, { recursive: true, force: true });
+		worktree = makeTestTempDir("wf-worktree-", onTestFinished);
 	});
 
 	it("reports the directory the child ran in, so a gate verifies that tree", async () => {
@@ -522,7 +520,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 	});
 
 	it("aborts the manager record the runtime's agent id stands for", async () => {
-		const stub = stubManager(() => record({ id: "manager-id-7" }));
+		const stub = stubManager(() => record({ id: "manager-id-7" }), "manager-id-7");
 		const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
 		await host.spawnAgent(request({ agentId: "wf-agent-3" }));
@@ -541,7 +539,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 	});
 
 	it("resumes the same manager record, long after that agent settled", async () => {
-		const stub = stubManager(() => record({ id: "manager-id-7" }));
+		const stub = stubManager(() => record({ id: "manager-id-7" }), "manager-id-7");
 		const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
 
 		await host.spawnAgent(request({ agentId: "wf-agent-0" }));
@@ -559,7 +557,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 			requestedThinking: "high",
 		});
 		let current: AgentRecord = record({ id: "manager-id-7", invocation: invocation("high") as never });
-		const stub = stubManager(() => current);
+		const stub = stubManager(() => current, current.id);
 		const getRecord = () => current;
 		const manager = { ...(stub.manager as object), getRecord } as unknown as AgentManager;
 		stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
@@ -579,7 +577,7 @@ describe("createWorkflowHost — abort, resume and gate", () => {
 	});
 
 	it("ignores a per-message relabel before the resumed child's model is known (#906)", async () => {
-		const stub = stubManager(() => record({ id: "manager-id-7" }));
+		const stub = stubManager(() => record({ id: "manager-id-7" }), "manager-id-7");
 		stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
 			options.onAssistantUsage();
 			return record({ id: "manager-id-7" });

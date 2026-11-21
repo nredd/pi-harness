@@ -155,7 +155,7 @@ def test_errors_and_measurement_only_are_explicit() -> None:
 
 
 def test_main_delta_compatibility_added_removed_and_missing() -> None:
-    """Never compare Linux and WSL or changed producer/counter semantics.
+    """Never compare different hosts or changed producer/counter semantics.
 
     Parameters:
         None.
@@ -175,7 +175,7 @@ def test_main_delta_compatibility_added_removed_and_missing() -> None:
         == "unavailable"
     )
     assert report.measured_delta(current, replace(current, plan=()), signal) == "added"
-    assert report.measured_delta(current, replace(current, host="wsl2"), signal) == "incompatible"
+    assert report.measured_delta(current, replace(current, host="macos-14"), signal) == "incompatible"
     assert (
         report.measured_delta(current, replace(current, plan=(replace(signal, semantics="other"),)), signal)
         == "incompatible"
@@ -274,11 +274,11 @@ def test_deterministic_ordering_and_bounded_whole_rows() -> None:
         report.render_markdown((current, current), PROVENANCE)
     with pytest.raises(ValueError, match=r"^Essential report state exceeds Markdown limit$"):
         report.render_markdown(
-            (current, replace(current, host="wsl2"), replace(current, host="macos-14")),
+            (current, replace(current, host="macos-14")),
             replace(
                 PROVENANCE,
-                repository="x" * 300 + "/repo",
-                workflow_ref="x" * 300 + "/repo/.github/workflows/ci.yml@refs/pull/1/merge",
+                repository="x" * 500 + "/repo",
+                workflow_ref="x" * 500 + "/repo/.github/workflows/ci.yml@refs/pull/1/merge",
             ),
             limit=1000,
         )

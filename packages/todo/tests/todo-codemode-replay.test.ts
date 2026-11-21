@@ -11,8 +11,7 @@
  * direct `todo list`.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type JsonObject } from "@earendil-works/pi-ai";
@@ -25,7 +24,8 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
 
@@ -39,7 +39,7 @@ describe("todo calls made through codemode survive session replay (#290)", () =>
 	let runtime: ModelRuntime;
 
 	beforeEach(async () => {
-		home = mkdtempSync(join(tmpdir(), "rpiv-todo-codemode-"));
+		home = makeTestTempDir("rpiv-todo-codemode-", onTestFinished);
 		agentDir = join(home, "agent");
 		cwd = join(home, "cwd");
 		sessionDir = join(home, "sessions");
@@ -63,7 +63,6 @@ describe("todo calls made through codemode survive session replay (#290)", () =>
 	afterEach(() => {
 		if (prevOffline === undefined) delete process.env.PI_OFFLINE;
 		else process.env.PI_OFFLINE = prevOffline;
-		rmSync(home, { recursive: true, force: true });
 	});
 
 	async function openSession(sessionManager: SessionManager): Promise<AgentSession> {

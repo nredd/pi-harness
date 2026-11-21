@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, open, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
-import { type CpuInfo, tmpdir } from "node:os";
+import { open, readdir, readFile, readlink, symlink, writeFile } from "node:fs/promises";
+import type { CpuInfo } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { Budget, command, darwinHostMemory, linuxProcesses, pressure } from "../src/collect.js";
 import {
 	cpuSnapshot,
@@ -392,24 +393,20 @@ vi.mock("node:fs/promises", async (original) => {
 
 describe("bounded executable links", () => {
 	it("charges readlink to the remaining byte budget and drops names beyond it", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "resource-sampler-"));
-		try {
-			const target = `/opt/${"d".repeat(100)}/tool`;
-			const link = join(dir, "exe");
-			await symlink(target, link);
-			const roomy = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
-			expect(await roomy.executable(link)).toBe("tool");
-			expect(roomy.bytesRead).toBe(target.length);
-			const tight = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
-			tight.bytesRead = 4096 - 50;
-			expect(await tight.executable(link)).toBe("");
-			expect(tight.bytesRead).toBe(4096);
-			expect([...tight.reasons]).toEqual(["byte-limit"]);
-			// The scan's next `status` read is refused, so the whole process is skipped, not kept unnamed.
-			await expect(tight.read(link)).rejects.toThrow("budget exhausted");
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
+		const dir = makeTestTempDir("resource-sampler-", onTestFinished);
+		const target = `/opt/${"d".repeat(100)}/tool`;
+		const link = join(dir, "exe");
+		await symlink(target, link);
+		const roomy = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+		expect(await roomy.executable(link)).toBe("tool");
+		expect(roomy.bytesRead).toBe(target.length);
+		const tight = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+		tight.bytesRead = 4096 - 50;
+		expect(await tight.executable(link)).toBe("");
+		expect(tight.bytesRead).toBe(4096);
+		expect([...tight.reasons]).toEqual(["byte-limit"]);
+		// The scan's next `status` read is refused, so the whole process is skipped, not kept unnamed.
+		await expect(tight.read(link)).rejects.toThrow("budget exhausted");
 	});
 	it("does not readlink once the scan budget is exhausted", async () => {
 		vi.mocked(readlink).mockClear();
@@ -430,22 +427,18 @@ describe("bounded executable links", () => {
 
 describe("bounded proc reads and Linux process collection", () => {
 	it("reads complete proc data, rejects a full bounded read, and preserves byte accounting", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "resource-sampler-read-"));
-		try {
-			const short = join(dir, "short");
-			const full = join(dir, "full");
-			await writeFile(short, "ok");
-			await writeFile(full, "x".repeat(4096));
-			const complete = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
-			expect(await complete.read(short)).toBe("ok");
-			expect(complete.bytesRead).toBe(2);
-			const truncated = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
-			await expect(truncated.read(full)).rejects.toThrow("proc file may be truncated");
-			expect(truncated.bytesRead).toBe(4096);
-			expect([...truncated.reasons]).toContain("file-byte-limit");
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
+		const dir = makeTestTempDir("resource-sampler-read-", onTestFinished);
+		const short = join(dir, "short");
+		const full = join(dir, "full");
+		await writeFile(short, "ok");
+		await writeFile(full, "x".repeat(4096));
+		const complete = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		expect(await complete.read(short)).toBe("ok");
+		expect(complete.bytesRead).toBe(2);
+		const truncated = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		await expect(truncated.read(full)).rejects.toThrow("proc file may be truncated");
+		expect(truncated.bytesRead).toBe(4096);
+		expect([...truncated.reasons]).toContain("file-byte-limit");
 	});
 	it("closes a proc file whose open outlived the deadline without reading it", async () => {
 		const close = vi.fn(async () => {});

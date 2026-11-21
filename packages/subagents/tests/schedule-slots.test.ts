@@ -1,9 +1,8 @@
 /** Slot claims: processes sharing a session fire each repeating slot once, and stale timers never fire. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.ts";
 import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.ts";
@@ -14,8 +13,8 @@ let dir: string;
 let path: string;
 const schedulers: SubagentScheduler[] = [];
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "slot-scheduler-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("slot-scheduler-", onTestFinished);
 	path = join(dir, "jobs.json");
 	registerAgents(new Map());
 	setFallbackSubagent(NO_FALLBACK);
@@ -26,7 +25,6 @@ afterEach(() => {
 	setFallbackSubagent(undefined);
 	vi.restoreAllMocks();
 	vi.useRealTimers();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 /** One simulated pi process: its own scheduler and store over the shared file. */

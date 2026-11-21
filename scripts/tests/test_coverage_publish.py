@@ -73,7 +73,8 @@ def test_sticky_comment_and_retry(tmp_path: Path, repository: str) -> None:
         if line.startswith(("#", "Coverage for PR", "Ubuntu enforced signals:"))
     ]
     assert not any("verified" in line.casefold() for line in headings)
-    assert pub.SCHEDULE in body
+    assert "macOS: NOT RUN (main/dispatch only). WSL2: no longer scheduled." in body.splitlines()
+    assert "WSL enforced signals:" not in body
     assert f"tested: {TESTED}" in body
     assert len(body) <= 60_000
     assert summary.read_text() == (body + "\n") * 2

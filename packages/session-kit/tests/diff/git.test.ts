@@ -1,17 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
-import {
-	chmodSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { loadDiff, loadStat, MAX_UNTRACKED_FILES, runGit, untrackedPatch } from "../../src/diff/git.ts";
 import { PER_FILE_BYTES } from "../../src/diff/parse.ts";
 import { alive, waitFor } from "../fixtures/monitor/helpers.ts";
@@ -51,14 +43,13 @@ const write = (name: string, content: string | Buffer) => {
 	writeFileSync(join(dir, name), content);
 };
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "psk-diff-test-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("psk-diff-test-", onTestFinished);
 	git("init", "-q", "-b", "main");
 });
 afterEach(() => {
 	vi.useRealTimers();
 	vi.mocked(spawn).mockReset();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 /**
@@ -85,13 +76,9 @@ function commitAll(msg = "c") {
 
 describe("loadDiff", () => {
 	it("reports a non-repo clearly", async () => {
-		const plain = mkdtempSync(join(tmpdir(), "psk-nogit-"));
-		try {
-			const r = await loadDiff(plain);
-			expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/not a git repository/) });
-		} finally {
-			rmSync(plain, { recursive: true, force: true });
-		}
+		const plain = makeTestTempDir("psk-nogit-", onTestFinished);
+		const r = await loadDiff(plain);
+		expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/not a git repository/) });
 	});
 
 	it("is empty on a clean tree", async () => {

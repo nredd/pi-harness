@@ -1,7 +1,21 @@
 /** Actual entry paths + manager, real Pi registry/resolver; only child execution is stubbed. */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { once } from "node:events";
+import * as fs from "node:fs";
+import {
+	chmodSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { createServer } from "node:net";
+import { join, parse, relative } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
@@ -24,6 +38,19 @@ import type { FleetUICtx } from "../src/ui/fleet-list.ts";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../src/ui/fleet-state.ts";
 import { createWorkflowHost } from "../src/workflow/host.ts";
 import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./fixtures/boot-extension.ts";
+
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return {
+		...fs,
+		fchmodSync: vi.fn(fs.fchmodSync),
+		fstatSync: vi.fn(fs.fstatSync),
+		mkdirSync: vi.fn(fs.mkdirSync),
+		lstatSync: vi.fn(fs.lstatSync),
+		openSync: vi.fn(fs.openSync),
+		realpathSync: vi.fn(fs.realpathSync),
+	};
+});
 
 vi.mock("../src/agent-runner.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof runner>()),
@@ -171,16 +198,17 @@ afterEach(async () => {
 	sandbox.restore();
 });
 
-describe("/agents propose-tiers", () => {
+describe("/agents tier proposals", () => {
 	const agentDir = () => process.env.PI_CODING_AGENT_DIR!;
 	const globalSettings = () => join(agentDir(), "subagents.json");
+	const enterpriseSettings = () => join(agentDir(), "enterprise.local.json");
 	const snapshot = (root: string) =>
 		readdirSync(root, { recursive: true, withFileTypes: true })
 			.map((entry) => {
 				const path = join(entry.parentPath, entry.name);
-				const digest = entry.isDirectory()
-					? "directory"
-					: createHash("sha256").update(readFileSync(path)).digest("hex");
+				const digest = entry.isFile()
+					? createHash("sha256").update(readFileSync(path)).digest("hex")
+					: String(lstatSync(path).mode);
 				return `${relative(root, path)}: ${digest}`;
 			})
 			.sort();
@@ -209,7 +237,7 @@ describe("/agents propose-tiers", () => {
 	}
 
 	it("returns headless without reading settings or profiles or emitting output", async () => {
-		const load = vi.spyOn(settings, "loadTrustedSettings");
+		const load = vi.spyOn(settings, "loadTierProposalSettings");
 		const list = vi.spyOn(registry, "getAll");
 		try {
 			expect(await runProposal(false)).not.toHaveBeenCalled();
@@ -222,7 +250,7 @@ describe("/agents propose-tiers", () => {
 	});
 
 	it("reports a throwing trusted settings read to the UI without exposing the raw error", async () => {
-		const load = vi.spyOn(settings, "loadTrustedSettings").mockImplementationOnce(() => {
+		const load = vi.spyOn(settings, "loadTierProposalSettings").mockImplementationOnce(() => {
 			throw new Error("synthetic private read failure");
 		});
 		try {
@@ -316,6 +344,775 @@ describe("/agents propose-tiers", () => {
 		const display = await preview();
 		expect(display).toContain("Skipped @cheap: a binding would shadow the legacy Explore alias.");
 		expect(JSON.parse(display.slice(display.indexOf("{")))).toEqual({ modelTiers: { default: ["router/default"] } });
+	});
+
+	async function apply(
+		confirm = vi.fn<(title: string, message: string) => Promise<boolean>>().mockResolvedValue(true),
+		hasUI = true,
+	) {
+		const notify = vi.fn<(message: string, level: string) => void>();
+		await boot.commands.get("agents").handler(
+			" apply-tiers ",
+			makeCtx({
+				hasUI,
+				cwd: sandbox.dir,
+				modelRegistry: registry,
+				ui: { notify, confirm },
+			}),
+		);
+		expect(admissionModels).toEqual([]);
+		expect(boot.pi.sendMessage).not.toHaveBeenCalled();
+		return { confirm, notify };
+	}
+
+	it("declining the exact proposal leaves settings and routing untouched", async () => {
+		const before = snapshot(agentDir());
+		const confirm = vi.fn(async () => false);
+		await apply(confirm);
+		expect(confirm).toHaveBeenCalledExactlyOnceWith(
+			"Save proposed modelTiers?",
+			'Add {"default":["router/default"]} to global subagents.json?',
+		);
+		expect(snapshot(agentDir())).toEqual(before);
+		expect(tierBinding("default")).toBeUndefined();
+	});
+
+	it("saves the confirmed exact matches globally and loads them from trusted settings", async () => {
+		register("frontier-extra");
+		register("review");
+		register("Deep");
+		const projectBefore = snapshot(sandbox.dir);
+		const { confirm, notify } = await apply();
+		const modelTiers = { default: ["router/default"], review: ["router/review"] };
+		expect(confirm).toHaveBeenCalledExactlyOnceWith(
+			"Save proposed modelTiers?",
+			`Add ${JSON.stringify(modelTiers)} to global subagents.json?`,
+		);
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers });
+		expect(settings.loadTrustedSettings().modelTiers).toEqual(modelTiers);
+		expect(snapshot(sandbox.dir)).toEqual(projectBefore);
+		expect(tierBinding("review")).toBeUndefined();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(
+			"Saved modelTiers to global subagents.json. Restart Pi to use the new bindings.",
+			"info",
+		);
+	});
+
+	it("preserves legacy aliases and unknown global settings while saving independent tiers", async () => {
+		register("cheap");
+		const original = {
+			modelAliases: { "Claude-Haiku-4-5": ["selection-path/definition"] },
+			futureOption: { active: true },
+		};
+		writeFileSync(globalSettings(), JSON.stringify(original));
+		const overlay = JSON.stringify({ version: 1, subagents: { modelResolution: { allowFallback: false } } });
+		writeFileSync(enterpriseSettings(), overlay, { mode: 0o600 });
+		const { confirm } = await apply();
+		expect(confirm).toHaveBeenCalledExactlyOnceWith(
+			"Save proposed modelTiers?",
+			'Add {"default":["router/default"]} to global subagents.json?',
+		);
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({
+			...original,
+			modelTiers: { default: ["router/default"] },
+		});
+		expect(readFileSync(enterpriseSettings(), "utf8")).toBe(overlay);
+	});
+
+	it.each(["global", "enterprise"])("does not request approval over an explicit %s map", async (layer) => {
+		// `router/default` is registered but must not replace this explicit binding.
+		const config = { modelTiers: layer === "global" ? { default: ["selection-path/definition"] } : {} };
+		if (layer === "global") writeFileSync(globalSettings(), JSON.stringify(config));
+		else writeFileSync(enterpriseSettings(), JSON.stringify({ version: 1, subagents: config }), { mode: 0o600 });
+		const before = snapshot(agentDir());
+		expect((await apply()).confirm).not.toHaveBeenCalled();
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("does not request approval or create settings without matching profiles", async () => {
+		registry.unregisterVirtualModel("router", "default");
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("No bindings proposed."), "info");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("does not request approval or create settings headless", async () => {
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply(undefined, false);
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it("preserves an explicit empty map added during confirmation", async () => {
+		const original = '{ "modelTiers": {} }';
+		const { notify } = await apply(
+			vi.fn(async () => {
+				writeFileSync(globalSettings(), original);
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("proposal changed"), "warning");
+		expect(readFileSync(globalSettings(), "utf8")).toBe(original);
+	});
+
+	it("does not save a stale proposal after profile registrations change", async () => {
+		const before = snapshot(agentDir());
+		const { notify } = await apply(
+			vi.fn(async () => {
+				register("review");
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("proposal changed"), "warning");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	const tiers = { default: ["router/default"] };
+	const member = '"modelTiers": {"default":["router/default"]}';
+	const spacedValue = `{"keep": "${" ".repeat(200_000)}"`;
+	const unusualKeys = String.raw`{"repeat": 1, "repeat": 2, "\"}{": 3`;
+	it.each([
+		["long string of spaces", `${spacedValue}  }\n`, `${spacedValue},${member}  }\n`],
+		["duplicate keys and an escaped quote and braces in a key", `${unusualKeys}}`, `${unusualKeys},${member}}`],
+		["empty compact object", "{}", `{${member}}`],
+		["empty spaced object", "{ }", `{ ${member} }`],
+		["empty multiline object", "{\n}\n", `{\n  ${member}\n}\n`],
+		["compact object with a member", '{"keep": 1}', `{"keep": 1,${member}}`],
+		["literal 9007199254740993", ' { "keep": 9007199254740993 }\n', ` { "keep": 9007199254740993, ${member} }\n`],
+		[
+			"nested object with CRLF and tabs",
+			'{\r\n\t"nested": {"list": [{"brace": "}𝄞"}]},\r\n\t"escaped": "\\u0061"\r\n}\r\n',
+			`{\r\n\t"nested": {"list": [{"brace": "}𝄞"}]},\r\n\t"escaped": "\\u0061",\r\n\t${member}\r\n}\r\n`,
+		],
+	])("inserts only modelTiers: %s", async (_name, source, expected) => {
+		writeFileSync(globalSettings(), source);
+		await apply();
+		expect(readFileSync(globalSettings())).toEqual(Buffer.from(expected));
+	});
+
+	it("aborts if even whitespace in the approved snapshot changes during confirmation", async () => {
+		writeFileSync(globalSettings(), '{"keep":1}\n');
+		const edited = '{"keep":1} \n';
+		const { notify } = await apply(
+			vi.fn(async () => {
+				writeFileSync(globalSettings(), edited);
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("run /agents apply-tiers again"), "warning");
+		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+	});
+
+	it("refuses to redirect an approved save through a retargeted agent-directory symlink", async () => {
+		const a = join(agentDir(), "a");
+		const b = join(agentDir(), "b");
+		const current = join(agentDir(), "current");
+		const source = '{"keep":1}\n';
+		for (const dir of [a, b]) {
+			mkdirSync(dir);
+			writeFileSync(join(dir, "subagents.json"), source);
+		}
+		symlinkSync(a, current, "junction");
+		const original = agentDir();
+		process.env.PI_CODING_AGENT_DIR = current;
+		try {
+			const { confirm, notify } = await apply(
+				vi.fn(async () => {
+					unlinkSync(current);
+					symlinkSync(b, current, "junction");
+					return true;
+				}),
+			);
+			expect(confirm).toHaveBeenCalledOnce();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("settings directory changed"), "warning");
+			for (const dir of [a, b]) {
+				expect(readdirSync(dir)).toEqual(["subagents.json"]);
+				expect(readFileSync(join(dir, "subagents.json"), "utf8")).toBe(source);
+			}
+		} finally {
+			process.env.PI_CODING_AGENT_DIR = original;
+		}
+	});
+
+	function swapAgentDirectory() {
+		const dir = agentDir();
+		const moved = join(sandbox.dir, "moved-agent-dir");
+		renameSync(dir, moved);
+		mkdirSync(dir);
+		return moved;
+	}
+
+	it("rejects a new directory at the same path before locking", async () => {
+		let moved = "";
+		const open = vi.mocked(fs.openSync);
+		const callsBefore = open.mock.calls.length;
+		const { notify } = await apply(
+			vi.fn(async () => {
+				moved = swapAgentDirectory();
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("settings directory changed"), "warning");
+		expect(open.mock.calls.slice(callsBefore).map(([path]) => path)).not.toContain(`${globalSettings()}.lock`);
+		expect(readdirSync(agentDir())).toEqual([]);
+		expect(readdirSync(moved)).not.toContain("subagents.json.lock");
+	});
+
+	it("rejects a same-path directory swap at the replacement boundary and leaves the planted lock", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const lock = `${globalSettings()}.lock`;
+		let moved = "";
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				moved = swapAgentDirectory();
+				writeFileSync(lock, "replacement process lock");
+			}),
+		).rejects.toThrow(/settings directory changed/);
+		expect(readdirSync(agentDir())).toEqual(["subagents.json.lock"]);
+		expect(readFileSync(lock, "utf8")).toBe("replacement process lock");
+		expect(lstatSync(join(moved, "subagents.json.lock")).isFile()).toBe(true);
+	});
+
+	it.each(["before open", "after open"])("rejects a directory swap %s of the lock", async (when) => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const lock = `${globalSettings()}.lock`;
+		const open = (await vi.importActual<typeof import("node:fs")>("node:fs")).openSync;
+		const spy = vi.mocked(fs.openSync);
+		const calls = spy.mock.calls.length;
+		let moved = "";
+		spy.mockImplementationOnce((...args) => {
+			expect(args[0]).toBe(lock);
+			if (when === "before open") moved = swapAgentDirectory();
+			const fd = open(...args);
+			if (when === "after open") moved = swapAgentDirectory();
+			return fd;
+		});
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
+		expect(spy.mock.calls.slice(calls).map(([path]) => path)).toEqual([lock]);
+		expect(readdirSync(agentDir())).toEqual([]);
+		expect(readdirSync(moved).some((name) => name.startsWith(".subagents-tiers-"))).toBe(false);
+	});
+
+	it("preserves an editor replacement during the final directory check", async () => {
+		const source = '{"keep":1}\n';
+		const edited = '{"keep":2}\n';
+		writeFileSync(globalSettings(), source);
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const realpath = (await vi.importActual<typeof import("node:fs")>("node:fs")).realpathSync;
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				vi.mocked(fs.realpathSync).mockImplementationOnce((...args) => {
+					const resolved = realpath(...args);
+					const edit = `${globalSettings()}.edit`;
+					writeFileSync(edit, edited);
+					renameSync(edit, globalSettings());
+					return resolved;
+				});
+			}),
+		).rejects.toThrow(/settings file was replaced/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+	});
+
+	it("cleans up its staging container even if creation raced a directory swap", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const stat = (await vi.importActual<typeof import("node:fs")>("node:fs")).lstatSync;
+		const check = vi.mocked(fs.lstatSync);
+		check.mockImplementationOnce(stat).mockImplementationOnce((...args) => {
+			const info = stat(...args);
+			expect(args[0]).toBe(agentDir());
+			swapAgentDirectory();
+			return info;
+		});
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
+		expect(readdirSync(agentDir())).toEqual([]);
+	});
+
+	it("does not publish or unlink a different staging file", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		let staged = "";
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				const container = readdirSync(agentDir()).find((name) => name.startsWith(".subagents-tiers-"))!;
+				staged = join(agentDir(), container, "subagents.json");
+				renameSync(staged, `${staged}.moved`);
+				writeFileSync(staged, "foreign contents");
+			}),
+		).rejects.toThrow(/staged settings file was replaced/);
+		expect(readFileSync(staged, "utf8")).toBe("foreign contents");
+		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
+	});
+
+	it("flat staging cannot change the approved bytes", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), 0o666);
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		await settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+			for (const name of readdirSync(agentDir()).filter((name) => name.startsWith(".subagents-tiers-"))) {
+				const entry = join(agentDir(), name);
+				const stat = lstatSync(entry);
+				if (!stat.isDirectory()) {
+					if (stat.mode & 0o002) writeFileSync(entry, '{"unapproved":true}\n');
+					continue;
+				}
+				if (process.platform !== "win32") expect(stat.mode & 0o777).toBe(0o700);
+				const payload = join(entry, "subagents.json");
+				if (lstatSync(payload).mode & 0o002 && process.platform !== "win32")
+					writeFileSync(payload, '{"unapproved":true}\n');
+			}
+		});
+		expect(readFileSync(globalSettings(), "utf8")).toBe('{"modelTiers": {"default":["router/default"]}}\n');
+		expect(readdirSync(agentDir())).toEqual(["subagents.json"]);
+	});
+
+	it("refuses to stage in a directory with non-private POSIX permissions", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const stat = (await vi.importActual<typeof import("node:fs")>("node:fs")).lstatSync;
+		vi.mocked(fs.lstatSync)
+			.mockImplementationOnce(stat)
+			.mockImplementationOnce(stat)
+			.mockImplementationOnce((...args) => {
+				const path = String(args[0]);
+				expect(path).toContain(".subagents-tiers-");
+				chmodSync(path, 0o755);
+				return stat(...args);
+			});
+		const save = settings.saveProposedModelTiers(tiers, approved);
+		if (process.platform === "win32") {
+			await save;
+			expect(readdirSync(agentDir())).toEqual(["subagents.json"]);
+		} else {
+			await expect(save).rejects.toThrow(/private staging directory/);
+			expect(readdirSync(agentDir())).toEqual([]);
+		}
+	});
+
+	it("refuses a staged entry that differs from the created descriptor", async () => {
+		const other = join(sandbox.dir, "other-inode");
+		writeFileSync(other, "foreign contents");
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const fstat = (await vi.importActual<typeof import("node:fs")>("node:fs")).fstatSync;
+		vi.mocked(fs.fstatSync)
+			.mockImplementationOnce(fstat)
+			.mockReturnValueOnce(lstatSync(other, { bigint: true }));
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/staged settings file was replaced/);
+		expect(readFileSync(other, "utf8")).toBe("foreign contents");
+		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
+	});
+
+	it("cleans up staging when the payload's first fstat fails", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const fstat = (await vi.importActual<typeof import("node:fs")>("node:fs")).fstatSync;
+		const error = Object.assign(new Error("synthetic payload metadata failure"), { code: "EIO" });
+		vi.mocked(fs.fstatSync)
+			.mockImplementationOnce(fstat)
+			.mockImplementationOnce(() => {
+				throw error;
+			});
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(error);
+		expect(readdirSync(agentDir())).toEqual([]);
+	});
+
+	it("does not unlink a different lock planted in the approved directory", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const lock = `${globalSettings()}.lock`;
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				renameSync(lock, `${lock}.moved`);
+				writeFileSync(lock, "replacement process lock");
+				throw new Error("abort replacement");
+			}),
+		).rejects.toThrow(/abort replacement/);
+		expect(readFileSync(lock, "utf8")).toBe("replacement process lock");
+	});
+
+	it("refuses a replaced file even when its mode and bytes match the proposal", async () => {
+		const source = '{"keep":1}\n';
+		const replacement = `${globalSettings()}.replacement`;
+		writeFileSync(globalSettings(), source);
+		writeFileSync(replacement, source);
+		const replacedInode = lstatSync(replacement, { bigint: true }).ino;
+		const { notify } = await apply(
+			vi.fn(async () => {
+				renameSync(replacement, globalSettings());
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("settings file was replaced"), "warning");
+		expect(readFileSync(globalSettings(), "utf8")).toBe(source);
+		expect(lstatSync(globalSettings(), { bigint: true }).ino).toBe(replacedInode);
+	});
+
+	it("preserves edits made at the replacement boundary and cleans up its lock", async () => {
+		writeFileSync(globalSettings(), '{"keep":1}\n');
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const edited = '{"keep":2}\n';
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				expect(lstatSync(`${globalSettings()}.lock`).isFile()).toBe(true);
+				writeFileSync(globalSettings(), edited);
+			}),
+		).rejects.toThrow(/run \/agents apply-tiers again/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+		expect(readdirSync(agentDir())).not.toContain("subagents.json.lock");
+		expect(readdirSync(agentDir()).some((name) => name.startsWith(".subagents-tiers-"))).toBe(false);
+	});
+
+	it("creates a missing agent directory only after approval", async () => {
+		const target = join(agentDir(), "missing", "agent");
+		vi.stubEnv("PI_CODING_AGENT_DIR", target);
+		try {
+			await apply(
+				vi.fn(async () => {
+					expect(lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
+					return true;
+				}),
+			);
+			expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("refuses an agent-directory path that resolves to a regular file", async () => {
+		const path = join(agentDir(), "not-a-directory");
+		writeFileSync(path, "keep me");
+		vi.stubEnv("PI_CODING_AGENT_DIR", path);
+		try {
+			const { confirm, notify } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(
+				expect.stringContaining("Expected a global settings directory"),
+				"error",
+			);
+			expect(readFileSync(path, "utf8")).toBe("keep me");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("rejects a dangling agent-directory symlink instead of creating its target", async () => {
+		const current = join(agentDir(), "current");
+		const absent = join(agentDir(), "absent");
+		symlinkSync(absent, current, "junction");
+		vi.stubEnv("PI_CODING_AGENT_DIR", current);
+		try {
+			const { confirm } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(lstatSync(absent, { throwIfNoEntry: false })).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it.each(["ENOENT", "EACCES"])("propagates an unresolved filesystem root: %s", (code) => {
+		vi.stubEnv("PI_CODING_AGENT_DIR", parse(agentDir()).root);
+		try {
+			const error = Object.assign(new Error("synthetic realpath failure"), { code });
+			vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
+				throw error;
+			});
+			expect(() => settings.loadTierProposalSettings(true)).toThrow(error);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("rejects a different inode opened after the first lstat", () => {
+		writeFileSync(globalSettings(), "{}\n");
+		const other = `${globalSettings()}.other`;
+		writeFileSync(other, "{}\n");
+		vi.mocked(fs.fstatSync).mockReturnValueOnce(lstatSync(other, { bigint: true }));
+		expect(() => settings.loadTierProposalSettings(true)).toThrow(settings.TierSettingsChangedError);
+	});
+
+	it("reports an unexpected lock failure without saving", async () => {
+		const { notify } = await apply(
+			vi.fn(async () => {
+				vi.mocked(fs.openSync).mockImplementationOnce(() => {
+					throw Object.assign(new Error("synthetic lock permission failure"), { code: "EACCES" });
+				});
+				return true;
+			}),
+		);
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Check the trusted configuration"), "error");
+		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
+	});
+
+	it("serializes two cooperating saves from the same snapshot", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const results = await Promise.allSettled([
+			settings.saveProposedModelTiers(tiers, approved),
+			settings.saveProposedModelTiers({ review: ["router/review"] }, approved),
+		]);
+		expect(results[0]).toEqual({ status: "fulfilled", value: undefined });
+		expect(results[1]).toMatchObject({ status: "rejected", reason: expect.any(settings.TierSettingsChangedError) });
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+	});
+
+	it("fails closed when the lock is held and leaves it alone", async () => {
+		writeFileSync(`${globalSettings()}.lock`, "held");
+		const before = snapshot(agentDir());
+		const { notify } = await apply();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("holds the global settings lock"), "error");
+		expect(snapshot(agentDir())).toEqual(before);
+	});
+
+	it.each(["not JSON", "null", "42", "[]", Buffer.from([0x7b, 0xff, 0x7d])])(
+		"refuses to replace invalid global config: %s",
+		async (raw) => {
+			writeFileSync(globalSettings(), raw);
+			const before = snapshot(agentDir());
+			const { confirm, notify } = await apply();
+			expect(confirm).not.toHaveBeenCalled();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(
+				"Could not read trusted settings or registered router profiles for the tier proposal.",
+				"error",
+			);
+			expect(snapshot(agentDir())).toEqual(before);
+		},
+	);
+
+	async function expectNonregularRefused() {
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(
+			expect.stringContaining("Expected a regular global settings file"),
+			"error",
+		);
+		expect(snapshot(agentDir())).toEqual(before);
+	}
+
+	it("refuses a directory or symlink to a directory before reading", async () => {
+		const directory = `${globalSettings()}.directory`;
+		mkdirSync(directory);
+		symlinkSync(directory, globalSettings(), "junction");
+		await expectNonregularRefused();
+	});
+
+	it("refuses a nonregular target before reading", async () => {
+		if (process.platform === "win32") mkdirSync(globalSettings());
+		else execFileSync("mkfifo", [globalSettings()]);
+		await expectNonregularRefused();
+	});
+
+	it("refuses a Unix socket before reading (directory on Windows)", async () => {
+		if (process.platform === "win32") {
+			mkdirSync(globalSettings());
+			await expectNonregularRefused();
+			return;
+		}
+		const server = createServer();
+		const cwd = process.cwd();
+		// A relative bind keeps the socket address below sun_path's limit even
+		// when the isolated runner nests this hermetic agent directory deeply.
+		process.chdir(agentDir());
+		try {
+			server.listen("subagents.json");
+			await once(server, "listening");
+			try {
+				expect(lstatSync(globalSettings()).isSocket()).toBe(true);
+				await expectNonregularRefused();
+			} finally {
+				const closed = once(server, "close");
+				server.close();
+				await closed;
+			}
+		} finally {
+			process.chdir(cwd);
+		}
+	});
+
+	async function expectNoWriteAccess() {
+		const before = snapshot(agentDir());
+		const { confirm, notify } = await apply();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("No write access"), "error");
+		expect(snapshot(agentDir())).toEqual(before);
+	}
+
+	it("refuses to replace a read-only 0444 global settings file", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), 0o444);
+		try {
+			await expectNoWriteAccess();
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	function canOpenForWrite(path: string): boolean {
+		try {
+			fs.closeSync(fs.openSync(path, "r+"));
+			return true;
+		} catch (error) {
+			if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+			return false;
+		}
+	}
+
+	async function expectEffectiveWriteAccess() {
+		if (canOpenForWrite(globalSettings())) {
+			const { notify } = await apply();
+			expect(notify).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Saved modelTiers"), "info");
+			expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+		} else await expectNoWriteAccess();
+	}
+
+	it("refuses 0444 even if a privileged write-capable open succeeds", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o444 });
+		const fd = fs.openSync(globalSettings(), "r");
+		// Simulate DAC override without requiring a privileged test worker.
+		vi.mocked(fs.openSync).mockReturnValueOnce(fd);
+		try {
+			await expectNoWriteAccess();
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("does not read a proposal if the preview open fails", () => {
+		writeFileSync(globalSettings(), "{}\n");
+		const error = new Error("synthetic read failure");
+		vi.mocked(fs.openSync).mockImplementationOnce(() => {
+			throw error;
+		});
+		expect(() => settings.loadTierProposalSettings(false)).toThrow(error);
+	});
+
+	it("honors effective access on a 0464 file owned by the caller (0444 on Windows)", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
+		try {
+			if (process.platform === "win32") await expectNoWriteAccess();
+			else await expectEffectiveWriteAccess();
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("refuses a macOS ACL write deny (0464 mode deny on other Unix hosts)", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		try {
+			if (process.platform === "darwin") {
+				const owner = execFileSync("id", ["-un"], { encoding: "utf8" }).trim();
+				execFileSync("chmod", ["+a", `${owner} deny write`, globalSettings()]);
+			} else {
+				chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : 0o464);
+			}
+			if (process.platform === "win32") await expectNoWriteAccess();
+			else await expectEffectiveWriteAccess();
+		} finally {
+			if (process.platform === "darwin") execFileSync("chmod", ["-N", globalSettings()]);
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it.each(["preview", "replacement"])("requires a non-truncating write open at %s", async (boundary) => {
+		const source = '{"keep":1}\n';
+		writeFileSync(globalSettings(), source, { mode: 0o600 });
+		const open = vi.mocked(fs.openSync);
+		const deny = () =>
+			open.mockImplementationOnce(() => {
+				throw Object.assign(new Error("synthetic write denial"), { code: "EACCES" });
+			});
+		if (boundary === "preview") {
+			deny();
+			await expectNoWriteAccess();
+		} else {
+			const { snapshot: approved } = settings.loadTierProposalSettings(true);
+			await expect(
+				settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+					deny();
+				}),
+			).rejects.toThrow(/No write access/);
+		}
+		const [path, flags] = open.mock.lastCall ?? [];
+		expect(path).toBe(globalSettings());
+		expect(typeof flags).toBe("number");
+		expect(Number(flags) & (fs.constants.O_WRONLY | fs.constants.O_RDWR)).not.toBe(0);
+		expect(Number(flags) & fs.constants.O_TRUNC).toBe(0);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(source);
+	});
+
+	it("rechecks access at the replacement boundary", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		try {
+			await expect(
+				settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+					chmodSync(globalSettings(), 0o444);
+				}),
+			).rejects.toThrow(/No write access/);
+			expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+		} finally {
+			chmodSync(globalSettings(), 0o600);
+		}
+	});
+
+	it("preserves the original mode on replacement", async () => {
+		writeFileSync(globalSettings(), "{}\n");
+		chmodSync(globalSettings(), process.platform === "win32" ? 0o640 : 0o1640);
+		const mode = lstatSync(globalSettings()).mode & 0o7777;
+		if (process.platform === "darwin" || process.platform === "linux") expect(mode).toBe(0o1640);
+		await apply();
+		expect(JSON.parse(readFileSync(globalSettings(), "utf8"))).toEqual({ modelTiers: tiers });
+		expect(lstatSync(globalSettings()).mode & 0o7777).toBe(mode);
+	});
+
+	it("refuses replacement if the destination cannot retain the approved mode", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const chmod = (await vi.importActual<typeof import("node:fs")>("node:fs")).fchmodSync;
+		vi.mocked(fs.fchmodSync).mockImplementationOnce((fd) => chmod(fd, 0o444));
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/Cannot preserve/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+	});
+
+	it("refuses to lock a newly created directory that disappears", async () => {
+		const path = join(agentDir(), "missing");
+		vi.stubEnv("PI_CODING_AGENT_DIR", path);
+		try {
+			const { snapshot: approved } = settings.loadTierProposalSettings(true);
+			// Simulate disappearance at the mkdir boundary by making the leaf mkdir a no-op.
+			vi.mocked(fs.mkdirSync)
+				.mockImplementationOnce(() => undefined)
+				.mockImplementationOnce(() => undefined);
+			await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
+			expect(lstatSync(path, { throwIfNoEntry: false })).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("rejects a mode-only change at replacement (sticky bit on Unix)", async () => {
+		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const maskedMode = () => lstatSync(globalSettings()).mode & 0o7777;
+		const mode = maskedMode();
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				// Windows chmod only supports the writable toggle.
+				chmodSync(globalSettings(), process.platform === "win32" ? 0o444 : mode | 0o1000);
+				expect(maskedMode()).not.toBe(mode);
+			}),
+		).rejects.toThrow(process.platform === "win32" ? /No write access/ : /Global settings changed/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
+		chmodSync(globalSettings(), 0o600);
+	});
+
+	it.each(["global", "enterprise"])("the writer refuses to save over an existing %s tier field", async (layer) => {
+		const config = { modelTiers: null };
+		if (layer === "global") writeFileSync(globalSettings(), JSON.stringify(config));
+		else writeFileSync(enterpriseSettings(), JSON.stringify({ version: 1, subagents: config }), { mode: 0o600 });
+		const before = snapshot(agentDir());
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/modelTiers/);
+		expect(snapshot(agentDir())).toEqual(before);
 	});
 });
 

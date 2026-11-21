@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as jsonl from "../../src/stats/jsonl.ts";
 import * as load from "../../src/stats/load.ts";
@@ -11,12 +11,11 @@ import { call, header, info, timestamp, writeSession } from "../fixtures/subagen
 
 let root: string;
 const file = (name: string, entries: unknown[]) => writeSession(root, name, entries);
-beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "agent-report-boundaries-"));
+beforeEach(async ({ onTestFinished }) => {
+	root = makeTestTempDir("agent-report-boundaries-", onTestFinished);
 });
 afterEach(async () => {
 	vi.restoreAllMocks();
-	await rm(root, { recursive: true, force: true });
 });
 
 it("keeps initial review spend separate from a resumed run", async () => {

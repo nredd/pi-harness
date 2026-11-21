@@ -595,7 +595,7 @@ func currentKeyboardInputSource() -> KeyboardInputSource {
 }
 // END KEYBOARD LAYOUT
 
-private struct LookRecord {
+struct LookRecord {
 	let lookId: String
 	let windowId: UInt32
 	/// Native root ref the look was taken from; the only identity for unpaired roots (windowId 0).
@@ -604,6 +604,121 @@ private struct LookRecord {
 	let imageWidth: Int
 	let imageHeight: Int
 	let hasImage: Bool
+}
+
+struct ActScrollRequest {
+	let targetPid: Int32
+	let scrollX: Int
+	let scrollY: Int
+	let steps: Int
+	let point: CGPoint?
+}
+
+/// Native boundaries for an action. The headless world supplies every operation, with no live fallback.
+struct ActWorld {
+	typealias ScrollBarWrite = (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)
+	let lookRecord: (String) -> LookRecord?
+	let cachedElement: (String) -> AXUIElement?
+	let refindElement: (String, Int32, UInt32?, String?) -> AXUIElement?
+	let copyAttribute: (AXUIElement, CFString) -> CFTypeRef?
+	let stringAttribute: (AXUIElement, CFString) -> String?
+	let frame: (AXUIElement) -> CGRect?
+	let hasAncestorRole: (AXUIElement, String) -> Bool
+	let supportsAction: (AXUIElement, CFString) -> Bool
+	let performAction: (AXUIElement, CFString) -> AXError
+	let setAttribute: (AXUIElement, CFString, CFTypeRef) -> AXError
+	let hitTest: (CGPoint) -> AXUIElement?
+	let sameElement: (AXUIElement, AXUIElement) -> Bool
+	let isDescendant: (AXUIElement, AXUIElement) -> Bool
+	let describeElement: (AXUIElement) -> String
+	let sheetCount: (Int32, LookRecord) -> Int?
+	let focusedWindow: (Int32) -> String
+	let activateIfInactive: (Int32) -> Bool?
+	let raiseWindow: (Int32, LookRecord) -> Bool?
+	let animateCursor: (CGPoint, UInt32) -> Void
+	let requireTargetFocus: (Int32) throws -> Void
+	let refuseBlockedKeyboard: ([String]) throws -> Void
+	let refuseBlockedPoints: ([CGPoint], [String]) throws -> Void
+	let beginRootDelta: (Int32) -> ([String: Any]) -> [String: Any]
+	let lockInput: () -> Void
+	let unlockInput: () -> Void
+	let sleep: (useconds_t) -> Void
+	let scrollSignature: (AXUIElement) -> String
+	let scrollAction: (AXUIElement, ActScrollRequest) -> [String: Any]
+	let scrollBar: (AXUIElement, ActScrollRequest) -> ScrollBarWrite?
+	let postMouseClick: (CGPoint, Int32, CGMouseButton, Int, String) throws -> Void
+	let postMouseMove: (CGPoint, Int32, String) throws -> Void
+	let postScrollWheel: (CGPoint, Int, Int, Int32, String) throws -> Void
+	let postMouseDrag: ([CGPoint], Int32, String) throws -> Void
+	let postKeyPress: ([String], Int32, String) throws -> Void
+	let postKeyCode: (CGKeyCode, CGEventFlags, Int32, String) throws -> Void
+	let postUnicodeText: (String, Int32, String) throws -> Void
+	let postAtomicUnicodeText: (String, Int32, String) throws -> Void
+	let snapshotClipboard: (String) -> (write: () throws -> Void, restore: () -> Bool)
+	let pasteKeyCode: () -> UInt16?
+}
+
+/// AX reads and writes for scroll traversal. The traversal owns ancestry and PID checks.
+struct AXScrollWorld {
+	let pid: (AXUIElement) -> Int32?
+	let parent: (AXUIElement) -> AXUIElement?
+	let supportsAction: (AXUIElement, CFString) -> Bool
+	let performAction: (AXUIElement, CFString) -> AXError
+	let role: (AXUIElement) -> String?
+	let hitTest: (CGPoint, Int32?) -> AXUIElement?
+	let sameElement: (AXUIElement, AXUIElement) -> Bool
+	let writeBar: (AXUIElement, String, Int, Bool) -> (write: ScrollAxisWrite, value: Double?)
+}
+
+/// Event creation and delivery boundaries; the sequencer still owns ordering and delays.
+struct NativeInputSink {
+	let mouseEvent: (CGEventType, CGPoint, CGMouseButton) -> CGEvent?
+	let wheelEvent: (Int32, Int32) -> CGEvent?
+	let keyEvent: (CGKeyCode, Bool) -> CGEvent?
+	let postToPid: (CGEvent, Int32) -> Void
+	let postHID: (CGEvent, Int32) -> Void
+	let sleep: (useconds_t) -> Void
+	let keyboardInputSource: () -> KeyboardInputSource
+	var checkCancellation: (() throws -> Void)?
+
+	func checkDragCancellation() throws {
+		try Task.checkCancellation()
+		try checkCancellation?()
+	}
+
+	static func createMouseEvent(_ type: CGEventType, _ point: CGPoint, _ button: CGMouseButton) -> CGEvent? {
+		CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
+	}
+
+	static func createWheelEvent(_ vertical: Int32, _ horizontal: Int32) -> CGEvent? {
+		CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0)
+	}
+
+	static func createKeyEvent(_ code: CGKeyCode, _ down: Bool) -> CGEvent? {
+		CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+	}
+
+	static let live = NativeInputSink(
+		mouseEvent: createMouseEvent,
+		wheelEvent: createWheelEvent,
+		keyEvent: createKeyEvent,
+		postToPid: { $0.postToPid($1) },
+		postHID: { event, pid in
+			// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
+			// target frontmost when posting at the HID event tap instead.
+			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
+				if #available(macOS 14.0, *) {
+					_ = app.activate()
+				} else {
+					_ = app.activate(options: [.activateIgnoringOtherApps])
+				}
+				usleep(20_000)
+			}
+			event.post(tap: .cghidEventTap)
+		},
+		sleep: { _ = usleep($0) },
+		keyboardInputSource: currentKeyboardInputSource
+	)
 }
 
 private struct RootAXEvent {
@@ -724,6 +839,11 @@ final class Box<T> {
 	}
 }
 
+/// A disabled tap is re-enabled, and its notification is passed through rather than swallowed.
+func suppressionTapShouldReenable(_ type: CGEventType) -> Bool {
+	type == .tapDisabledByTimeout || type == .tapDisabledByUserInput
+}
+
 final class InputSuppressionGuard {
 	static let maxSuppressionSeconds: TimeInterval = 30
 
@@ -766,7 +886,7 @@ final class InputSuppressionGuard {
 		let callback: CGEventTapCallBack = { _proxy, type, event, userInfo in
 			guard let userInfo else { return Unmanaged.passUnretained(event) }
 			let inputGuard = Unmanaged<InputSuppressionGuard>.fromOpaque(userInfo).takeUnretainedValue()
-			if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+			if suppressionTapShouldReenable(type) {
 				inputGuard.reenableTap()
 				return Unmanaged.passUnretained(event)
 			}
@@ -870,6 +990,7 @@ final class Bridge {
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
+	private let inputSink: NativeInputSink
 	private let supportsAgentCursor = CommandLine.arguments.contains("serve")
 	private let browserBundleIds: Set<String> = [
 		"com.apple.Safari", "com.google.Chrome", "org.chromium.Chromium", "company.thebrowser.Browser", "com.brave.Browser", "com.microsoft.edgemac", "com.vivaldi.Vivaldi", "net.imput.helium", "org.mozilla.firefox",
@@ -888,9 +1009,11 @@ final class Bridge {
 		dispatchRequest: (([String: Any], UUID?) throws -> Any)? = nil,
 		readSession: @escaping () -> [String: Any]? = { CGSessionCopyCurrentDictionary() as? [String: Any] },
 		writeOutput: @escaping (Data) throws -> Void = { try FileHandle.standardOutput.write(contentsOf: $0) },
-		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) }
+		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) },
+		inputSink: NativeInputSink = .live
 	) {
 		self.activityGlow = activityGlow
+		self.inputSink = inputSink
 		self.dispatchRequest = dispatchRequest
 		self.readSession = readSession
 		self.writeOutput = writeOutput
@@ -1116,7 +1239,10 @@ final class Bridge {
 		return recentCompletedRequestIds
 	}
 
-	func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
+	func handleRequest(
+		_ request: [String: Any], clientID: UUID?,
+		discoverRoots: ((Int32?, String?) throws -> [String: Any])? = nil
+	) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
 		if let refusal = lockedSessionRefusal(cmd: cmd, session: readSession()) {
 			throw BridgeFailure(message: refusal.message, code: refusal.code)
@@ -1149,9 +1275,13 @@ final class Bridge {
 		case "listApps":
 			return listApps()
 		case "listWindows":
-			return try listWindows(pid: Int32(try intArg(request, "pid")))
+			return try listWindows(pid: pidArg(request))
 		case "listRoots":
-			return try listRoots(pid: optionalIntArg(request, "pid").map { Int32($0) }, title: optionalStringArg(request, "title"))
+			// Missing, null and nonnumeric filters previously meant broad discovery. Never truncate numeric filters.
+			let pid = try request["pid"] is NSNumber ? pidArg(request) : nil
+			let title = optionalStringArg(request, "title")
+			if let discoverRoots { return try discoverRoots(pid, title) }
+			return try listRoots(pid: pid, title: title)
 		case "getFrontmost":
 			return try getFrontmost()
 		case "getUserContext":
@@ -1216,6 +1346,13 @@ final class Bridge {
 			return Int(value)
 		}
 		throw BridgeFailure(message: "Missing integer argument '\(key)'", code: "invalid_args")
+	}
+
+	private func pidArg(_ request: [String: Any]) throws -> Int32 {
+		guard let raw = request["pid"] as? Int, let pid = Int32(exactly: raw) else {
+			throw BridgeFailure(message: "pid must be a 32-bit integer", code: "invalid_args")
+		}
+		return pid
 	}
 
 	/// `windowId` from the wire, treating invalid ids as absent (unpaired roots have no CG window).
@@ -1566,7 +1703,7 @@ final class Bridge {
 	}
 
 	private func restoreUserFocus(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let targetTitle = optionalStringArg(request, "windowTitle")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 		guard let app = NSRunningApplication(processIdentifier: pid) else {
 			throw BridgeFailure(message: "App with pid \(pid) is no longer running", code: "app_not_found")
@@ -1603,7 +1740,7 @@ final class Bridge {
 	}
 
 	private func setWindowFrame(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
@@ -1630,7 +1767,7 @@ final class Bridge {
 	}
 
 	private func focusWindow(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
@@ -1710,16 +1847,15 @@ final class Bridge {
 				return (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
 			})
 			apps = listApps(cgEntries: entries).filter { app in
-				guard let rawPid = app["pid"] as? Int else { return false }
-				return matchingPids.contains(Int32(rawPid))
+				guard let rawPid = app["pid"] as? Int, let pid = Int32(exactly: rawPid) else { return false }
+				return matchingPids.contains(pid)
 			}
 		} else {
 			apps = broadRootCandidateApps(entries: entries)
 		}
 		var roots: [[String: Any]] = []
 		for app in apps {
-			guard let rawPid = app["pid"] as? Int else { continue }
-			let appPid = Int32(rawPid)
+			guard let rawPid = app["pid"] as? Int, let appPid = Int32(exactly: rawPid) else { continue }
 			let appName = app["appName"] as? String ?? processName(pid: appPid) ?? "Unknown App"
 			let bundleId = app["bundleId"] as? String
 			for var root in (try? listWindows(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)) ?? [] {
@@ -2411,12 +2547,65 @@ final class Bridge {
 		return payloadNode(element: element)
 	}
 
+	func actionWorld() -> ActWorld {
+		let scroll = scrollWorld()
+		return ActWorld(
+			lookRecord: lookRecord(for:), cachedElement: refStore.element(for:), refindElement: refindElement(ref:pid:windowId:windowRef:),
+			copyAttribute: copyAttribute(_:attribute:), stringAttribute: stringAttribute(_:attribute:), frame: frameForElement,
+			hasAncestorRole: hasAncestorRole(_:role:), supportsAction: supportsAction(_:action:),
+			performAction: AXUIElementPerformAction, setAttribute: AXUIElementSetAttributeValue,
+			hitTest: { self.hitTestElement(at: $0) }, sameElement: sameElement, isDescendant: isElement(_:descendantOf:),
+			describeElement: { "\(self.payloadNode(element: $0))" },
+			sheetCount: { pid, record in
+				self.windowElement(pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef).map { self.sheetElements(of: $0).count }
+			},
+			focusedWindow: focusedWindowSummary(pid:),
+			activateIfInactive: { pid in
+				guard let app = NSRunningApplication(processIdentifier: pid), !app.isActive else { return nil }
+				return app.activate()
+			},
+			raiseWindow: { pid, record in
+				guard let window = self.windowElement(pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef) else { return nil }
+				_ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+				_ = AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				return AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
+			},
+			animateCursor: { point, windowId in Task { @MainActor in AgentCursor.shared.animate(to: point, above: windowId) } },
+			requireTargetFocus: requireTargetFocus(pid:), refuseBlockedKeyboard: refuseBlockedKeyboardTarget(blocked:),
+			refuseBlockedPoints: refuseBlockedPoints(_:blocked:), beginRootDelta: beginActRootDelta(pid:),
+			lockInput: physicalInputLock.lock, unlockInput: physicalInputLock.unlock, sleep: { _ = usleep($0) },
+			scrollSignature: scrollPositionSignature,
+			scrollAction: { self.performScrollActionOrAncestor(startingAt: $0, request: $1, world: scroll) },
+			scrollBar: { self.setScrollBarValueOrAncestor(startingAt: $0, request: $1, world: scroll) },
+			postMouseClick: postMouseClick(at:pid:button:clickCount:delivery:), postMouseMove: postMouseMove(to:pid:delivery:),
+			postScrollWheel: postScrollWheel(at:deltaX:deltaY:pid:delivery:), postMouseDrag: postMouseDrag(points:pid:delivery:),
+			postKeyPress: postKeyPress(keys:pid:delivery:), postKeyCode: postKeyCode(_:flags:pid:delivery:),
+			postUnicodeText: postUnicodeText(_:pid:delivery:), postAtomicUnicodeText: postAtomicUnicodeText(_:pid:delivery:),
+			snapshotClipboard: snapshotClipboard, pasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }
+		)
+	}
+
+	private func beginActRootDelta(pid: Int32) -> ([String: Any]) -> [String: Any] {
+		let eventsLive = ensureRootObserver(pid: pid)
+		let eventCursor = eventsLive ? rootEventCursor(pid: pid) : 0
+		let beforeRootSnapshot = rootMetadataSnapshot(pid: pid)
+		let beforeCgSignature = cgRootSignature(pid: pid)
+		let beforeFrontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+		return { response in
+			self.attachRootDelta(to: response, before: beforeRootSnapshot, beforeFrontmostPid: beforeFrontmostPid, pid: pid, eventsLive: eventsLive, eventCursor: eventCursor, beforeCgSignature: beforeCgSignature)
+		}
+	}
+
 	private func act(_ request: [String: Any]) throws -> [String: Any] {
+		try act(request, world: actionWorld(), supportsAgentCursor: supportsAgentCursor)
+	}
+
+	func act(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
 		let lookId = try stringArg(request, "lookId")
-		guard let record = lookRecord(for: lookId) else {
+		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
 		}
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let action = try stringArg(request, "action")
 		let target = request["target"] as? [String: Any] ?? [:]
 		let params = request["params"] as? [String: Any] ?? [:]
@@ -2426,11 +2615,11 @@ final class Bridge {
 		var holdsPhysicalInput = false
 		func acquirePhysicalInputIfNeeded() {
 			if delivery == "hid" && !holdsPhysicalInput {
-				physicalInputLock.lock()
+				world.lockInput()
 				holdsPhysicalInput = true
 			}
 		}
-		defer { if holdsPhysicalInput { physicalInputLock.unlock() } }
+		defer { if holdsPhysicalInput { world.unlockInput() } }
 		func rejectInStrictHeadless(_ message: String) throws {
 			if policy == "ax_only" { throw BridgeFailure(message: message, code: "foreground_required") }
 		}
@@ -2441,40 +2630,35 @@ final class Bridge {
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
-		let eventsLive = !deferRootDelta && ensureRootObserver(pid: pid)
-		let eventCursor = eventsLive ? rootEventCursor(pid: pid) : 0
-		let beforeRootSnapshot = deferRootDelta ? [:] : rootMetadataSnapshot(pid: pid)
-		let beforeCgSignature = deferRootDelta ? [] : cgRootSignature(pid: pid)
-		let beforeFrontmostPid = deferRootDelta ? nil : NSWorkspace.shared.frontmostApplication?.processIdentifier
-		let beforeSheetCount = windowElement(pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef).map { sheetElements(of: $0).count } ?? 0
-		let beforeFocusedWindow = focusedWindowSummary(pid: pid)
+		let rootDelta = deferRootDelta ? nil : world.beginRootDelta(pid)
+		let beforeSheetCount = world.sheetCount(pid, record) ?? 0
+		let beforeFocusedWindow = world.focusedWindow(pid)
 		let beforeValue: String?
 		let beforeSelected: String?
 		func finish(_ response: [String: Any]) -> [String: Any] {
-			if deferRootDelta { return response }
-			return attachRootDelta(to: response, before: beforeRootSnapshot, beforeFrontmostPid: beforeFrontmostPid, pid: pid, eventsLive: eventsLive, eventCursor: eventCursor, beforeCgSignature: beforeCgSignature)
+			return rootDelta?(response) ?? response
 		}
 
 		if let ref = target["ref"] as? String {
 			var refound = false
-			let cached = refStore.element(for: ref)
+			let cached = world.cachedElement(ref)
 			let cachedIsLive = cached.map {
-				stringAttribute($0, attribute: kAXRoleAttribute as CFString) != nil && frameForElement($0) != nil
+				world.stringAttribute($0, kAXRoleAttribute as CFString) != nil && world.frame($0) != nil
 			} ?? false
 			let resolved: AXUIElement?
 			if cachedIsLive {
 				resolved = cached
 			} else {
 				refound = true
-				resolved = refindElement(ref: ref, pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef)
+				resolved = world.refindElement(ref, pid, record.windowId > 0 ? record.windowId : nil, record.windowRef)
 			}
 			guard let stored = resolved else {
 				throw BridgeFailure(message: "Element reference is stale", code: "stale_ref")
 			}
 			if refound { performed["refound"] = true }
 			element = stored
-			beforeValue = stringAttribute(stored, attribute: kAXValueAttribute as CFString)
-			beforeSelected = stringAttribute(stored, attribute: kAXSelectedTextAttribute as CFString)
+			beforeValue = world.stringAttribute(stored, kAXValueAttribute as CFString)
+			beforeSelected = world.stringAttribute(stored, kAXSelectedTextAttribute as CFString)
 		} else if let xNumber = target["x"] as? NSNumber, let yNumber = target["y"] as? NSNumber {
 			guard record.hasImage else {
 				throw BridgeFailure(message: "Coordinate targeting is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
@@ -2487,7 +2671,7 @@ final class Bridge {
 		}
 
 		func coordinatePoint() throws -> CGPoint {
-			if let element, let frame = frameForElement(element) {
+			if let element, let frame = world.frame(element) {
 				return CGPoint(x: frame.midX, y: frame.midY)
 			}
 			if let rawPoint { return rawPoint }
@@ -2501,35 +2685,29 @@ final class Bridge {
 				policy != "ax_only",
 				["press", "click", "moveMouse", "scroll", "drag"].contains(action)
 			else { return }
-			Task { @MainActor in AgentCursor.shared.animate(to: point, above: record.windowId) }
+			world.animateCursor(point, record.windowId)
 		}
 
 		func focusTargetForPhysicalInput() {
 			guard delivery == "hid" else { return }
-			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
-				performed["activated"] = app.activate()
-			}
-			if let window = windowElement(pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef) {
-				_ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-				_ = AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-				performed["raised"] = AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
-			}
-			usleep(20_000)
+			if let activated = world.activateIfInactive(pid) { performed["activated"] = activated }
+			if let raised = world.raiseWindow(pid, record) { performed["raised"] = raised }
+			world.sleep(20_000)
 		}
 
 		func preflight(_ point: CGPoint) throws {
 			guard let element else { preflightCapsUnknown = true; return }
 			for attempt in 0..<4 {
-				guard let hit = hitTestElement(at: point) else { preflightCapsUnknown = true; return }
-				if sameElement(hit, element) || isElement(hit, descendantOf: element) || isElement(element, descendantOf: hit) { return }
-				let role = stringAttribute(hit, attribute: kAXRoleAttribute as CFString) ?? ""
+				guard let hit = world.hitTest(point) else { preflightCapsUnknown = true; return }
+				if world.sameElement(hit, element) || world.isDescendant(hit, element) || world.isDescendant(element, hit) { return }
+				let role = world.stringAttribute(hit, kAXRoleAttribute as CFString) ?? ""
 				if role == "AXWindow" || role == "AXApplication" { preflightCapsUnknown = true; return }
 				if delivery == "hid" && attempt < 3 {
 					focusTargetForPhysicalInput()
-					usleep(20_000)
+					world.sleep(20_000)
 					continue
 				}
-				throw BridgeFailure(message: "Target is occluded by \(payloadNode(element: hit))", code: "occluded_target")
+				throw BridgeFailure(message: "Target is occluded by \(world.describeElement(hit))", code: "occluded_target")
 			}
 		}
 
@@ -2537,7 +2715,7 @@ final class Bridge {
 		/// focus and preflight, right before posting; pid delivery skips it (the target root is checked in TypeScript).
 		func refuseBlockedBeforePost(_ points: [CGPoint]) throws {
 			guard actPointerRefusalApplies(delivery: delivery) else { return }
-			try refuseBlockedPoints(points, blocked: blockedBundleIdList(request))
+			try world.refuseBlockedPoints(points, blockedBundleIdList(request))
 		}
 
 		/// HID keys reach the focused app: settle focus on the target first, then refuse a blocked focused app.
@@ -2545,9 +2723,9 @@ final class Bridge {
 			guard delivery == "hid" else { return }
 			if !preserveFocus {
 				focusTargetForPhysicalInput()
-				try requireTargetFocus(pid: pid)
+				try world.requireTargetFocus(pid)
 			}
-			try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))
+			try world.refuseBlockedKeyboard(blockedBundleIdList(request))
 		}
 
 		func executeCoordinates(_ point: CGPoint) throws {
@@ -2564,15 +2742,15 @@ final class Bridge {
 			case "press", "click":
 				animateCursor(at: point)
 				try refuseBlockedBeforePost([point])
-				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery)
+				try world.postMouseClick(point, pid, mouseButton(params["button"] as? String ?? "left"), max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery)
 			case "moveMouse":
 				animateCursor(at: point)
 				try refuseBlockedBeforePost([point])
-				try postMouseMove(to: point, pid: pid, delivery: delivery)
+				try world.postMouseMove(point, pid, delivery)
 			case "scroll":
 				animateCursor(at: point)
 				try refuseBlockedBeforePost([point])
-				try postScrollWheel(at: point, deltaX: wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
+				try world.postScrollWheel(point, wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid, delivery)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
 					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
@@ -2585,7 +2763,7 @@ final class Bridge {
 				}
 				animateCursor(at: point)
 				try refuseBlockedBeforePost(points)
-				try postMouseDrag(points: points, pid: pid, delivery: delivery)
+				try world.postMouseDrag(points, pid, delivery)
 			default:
 				throw BridgeFailure(message: "Action \(action) cannot use coordinate grounding", code: "invalid_args")
 			}
@@ -2593,7 +2771,7 @@ final class Bridge {
 
 		func refreshElement() -> AXUIElement? {
 			guard let ref = target["ref"] as? String,
-				let refreshed = refindElement(ref: ref, pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef)
+				let refreshed = world.refindElement(ref, pid, record.windowId > 0 ? record.windowId : nil, record.windowRef)
 			else { return nil }
 			element = refreshed
 			performed["refound"] = true
@@ -2605,20 +2783,20 @@ final class Bridge {
 		}
 
 		if let element, action == "press" || action == "click" {
-			let elementRole = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
+			let elementRole = world.stringAttribute(element, kAXRoleAttribute as CFString) ?? ""
 			let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
-			let requiresPointerFocus = hasAncestorRole(element, role: "AXWebArea") || textRoles.contains(elementRole)
+			let requiresPointerFocus = world.hasAncestorRole(element, "AXWebArea") || textRoles.contains(elementRole)
 			if requiresPointerFocus && policy != "ax_only" {
 				if policy == "foreground" {
 					try executeCoordinates(coordinatePoint())
 				} else {
 					throw BridgeFailure(message: "Web content requires pointer input", code: "foreground_required")
 				}
-			} else if supportsAction(element, action: kAXPressAction as CFString) {
+			} else if world.supportsAction(element, kAXPressAction as CFString) {
 				let cursorPoint = try? coordinatePoint()
-				var status = AXUIElementPerformAction(element, kAXPressAction as CFString)
-				if status != .success, let refreshed = refreshElement(), supportsAction(refreshed, action: kAXPressAction as CFString) {
-					status = AXUIElementPerformAction(refreshed, kAXPressAction as CFString)
+				var status = world.performAction(element, kAXPressAction as CFString)
+				if status != .success, let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
+					status = world.performAction(refreshed, kAXPressAction as CFString)
 				}
 				if status == .success {
 					performed["grounding"] = "description"
@@ -2632,40 +2810,40 @@ final class Bridge {
 			}
 		} else if let element, action == "setText" {
 			let text = params["text"] as? String ?? ""
-			if hasAncestorRole(element, role: "AXWebArea") {
+			if world.hasAncestorRole(element, "AXWebArea") {
 				try rejectInStrictHeadless("Web text replacement requires synthesized keyboard input, which strict headless mode prohibits")
 				acquirePhysicalInputIfNeeded()
 				// HID keys follow (cmd+a, text): the same focus wait and blocked-app check as typeText/keypress.
 				if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }
-				_ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-				let currentValue = stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
+				_ = world.setAttribute(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				let currentValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
 				var range = CFRange(location: 0, length: (currentValue as NSString).length)
 				let selected = AXValueCreate(.cfRange, &range).map {
-					AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, $0) == .success
+					world.setAttribute(element, kAXSelectedTextRangeAttribute as CFString, $0) == .success
 				} ?? false
 				if !selected {
-					try postKeyPress(keys: ["cmd", "a"], pid: pid, delivery: delivery)
-					usleep(20_000)
+					try world.postKeyPress(["cmd", "a"], pid, delivery)
+					world.sleep(20_000)
 				}
-				try postAtomicUnicodeText(text, pid: pid, delivery: delivery)
-				usleep(40_000)
+				try world.postAtomicUnicodeText(text, pid, delivery)
+				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
-				let value = stringAttribute(verificationElement, attribute: kAXValueAttribute as CFString) ?? ""
+				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
 				performed["grounding"] = "keyboard-events"
 				performed["delivery"] = delivery
 				performed["selectionGrounding"] = selected ? "ax" : "keyboard"
 				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
 			}
 			var targetElement = element
-			var status = AXUIElementSetAttributeValue(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
+			var status = world.setAttribute(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
 			if status != .success, let refreshed = refreshElement() {
 				targetElement = refreshed
-				status = AXUIElementSetAttributeValue(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
+				status = world.setAttribute(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
 			}
 			if status == .success {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
-				let value = stringAttribute(targetElement, attribute: kAXValueAttribute as CFString) ?? ""
+				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString) ?? ""
 				if value != text && policy != "foreground" {
 					throw BridgeFailure(message: "The background accessibility value write was accepted but did not take effect", code: "foreground_required")
 				}
@@ -2676,18 +2854,18 @@ final class Bridge {
 			try rejectInStrictHeadless("Typing requires synthesized keyboard input, which strict headless mode prohibits")
 			let preserveFocus = params["preserveFocus"] as? Bool ?? false
 			if let element {
-				let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				let focused = world.setAttribute(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				if focused == .success { performed["focused"] = true }
 			}
 			acquirePhysicalInputIfNeeded()
 			// HID keys reach the focused app, which a non-activating panel of a blocked app can be.
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			let text = params["text"] as? String ?? ""
-			try postUnicodeText(text, pid: pid, delivery: delivery)
+			try world.postUnicodeText(text, pid, delivery)
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
-				usleep(30_000)
-				let afterValue = stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
+				world.sleep(30_000)
+				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
 				let changed = afterValue != (beforeValue ?? "")
 				return finish(["outcome": changed ? "worked" : "didnt", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
 			}
@@ -2697,15 +2875,15 @@ final class Bridge {
 				throw BridgeFailure(message: "secondaryAction requires an AX action name", code: "invalid_args")
 			}
 			var targetElement = element
-			if !supportsAction(targetElement, action: name as CFString) {
-				guard let refreshed = refreshElement(), supportsAction(refreshed, action: name as CFString) else {
+			if !world.supportsAction(targetElement, name as CFString) {
+				guard let refreshed = refreshElement(), world.supportsAction(refreshed, name as CFString) else {
 					throw BridgeFailure(message: "Element does not advertise \(name)", code: "action_unsupported")
 				}
 				targetElement = refreshed
 			}
-			var status = AXUIElementPerformAction(targetElement, name as CFString)
-			if status != .success, secondaryActionRetryIsSafe(axError: status.rawValue), let refreshed = refreshElement(), supportsAction(refreshed, action: name as CFString) {
-				status = AXUIElementPerformAction(refreshed, name as CFString)
+			var status = world.performAction(targetElement, name as CFString)
+			if status != .success, secondaryActionRetryIsSafe(axError: status.rawValue), let refreshed = refreshElement(), world.supportsAction(refreshed, name as CFString) {
+				status = world.performAction(refreshed, name as CFString)
 			}
 			performed["grounding"] = "description"
 			performed["delivery"] = "ax"
@@ -2714,14 +2892,14 @@ final class Bridge {
 				return finish(["outcome": secondaryActionFailureOutcome(axError: status.rawValue), "performed": performed, "error": ["code": "ax_action_failed", "message": "\(name) failed (AXError \(status.rawValue))"]])
 			}
 			// Menus and sheets open asynchronously; the root delta and window check below see them.
-			usleep(60_000)
+			world.sleep(60_000)
 		} else if let element, action == "selectText" {
 			// AX-only: AXSelectedTextRange is in UTF-16 units, like NSString.
 			guard let start = (params["start"] as? NSNumber)?.intValue else {
 				throw BridgeFailure(message: "selectText requires start", code: "invalid_args")
 			}
 			let length = (params["length"] as? NSNumber)?.intValue ?? 0
-			let valueLength = stringAttribute(element, attribute: kAXValueAttribute as CFString).map { ($0 as NSString).length }
+			let valueLength = world.stringAttribute(element, kAXValueAttribute as CFString).map { ($0 as NSString).length }
 			if let issue = selectionRangeIssue(start: start, length: length, valueLength: valueLength) {
 				throw BridgeFailure(message: issue, code: "invalid_args")
 			}
@@ -2730,10 +2908,10 @@ final class Bridge {
 				throw BridgeFailure(message: "Could not encode the selection range", code: "invalid_args")
 			}
 			var targetElement = element
-			var status = AXUIElementSetAttributeValue(targetElement, kAXSelectedTextRangeAttribute as CFString, axRange)
+			var status = world.setAttribute(targetElement, kAXSelectedTextRangeAttribute as CFString, axRange)
 			if status != .success, let refreshed = refreshElement() {
 				targetElement = refreshed
-				status = AXUIElementSetAttributeValue(targetElement, kAXSelectedTextRangeAttribute as CFString, axRange)
+				status = world.setAttribute(targetElement, kAXSelectedTextRangeAttribute as CFString, axRange)
 			}
 			performed["grounding"] = "description"
 			performed["delivery"] = "ax"
@@ -2741,7 +2919,7 @@ final class Bridge {
 				return finish(["outcome": "didnt", "performed": performed, "error": ["code": "ax_write_failed", "message": "The element refused AXSelectedTextRange (AXError \(status.rawValue))"]])
 			}
 			var readBack: (location: Int, length: Int)?
-			if let raw = copyAttribute(targetElement, attribute: kAXSelectedTextRangeAttribute as CFString), CFGetTypeID(raw) == AXValueGetTypeID() {
+			if let raw = world.copyAttribute(targetElement, kAXSelectedTextRangeAttribute as CFString), CFGetTypeID(raw) == AXValueGetTypeID() {
 				var actual = CFRange()
 				if AXValueGetValue(raw as! AXValue, .cfRange, &actual) { readBack = (actual.location, actual.length) }
 			}
@@ -2754,33 +2932,35 @@ final class Bridge {
 			let text = params["text"] as? String ?? ""
 			guard !text.isEmpty else { throw BridgeFailure(message: "paste requires non-empty text", code: "invalid_args") }
 			if let element {
-				let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				let focused = world.setAttribute(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				if focused == .success { performed["focused"] = true }
 			}
 			var valueMoved = false
 			acquirePhysicalInputIfNeeded()
 			// cmd+v reaches the focused app under HID delivery: refuse a blocked one BEFORE the clipboard is touched.
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
-			let restored = try withTemporaryClipboard(text) {
-				// Snapshotting the clipboard can take long (large or lazily provided types): focus may have moved since the check above.
+			let clipboard = world.snapshotClipboard(text)
+			// Lazy pasteboard data can stall the snapshot while focus moves. Do not publish if it moved to a blocked app.
+			if delivery == "hid" { try world.refuseBlockedKeyboard(blockedBundleIdList(request)) }
+			let restored = try withRestoredClipboard(write: clipboard.write, restore: clipboard.restore) {
 				// Looked up first, inside the clipboard: activating the target can switch the input source, and the lookup
 				// (a main-queue hop plus layout translation) must not sit between the last focus check and the post. Throwing restores the clipboard.
-				guard let vKeyCode = pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) else {
+				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				if delivery == "hid" { try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request)) }
-				try postKeyCode(CGKeyCode(vKeyCode), flags: .maskCommand, pid: pid, delivery: delivery)
+				if delivery == "hid" { try world.refuseBlockedKeyboard(blockedBundleIdList(request)) }
+				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery)
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
-					usleep(30_000)
-					if attempt >= 2, let element, stringAttribute(element, attribute: kAXValueAttribute as CFString) != beforeValue { valueMoved = true; break }
+					world.sleep(30_000)
+					if attempt >= 2, let element, world.stringAttribute(element, kAXValueAttribute as CFString) != beforeValue { valueMoved = true; break }
 				}
 			}
 			performed["grounding"] = "coordinates"
 			performed["clipboardRestored"] = restored
 			// A slow target can still read the pasteboard after the restore and paste the OLD clipboard.
 			if !valueMoved { performed["pasteDeadlineExpired"] = true }
-			let afterValue = element.flatMap { stringAttribute($0, attribute: kAXValueAttribute as CFString) }
+			let afterValue = element.flatMap { world.stringAttribute($0, kAXValueAttribute as CFString) }
 			let outcome = pasteOutcome(valueBefore: element == nil ? nil : beforeValue, valueAfter: afterValue)
 			var evidence: [String: Any] = [:]
 			if let afterValue { evidence["value"] = afterValue; evidence["valueChanged"] = afterValue != (beforeValue ?? "") }
@@ -2792,17 +2972,17 @@ final class Bridge {
 				throw BridgeFailure(message: "keypress requires keys", code: "invalid_args")
 			}
 			if let element {
-				let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				let focused = world.setAttribute(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				if focused == .success { performed["focused"] = true }
 				let normalizedKeys = keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 				if normalizedKeys.count == 2,
 					normalizedKeys.last == "a",
 					["cmd", "command", "meta"].contains(normalizedKeys.first ?? ""),
-					let value = stringAttribute(element, attribute: kAXValueAttribute as CFString)
+					let value = world.stringAttribute(element, kAXValueAttribute as CFString)
 				{
 					var range = CFRange(location: 0, length: (value as NSString).length)
 					if let selection = AXValueCreate(.cfRange, &range),
-						AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, selection) == .success
+						world.setAttribute(element, kAXSelectedTextRangeAttribute as CFString, selection) == .success
 					{
 						performed["selectionGrounding"] = "ax"
 					}
@@ -2810,25 +2990,25 @@ final class Bridge {
 			}
 			acquirePhysicalInputIfNeeded()
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
-			try postKeyPress(keys: keys, pid: pid, delivery: delivery)
+			try world.postKeyPress(keys, pid, delivery)
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
 			let cursorPoint = try? coordinatePoint()
-			let before = scrollPositionSignature(element)
-			let result = performScrollActionOrAncestor(startingAt: element, targetPid: pid, scrollX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, scrollY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, steps: 1)
+			let before = world.scrollSignature(element)
+			let scroll = ActScrollRequest(targetPid: pid, scrollX: (params["scrollX"] as? NSNumber)?.intValue ?? 0,
+				scrollY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, steps: 1, point: cursorPoint)
+			let result = world.scrollAction(element, scroll)
 			if (result["scrolled"] as? Bool) == true {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
 				if let cursorPoint { animateCursor(at: cursorPoint) }
-				let after = scrollPositionSignature(element)
+				let after = world.scrollSignature(element)
 				return finish(["outcome": before != after ? "worked" : "unknown", "performed": performed])
 			}
 			// SwiftUI and many AppKit scroll areas expose no scroll actions and can
 			// ignore wheel events posted to a background app, but accept a write to
 			// their scroll bar's value.
-			let requestedX = (params["scrollX"] as? NSNumber)?.intValue ?? 0
-			let requestedY = (params["scrollY"] as? NSNumber)?.intValue ?? 0
-			if let write = setScrollBarValueOrAncestor(startingAt: element, targetPid: pid, scrollX: requestedX, scrollY: requestedY, point: cursorPoint) {
+			if let write = world.scrollBar(element, scroll) {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
 				performed["axScroll"] = "scroll_bar_value"
@@ -2867,13 +3047,13 @@ final class Bridge {
 			try executeCoordinates(coordinatePoint())
 		}
 
-		let afterSheetCount = windowElement(pid: pid, windowId: record.windowId > 0 ? record.windowId : nil, windowRef: record.windowRef).map { sheetElements(of: $0).count } ?? beforeSheetCount
-		let windowChanged = beforeFocusedWindow != focusedWindowSummary(pid: pid) || beforeSheetCount != afterSheetCount
+		let afterSheetCount = world.sheetCount(pid, record) ?? beforeSheetCount
+		let windowChanged = beforeFocusedWindow != world.focusedWindow(pid) || beforeSheetCount != afterSheetCount
 		var outcome = preflightCapsUnknown ? "unknown" : "unknown"
 		var evidence: [String: Any] = [:]
 		if let element, action == "press" || action == "click" || action == "secondaryAction" {
-			let afterValue = stringAttribute(element, attribute: kAXValueAttribute as CFString)
-			let afterSelected = stringAttribute(element, attribute: kAXSelectedTextAttribute as CFString)
+			let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString)
+			let afterSelected = world.stringAttribute(element, kAXSelectedTextAttribute as CFString)
 			if beforeValue != afterValue || beforeSelected != afterSelected || windowChanged {
 				outcome = "worked"
 			}
@@ -2888,10 +3068,9 @@ final class Bridge {
 		return finish(response)
 	}
 
-	/// Writes `text` to the general pasteboard as a transient, auto-generated item (clipboard history managers skip
-	/// it), runs `body`, then restores the previous contents (every item and type) unless something else wrote to
-	/// the pasteboard in the meantime. Restores on every exit. Returns whether it restored.
-	private func withTemporaryClipboard(_ text: String, _ body: () throws -> Void) throws -> Bool {
+	/// Snapshots every item and type without writing. The returned operations publish a transient item and
+	/// restore the snapshot only while we still own the pasteboard change count.
+	private func snapshotClipboard(_ text: String) -> (write: () throws -> Void, restore: () -> Bool) {
 		let pasteboard = NSPasteboard.general
 		let saved: [[NSPasteboard.PasteboardType: Data]] = (pasteboard.pasteboardItems ?? []).map { item in
 			var entry: [NSPasteboard.PasteboardType: Data] = [:]
@@ -2910,7 +3089,7 @@ final class Bridge {
 			}
 			return items.isEmpty || pasteboard.writeObjects(items)
 		}
-		return try withRestoredClipboard(write: {
+		return (write: {
 			// Keep the pasted text off Universal Clipboard / Handoff: it must not sync to the user's other devices.
 			pasteboard.prepareForNewContents(with: .currentHostOnly)
 			ownChangeCount = pasteboard.changeCount
@@ -2921,31 +3100,32 @@ final class Bridge {
 				throw BridgeFailure(message: "The clipboard rejected the text", code: "clipboard_write_failed")
 			}
 			ownChangeCount = pasteboard.changeCount
-		}, restore: restore, body: body)
+		}, restore: restore)
 	}
 
 	private func actBatch(_ request: [String: Any]) throws -> [String: Any] {
+		try actBatch(request, world: actionWorld(), supportsAgentCursor: supportsAgentCursor)
+	}
+
+	func actBatch(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
 		guard let actions = request["actions"] as? [[String: Any]], !actions.isEmpty, actions.count <= 20 else {
 			throw BridgeFailure(message: "actBatch requires 1...20 actions", code: "invalid_args")
 		}
-		let pid = Int32(try intArg(actions[0], "pid"))
+		let pids = try actions.map(pidArg)
+		let pid = pids[0]
 		let lookId = try stringArg(actions[0], "lookId")
-		guard actions.allSatisfy({ ($0["pid"] as? NSNumber)?.int32Value == pid }) else {
+		guard pids.allSatisfy({ $0 == pid }) else {
 			throw BridgeFailure(message: "actBatch actions must target one pid", code: "invalid_args")
 		}
 		guard actions.allSatisfy({ ($0["lookId"] as? String) == lookId }) else {
 			throw BridgeFailure(message: "actBatch actions must belong to one look", code: "invalid_args")
 		}
-		let eventsLive = ensureRootObserver(pid: pid)
-		let eventCursor = eventsLive ? rootEventCursor(pid: pid) : 0
-		let beforeRootSnapshot = rootMetadataSnapshot(pid: pid)
-		let beforeCgSignature = cgRootSignature(pid: pid)
-		let beforeFrontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+		let finish = world.beginRootDelta(pid)
 		let mayUsePhysicalInput = actions.contains { action in
 			(optionalStringArg(action, "policy") ?? "default") != "ax_only"
 		}
-		if mayUsePhysicalInput { physicalInputLock.lock() }
-		defer { if mayUsePhysicalInput { physicalInputLock.unlock() } }
+		if mayUsePhysicalInput { world.lockInput() }
+		defer { if mayUsePhysicalInput { world.unlockInput() } }
 
 		var steps: [[String: Any]] = []
 		var stoppedAt: Int?
@@ -2953,7 +3133,7 @@ final class Bridge {
 			var deferred = action
 			deferred["deferRootDelta"] = true
 			do {
-				let step = try act(deferred)
+				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
 				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {
@@ -2966,7 +3146,7 @@ final class Bridge {
 		let outcome = outcomes.contains("didnt") ? "didnt" : (outcomes.contains("unknown") ? "unknown" : "worked")
 		var response: [String: Any] = ["outcome": outcome, "performed": ["transaction": true, "actionCount": steps.count], "steps": steps]
 		if let stoppedAt { response["stoppedAt"] = stoppedAt }
-		return attachRootDelta(to: response, before: beforeRootSnapshot, beforeFrontmostPid: beforeFrontmostPid, pid: pid, eventsLive: eventsLive, eventCursor: eventCursor, beforeCgSignature: beforeCgSignature)
+		return finish(response)
 	}
 
 	private func rootIdentity(_ root: [String: Any]) -> String {
@@ -3069,7 +3249,7 @@ final class Bridge {
 	}
 
 	private func axWaitFor(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		ensureEnhancedAccessibility(pid: pid)
 		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
@@ -3178,25 +3358,31 @@ final class Bridge {
 		return actions.contains(axScrollDownAction as String) || actions.contains(axScrollUpAction as String) || actions.contains(axScrollLeftAction as String) || actions.contains(axScrollRightAction as String)
 	}
 
-	private func performScrollActionOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, steps: Int) -> [String: Any] {
-		let actions = scrollActionNames(scrollX: scrollX, scrollY: scrollY)
+	private func scrollWorld() -> AXScrollWorld {
+		AXScrollWorld(pid: pidForElement, parent: parentElement, supportsAction: supportsAction(_:action:),
+			performAction: AXUIElementPerformAction, role: { self.stringAttribute($0, attribute: kAXRoleAttribute as CFString) },
+			hitTest: hitTestElement(at:pid:), sameElement: sameElement, writeBar: setScrollBarValue(area:barAttribute:delta:vertical:))
+	}
+
+	func performScrollActionOrAncestor(startingAt element: AXUIElement, request: ActScrollRequest, world: AXScrollWorld) -> [String: Any] {
+		let actions = scrollActionNames(scrollX: request.scrollX, scrollY: request.scrollY)
 		guard !actions.isEmpty else { return ["scrolled": false, "reason": "zero_delta"] }
 		var current: AXUIElement? = element
 		var depth = 0
 
 		while let candidate = current, depth < 10 {
-			if let pid = pidForElement(candidate), pid != targetPid {
+			if let pid = world.pid(candidate), pid != request.targetPid {
 				return ["scrolled": false, "reason": "pid_mismatch", "ownerPid": Int(pid)]
 			}
 			var didScroll = false
-			for _ in 0..<steps {
-				for action in actions where supportsAction(candidate, action: action) {
-					let status = AXUIElementPerformAction(candidate, action)
+			for _ in 0..<request.steps {
+				for action in actions where world.supportsAction(candidate, action) {
+					let status = world.performAction(candidate, action)
 					if status == .success { didScroll = true }
 				}
 			}
 			if didScroll { return ["scrolled": true] }
-			current = parentElement(candidate)
+			current = world.parent(candidate)
 			depth += 1
 		}
 
@@ -3208,8 +3394,8 @@ final class Bridge {
 	/// region falls through to the wheel instead of scrolling the outer area. Returns the last value read back
 	/// (nil when no write was confirmed), whether every written axis was confirmed, and the deltas no bar
 	/// delivered. Nil when no bar was written.
-	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?) -> (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)? {
-		var remaining = (x: scrollX, y: scrollY)
+	func setScrollBarValueOrAncestor(startingAt element: AXUIElement, request: ActScrollRequest, world: AXScrollWorld) -> ActWorld.ScrollBarWrite? {
+		var remaining = (x: request.scrollX, y: request.scrollY)
 		var value: Double?
 		var anyWritten = false
 		var confirmed = true
@@ -3217,34 +3403,34 @@ final class Bridge {
 		func hitTestResolves(to area: AXUIElement) -> Bool {
 			if hitArea == nil {
 				var found: AXUIElement?
-				if let point, var hit = hitTestElement(at: point, pid: pidForElement(element) ?? targetPid) {
+				if let point = request.point, var hit = world.hitTest(point, world.pid(element) ?? request.targetPid) {
 					var hops = 0
 					while hops < 10 {
-						if stringAttribute(hit, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) { found = hit; break }
-						guard let parent = parentElement(hit) else { break }
+						if world.role(hit) == (kAXScrollAreaRole as String) { found = hit; break }
+						guard let parent = world.parent(hit) else { break }
 						hit = parent
 						hops += 1
 					}
 				}
 				hitArea = .some(found)
 			}
-			if case .some(.some(let found)) = hitArea { return sameElement(found, area) }
+			if case .some(.some(let found)) = hitArea { return world.sameElement(found, area) }
 			return false
 		}
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 10, remaining.x != 0 || remaining.y != 0 {
-			if let pid = pidForElement(candidate), pid != targetPid { break }
-			if stringAttribute(candidate, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
+			if let pid = world.pid(candidate), pid != request.targetPid { break }
+			if world.role(candidate) == (kAXScrollAreaRole as String) {
 				guard scrollBarWriteAllowed(depthFromStart: depth, hitTestResolvesToArea: depth <= 1 ? false : hitTestResolves(to: candidate)) else { break }
-				let writeY = remaining.y != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: remaining.y, vertical: true) : (write: ScrollAxisWrite.notWritten, value: nil)
-				let writeX = remaining.x != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: remaining.x, vertical: false) : (write: ScrollAxisWrite.notWritten, value: nil)
+				let writeY = remaining.y != 0 ? world.writeBar(candidate, "AXVerticalScrollBar", remaining.y, true) : (write: ScrollAxisWrite.notWritten, value: nil)
+				let writeX = remaining.x != 0 ? world.writeBar(candidate, "AXHorizontalScrollBar", remaining.x, false) : (write: ScrollAxisWrite.notWritten, value: nil)
 				remaining = remainingScroll(requestedX: remaining.x, requestedY: remaining.y, x: writeX.write, y: writeY.write)
 				if writeX.write != .notWritten || writeY.write != .notWritten { anyWritten = true }
 				if !scrollWritesConfirmed(x: writeX.write, y: writeY.write) { confirmed = false }
 				if let moved = writeY.value ?? writeX.value { value = moved }
 			}
-			current = parentElement(candidate)
+			current = world.parent(candidate)
 			depth += 1
 		}
 		guard anyWritten else { return nil }
@@ -3522,7 +3708,7 @@ final class Bridge {
 	}
 
 	private func focusedElement(_ request: [String: Any]) throws -> [String: Any] {
-		let pid = Int32(try intArg(request, "pid"))
+		let pid = try pidArg(request)
 		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
 		let windowRef = optionalStringArg(request, "windowRef")
 		let app = AXUIElementCreateApplication(pid)
@@ -3644,7 +3830,7 @@ final class Bridge {
 	private func requireTargetFocus(pid: Int32) throws {
 		let held = waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: {
 			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), targetPid: pid)
-		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(DispatchTime.now().uptimeNanoseconds / 1_000_000) })
+		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(clamping: DispatchTime.now().uptimeNanoseconds / 1_000_000) })
 		if !held { throw BridgeFailure(message: "The target app did not take focus, so keyboard input was not sent", code: "focus_not_acquired") }
 	}
 
@@ -4432,28 +4618,16 @@ final class Bridge {
 
 	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid") {
 		if delivery == "pid" {
-			event.postToPid(pid)
-			return
+			inputSink.postToPid(event, pid)
+		} else {
+			inputSink.postHID(event, pid)
 		}
-		// Post as a real foreground HID event. AppKit views with mouseDown handlers
-		// can ignore pid-targeted CGEvents even though postToPid reports success.
-		// Keep the target app frontmost so the HID event is delivered to the intended
-		// window, then post at the session event tap.
-		if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
-			if #available(macOS 14.0, *) {
-				_ = app.activate()
-			} else {
-				_ = app.activate(options: [.activateIgnoringOtherApps])
-			}
-			usleep(20_000)
-		}
-		event.post(tap: .cghidEventTap)
 	}
 
 	private func postMouseMove(to point: CGPoint, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+		guard let move = inputSink.mouseEvent(.mouseMoved, point, .left) else {
 			throw BridgeFailure(message: "Failed to create mouse move event", code: "input_failed")
 		}
 		postEvent(move, pid: pid, delivery: delivery)
@@ -4508,18 +4682,18 @@ final class Bridge {
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try postMouseMove(to: point, pid: pid, delivery: delivery)
 		for index in 1...max(1, clickCount) {
-			guard let down = CGEvent(mouseEventSource: nil, mouseType: mouseDownType(for: button), mouseCursorPosition: point, mouseButton: button),
-				let up = CGEvent(mouseEventSource: nil, mouseType: mouseUpType(for: button), mouseCursorPosition: point, mouseButton: button)
+			guard let down = inputSink.mouseEvent(mouseDownType(for: button), point, button),
+				let up = inputSink.mouseEvent(mouseUpType(for: button), point, button)
 			else {
 				throw BridgeFailure(message: "Failed to create mouse click event", code: "input_failed")
 			}
 			down.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			postEvent(down, pid: pid, delivery: delivery)
-			usleep(12_000)
+			inputSink.sleep(12_000)
 			postEvent(up, pid: pid, delivery: delivery)
 			if index < clickCount {
-				usleep(70_000)
+				inputSink.sleep(70_000)
 			}
 		}
 	}
@@ -4527,16 +4701,27 @@ final class Bridge {
 	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard points.count >= 2, let first = points.first else {
+		guard points.count >= 2, let first = points.first, let last = points.last else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
+		try inputSink.checkDragCancellation()
+		// Reserve the matching release before sending any input. Unwinding must not allocate it.
+		guard let up = inputSink.mouseEvent(.leftMouseUp, first, .left) else {
+			throw BridgeFailure(message: "Failed to create mouse up event", code: "input_failed")
+		}
 		try postMouseMove(to: first, pid: pid, delivery: delivery)
-		guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: first, mouseButton: .left) else {
+		guard let down = inputSink.mouseEvent(.leftMouseDown, first, .left) else {
 			throw BridgeFailure(message: "Failed to create mouse down event", code: "input_failed")
 		}
 		down.setIntegerValueField(.mouseEventClickState, value: 1)
 		postEvent(down, pid: pid, delivery: delivery)
-		usleep(30_000)
+		var releasePosition = first
+		defer {
+			up.location = releasePosition
+			up.setIntegerValueField(.mouseEventClickState, value: 1)
+			postEvent(up, pid: pid, delivery: delivery)
+		}
+		inputSink.sleep(30_000)
 
 		// Real drags are a stream of positions; apps ignore a single long jump. Step each segment (~12pt),
 		// widening the step so the whole drag stays under ~1000 events (about 8s).
@@ -4544,32 +4729,20 @@ final class Bridge {
 		for pair in zip(points, points.dropFirst()) { total += hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y) }
 		let maxStep = max(12, total / 1000)
 		var previous = first
-		var lastPosition = first
-		func releaseButton(at position: CGPoint) {
-			if let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: position, mouseButton: .left) {
-				up.setIntegerValueField(.mouseEventClickState, value: 1)
-				postEvent(up, pid: pid, delivery: delivery)
-			}
-		}
-		// Never leave the button held if anything below fails.
-		do {
-			for point in points.dropFirst() {
-				for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
-					guard let drag = CGEvent(mouseEventSource: nil, mouseType: mouseDraggedType(for: .left), mouseCursorPosition: step, mouseButton: .left) else {
-						throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
-					}
-					drag.setIntegerValueField(.mouseEventClickState, value: 1)
-					postEvent(drag, pid: pid, delivery: delivery)
-					lastPosition = step
-					usleep(8_000)
+		for point in points.dropFirst() {
+			for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
+				try inputSink.checkDragCancellation()
+				guard let drag = inputSink.mouseEvent(mouseDraggedType(for: .left), step, .left) else {
+					throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
 				}
-				previous = point
+				drag.setIntegerValueField(.mouseEventClickState, value: 1)
+				postEvent(drag, pid: pid, delivery: delivery)
+				releasePosition = step
+				inputSink.sleep(8_000)
 			}
-		} catch {
-			releaseButton(at: lastPosition)
-			throw error
+			previous = point
 		}
-		releaseButton(at: points.last ?? lastPosition)
+		releasePosition = last
 	}
 
 	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid") throws {
@@ -4577,14 +4750,7 @@ final class Bridge {
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try postMouseMove(to: point, pid: pid, delivery: delivery)
 		let counts = scrollWheelCounts(deltaX: deltaX, deltaY: deltaY)
-		guard let event = CGEvent(
-			scrollWheelEvent2Source: nil,
-			units: .pixel,
-			wheelCount: 2,
-			wheel1: counts.wheel1,
-			wheel2: counts.wheel2,
-			wheel3: 0
-		) else {
+		guard let event = inputSink.wheelEvent(counts.wheel1, counts.wheel2) else {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
 		}
 		event.location = point
@@ -4677,8 +4843,7 @@ final class Bridge {
 	private func postKeyCode(_ code: CGKeyCode, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
-			let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
+		guard let down = inputSink.keyEvent(code, true), let up = inputSink.keyEvent(code, false)
 		else {
 			throw BridgeFailure(message: "Failed to create key event", code: "input_failed")
 		}
@@ -4686,21 +4851,20 @@ final class Bridge {
 		up.flags = flags
 		postEvent(down, pid: pid, delivery: delivery)
 		postEvent(up, pid: pid, delivery: delivery)
-		usleep(8_000)
+		inputSink.sleep(8_000)
 	}
 
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		let inputSource = currentKeyboardInputSource()
+		let inputSource = inputSink.keyboardInputSource()
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
 				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery)
 				continue
 			}
-			guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-				let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+			guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
 			else {
 				throw BridgeFailure(message: "Failed to create unicode key event", code: "input_failed")
 			}
@@ -4708,20 +4872,19 @@ final class Bridge {
 			setUnicodeString(event: up, text: char)
 			postEvent(down, pid: pid, delivery: delivery)
 			postEvent(up, pid: pid, delivery: delivery)
-			usleep(8_000)
+			inputSink.sleep(8_000)
 		}
 	}
 
 	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-			let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+		guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
 		else { throw BridgeFailure(message: "Failed to create unicode text event", code: "input_failed") }
 		setUnicodeString(event: down, text: text)
 		setUnicodeString(event: up, text: text)
 		postEvent(down, pid: pid, delivery: delivery)
-		usleep(8_000)
+		inputSink.sleep(8_000)
 		postEvent(up, pid: pid, delivery: delivery)
 	}
 

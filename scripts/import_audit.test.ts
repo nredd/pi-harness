@@ -4,30 +4,26 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/async";
-import { test, vi } from "vitest";
+import { onTestFinished, test, vi } from "vitest";
+import { makeTestTempDir } from "../tests/lib/src/temp-dir.ts";
 import { type AuditResult, auditFiles, dispatch, main } from "./import_audit.ts";
 
 /** Write `sources` under `<root>/pkg/` and audit them in one batch. */
 async function audit(sources: Record<string, string>): Promise<AuditResult> {
-	const root = mkdtempSync(join(tmpdir(), "import-audit-"));
-	try {
-		for (const [name, text] of Object.entries(sources)) {
-			const path = join(root, "pkg", name);
-			mkdirSync(dirname(path), { recursive: true });
-			writeFileSync(path, text);
-		}
-		return await auditFiles(
-			root,
-			Object.keys(sources).map((name) => `pkg/${name}`),
-		);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
+	const root = makeTestTempDir("import-audit-", onTestFinished);
+	for (const [name, text] of Object.entries(sources)) {
+		const path = join(root, "pkg", name);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, text);
 	}
+	return await auditFiles(
+		root,
+		Object.keys(sources).map((name) => `pkg/${name}`),
+	);
 }
 
 /** Run `main` in process against recording writers. */
@@ -185,36 +181,28 @@ test("a file that does not parse is reported, not trusted", async () => {
 });
 
 test("the CLI batches several files and prints one JSON document", async () => {
-	const root = mkdtempSync(join(tmpdir(), "import-audit-cli-"));
-	try {
-		mkdirSync(join(root, "pkg"));
-		writeFileSync(join(root, "pkg", "a.ts"), 'import "a";');
-		writeFileSync(join(root, "pkg", "b.mjs"), 'import("b");');
-		const script = join(dirname(fileURLToPath(import.meta.url)), "import_audit.ts");
-		const out = execFileSync(process.execPath, [script, root, "pkg/a.ts", "pkg/b.mjs"], { encoding: "utf8" });
-		assert.deepEqual(JSON.parse(out), {
-			files: {
-				"pkg/a.ts": { specifiers: ["a"], diagnostics: [] },
-				"pkg/b.mjs": { specifiers: ["b"], diagnostics: [] },
-			},
-		});
-		assert.deepEqual(await runMain([root, "pkg/a.ts", "pkg/b.mjs"]), { status: 0, stdout: out, stderr: "" });
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+	const root = makeTestTempDir("import-audit-cli-", onTestFinished);
+	mkdirSync(join(root, "pkg"));
+	writeFileSync(join(root, "pkg", "a.ts"), 'import "a";');
+	writeFileSync(join(root, "pkg", "b.mjs"), 'import("b");');
+	const script = join(dirname(fileURLToPath(import.meta.url)), "import_audit.ts");
+	const out = execFileSync(process.execPath, [script, root, "pkg/a.ts", "pkg/b.mjs"], { encoding: "utf8" });
+	assert.deepEqual(JSON.parse(out), {
+		files: {
+			"pkg/a.ts": { specifiers: ["a"], diagnostics: [] },
+			"pkg/b.mjs": { specifiers: ["b"], diagnostics: [] },
+		},
+	});
+	assert.deepEqual(await runMain([root, "pkg/a.ts", "pkg/b.mjs"]), { status: 0, stdout: out, stderr: "" });
 });
 
 test("a listed file tsgo cannot load fails the whole audit instead of passing it empty", async () => {
-	const root = mkdtempSync(join(tmpdir(), "import-audit-missing-"));
-	try {
-		await assert.rejects(auditFiles(root, ["pkg/missing.ts"]), /^Error: tsgo did not load 'pkg\/missing\.ts'$/);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+	const root = makeTestTempDir("import-audit-missing-", onTestFinished);
+	await assert.rejects(auditFiles(root, ["pkg/missing.ts"]), /^Error: tsgo did not load 'pkg\/missing\.ts'$/);
 });
 
 test("a project tsgo did not open fails the audit and still closes the session", async () => {
-	const root = mkdtempSync(join(tmpdir(), "import-audit-project-"));
+	const root = makeTestTempDir("import-audit-project-", onTestFinished);
 	const original = API.prototype.updateSnapshot;
 	const snapshots = vi.spyOn(API.prototype, "updateSnapshot").mockImplementation(async function (
 		this: API,
@@ -233,7 +221,6 @@ test("a project tsgo did not open fails the audit and still closes the session",
 		assert.equal(closes.mock.calls.length, 1);
 	} finally {
 		vi.restoreAllMocks();
-		rmSync(root, { recursive: true, force: true });
 	}
 });
 

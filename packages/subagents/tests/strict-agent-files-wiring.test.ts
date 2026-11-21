@@ -13,9 +13,9 @@
  * old-host refusal is covered, against the real SDK, by
  * strict-agent-files-old-host.test.ts.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.ts";
 import { bootPi, ctx, startSession } from "./fixtures/boot-extension.ts";
@@ -54,9 +54,9 @@ function writeBrokenAgent(): string {
 describe("strictAgentFiles gates session startup", () => {
 	let warn: ReturnType<typeof vi.spyOn>;
 
-	beforeEach(() => {
+	beforeEach(({ onTestFinished }) => {
 		originalCwd = process.cwd();
-		cwd = mkdtempSync(join(tmpdir(), "strict-agent-files-"));
+		cwd = makeTestTempDir("strict-agent-files-", onTestFinished);
 		process.chdir(cwd);
 		// A developer's real ~/.pi/subagents.json would otherwise set this very
 		// setting under the tests, and their global agents would pollute the roster.
@@ -72,7 +72,6 @@ describe("strictAgentFiles gates session startup", () => {
 		if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		registerAgents(new Map());
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	it("activates, then fails session_start naming the file with the host's startup error", async () => {

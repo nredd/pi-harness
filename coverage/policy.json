@@ -416,12 +416,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): AT-SPI snapshot traversal reduced uncovered L/F/regions from 1059/145/1968 to 967/129/1793. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
+      "note": "Pinned Linux ARM64 measurement (#696): shared peer tests and AT-SPI root discovery reduced uncovered L/F/regions from 967/129/1793 to 930/125/1730. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 967, "functions": 129 } },
+          "max_uncovered": { "linux": { "lines": 930, "functions": 125 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
@@ -459,7 +459,7 @@
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 3654, "functions": 694, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 2872, "functions": 656, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "Report full-source headless Swift coverage for #645 without claiming all-native coverage. Swift tests run locally and on macOS main/dispatch, not in PR CI.",

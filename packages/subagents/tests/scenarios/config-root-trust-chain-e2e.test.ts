@@ -8,11 +8,11 @@
  * untrusted, so a grandchild that re-derived trust from that session would hide
  * the trusted config root's agents from its nested registry.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentCall, type FauxReply, type PrintModeRun, runPrintMode } from "../fixtures/print-mode-runner.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -48,18 +48,15 @@ function writeAgent(root: string, name: string, extra: string, body: string): vo
 
 describe("config-root trust survives nested spawns after a custom-cwd spawn (faux model)", () => {
 	let run: PrintModeRun | undefined;
-	const dirs: string[] = [];
 
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
-		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 	});
 
 	async function chain(projectTrusted: boolean): Promise<{ text: string; hostileSeen: boolean; reached: string[] }> {
-		const config = mkdtempSync(join(tmpdir(), "config-root-"));
-		const work = mkdtempSync(join(tmpdir(), "exec-cwd-"));
-		dirs.push(config, work);
+		const config = makeTestTempDir("config-root-", onTestFinished);
+		const work = makeTestTempDir("exec-cwd-", onTestFinished);
 		CHAIN.slice(0, -1).forEach((name, i) => {
 			writeAgent(config, name, `allowed_subagents: ${CHAIN[i + 1]}\n`, `You are ${name}.`);
 		});

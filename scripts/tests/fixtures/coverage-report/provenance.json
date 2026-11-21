@@ -20,14 +20,6 @@
    "original_file_rows": 744,
    "kept_file_rows": 74,
    "fixture_sha256": "bc55d6c9ece25a8e9d7bbf7d1fb7fb570ce1ced1856af0b2d65323bda2e636cb"
-  },
-  "wsl2": {
-   "artifact_id": 14338064184,
-   "original_sha256": "b3d69b6e1d8e93f0a42730d5c8c54f2e9964d1b61030a736a7edceca72ece57c",
-   "original_signals": 32,
-   "original_file_rows": 663,
-   "kept_file_rows": 62,
-   "fixture_sha256": "48882b8ede8a5e20b13f52378d8464da1313bd7666dcfabcc087e7b91a4cae60"
   }
  },
  "trim": "Each fixture keeps os, measurement_only, packages, signals, not_measured and errors byte-equivalent in value, and at most 2 file rows per signal (4 when uncovered). measured_floors and the other file rows are dropped; package totals still describe every original row. Each fixture carries rows_trimmed.original_file_rows so the renderer accepts the subset and shows a partial-rows note; production summaries must match totals exactly."

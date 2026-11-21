@@ -1,11 +1,11 @@
 /** Native-process proof that headless scenarios never evaluate the fork's testing host. */
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { runTree } from "@nredd/pi-test-lib/run-tree";
-import { expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished } from "vitest";
 
 const fixture = new URL("./fixtures/scenario-session.ts", import.meta.url).href;
 const faux = new URL("../../../tests/lib/src/faux.ts", import.meta.url).href;
@@ -38,34 +38,34 @@ if (globalThis.Bun) {
 
 /** Launch the current engine, with a disposable home and no inherited provider credentials. */
 async function run(body: string) {
-	const root = mkdtempSync(join(tmpdir(), "scenario-headless-process-"));
+	const root = makeTestTempDir("scenario-headless-process-", (cleanup) => {
+		onTestFinished(() => {
+			cleanup();
+			expect(existsSync(root)).toBe(false);
+		});
+	});
 	const home = join(root, "home");
 	const temp = join(root, "tmp");
 	mkdirSync(home);
 	mkdirSync(temp);
-	try {
-		const result = await runTree(process.execPath, ["--input-type=module", "-e", guard + body], {
-			cwd: fileURLToPath(new URL("..", import.meta.url)),
-			env: {
-				PATH: process.env.PATH,
-				...isolatedHomeEnv(home),
-				TMPDIR: temp,
-				TMP: temp,
-				TEMP: temp,
-				PI_OFFLINE: "1",
-				PI_NO_LOCAL_LLM: "1",
-				JITI_FS_CACHE: "false",
-			},
-			timeoutMs: 5_000,
-		});
-		expect(result.error).toBeUndefined();
-		expect(result.timedOut).toBe(false);
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		return JSON.parse(result.stdout);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-		expect(existsSync(root)).toBe(false);
-	}
+	const result = await runTree(process.execPath, ["--input-type=module", "-e", guard + body], {
+		cwd: fileURLToPath(new URL("..", import.meta.url)),
+		env: {
+			PATH: process.env.PATH,
+			...isolatedHomeEnv(home),
+			TMPDIR: temp,
+			TMP: temp,
+			TEMP: temp,
+			PI_OFFLINE: "1",
+			PI_NO_LOCAL_LLM: "1",
+			JITI_FS_CACHE: "false",
+		},
+		timeoutMs: 5_000,
+	});
+	expect(result.error).toBeUndefined();
+	expect(result.timedOut).toBe(false);
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	return JSON.parse(result.stdout);
 }
 
 it("runs and persists a real physical child without evaluating a fork testing module", async () => {

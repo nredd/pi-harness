@@ -1,17 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHomeResourceLoader, normalizeResourceSettings } from "../src/resource-loader.ts";
 
 let root: string;
 
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "pi-resource-loader-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("pi-resource-loader-", onTestFinished);
 });
-
-afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("normalizeResourceSettings", () => {
 	it("expands a bare `~` entry to the injected home and keeps its filter modifier", () => {

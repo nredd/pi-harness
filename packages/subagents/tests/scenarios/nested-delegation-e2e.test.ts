@@ -16,11 +16,11 @@
  * a passing test. Each run therefore pins `live: false` rather than trusting the
  * env var to leave it alone — the pre-publish smoke sets it globally.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerAgents } from "../../src/agent-types.ts";
 import { loadCustomAgents } from "../../src/custom-agents.ts";
 import { encodeCwd, transcriptRoot } from "../../src/output-file.ts";
@@ -83,18 +83,15 @@ function writeAgents(cwd: string): void {
 
 describe("nested delegation e2e (real pi-mono, faux model)", () => {
 	let run: PrintModeRun | undefined;
-	const tmpDirs: string[] = [];
 
 	afterEach(async () => {
 		await run?.dispose();
 		run = undefined;
 		resetBudgetForTests();
-		for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 	});
 
 	it("a child with allowed_subagents spawns its own child, and the output travels back up", async () => {
-		const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-"));
-		tmpDirs.push(cwd);
+		const cwd = makeTestTempDir("nested-e2e-", onTestFinished);
 		writeAgents(cwd);
 
 		/** Tool names each session was actually offered, keyed by who it is. */
@@ -178,8 +175,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 	});
 
 	it("runs a nested child in the foreground and streams its transcript", async () => {
-		const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-bg-"));
-		tmpDirs.push(cwd);
+		const cwd = makeTestTempDir("nested-e2e-bg-", onTestFinished);
 		writeAgents(cwd);
 		const cwdRoot = join(transcriptRoot(), encodeCwd(cwd));
 		rmSync(cwdRoot, { recursive: true, force: true });
@@ -257,8 +253,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 	// slots at once; each keeps its slot while its reviewer runs, and the
 	// reserve is what lets a reviewer start with both implementer slots taken.
 	it("three implementers each wait on a depth-2 reviewer under a cap of 3 and all finish", async () => {
-		const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-budget-"));
-		tmpDirs.push(cwd);
+		const cwd = makeTestTempDir("nested-e2e-budget-", onTestFinished);
 		writeAgents(cwd);
 		let maxActive = 0;
 

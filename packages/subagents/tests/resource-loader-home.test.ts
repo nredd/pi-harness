@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { build } from "vite";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { normalizeResourceSettings } from "../src/resource-loader.ts";
 import { hermeticDir } from "./fixtures/boot-extension.ts";
 
@@ -50,7 +50,7 @@ describe("real resource-loader settings home", () => {
 		it.each(["global", "project"])(
 			`${mode} isolates %s settings from a decoy ambient home`,
 			(scope) => {
-				const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+				const root = makeTestTempDir("real-loader-home-", onTestFinished);
 				const ambient = join(root, "ambient");
 				mkdirSync(ambient);
 				const env: NodeJS.ProcessEnv = {
@@ -65,21 +65,17 @@ describe("real resource-loader settings home", () => {
 				};
 				delete env.PI_CODING_AGENT_DIR;
 				delete env.PI_CODING_AGENT_SESSION_DIR;
-				try {
-					// HOME changes only at process creation, so Node and Bun both see the
-					// same disposable ambient home. The production code never mutates it.
-					const args = [join(bundleDir, "probe.mjs")];
-					const child = spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: PROBE_CHILD_TIMEOUT_MS });
-					expect(child.status, child.stdout + child.stderr).toBe(0);
-					const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
-					expect(result.runtime).toBe(process.versions.bun ?? "node");
-					expect(result.forbiddenProbes).toEqual([]);
-					expect(result.sawInjectedPackage).toBe(true);
-					expect(result.sawInjectedExtension).toBe(true);
-					expect(result.loaded.sort()).toEqual(mode === "runner" ? ["INJECTED:extension", "INJECTED:package"] : []);
-				} finally {
-					rmSync(root, { recursive: true, force: true });
-				}
+				// HOME changes only at process creation, so Node and Bun both see the
+				// same disposable ambient home. The production code never mutates it.
+				const args = [join(bundleDir, "probe.mjs")];
+				const child = spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: PROBE_CHILD_TIMEOUT_MS });
+				expect(child.status, child.stdout + child.stderr).toBe(0);
+				const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+				expect(result.runtime).toBe(process.versions.bun ?? "node");
+				expect(result.forbiddenProbes).toEqual([]);
+				expect(result.sawInjectedPackage).toBe(true);
+				expect(result.sawInjectedExtension).toBe(true);
+				expect(result.loaded.sort()).toEqual(mode === "runner" ? ["INJECTED:extension", "INJECTED:package"] : []);
 			},
 			PROBE_TEST_BUDGET_MS,
 		);
@@ -89,7 +85,7 @@ describe("real resource-loader settings home", () => {
 it(
 	"keeps ambient user skill content out of an injected-home preload",
 	() => {
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -104,22 +100,18 @@ it(
 		};
 		delete env.PI_CODING_AGENT_DIR;
 		delete env.PI_CODING_AGENT_SESSION_DIR;
-		try {
-			const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
-				env,
-				encoding: "utf8",
-				timeout: PROBE_CHILD_TIMEOUT_MS,
-			});
-			expect(child.status, child.stdout + child.stderr).toBe(0);
-			const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
-			expect(result.runtime).toBe(process.versions.bun ?? "node");
-			// The decoy is the only skill with this name: any ambient leak would read as its text.
-			expect(result.content).toContain("not found");
-			expect(result.content).not.toContain("AMBIENT-SKILL");
-			expect(result.ambientAccesses).toEqual([]);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
+		const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
+			env,
+			encoding: "utf8",
+			timeout: PROBE_CHILD_TIMEOUT_MS,
+		});
+		expect(child.status, child.stdout + child.stderr).toBe(0);
+		const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+		expect(result.runtime).toBe(process.versions.bun ?? "node");
+		// The decoy is the only skill with this name: any ambient leak would read as its text.
+		expect(result.content).toContain("not found");
+		expect(result.content).not.toContain("AMBIENT-SKILL");
+		expect(result.ambientAccesses).toEqual([]);
 	},
 	PROBE_TEST_BUDGET_MS,
 );
@@ -128,7 +120,7 @@ it(
 	"builds a real child prompt from the injected private package, not an ambient decoy",
 	() => {
 		const fixture = hermeticDir();
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -159,7 +151,6 @@ it(
 			expect(result.ambientAccesses).toEqual([]);
 			expect(result.startupPackageAccesses).toEqual([]);
 		} finally {
-			rmSync(root, { recursive: true, force: true });
 			fixture.restore();
 		}
 	},
@@ -170,7 +161,7 @@ it(
 	"keeps a native-disabled skill out of a real injected-home child prompt",
 	() => {
 		const fixture = hermeticDir();
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -201,7 +192,6 @@ it(
 			expect(result.ambientAccesses).toEqual([]);
 			expect(result.startupPackageAccesses).toEqual([]);
 		} finally {
-			rmSync(root, { recursive: true, force: true });
 			fixture.restore();
 		}
 	},
@@ -212,7 +202,7 @@ it.each(["disabled", "allowed"])(
 	"honors a project package %s filter in a private real child behind a rejected alias",
 	(filter) => {
 		const fixture = hermeticDir();
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -248,7 +238,6 @@ it.each(["disabled", "allowed"])(
 				expect(result.childPrompt).toContain('Skill \\"packaged\\" not found');
 			}
 		} finally {
-			rmSync(root, { recursive: true, force: true });
 			fixture.restore();
 		}
 	},
@@ -258,7 +247,7 @@ it.each(["disabled", "allowed"])(
 it.each(["runner", "clone"])(
 	"#179 never reads the ambient .agents/skills root through the real %s loader",
 	(mode) => {
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -273,19 +262,15 @@ it.each(["runner", "clone"])(
 		};
 		delete env.PI_CODING_AGENT_DIR;
 		delete env.PI_CODING_AGENT_SESSION_DIR;
-		try {
-			const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
-				env,
-				encoding: "utf8",
-				timeout: PROBE_CHILD_TIMEOUT_MS,
-			});
-			expect(child.status, child.stdout + child.stderr).toBe(0);
-			const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
-			expect(result.runtime).toBe(process.versions.bun ?? "node");
-			expect(result.ambientAccesses).toEqual([]);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
+		const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
+			env,
+			encoding: "utf8",
+			timeout: PROBE_CHILD_TIMEOUT_MS,
+		});
+		expect(child.status, child.stdout + child.stderr).toBe(0);
+		const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+		expect(result.runtime).toBe(process.versions.bun ?? "node");
+		expect(result.ambientAccesses).toEqual([]);
 	},
 	PROBE_TEST_BUDGET_MS,
 );
@@ -297,7 +282,7 @@ it.each([
 ])(
 	"records the %s ambient-home bypass probe",
 	(bypass, expected) => {
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -313,18 +298,14 @@ it.each([
 		};
 		delete env.PI_CODING_AGENT_DIR;
 		delete env.PI_CODING_AGENT_SESSION_DIR;
-		try {
-			const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
-				env,
-				encoding: "utf8",
-				timeout: PROBE_CHILD_TIMEOUT_MS,
-			});
-			expect(child.status, child.stdout + child.stderr).toBe(0);
-			const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
-			expect(result.ambientAccesses).toEqual(expect.arrayContaining(expected));
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
+		const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
+			env,
+			encoding: "utf8",
+			timeout: PROBE_CHILD_TIMEOUT_MS,
+		});
+		expect(child.status, child.stdout + child.stderr).toBe(0);
+		const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+		expect(result.ambientAccesses).toEqual(expect.arrayContaining(expected));
 	},
 	PROBE_TEST_BUDGET_MS,
 );
@@ -333,7 +314,7 @@ const bunIt = process.versions.bun ? it : it.skip;
 bunIt(
 	"records the Bun.file ambient-home bypass probe",
 	() => {
-		const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
+		const root = makeTestTempDir("real-loader-home-", onTestFinished);
 		const ambient = join(root, "ambient");
 		mkdirSync(ambient);
 		const env: NodeJS.ProcessEnv = {
@@ -349,18 +330,14 @@ bunIt(
 		};
 		delete env.PI_CODING_AGENT_DIR;
 		delete env.PI_CODING_AGENT_SESSION_DIR;
-		try {
-			const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
-				env,
-				encoding: "utf8",
-				timeout: PROBE_CHILD_TIMEOUT_MS,
-			});
-			expect(child.status, child.stdout + child.stderr).toBe(0);
-			const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
-			expect(result.ambientAccesses).toEqual(expect.arrayContaining([".agents/bun-file"]));
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
+		const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], {
+			env,
+			encoding: "utf8",
+			timeout: PROBE_CHILD_TIMEOUT_MS,
+		});
+		expect(child.status, child.stdout + child.stderr).toBe(0);
+		const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
+		expect(result.ambientAccesses).toEqual(expect.arrayContaining([".agents/bun-file"]));
 	},
 	PROBE_TEST_BUDGET_MS,
 );

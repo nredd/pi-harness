@@ -38,10 +38,9 @@
  * No network/LLM: a faux Model satisfies `createAgentSession`, and the veto is
  * invoked directly rather than through a model turn.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../../src/agent-types.ts";
 import type { AgentConfig } from "../../src/types.ts";
@@ -61,8 +60,8 @@ describe("tool veto reachability against real pi-mono", () => {
 	let cwd: string;
 	let faux: ReturnType<typeof registerFauxProvider>;
 
-	beforeEach(() => {
-		cwd = mkdtempSync(join(tmpdir(), "subagents-veto-"));
+	beforeEach(({ onTestFinished }) => {
+		cwd = makeTestTempDir("subagents-veto-", onTestFinished);
 		faux = registerFauxProvider({
 			provider: "faux",
 			models: [{ id: "faux-1", contextWindow: 200_000 }],
@@ -70,7 +69,6 @@ describe("tool veto reachability against real pi-mono", () => {
 	});
 	afterEach(() => {
 		faux.unregister();
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	it("pi installs a chainable beforeToolCall, and runAgent's veto blocks out-of-scope tools", async () => {

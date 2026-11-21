@@ -1,16 +1,7 @@
-import {
-	mkdirSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isExpired, mergeQuota, type QuotaObservation } from "../../src/stats/harness/common.ts";
 import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
@@ -44,14 +35,13 @@ let repo: string;
 let agent: string;
 let viewer: string;
 let home: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "stats-harness-export-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("stats-harness-export-", onTestFinished);
 	repo = join(dir, "repo");
 	agent = join(dir, "agent");
 	viewer = join(dir, "viewer");
 	home = join(dir, "home");
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const quota = (extra: Partial<QuotaObservation> = {}): QuotaObservation => ({
 	harness: "codex",

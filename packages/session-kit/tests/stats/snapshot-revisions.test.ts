@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	decodeShard,
@@ -29,8 +29,8 @@ let root: string;
 let agent: string;
 let out: string;
 let viewer: string;
-beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "stats-revisions-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("stats-revisions-", onTestFinished);
 	agent = join(root, "agent");
 	out = join(root, "out");
 	viewer = join(root, "viewer");
@@ -41,7 +41,6 @@ afterEach(() => {
 	vi.mocked(unlink).mockRestore();
 	vi.mocked(readdir).mockRestore();
 	vi.mocked(writeFile).mockRestore();
-	rmSync(root, { recursive: true, force: true });
 });
 const manifest = (path: string): Manifest => JSON.parse(readFileSync(join(path, "manifest.json"), "utf8")) as Manifest;
 

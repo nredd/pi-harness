@@ -6,10 +6,10 @@
  * listing's guards. Each test pins the observable outcome of one branch.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { Check, Errors } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../../src/agent-manager.ts";
@@ -248,10 +248,9 @@ describe("compileJsonSchema with a validator that misbehaves", () => {
 
 describe("journal entries carrying the resume mark", () => {
 	let dir: string;
-	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "wf-journal-branch-"));
+	beforeEach(({ onTestFinished }) => {
+		dir = makeTestTempDir("wf-journal-branch-", onTestFinished);
 	});
-	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 	it("keeps `resumed: true` and drops any other value", () => {
 		const path = join(dir, "run.jsonl");
@@ -267,9 +266,9 @@ describe("saved workflow edges", () => {
 	let agentDir: string;
 	let prevAgentDir: string | undefined;
 
-	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "pi-wf-branch-"));
-		agentDir = mkdtempSync(join(tmpdir(), "pi-wf-branch-agentdir-"));
+	beforeEach(({ onTestFinished }) => {
+		tmpDir = makeTestTempDir("pi-wf-branch-", onTestFinished);
+		agentDir = makeTestTempDir("pi-wf-branch-agentdir-", onTestFinished);
 		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		resetPackageState();
@@ -279,8 +278,6 @@ describe("saved workflow edges", () => {
 		if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		resetPackageState();
-		rmSync(tmpDir, { recursive: true, force: true });
-		rmSync(agentDir, { recursive: true, force: true });
 	});
 
 	/** A package declaring individual workflow files, registered in pi's user settings. */
@@ -359,9 +356,10 @@ describe("the workflow host at its edges", () => {
 				_ctx: unknown,
 				_type: unknown,
 				_prompt: unknown,
-				opts: Record<string, unknown>,
+				opts: Record<string, unknown> & { onPrepare?: (id: string) => void },
 				onSpawned?: (id: string) => void,
 			) {
+				opts.onPrepare?.(full.id);
 				onSpawned?.(full.id);
 				await during?.(opts);
 				return { id: full.id, record: full };
@@ -387,6 +385,21 @@ describe("the workflow host at its edges", () => {
 		const host = createWorkflowHost({ pi: pi(), ctx: ctx(), manager: managerFor({ modelTier: UNMAPPED }) });
 		await host.spawnAgent(request({ onResolved: (info) => reported.push(info) }));
 		expect(reported).toEqual([{ recordId: "rec-1" }]);
+	});
+
+	it("reports no inspector or model details if allocation rejects", async () => {
+		const getRecord = vi.fn();
+		const manager = {
+			getRecord,
+			async spawnAndWait() {
+				throw new Error("no record allocated");
+			},
+		} as unknown as AgentManager;
+		const host = createWorkflowHost({ pi: pi(), ctx: ctx(), manager });
+		const onResolved = vi.fn();
+		expect(await host.spawnAgent(request({ onResolved }))).toEqual({ ok: false, error: "no record allocated" });
+		expect(getRecord).not.toHaveBeenCalled();
+		expect(onResolved).not.toHaveBeenCalled();
 	});
 
 	it("returns a non-Error the manager throws as the agent's failure", async () => {

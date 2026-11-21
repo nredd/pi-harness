@@ -1,11 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { text } from "@nredd/pi-test-lib/faux";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentCall, type PrintModeRun, runPrintMode } from "../fixtures/print-mode-runner.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -29,12 +27,11 @@ describe("background completion steering scheduling", () => {
 		await run?.dispose();
 		run = undefined;
 		delete (globalThis as Record<symbol, unknown>)[BLOCKING_TOOL_CONTROL];
-		if (cwd) rmSync(cwd, { recursive: true, force: true });
 		cwd = undefined;
 	});
 
 	it("finishes a blocking tool batch, then delivers the completion before the next model call", async () => {
-		cwd = mkdtempSync(join(tmpdir(), "subagents-steer-scheduling-"));
+		cwd = makeTestTempDir("subagents-steer-scheduling-", onTestFinished);
 
 		let enteredBlockingTool: ((signal: AbortSignal | undefined) => void) | undefined;
 		let completedBlockingTool: ((signal: AbortSignal | undefined) => void) | undefined;
@@ -160,7 +157,7 @@ describe("background completion steering scheduling", () => {
 	});
 
 	it("delivers children that finished during one tool batch together, in one message", async () => {
-		cwd = mkdtempSync(join(tmpdir(), "subagents-steer-scheduling-"));
+		cwd = makeTestTempDir("subagents-steer-scheduling-", onTestFinished);
 
 		let release!: () => void;
 		let entered!: () => void;

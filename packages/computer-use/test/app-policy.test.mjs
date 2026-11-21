@@ -152,6 +152,68 @@ test("project config can only add to blocked_apps, never remove", async ({ onTes
 	loadComputerUseConfig(cwd);
 });
 
+function stripSwiftComments(source) {
+	// Skip quoted text; keep newlines so the initializer's argument boundaries stay intact.
+	const tokens = /"(?:\\[^\n]|[^"\\\n])*"|\/\/[^\n]*|\/\*/g;
+	const blockMarkers = /\/\*|\*\//g;
+	let cursor = 0;
+	let result = "";
+	for (let token = tokens.exec(source); token; token = tokens.exec(source)) {
+		if (token[0].startsWith('"')) continue;
+		if (token[0] === "/*") {
+			blockMarkers.lastIndex = tokens.lastIndex;
+			let depth = 1;
+			while (depth) {
+				const marker = blockMarkers.exec(source);
+				assert.ok(marker, "unterminated Swift block comment");
+				depth += marker[0] === "/*" ? 1 : -1;
+			}
+			tokens.lastIndex = blockMarkers.lastIndex;
+		}
+		result += source.slice(cursor, token.index) + source.slice(token.index, tokens.lastIndex).replace(/[^\n]/g, " ");
+		cursor = tokens.lastIndex;
+	}
+	return result + source.slice(cursor);
+}
+
+function assertLiveActionBindings(swift) {
+	const factory = stripSwiftComments(swift).match(/^\tfunc actionWorld\(\) -> ActWorld \{[\s\S]*?^\t\}/m)?.[0];
+	const args = factory?.match(/^\t\treturn ActWorld\(\n([\s\S]*?)^\t\t\)$/m)?.[1];
+	assert.ok(args, "expected the live actionWorld ActWorld initializer");
+	for (const [binding, helper] of [
+		["requireTargetFocus", "requireTargetFocus(pid:)"],
+		["refuseBlockedKeyboard", "refuseBlockedKeyboardTarget(blocked:)"],
+		["refuseBlockedPoints", "refuseBlockedPoints(_:blocked:)"],
+		["snapshotClipboard", "snapshotClipboard"],
+		["pasteKeyCode", "{ pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }"],
+	]) {
+		const value = args.match(
+			new RegExp(`^\\t{3}(?:(?:requireTargetFocus|snapshotClipboard): [^,\\n]+, )?${binding}: ([^,\\n]+)`, "m"),
+		)?.[1];
+		assert.equal(value?.trimEnd(), helper, `live actionWorld must bind ${binding} to ${helper}`);
+	}
+}
+
+test("Swift live binding check rejects helpers left only in comments", () => {
+	const original = "refuseBlockedKeyboard: refuseBlockedKeyboardTarget(blocked:),";
+	const fixture = [
+		"\tfunc actionWorld() -> ActWorld {",
+		"\t\treturn ActWorld(",
+		"\t\t\trequireTargetFocus: requireTargetFocus(pid:),",
+		`\t\t\t${original}`,
+		"\t\t\trefuseBlockedPoints: refuseBlockedPoints(_:blocked:),",
+		"\t\t\tsnapshotClipboard: snapshotClipboard,",
+		"\t\t\tpasteKeyCode: { pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData) }",
+		"\t\t)",
+		"\t}",
+	].join("\n");
+	assertLiveActionBindings(fixture);
+	for (const comment of [`// ${original}`, `/*\n\t\t\t${original}\n\t\t\t*/`]) {
+		const mutant = fixture.replace(original, `${comment}\n\t\t\trefuseBlockedKeyboard: { _ in },`);
+		assert.throws(() => assertLiveActionBindings(mutant), /live actionWorld must bind refuseBlockedKeyboard to/);
+	}
+});
+
 test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
@@ -186,19 +248,23 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try withTemporaryClipboard/,
+		/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let clipboard = world\.snapshotClipboard/,
 		"paste must refuse a blocked focused app before it touches the clipboard",
 	);
-	const pasteBody = swift.match(/let restored = try withTemporaryClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
-	const recheckAt = pasteBody.indexOf("try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))");
-	const lookupAt = pasteBody.indexOf("pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData)");
-	const postAt = pasteBody.indexOf("try postKeyCode(");
+	const pasteBody =
+		swift.match(
+			/let restored = try withRestoredClipboard\(write: clipboard\.write, restore: clipboard\.restore\) \{[\s\S]*?\n\t\t\t\}\n/,
+		)?.[0] ?? "";
+	const recheckAt = pasteBody.indexOf("try world.refuseBlockedKeyboard(blockedBundleIdList(request))");
+	const lookupAt = pasteBody.indexOf("world.pasteKeyCode()");
+	const postAt = pasteBody.indexOf("try world.postKeyCode(");
+	assertLiveActionBindings(swift);
 	assert.ok(
 		lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",
 	);
 	assert.ok(
-		!pasteBody.slice(recheckAt, postAt).includes("currentKeyboardInputSource"),
+		!/(?:currentKeyboardInputSource|pasteKeyCode)\(/.test(pasteBody.slice(recheckAt, postAt)),
 		"nothing slow may sit between the last blocked-app check and the post",
 	);
 	assert.match(
@@ -211,11 +277,6 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		/else \{ return false \}\n\t+\/\/ Always host-only[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/,
 		"the restore must be host-only so a host-only secret is never republished as syncable",
 	);
-	assert.match(
-		swift,
-		/return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/,
-		"the temporary clipboard must restore on every exit, including a refusal in the body",
-	);
 	const restoreHelper = swift.match(/func withRestoredClipboard[\s\S]*?\n\}\n/)?.[0] ?? "";
 	assert.match(
 		restoreHelper,
@@ -224,15 +285,15 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/,
+		/if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = world\.setAttribute\(element, kAXFocusedAttribute/,
 		"web setText must wait for focus and refuse a blocked focused app before its HID keys",
 	);
 	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
 	const keyboardOrder = [
 		'guard delivery == "hid"',
 		"focusTargetForPhysicalInput()",
-		"try requireTargetFocus(pid: pid)",
-		"try refuseBlockedKeyboardTarget(",
+		"try world.requireTargetFocus(pid)",
+		"try world.refuseBlockedKeyboard(",
 	].map((needle) => keyboardHelper.indexOf(needle));
 	assert.ok(
 		keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]),
@@ -240,7 +301,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		keyboardHelper,
-		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry refuseBlockedKeyboardTarget/,
+		/if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry world\.refuseBlockedKeyboard/,
 		"preserveFocus skips only the focus wait, never the blocked-app check",
 	);
 	assert.match(
@@ -257,7 +318,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		"act coordinate input must not refuse before focus and preflight",
 	);
 	for (const post of ["postMouseClick(", "postMouseMove(", "postScrollWheel(", "postMouseDrag("]) {
-		const postAt = coordinates.indexOf(`try ${post}`);
+		const postAt = coordinates.indexOf(`try world.${post}`);
 		const refuseAt = coordinates.lastIndexOf("try refuseBlockedBeforePost(", postAt);
 		assert.ok(
 			refuseAt > preflightAt && postAt > refuseAt,
@@ -268,7 +329,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.match(coordinates, /try refuseBlockedBeforePost\(points\)/, "act drag must check every vertex");
 	assert.match(
 		swift,
-		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry refuseBlockedPoints\(/,
+		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry world\.refuseBlockedPoints\(/,
 		"act pointer refusal is gated on HID delivery",
 	);
 	assert.match(

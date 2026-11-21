@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { freshnessLines, timestampLabel } from "../../src/stats/freshness.ts";
 import { exportStats, importStats, loadCombined } from "../../src/stats/snapshot.ts";
 
@@ -45,7 +45,7 @@ it("lists remote machines of equal standing in machine id order, the local one f
 });
 
 it("keeps v1 producer times across new imports, corrupt/missing snapshots and last-good retention", async () => {
-	const root = mkdtempSync(join(tmpdir(), "stats-freshness-"));
+	const root = makeTestTempDir("stats-freshness-", onTestFinished);
 	const producer = join(root, "producer");
 	const viewer = join(root, "viewer");
 	const repo = join(root, "repo");
@@ -85,7 +85,6 @@ it("keeps v1 producer times across new imports, corrupt/missing snapshots and la
 		);
 	} finally {
 		vi.restoreAllMocks();
-		rmSync(root, { recursive: true, force: true });
 	}
 });
 

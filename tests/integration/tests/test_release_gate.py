@@ -349,10 +349,8 @@ def test_stack_cells_are_exactly_the_executing_matrix() -> None:
     Returns:
         None: The verifier's stack cells and platforms match `ci.yml` and `CI_PLAN["STACK_NOT_RUN"]`.
     """
-    matrix = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["stack"]["strategy"][
-        "matrix"
-    ]
-    rows = json.loads(matrix["include"].split(" || ", 1)[1].split("'")[1])
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    rows = [row for name in ("stack", "stack-macos") for row in jobs[name]["strategy"]["matrix"]["include"]]
     executing = {(row["os"], row["stack"], row["platform"]) for row in rows}
     assert {name for name in gate.expected_jobs() if name.startswith("stack ")} == {
         f"stack ({os}, {stack})" for os, stack, _ in executing

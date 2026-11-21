@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { test } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { onTestFinished, test } from "vitest";
 import requestLedgerProbe from "./request-ledger.ts";
 
 test("records source and exact custom-type provenance without replacing the request", () => {
-	const root = mkdtempSync(join(tmpdir(), "ledger-probe-"));
+	const root = makeTestTempDir("ledger-probe-", onTestFinished);
 	const old = process.env.HARNESS_LEDGER_REGISTRY;
 	const handlers = new Map<string, (event: unknown) => void>();
 	const tools = [{ name: "read", sourceInfo: { source: "builtin", path: "builtin:read" } }];
@@ -65,6 +65,5 @@ test("records source and exact custom-type provenance without replacing the requ
 	} finally {
 		if (old === undefined) delete process.env.HARNESS_LEDGER_REGISTRY;
 		else process.env.HARNESS_LEDGER_REGISTRY = old;
-		rmSync(root, { recursive: true });
 	}
 });

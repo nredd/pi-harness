@@ -1,14 +1,16 @@
 /** Root-local discovery through the public metadata and tool boundaries. */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, expect, it } from "vitest";
 import { AgentRoster, AUDIT_LIMIT, ROSTER_BYTES, ROSTER_LIMIT, rosterJson } from "../src/agent-roster.ts";
 import { createRosterTools } from "../src/roster-tools.ts";
 import type { AgentConfig, AgentRecord } from "../src/types.ts";
 
-const home = mkdtempSync(join(tmpdir(), "roster-"));
-afterEach(() => rmSync(home, { recursive: true, force: true }));
+let home: string;
+beforeEach(({ onTestFinished }) => {
+	home = makeTestTempDir("roster-", onTestFinished);
+});
 
 function record(id: string, extra: Partial<AgentRecord> = {}): AgentRecord {
 	return {
@@ -111,6 +113,7 @@ it("limits discovery to authorized siblings and direct children of the current r
 it.each([
 	["evicted", []],
 	["finished", [record("parent", { status: "completed" })]],
+	["unbound workflow", [record("parent", { workflowId: "wf_shared" })]],
 	["resumed", [record("parent", { runId: "new-run" })]],
 	["unbound", [record("parent", { runId: undefined })]],
 	["cross-root", [record("parent", { rosterRootId: "other" })]],
@@ -136,6 +139,14 @@ it("does not restore nested roster membership when a parent is reopened under a 
 		"reopened-parent",
 		"new-child",
 	]);
+});
+
+it("excludes workflow-owned records without an execution binding", () => {
+	const roster = new AgentRoster(() => [record("standalone"), record("unbound", { workflowId: "wf_shared" })]);
+	const allowed = new Set(["Explore"]);
+	expect(() => roster.child("unbound", allowed)).toThrow("no active workflow run");
+	expect(roster.audit("one")).toEqual([]);
+	expect(roster.child("standalone", allowed).agents.map((agent) => agent.id)).toEqual(["root:one", "standalone"]);
 });
 
 it("fails closed for absent, unscoped or settled callers and invalid roots", () => {

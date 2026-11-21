@@ -1,8 +1,8 @@
 /** Nested control failures and queued waits, scoped to the parent that owns them. */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.ts";
 import { runAgent } from "../src/agent-runner.ts";
@@ -12,14 +12,13 @@ import type { AgentRecord } from "../src/types.ts";
 vi.mock("../src/agent-runner.ts", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
 
 let dir: string;
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "lifecycle-nested-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("lifecycle-nested-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", join(dir, "agent"));
 });
 afterEach(() => {
 	vi.useRealTimers();
 	vi.unstubAllEnvs();
-	rmSync(dir, { recursive: true, force: true });
 });
 
 function fixture() {

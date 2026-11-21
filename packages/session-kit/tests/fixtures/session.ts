@@ -1,6 +1,4 @@
 /** Real-session fixtures shared by the Vitest and Bun scenario suites. No fake Pi or live config. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionUIContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { FakeClock } from "@nredd/pi-test-lib/clock";
@@ -15,6 +13,7 @@ import {
 	type Harness,
 	type HarnessOptions,
 } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import type { Clock } from "../../src/clock.ts";
 import { defaultConfig, type Feature, type KitConfig } from "../../src/config.ts";
 import { GOAL_ENTRY, GOAL_NUDGE_TYPE, type GoalSnapshot } from "../../src/goal/state.ts";
@@ -33,7 +32,10 @@ export function configFor(...features: Feature[]): KitConfig {
 
 /** Scratch workspace with file-backed sessions and explicitly configured real kit factories. */
 export class ScenarioFixture {
-	readonly root = mkdtempSync(join(tmpdir(), "pi-kit-scenario-"));
+	private cleanupRoot?: () => void;
+	readonly root = makeTestTempDir("pi-kit-scenario-", (cleanup) => {
+		this.cleanupRoot = cleanup;
+	});
 	readonly sessions = join(this.root, "sessions");
 	readonly agentDir = join(this.root, "agent");
 	private harnesses: Harness[] = [];
@@ -68,7 +70,7 @@ export class ScenarioFixture {
 	cleanup(): void {
 		for (const harness of this.harnesses.reverse()) harness.cleanup();
 		this.harnesses = [];
-		rmSync(this.root, { recursive: true, force: true });
+		this.cleanupRoot?.();
 	}
 }
 

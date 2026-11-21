@@ -1,9 +1,9 @@
 /** Filesystem TOCTOU and native permission failures at public resource boundaries. */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionTaskDir } from "../src/output-file.ts";
 import { resolveDeclaredPaths } from "../src/package-resources.ts";
@@ -46,8 +46,8 @@ vi.mock("node:fs", async (original) => {
 	};
 });
 let root: string;
-beforeEach(() => {
-	root = fs.mkdtempSync(join(tmpdir(), "lifecycle-filesystem-"));
+beforeEach(({ onTestFinished }) => {
+	root = makeTestTempDir("lifecycle-filesystem-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "agent"));
 });
 afterEach(() => {
@@ -56,7 +56,6 @@ afterEach(() => {
 	faults.unresolvable = "";
 	faults.chmod = false;
 	vi.unstubAllEnvs();
-	fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("resource filesystem races", () => {

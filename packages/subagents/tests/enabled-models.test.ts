@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type ModelRegistryRef, readEnabledModels, resolveEnabledModels } from "../src/enabled-models.ts";
 
@@ -30,9 +30,9 @@ describe("readEnabledModels", () => {
 	const projectFile = () => join(projectDir, ".pi", "settings.json");
 	const globalFile = () => join(agentDir, "settings.json");
 
-	beforeEach(() => {
-		agentDir = mkdtempSync(join(tmpdir(), "pi-em-global-"));
-		projectDir = mkdtempSync(join(tmpdir(), "pi-em-project-"));
+	beforeEach(({ onTestFinished }) => {
+		agentDir = makeTestTempDir("pi-em-global-", onTestFinished);
+		projectDir = makeTestTempDir("pi-em-project-", onTestFinished);
 		originalEnv = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 	});
@@ -40,8 +40,6 @@ describe("readEnabledModels", () => {
 	afterEach(() => {
 		if (originalEnv == null) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalEnv;
-		rmSync(agentDir, { recursive: true, force: true });
-		rmSync(projectDir, { recursive: true, force: true });
 	});
 
 	function writeProject(obj: unknown) {

@@ -6,6 +6,10 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 - Move the entry to `src/index.ts`, retire the inherited website/media/workflows, preserve prose, and build native payloads instead of committing them (#870).
 
+### Fixed
+
+- On macOS, recheck blocked apps before publishing a paste, reject out-of-range PIDs before any batch action runs, and reserve drag mouse-up before sending input so an allocation failure reports `input_failed` without leaving the button held (#1164).
+
 ### Removed
 
 - `UPSTREAM.md` is no longer shipped or maintained. `docs/macos-root-targeting.md` moved into the README.

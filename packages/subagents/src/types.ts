@@ -168,6 +168,12 @@ export type MentionResolution = { kind: "live"; record: AgentRecord } | { kind: 
 /** Which concurrency pool a run is charged to. */
 export type Pool = "background" | "foreground";
 
+/** Per-execution identity and live state for workflow roster access. */
+export interface RosterWorkflowRun {
+	readonly signal: AbortSignal;
+	isRunning(): boolean;
+}
+
 export interface AgentRecord {
 	id: string;
 	type: SubagentType;
@@ -385,6 +391,8 @@ export interface AgentRecord {
 	rosterRootId?: string;
 	/** Roster-only binding to the immediate parent run that spawned this nested record. */
 	rosterParentRunId?: string;
+	/** Unique workflow execution and its lifetime, inherited by nested descendants. */
+	rosterWorkflowRun?: RosterWorkflowRun;
 	/** Opaque identity of the current run, renewed on every accepted resume. */
 	runId?: string;
 }

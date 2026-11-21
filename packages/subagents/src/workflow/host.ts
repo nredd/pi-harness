@@ -49,27 +49,25 @@ import { resolveWorkflowSource } from "./saved.ts";
  */
 export const DEFAULT_GATE_TIMEOUT_MS = 10 * 60_000;
 
-export interface WorkflowHostOptions {
+export type WorkflowHostOptions = {
 	/** Home directory for nested saved workflows. */
 	homeDir?: string;
 	pi: ExtensionAPI;
 	ctx: ExtensionContext;
 	manager: AgentManager;
-	/** The run's abort signal, so killing the workflow kills its children. */
-	signal?: AbortSignal;
 	/** Groups child transcripts under the parent session. */
 	rootSessionId?: string;
-	/**
-	 * The run id every child is stamped with.
-	 *
-	 * What makes them the workflow's rather than the session's: stamped children
-	 * are filtered out of the fleet list, the widget, the `/agents` menus and
-	 * `@handle` resolution, and they take no `maxConcurrent` slot. The run
-	 * reports for them, and it has its own concurrency cap.
-	 */
-	workflowId?: string;
 	gateTimeoutMs?: number;
-}
+} & (
+	| {
+			/** Display ID used to mark the child as workflow-owned. */
+			workflowId: string;
+			/** Unique lifetime signal for this execution, not looked up by display ID. */
+			signal: AbortSignal;
+			isRunning: () => boolean;
+	  }
+	| { workflowId?: undefined; signal?: AbortSignal }
+);
 
 /**
  * Where the child worked, when that directory still exists.
@@ -190,6 +188,7 @@ function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): W
 
 export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 	const { pi, ctx, manager } = deps;
+	const workflowRun = deps.workflowId === undefined ? undefined : { signal: deps.signal, isRunning: deps.isRunning };
 	/** Runtime agent id → the manager record it spawned. Never pruned mid-run. */
 	const records = new Map<string, string>();
 	/**
@@ -257,7 +256,8 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 			 * against the wrong tree.
 			 */
 			let gate: WorkflowGateResult | undefined;
-			let spawnedId: string | undefined;
+			// The manager calls onPrepare before the runner or any of its hooks.
+			let spawnedId: string;
 
 			/**
 			 * Hand the child's EFFECTIVE configuration back to the run.
@@ -268,16 +268,8 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 			 * rather than re-deriving "the session, else the request" is the whole
 			 * point of that field existing.
 			 */
-			let sessionReady = false;
 			const report = dedupedReporter(request.onResolved);
 			const reportResolved = () => {
-				// Called from BOTH the session hook and the spawn hook, because their
-				// order is not guaranteed: the manager fires `onSpawned` after
-				// `runAgent` returns, but `runAgent` decides when its own
-				// `onSessionCreated` fires — synchronously, for a stub. Each fires once,
-				// so the first call finds a half missing and returns, and the second is
-				// the one that reports.
-				if (!sessionReady || spawnedId === undefined) return;
 				const info = resolvedInfo(manager.getRecord(spawnedId));
 				if (info !== undefined) report(info);
 			};
@@ -295,7 +287,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 					: async (worktreePath: string): Promise<void> => {
 							// A failed child's gate is never consulted — the runtime reports
 							// the child's own failure — so running it would be pure cost.
-							if (spawnedId === undefined || !succeeded(manager.getRecord(spawnedId))) return;
+							if (!succeeded(manager.getRecord(spawnedId))) return;
 							try {
 								gate = await executeGate(command, worktreePath);
 							} catch (error) {
@@ -304,66 +296,56 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 						};
 
 			try {
-				const { record } = await manager.spawnAndWait(
-					pi,
-					ctx,
-					dispatch.type,
-					request.prompt,
-					{
-						description: request.label,
-						modelSelection: selection,
-						// Same as the Agent tool: `isolated` comes off the agent definition.
-						// Left out, a hermetic agent's script-spawned children loaded every
-						// host extension and picked up its MCP and web tools.
-						...(config?.isolated !== undefined ? { isolated: config.isolated } : {}),
-						// The stamp is what keeps this child out of the session's
-						// `maxConcurrent` pool — see `occupiesPoolSlot`. The run already
-						// bounds how many of its agents run at once, and counting them
-						// twice would let one fan-out starve everything else the user is
-						// doing. No `bypassQueue` needed: an agent outside the pool is
-						// never queued behind it.
-						...(deps.workflowId !== undefined ? { workflowId: deps.workflowId } : {}),
-						...(model !== undefined ? { model } : {}),
-						// Validated worker-side against the same list pi accepts, so the
-						// cast asserts what the boundary has already checked. Left unset,
-						// the agent definition's `thinking` (then the parent's) still wins —
-						// same precedence as `model` above.
-						...(request.effort !== undefined ? { thinkingLevel: request.effort as ThinkingLevel } : {}),
-						// Seeded with the REQUEST, not the outcome. The manager overwrites
-						// the effective half at session creation; without a seed there is
-						// nothing for it to compare against, so a level pi clamped would be
-						// indistinguishable from one that was honoured.
-						invocation: {
-							...(request.effort !== undefined ? { thinking: request.effort as ThinkingLevel } : {}),
-						},
-						// Fires once the child's session exists, which is where the model
-						// and the clamped thinking level first become knowable.
-						onSessionCreated: () => {
-							sessionReady = true;
-							reportResolved();
-						},
-						// The manager relabels the record from each answered message (the
-						// physical model and the level it really ran at) before this fires,
-						// so the card follows routing as it happens, not only at settle.
-						onAssistantUsage: reportResolved,
-						...(request.schema !== undefined ? { structuredOutput: request.schema } : {}),
-						...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
-						...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-						...(deps.rootSessionId !== undefined ? { rootSessionId: deps.rootSessionId } : {}),
-						...(onBeforeWorktreeCleanup !== undefined ? { onBeforeWorktreeCleanup } : {}),
+				const options: Parameters<AgentManager["spawnAndWait"]>[4] = {
+					description: request.label,
+					modelSelection: selection,
+					// Same as the Agent tool: `isolated` comes off the agent definition.
+					// Left out, a hermetic agent's script-spawned children loaded every
+					// host extension and picked up its MCP and web tools.
+					...(config?.isolated !== undefined ? { isolated: config.isolated } : {}),
+					// The stamp is what keeps this child out of the session's
+					// `maxConcurrent` pool — see `occupiesPoolSlot`. The run already
+					// bounds how many of its agents run at once, and counting them
+					// twice would let one fan-out starve everything else the user is
+					// doing. No `bypassQueue` needed: an agent outside the pool is
+					// never queued behind it.
+					...(deps.workflowId !== undefined ? { workflowId: deps.workflowId, rosterWorkflowRun: workflowRun } : {}),
+					...(model !== undefined ? { model } : {}),
+					// Validated worker-side against the same list pi accepts, so the
+					// cast asserts what the boundary has already checked. Left unset,
+					// the agent definition's `thinking` (then the parent's) still wins —
+					// same precedence as `model` above.
+					...(request.effort !== undefined ? { thinkingLevel: request.effort as ThinkingLevel } : {}),
+					// Seeded with the REQUEST, not the outcome. The manager overwrites
+					// the effective half at session creation; without a seed there is
+					// nothing for it to compare against, so a level pi clamped would be
+					// indistinguishable from one that was honoured.
+					invocation: {
+						...(request.effort !== undefined ? { thinking: request.effort as ThinkingLevel } : {}),
 					},
-					(id) => {
+					// Fires once the child's session exists, which is where the model
+					// and the clamped thinking level first become knowable.
+					onSessionCreated: reportResolved,
+					// The manager relabels the record from each answered message (the
+					// physical model and the level it really ran at) before this fires,
+					// so the card follows routing as it happens, not only at settle.
+					onAssistantUsage: reportResolved,
+					...(request.schema !== undefined ? { structuredOutput: request.schema } : {}),
+					...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
+					...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+					...(deps.rootSessionId !== undefined ? { rootSessionId: deps.rootSessionId } : {}),
+					...(onBeforeWorktreeCleanup !== undefined ? { onBeforeWorktreeCleanup } : {}),
+					// Bind before queueing, model admission or worktree creation so
+					// abortAgent can stop a child that has not reached the runner.
+					onPrepare: (id) => {
 						spawnedId = id;
 						records.set(request.agentId, id);
-						// Ahead of `reportResolved`, and not folded into it: that one waits
-						// for the child's session so it can name the effective model, while
-						// the record id is known here and is what the inspector opens a
-						// conversation on. A child that fails before its session resolves
-						// would otherwise never be openable at all.
-						request.onResolved?.({ recordId: id });
-						reportResolved();
 					},
-				);
+				};
+				// The inspector should only link to a record that got past startup.
+				const { record } = await manager.spawnAndWait(pi, ctx, dispatch.type, request.prompt, options, (id) => {
+					request.onResolved?.({ recordId: id });
+				});
 				const finalInfo = resolvedInfo(record);
 				if (finalInfo) report(finalInfo);
 				return { ...toSpawnResult(record), ...(gate !== undefined ? { gate } : {}) };
@@ -377,8 +359,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 
 		abortAgent(agentId) {
 			const id = records.get(agentId);
-			// Nothing to abort before the manager has issued an id — the child is
-			// still in startup, and the run's own signal reaches it there.
+			// No id only if the request has not created a manager record.
 			if (id !== undefined) manager.abort(id);
 		},
 

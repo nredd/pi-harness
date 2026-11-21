@@ -519,6 +519,8 @@ interface SpawnOptions {
 	 * counting them twice would let one workflow starve the whole session.
 	 */
 	workflowId?: string;
+	/** Roster-only execution identity; the workflow host supplies its lifetime signal. */
+	rosterWorkflowRun?: AgentRecord["rosterWorkflowRun"];
 	/**
 	 * Make the child report through a `StructuredOutput` tool built from this
 	 * compiled schema. Set only by the workflow host, for `agent({ schema })`.
@@ -980,6 +982,8 @@ export class AgentManager {
 			rosterRootId:
 				options.parentAgentId !== undefined ? rosterParent?.rosterRootId : ctx.sessionManager?.getSessionId?.(),
 			rosterParentRunId: rosterParent?.runId,
+			rosterWorkflowRun:
+				options.parentAgentId !== undefined ? rosterParent?.rosterWorkflowRun : options.rosterWorkflowRun,
 			runId: randomUUID(),
 		};
 		this.decidePlanGate(record, () => queryPlanPolicy(pi.events));
@@ -2264,6 +2268,7 @@ export class AgentManager {
 
 	/** Mark a dequeued record stopped and tell `onQueuedStop`; the queue entry is already gone. */
 	private stopQueued(record: AgentRecord): void {
+		this.detachParentAbort(record);
 		record.status = "stopped";
 		record.completedAt = this.clock.now();
 		this.onQueuedStop?.(record);

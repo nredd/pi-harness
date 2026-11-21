@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseColor } from "@earendil-works/pi-tui";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/stats/index.ts";
@@ -15,13 +15,12 @@ type Any = any;
 let dir: string;
 const saved = { agent: process.env.PI_CODING_AGENT_DIR, sessions: process.env.PI_CODING_AGENT_SESSION_DIR };
 
-beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "psk-statscmd-"));
+beforeEach(({ onTestFinished }) => {
+	dir = makeTestTempDir("psk-statscmd-", onTestFinished);
 	process.env.PI_CODING_AGENT_DIR = dir;
 	delete process.env.PI_CODING_AGENT_SESSION_DIR;
 });
 afterEach(() => {
-	rmSync(dir, { recursive: true, force: true });
 	for (const [key, value] of [
 		["PI_CODING_AGENT_DIR", saved.agent],
 		["PI_CODING_AGENT_SESSION_DIR", saved.sessions],

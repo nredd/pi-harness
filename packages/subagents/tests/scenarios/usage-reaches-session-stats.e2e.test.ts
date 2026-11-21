@@ -30,11 +30,9 @@
  * on past it (the Workflow tool needs 0.84.0), so this no longer pins the range's
  * lower edge — it still pins the behaviour that made 0.80.x unsupportable.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent } from "../../src/agent-runner.ts";
 import { PendingUsagePool } from "../../src/usage.ts";
@@ -49,13 +47,12 @@ describe("subagent usage reaches the parent session's stats (real pi)", () => {
 	let cwd: string;
 	let faux: ReturnType<typeof registerFauxProvider>;
 
-	beforeEach(() => {
-		cwd = mkdtempSync(join(tmpdir(), "subagents-usage-e2e-"));
+	beforeEach(({ onTestFinished }) => {
+		cwd = makeTestTempDir("subagents-usage-e2e-", onTestFinished);
 		faux = registerFauxProvider({ provider: "faux", models: [{ id: "faux-1", contextWindow: 200_000 }] });
 	});
 	afterEach(() => {
 		faux.unregister();
-		rmSync(cwd, { recursive: true, force: true });
 	});
 
 	/** A real session, in memory, on a faux model. */

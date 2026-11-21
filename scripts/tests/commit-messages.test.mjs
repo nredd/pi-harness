@@ -2,11 +2,12 @@
 // Exercise the actual CLI against disposable Git histories, including a depth-one file:// clone.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "vitest";
+import { makeTestTempDir } from "../../tests/lib/src/temp-dir.ts";
 import { main as commits } from "../check-commit-messages.mjs";
 
 const checker = fileURLToPath(new URL("../check-commit-messages.mjs", import.meta.url));
@@ -19,8 +20,7 @@ const env = Object.fromEntries(
 Object.assign(env, { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" });
 
 function fixture(t) {
-	const work = mkdtempSync(path.join(os.tmpdir(), "cu-commit-range-"));
-	t.onTestFinished(() => rmSync(work, { recursive: true, force: true }));
+	const work = makeTestTempDir("cu-commit-range-", t.onTestFinished);
 	const repo = path.join(work, "repo");
 	mkdirSync(repo);
 	const git = (...args) =>

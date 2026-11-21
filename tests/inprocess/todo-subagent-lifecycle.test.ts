@@ -3,10 +3,10 @@
  * tracked without a stale `created` winning, and an RPC spawn's wake eligibility reaches the todo notice.
  * The event-only halves stay in `packages/subagents/tests/lifecycle-identity.test.ts`.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type * as AgentRunner from "../../packages/subagents/src/agent-runner.ts";
 import { agentLookup, agentStateFor, applyAgentEvent, forgetAgents } from "../../packages/todo/src/agents.ts";
 import { formatInProgressNotice } from "../../packages/todo/src/plan/hooks.ts";
@@ -30,7 +30,7 @@ let saved: { cwd: string; agentDir?: string };
 
 beforeEach(() => {
 	saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
-	cwd = mkdtempSync(join(tmpdir(), "todo-subagent-lifecycle-"));
+	cwd = makeTestTempDir("todo-subagent-lifecycle-", onTestFinished);
 	process.chdir(cwd);
 	process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
 	mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
@@ -46,7 +46,6 @@ afterEach(() => {
 	if (saved.agentDir == null) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
 	registerAgents(new Map());
-	rmSync(cwd, { recursive: true, force: true });
 });
 
 /** A parent context whose model registry knows only the parent model. */

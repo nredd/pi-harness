@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { main, run, runCli } from "../scripts/build-native.mjs";
 
 const scriptPath = fileURLToPath(new URL("../scripts/build-native.mjs", import.meta.url));
@@ -17,15 +17,11 @@ let tmpdir;
 let cwd;
 
 beforeEach(() => {
-	sandbox = mkdtempSync(path.join(os.tmpdir(), "cu-build-native-"));
+	sandbox = makeTestTempDir("cu-build-native-", onTestFinished);
 	rootDir = path.join(sandbox, "pkg");
 	tmpdir = path.join(sandbox, "tmp");
 	cwd = path.join(sandbox, "cwd");
 	for (const dir of [rootDir, tmpdir, cwd]) mkdirSync(dir, { recursive: true });
-});
-
-afterEach(() => {
-	rmSync(sandbox, { recursive: true, force: true });
 });
 
 function elf(machine) {

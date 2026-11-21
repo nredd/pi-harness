@@ -2,13 +2,13 @@
  * Prompt-composition regression (#237) -- real Pi loader and AgentSession, no
  * mocked tool registration. The assertion is at the same seam agents receive.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createHarness, fauxAssistantMessage, fauxToolCall, getToolResult } from "@nredd/pi-test-lib/harness";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
 const OLD_GUIDANCE = /exactly one task in_progress|never batch completions/i;
@@ -18,7 +18,7 @@ describe("todo SDK-composed prompt", () => {
 	let previousXdgConfigHome: string | undefined;
 
 	beforeEach(() => {
-		home = mkdtempSync(join(tmpdir(), "rpiv-todo-prompt-"));
+		home = makeTestTempDir("rpiv-todo-prompt-", onTestFinished);
 		previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
 		process.env.XDG_CONFIG_HOME = join(home, ".config");
 		mkdirSync(join(home, "cwd"));
@@ -31,7 +31,6 @@ describe("todo SDK-composed prompt", () => {
 	afterEach(() => {
 		if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
 		else process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
-		rmSync(home, { recursive: true, force: true });
 	});
 
 	it("composes parallel ownership and immediate atomic completion guidance", async () => {
