@@ -82,9 +82,10 @@ def test_script_lcov_replays_from_a_different_checkout(tmp_path: Path) -> None:
         assert (replay_root / files[0]).resolve(strict=True) == replay_root / source
 
 
-@pytest.mark.parametrize("assertion", ["False", "True"])
-def test_script_gate_publishes_both_reports_after_pytest_failure(tmp_path: Path, assertion: str) -> None:
-    """Run miniature scripts gates with a failed test or missed coverage threshold."""
+@pytest.mark.parametrize("mode", ["test fails", "threshold fails", "no coverage"])
+def test_script_gate_requires_fresh_reports(tmp_path: Path, mode: str) -> None:
+    """Run miniature scripts gates under shell errexit with stale artifacts present."""
+    assertion = mode != "test fails"
     shutil.copyfile(ROOT / "Makefile", tmp_path / "Makefile")
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -122,9 +123,29 @@ def test_script_gate_publishes_both_reports_after_pytest_failure(tmp_path: Path,
         "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
         "PYTHONPATH": os.pathsep.join(map(str, (scripts, guard.parent))),
     }
+    reports = (
+        scripts / "coverage/python/lcov.info",
+        tmp_path / "packages/preset/coverage/sweep-guard/lcov.info",
+    )
+    for report in reports:
+        report.parent.mkdir(parents=True)
+        report.write_text("stale")
+    data = CoverageData(basename=str(scripts / ".coverage"))
+    data.add_lines({str(scripts / "example.py"): [1], str(guard): [1]})
+    data.write()
+    stale_worker = scripts / ".coverage.stale-worker"
+    stale_worker.touch()
+    if mode == "no coverage":
+        env["PYTEST_ADDOPTS"] = "--no-cov"
+    # macOS Make 3.81 ignores `.SHELLFLAGS`; enforce errexit on it too.
+    shell = tmp_path / "errexit-sh"
+    shell.write_text('#!/bin/sh\nexec /bin/sh -e "$@"\n')
+    shell.chmod(0o755)
     done = subprocess.run(
         [
             "/usr/bin/make",
+            ".SHELLFLAGS=-ec",
+            f"SHELL={shell}",
             "check-scripts-python",
             f"COVERAGE_REPORT={quote(sys.executable)} -m coverage",
         ],
@@ -137,13 +158,17 @@ def test_script_gate_publishes_both_reports_after_pytest_failure(tmp_path: Path,
     )
     assert done.returncode != 0
     assert "Error 1" in done.stderr, (done.stdout, done.stderr)
-    expected = "1 failed" if assertion == "False" else "1 passed"
-    assert expected in done.stdout
-    assert "Required test coverage of 100% not reached" in done.stdout
-    scripts_report = scripts / "coverage/python/lcov.info"
-    guard_report = tmp_path / "packages/preset/coverage/sweep-guard/lcov.info"
-    assert "SF:example.py\n" in scripts_report.read_text()
-    assert "SF:skills/ship-issue/sweep_guard.py\n" in guard_report.read_text()
+    assert ("1 passed" if assertion else "1 failed") in done.stdout
+    assert not stale_worker.exists()
+    scripts_report, guard_report = reports
+    if mode == "no coverage":
+        assert "pytest produced no fresh coverage" in done.stderr
+        assert not (scripts / ".coverage").exists()
+        assert not any(report.exists() for report in reports)
+    else:
+        assert "Required test coverage of 100% not reached" in done.stdout
+        assert "SF:example.py\n" in scripts_report.read_text()
+        assert "SF:skills/ship-issue/sweep_guard.py\n" in guard_report.read_text()
 
 
 def launch_bun(tmp_path: Path, *args: str) -> list[str]:
