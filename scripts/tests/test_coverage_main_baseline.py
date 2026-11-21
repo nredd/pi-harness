@@ -248,7 +248,7 @@ def test_recency_and_cancelled_mac_walkback(tmp_path: Path) -> None:
         AssertionError: Fixture or contract did not match.
     """
     api = MainGitHub()
-    newest, older = main_push(20, run_attempt=3), main_push(18)
+    newest, older = main_push(20, run_attempt=3, created_at="2026-11-20T04:40:01Z"), main_push(18)
     api.runs.extend(
         [
             main_push(30, status="in_progress", conclusion=None),
@@ -258,12 +258,20 @@ def test_recency_and_cancelled_mac_walkback(tmp_path: Path) -> None:
             main_push(26, head_repository={"id": 90, "full_name": FORK, "fork": True}),
         ]
     )
-    api.add(newest, cancelled=True)
-    _, gap = api.add(main_push(19))
+    _, retained = api.add(newest, cancelled=True)
+    jobs, gap = api.add(main_push(19))
+    jobs[-1]["steps"].append({"name": UPLOAD, "conclusion": "skipped"})
     gap.pop()  # No macOS artifact, even though this intermediate run has no cancellation.
-    api.add(older)
-    # The new success finished first, and the current PR tested a different SHA.
-    assert newest["updated_at"] < older["updated_at"]
+    _, earlier = api.add(older)
+    retained.append(
+        earlier[-1]
+        | {
+            "id": 2201,
+            "created_at": "2026-11-20T04:49:59Z",
+            "workflow_run": retained[0]["workflow_run"],
+        }
+    )  # Retained from attempt 1; GitHub lists artifacts across all attempts.
+    api.runs[-3:] = [older, newest, api.runs[-2]]
     summary = tmp_path / "summary.md"
     pub.publish(api, pub.Run.parse(api.data), POLICY, summary)
     (write,) = api.writes
@@ -299,7 +307,10 @@ def test_recency_and_cancelled_mac_walkback(tmp_path: Path) -> None:
         {"id": 123},
         {"workflow_id": 99},
         {"path": ".github/workflows/other.yml"},
+        {"event": "workflow_dispatch"},
+        {"status": "in_progress"},
         {"head_branch": "topic"},
+        {"head_repository": REPOSITORY | {"full_name": FORK}},
         {"pull_requests": [{"number": 4}]},
         {"repository": REPOSITORY | {"full_name": FORK}},
         {"repository": REPOSITORY | {"fork": True}},
@@ -325,6 +336,28 @@ def test_rejects_ineligible_run(mutation: dict[str, Any]) -> None:
     assert not pub.main_baselines(api, pub.Run.parse(api.data), pub.read_summary(POLICY))
     assert api.reads == ["actions/workflows/12/runs"]
     assert not api.downloads
+
+
+def test_non_main_pr_base_still_compares_to_main(tmp_path: Path) -> None:
+    """Compare a same-repository PR targeting another branch to the main push.
+
+    Parameters:
+        tmp_path (Path): Isolated summary directory.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Publication used a different baseline.
+    """
+    api = MainGitHub()
+    api.data["head_repository"] = REPOSITORY
+    api.pulls[0]["head"]["repo"] = REPOSITORY
+    api.pulls[0]["base"]["ref"] = "maintenance"
+    source = main_push(20)
+    api.add(source)
+    pub.publish(api, pub.Run.parse(api.data), POLICY, tmp_path / "summary.md")
+    (write,) = api.writes
+    assert f"/commit/{source['head_sha']}" in write[2]["body"]
+    assert "lines +0, functions +0, branches +0" in write[2]["body"]
 
 
 @pytest.mark.parametrize(

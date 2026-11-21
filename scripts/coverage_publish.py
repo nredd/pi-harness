@@ -278,24 +278,71 @@ def is_latest(api: GitHub, run: Run) -> bool:
     return run in peers and max(peer.order for peer in peers) == run.order
 
 
+@dataclass(frozen=True)
+class Census:
+    """Attempt-scoped jobs and run-wide artifacts returned by GitHub."""
+
+    jobs: list[Any]
+    artifacts: list[Any]
+
+
+def uploaded_artifacts(upload: dict[str, Any], artifacts: list[Any], host: str) -> list[Any]:
+    """Associate artifact rows with the attempt's upload step, including expired rows.
+
+    Parameters:
+        upload (dict[str, Any]): Upload step from the attempt job, or an empty record.
+        artifacts (list[Any]): Run-wide artifact rows.
+        host (str): Coverage artifact host.
+    Returns:
+        list[Any]: Rows named for the host and created during that upload step.
+    Raises:
+        ValueError: A relevant timestamp is malformed.
+        KeyError: An artifact row lacks required metadata.
+    """
+    if not upload.get("started_at") or not upload.get("completed_at"):
+        return []
+    start, end = timestamp(upload["started_at"]), timestamp(upload["completed_at"])
+    return [
+        row
+        for row in artifacts
+        if row["name"] == ARTIFACT.format(host=host) and start <= timestamp(row["created_at"]) <= end
+    ]
+
+
 def fetch_evidence(
     api: GitHub,
     run: Run,
     directory: Path,
     host: str = "ubuntu-24.04",
     *,
-    census: tuple[list[Any], list[Any]] | None = None,
+    census: Census | None = None,
     repository_id: int | None = None,
 ) -> str:
     """Determine NOT RUN from the attempt job, or download its unique bounded artifact.
 
     Upload time is only an extra ownership check; the renderer must still validate the
-    full producer sidecar. Artefacts from another attempt are never a fallback.
+    full producer sidecar. Artifacts from another attempt are never a fallback.
+
+    Parameters:
+        api (GitHub): Repository-scoped transport.
+        run (Run): Selected CI execution and attempt.
+        directory (Path): Private download directory.
+        host (str): Coverage artifact host.
+        census (Census | None): Preloaded attempt jobs and run-wide artifacts; otherwise fetch on demand.
+        repository_id (int | None): For main pushes, require a successful producer and bind the
+            artifact to this repository ID, head repository ID, run, branch and head SHA.
+    Returns:
+        str: One of `available`, `NOT RUN` or `unavailable`.
+    Raises:
+        OSError: A metadata request failed.
+        KeyError: Required metadata is missing.
+        TypeError: Metadata has an unexpected shape.
+        ValueError: Metadata or the main producer binding is invalid.
     """
     jobs = (
         api.pages(f"actions/runs/{run.id}/attempts/{run.attempt}/jobs", "jobs")
         if census is None
-        else census[0]
+        else census.jobs
     )
     owned = [job for job in jobs if job["name"] == OWNED_JOB.format(host=host)]
     if len(owned) != 1:
@@ -316,16 +363,11 @@ def fetch_evidence(
         or not upload.get("completed_at")
     ):
         return "unavailable"
-    start, end = timestamp(upload["started_at"]), timestamp(upload["completed_at"])
     artifact = ARTIFACT.format(host=host)
-    artifacts = api.pages(f"actions/runs/{run.id}/artifacts", "artifacts") if census is None else census[1]
-    candidates = [
-        row
-        for row in artifacts
-        if row["name"] == artifact
-        and row["expired"] is False
-        and start <= timestamp(row["created_at"]) <= end
-    ]
+    artifacts = (
+        api.pages(f"actions/runs/{run.id}/artifacts", "artifacts") if census is None else census.artifacts
+    )
+    candidates = [row for row in uploaded_artifacts(upload, artifacts, host) if row["expired"] is False]
     if len(candidates) != 1 or positive_id(candidates[0]["size_in_bytes"]) > MAX_ARCHIVE_BYTES:
         return "unavailable"
     row = candidates[0]
@@ -532,7 +574,19 @@ def timestamp(value: object) -> datetime:
 
 
 def main_run(api: GitHub, data: Any, trigger: Run) -> tuple[Run, int]:
-    """Bind an eligible main push to the same CI workflow and non-fork repository."""
+    """Bind an eligible main push to the same CI workflow and non-fork repository.
+
+    Parameters:
+        api (GitHub): Repository-scoped transport.
+        data (Any): Workflow run listing row.
+        trigger (Run): PR execution identifying the CI workflow.
+    Returns:
+        tuple[Run, int]: Eligible run and the common repository and head repository ID.
+    Raises:
+        KeyError: Required run metadata is missing.
+        TypeError: Run metadata has an unexpected shape.
+        ValueError: The row does not describe an eligible main push.
+    """
     run = Run.parse(data, "push")
     repo_id = positive_id(data["repository"]["id"])
     if (
@@ -553,7 +607,22 @@ def main_run(api: GitHub, data: Any, trigger: Run) -> tuple[Run, int]:
 
 
 def main_page(api: GitHub, path: str, key: str, *, limit: int = 100, **params: str) -> list[Any]:
-    """Read one bounded page, requiring the full census for jobs and artifacts."""
+    """Read one bounded page, requiring the full census for jobs and artifacts.
+
+    Parameters:
+        api (GitHub): Repository-scoped transport.
+        path (str): Repository-relative listing route.
+        key (str): GitHub list envelope key.
+        limit (int): Page size; the default of 100 requires a complete census.
+        **params (str): Collection filters.
+    Returns:
+        list[Any]: Rows returned on the first page.
+    Raises:
+        OSError: The request failed.
+        KeyError: The response is missing envelope fields.
+        TypeError: The response does not have the expected shape.
+        ValueError: The census is invalid or truncated.
+    """
     data = api.request(f"{path}?{urlencode(params | {'per_page': limit, 'page': 1})}")
     rows = data[key]
     if not isinstance(rows, list) or len(rows) > limit or (limit == 100 and data["total_count"] != len(rows)):
@@ -566,11 +635,24 @@ def main_cell(
     source: Run,
     repo_id: int,
     host: str,
-    census: tuple[list[Any], list[Any]],
+    census: Census,
     *,
     policy: dict[str, object],
 ) -> Evidence | None:
-    """Read the main artifact through the same attempt, ZIP and sidecar validation as the PR."""
+    """Read the main artifact through the same attempt, ZIP and sidecar validation as the PR.
+
+    Parameters:
+        api (GitHub): Repository-scoped transport.
+        source (Run): Selected main push and attempt.
+        repo_id (int): Verified repository and head repository ID for `source`.
+        host (str): Coverage artifact host.
+        census (Census): Attempt jobs and run-wide artifacts for `source`.
+        policy (dict[str, object]): Trusted policy used to describe comparable signals.
+    Returns:
+        Evidence | None: Validated measurement, or None for unavailable evidence.
+    Raises:
+        None.
+    """
     provenance = Provenance(
         api.repository,
         None,
@@ -604,14 +686,33 @@ def main_cell(
 
 
 def macos_cancelled(jobs: list[Any]) -> bool:
-    """Recognize macOS main-push shard cancellation before fan-in."""
+    """Recognize macOS main-push shard cancellation before fan-in.
+
+    Parameters:
+        jobs (list[Any]): Jobs returned for the selected attempt.
+    Returns:
+        bool: Whether a macOS shard was cancelled.
+    Raises:
+        KeyError: A required job field is missing.
+        TypeError: Job metadata has an unexpected shape.
+    """
     return any(
         job["name"].startswith("owned shard (macos-14, ") and job["conclusion"] == "cancelled" for job in jobs
     )
 
 
 def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict[str, tuple[Run, Evidence]]:
-    """Select by push run recency; allow a missing macOS artifact only after cancellation."""
+    """Select by push run recency; allow a missing macOS artifact only after cancellation.
+
+    Parameters:
+        api (GitHub): Repository-scoped transport.
+        trigger (Run): PR execution identifying the CI workflow independently of its base branch.
+        policy (dict[str, object]): Trusted signal policy.
+    Returns:
+        dict[str, tuple[Run, Evidence]]: Validated main baselines keyed by coverage host.
+    Raises:
+        None.
+    """
     baselines = {}
     try:
         rows = main_page(
@@ -634,11 +735,20 @@ def main_baselines(api: GitHub, trigger: Run, policy: dict[str, object]) -> dict
             route = f"actions/runs/{source.id}"
             jobs = main_page(api, f"{route}/attempts/{source.attempt}/jobs", "jobs")
             artifacts = main_page(api, f"{route}/artifacts", "artifacts")
+            census = Census(jobs=jobs, artifacts=artifacts)
             for host in hosts:
-                cell = main_cell(api, source, repo_id, host, (jobs, artifacts), policy=policy)
+                cell = main_cell(api, source, repo_id, host, census, policy=policy)
                 if cell is not None:
                     baselines[host] = source, cell
-            if any(row["name"] == ARTIFACT.format(host="macos-14") for row in artifacts):
+            # The artifact endpoint is run-wide. Only the selected attempt's upload window
+            # can stop walk-back; do not skip an expired or invalid artifact in that window.
+            if any(
+                uploaded_artifacts(step, census.artifacts, "macos-14")
+                for job in census.jobs
+                if job["name"] == OWNED_JOB.format(host="macos-14")
+                for step in job["steps"]
+                if step["name"] == UPLOAD_STEP
+            ):
                 break
             if hosts != ("macos-14",) and not macos_cancelled(jobs):
                 break
