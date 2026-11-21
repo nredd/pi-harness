@@ -7,7 +7,7 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import {
 	ALWAYS_BLOCKED_BUNDLE_IDS,
-	DEFAULT_BLOCKED_APPS,
+	defaultBlockedApps,
 	effectiveBlockedBundleIds,
 	getComputerUseConfig,
 	getLoadedComputerUseConfig,
@@ -63,6 +63,24 @@ afterEach(() => {
 });
 
 describe("defaults", () => {
+	test.each([
+		["darwin", "com.apple.Terminal"],
+		["win32", "WindowsTerminal.exe"],
+		["linux", "xterm"],
+	])("selects only the %s defaults", (platform, expected) => {
+		const original = Object.getOwnPropertyDescriptor(process, "platform");
+		Object.defineProperty(process, "platform", { ...original, value: platform });
+		try {
+			const terminals = ["com.apple.Terminal", "WindowsTerminal.exe", "xterm"];
+			assert.deepEqual(
+				loadComputerUseConfig(cwd()).config.blocked_apps.filter((id) => terminals.includes(id)),
+				[expected],
+			);
+		} finally {
+			Object.defineProperty(process, "platform", original);
+		}
+	});
+
 	test("no files and no env give the documented defaults", () => {
 		const loaded = loadComputerUseConfig(cwd());
 		assert.deepEqual(loaded.config, {
@@ -73,7 +91,7 @@ describe("defaults", () => {
 			activity_glow: false,
 			managed_browser: "chrome",
 			managed_browser_profile: null,
-			blocked_apps: [...DEFAULT_BLOCKED_APPS],
+			blocked_apps: [...defaultBlockedApps()],
 		});
 		assert.deepEqual(
 			loaded.sources.map(({ path: p, exists }) => [p, exists]),
@@ -217,7 +235,7 @@ describe("unreadable and oddly shaped files", () => {
 		const loaded = loadComputerUseConfig(cwd());
 		assert.equal(loaded.sources[1].error, undefined);
 		assert.deepEqual(loaded.sources[1].values, {});
-		assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS]);
+		assert.deepEqual(loaded.config.blocked_apps, [...defaultBlockedApps()]);
 	});
 
 	test("a non-object `computer_use` wrapper falls back to the root keys", () => {
@@ -264,7 +282,7 @@ describe("blocked_apps", () => {
 	});
 
 	test.each([
-		["not an array", "com.example.a", /blocked_apps must be an array of bundle id strings/],
+		["not an array", "com.example.a", /blocked_apps must be an array of app id strings/],
 		["null", null, /blocked_apps must be an array/],
 		["one bad entry", ["com.example.a", 5], /blocked_apps has 1 invalid entry \(each must be a non-blank string\)/],
 		["several bad entries", [" ", {}, "ok"], /blocked_apps has 2 invalid entries/],
@@ -281,7 +299,7 @@ describe("blocked_apps", () => {
 			assert.match(loaded.blockedAppsErrors[0], new RegExp(`^${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: `));
 			assert.match(loaded.blockedAppsErrors[0], message);
 			assert.match(loaded.blockedAppsErrors[0], /; keeping the current list$/);
-			assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS], scope);
+			assert.deepEqual(loaded.config.blocked_apps, [...defaultBlockedApps()], scope);
 			assert.equal(
 				"blockedAppsError" in loaded.sources[scope === "user" ? 0 : 1],
 				false,

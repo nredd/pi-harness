@@ -68,8 +68,8 @@ describe("macOS backend", () => {
 			null,
 		];
 		const expected = [
-			{ appName: "Safari", bundleId: "com.apple.Safari", pid: 10, isFrontmost: true },
-			{ appName: "Unknown App", bundleId: undefined, pid: 12, isFrontmost: false },
+			{ appName: "Safari", appId: "com.apple.Safari", bundleId: "com.apple.Safari", pid: 10, isFrontmost: true },
+			{ appName: "Unknown App", appId: undefined, bundleId: undefined, pid: 12, isFrontmost: false },
 		];
 		fakes.macos.command.mockResolvedValueOnce(raw);
 		assert.deepEqual(await macosBackend.listApps(signal), expected);
@@ -116,6 +116,7 @@ describe("macOS backend", () => {
 				windowId: 5,
 				pid: 9,
 				appName: "App",
+				appId: "b.id",
 				bundleId: "b.id",
 				title: "T",
 				role: "AXWindow",
@@ -148,6 +149,7 @@ describe("macOS backend", () => {
 			windowId: undefined,
 			pid: undefined,
 			appName: undefined,
+			appId: undefined,
 			bundleId: undefined,
 			title: "",
 			role: undefined,
@@ -194,6 +196,7 @@ describe("macOS backend", () => {
 		});
 		assert.deepEqual(await macosBackend.getFrontmost(signal), {
 			appName: "Pages",
+			appId: "b",
 			bundleId: "b",
 			pid: 7,
 			windowTitle: "Doc",
@@ -203,6 +206,7 @@ describe("macOS backend", () => {
 		fakes.macos.command.mockResolvedValueOnce({ pid: 8, windowId: "nope" });
 		assert.deepEqual(await macosBackend.getFrontmost(), {
 			appName: "Unknown App",
+			appId: undefined,
 			bundleId: undefined,
 			pid: 8,
 			windowTitle: undefined,
@@ -351,7 +355,7 @@ describe("Windows backend", () => {
 			windowId: undefined,
 			pid: 4,
 			appName: "Word.exe",
-			bundleId: undefined,
+			appId: "Word.exe",
 			title: " Report ",
 			role: undefined,
 			subrole: undefined,
@@ -391,19 +395,19 @@ describe("Windows backend", () => {
 
 	test("listApps dedupes by pid and getFrontmost picks the focused root", async () => {
 		fakes.windows.command.mockResolvedValue([
-			{ pid: 1, appName: "A", bundleId: "a.id", title: "t1" },
+			{ pid: 1, appName: "A", processName: "A.exe", title: "t1" },
 			{ pid: 1, appName: "A dup" },
 			{ appName: "no pid" },
 			{ pid: 2, isFocused: true, title: "t2", windowId: 8, rootRef: "r2" },
 		]);
 		assert.deepEqual(await backend.listApps(signal), [
-			{ appName: "A", bundleId: "a.id", pid: 1, isFrontmost: false },
-			{ appName: "Unknown", bundleId: undefined, pid: 2, isFrontmost: true },
+			{ appName: "A", appId: "A.exe", pid: 1, isFrontmost: false },
+			{ appName: "Unknown", appId: undefined, pid: 2, isFrontmost: true },
 		]);
 		assert.deepEqual(lastCall(fakes.windows), ["listRoots", {}, { signal }]);
 		assert.deepEqual(await backend.getFrontmost(), {
 			appName: "Unknown",
-			bundleId: undefined,
+			appId: undefined,
 			pid: 2,
 			windowTitle: "t2",
 			windowId: 8,
@@ -523,7 +527,8 @@ describe("Linux backend", () => {
 		const roots = await backend.listRoots({ pid: 1.2 }, signal);
 		assert.deepEqual(lastCall(fakes.linux), ["listRoots", { pid: 1 }, { signal }]);
 		assert.equal(roots[0].kind, "sheet");
-		assert.equal(roots[0].bundleId, "org.gnome.Gedit");
+		assert.equal(roots[0].appId, "gedit");
+		assert.equal(roots[0].bundleId, undefined);
 		assert.equal(roots[0].appName, "gedit");
 		assert.deepEqual(roots[0].framePoints, { x: 1, y: 2, w: 3, h: 4 });
 		assert.equal(roots[0].isMain, true);
@@ -556,12 +561,12 @@ describe("Linux backend", () => {
 			{ title: "none" },
 		]);
 		assert.deepEqual(await backend.listApps(signal), [
-			{ appName: "A", bundleId: undefined, pid: 1, isFrontmost: false },
-			{ appName: "Unknown", bundleId: undefined, pid: 2, isFrontmost: true },
+			{ appName: "A", appId: undefined, pid: 1, isFrontmost: false },
+			{ appName: "Unknown", appId: undefined, pid: 2, isFrontmost: true },
 		]);
 		assert.deepEqual(await backend.getFrontmost(), {
 			appName: "Unknown",
-			bundleId: undefined,
+			appId: undefined,
 			pid: 2,
 			windowTitle: "t",
 			windowId: 4,

@@ -77,8 +77,13 @@ const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string
 	},
 };
 
-const HOST_PLATFORM: PlatformName =
-	process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
+function hostPlatform(): PlatformName {
+	return process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
+}
+
+export function defaultBlockedApps(platform: PlatformName = hostPlatform()): readonly string[] {
+	return BLOCKED_APPS_BY_PLATFORM[platform].defaults;
+}
 
 export interface ComputerUseConfigSource {
 	path: string;
@@ -105,7 +110,7 @@ const DEFAULT_CONFIG: ComputerUseConfig = {
 	activity_glow: false,
 	managed_browser: "chrome",
 	managed_browser_profile: null,
-	blocked_apps: [...BLOCKED_APPS_BY_PLATFORM[HOST_PLATFORM].defaults],
+	blocked_apps: [...defaultBlockedApps()],
 };
 
 let activeConfig: ComputerUseConfig = { ...DEFAULT_CONFIG };
@@ -221,7 +226,7 @@ function readEnv(): Partial<ComputerUseConfig> {
 	return out;
 }
 
-export function loadComputerUseConfig(cwd: string, platform: PlatformName = HOST_PLATFORM): LoadedComputerUseConfig {
+export function loadComputerUseConfig(cwd: string, platform: PlatformName = hostPlatform()): LoadedComputerUseConfig {
 	const read = [
 		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json"), "user"),
 		readConfigFile(path.join(cwd, ".pi", "computer-use.json"), "project"),
@@ -229,7 +234,7 @@ export function loadComputerUseConfig(cwd: string, platform: PlatformName = HOST
 	const blockedAppsErrors = read.flatMap((source) => (source.blockedAppsError ? [source.blockedAppsError] : []));
 	const sources: ComputerUseConfigSource[] = read.map(({ blockedAppsError: _ignored, ...source }) => source);
 	const env = readEnv();
-	const config = { ...DEFAULT_CONFIG, blocked_apps: [...BLOCKED_APPS_BY_PLATFORM[platform].defaults] };
+	const config = { ...DEFAULT_CONFIG, blocked_apps: [...defaultBlockedApps(platform)] };
 	for (const source of sources) {
 		if (source.values) Object.assign(config, source.values);
 	}

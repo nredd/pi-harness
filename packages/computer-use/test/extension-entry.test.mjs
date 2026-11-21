@@ -7,7 +7,7 @@ import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
-import { DEFAULT_BLOCKED_APPS } from "../src/config.ts";
+import { defaultBlockedApps } from "../src/config.ts";
 import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../src/index.ts";
 
 vi.mock("../src/bridge.ts", async (importOriginal) => ({
@@ -129,7 +129,7 @@ describe("/computer-use", () => {
 				"headless: disabled",
 				"cursor_overlay: enabled",
 				"activity_glow: disabled",
-				`blocked_apps: ${DEFAULT_BLOCKED_APPS.join(", ")} (system authentication agents are always blocked)`,
+				`blocked_apps: ${defaultBlockedApps().join(", ")} (system authentication agents are always blocked)`,
 				"",
 				"Sources:",
 				`- ${path.join(root, "agent", "extensions", "pi-computer-use.json")}: not found`,
@@ -173,12 +173,12 @@ describe("/computer-use", () => {
 		const text = await run();
 		assert.match(
 			text,
-			/^blocked_apps error: .*pi-computer-use\.json: blocked_apps must be an array of bundle id strings; keeping the current list$/m,
+			/^blocked_apps error: .*pi-computer-use\.json: blocked_apps must be an array of app id strings; keeping the current list$/m,
 		);
 		assert.match(text, /computer-use\.json: error: .+$/m);
 		assert.match(
 			text,
-			new RegExp(`^blocked_apps: ${DEFAULT_BLOCKED_APPS[0].replaceAll(".", "\\.")}`, "m"),
+			new RegExp(`^blocked_apps: ${defaultBlockedApps()[0].replaceAll(".", "\\.")}`, "m"),
 			"defaults stay in force",
 		);
 	});
