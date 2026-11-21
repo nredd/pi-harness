@@ -43,7 +43,7 @@ vi.mock("node:fs", async (importOriginal) => {
 	const fs = await importOriginal<typeof import("node:fs")>();
 	return {
 		...fs,
-		chmodSync: vi.fn(fs.chmodSync),
+		fchmodSync: vi.fn(fs.fchmodSync),
 		fstatSync: vi.fn(fs.fstatSync),
 		mkdirSync: vi.fn(fs.mkdirSync),
 		openSync: vi.fn(fs.openSync),
@@ -575,6 +575,73 @@ describe("/agents tier proposals", () => {
 		expect(lstatSync(join(moved, "subagents.json.lock")).isFile()).toBe(true);
 	});
 
+	it.each(["before open", "after open"])("rejects a directory swap %s of the lock", async (when) => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const lock = `${globalSettings()}.lock`;
+		const open = (await vi.importActual<typeof import("node:fs")>("node:fs")).openSync;
+		const spy = vi.mocked(fs.openSync);
+		const calls = spy.mock.calls.length;
+		let moved = "";
+		spy.mockImplementationOnce((...args) => {
+			expect(args[0]).toBe(lock);
+			if (when === "before open") moved = swapAgentDirectory();
+			const fd = open(...args);
+			if (when === "after open") moved = swapAgentDirectory();
+			return fd;
+		});
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
+		expect(spy.mock.calls.slice(calls).map(([path]) => path)).toEqual([lock]);
+		expect(readdirSync(agentDir())).toEqual([]);
+		expect(readdirSync(moved).some((name) => name.startsWith(".subagents-tiers-"))).toBe(false);
+	});
+
+	it("preserves an editor replacement during the final directory check", async () => {
+		const source = '{"keep":1}\n';
+		const edited = '{"keep":2}\n';
+		writeFileSync(globalSettings(), source);
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const realpath = (await vi.importActual<typeof import("node:fs")>("node:fs")).realpathSync;
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				vi.mocked(fs.realpathSync).mockImplementationOnce((...args) => {
+					const resolved = realpath(...args);
+					const edit = `${globalSettings()}.edit`;
+					writeFileSync(edit, edited);
+					renameSync(edit, globalSettings());
+					return resolved;
+				});
+			}),
+		).rejects.toThrow(/settings file was replaced/);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(edited);
+	});
+
+	it("cleans up its staging file even if creation raced a directory swap", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		const open = (await vi.importActual<typeof import("node:fs")>("node:fs")).openSync;
+		vi.mocked(fs.openSync)
+			.mockImplementationOnce(open)
+			.mockImplementationOnce((...args) => {
+				swapAgentDirectory();
+				return open(...args);
+			});
+		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/settings directory changed/);
+		expect(readdirSync(agentDir())).toEqual([]);
+	});
+
+	it("does not publish or unlink a different staging file", async () => {
+		const { snapshot: approved } = settings.loadTierProposalSettings(true);
+		let staged = "";
+		await expect(
+			settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+				staged = join(agentDir(), readdirSync(agentDir()).find((name) => name.startsWith(".subagents-tiers-"))!);
+				renameSync(staged, `${staged}.moved`);
+				writeFileSync(staged, "foreign contents");
+			}),
+		).rejects.toThrow(/staged settings file was replaced/);
+		expect(readFileSync(staged, "utf8")).toBe("foreign contents");
+		expect(lstatSync(globalSettings(), { throwIfNoEntry: false })).toBeUndefined();
+	});
+
 	it("does not unlink a different lock planted in the approved directory", async () => {
 		const { snapshot: approved } = settings.loadTierProposalSettings(true);
 		const lock = `${globalSettings()}.lock`;
@@ -872,6 +939,33 @@ describe("/agents tier proposals", () => {
 		}
 	});
 
+	it.each(["preview", "replacement"])("requires a non-truncating write open at %s", async (boundary) => {
+		const source = '{"keep":1}\n';
+		writeFileSync(globalSettings(), source, { mode: 0o600 });
+		const open = vi.mocked(fs.openSync);
+		const deny = () =>
+			open.mockImplementationOnce(() => {
+				throw Object.assign(new Error("synthetic write denial"), { code: "EACCES" });
+			});
+		if (boundary === "preview") {
+			deny();
+			await expectNoWriteAccess();
+		} else {
+			const { snapshot: approved } = settings.loadTierProposalSettings(true);
+			await expect(
+				settings.saveProposedModelTiers(tiers, approved, undefined, () => {
+					deny();
+				}),
+			).rejects.toThrow(/No write access/);
+		}
+		const [path, flags] = open.mock.lastCall ?? [];
+		expect(path).toBe(globalSettings());
+		expect(typeof flags).toBe("number");
+		expect(Number(flags) & (fs.constants.O_WRONLY | fs.constants.O_RDWR)).not.toBe(0);
+		expect(Number(flags) & fs.constants.O_TRUNC).toBe(0);
+		expect(readFileSync(globalSettings(), "utf8")).toBe(source);
+	});
+
 	it("rechecks access at the replacement boundary", async () => {
 		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
 		const { snapshot: approved } = settings.loadTierProposalSettings(true);
@@ -900,8 +994,8 @@ describe("/agents tier proposals", () => {
 	it("refuses replacement if the destination cannot retain the approved mode", async () => {
 		writeFileSync(globalSettings(), "{}\n", { mode: 0o600 });
 		const { snapshot: approved } = settings.loadTierProposalSettings(true);
-		const chmod = (await vi.importActual<typeof import("node:fs")>("node:fs")).chmodSync;
-		vi.mocked(fs.chmodSync).mockImplementationOnce((path) => chmod(path, 0o444));
+		const chmod = (await vi.importActual<typeof import("node:fs")>("node:fs")).fchmodSync;
+		vi.mocked(fs.fchmodSync).mockImplementationOnce((fd) => chmod(fd, 0o444));
 		await expect(settings.saveProposedModelTiers(tiers, approved)).rejects.toThrow(/Cannot preserve/);
 		expect(readFileSync(globalSettings(), "utf8")).toBe("{}\n");
 	});

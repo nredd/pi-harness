@@ -2,21 +2,20 @@
 // - Global:  ~/.pi/agent/subagents.json — manual defaults, except for confirmed tier proposals
 // - Project: <cwd>/.pi/subagents.json — written by /agents → Settings; overrides global on load
 
+import { randomUUID } from "node:crypto";
 import {
-	chmodSync,
 	closeSync,
 	constants,
 	existsSync,
+	fchmodSync,
 	fstatSync,
 	linkSync,
 	lstatSync,
 	mkdirSync,
-	mkdtempSync,
 	openSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
-	rmSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -879,6 +878,12 @@ function insertModelTiers(source: string, modelTiers: Record<string, string[]>):
 	return `${source.slice(0, start + end)}${prefix}${member}${source.slice(start + end)}`;
 }
 
+function unlinkOwnedFile(path: string, identity: FileIdentity): void {
+	// Keep the descriptor open through cleanup so its inode cannot be recycled.
+	// Check the file, not its parent: open may have raced a directory replacement.
+	if (sameIdentity(lstatSync(path, { throwIfNoEntry: false, bigint: true }), identity)) unlinkSync(path);
+}
+
 async function acquireTierSettingsLock(path: string, checkDirectory: () => void): Promise<number> {
 	const deadline = performance.now() + 1_000;
 	do {
@@ -920,45 +925,47 @@ export async function saveProposedModelTiers(
 	try {
 		const lockIdentity = fstatSync(fd, { bigint: true });
 		try {
+			checkDirectory();
 			const overlay = readEnterpriseLocalManifest(homeDir)?.subagents;
 			if (overlay && Object.hasOwn(overlay, "modelTiers")) {
 				throw new TierSettingsChangedError("Enterprise modelTiers already exists.");
 			}
-			const tempDir = mkdtempSync(join(dir, ".subagents-tiers-"));
+			const temp = join(dir, `.subagents-tiers-${randomUUID()}`);
+			const staging = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
 			try {
-				const temp = join(tempDir, "subagents.json");
-				writeFileSync(temp, insertModelTiers(source, modelTiers), { mode: 0o600 });
-				if (file) {
-					chmodSync(temp, file.mode);
-					if (Number(lstatSync(temp, { bigint: true }).mode & 0o7777n) !== file.mode) {
-						throw new TierSettingsTargetError("Cannot preserve the global settings file mode");
+				const stagingIdentity = fstatSync(staging, { bigint: true });
+				try {
+					writeFileSync(staging, insertModelTiers(source, modelTiers));
+					if (file) {
+						fchmodSync(staging, file.mode);
+						if (Number(fstatSync(staging, { bigint: true }).mode & 0o7777n) !== file.mode) {
+							throw new TierSettingsTargetError("Cannot preserve the global settings file mode");
+						}
 					}
+					beforeReplace?.();
+					checkDirectory();
+					if (!sameIdentity(lstatSync(temp, { throwIfNoEntry: false, bigint: true }), stagingIdentity)) {
+						throw new TierSettingsChangedError("The staged settings file was replaced.");
+					}
+					const current = readTierSettingsFile(path, true);
+					if (!sameIdentity(current, file)) {
+						throw new TierSettingsChangedError("The global settings file was replaced.");
+					}
+					if (file && (!current || current.mode !== file.mode || !file.bytes.equals(current.bytes))) {
+						throw new TierSettingsChangedError();
+					}
+					// Keep the target validation last. A non-cooperating editor can still race rename.
+					// For a new file even that window cannot overwrite a concurrent creation.
+					if (file) renameSync(temp, path);
+					else linkSync(temp, path);
+				} finally {
+					unlinkOwnedFile(temp, stagingIdentity);
 				}
-				beforeReplace?.();
-				const current = readTierSettingsFile(path, true);
-				if (!sameIdentity(current, file)) {
-					throw new TierSettingsChangedError("The global settings file was replaced.");
-				}
-				if (file && (!current || current.mode !== file.mode || !file.bytes.equals(current.bytes))) {
-					throw new TierSettingsChangedError();
-				}
-				// Non-cooperating editors can still race this check and rename.
-				// For a new file even that window cannot overwrite a concurrent creation.
-				checkDirectory();
-				if (file) renameSync(temp, path);
-				else linkSync(temp, path);
 			} finally {
-				if (sameIdentity(lstatSync(dir, { throwIfNoEntry: false, bigint: true }), approvedDirectory)) {
-					rmSync(tempDir, { recursive: true, force: true });
-				}
+				closeSync(staging);
 			}
 		} finally {
-			// Keep our descriptor open so its inode cannot be recycled before the check.
-			if (
-				sameIdentity(lstatSync(dir, { throwIfNoEntry: false, bigint: true }), approvedDirectory) &&
-				sameIdentity(lstatSync(lock, { throwIfNoEntry: false, bigint: true }), lockIdentity)
-			)
-				unlinkSync(lock);
+			unlinkOwnedFile(lock, lockIdentity);
 		}
 	} finally {
 		closeSync(fd);
