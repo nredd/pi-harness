@@ -1,6 +1,6 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
@@ -921,20 +921,36 @@ export interface ExportResult {
 	warnings?: string[];
 }
 
-/**
- * Write only this machine's immutable shards, publishing its manifest last. Callers must not run two exports
- * into one outbox at once (`pi-usage-sync` serializes its runs); nothing here locks.
- */
+/** Write only this machine's immutable shards, publishing its manifest last under an exclusive local lock. */
 export async function exportStats(
 	dir: string,
 	output: string,
 	root = sessionsDir(dir),
 	options: ExportOptions = {},
 ): Promise<ExportResult> {
-	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const identity = await machineIdentity(dir);
-	const state = await exportState(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
+	const lock = join(snapshotDir, ".export.lock");
+	await mkdir(snapshotDir, { recursive: true });
+	// The portable kit cannot import the dev-tools lock. Fail closed on contention or a
+	// crashed writer; never infer that another writer is dead from the age of the lock.
+	await mkdir(lock);
+	try {
+		return await publishStats(dir, snapshotDir, root, options, identity);
+	} finally {
+		await rmdir(lock);
+	}
+}
+
+async function publishStats(
+	dir: string,
+	snapshotDir: string,
+	root: string,
+	options: ExportOptions,
+	identity: Identity,
+): Promise<ExportResult> {
+	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
+	const state = await exportState(dir);
 	const previous = await loadPrevious(snapshotDir);
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
@@ -1038,7 +1054,6 @@ export async function exportStats(
 		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
 	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));
 	const captureRecovery = recoveryPending && (previous === "unreadable" || state.recoveryFiles === null);
-	await mkdir(snapshotDir, { recursive: true });
 	if (captureRecovery) {
 		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
 			if (entry.isFile() && SHARD_FILE.test(entry.name)) protectedFiles.add(entry.name);

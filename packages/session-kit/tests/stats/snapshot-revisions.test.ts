@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { readdir, unlink, writeFile } from "node:fs/promises";
+import { readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -23,6 +23,7 @@ vi.mock("node:fs/promises", async (original) => {
 	return {
 		...actual,
 		unlink: vi.fn(actual.unlink),
+		rename: vi.fn(actual.rename),
 		readdir: vi.fn(actual.readdir),
 		writeFile: vi.fn(actual.writeFile),
 	};
@@ -41,6 +42,7 @@ beforeEach(({ onTestFinished }) => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.mocked(unlink).mockRestore();
+	vi.mocked(rename).mockRestore();
 	vi.mocked(readdir).mockRestore();
 	vi.mocked(writeFile).mockRestore();
 });
@@ -527,6 +529,51 @@ it("compacts an already over-cap month missing from the scan and keeps last-good
 	writeFileSync(path, bytes);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	expect((await loadCombined(viewer)).quota).toEqual([expect.objectContaining({ usedPercent: 32 })]);
+});
+
+it("concurrent exports preserve winning manifest", async () => {
+	const first = await exportStats(agent, out);
+	const path = join(first.snapshotDir, "manifest.json");
+	const seed = (input: number) =>
+		sessionFile(join(agent, "sessions", "active.jsonl"), {
+			startMs: at("2026-11-01"),
+			lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input })],
+		});
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	let pause!: () => void;
+	const paused = new Promise<void>((resolve) => {
+		pause = resolve;
+	});
+	let resume!: () => void;
+	const release = new Promise<void>((resolve) => {
+		resume = resolve;
+	});
+	let blocked = false;
+	vi.mocked(rename).mockImplementation(async (from, to) => {
+		if (to === path && !blocked) {
+			blocked = true;
+			pause();
+			await release;
+		}
+		await actual.rename(from, to);
+	});
+	seed(7);
+	const a = exportStats(agent, out);
+	await Promise.race([paused, a]);
+	let result: unknown;
+	try {
+		seed(13);
+		result = await exportStats(agent, out).catch((error: unknown) => error);
+	} finally {
+		resume();
+		await a;
+	}
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
+	expect(result).toMatchObject({ code: "EEXIST", path: join(first.snapshotDir, ".export.lock") });
+	await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
 });
 
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {

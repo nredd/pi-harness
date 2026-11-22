@@ -516,9 +516,10 @@ refused unless `--replace-harnesses` is given; with a recorded set it still guar
 (If both the state and the snapshot have gone bad, a stale state can understate a widening that
 was never recorded; that double fault is not defended.)
 
-Callers must not run two exports into the same outbox at once: nothing in the artifact locks. The
-only scheduled caller, `pi-usage-sync`, already serializes its runs under its own lock, so a manual
-export should go through it (or not overlap one).
+Exports lock the machine outbox from reading the previous manifest through pruning and recording
+export state. A concurrent export fails without publishing; retry after the first writer finishes.
+If a crash leaves `.export.lock` behind, remove that directory only after verifying no export is
+running. `pi-usage-sync` separately serializes whole sync runs.
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
 `PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History
