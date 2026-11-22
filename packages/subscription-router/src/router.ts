@@ -34,7 +34,7 @@ import { COLLECTOR_EVIDENCE, type UsageDecision, type UsageSnapshot } from "./us
  * acts on it, so over-matching costs one cached request and a classification.
  */
 const QUOTA_ERROR_PATTERN =
-	/\b429\b|\b402\b|quota|rate.?limit|too many requests|usage.?limit|billing|out of budget|extra.?usage|available balance|UsageLimitError|subscription_sharing_usage_limit_exceeded|RESOURCE_EXHAUSTED|credits depleted|payment required/i;
+	/\b429\b|\b402\b|quota|rate.?limit|too many requests|usage.?limit|billing|out of budget|extra.?usage|available balance|UsageLimitError|subscription_sharing_usage_limit_exceeded|RESOURCE_EXHAUSTED|credits? (?:depleted|exhausted)|payment required|insufficient (?:credits?|balance|funds)|no (?:prepayment )?credits?\b/i;
 
 /** Whether an assistant error could be subscription quota. */
 export function isQuotaError(message: Pick<AssistantMessage, "stopReason" | "errorMessage">): boolean {

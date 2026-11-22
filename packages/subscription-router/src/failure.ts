@@ -34,6 +34,8 @@ export function nextPacificMidnight(now: number): number {
 }
 
 const LEADING_STATUS = /^(?:HTTP(?:\/\d(?:\.\d)?)?\s+)?([45]\d{2})(?=$|\s|:)(?!\s+(?:tokens?|bytes?|requests?)\b)/i;
+// Core's `formatProviderError` with a prefix: `<prefix> (<status>): <body>`.
+const PREFIXED_STATUS = /^[^{}()\r\n]*\(([45]\d{2})\)\s*:/;
 const JSON_TOKEN =
 	/\s*(?:"(?:[^"\\\r\n]|\\.)*"|[{}[\],:]|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.+-]))/y;
 const CUT_MESSAGE = /^\s*,?\s*"message"\s*:\s*"(?:[^"\\\r\n]|\\.)*$/;
@@ -45,9 +47,11 @@ const LEGACY_LIMIT =
 	/\b(?:UsageLimitError|subscription_sharing_usage_limit_exceeded|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|out of extra[ _-]?usage|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
 // Bare labels can be verdicts; the same words in arbitrary prose are only weak signals.
 const LEGACY_LABEL = /^(?:quota|rate.?limit|usage.?limit|extra.?usage|available balance)$/i;
-const BILLING = /\b(?:billing|credits depleted|prepayment credits|payment required)\b/i;
+// Affirmative payment exhaustion only. A bare mention of billing is weak: it can be an address or a service name.
+const BILLING =
+	/\b(?:credits? (?:depleted|exhausted)|(?:no|insufficient) (?:prepayment )?credits?\b|insufficient (?:balance|funds)\b|credit balance is too low|payment required|billing hard limit|billing account (?:is )?(?:disabled|suspended|inactive)\b)/i;
 const WEAK =
-	/\b(?:429|402)\b|quota|rate.?limit|too many requests|usage.?limit|out of budget|extra.?usage|available balance/i;
+	/\b(?:429|402)\b|quota|billing|rate.?limit|too many requests|usage.?limit|out of budget|extra.?usage|available balance/i;
 const DAILY = /PerDay|Daily/i;
 const PER_MINUTE = /PerMinute/i;
 const DAILY_TOKEN = /\b(?:RequestsPerDay\b|Per[ -]?Day\b|Daily(?:\s+(?:quota|limit)\b|(?=\s*(?:$|[.,;:)!]))))/i;
@@ -150,7 +154,7 @@ function retryHint(delays: string[], prose: string): number | undefined {
 /** Classify evidence, not marks. The caller owns repeat thresholds and caps the resulting expiry. */
 export function classify(errorMessage: string | undefined, now: number): FailureClassification {
 	const text = (errorMessage ?? "").trim();
-	const leading = LEADING_STATUS.exec(text);
+	const leading = LEADING_STATUS.exec(text) ?? PREFIXED_STATUS.exec(text);
 	const { status, codes, prose, quotaIds, delays } = rpcSignals(parseBody(text));
 	const http = leading ? Number(leading[1]) : status;
 	const prefix = string(text.split("{", 1)[0]);

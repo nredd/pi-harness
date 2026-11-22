@@ -101,6 +101,19 @@ describe("classify failure text", () => {
 		["prepayment credits", "No prepayment credits", billing],
 		["billing wording", "billing account disabled", billing],
 		["payment required", "Payment required", billing],
+		["insufficient credits", "Insufficient credits for this request", billing],
+		["insufficient balance", "insufficient balance", billing],
+		["billing hard limit", "Billing hard limit has been reached", billing],
+		["parenthesized 402", "OpenAI API error (402): No funds", billing],
+		[
+			"parenthesized 503 overrides billing prose",
+			'OpenAI API error (503): {"error":{"message":"billing service failed"}}',
+			other,
+		],
+		["parenthesized 401 overrides quota prose", "Mistral API error (401): quota project", other],
+		["parenthesized 429 with a daily token", "Mistral API error (429): Daily quota exceeded", daily],
+		["bare billing mention is weak", "400: Invalid billing address", weak],
+		["billing limit without an affirmative verb is weak", "billing limit", weak],
 		["billing in the JSON status position", '{"error":{"code":402,"message":"No funds"}}', billing],
 		["502 overrides billing prose", "502: upstream failure checking billing", other],
 		["503 overrides JSON quota evidence", `503: ${rpc(quotaId("PerDay"))}`, other],
@@ -252,7 +265,6 @@ const legacyFixtures = [
 	"Your credit balance is too low; check billing",
 	`400 {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."}}`,
 	"billing account disabled",
-	"billing limit",
 	"overloaded_error",
 	"overloaded",
 	"request took 4290ms",
@@ -291,7 +303,6 @@ it.each([
 	"usage-limit",
 	"usage_limit",
 	"usagelimit",
-	"billing",
 	"out of budget",
 	"extra usage",
 	"extra-usage",
@@ -303,6 +314,12 @@ it.each([
 ])("preserves the legacy gate phrase %s", (text) => {
 	expect(legacyGate(text)).toBe(true);
 	expectQuotaClass(text);
+});
+
+// A bare billing mention still earns a confirming read, but alone it never infers a provider-wide block.
+it.each(["billing", "billing limit"])("keeps the legacy gate for the billing mention %s as weak evidence", (text) => {
+	expect(legacyGate(text)).toBe(true);
+	expect(classify(text, NOW)).toStrictEqual(weak);
 });
 
 it.each([

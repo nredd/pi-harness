@@ -129,6 +129,8 @@ describe("failure-inferred evidence", () => {
 		["5xx", "503 overloaded: quota"],
 		["safety", "Provider stopped with: SAFETY quota"],
 		["weak prose", "processed 429 tokens"],
+		["parenthesized 503 mentioning billing", 'OpenAI API error (503): {"error":{"message":"billing service failed"}}'],
+		["400 mentioning billing", "400: Invalid billing address"],
 	])("never marks %s", async (_name, text) => {
 		const history = new FailureHistory();
 		const adapter = failureEvidence(history);
@@ -472,12 +474,19 @@ describe("routing on the composed chain", () => {
 });
 
 describe("the confirmation gate", () => {
-	it.each(["RESOURCE_EXHAUSTED", "402", "402: Payment Required", "prepayment credits depleted"])(
-		"confirms %s",
-		(errorMessage) => {
-			expect(isQuotaError({ stopReason: "error", errorMessage })).toBe(true);
-		},
-	);
+	it.each([
+		"RESOURCE_EXHAUSTED",
+		"402",
+		"Payment required",
+		"credits depleted",
+		"Insufficient credits for this request",
+		"insufficient balance",
+		"insufficient funds",
+		"Credits exhausted",
+		"No prepayment credits",
+	])("confirms %s", (errorMessage) => {
+		expect(isQuotaError({ stopReason: "error", errorMessage })).toBe(true);
+	});
 
 	it("ignores digits that merely contain 402", () => {
 		expect(isQuotaError({ stopReason: "error", errorMessage: "request took 4020ms" })).toBe(false);
