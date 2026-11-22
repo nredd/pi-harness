@@ -135,9 +135,20 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   Counts such as `37/250 req obs` describe locally observed usage, not account-wide quota;
   unknown limits have no denominator. Model buckets appear for the routed or directly selected
   model and for models with active blocks. No Google collector or credentials are needed by the footer.
+  Provenance is never promoted: an inferred span reads `10m~` (full: `span inferred`) and an
+  assumed or unrecognized one `name?` (full: `window unknown`), on percentages and counts alike.
+  A count with an unrecognized basis is skipped; a block with unrecognized evidence shows `unk`
+  (full: `unknown`). Counts keep their reset time, and only an observed zero is hidden (no calls,
+  no row). Legacy rules apply only to v1 replies and views that keep the built-in Anthropic or
+  Codex selection. Staleness covers percentages, counts and pools: an expired or failed snapshot
+  says `(stale)`, never on an active block, and a failed view with nothing cached shows
+  `quota error`, `quota unavailable` or `quota stale`.
   The layout tries one full or compact row, then compact provider rows, then removes reset times
-  and drops counts and pools if needed. The fallback shows at most four provider rows and points
-  to `/router status` for the rest. Deferred
+  and drops counts and pools if needed. The fallback shows at most four provider rows, blocked
+  providers first and then the lowest remaining quota, and points to `/router status` for the
+  rest, e.g. `+2 more (1 blocked)`. Each fallback row fits the width: the label shortens first,
+  then whole lower cells drop behind ` ...`; a block shortens to `blocked inf` (or `model blocked inf`)
+  and is omitted rather than clipped away from its evidence. Deferred
   startup, 60s polling, one outstanding request, unique reply channel, 12s timeout, expiry repaint,
   stale retained readings and recovery. Without a valid reply the row stays hidden. Disposal
   cancels listeners and timers; unreferenced default timers do not keep the process alive.
