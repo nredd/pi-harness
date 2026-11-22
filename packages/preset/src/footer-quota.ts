@@ -659,6 +659,7 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 			const families = cell.names;
 			const named = (full ? families : families.map((id) => id.replace(/^[a-z]+-\d+-/, ""))).join(",");
 			const scope = `${named}${cell.extra ? `+${cell.extra}` : ""}` || "provider";
+			// Compact drops the date only for a block lifting today, like reset times.
 			const when = layout.resets ? formatResetAt(cell.until, opts.now, opts.timeZone, full) : undefined;
 			const evidence = full
 				? `(${cell.evidence})`
@@ -666,10 +667,7 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 			// Terse keeps the scope kind honest: a model-scoped block never reads as the whole provider.
 			const model = scope.length < "model".length ? scope : "model";
 			const subject = layout.terse ? (families.length ? `${model} ` : "") : `${scope} `;
-			return colorize(
-				"warning",
-				`${subject}blocked${when ? (full ? ` until ${when}` : `->${when.split(" ").at(-1)}`) : ""} ${evidence}`,
-			);
+			return colorize("warning", `${subject}blocked${when ? (full ? ` until ${when}` : `->${when}`) : ""} ${evidence}`);
 		}
 	}
 }

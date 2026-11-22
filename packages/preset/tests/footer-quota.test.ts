@@ -1174,7 +1174,7 @@ test("preset reads the shared metered and inferred-span v2 fixture", () => {
 	const opts = { now: metered.now, timeZone: metered.timeZone };
 	assert.equal(
 		footer.formatQuotaRow(state, "compact", plain, opts),
-		"Left: Goog 1d 37/250 req obs @Jan 16 08:00 $1.24/10m obs prepaid-credits 12 credits | faux-fast blocked->08:00 inf",
+		"Left: Goog 1d 37/250 req obs @Jan 16 08:00 $1.24/10m obs prepaid-credits 12 credits | faux-fast blocked->Jan 16 08:00 inf",
 	);
 	assert.deepEqual(footer.fitQuotaRows(state, 120, plain, opts).length, 1);
 	const inferred = present(fixture.views.find(({ name }) => name === "inferred-span"));
@@ -1215,7 +1215,7 @@ test("Google rows show counts without invented limits and marks in warning color
 		now,
 	);
 	const opts = { now, timeZone: UTC };
-	const compact = "Left: Goog 1d 37 req obs $1.24/10m obs | carbon blocked->00:00 inf";
+	const compact = "Left: Goog 1d 37 req obs $1.24/10m obs | carbon blocked->Nov 22 00:00 inf";
 	const full =
 		"Quota left: Google day 37 requests observed; $1.24 last 10m observed; gemini-4-carbon blocked until Nov 22 00:00 (inferred)";
 	const paint: string[] = [];
@@ -1234,7 +1234,7 @@ test("Google rows show counts without invented limits and marks in warning color
 	);
 	assert.deepEqual(
 		paint.filter((text) => !text.startsWith("dim:")),
-		["warning:carbon blocked->00:00 inf"],
+		["warning:carbon blocked->Nov 22 00:00 inf"],
 	);
 	assert.match(
 		footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "google", id: "gemini-4-sibling" } }),
@@ -1973,7 +1973,7 @@ test("a confirmed model block is visible beside healthy legacy quota, from v1 bl
 	);
 	assert.equal(
 		footer.formatQuotaRow(state, "compact", plain, at),
-		"Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | opus blocked->12:00 read | OAI 7d 35% @Jan 18 12:00",
+		"Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | opus blocked->Jan 18 12:00 read | OAI 7d 35% @Jan 18 12:00",
 	);
 });
 
@@ -2054,4 +2054,11 @@ test("providers whose labels collide get a stable distinguishing tag, kept when 
 	assert.equal(new Set(tags).size, 2, tags.join());
 	// Without a collision nothing is tagged.
 	assert.equal(footer.formatQuotaRow(projected([healthy("solo")]), "compact", plain, fixed), "Left: solo 1h 50%");
+});
+
+test("a compact block keeps the expiry day when it lifts on another day", () => {
+	const row = (until: number) =>
+		footer.formatQuotaRow(projected([view("A", { marks: [mark(until, "inferred")] })]), "compact", plain, fixed);
+	assert.equal(row(CLOCK + hour), "Left: A provider blocked->13:00 inf");
+	assert.equal(row(CLOCK + 25 * hour), "Left: A provider blocked->Jan 11 13:00 inf");
 });
