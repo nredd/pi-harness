@@ -164,7 +164,16 @@ describe("saved child validation", () => {
 		const { root, parentFile, directory, file } = child();
 		const elsewhere = join(root, "elsewhere");
 		const options = { file, parentFile, status: "completed", now: CHECKED_LATER } as const;
+		// A directory that does not resolve keeps the legacy wording.
 		expect(checkSavedChild({ ...options, directories: [undefined, elsewhere] })).toEqual({
+			refusal: `child session is missing or unreadable: ${file}`,
+		});
+		const other = join(root, "other");
+		mkdirSync(other);
+		expect(checkSavedChild({ ...options, directories: [other, elsewhere] })).toEqual({
+			refusal: `child session is missing or unreadable: ${file}`,
+		});
+		expect(checkSavedChild({ ...options, directories: [undefined, other] })).toEqual({
 			refusal: `child session is outside its configured directory: ${file}`,
 		});
 		expect(checkSavedChild({ ...options, directories: [directory, elsewhere] })).toEqual({
@@ -238,7 +247,7 @@ describe("saved child validation", () => {
 		unlinkSync(link);
 		expect(checkSavedChild(options)).toEqual({ file: realpathSync(file) });
 		expect(checkSavedChild({ ...options, canonical: canonicalPaths() })).toEqual({
-			refusal: `child session is outside its configured directory: ${file}`,
+			refusal: `child session is missing or unreadable: ${file}`,
 		});
 		expect(() => canonical(join(directory, "missing"))).toThrow();
 	});

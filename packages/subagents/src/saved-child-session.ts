@@ -127,6 +127,29 @@ function lastWrite(mtimeMs: number, now: number): string | undefined {
 		: undefined;
 }
 
+/**
+ * Whether `canonicalFile` lies in one of `directories`. Throws when none holds
+ * it and one did not resolve, so an unresolvable configured directory keeps
+ * the "missing or unreadable" refusal it always had.
+ */
+function insideDirectory(
+	canonicalFile: string,
+	directories: readonly (string | undefined)[],
+	canonical: (path: string) => string,
+): boolean {
+	let unresolved: unknown;
+	for (const directory of directories) {
+		if (directory === undefined) continue;
+		try {
+			if (canonicalFile.startsWith(canonical(directory).replace(/[\\/]?$/, sep))) return true;
+		} catch (error) {
+			unresolved ??= error;
+		}
+	}
+	if (unresolved) throw unresolved;
+	return false;
+}
+
 /** Check the saved file without opening a writable SessionManager on untrusted history. */
 export function checkSavedChild(options: SavedChildCheckOptions): SavedChildCheck {
 	const { file, parentFile, status, now, savedCwd, canonical = realpathSync } = options;
@@ -135,15 +158,7 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 	}
 	try {
 		const canonicalFile = realpathSync(file);
-		const inside = options.directories.some((directory) => {
-			if (directory === undefined) return false;
-			try {
-				return canonicalFile.startsWith(canonical(directory).replace(/[\\/]?$/, sep));
-			} catch {
-				return false;
-			}
-		});
-		if (!inside) {
+		if (!insideDirectory(canonicalFile, options.directories, canonical)) {
 			return { refusal: `child session is outside its configured directory: ${file}` };
 		}
 		const stats = statSync(canonicalFile);
