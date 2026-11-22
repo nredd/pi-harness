@@ -278,10 +278,10 @@ test("skills an agent preloads are owned here or declared external, and external
 	}
 });
 
-test("exactly the four owned skills ship, each a single valid SKILL.md", () => {
+test("the four owned skills ship with valid SKILL.md files and the sweep guard", () => {
 	assert.deepEqual(
 		walk("skills").map((p) => p.split("/").slice(1).join("/")),
-		SKILLS.map((s) => `${s}/SKILL.md`),
+		[...SKILLS.map((s) => `${s}/SKILL.md`), "ship-issue/sweep_guard.py"],
 	);
 	for (const skill of SKILLS) {
 		const { frontmatter, body } = frontmatterOf(`skills/${skill}/SKILL.md`);
