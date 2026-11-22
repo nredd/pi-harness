@@ -42,8 +42,13 @@ const BARE = "429 Too Many Requests";
 const BILLING = "402: prepayment credits depleted";
 const AUTH = '403 {"error":{"code":403,"message":"quota project permission denied","status":"PERMISSION_DENIED"}}';
 
-/** One scripted outcome: an error message, partial text plus an error, or success. */
-type Step = "ok" | string | { partial: string; error: string };
+/** One scripted outcome: success, an error message, or partial text plus an error. */
+type Step =
+	| { kind: "success" }
+	| { kind: "error"; error: string }
+	| { kind: "partial"; partial: string; error: string };
+const OK: Step = { kind: "success" };
+const fail = (error: string): Step => ({ kind: "error", error });
 
 interface Options {
 	chain: ChainEntry[];
@@ -154,15 +159,19 @@ class Scenario {
 	private respond(physical: { provider: string; id: string }): AssistantMessage {
 		const key = refKey(physical);
 		this.calls.push(key);
-		const step = this.scripts.get(key)?.shift() ?? "ok";
+		const step = this.scripts.get(key)?.shift() ?? OK;
 		// Every response takes a second, so distinct failures have distinct timestamps.
 		this.clock.advance(1000);
 		const timestamp = this.clock.now();
 		this.times.push(timestamp);
-		if (step === "ok") return fauxAssistantMessage(`answered by ${key}`, { timestamp });
-		if (typeof step === "string")
-			return fauxAssistantMessage("", { stopReason: "error", errorMessage: step, timestamp });
-		return fauxAssistantMessage(step.partial, { stopReason: "error", errorMessage: step.error, timestamp });
+		switch (step.kind) {
+			case "success":
+				return fauxAssistantMessage(`answered by ${key}`, { timestamp });
+			case "error":
+				return fauxAssistantMessage("", { stopReason: "error", errorMessage: step.error, timestamp });
+			case "partial":
+				return fauxAssistantMessage(step.partial, { stopReason: "error", errorMessage: step.error, timestamp });
+		}
 	}
 
 	/** Assistant completions for one prompt. */
@@ -199,7 +208,7 @@ async function run(options: Options): Promise<Scenario> {
 describe("uncollected metered providers fail over on inferred evidence", () => {
 	it("P2/S5/K1/L3: a daily 429 marks only that model until Pacific midnight; the next member answers", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, DAILY);
+		s.script(CARBON, fail(DAILY));
 		const messages = await s.prompt();
 		expect(s.calls).toEqual(["google/gemini-4-carbon", "google/gemini-4-neon"]);
 		expect(messages.at(-1)).toMatchObject({ stopReason: "stop", provider: "google", model: NEON.id });
@@ -222,7 +231,7 @@ describe("uncollected metered providers fail over on inferred evidence", () => {
 
 	it("S6/L1/L2: a hint of 95s marks until the hint, then the model is eligible again", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, HINT_95S);
+		s.script(CARBON, fail(HINT_95S));
 		await s.prompt();
 		const until = (s.times[0] as number) + 95_000;
 		expect(s.tracker.active()).toMatchObject([{ window: "inferred:hint", until, expiry: "hinted" }]);
@@ -234,14 +243,14 @@ describe("uncollected metered providers fail over on inferred evidence", () => {
 
 	it("caps a two-hour hint at 60 minutes", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, HINT_2H);
+		s.script(CARBON, fail(HINT_2H));
 		await s.prompt();
 		expect(s.tracker.active()).toMatchObject([{ until: (s.times[0] as number) + 60 * MINUTE, resetKnown: true }]);
 	});
 
 	it("S7: per-minute throttles never mark and core retries the same model", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, PER_MINUTE, PER_MINUTE, PER_MINUTE, PER_MINUTE);
+		s.script(CARBON, fail(PER_MINUTE), fail(PER_MINUTE), fail(PER_MINUTE), fail(PER_MINUTE));
 		await s.prompt();
 		expect(s.calls).toEqual(Array(4).fill("google/gemini-4-carbon"));
 		expect(s.tracker.active()).toEqual([]);
@@ -249,7 +258,7 @@ describe("uncollected metered providers fail over on inferred evidence", () => {
 
 	it("S8/L7: an unknown 429 marks on its second distinct failure with a 5-minute backoff", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, BARE, BARE);
+		s.script(CARBON, fail(BARE), fail(BARE));
 		await s.prompt();
 		expect(s.calls).toEqual(["google/gemini-4-carbon", "google/gemini-4-carbon", "google/gemini-4-neon"]);
 		expect(s.tracker.active()).toMatchObject([
@@ -259,7 +268,7 @@ describe("uncollected metered providers fail over on inferred evidence", () => {
 
 	it("S8: a success between two unknown 429s resets the count", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, BARE, "ok", BARE, "ok");
+		s.script(CARBON, fail(BARE), OK, fail(BARE), OK);
 		await s.prompt();
 		s.clock.advance(MINUTE);
 		await s.prompt();
@@ -269,7 +278,7 @@ describe("uncollected metered providers fail over on inferred evidence", () => {
 
 	it("S9/K3: a 402 blocks the whole provider and leaves google-vertex untouched", async () => {
 		const s = await run({ chain: [CARBON, NEON, VERTEX] });
-		s.script(CARBON, BILLING);
+		s.script(CARBON, fail(BILLING));
 		const messages = await s.prompt();
 		expect(s.calls).toEqual(["google/gemini-4-carbon", "google-vertex/gemini-4-carbon"]);
 		expect(messages.at(-1)).toMatchObject({ provider: "google-vertex", stopReason: "stop" });
@@ -283,7 +292,7 @@ describe("uncollected metered providers fail over on inferred evidence", () => {
 
 	it("auth failures surface and never mark, even when they mention quota", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, AUTH, AUTH, AUTH, AUTH);
+		s.script(CARBON, fail(AUTH), fail(AUTH), fail(AUTH), fail(AUTH));
 		const messages = await s.prompt();
 		expect(s.calls.every((call) => call === "google/gemini-4-carbon")).toBe(true);
 		expect(messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: AUTH });
@@ -296,7 +305,7 @@ describe("collected providers keep read-only confirmation", () => {
 
 	it("P5: anthropic with an API key reads nothing and fails over on inferred evidence", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: { anthropic: "sk-ant-api03-synthetic" } });
-		s.script(SONNET, BARE, BARE);
+		s.script(SONNET, fail(BARE), fail(BARE));
 		await s.prompt();
 		expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-5-5", "google/gemini-4-neon"]);
 		expect(s.fetches).toEqual([]);
@@ -306,7 +315,7 @@ describe("collected providers keep read-only confirmation", () => {
 	it("S1: a fresh read showing the block marks it as read-confirmed", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
 		s.usage = { percent: 100 };
-		s.script(SONNET, BARE);
+		s.script(SONNET, fail(BARE));
 		await s.prompt();
 		expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5", "google/gemini-4-neon"]);
 		const [mark] = s.tracker.active();
@@ -326,7 +335,7 @@ describe("collected providers keep read-only confirmation", () => {
 	])("S10-S12: a %s never marks, even when a fresh read would show the block", async (_name, text) => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
 		s.usage = { percent: 100 };
-		s.script(SONNET, text, text, text, text);
+		s.script(SONNET, fail(text), fail(text), fail(text), fail(text));
 		const messages = await s.prompt();
 		expect(s.calls.every((call) => call === "anthropic/claude-sonnet-5-5")).toBe(true);
 		expect(messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: text });
@@ -335,7 +344,7 @@ describe("collected providers keep read-only confirmation", () => {
 
 	it("S2: a fresh read with room is authoritative; a daily token never reaches inference", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH, usage: { percent: 40 } });
-		s.script(SONNET, DAILY, DAILY, DAILY, DAILY);
+		s.script(SONNET, fail(DAILY), fail(DAILY), fail(DAILY), fail(DAILY));
 		await s.prompt();
 		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
 		expect(s.tracker.active()).toEqual([]);
@@ -343,7 +352,7 @@ describe("collected providers keep read-only confirmation", () => {
 
 	it("S3: a failed read confirms nothing by default", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH, usage: { status: 500 } });
-		s.script(SONNET, DAILY, DAILY, DAILY, DAILY);
+		s.script(SONNET, fail(DAILY), fail(DAILY), fail(DAILY), fail(DAILY));
 		await s.prompt();
 		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
 		expect(s.fetches.length).toBeGreaterThan(0);
@@ -352,7 +361,7 @@ describe("collected providers keep read-only confirmation", () => {
 
 	it("S3: a registered collector without a usage credential confirms nothing", async () => {
 		const s = await run({ chain: [SONNET, NEON] });
-		s.script(SONNET, DAILY, DAILY, DAILY, DAILY);
+		s.script(SONNET, fail(DAILY), fail(DAILY), fail(DAILY), fail(DAILY));
 		await s.prompt();
 		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
 		expect(s.tracker.active()).toEqual([]);
@@ -372,7 +381,7 @@ describe("collected providers keep read-only confirmation", () => {
 		});
 		try {
 			const s = await run({ chain: [CARBON, NEON], tokens: { google: "synthetic-oauth" } });
-			s.script(CARBON, DAILY);
+			s.script(CARBON, fail(DAILY));
 			await s.prompt();
 			expect(s.calls).toEqual(["google/gemini-4-carbon", "google/gemini-4-carbon"]);
 			expect(s.tracker.active()).toEqual([]);
@@ -388,7 +397,7 @@ describe("collected providers keep read-only confirmation", () => {
 			usage: { status: 500 },
 			providers: { anthropic: { fallbackOnReadError: true } },
 		});
-		s.script(SONNET, DAILY);
+		s.script(SONNET, fail(DAILY));
 		await s.prompt();
 		expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5", "google/gemini-4-neon"]);
 		expect(s.tracker.active()).toMatchObject([
@@ -404,7 +413,7 @@ describe("collected providers keep read-only confirmation", () => {
 			providers: { anthropic: { evidence: ["failure"] } },
 		});
 		const before = s.fetches.length;
-		s.script(SONNET, DAILY);
+		s.script(SONNET, fail(DAILY));
 		await s.prompt();
 		expect(s.fetches.length).toBe(before);
 		expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5", "google/gemini-4-neon"]);
@@ -414,7 +423,7 @@ describe("collected providers keep read-only confirmation", () => {
 describe("chain situations", () => {
 	it("C1/C3: a single uncollected member fails fast with the inferred reason and reset", async () => {
 		const s = await run({ chain: [CARBON] });
-		s.script(CARBON, BARE, BARE);
+		s.script(CARBON, fail(BARE), fail(BARE));
 		const messages = await s.prompt();
 		expect(s.calls).toEqual(["google/gemini-4-carbon", "google/gemini-4-carbon"]);
 		const until = (s.times[1] as number) + 5 * MINUTE;
@@ -425,8 +434,8 @@ describe("chain situations", () => {
 
 	it("C1: every member exhausted reports the earliest reset", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, HINT_95S);
-		s.script(NEON, HINT_2H);
+		s.script(CARBON, fail(HINT_95S));
+		s.script(NEON, fail(HINT_2H));
 		const messages = await s.prompt();
 		const earliest = new Date((s.times[0] as number) + 95_000).toISOString().replace(".000Z", "Z");
 		expect(messages.at(-1)?.errorMessage ?? "").toContain(`Earliest reset ${earliest}.`);
@@ -444,6 +453,12 @@ describe("chain situations", () => {
 		// Warm the anthropic cache, then route again: measured beats fallback even at 90% used.
 		await s.prompt();
 		expect(s.calls.at(-1)).toBe("anthropic/claude-sonnet-5-5");
+		// Once the measured member is blocked, the metered member is the fallback.
+		s.usage = { percent: 100 };
+		s.clock.advance(MINUTE);
+		await s.harness.session.prompt("/router refresh");
+		await s.prompt();
+		expect(s.calls.at(-1)).toBe("google/gemini-4-neon");
 	});
 
 	it("C4: a three-provider profile fails over past a read mark and an inferred mark", async () => {
@@ -452,8 +467,8 @@ describe("chain situations", () => {
 			tokens: { anthropic: "synthetic-oauth" },
 		});
 		s.usage = { percent: 100 };
-		s.script(SONNET, BARE);
-		s.script(CARBON, DAILY);
+		s.script(SONNET, fail(BARE));
+		s.script(CARBON, fail(DAILY));
 		const messages = await s.prompt();
 		expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5", "google/gemini-4-carbon", "openai-codex/gpt-5.6-terra"]);
 		expect(messages.at(-1)).toMatchObject({ provider: "openai-codex", stopReason: "stop" });
@@ -463,7 +478,7 @@ describe("chain situations", () => {
 	it("C6: a continuation leaves a marked incumbent", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
 		await s.prompt();
-		s.script(CARBON, DAILY);
+		s.script(CARBON, fail(DAILY));
 		await s.prompt();
 		await s.prompt();
 		expect(s.calls).toEqual([
@@ -476,7 +491,7 @@ describe("chain situations", () => {
 
 	it("C8: admission honours inferred marks", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, DAILY);
+		s.script(CARBON, fail(DAILY));
 		await s.prompt();
 		const until = nextPacificMidnight(s.times[0] as number);
 		expect(await s.admit("router/mixed")).toEqual({ ok: true, resolvedModel: "google/gemini-4-neon" });
@@ -495,10 +510,12 @@ describe("chain situations", () => {
 			const before = s.fetches.length;
 			s.usage = { status: 500 };
 			if (abort) s.onFetch = () => void s.harness.session.abort();
-			s.script(SONNET, BILLING);
+			s.script(SONNET, fail(BILLING));
 			await s.prompt();
 			expect(s.fetches.length).toBe(before + 1);
 			const switched = s.notifications.filter((text) => text.includes("out of quota"));
+			const edits = s.harness.session.sessionManager.getBranch().filter((entry) => entry.type === "context_edit");
+			expect(edits).toHaveLength(abort ? 0 : 1);
 			if (abort) {
 				expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5"]);
 				expect(s.tracker.active()).toEqual([]);
@@ -515,7 +532,7 @@ describe("chain situations", () => {
 
 	it("C10: partial output is marked, then replay is refused", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
-		s.script(CARBON, { partial: "visible", error: DAILY });
+		s.script(CARBON, { kind: "partial", partial: "visible", error: DAILY });
 		const messages = await s.prompt();
 		expect(s.calls).toEqual(["google/gemini-4-carbon"]);
 		expect(messages.at(-1)?.errorMessage ?? "").toContain("refusing to replay a partial response");
@@ -524,7 +541,7 @@ describe("chain situations", () => {
 
 	it("C10: a terminal failure with partial output is marked, but never edited or continued", async () => {
 		const s = await run({ chain: [CARBON, VERTEX] });
-		s.script(CARBON, { partial: "visible", error: BILLING });
+		s.script(CARBON, { kind: "partial", partial: "visible", error: BILLING });
 		const messages = await s.prompt();
 		expect(s.calls).toEqual(["google/gemini-4-carbon"]);
 		expect(messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: BILLING });
@@ -539,11 +556,11 @@ describe("chain situations", () => {
 	it("/router reset forgets failure counts", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
 		// One counted unknown 429, then per-minute throttles exhaust core retries without a success.
-		s.script(CARBON, BARE, PER_MINUTE, PER_MINUTE, PER_MINUTE);
+		s.script(CARBON, fail(BARE), fail(PER_MINUTE), fail(PER_MINUTE), fail(PER_MINUTE));
 		await s.prompt();
 		await s.harness.session.prompt("/router reset");
 		// The first unknown 429 was forgotten: one more within 10 minutes is not a repeat.
-		s.script(CARBON, BARE, "ok");
+		s.script(CARBON, fail(BARE), OK);
 		s.clock.advance(MINUTE);
 		await s.prompt();
 		expect(s.tracker.active()).toEqual([]);

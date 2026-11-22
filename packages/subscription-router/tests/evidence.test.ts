@@ -256,15 +256,7 @@ describe("failure-inferred evidence", () => {
 
 	it("lets a success erase a failure whose confirmation was still pending", async () => {
 		const history = new FailureHistory();
-		let release: () => void = () => {};
-		const usage: UsageRead = {
-			get: (provider) =>
-				new Promise((resolve) => {
-					const read = { provider, status: "unavailable" as const, windows: [], retrievedAt: T0, expiresAt: T0 };
-					release = () => resolve(Object.defineProperty(read, NO_USAGE_SOURCE, { value: true }));
-				}),
-			decisionFor: () => ({ block: false }),
-		};
+		const { usage, release } = deferredUsage();
 		const confirm = confirmEvidence(usage, history, undefined);
 		const late = confirm(failure(BARE, T0));
 		history.succeeded(CARBON, T0 + MINUTE);
@@ -290,6 +282,26 @@ describe("failure-inferred evidence", () => {
 		history.succeeded({ provider: "google", id: "unseen" }, T0);
 	});
 });
+
+/** Reads for a provider without a usage source that answer only on `release`, to race confirmations. */
+function deferredUsage() {
+	const releases: Array<() => void> = [];
+	const usage: UsageRead = {
+		get: (provider) =>
+			new Promise((resolve) => {
+				const read = { provider, status: "unavailable" as const, windows: [], retrievedAt: T0, expiresAt: T0 };
+				releases.push(() => resolve(Object.defineProperty(read, NO_USAGE_SOURCE, { value: true })));
+			}),
+		decisionFor: () => ({ block: false }),
+	};
+	return {
+		usage,
+		pending: () => releases.length,
+		release: () => {
+			for (const release of releases.splice(0)) release();
+		},
+	};
+}
 
 /** An `unavailable` read for a provider without any usage source. */
 function noSource(): Partial<UsageSnapshot> {
@@ -580,12 +592,12 @@ describe("routing on the composed chain", () => {
 	const profile: Profile = { id: "metered", name: "Metered", chain: [CARBON, { ...NEON, thinking: "xhigh" }] };
 	const asModel = (ref: { provider: string; id: string }) => ({ ...ref, api: "test" }) as unknown as Model<Api>;
 
-	function routed() {
+	/** A router confirming through the production chain, `read` then `failure`. */
+	function routed(usage: UsageRead = reader(noSource()).usage) {
 		const clock = { now: T0 };
 		const tracker = new ExhaustionTracker(() => clock.now);
 		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => clock.now);
-		const history = new FailureHistory();
-		const confirm = composeEvidence(evidenceChain(reader(noSource()).usage, history, undefined));
+		const confirm = confirmEvidence(usage, new FailureHistory(), undefined);
 		const env: RouteEnv = {
 			resolve: (entry) => asModel(entry),
 			refresh: (model, signal, failedAt, message) => confirm({ model, signal, failedAt, message }),
@@ -593,16 +605,17 @@ describe("routing on the composed chain", () => {
 		return { clock, tracker, router, env };
 	}
 
-	const retry = (errorMessage: string): ModelRouteRequest => ({
+	const retry = (errorMessage: string, timestamp = T0): ModelRouteRequest => ({
 		model: asModel({ provider: "router", id: "metered" }),
 		reason: "retry",
 		thinkingLevel: "low",
 		messages: [],
 		failed: {
 			model: asModel(CARBON),
-			message: fauxAssistantMessage("", { stopReason: "error", errorMessage, timestamp: T0 }),
+			message: fauxAssistantMessage("", { stopReason: "error", errorMessage, timestamp }),
 		},
 	});
+	const user: ModelRouteRequest = { ...retry(DAILY), reason: "user", failed: undefined };
 
 	it("L7: racing confirmations of one failure mark once", async () => {
 		const { tracker, router, env } = routed();
@@ -616,29 +629,14 @@ describe("routing on the composed chain", () => {
 	});
 
 	it("L7: two distinct failures racing one confirmation both count", async () => {
-		const clock = { now: T0 };
-		const tracker = new ExhaustionTracker(() => clock.now);
-		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => clock.now);
-		const releases: Array<() => void> = [];
-		const usage: UsageRead = {
-			get: (provider) =>
-				new Promise((resolve) => {
-					const read = { provider, status: "unavailable" as const, windows: [], retrievedAt: T0, expiresAt: T0 };
-					releases.push(() => resolve(Object.defineProperty(read, NO_USAGE_SOURCE, { value: true })));
-				}),
-			decisionFor: () => ({ block: false }),
-		};
-		const confirm = confirmEvidence(usage, new FailureHistory(), undefined);
-		const env: RouteEnv = {
-			resolve: (entry) => asModel(entry),
-			refresh: (model, signal, failedAt, message) => confirm({ model, signal, failedAt, message }),
-		};
+		const { usage, release } = deferredUsage();
+		const { clock, tracker, router, env } = routed(usage);
 		const failed = (timestamp: number) =>
 			fauxAssistantMessage("", { stopReason: "error", errorMessage: "402: credits depleted", timestamp });
 		const first = router.confirm(asModel(CARBON), env, undefined, T0, failed(T0));
 		const second = router.confirm(asModel(CARBON), env, undefined, T0 + 1000, failed(T0 + 1000));
 		clock.now = T0 + 5000;
-		for (const release of releases) release();
+		release();
 		expect(await Promise.all([first, second])).toEqual([true, true]);
 		expect(tracker.active()).toMatchObject([{ confirmations: 2, until: T0 + 5000 + 10 * MINUTE }]);
 	});
@@ -649,12 +647,20 @@ describe("routing on the composed chain", () => {
 		expect(route).toMatchObject({ model: { id: NEON.id }, thinkingLevel: "xhigh" });
 	});
 
-	it("C7: concurrent requests all see the mark", async () => {
-		const { router, env } = routed();
-		await router.route(profile, retry(DAILY), env);
-		const user = { ...retry(DAILY), reason: "user" as const, failed: undefined };
-		const routes = await Promise.all([router.route(profile, user, env), router.route(profile, user, env)]);
-		expect(routes.map((route) => route.model.id)).toEqual([NEON.id, NEON.id]);
+	it("C7: requests in flight before the mark see it at their next pick", async () => {
+		const { usage, pending, release } = deferredUsage();
+		const { tracker, router, env } = routed(usage);
+		// Two requests failed on carbon; both confirmations wait on the read.
+		const first = router.route(profile, retry(DAILY, T0), env);
+		const second = router.route(profile, retry(DAILY, T0 + 1000), env);
+		await Promise.resolve();
+		expect(pending()).toBe(2);
+		// A user request routed while both wait still sees no mark.
+		expect((await router.route(profile, user, env)).model.id).toBe(CARBON.id);
+		release();
+		expect((await Promise.all([first, second])).map((route) => route.model.id)).toEqual([NEON.id, NEON.id]);
+		expect((await router.route(profile, user, env)).model.id).toBe(NEON.id);
+		expect(tracker.active()).toMatchObject([{ window: "inferred:daily", confirmations: 2 }]);
 	});
 
 	it("discards an inferred deadline that elapsed before confirmation finished", async () => {
