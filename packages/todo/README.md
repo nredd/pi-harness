@@ -129,7 +129,7 @@ In parent TUI sessions only, an unchanged list with `pending` or `in_progress` t
 `rpiv-todo-stale-reminder` after `staleAfterSettles` completed settles (default 10, set in
 `~/.config/rpiv-todo/config.json`; see [Stale-list reminders](#stale-list-reminders)) that
 would otherwise stop, even when a background agent is armed. It asks the parent to run
-`todo list` and reconcile actual progress. A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
+`todo list` and reconcile actual progress. A successful todo write resets the count, as do compaction and `/tree` replay; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
 On resume or `/reload`, a restored spent budget blocks another nudge until fresh human input.
 
@@ -165,8 +165,13 @@ appended, listing every `pending` and `in_progress` todo with its owner and open
 asking the model to update them by id instead of recreating them. This applies in every session
 mode, child agents included. The message is never persisted and later requests do not carry it.
 A request with nothing open spends it. Plan mode defers it to the first request after Plan mode.
-The pending list is in memory only, so a `/reload` or session switch before the next request
-drops it.
+The list is built from the todos at that request; until then only a pending flag is kept, in
+memory, so a `/reload` or session switch before the next request drops it, also while Plan mode
+defers it. `/tree` navigation does not set the flag and does not clear one already set: the next
+eligible request lists the newly replayed branch's todos.
+
+Limits: the stale-list and empty-list nudges stay parent-TUI-only (#1195), so headless parents
+(JSON, RPC, print) get neither. Only the compaction list reaches every session mode.
 
 ### Session switches and survivors
 

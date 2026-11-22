@@ -14,6 +14,7 @@ import {
 	HELD_REMINDER_MARKER,
 	isPlanApprovedPayload,
 	PLAN_REMINDER_MARKER,
+	registerPlanHooks,
 	remindedSinceLastPrompt,
 	STALE_REMINDER_MARKER,
 } from "../../src/plan/hooks.ts";
@@ -52,7 +53,11 @@ const PLAN = `# Add widgets
 
 type Handler = (...args: unknown[]) => unknown;
 
-function setup() {
+function setup(
+	importOverlay: () => Promise<typeof import("../../src/todo-overlay.ts")> = async () => {
+		throw new Error("overlay must not load in headless tests");
+	},
+) {
 	__resetState();
 	const bus = new Map<string, Handler[]>();
 	const appendEntry = vi.fn();
@@ -68,13 +73,7 @@ function setup() {
 			}),
 		},
 	} as never);
-	registerTodo(
-		pi,
-		async () => {
-			throw new Error("overlay must not load in headless tests");
-		},
-		{ homeDir: TEST_HOME },
-	);
+	registerTodo(pi, importOverlay, { homeDir: TEST_HOME });
 	const handler = (name: string) => {
 		const found = captured.handlers.get(name)?.[0];
 		if (!found) throw new Error(`${name} not registered`);
@@ -701,12 +700,52 @@ describe("settling with nothing armed to wake the parent", () => {
 			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
 		});
 
-		it.each(["session_start", "session_shutdown"])("drops a pending list on %s", async (event) => {
+		it("drops a pending list on session_start", async () => {
 			const { handler, ctx } = await start(tasks({ id: 1 }));
 			await handler("session_compact")({}, ctx);
-			await handler(event)({ reason: event === "session_start" ? "new" : "quit" }, ctx);
-			if (event === "session_shutdown") await handler("session_start")({ reason: "new" }, ctx);
+			await handler("session_start")({ reason: "new" }, ctx);
 			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it("clears the pending flag at shutdown while the activation lives on", () => {
+			const hooks = registerPlanHooks(
+				createTodoPi().pi,
+				async () => {},
+				() => {},
+				{ homeDir: TEST_HOME },
+			);
+			hooks.sessionCompacted("s1");
+			hooks.sessionCompacted("s2");
+			expect(hooks.compactionListPending("s1")).toBe(true);
+			hooks.sessionEnded("s1");
+			expect(hooks.compactionListPending("s1")).toBe(false);
+			expect(hooks.compactionListPending("s2")).toBe(true);
+		});
+
+		it.each(["rejects", "is still loading"])("arms the list when the overlay refresh %s", async (outcome) => {
+			const Overlay = class {
+				setUICtx = vi.fn();
+				update = vi.fn();
+			};
+			let release = () => {};
+			const loaded = new Promise<typeof import("../../src/todo-overlay.ts")>((resolve, reject) => {
+				release = () => resolve({ TodoOverlay: Overlay } as never);
+				if (outcome === "rejects") reject(new Error("overlay load failed"));
+			});
+			const { handler } = setup(() => loaded);
+			// An empty foreground binds the UI without loading the overlay; the compaction replay
+			// brings visible tasks, so its refresh is the first load.
+			const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
+			await handler("session_start")({ reason: "new" }, ctx);
+			Object.assign(ctx.sessionManager, {
+				getBranch: () => [{ type: "custom", customType: STATE_ENTRY_TYPE, data: tasks({ id: 1 }) }],
+			});
+			const compacting = handler("session_compact")({}, ctx) as Promise<void>;
+			if (outcome === "rejects") await expect(compacting).rejects.toThrow("overlay load failed");
+			const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: unknown[] };
+			expect(result.messages[1]).toMatchObject({ customType: COMPACTION_LIST_MESSAGE_TYPE });
+			release();
+			await compacting.catch(() => {});
 		});
 
 		it("skips a blocker missing from the list", () => {

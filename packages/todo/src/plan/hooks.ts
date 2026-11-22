@@ -477,6 +477,8 @@ export interface PlanSessionHooks {
 	): Promise<void>;
 	/** Call from `session_compact` after replay: the next request outside Plan mode gets the open list once. */
 	sessionCompacted(sessionId: string): void;
+	/** Whether `sessionId`'s next request outside Plan mode gets the open list: the pending flag `sessionCompacted` sets. */
+	compactionListPending(sessionId: string): boolean;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
 }
@@ -712,6 +714,9 @@ export function registerPlanHooks(
 		},
 		sessionCompacted(sessionId) {
 			compacted.add(sessionId);
+		},
+		compactionListPending(sessionId) {
+			return compacted.has(sessionId);
 		},
 		sessionEnded(sessionId) {
 			live.delete(sessionId);
