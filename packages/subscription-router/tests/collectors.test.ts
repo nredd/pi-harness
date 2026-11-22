@@ -244,6 +244,36 @@ it("applies the usage deadline and backoff to a custom reader even if it ignores
 	expect(fetch).not.toHaveBeenCalled();
 });
 
+it("selects configured collector IDs without changing the credential provider", async () => {
+	const { usage, getAccessToken } = harness();
+	const { pi } = createRecordingPi();
+	install(fake);
+	const alias = "faux-alias";
+	const read = vi.fn(fake.read);
+	install({ ...fake, provider: alias, read });
+	await createSubscriptionRouter({
+		usage,
+		config: {
+			ok: true,
+			profiles: [],
+			providers: {
+				[provider]: { collector: { id: "unknown" } },
+				[alias]: { collector: { id: provider } },
+			},
+		},
+	})(pi);
+	expect(await usage.get(ctx, provider)).toMatchObject({ status: "unavailable" });
+	expect(getAccessToken).not.toHaveBeenCalled();
+	const snapshot = await usage.get(ctx, alias);
+	expect(snapshot).toMatchObject({ provider: alias, status: "available", windows: reading.windows });
+	expect(getAccessToken).toHaveBeenCalledWith(ctx, alias);
+	expect(read).not.toHaveBeenCalled();
+	usage.configureCollectors({});
+	expect(usage.peek(alias)).toBeUndefined();
+	expect(await usage.get(ctx, alias)).toMatchObject({ status: "available" });
+	expect(read).toHaveBeenCalledOnce();
+});
+
 it("warms a registered scoped provider and includes late registrations in the usage RPC", async () => {
 	const { usage } = harness();
 	const { pi, handlers } = createRecordingPi();

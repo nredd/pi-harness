@@ -15,6 +15,8 @@ import { addAbortListener } from "node:events";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type CollectorReading, type CollectorRegistration, registrationFor } from "./collectors.ts";
 
+import type { ProviderConfig } from "./config.ts";
+
 export { parseAnthropic, parseCodex } from "./builtin-collectors.ts";
 
 import { type ModelRef, refKey } from "./model-ref.ts";
@@ -190,9 +192,18 @@ interface UsageRead {
 	newer?: UsageRead;
 }
 
+/** Resolve adapter IDs without changing the provider whose credentials are read. */
+export function collectorIdFor(provider: string, providers: Readonly<Record<string, ProviderConfig>>): string {
+	return providers[provider]?.collector?.id ?? provider;
+}
+
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
-	private readonly collectors = new Map<string, CollectorRegistration>();
+	private readonly collectors = new Map<
+		string,
+		{ registration: CollectorRegistration; binding: CollectorRegistration; unbind: AbortController }
+	>();
+	private providers: Readonly<Record<string, ProviderConfig>> = {};
 	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration>();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly generations = new Map<string, number>();
@@ -207,6 +218,14 @@ export class UsageService {
 			getAccessToken: (ctx, provider) => ctx.modelRegistry.getApiKeyForProvider(provider),
 		},
 	) {}
+
+	/** Apply provider declarations before serving reads for this config. */
+	configureCollectors(providers: Readonly<Record<string, ProviderConfig>> = {}): void {
+		this.providers = providers;
+		for (const [provider, { registration, unbind }] of this.collectors) {
+			if (registration !== registrationFor(collectorIdFor(provider, providers))) unbind.abort();
+		}
+	}
 
 	/**
 	 * Current usage for `provider`: cached while younger than five minutes, else a
@@ -383,16 +402,23 @@ export class UsageService {
 	}
 
 	private currentCollector(provider: string): CollectorRegistration | undefined {
-		const registered = registrationFor(provider);
-		if (registered && this.collectors.get(provider) !== registered) {
-			this.collectors.set(provider, registered);
-			addAbortListener(registered.signal, () => {
-				this.invalidate(provider);
-				this.lastManualRefreshAt.delete(provider);
-				this.collectors.delete(provider);
-			});
-		}
-		return registered;
+		const registration = registrationFor(collectorIdFor(provider, this.providers));
+		const current = this.collectors.get(provider);
+		if (current?.registration === registration) return current?.binding;
+		current?.unbind.abort();
+		if (!registration) return undefined;
+		const unbind = new AbortController();
+		const binding = {
+			collector: registration.collector,
+			signal: AbortSignal.any([registration.signal, unbind.signal]),
+		};
+		this.collectors.set(provider, { registration, binding, unbind });
+		addAbortListener(binding.signal, () => {
+			this.invalidate(provider);
+			this.lastManualRefreshAt.delete(provider);
+			this.collectors.delete(provider);
+		});
+		return binding;
 	}
 
 	private refresh(

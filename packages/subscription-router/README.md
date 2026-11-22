@@ -321,7 +321,9 @@ A collector receives the provider credential from Pi, so register only code you 
 credential. A `kind: "http"` adapter defines `request(token)` and `parse(payload)`; a `kind: "custom"`
 adapter defines `read({ token, signal, now })` and should stop on abort. Return normalized `windows`
 (and optional `meters`, `pools` or `credits`), or `undefined` for unsupported data. Only matching
-percentage windows can block models. Provider declarations do not override the provider-ID lookup yet.
+percentage windows can block models. Set `providers.<provider>.collector.id` to use a different
+registered adapter; credentials still come from `<provider>`. Unknown explicit IDs return `unavailable`
+without falling back to the provider ID.
 
 No Google subscription collector or OAuth client is bundled. A user-supplied Google subscription
 collector must be read-only, use local first-party client state or a documented first-party client
