@@ -64,7 +64,7 @@ async function rig(
 	const socketPath = shortSocketPath();
 	const fake = await startFakeHelper({
 		socketPath,
-		diagnostics: { protocolVersion: 7, pid: 0, buildIdentity },
+		diagnostics: { protocolVersion: 8, pid: 0, buildIdentity },
 		handlers: { listApps: ok([]), setActivityGlow: ok({}) },
 	});
 	onTestFinished(() => fake.stop());
@@ -251,7 +251,7 @@ test.each(["command", "glow"])(
 		symlinkSync(fake.socketPath, managedSocket(home));
 		fake.script(
 			"diagnostics",
-			effect(() => rmSync(managedSocket(home)), ok({ protocolVersion: 7, pid: 0, buildIdentity: older })),
+			effect(() => rmSync(managedSocket(home)), ok({ protocolVersion: 8, pid: 0, buildIdentity: older })),
 		);
 		await assert.rejects(path_ === "glow" ? glow.setActive(true) : client.command("listApps"), {
 			code: "stale_helper",
@@ -275,7 +275,7 @@ test("an incompatible replacement of an external helper receives no effect", asy
 	fake.diagnostics.protocolVersion = 6;
 	await assert.rejects(client.command("listApps"), {
 		code: "helper_protocol",
-		message: `External helper at ${fake.socketPath} reports protocol 6; expected 7. Its operator must update and restart it.`,
+		message: `External helper at ${fake.socketPath} reports protocol 6; expected 8. Its operator must update and restart it.`,
 	});
 	assert.deepEqual(commands().slice(-1), ["diagnostics"]);
 	assert.equal(commands().filter((cmd: string) => cmd === "listApps").length, 1);
@@ -288,7 +288,7 @@ test("the activity glow checks an external helper's protocol before its first fr
 	fake.diagnostics.protocolVersion = 6;
 	await assert.rejects(glow.setActive(true), { code: "helper_protocol" });
 	assert.ok(!commands().includes("setActivityGlow"));
-	fake.diagnostics.protocolVersion = 7;
+	fake.diagnostics.protocolVersion = 8;
 	await glow.setActive(true);
 	assert.deepEqual(commands().slice(-2), ["diagnostics", "setActivityGlow"]);
 });
@@ -357,7 +357,7 @@ test.each([
 	async (caller, retry) => {
 		const setup = caller === "ensureInstalled setup";
 		const { client, fake, connect, spawn } = await rig(current, { installed: !setup });
-		fake.script("diagnostics", [silent(), ok({ protocolVersion: 7, pid: 0, buildIdentity: current })]);
+		fake.script("diagnostics", [silent(), ok({ protocolVersion: 8, pid: 0, buildIdentity: current })]);
 		if (retry === "absent")
 			connect.afterConnect = () => {
 				connect.failWith = "ENOENT";
@@ -401,7 +401,7 @@ test.each([
 	"a healthy resident whose diagnostics take %i ms is used, not launched or reinstalled (installed: %s)",
 	async (ms, installed) => {
 		const { client, fake, spawn, commands } = await rig(current, { installed });
-		fake.script("diagnostics", slow(ms, ok({ protocolVersion: 7, pid: 0, buildIdentity: current })));
+		fake.script("diagnostics", slow(ms, ok({ protocolVersion: 8, pid: 0, buildIdentity: current })));
 		const launch = vi.spyOn(client, "launchDaemon");
 		if (installed) assert.deepEqual(await client.command("listApps"), []);
 		else await client.ensureInstalled();

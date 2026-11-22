@@ -81,7 +81,7 @@ function realisticChild(children, options, hold) {
 function envelope(platform, handlers = {}, extra = {}) {
 	return createHelperEngine({
 		profile: "envelope",
-		protocolVersion: 5,
+		protocolVersion: platform === "Windows" ? 6 : 5,
 		platform,
 		handlers,
 		diagnostics: { invariants: REQUIRED_INVARIANTS },
@@ -131,7 +131,7 @@ describe("Windows helper client", () => {
 		const { WINDOWS_HELPER_PATH, WINDOWS_HELPER_PROTOCOL_VERSION, windowsHelper, WindowsHelperClient } = await import(
 			"../src/platform/windows/helper.ts"
 		);
-		assert.equal(WINDOWS_HELPER_PROTOCOL_VERSION, 5);
+		assert.equal(WINDOWS_HELPER_PROTOCOL_VERSION, 6);
 		assert.equal(
 			WINDOWS_HELPER_PATH,
 			path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "windows-bridge.exe"),
@@ -163,7 +163,7 @@ describe("Windows helper client", () => {
 			["look", "look"],
 		);
 		assert.deepEqual(engine.requests[0].raw, {
-			protocolVersion: 5,
+			protocolVersion: 6,
 			id: engine.requests[0].id,
 			cmd: "look",
 			args: { app: "x" },
@@ -285,7 +285,7 @@ describe("Windows helper client", () => {
 			look: split(ok({ roots: [1, 2, 3] }), 4, 1),
 			noise: (request) => ({
 				kind: "raw",
-				text: `\n   \n{not json\n${JSON.stringify({ protocolVersion: 4, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 5, id: request.id, ok: true, result: "after noise" })}\n`,
+				text: `\n   \n{not json\n${JSON.stringify({ protocolVersion: 4, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 6, id: request.id, ok: true, result: "after noise" })}\n`,
 			}),
 		});
 		const { client } = await windows({ helper: { engine } });
@@ -327,16 +327,16 @@ describe("Windows helper client", () => {
 	test("a reply from another protocol version is rejected with the versions named", async () => {
 		install();
 		const engine = envelope("Windows", {
-			old: withProtocol(4),
+			old: withProtocol(5),
 			unversioned: (request) => raw(`${JSON.stringify({ id: request.id, ok: true, result: {} })}\n`),
 		});
 		const { client } = await windows({ helper: { engine } });
-		// A v4 helper predates owner-bound reads and waits.
+		// A v5 helper predates instance-bound roots and looks.
 		await assert.rejects(
 			client.command("old"),
-			/Windows helper protocol mismatch: expected 5, got 4\. Restart Pi to use the installed helper\./,
+			/Windows helper protocol mismatch: expected 6, got 5\. Restart Pi to use the installed helper\./,
 		);
-		await assert.rejects(client.command("unversioned"), /expected 5, got unknown\./);
+		await assert.rejects(client.command("unversioned"), /expected 6, got unknown\./);
 	});
 
 	test("a command that gets no reply times out and a late reply is ignored", async () => {
@@ -345,7 +345,7 @@ describe("Windows helper client", () => {
 		const { client, children } = await windows({ helper: { engine } });
 		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
 		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 5, id: engine.requests[0].id, ok: true, result: {} })}\n`,
+			`${JSON.stringify({ protocolVersion: 6, id: engine.requests[0].id, ok: true, result: {} })}\n`,
 		);
 		engine.script("hang", ok("again"));
 		assert.equal(await client.command("hang"), "again");

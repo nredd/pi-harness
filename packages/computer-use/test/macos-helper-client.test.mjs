@@ -89,7 +89,7 @@ async function load({ external, fake, spawn }) {
 	return await import("../src/platform/macos/helper.ts");
 }
 
-async function fakeOn({ protocol = 7, ...options } = {}) {
+async function fakeOn({ protocol = 8, ...options } = {}) {
 	const socketPath = shortSocketPath();
 	const fake = await startFakeHelper({
 		socketPath,
@@ -115,7 +115,7 @@ describe("daemon commands over the socket", () => {
 		assert.equal(fake.requests[0].cmd, "diagnostics", "command() probes the daemon first");
 	});
 
-	test("keyboard stops carry a deadline and the posted prefix without retry", async () => {
+	test("keyboard stops carry the posted prefix without retry", async () => {
 		const fake = await fakeOn({
 			handlers: {
 				desktopInput: {
@@ -125,15 +125,12 @@ describe("daemon commands over the socket", () => {
 			},
 		});
 		const { MacosHelperClient } = await load({ external: true, fake });
-		const start = Date.now();
 		await assert.rejects(new MacosHelperClient().command("desktopInput", { action: "key" }, { timeoutMs: 30_000 }), {
 			code: "app_blocked",
 			evidence: { postedUnits: 1 },
 		});
-		const requests = fake.requests.filter(({ cmd }) => cmd === "desktopInput");
-		assert.equal(requests.length, 1);
-		assert.ok(requests[0].args.keyboardDeadlineMs >= start + 29_750);
-		assert.ok(requests[0].args.keyboardDeadlineMs <= Date.now() + 29_750);
+		// Sent once, never retried; the deadline's value is `tests/keyboard-deadline-clock.test.ts`'s job.
+		assert.equal(fake.requests.filter(({ cmd }) => cmd === "desktopInput").length, 1);
 	});
 
 	test("error replies become HelperCommandError with the helper's code and message", async () => {
@@ -219,7 +216,7 @@ describe("daemon commands over the socket", () => {
 			(error) => error.code === "helper_disconnected",
 		);
 		assert.equal(client.daemonAvailable, false);
-		assert.equal((await client.command("diagnostics")).protocolVersion, 7);
+		assert.equal((await client.command("diagnostics")).protocolVersion, 8);
 	});
 
 	test("a reply that is followed at once by a disconnect resolves, not helper_disconnected (#725)", async () => {
@@ -382,7 +379,7 @@ describe("diagnostics", () => {
 	test("normalises the helper's diagnostics and caches them", async () => {
 		const fake = await fakeOn({
 			diagnostics: {
-				protocolVersion: 7.9,
+				protocolVersion: 8.9,
 				architectureVersion: "3",
 				invariants: ["a", 1, "b"],
 				pid: 42.5,
@@ -402,7 +399,7 @@ describe("diagnostics", () => {
 		assert.equal(client.diagnostics, undefined);
 		const diagnostics = await client.diagnosticsCommand();
 		assert.deepEqual(diagnostics, {
-			protocolVersion: 7,
+			protocolVersion: 8,
 			architectureVersion: 3,
 			invariants: ["a", "b"],
 			pid: 42,
@@ -421,7 +418,7 @@ describe("diagnostics", () => {
 
 	test("tolerates a sparse result with zero and false defaults, but an external helper needs its protocol", async () => {
 		const fake = await fakeOn({
-			handlers: { diagnostics: [{ kind: "reply", body: { ok: true } }, ok({ protocolVersion: 7 })] },
+			handlers: { diagnostics: [{ kind: "reply", body: { ok: true } }, ok({ protocolVersion: 8 })] },
 		});
 		const { MacosHelperClient } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
@@ -434,17 +431,17 @@ describe("diagnostics", () => {
 	});
 });
 
-test.each([7, 6])("external daemon from another executable with protocol %s is never restarted", async (protocol) => {
+test.each([8, 6])("external daemon from another executable with protocol %s is never restarted", async (protocol) => {
 	const fake = await fakeOn({ protocol, diagnostics: { executablePath: path.join(tmp, "other", "bridge") } });
 	const spawn = createFakeSpawn({});
 	const { MacosHelperClient } = await load({ external: true, fake, spawn });
 	const client = new MacosHelperClient();
-	if (protocol === 7) assert.equal((await client.ensureProtocol()).protocolVersion, 7);
-	else await assert.rejects(client.ensureProtocol(), /reports protocol 6; expected 7.*operator/);
+	if (protocol === 8) assert.equal((await client.ensureProtocol()).protocolVersion, 8);
+	else await assert.rejects(client.ensureProtocol(), /reports protocol 6; expected 8.*operator/);
 	await assert.rejects(client.restart(), /restarted by its operator/);
 	assert.deepEqual(
 		fake.requests.map(({ cmd }) => cmd),
-		protocol === 7 ? ["diagnostics", "diagnostics"] : ["diagnostics"],
+		protocol === 8 ? ["diagnostics", "diagnostics"] : ["diagnostics"],
 	);
 	assert.deepEqual(spawn.calls, []);
 });
@@ -463,7 +460,7 @@ describe("ensureProtocol", () => {
 
 	test("accepts a current daemon without restarting", async () => {
 		const { client, fake, spawn } = await protocolRig({ diagnostics: { pid: 77 } });
-		assert.equal((await client.ensureProtocol()).protocolVersion, 7);
+		assert.equal((await client.ensureProtocol()).protocolVersion, 8);
 		assert.equal(
 			fake.requests.some((request) => request.cmd === "shutdown"),
 			false,
@@ -489,9 +486,9 @@ describe("ensureProtocol", () => {
 		async () => {
 			const { client, fake } = await protocolRig({
 				diagnostics: { protocolVersion: 6 },
-				afterRestart: { protocolVersion: 7 },
+				afterRestart: { protocolVersion: 8 },
 			});
-			assert.equal((await client.ensureProtocol()).protocolVersion, 7);
+			assert.equal((await client.ensureProtocol()).protocolVersion, 8);
 			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
 		},
 		SLOW_MS,
@@ -533,7 +530,7 @@ describe("ensureProtocol", () => {
 			await assert.rejects(client.ensureProtocol(), (error) => {
 				assert.equal(
 					error.message,
-					`pi-computer-use helper mismatch after relaunch: expected protocol 7 and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol 5 and executable unknown. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
+					`pi-computer-use helper mismatch after relaunch: expected protocol 8 and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol 5 and executable unknown. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
 				);
 				return true;
 			});
@@ -547,9 +544,9 @@ describe("ensureProtocol", () => {
 		async () => {
 			const { client } = await protocolRig({
 				diagnostics: { protocolVersion: 5 },
-				afterRestart: { protocolVersion: 7, executablePath: path.join(tmp, "other") },
+				afterRestart: { protocolVersion: 8, executablePath: path.join(tmp, "other") },
 			});
-			await assert.rejects(client.ensureProtocol(), /got protocol 7 and executable .*other/);
+			await assert.rejects(client.ensureProtocol(), /got protocol 8 and executable .*other/);
 		},
 		SLOW_MS,
 	);

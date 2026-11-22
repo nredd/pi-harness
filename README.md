@@ -40,8 +40,9 @@ put the why in the commit.
     reads the checkout SHA from Git stdout, and refuses unknown job keys. Non-PR reports show
     `head: n/a` separately from the tested SHA. Swift
     and native Windows keep their independent diagnostic uploads without a presentation sidecar.
-    The fan-in stamps the summary only when all downloaded shards match its run,
-    attempt and checkout; a partial rerun that reuses older shards can retain reports without a stamp.
+    The fan-in stamps the summary only when the downloaded shards are exactly the planned set
+    (`OWNED_SHARDS` in `scripts/ci_paths.py`, which expands into the shard matrix) and all match its run,
+    attempt and checkout, so a shard whose artifact never arrived cannot pass by its absence; a partial rerun that reuses older shards can retain reports without a stamp.
     Missing, malformed or mismatched records render `unavailable`, never zero. Accounting and floors
     are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,
     `--event-name`, `--workflow-ref` and (on PRs only) `--head-sha`; measured-main comparison also
@@ -350,7 +351,13 @@ the original commit. No branch is moved forward merely to satisfy release freshn
 `pi_release.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
 candidate `head_sha`, the current attempt's complete matrix and core jobs, the successful actual
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
-contract, Node stack and standalone stack artifacts bound to that run and SHA.
+contract, Node stack and standalone stack artifacts bound to that run and SHA. The Windows x64
+coverage ratchet is part of that roster: the `computer-use Rust (windows-x64)` producer with its
+`Native Windows tests and LLVM reports (no desktop interaction)` and `Preserve Windows source-bound
+native reports` steps, its `computer-use-rust-windows-x64-<attempt>` upload (any positive attempt,
+bound to the producer's job window like every artifact), and the `owned (ubuntu-24.04)` fan-in's
+`Download Windows x64 coverage` and `Account for Windows x64 coverage separately` steps. A green
+dispatch that skipped any of them refuses.
 
 The required job set is the verifier's own `OWNED_SHARDS`, not the candidate's. Each caller runs
 the verifier that matches its candidate: `publish.yml` runs from the tag's commit, and
@@ -361,8 +368,10 @@ change (e.g. the #660 macOS split) therefore verifies under its own commit's gat
 The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
-uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
-`stack-*` and `standalone-*` to their `stack (<os>, <stack>)` cell). That job must be in the
+uploads it (`coverage-<os>` to `owned (<os>)`, `computer-use-rust-windows-x64-<attempt>` to
+`computer-use Rust (windows-x64)`, never the `owned (ubuntu-24.04)` fan-in that downloads it,
+`contract-reports-<os>` to `contracts (<os>)`, `stack-*` and `standalone-*` to their
+`stack (<os>, <stack>)` cell). That job must be in the
 current attempt's job list and successful, and exactly one upload of that name must have a
 `created_at` inside the job's `started_at`..`completed_at`, both bounds inclusive, compared as
 offset-aware instants. A naive timestamp refuses. Two uploads inside one window refuse, the newest

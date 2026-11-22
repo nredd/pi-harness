@@ -12,7 +12,11 @@ import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
 const NO_LISTENER_CODES = new Set<string | undefined>(["ENOENT", "ECONNREFUSED"]);
-const HELPER_PROTOCOL_VERSION = 7;
+const HELPER_PROTOCOL_VERSION = 8;
+/** Commands that may post keys and so carry `keyboardDeadlineUptimeMs`. */
+const KEYBOARD_COMMANDS = new Set(["desktopInput", "act", "actBatch"]);
+/** Keyboard delivery stops this long before the socket timer, so the helper can still report its posted prefix. */
+const KEYBOARD_DEADLINE_MARGIN_MS = 250;
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 /** Deadline of one read-only diagnostics probe. A resident that answers within it is used as is. */
 const DIAGNOSTICS_PROBE_TIMEOUT_MS = 4_000;
@@ -147,6 +151,25 @@ export class HelperCommandError extends Error {
 		this.code = code;
 		this.evidence = evidence;
 	}
+}
+
+/**
+ * The keyboard deadline in the helper's boot-relative clock, which its `diagnostics` reports as `uptimeMs`. Only
+ * monotonic time is involved, so a wall-clock step on either side cannot extend delivery past the client's timeout.
+ * @param uptimeMs The helper's clock when it built the probe reply; it reads at least this by `nowMs`.
+ * @param deadlineMs The client's own deadline in `performance.now()` time.
+ * @param nowMs `performance.now()` when the probe reply arrived. Charging the reply's transit time against the
+ * budget can only make the deadline earlier.
+ * @throws {HelperCommandError} `helper_protocol` when the helper reports no usable clock.
+ */
+function helperKeyboardDeadline(uptimeMs: unknown, deadlineMs: number, nowMs: number): number {
+	if (typeof uptimeMs !== "number" || !Number.isFinite(uptimeMs) || uptimeMs < 0) {
+		throw new HelperCommandError(
+			`Helper at ${HELPER_SOCKET_PATH} reported no usable uptimeMs clock for the keyboard deadline; the command was not sent. Update and restart it.`,
+			"helper_protocol",
+		);
+	}
+	return uptimeMs + (deadlineMs - nowMs);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -387,6 +410,7 @@ export class MacosHelperClient {
 	): Promise<T> {
 		// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.
 		throwIfAborted(signal);
+		const deadlineMs = performance.now() + timeoutMs - KEYBOARD_DEADLINE_MARGIN_MS;
 		return await new Promise<T>((resolve, reject) => {
 			const id = `req_${++this.requestSequence}`;
 			const probeId = `build_${id}`;
@@ -422,10 +446,9 @@ export class MacosHelperClient {
 					socket.destroy();
 					reject(new Error("Operation aborted."));
 				});
-			// Give the helper a chance to report its posted prefix before the socket timer wins.
-			const keyboardDeadlineMs =
-				cmd === "desktopInput" || cmd === "act" || cmd === "actBatch" ? Date.now() + timeoutMs - 250 : undefined;
-			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
+			// Set from this connection's own build probe, which every keyboard command waits for.
+			let keyboardDeadlineUptimeMs: number | undefined;
+			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineUptimeMs })}\n`);
 			const onConnect = (managedAtConnect: boolean) => {
 				connected = true;
 				managed = managedAtConnect;
@@ -443,6 +466,8 @@ export class MacosHelperClient {
 							throw new HelperTransportError("Invalid helper build probe reply.");
 						}
 						this.verifyBuild(probe.result, managed);
+						if (KEYBOARD_COMMANDS.has(cmd))
+							keyboardDeadlineUptimeMs = helperKeyboardDeadline(probe.result?.uptimeMs, deadlineMs, performance.now());
 						checkingBuild = false;
 						buffer = "";
 						sendCommand();

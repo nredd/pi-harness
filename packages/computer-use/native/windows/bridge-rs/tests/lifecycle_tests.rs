@@ -23,7 +23,7 @@ impl Helper {
             .as_mut()
             .expect("owned input pipe")
             .write_all(
-                b"{\"protocolVersion\":5,\"id\":\"fixture\",\"cmd\":\"diagnostics\",\"args\":{}}\n",
+                b"{\"protocolVersion\":6,\"id\":\"fixture\",\"cmd\":\"diagnostics\",\"args\":{}}\n",
             )
             .expect("send diagnostic frame to owned helper");
     }
@@ -68,7 +68,7 @@ fn input_eof_drains_the_readiness_frame_then_stops() {
     let response: serde_json::Value =
         serde_json::from_str(&output).expect("one complete response frame");
     assert_eq!(response["id"], "fixture");
-    assert_eq!(response["protocolVersion"], 5);
+    assert_eq!(response["protocolVersion"], 6);
     assert_eq!(
         response["result"]["capabilities"],
         serde_json::json!(["fail-closed-live-target-v1"])
