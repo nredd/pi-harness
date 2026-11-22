@@ -1009,6 +1009,7 @@ mod tests {
             bounds: None,
             is_secure: false,
             depth: 0,
+            unread: false,
         }
     }
 
@@ -1324,6 +1325,9 @@ mod tests {
         .await
     }
 
+    /// Fixture role name that makes `GetRoleName` fail with a non-timeout error.
+    const FAILING_ROLE_NAME: &str = "<GetRoleName fails>";
+
     struct PeerNode {
         name: &'static str,
         role: watch::Receiver<Option<u32>>,
@@ -1346,8 +1350,11 @@ mod tests {
             self.name
         }
 
-        fn get_role_name(&self) -> &str {
-            self.role_name
+        fn get_role_name(&self) -> zbus::fdo::Result<&str> {
+            if self.role_name == FAILING_ROLE_NAME {
+                return Err(zbus::fdo::Error::Failed("role name unavailable".into()));
+            }
+            Ok(self.role_name)
         }
 
         async fn get_role(&self) -> zbus::fdo::Result<u32> {
@@ -2003,6 +2010,12 @@ mod tests {
                         .result
                         .unwrap();
                         assert_eq!(look["outline"]["title"], "Window");
+                        // The stalled parent is unread, not a leaf: the outline must say so.
+                        assert_eq!(look["outline"]["truncated"], false);
+                        let parent = &look["outline"]["children"][0];
+                        assert_eq!(parent["title"], "Parent");
+                        assert_eq!(parent["truncated"], true);
+                        assert_eq!(parent["children"], json!([]));
                     } else {
                         let reply = peer_request(
                             &state,
@@ -2020,7 +2033,86 @@ mod tests {
                         )
                         .await;
                         assert_eq!(gone.result.unwrap()["gone"], true);
+                        let look = peer_request(
+                            &state,
+                            &connection,
+                            "look",
+                            json!({"rootRef":root_ref,"includeImage":false}),
+                        )
+                        .await
+                        .result
+                        .unwrap();
+                        let parent = &look["outline"]["children"][0];
+                        assert_eq!(parent["truncated"], false);
+                        assert_eq!(parent["children"][0]["title"], "Matching child");
                     }
+                },
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_for_gone_rejects_unread_role_name() {
+        let (state, root_ref) = peer_root_state();
+        for role_name in ["label", "", "  ", FAILING_ROLE_NAME] {
+            let complete = role_name == "label";
+            with_peer(
+                |peer| {
+                    peer.serve_at(
+                        "/window",
+                        PeerNode {
+                            name: "Window",
+                            role: watch::channel(Some(23)).1,
+                            role_name: "frame",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: Some("/window/label"),
+                            text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/label",
+                        PeerNode {
+                            name: "Status",
+                            role: watch::channel(Some(29)).1,
+                            role_name,
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: None,
+                            text: false,
+                        },
+                    )
+                },
+                async |connection| {
+                    let reply = peer_request(
+                        &state,
+                        &connection,
+                        "atspiWaitFor",
+                        json!({"rootRef":root_ref,"role":"label","gone":true,"timeoutMs":300}),
+                    )
+                    .await;
+                    if complete {
+                        // Still present: the wait times out without claiming `gone`.
+                        let result = reply.result.unwrap();
+                        assert_eq!(result["gone"], Value::Null);
+                        assert_eq!(result["timedOut"], true);
+                    } else {
+                        assert!(!reply.ok, "{role_name:?} proved absence: {reply:?}");
+                        assert_eq!(reply.error.unwrap().code, ErrorCode::Timeout);
+                    }
+                    let look = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({"rootRef":root_ref,"includeImage":false}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    let label = &look["outline"]["children"][0];
+                    assert_eq!(label["title"], "Status", "{role_name:?}");
+                    assert_eq!(label["truncated"], !complete, "{role_name:?}");
                 },
             )
             .await;
