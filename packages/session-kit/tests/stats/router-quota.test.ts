@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { QUOTA_LABEL_MAX } from "../../src/stats/quota.ts";
 import { readRouterQuota } from "../../src/stats/router-quota.ts";
 
 vi.mock("node:fs/promises", { spy: true });
@@ -226,4 +227,33 @@ it("returns rows that callers cannot mutate", async () => {
 	row.label = "changed";
 	// @ts-expect-error head variants are readonly
 	row.head.text = "changed";
+});
+
+it("clips long names but keeps span and stale qualifiers within the label limit", async () => {
+	const giant = "x".repeat(10_000);
+	const clipped = `${"x".repeat(39)}…`;
+	writeFileSync(
+		view,
+		JSON.stringify([
+			{
+				provider: giant,
+				display: { full: giant },
+				snapshot: {
+					status: "stale",
+					windows: [{ name: giant, families: [giant], usedPercent: 5, spanSource: "inferred" }],
+				},
+				meters: [{ name: giant, families: [giant], spanSource: "assumed", quantity: { unit: "requests", used: 1 } }],
+				pools: [{ name: giant, unit: "usd", balance: 2 }],
+				marks: [{ window: giant, families: [giant], until: NOW + 60_000 }],
+			},
+		]),
+	);
+	const labels = (await readRouterQuota(dir, NOW)).map((row) => row.label);
+	expect(labels).toEqual([
+		`${clipped}/${clipped} ${clipped} (inferred span) (stale)`,
+		`${clipped}/${clipped} ${clipped} (assumed span) (stale)`,
+		`${clipped} ${clipped} (stale)`,
+		`${clipped}/${clipped} ${clipped}`,
+	]);
+	expect(Math.max(...labels.map((l) => l.length))).toBeLessThanOrEqual(QUOTA_LABEL_MAX);
 });

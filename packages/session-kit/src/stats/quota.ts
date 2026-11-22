@@ -4,6 +4,8 @@
  * current one, so it renders as "reset, no newer reading" with no percentage (unknown, not the old value).
  */
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { sanitize } from "../diff/view.ts";
 import { duration } from "./format.ts";
 import { isExpired, type QuotaObservation } from "./harness/common.ts";
 
@@ -12,6 +14,22 @@ export const QUOTA_DIM_AFTER_MS = 15 * 60_000;
 /** Shown for a provider whose harness persists no quota. */
 export const NO_LOCAL_READING = "no local reading";
 const BAR_CELLS = 10;
+/** Widest quota label, in columns; longer labels end in `…` in both the overlay and print. */
+export const QUOTA_LABEL_MAX = 160;
+
+/** `text` with control characters made visible, cut to `max` columns ending in `…`; never adds ANSI codes. */
+export function clipLabel(text: string, max: number): string {
+	const clean = sanitize(text);
+	if (visibleWidth(clean) <= max) return clean;
+	let kept = "";
+	let width = 0;
+	for (const { segment } of new Intl.Segmenter().segment(clean)) {
+		width += visibleWidth(segment);
+		if (width > max - 1) break;
+		kept += segment;
+	}
+	return `${kept}…`;
+}
 
 export interface QuotaRow {
 	/** `provider[/limit] window`, plus an account tag when the same window has readings for several. */

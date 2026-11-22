@@ -61,8 +61,10 @@ import {
 } from "./pricing.ts";
 import {
 	claudeHasNoReading,
+	clipLabel,
 	gauge,
 	NO_LOCAL_READING,
+	QUOTA_LABEL_MAX,
 	type QuotaRow,
 	quotaDetails,
 	quotaRows,
@@ -77,6 +79,8 @@ const TABS: readonly Tab[] = ["Overview", "Models", "Machines"];
 const SERIES = 3;
 /** The provider Claude Code's quota would belong to. */
 const ANTHROPIC = "anthropic (Claude Code)";
+/** Columns a quota head needs: a gauge, a space and `100%`, which `no local reading` also fits. */
+const QUOTA_HEAD_WIDTH = 16;
 /** The harness filter: every harness, or one. */
 type HarnessFilter = "all" | Harness;
 /** Narrowest plot `plot` can draw; only panes too narrow for a 6-week heatmap hit it. */
@@ -472,9 +476,16 @@ export class StatsView implements Component {
 		if (rows.length === 0 && !noClaude) return [];
 		const t = this.o.theme;
 		const out = ["", t.bold("Quota") + this.paint("muted", "  latest reading per window · local files, never fetched")];
-		const labelWidth = Math.max(...rows.map((r) => visibleWidth(sanitize(r.label))), noClaude ? ANTHROPIC.length : 0);
-		const pad = (label: string) => `  ${padTo(sanitize(label), labelWidth)}  `;
-		for (const row of rows) {
+		const labels = rows.map((r) => clipLabel(r.label, QUOTA_LABEL_MAX));
+		const longest = labels.reduce((max, l) => Math.max(max, visibleWidth(l)), noClaude ? ANTHROPIC.length : 0);
+		// Cap padding before allocating it: one long label must not push every short row's head off screen.
+		const labelWidth = Math.min(longest, Math.max(0, inner - 4 - QUOTA_HEAD_WIDTH));
+		const pad = (label: string) => `  ${padTo(label, labelWidth)}  `;
+		// No argument spread: a narrow pane can wrap one label into very many lines.
+		const wrapped = (line: string) => {
+			for (const part of wrapTextWithAnsi(line, inner)) out.push(part);
+		};
+		for (const [i, row] of rows.entries()) {
 			const tone: ThemeColor = row.old || row.expired ? "dim" : "muted";
 			const detail = this.paint(tone, quotaDetails(row).join(" · "));
 			const head =
@@ -482,20 +493,27 @@ export class StatsView implements Component {
 					? `${this.paint(row.old ? "dim" : "accent", gauge(row.head.percent))} ${this.paint(tone, usedLabel(row.head.percent).padStart(5))}`
 					: row.head.text && this.paint(tone, row.head.text);
 			const labelTone = row.old || row.expired ? "dim" : "text";
-			const label = this.paint(labelTone, pad(row.label));
+			const label = this.paint(labelTone, pad(nth(labels, i)));
 			const left = `${label}${head}`;
 			const joined = `${left}${head ? "  " : ""}${detail}`;
 			if (visibleWidth(joined) <= inner) out.push(joined);
 			else {
 				// Do not spend the head’s width on padding to an unrelated quota label.
 				if (visibleWidth(left) > inner) {
-					out.push(...wrapTextWithAnsi(this.paint(labelTone, `  ${sanitize(row.label)}`), inner));
-					if (head) out.push(...wrapTextWithAnsi(`    ${head}`, inner));
+					wrapped(this.paint(labelTone, `  ${nth(labels, i)}`));
+					if (head) wrapped(`    ${head}`);
 				} else out.push(left.trimEnd());
 				if (detail) out.push(truncateToWidth(`    ${detail}`, inner, "…"));
 			}
 		}
-		if (noClaude) out.push(this.paint("muted", `${pad(ANTHROPIC)}${NO_LOCAL_READING}`));
+		if (noClaude) {
+			const claude = `${pad(ANTHROPIC)}${NO_LOCAL_READING}`;
+			if (visibleWidth(claude) <= inner) out.push(this.paint("muted", claude));
+			else {
+				wrapped(this.paint("muted", `  ${ANTHROPIC}`));
+				wrapped(this.paint("muted", `    ${NO_LOCAL_READING}`));
+			}
+		}
 		return out;
 	}
 
@@ -848,7 +866,7 @@ function quotaLines(
 		...rows.map((r) => {
 			const head = r.head.kind === "gauge" ? `${usedLabel(r.head.percent)} used` : r.head.text;
 			const detail = [...(head ? [head] : []), ...quotaDetails(r)];
-			return `  ${sanitize(r.label)}: ${detail.join(r.observed === undefined ? " · " : ", ")}`;
+			return `  ${clipLabel(r.label, QUOTA_LABEL_MAX)}: ${detail.join(r.observed === undefined ? " · " : ", ")}`;
 		}),
 		...(noClaude ? [`  ${ANTHROPIC}: ${NO_LOCAL_READING}`] : []),
 	];

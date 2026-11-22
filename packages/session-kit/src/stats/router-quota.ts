@@ -3,10 +3,16 @@ import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { duration } from "./format.ts";
 import { asRecordOf } from "./harness/common.ts";
-import { QUOTA_DIM_AFTER_MS, type QuotaRow } from "./quota.ts";
+import { clipLabel, QUOTA_DIM_AFTER_MS, type QuotaRow } from "./quota.ts";
 
 type Fields = Record<string, unknown>;
 const MAX_VIEW_BYTES = 1024 * 1024;
+/**
+ * Columns per provider, model-family or bucket name. Three parts plus the span and stale qualifiers stay
+ * under `QUOTA_LABEL_MAX`, so clipping a long name never hides the qualifiers.
+ */
+const LABEL_PART_MAX = 40;
+const part = (value: string): string => clipLabel(value, LABEL_PART_MAX);
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const text = (value: unknown): value is string => typeof value === "string";
 const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -18,13 +24,14 @@ function basis(value: unknown, reported: "reported" | "read" = "reported"): Quot
 
 function label(provider: string, families: unknown, window: string): string {
 	const models = list(families).filter(text).join(", ");
-	return `${provider}${models ? `/${models}` : ""} ${window}`;
+	return `${provider}${models ? `/${part(models)}` : ""} ${window}`;
 }
 
 /** Span provenance is separate from the quantity basis: a reported count over an inferred span says so. */
 function spanName(bucket: Fields): string {
 	const source = bucket.spanSource;
-	return source === "assumed" || source === "inferred" ? `${bucket.name} (${source} span)` : String(bucket.name);
+	const name = part(String(bucket.name));
+	return source === "assumed" || source === "inferred" ? `${name} (${source} span)` : name;
 }
 
 /** Stale rows say so in their label, so dimming is never the only signal and print output carries it too. */
@@ -66,7 +73,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 	for (const view of list(value).map(asRecordOf)) {
 		if (!text(view.provider)) continue;
 		const display = asRecordOf(view.display).full;
-		const provider = text(display) ? display : view.provider;
+		const provider = part(text(display) ? display : view.provider);
 		const snapshot = asRecordOf(view.snapshot);
 		const old =
 			snapshot.status === "stale" ||
@@ -117,7 +124,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			const balance = meterText({ unit: pool.unit, used: pool.balance });
 			if (pool.unlimited !== true && balance === undefined) continue;
 			rows.push({
-				label: `${provider} ${staleName(pool.name, old)}`,
+				label: `${provider} ${staleName(part(pool.name), old)}`,
 				head: { kind: "text", text: pool.unlimited === true ? "unlimited balance" : `${balance} balance` },
 				expired: false,
 				old,
@@ -132,7 +139,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 				.replace("T", " ")
 				.replace(/:\d\d\.\d{3}Z$/, " UTC");
 			rows.push({
-				label: label(provider, mark.families, mark.window),
+				label: label(provider, mark.families, part(mark.window)),
 				head: { kind: "text", text: `blocked until ${until}` },
 				basis: evidence,
 				expired: false,
