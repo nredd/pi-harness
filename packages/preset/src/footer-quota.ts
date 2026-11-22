@@ -95,18 +95,24 @@ type Cell =
 	  }
 	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit }
 	/** A view whose snapshot failed with nothing else to show: the failure is the reading. */
-	| { kind: "status"; status: "error" | "unavailable" | "stale" };
+	| { kind: "status"; status: FailedStatus };
+
+type FailedStatus = "error" | "unavailable" | "stale";
+/** Parsed cells; a status cell is only added at render time. */
+type StoredCell = Exclude<Cell, { kind: "status" }>;
 
 /** Recursively readonly: state is shared between the poller and every render. */
 type Frozen<T> = T extends object ? { readonly [K in keyof T]: Frozen<T[K]> } : T;
 
 interface QuotaFields {
 	display: Display;
-	cells: QuotaCell[];
+	cells: Frozen<StoredCell>[];
 	stale: boolean;
 	expiresAt?: number;
 	/** Rendered with the legacy Anthropic/Codex rules, which keep those rows byte-identical. */
 	legacy: boolean;
+	/** A failed snapshot status, shown in place of the row's values when none is rendered. */
+	failed?: FailedStatus;
 }
 
 export type ProviderQuota = Frozen<QuotaFields>;
@@ -288,8 +294,8 @@ function unitOf(value: unknown): Unit | undefined {
 	return typeof value === "string" && Object.hasOwn(UNITS, value) ? (value as Unit) : undefined;
 }
 
-function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] {
-	const counts = buckets(view.meters).flatMap<Cell>(({ raw, label, families }) => {
+function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): StoredCell[] {
+	const counts = buckets(view.meters).flatMap<StoredCell>(({ raw, label, families }) => {
 		const quantity = asRecord(raw.quantity);
 		const unit = unitOf(quantity?.unit);
 		const used = finite(quantity?.used);
@@ -313,13 +319,13 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 			},
 		];
 	});
-	const pools = records(view.pools).flatMap<Cell>((pool) => {
+	const pools = records(view.pools).flatMap<StoredCell>((pool) => {
 		const name = labelOf(pool.name);
 		const unit = unitOf(pool.unit);
 		const balance = finite(pool.balance);
 		return name && unit ? [{ kind: "pool", name, unit, balance, unlimited: pool.unlimited === true }] : [];
 	});
-	const marks = records(view.marks).flatMap<Cell>((mark) => {
+	const marks = records(view.marks).flatMap<StoredCell>((mark) => {
 		const until = epoch(mark.until);
 		// Absent means read. An unrecognized value stays visible as unknown: a block is never hidden.
 		const evidence =
@@ -394,18 +400,22 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 			expiresAt !== undefined &&
 			expiresAt > now;
 		const seen = chooseWindows(windows, display, legacy);
-		const cells: QuotaCell[] = [
+		const cells: QuotaFields["cells"] = [
 			...(fresh ? seen : mergePercents(seen, prior, legacy)),
 			...auxiliaryCells(view, legacy),
 		];
 		const status = snapshot?.status;
-		if (
-			(status === "error" || status === "unavailable" || status === "stale") &&
-			!cells.some((cell) => cell.kind !== "mark")
-		) {
-			cells.unshift({ kind: "status", status });
-		}
-		state[id] = { display, legacy, stale: !fresh, expiresAt: fresh ? expiresAt : prior?.expiresAt, cells };
+		// Legacy rows keep their pinned placeholders, so only generic rows report a failure as text.
+		const failed =
+			!legacy && (status === "error" || status === "unavailable" || status === "stale") ? status : undefined;
+		state[id] = {
+			display,
+			legacy,
+			stale: !fresh,
+			expiresAt: fresh ? expiresAt : prior?.expiresAt,
+			cells,
+			...(failed && { failed }),
+		};
 	}
 	return deepFreeze(state);
 }
@@ -550,11 +560,21 @@ function matchesModel(id: string, family: string): boolean {
 function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): QuotaCell[] {
 	const models = quota.cells.flatMap((cell) => (cell.kind === "mark" && cell.until > opts.now ? cell.families : []));
 	if (opts.model?.provider === id) models.push(opts.model.id);
-	return quota.cells.filter((cell) => {
+	const cells = quota.cells.filter((cell) => {
 		if (cell.kind === "mark") return cell.until > opts.now;
-		if (cell.kind === "pool" || cell.kind === "status") return true;
+		if (cell.kind === "pool") return true;
 		return !cell.families.length || cell.families.some((family) => models.some((model) => matchesModel(model, family)));
 	});
+	// Decided from what this render shows: a failure with no visible cached value says so, beside any marks.
+	if (!quota.failed || cells.some(hasValue)) return cells;
+	return [{ kind: "status", status: quota.failed }, ...cells.filter((cell) => cell.kind === "mark")];
+}
+
+/** Whether a cell shows a cached value, not a `--` placeholder or a block. */
+function hasValue(cell: QuotaCell): boolean {
+	if (cell.kind === "percent") return cell.remaining !== undefined;
+	if (cell.kind === "pool") return cell.unlimited || cell.balance !== undefined;
+	return cell.kind === "count";
 }
 
 type ResolvedOptions = FormatOptions & { now: number };

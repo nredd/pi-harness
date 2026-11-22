@@ -1766,3 +1766,30 @@ test("a duration selector never lends its duration to a qualified reading", () =
 	assert.equal(row("inferred", "full"), "Quota left: G est 90% (span inferred)");
 	assert.equal(row("assumed"), "Left: G est? 90%");
 });
+
+test("a failed view says so unless a cached value is actually rendered", () => {
+	const failed = (extra: Record<string, unknown>, status = "error") =>
+		view("e", { snapshot: snap("e", [], { status, expiresAt: CLOCK + hour }), ...extra });
+	const row = (input: unknown, opts: footer.FormatOptions = fixed) =>
+		footer.formatQuotaRow(projected([input]), "compact", plain, opts);
+	const placeholder = {
+		display: { full: "e", compact: "e", footer: { show: [{ durationMs: hour }], placeholder: true } },
+	};
+	const unknownPool = { pools: [{ name: "wallet", unit: "credits" }] };
+	const offModel = { meters: [meter("calls", 3, { scope: "model", families: ["opus"] })] };
+	// Nothing cached is visible: a placeholder, an unknown-only pool or another model's meter.
+	assert.equal(row(failed(placeholder)), "Left: e quota error");
+	assert.equal(row(failed(unknownPool, "unavailable")), "Left: e quota unavailable");
+	assert.equal(row(failed(offModel)), "Left: e quota error");
+	assert.equal(
+		row(failed({ ...offModel, marks: [mark(CLOCK + hour, "inferred")] })),
+		"Left: e quota error | provider blocked->13:00 inf",
+	);
+	// The selected model's meter is a visible cached value, so it reads stale instead.
+	assert.equal(
+		row(failed(offModel), { ...fixed, model: { provider: "e", id: "claude-opus" } }),
+		"Left: e (stale) calls 3 req obs",
+	);
+	// An available snapshot with only a placeholder has nothing to report as failed.
+	assert.equal(row(failed(placeholder, "available")), "Left: e 1h --");
+});
