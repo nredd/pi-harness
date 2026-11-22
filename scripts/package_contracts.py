@@ -1012,6 +1012,7 @@ TODO_CONTRACT = PackageContract(
         "package.json",
         "src/plan/empty-reminder.ts",
         "src/plan/hooks.ts",
+        "src/plan/stale-reminder.ts",
         "src/agents.ts",
         "src/state/i18n-bridge.ts",
         "src/state/invariants.ts",

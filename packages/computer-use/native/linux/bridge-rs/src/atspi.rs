@@ -74,6 +74,8 @@ pub struct NodeSnapshot {
     pub bounds: Option<Rect>,
     pub is_secure: bool,
     pub depth: usize,
+    /// A field or the children of this node were not read, so the outline marks it `truncated`.
+    pub unread: bool,
 }
 
 /// A best-effort tree plus the information needed to distinguish absence from missing data.
@@ -99,6 +101,7 @@ impl NodeSnapshot {
             bounds: None,
             is_secure: false,
             depth: 0,
+            unread: false,
         }
     }
 
@@ -264,23 +267,20 @@ impl AtspiClient {
         })
     }
 
-    async fn application_pid(&self, accessible: &AccessibleRef) -> u64 {
-        let Ok(bus) = Proxy::new(
+    async fn application_pid(&self, accessible: &AccessibleRef) -> Result<u64, ProtocolError> {
+        let bus = Proxy::new(
             &self.connection,
             DBUS_DESTINATION,
             DBUS_ROOT,
             DBUS_INTERFACE,
         )
         .await
-        else {
-            return 0;
-        };
+        .map_err(atspi_error)?;
         let member = "GetConnectionUnixProcessID";
-        let connection_pid: Option<u32> = self
+        let connection_pid: u32 = self
             .request(member, bus.call(member, &(accessible.destination.as_str())))
-            .await
-            .ok();
-        connection_pid.map(u64::from).unwrap_or(0)
+            .await?;
+        Ok(u64::from(connection_pid))
     }
 
     pub async fn list_roots(
@@ -294,7 +294,8 @@ impl AtspiClient {
         let applications = self.children(&registry).await?;
         let mut roots = Vec::new();
         for app in applications {
-            let pid = self.application_pid(&app).await;
+            // A PID-scoped inventory proves absence, so an app it could not read must fail it.
+            let pid = scoped_inventory(filter_pid, self.application_pid(&app).await, 0)?;
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
@@ -304,7 +305,7 @@ impl AtspiClient {
                 })
                 .await
                 .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
-            let windows = self.children(&app).await.unwrap_or_default();
+            let windows = scoped_inventory(filter_pid, self.children(&app).await, Vec::new())?;
             for window in windows {
                 let (role, name) = self
                     .checked_metadata(&window, async || {
@@ -382,6 +383,7 @@ impl AtspiClient {
         let mut incomplete = false;
         let mut root_fields_incomplete = false;
         let mut seen = HashSet::new();
+        let mut unread_parents = HashSet::new();
         let mut queue = VecDeque::from([(start.clone(), None, 0usize)]);
         while let Some((accessible, parent, depth)) = queue.pop_front() {
             if !seen.insert(accessible.clone()) {
@@ -389,23 +391,25 @@ impl AtspiClient {
             }
             if result.len() >= max_nodes || depth > max_depth {
                 incomplete = true;
+                unread_parents.extend(parent);
                 continue;
             }
-            let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
+            let mut unread = false;
+            let interfaces = field_or_default(self.interfaces(&accessible).await, &mut unread);
             let access = self.role_access(&accessible).await;
-            incomplete |= access == RoleAccess::Unclassified;
+            unread |= access == RoleAccess::Unclassified;
             let mut readable = access.readable();
             let mut value = String::new();
             let (mut role, mut name, mut description) = if readable.is_some() {
+                // `wait_for` matches the role name, so a blank or failed one cannot prove absence.
+                let role_name = self.role_name(&accessible).await.unwrap_or_default();
+                unread |= role_name.trim().is_empty();
                 (
-                    field_or_default(self.role_name(&accessible).await, &mut incomplete),
-                    field_or_default(
-                        self.string_property(&accessible, "Name").await,
-                        &mut incomplete,
-                    ),
+                    role_name,
+                    field_or_default(self.string_property(&accessible, "Name").await, &mut unread),
                     field_or_default(
                         self.string_property(&accessible, "Description").await,
-                        &mut incomplete,
+                        &mut unread,
                     ),
                 )
             } else {
@@ -423,21 +427,23 @@ impl AtspiClient {
                 match result {
                     Err(error) if error.code == ErrorCode::SecureTextUnreadable => {
                         readable = None;
-                        incomplete = true;
+                        unread = true;
                         role = RoleAccess::Unclassified.protected_name().to_owned();
                         name = PROTECTED_LABEL.to_owned();
                         description.clear();
                     }
-                    other => value = field_or_default(other, &mut incomplete),
+                    other => value = field_or_default(other, &mut unread),
                 }
             }
+            incomplete |= unread;
             if depth == 0 {
                 root_fields_incomplete = incomplete;
             }
             let children = self.children(&accessible).await.unwrap_or_else(|_| {
-                incomplete = true;
+                unread = true;
                 Vec::new()
             });
+            incomplete |= unread;
             for child in children {
                 queue.push_back((child, Some(accessible.clone()), depth + 1));
             }
@@ -453,7 +459,11 @@ impl AtspiClient {
                 interfaces,
                 is_secure: readable.is_none(),
                 depth,
+                unread,
             });
+        }
+        for node in &mut result {
+            node.unread |= unread_parents.contains(&node.accessible);
         }
         Ok(Snapshot {
             nodes: result,
@@ -638,7 +648,7 @@ pub fn outline_json(root: &RootSnapshot, nodes: &[NodeSnapshot], max_nodes: usiz
             "focused": false,
             "offscreen": node.bounds.is_none(),
             "pictureOnly": false,
-            "truncated": nodes.len() >= max_nodes && node.depth == 0,
+            "truncated": node.unread || (nodes.len() >= max_nodes && node.depth == 0),
             "text": if node.value.is_empty() || node.is_secure { json!([]) } else {
                 json!([{"string":node.value,"confidence":1.0,"rect":rect}])
             },
@@ -744,6 +754,18 @@ async fn accessibility_bus_address(
         .await?
         .map_err(unavailable)?;
     address.parse().map_err(unavailable)
+}
+
+/// Keep a best-effort unscoped inventory, but fail a PID-scoped one that timed out: it would prove absence.
+fn scoped_inventory<T>(
+    filter_pid: Option<u64>,
+    result: Result<T, ProtocolError>,
+    fallback: T,
+) -> Result<T, ProtocolError> {
+    match result {
+        Err(error) if filter_pid.is_some() && error.code == ErrorCode::Timeout => Err(error),
+        result => Ok(result.unwrap_or(fallback)),
+    }
 }
 
 /// Whether a live `GetRole` reply permits reading provider names, descriptions and text.
@@ -910,7 +932,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(application.get_property::<i32>("Id").await.unwrap(), 8);
-                assert_eq!(client.application_pid(&app).await, 25361);
+                assert_eq!(client.application_pid(&app).await.unwrap(), 25361);
             },
         )
         .await;
@@ -1326,6 +1348,78 @@ mod tests {
         .await;
     }
 
+    /// An application whose window inventory never replies.
+    struct StalledApplication(StalledReply);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl StalledApplication {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Editor"
+        }
+
+        async fn get_children(&self) -> Vec<(String, OwnedObjectPath)> {
+            self.0.wait().await
+        }
+    }
+
+    /// A bus whose connection PID lookup never replies.
+    struct StalledBus(StalledReply);
+
+    #[zbus::interface(name = "org.freedesktop.DBus")]
+    impl StalledBus {
+        #[zbus(name = "GetConnectionUnixProcessID")]
+        async fn get_connection_unix_process_id(&self, _name: &str) -> u32 {
+            self.0.wait().await
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_inventory_cannot_verify_absence() {
+        for stalled_pid in [false, true] {
+            let (stall, mut requests) = StalledReply::new();
+            with_peer(
+                |server| {
+                    let registry = TreeNode {
+                        name: "Registry",
+                        role: "desktop",
+                        children: &[(":1.42", "/app")],
+                        has_text: false,
+                    };
+                    let server = server.serve_at(FIXTURE_REGISTRY_ROOT, registry)?;
+                    if stalled_pid {
+                        server.serve_at(FIXTURE_DBUS_ROOT, StalledBus(stall))
+                    } else {
+                        server
+                            .serve_at(FIXTURE_DBUS_ROOT, MockBus)?
+                            .serve_at("/app", StalledApplication(stall))
+                    }
+                },
+                async |connection| {
+                    let client = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT);
+                    // An unscoped listing stays best-effort.
+                    assert!(client.list_roots(None).await.unwrap().is_empty());
+                    assert_eq!(requests.try_recv(), Ok(()));
+                    // A PID-scoped probe must not read a stalled inventory as an empty one.
+                    let error = client.list_roots(Some(25361)).await.unwrap_err();
+                    assert_eq!(requests.try_recv(), Ok(()));
+                    assert_eq!(error.code, ErrorCode::Timeout);
+                    let member = if stalled_pid {
+                        "GetConnectionUnixProcessID"
+                    } else {
+                        "GetChildren"
+                    };
+                    assert_eq!(error.message, format!("AT-SPI2 {member} timed out"));
+                    if !stalled_pid {
+                        // Another app's PID is read in full, so its absence is still provable.
+                        assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+                    }
+                },
+            )
+            .await;
+        }
+    }
+
     struct StalledAction(StalledReply);
 
     #[zbus::interface(name = "org.a11y.atspi.Action")]
@@ -1427,6 +1521,7 @@ mod tests {
                     nodes, incomplete, ..
                 } = client.snapshot_from(&root, 10, 10).await.unwrap();
                 assert!(!incomplete);
+                assert!(nodes.iter().all(|node| !node.unread));
                 assert_eq!(nodes.len(), 3);
                 assert_eq!(nodes[0].accessible, root);
                 assert_eq!(nodes[0].parent, None);
@@ -1450,10 +1545,16 @@ mod tests {
                 assert!(depth_limited.incomplete);
                 assert_eq!(depth_limited.nodes.len(), 1);
                 assert_eq!(depth_limited.nodes[0].accessible, root);
+                assert!(
+                    depth_limited.nodes[0].unread,
+                    "unread children mark the parent"
+                );
                 let node_limited = client.snapshot_from(&root, 2, 10).await.unwrap();
                 assert!(node_limited.incomplete);
                 assert_eq!(node_limited.nodes.len(), 2);
+                assert!(node_limited.nodes[0].unread);
                 assert_eq!(node_limited.nodes[1].accessible.path, PASSWORD);
+                assert!(!node_limited.nodes[1].unread);
                 assert!(password_text.0.lock().unwrap().is_empty());
                 assert_eq!(*label_text.0.lock().unwrap(), [(0, -1)]);
             },
