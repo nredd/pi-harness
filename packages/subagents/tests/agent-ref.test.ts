@@ -68,11 +68,7 @@ function sourcesOf(
 	survivors: readonly AgentRecord[] = [],
 	tasks: ReadonlyMap<string, WorkflowTask> = new Map(),
 ): AgentSources {
-	return agentSources(
-		manager,
-		() => survivors,
-		() => tasks,
-	);
+	return agentSources(manager, () => survivors, tasks);
 }
 
 /** The parts of a ref worth comparing: state, step, ids and the record it names. */

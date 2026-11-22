@@ -73,7 +73,7 @@ export interface AgentSources {
 export function agentSources(
 	manager: AgentManager,
 	survivors: () => readonly AgentRecord[],
-	workflowTasks: () => ReadonlyMap<string, WorkflowTask>,
+	workflowTasks: ReadonlyMap<string, WorkflowTask>,
 ): AgentSources {
 	return {
 		getRecord: (id) => manager.getRecord(id),
@@ -83,7 +83,7 @@ export function agentSources(
 		tombstoneByName: (name) => manager.tombstoneByName(name),
 		getEvictedNote: (id) => manager.getEvictedNote(id),
 		survivors,
-		workflowTasks,
+		workflowTasks: () => workflowTasks,
 	};
 }
 
@@ -252,11 +252,7 @@ export function createAgentLookup(manager: AgentManager, getCtx: () => Extension
 	const liveAgentById = (id: string) =>
 		legacyRecord(
 			id,
-			agentSources(
-				manager,
-				() => listAllRunningDetached().map(({ agent }) => agent.record),
-				() => NO_WORKFLOWS,
-			),
+			agentSources(manager, () => listAllRunningDetached().map(({ agent }) => agent.record), NO_WORKFLOWS),
 			ID_ONLY,
 		);
 
@@ -274,7 +270,7 @@ export function createAgentLookup(manager: AgentManager, getCtx: () => Extension
 			agentSources(
 				manager,
 				() => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record),
-				() => NO_WORKFLOWS,
+				NO_WORKFLOWS,
 			),
 			ID_THEN_NAME,
 		);
