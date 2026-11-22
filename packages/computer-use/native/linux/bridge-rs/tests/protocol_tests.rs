@@ -248,8 +248,14 @@ fn shutdown_with_full_request_queue() {
         helper.send(&diagnostics("ready"));
         assert_eq!(helper.reply()["id"], "ready");
         // Four posts per capital at 25 ms each: about 20 s, with shift held for most of it.
-        helper.send(&typing("hold", &"A".repeat(200), json!({"delayMs": 25})));
-        helper.ready("locked hold");
+        helper.send(&typing(
+            "hold",
+            &"A".repeat(200),
+            json!({"delayMs": 25, "announce": "hold"}),
+        ));
+        // Attempt 1 begins only once attempt 0, the shift press, was posted: the action
+        // holds the lock and has delivered input, so its stop must be `unknown`.
+        helper.ready("posting hold 1");
         // Seven requests take the remaining workers and wait for the action lock; the
         // eighth waits for a worker in the reader, which saturates the queue. One of the
         // seven is a semantic (AT-SPI) action, and the eighth needs no lock at all:

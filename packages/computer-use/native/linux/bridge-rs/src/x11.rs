@@ -778,6 +778,22 @@ where
     S: InputSink + 'static,
     F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
 {
+    settle_for_exit_with(state, open, |finished| {
+        let _ = finished.recv_timeout(limit);
+    })
+}
+
+/// [`settle_for_exit`] with the wait for the settlement thread left to `wait`, which
+/// gets the channel that thread signals when it is done.
+fn settle_for_exit_with<S, F>(
+    state: Arc<InputState>,
+    open: F,
+    wait: impl FnOnce(&std::sync::mpsc::Receiver<()>),
+) -> Vec<String>
+where
+    S: InputSink + 'static,
+    F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
+{
     if state.debt().is_empty() {
         return Vec::new();
     }
@@ -791,7 +807,7 @@ where
         }));
         let _ = done.send(());
     });
-    let _ = finished.recv_timeout(limit);
+    wait(&finished);
     state.exit_report()
 }
 
@@ -2048,16 +2064,21 @@ mod tests {
 
     #[test]
     fn exit_settlement_that_times_out_keeps_the_release_delivery_unknown() {
-        // The release is submitted, then the exit stops waiting before it confirms.
+        // The release is submitted, then the exit stops waiting before it confirms: the
+        // wait ends when the sink signals the post began, not after an elapsed time.
         let state = owing(8);
-        let left = settle_for_exit(
+        let (posts, posting) = std::sync::mpsc::channel();
+        let left = settle_for_exit_with(
             Arc::clone(&state),
-            || {
-                Ok(RecordingSink::scripted(
-                    &json!({"delayMs": 2000, "held": [[false, 8]]}),
-                ))
+            move || {
+                Ok(
+                    RecordingSink::scripted(&json!({"delayMs": 2000, "held": [[false, 8]]}))
+                        .announce_posts(posts),
+                )
             },
-            Duration::from_millis(50),
+            |_| {
+                assert_eq!(posting.recv_timeout(Duration::from_secs(10)), Ok(0));
+            },
         );
         assert_eq!(left, ["keycode 8 (delivery unknown, never resent)"]);
         assert!(state.debt()[0].ambiguous, "never resendable in-process");
