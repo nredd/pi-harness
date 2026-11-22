@@ -38,6 +38,14 @@ export interface SavedChildCheckOptions {
 	 * the header must then match: a row from the parent session file is untrusted.
 	 */
 	journaledDirectory?: string;
+	/**
+	 * The directories the child's own project settings give (a worktree child is
+	 * created with the worktree's settings, not the parent's). Like
+	 * `journaledDirectory`, consulted only alongside an absolute `savedCwd`, and
+	 * called only when no other directory holds the file, so startup reads no
+	 * extra settings for rows the fast path already accepts or refuses.
+	 */
+	projectDirectories?: () => readonly (string | undefined)[];
 	parentFile: string | undefined;
 	status: AgentRecord["status"];
 	now: number;
@@ -185,14 +193,16 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 	try {
 		const canonicalFile = realpathSync(file);
 		// A journaled directory vouches only for a row whose saved cwd the header must match.
-		const directories =
-			savedCwd !== undefined && isAbsolute(savedCwd)
-				? [options.journaledDirectory, ...options.directories]
-				: options.directories;
+		const anchored = savedCwd !== undefined && isAbsolute(savedCwd);
+		const directories = anchored ? [options.journaledDirectory, ...options.directories] : options.directories;
 		let inside = insideDirectory(canonicalFile, directories, canonical);
 		// A startup resolution can be stale (a link retargeted between rows): ask once more uncached.
 		if (inside !== true && canonical !== realpathSync) {
 			inside = insideDirectory(canonicalFile, directories, realpathSync);
+		}
+		// Only a match widens: an unresolved project directory keeps the verdict above.
+		if (inside !== true && anchored && options.projectDirectories) {
+			if (insideDirectory(canonicalFile, options.projectDirectories(), realpathSync) === true) inside = true;
 		}
 		if (inside === "unresolved") return { refusal: `child session is missing or unreadable: ${file}` };
 		if (!inside) return { refusal: `child session is outside its configured directory: ${file}` };

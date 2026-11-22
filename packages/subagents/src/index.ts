@@ -1374,23 +1374,38 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		const setting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.();
 		const parentFile = ctx.sessionManager.getSessionFile();
 		const directories = new Map<string, string>();
+		const projectDirectories = new Map<string, string>();
 		// Every row shares the parent and a few directories: resolve each once.
 		const canonical = canonicalPaths();
 		return (note: EvictedNote, file: string) => {
 			const cwd = note.sessionCwd ?? ctx.cwd;
+			const configured = getAgentConfig(note.type)?.sessionDir;
 			const key = JSON.stringify([note.type, cwd]);
 			let directory = directories.get(key);
 			if (directory === undefined) {
-				directory = childSessionDir(getAgentConfig(note.type)?.sessionDir, setting, cwd, agentDir, home);
+				directory = childSessionDir(configured, setting, cwd, agentDir, home);
 				directories.set(key, directory);
 			}
+			// A worktree child read its settings in the worktree (`configCwd`), which
+			// can differ from the parent's uncommitted ones in either direction.
+			const projectDirectory = () => {
+				let found = projectDirectories.get(key);
+				if (found === undefined) {
+					const own = SettingsManager.create(cwd, agentDir, { projectTrusted: isProjectTrusted() });
+					const ownSetting = process.env.PI_CODING_AGENT_SESSION_DIR ?? own.getSessionDir?.();
+					found = childSessionDir(configured, ownSetting, cwd, agentDir, home);
+					projectDirectories.set(key, found);
+				}
+				return [found];
+			};
 			return checkSavedChild({
 				file,
 				// The journaled creation directory survives settings that changed since
 				// (or differ in a worktree) when the row saved a cwd; legacy rows have
-				// only the recomputed one.
+				// only the recomputed ones (parent settings, then the child cwd's own).
 				journaledDirectory: note.sessionDir,
 				directories: [directory],
+				projectDirectories: projectDirectory,
 				parentFile,
 				status: note.status,
 				now: clock.now(),

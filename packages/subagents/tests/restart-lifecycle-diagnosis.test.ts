@@ -18,6 +18,7 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentRunner from "../src/agent-runner.ts";
+import * as savedChildSession from "../src/saved-child-session.ts";
 import { RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
@@ -284,6 +285,71 @@ it("loads host settings once when restoring 200 saved rows across different chil
 	expect(await start(200)).toEqual({ settings: baseline.settings + 1, directories: 6 });
 });
 
+it("reads a worktree cwd's own settings once, only for legacy rows no other directory holds", async () => {
+	fixture = new ScenarioSession();
+	const worktree = join(fixture.root, "worktree");
+	const own = join(fixture.root, "worktree-sessions");
+	mkdirSync(join(worktree, ".pi"), { recursive: true });
+	mkdirSync(own);
+	writeFileSync(join(worktree, ".pi", "settings.json"), JSON.stringify({ sessionDir: own }));
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const parentFile = parent.getSessionFile()!;
+	// Unflushed until an assistant turn; the headers only need the path to resolve.
+	mkdirSync(dirname(parentFile), { recursive: true });
+	writeFileSync(parentFile, "");
+	const ids = ["legacy-0", "legacy-1", "legacy-2", "journaled"];
+	for (const id of ids) {
+		const sessionFile = join(own, `${id}.jsonl`);
+		writeFileSync(sessionFile, `${JSON.stringify({ type: "session", parentSession: parentFile, cwd: worktree })}\n`);
+		settle(sessionFile);
+		// Rows from before directories were journaled name only the file and its cwd.
+		parent.appendCustomEntry("subagents:record", {
+			id,
+			type: "general-purpose",
+			description: "Saved worktree child",
+			status: "completed",
+			sessionCwd: worktree,
+			sessionFile,
+			...(id === "journaled" ? { sessionDir: own } : {}),
+		});
+	}
+	/** Restart once: the cwds settings were read for, and each row's startup verdict. */
+	const restart = async () => {
+		const settings = vi.spyOn(SettingsManager, "create");
+		const checks = vi.spyOn(savedChildSession, "checkSavedChild");
+		try {
+			const host = await fixture.start({ harness: { sessionManager: parent } });
+			host.cleanup();
+			const verdicts = checks.mock.results.map(({ value }) => {
+				const check = value as ReturnType<typeof savedChildSession.checkSavedChild>;
+				return "refusal" in check ? check.refusal : "accepted";
+			});
+			return { settings: settings.mock.calls.filter(([cwd]) => cwd === worktree).length, verdicts };
+		} finally {
+			settings.mockRestore();
+			checks.mockRestore();
+			Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		}
+	};
+	// One settings read for the worktree, shared by the legacy rows; the journaled row needs none.
+	expect(await restart()).toEqual({ settings: 1, verdicts: ids.map(() => "accepted") });
+	// Without the worktree's setting (or the parent's trust in its project settings)
+	// only the row that journaled its directory resolves.
+	const unreadable = (id: string) => `child session is missing or unreadable: ${join(own, `${id}.jsonl`)}`;
+	const refused = {
+		settings: 1,
+		verdicts: [unreadable("legacy-0"), unreadable("legacy-1"), unreadable("legacy-2"), "accepted"],
+	};
+	const untrusted = vi.spyOn(SettingsManager.prototype, "isProjectTrusted").mockReturnValue(false);
+	try {
+		expect(await restart()).toEqual(refused);
+	} finally {
+		untrusted.mockRestore();
+	}
+	writeFileSync(join(worktree, ".pi", "settings.json"), "{}");
+	expect(await restart()).toEqual(refused);
+});
+
 it("reports unknown ids as errors to the model and to a nested tools caller", async () => {
 	fixture = new ScenarioSession();
 	const id = "nope-0000-000";
@@ -336,6 +402,8 @@ it.each([
 	"worktree",
 	"worktree-parent-settings",
 	"worktree-child-settings",
+	"worktree-parent-settings-legacy",
+	"worktree-child-settings-legacy",
 	"future",
 	"parent-alias",
 ] as const)("recovers a saved running child after a crash: %s", { timeout: 30_000 }, async (mode) => {
@@ -357,12 +425,17 @@ it.each([
 	}
 	const worktree = mode.startsWith("worktree");
 	const settingsFile = join(fixture.cwd, ".pi", "settings.json");
-	if (mode === "worktree-child-settings")
+	// A legacy row (written before rows journaled their directory) leaves only the
+	// child's own settings to say where a worktree child lives.
+	const legacy = mode.endsWith("-legacy");
+	const childSettings = mode.startsWith("worktree-child-settings");
+	const parentSettings = mode.startsWith("worktree-parent-settings");
+	if (childSettings)
 		writeFileSync(settingsFile, JSON.stringify({ sessionDir: join(fixture.root, "committed-sessions") }));
 	if (worktree) {
 		const git = (...args: string[]) => execFileSync("git", args, { cwd: fixture.cwd, stdio: "pipe" });
 		git("init");
-		git("add", ".pi/extensions/hold.ts", ...(mode === "worktree-child-settings" ? [".pi/settings.json"] : []));
+		git("add", ".pi/extensions/hold.ts", ...(childSettings ? [".pi/settings.json"] : []));
 		git(
 			"-c",
 			"user.email=fixture@example.com",
@@ -376,8 +449,8 @@ it.each([
 		);
 		// The worktree child is created with the worktree's settings, which differ
 		// from the parent's uncommitted ones in either direction.
-		if (mode === "worktree-child-settings") unlinkSync(settingsFile);
-		if (mode === "worktree-parent-settings")
+		if (childSettings) unlinkSync(settingsFile);
+		if (parentSettings)
 			writeFileSync(settingsFile, JSON.stringify({ sessionDir: join(fixture.root, "uncommitted-sessions") }));
 	}
 	const progress = fauxAssistantMessage([{ type: "text", text: "PROGRESS BEFORE CRASH" }, fauxToolCall("hold", {})], {
@@ -443,9 +516,8 @@ it.each([
 		if (mode === "cwd") expect(lost.session?.sessionManager.getHeader()?.cwd).toBe(subdir);
 		if (mode === "relative-dir") expect(dirname(childFile)).toBe(join(subdir, "child-sessions"));
 		if (worktree) expect(lost.worktree?.path).toBe(lost.session?.sessionManager.getHeader()?.cwd);
-		if (mode === "worktree-child-settings") expect(dirname(childFile)).toBe(join(fixture.root, "committed-sessions"));
-		if (mode === "worktree-parent-settings")
-			expect(dirname(childFile)).not.toBe(join(fixture.root, "uncommitted-sessions"));
+		if (childSettings) expect(dirname(childFile)).toBe(join(fixture.root, "committed-sessions"));
+		if (parentSettings) expect(dirname(childFile)).not.toBe(join(fixture.root, "uncommitted-sessions"));
 		if (chain) {
 			const row = { id, type: lost.type, description: lost.description, status: "running", sessionFile: childFile };
 			// An update is not another edge, and a different conversation cannot
@@ -475,6 +547,17 @@ it.each([
 		// Drop the registry without emitting session_shutdown. The held child
 		// cannot advance until cleanup, simulating a process that died mid-run.
 		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		if (legacy) {
+			const lines = readFileSync(parentFile, "utf8").trimEnd().split("\n");
+			const rows = lines.map((line) => {
+				const entry = JSON.parse(line);
+				if (entry.customType !== "subagents:record") return line;
+				const { sessionDir: _dir, canonicalSessionFile: _canonical, ...data } = entry.data;
+				return JSON.stringify({ ...entry, data });
+			});
+			expect(rows).not.toEqual(lines);
+			writeFileSync(parentFile, `${rows.join("\n")}\n`);
+		}
 		const alias = join(fixture.root, "parents-alias");
 		if (mode === "parent-alias") symlinkSync(dirname(parentFile), alias);
 		const parentPath = mode === "parent-alias" ? join(alias, basename(parentFile)) : parentFile;

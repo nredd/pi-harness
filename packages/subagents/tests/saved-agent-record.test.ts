@@ -216,6 +216,49 @@ describe("saved child validation", () => {
 		});
 	});
 
+	it("consults the child's own project directories last, and only for a row that saved its cwd", () => {
+		const cwd = "/synthetic/worktree";
+		const { root, parentFile, directory, file } = child({ cwd });
+		const other = join(root, "other");
+		mkdirSync(other);
+		const missing = join(root, "missing");
+		const calls: string[][] = [];
+		const project =
+			(...directories: string[]) =>
+			() => {
+				calls.push(directories);
+				return directories;
+			};
+		const options = { file, parentFile, status: "completed", now: CHECKED_LATER, savedCwd: cwd } as const;
+		const outside = { refusal: `child session is outside its configured directory: ${file}` };
+		const unreadable = { refusal: `child session is missing or unreadable: ${file}` };
+		expect(checkSavedChild({ ...options, directories: [other], projectDirectories: project(directory) })).toEqual({
+			file: realpathSync(file),
+		});
+		expect(checkSavedChild({ ...options, directories: [missing], projectDirectories: project(directory) })).toEqual({
+			file: realpathSync(file),
+		});
+		// No match never widens, and an unresolvable project directory keeps the verdict.
+		expect(checkSavedChild({ ...options, directories: [other], projectDirectories: project(missing) })).toEqual(
+			outside,
+		);
+		expect(checkSavedChild({ ...options, directories: [missing], projectDirectories: project(other) })).toEqual(
+			unreadable,
+		);
+		expect(checkSavedChild({ ...options, directories: [other] })).toEqual(outside);
+		expect(calls).toEqual([[directory], [directory], [missing], [other]]);
+		// Never called when another directory holds the file, or without an absolute saved cwd.
+		expect(checkSavedChild({ ...options, directories: [directory], projectDirectories: project(other) })).toEqual({
+			file: realpathSync(file),
+		});
+		for (const savedCwd of [undefined, "relative/worktree"]) {
+			expect(
+				checkSavedChild({ ...options, savedCwd, directories: [other], projectDirectories: project(directory) }),
+			).toEqual(outside);
+		}
+		expect(calls).toHaveLength(4);
+	});
+
 	it("refuses a transcript written in the future as possibly running, with a finite wait", () => {
 		const { directory, parentFile, file } = child();
 		const mtime = 1_700_000_000_000;
