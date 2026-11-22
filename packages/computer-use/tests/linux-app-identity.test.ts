@@ -2,11 +2,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, test, vi } from "vitest";
-import { effect, silent } from "../test/support/fake-helper.mjs";
 import { executeFind, executeObserve, executeReadText, executeSearchUi } from "../src/bridge.ts";
 import { currentPlatformBackend, platformBackendForRuntime } from "../src/platform/index.ts";
 import { linuxBackend } from "../src/platform/linux/backend.ts";
 import { linuxHelper } from "../src/platform/linux/helper.ts";
+import { effect, silent } from "../test/support/fake-helper.mjs";
 import { linuxHelperClient } from "./fixtures/linux-helper.mjs";
 
 type Root = Record<string, unknown> & { pid: number; metadata: { busName: string; objectPath: string } };
