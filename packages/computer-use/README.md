@@ -1118,6 +1118,7 @@ The runtime is state-scoped and outline-first:
 
 - `observe_ui` returns a compact control list and running note; `detail: "outline"` returns the folded outline.
 - `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
+- Retained text never outlives a node's readable classification. A node is protected when it is a macOS secure text field, has the Linux `password text` or `unknown` role, carries the helper's `[protected]` marker, or has no role at all; its value and OCR text are dropped on parse and restore. A note region keeps its label only while its node is in the current outline and readable: a protected node is noted as `[protected]`, and a region the latest look did not match, or a restored note without a node ref, reads `[redacted]`. `search_ui`, `expand_ui` and `inspect_ui` recheck the note against the current outline. When a scoped `expand_ui` look contains a protected node, preserved children that look did not confirm keep their refs but lose their text (`[redacted]`). An older `stateId` still answers for its own look (#1234).
 - `act_ui` is the state-scoped desktop action entrypoint. The carried macOS `desktop_input` tool is a separately gated physical fallback with a shared transaction lock.
 - UI observations are immutable records; request-local hydration replaces global current state.
 - Cached queries bypass scheduling; live work is ordered per physical resource.

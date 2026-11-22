@@ -136,6 +136,45 @@ export const INCIDENTAL_ACTIONS = new Set(["AXShowMenu", "AXScrollToVisible"]);
 
 const DEFAULT_BUDGET = { maxDepth: 2, maxNodes: 150 };
 
+/** Name the Linux helper substitutes for a protected or unclassified node (`PROTECTED_LABEL` in `atspi.rs`). */
+export const PROTECTED_LABEL = "[protected]";
+
+/** Placeholder for text retained from an earlier look whose node is no longer confirmed readable. */
+export const REDACTED_LABEL = "[redacted]";
+
+/** macOS secure fields, the Linux helper's protected role names and the Windows missing-role default. */
+const PROTECTED_ROLES = new Set(["axsecuretextfield", "password text", "unknown", ""]);
+
+/**
+ * Whether `node`'s current classification forbids echoing text it carried earlier. Fails closed: a node with no
+ * role, or one the helper could not classify, counts as protected.
+ */
+export function isProtectedNode(node: Pick<OutlineNode, "role" | "subrole" | "title" | "description">): boolean {
+	return (
+		PROTECTED_ROLES.has(node.role.trim().toLowerCase()) ||
+		node.subrole.trim().toLowerCase() === "axsecuretextfield" ||
+		node.title === PROTECTED_LABEL ||
+		node.description === PROTECTED_LABEL
+	);
+}
+
+/** Drop a protected node's value and OCR text, whatever an older or faulty helper sent. Mutates `node`. */
+function sanitizeProtected(node: OutlineNode): OutlineNode {
+	if (isProtectedNode(node)) {
+		node.value = "";
+		node.text = [];
+	}
+	return node;
+}
+
+/** Replace every text field of `node` that an earlier, unconfirmed look supplied. Mutates `node`. */
+function redactRetained(node: OutlineNode): void {
+	node.title = REDACTED_LABEL;
+	node.description = "";
+	node.value = "";
+	node.text = [];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -221,7 +260,7 @@ function parseNode(raw: unknown, parent?: OutlineNode): OutlineNode {
 		parent,
 	};
 	node.children = (Array.isArray(record.children) ? record.children : []).map((child) => parseNode(child, node));
-	return node;
+	return sanitizeProtected(node);
 }
 
 export function parseLookResponse(raw: unknown): LookResponse {
@@ -684,7 +723,7 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 	const refToWireRef = new Map<string, string>();
 	const wireRefToRef = new Map<string, string>();
 	const restoreNode = (raw: SerializedOutlineNode, parent?: OutlineNode): OutlineNode => {
-		const node: OutlineNode = { ...raw, children: [], parent };
+		const node = sanitizeProtected({ ...raw, children: [], parent });
 		nodes.push(node);
 		if (node.wireRef) {
 			refToWireRef.set(node.ref, node.wireRef);
@@ -770,7 +809,6 @@ function cloneForGraft(
 	used: Set<OutlineNode>,
 ): OutlineNode {
 	const existing = source.wireRef ? reusableByWireRef.get(source.wireRef) : undefined;
-	if (existing) used.add(existing);
 	const oldChildren = existing?.children ?? [];
 	const node: OutlineNode = existing ?? {
 		...source,
@@ -782,6 +820,7 @@ function cloneForGraft(
 		scrollExtent: undefined,
 	};
 	copyNodeFields(node, source, Boolean(existing));
+	used.add(node);
 	node.parent = parent;
 	const graftedChildren = source.children.map((child) => cloneForGraft(child, node, nextRef, reusableByWireRef, used));
 	const preservedChildren = oldChildren
@@ -789,6 +828,11 @@ function cloneForGraft(
 		.filter((child): child is OutlineNode => Boolean(child));
 	node.children = [...graftedChildren, ...preservedChildren];
 	return node;
+}
+
+function redactUnconfirmed(node: OutlineNode, confirmed: Set<OutlineNode>): void {
+	if (!confirmed.has(node)) redactRetained(node);
+	for (const child of node.children) redactUnconfirmed(child, confirmed);
 }
 
 export function graftScopedOutline(outline: Outline, targetRef: string, scoped: Outline): OutlineNode {
@@ -816,6 +860,9 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 		.filter((child): child is OutlineNode => Boolean(child));
 	target.children = [...graftedChildren, ...preservedChildren];
 	for (const child of target.children) clearScopedRects(child);
+	// A preserved node is absent from the scoped look, so its classification is unknown. Once that look shows
+	// any protected node, a preserved one may be the same element under a new wire ref: drop its old text.
+	if (scoped.nodes.some(isProtectedNode)) redactUnconfirmed(target, used);
 	rebuildIndexes(outline);
 	return target;
 }

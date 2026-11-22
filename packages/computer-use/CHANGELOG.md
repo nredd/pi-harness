@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Stop echoing outline text after a node turns protected or unclassified: redact unmatched note regions, recheck the note against the current outline in `search_ui`, `expand_ui` and `inspect_ui`, drop protected values and OCR text on parse and restore, and redact unconfirmed children kept by a scoped graft that saw a protected node (#1234).
 - Reject out-of-range macOS drag paths before HID lock, focus or event allocation, and return `invalid_args` for malformed window IDs in all five native request sites (#1173).
 - Always block the macOS Touch ID/password prompt hosted by `com.apple.LocalAuthenticationRemoteService` (#688).
 - Refuse stale managed macOS helpers, including older helpers with no build stamp, without reinstalling, restarting or stopping them. Show the reported build and, on refusal, the expected build in `/computer-use`. Launch the daemon or run setup only when the socket provably has no listener; inconclusive or slow probes never launch. A probe that timed out after connecting is never proof of absence. Check an external helper's protocol on every connection, classifying the socket before and at connect, and recheck an external helper's permissions without restarting it. The build stamp hashes only the Swift sources `build:native` compiles (#1211).

@@ -63,7 +63,7 @@ import {
 } from "./contract.ts";
 import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
 import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import { noteAfterAct, noteFromLook, noteRegionKeyForRef, reconcileNote, renderNote, type WindowNote } from "./note.ts";
 import {
 	controlLine,
 	foldToBudget,
@@ -1205,6 +1205,15 @@ async function performLook(
 	);
 }
 
+/**
+ * Re-check the state's note against `outline` before a cached query shows it: a graft or a restored session note
+ * may name a node that is no longer readable. Looks rebuild the note from their own outline and need no recheck.
+ */
+function currentNoteFor(state: OperationState, outline: Outline): WindowNote | undefined {
+	state.currentNote = reconcileNote(state.currentNote, outline);
+	return state.currentNote;
+}
+
 function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: LookResponse) {
 	return {
 		windowRef: target.windowRef,
@@ -2260,7 +2269,7 @@ async function performSearchUi(
 		totalMatches: ranked.totalMatches,
 		returned: matches.length,
 		hasMore: ranked.totalMatches > matches.length,
-		note: state.currentNote,
+		note: currentNoteFor(state, outline),
 	};
 	const collides = (match: OutlineSearchMatch) =>
 		matches.some((other) => other !== match && other.role === match.role && other.label === match.label);
@@ -2347,7 +2356,7 @@ async function performExpandUi(
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
 		renderedOutline: folded.text,
-		note: state.currentNote,
+		note: currentNoteFor(state, outline),
 	};
 	return {
 		content: [
@@ -2370,7 +2379,7 @@ async function performInspectUi(params: InspectUiParams): Promise<AgentToolResul
 		stateId: state.currentCapture?.stateId,
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
-		note: state.currentNote,
+		note: currentNoteFor(state, outline),
 	};
 	const fields = [
 		formatOutlineNodeLabel(target),

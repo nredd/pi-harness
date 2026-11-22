@@ -1,0 +1,396 @@
+// Retained outline labels never outlive a node's readable classification (#1234): notes, grafts, searches, diffs.
+import assert from "node:assert/strict";
+import { describe, onTestFinished, test, vi } from "vitest";
+import { noteFromLook, reconcileNote, renderNote, type WindowNote } from "../src/note.ts";
+import {
+	graftScopedOutline,
+	isProtectedNode,
+	PROTECTED_LABEL,
+	parseLookResponse,
+	REDACTED_LABEL,
+	restoreOutline,
+	searchOutlineRanked,
+	serializeOutline,
+} from "../src/outline.ts";
+import { changesBetween, renderChanges, stabilizeRefs } from "../src/view.ts";
+import { desktopRoot, installFakeDesktop, lookPayload, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
+import { outlineNode, outlineOf } from "../test/support/outline-nodes.mjs";
+
+vi.mock("../src/cdp.ts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/cdp.ts")>()),
+	cdpTabForWindow: vi.fn(async () => undefined),
+	listCdpPageContexts: vi.fn(async () => []),
+}));
+
+const SECRET = "private fixture label";
+const SECRET_VALUE = "hunter2 fixture value";
+
+/** How each host reports a node that is no longer readable; macOS-only helpers still sent a value. */
+const PROTECTED_SHAPES = {
+	"linux password": { platform: "linux", fields: { role: "password text", title: PROTECTED_LABEL, label: "" } },
+	"linux unclassified": { platform: "linux", fields: { role: "unknown", title: PROTECTED_LABEL, label: "" } },
+	"macos secure field": {
+		platform: "macos",
+		fields: { role: "AXSecureTextField", title: "", label: "", value: SECRET_VALUE },
+	},
+	"macos secure subrole": {
+		platform: "macos",
+		fields: { role: "AXTextField", subrole: "AXSecureTextField", title: "", label: "", value: SECRET_VALUE },
+	},
+	"windows missing role": { platform: "windows", fields: { role: "unknown", title: "", label: "" } },
+} as const;
+
+type Shape = (typeof PROTECTED_SHAPES)[keyof typeof PROTECTED_SHAPES];
+
+/** `value`, failing the test when it is missing. */
+function present<T>(value: T | undefined): T {
+	assert.ok(value !== undefined, "expected a value");
+	return value;
+}
+
+/** Parse a wire look and return its outline. */
+const parsed = (raw: object) => present(parseLookResponse(raw).parsedOutline);
+
+// biome-ignore lint/suspicious/noExplicitAny: tool results are untyped JS objects in these fixtures.
+type Result = any;
+
+/** Fail unless neither the model text nor the structured details mention the secret label or value. */
+function assertNoSecret(result: Result, text: string, what: string): void {
+	for (const secret of [SECRET, SECRET_VALUE]) {
+		assert.ok(!text.toLowerCase().includes(secret), `${what} text echoes ${secret}:\n${text}`);
+		assert.ok(!JSON.stringify(result.details).toLowerCase().includes(secret), `${what} details echo ${secret}`);
+	}
+}
+
+async function desktop(shape: Shape) {
+	const fake = await installFakeDesktop(onTestFinished, { platform: shape.platform });
+	if (shape.platform === "windows") {
+		// Windows admits a root only by its executable identity.
+		const root = desktopRoot({ appId: "notes.exe" });
+		fake.roots = [root];
+		fake.apps = [{ appName: root.appName, appId: root.appId, pid: root.pid, isFrontmost: true }];
+		fake.frontmost = { appName: root.appName, appId: root.appId, pid: root.pid, windowId: root.windowId };
+	}
+	const { executeExpandUi, executeInspectUi, executeSearchUi } = fake.bridge;
+	/** Every read-only query surface for `ref`, checked against the secret. */
+	const assertQueriesClean = async (stateId: string, ref: string) => {
+		for (const text of [SECRET, SECRET_VALUE, "private", "hunter2"]) {
+			const found = await fake.call(executeSearchUi, { stateId, text });
+			assertNoSecret(found, fake.text(found), `search_ui(${text})`);
+		}
+		const expanded = await fake.call(executeExpandUi, { stateId, ref, depth: 3 });
+		assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+		const inspected = await fake.call(executeInspectUi, { stateId, ref });
+		assertNoSecret(inspected, fake.text(inspected), "inspect_ui");
+	};
+	/** Press `Keep` (`@e3`) while the live tree turns into `next`; act_ui chains the note from `stateId`. */
+	const actWhile = async (stateId: string, next: object[]) => {
+		fake.actHook = () => {
+			fake.tree = next;
+			return undefined;
+		};
+		// The post-act settle sleep runs on fake timers: no wall-clock wait.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			let settled = false;
+			const acting = fake
+				.call(fake.bridge.executeAct, { stateId, actions: [{ action: "press", ref: "@e3" }] })
+				.finally(() => {
+					settled = true;
+				});
+			while (!settled) await vi.advanceTimersByTimeAsync(1_000);
+			const acted = await acting;
+			return { acted, text: fake.text(acted), stateId: acted.details.capture.stateId as string };
+		} finally {
+			vi.useRealTimers();
+		}
+	};
+	return { fake, assertQueriesClean, actWhile };
+}
+
+describe.each(Object.entries(PROTECTED_SHAPES))("a readable node that turns %s", (_name, shape) => {
+	test("expand_ui grafts the protection into the note, search, expand and inspect", async () => {
+		const { fake, assertQueriesClean } = await desktop(shape);
+		const readable = { title: SECRET, label: SECRET, value: SECRET_VALUE, truncated: true, children: [] };
+		let live: object = readable;
+		fake.lookPayload = (request: { scopeRef?: string }) =>
+			request.scopeRef === "c"
+				? { ...lookPayload({ lookId: "scoped", image: false }), outline: wireNode("c", "AXGroup", "", live) }
+				: lookPayload({ children: [wireNode("c", "AXGroup", "", live), wireButton("b", "Keep")] });
+		const { stateId, text } = await fake.observe();
+		assert.match(text, new RegExp(SECRET), "precondition: the readable look shows the label");
+		live = { ...shape.fields, truncated: false, children: [] };
+		const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+		assert.equal(fake.looks.at(-1).scopeRef, "c", "the truncated node took a scoped look");
+		assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+		assert.match(renderNote(expanded.details.note), /keep +seen/, "readable regions keep their labels");
+		await assertQueriesClean(stateId, "@e2");
+	});
+
+	test("act_ui drops the earlier label from retained note regions and diffs", async () => {
+		const { fake, assertQueriesClean, actWhile } = await desktop(shape);
+		fake.tree = [wireNode("c", "AXGroup", SECRET, { value: SECRET_VALUE }), wireButton("b", "Keep")];
+		const first = await fake.observe();
+		assert.match(first.text, new RegExp(SECRET));
+		const second = await actWhile(first.stateId, [
+			wireNode("c", "AXGroup", "", { ...shape.fields }),
+			wireButton("b", "Keep"),
+		]);
+		assert.equal(second.acted.details.view, "diff");
+		assertNoSecret(second.acted, second.text, "act_ui");
+		assert.match(second.text, /\[redacted\] +changed +\(not matched in latest look\)/);
+		await assertQueriesClean(second.stateId, "@e2");
+		// The earlier state still answers for its own look; only later states consult the new classification.
+		const earlier = await fake.call(fake.bridge.executeInspectUi, { stateId: first.stateId, ref: "@e2" });
+		assert.match(fake.text(earlier), new RegExp(SECRET));
+	});
+});
+
+test("a removed node's retained region is redacted: its classification is unknown", async () => {
+	const { fake, assertQueriesClean, actWhile } = await desktop(PROTECTED_SHAPES["linux password"]);
+	fake.tree = [wireNode("c", "AXGroup", SECRET), wireButton("b", "Keep")];
+	const first = await fake.observe();
+	const second = await actWhile(first.stateId, [wireButton("b", "Keep")]);
+	assertNoSecret(second.acted, second.text, "act_ui");
+	assert.match(second.text, /\[redacted\] +changed/);
+	await assertQueriesClean(second.stateId, "@e3");
+});
+
+test("a scoped look with a protected node redacts preserved, unconfirmed children", async () => {
+	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
+	const group = (children: object[], extra = {}) => wireNode("g", "AXGroup", "Group", { children, ...extra });
+	let kid = wireNode("kid", "AXStaticText", SECRET);
+	fake.lookPayload = (request: { scopeRef?: string }) =>
+		request.scopeRef === "g"
+			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group([kid]) }
+			: lookPayload({ children: [group([kid], { truncated: request.scopeRef === undefined })] });
+	const { stateId, text } = await fake.observe({ detail: "outline" });
+	assert.match(text, new RegExp(SECRET));
+	// The old child reappears under a new wire ref once protected, so the graft cannot reuse it.
+	kid = wireNode("kid2", "password text", PROTECTED_LABEL, { label: "" });
+	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+	assert.match(fake.text(expanded), /@e3 AXStaticText "\[redacted\]"/);
+	await assertQueriesClean(stateId, "@e3");
+});
+
+test("a restored session note from before the fix is redacted by every cached query", async () => {
+	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
+	fake.tree = [wireButton("b", "Keep")];
+	const observed = await fake.observe();
+	const details = JSON.parse(JSON.stringify(observed.result.details));
+	// Older notes carried no node ref, so nothing can confirm the label's node is still readable.
+	details.note.regions = [{ key: `AXGroup:${SECRET}`, label: SECRET, status: "seen" }];
+	const restore = async () => {
+		await fake.bridge.shutdownComputerUseSession();
+		fake.bridge.reconstructStateFromBranch({
+			...fake.ctx,
+			sessionManager: {
+				getBranch: () => [{ type: "message", message: { role: "toolResult", toolName: "observe_ui", details } }],
+			},
+		});
+	};
+	// Each query is first on a freshly restored state, so none relies on another's reconciliation.
+	for (const [tool, params] of [
+		[fake.bridge.executeSearchUi, { text: "Keep" }],
+		[fake.bridge.executeInspectUi, { ref: "@e2" }],
+		[fake.bridge.executeExpandUi, { ref: "@e2" }],
+	] as const) {
+		await restore();
+		const result = await fake.call(tool, { stateId: observed.stateId, ...params });
+		assertNoSecret(result, fake.text(result), tool.name);
+		assert.deepEqual(result.details.note.regions[0], { key: "redacted", label: REDACTED_LABEL, status: "seen" });
+	}
+	await assertQueriesClean(observed.stateId, "@e2");
+});
+
+describe("isProtectedNode", () => {
+	test.each([
+		["macOS secure role", { role: "AXSecureTextField" }],
+		["macOS secure subrole", { role: "AXTextField", subrole: "AXSecureTextField" }],
+		["Linux password", { role: "password text" }],
+		["Linux unclassified", { role: "unknown" }],
+		["Windows missing role", { role: " Unknown " }],
+		["no role at all", { role: "" }],
+		["the helper's title marker", { role: "AXGroup", title: PROTECTED_LABEL }],
+		["the helper's description marker", { role: "AXGroup", description: PROTECTED_LABEL }],
+	])("%s is protected", (_name, over) => {
+		assert.equal(isProtectedNode(outlineNode("x", over)), true);
+	});
+
+	test.each([
+		["AXButton", { role: "AXButton" }],
+		["macOS web AXUnknown", { role: "AXUnknown" }],
+		["Linux text", { role: "text", title: "protected" }],
+	])("%s is readable", (_name, over) => {
+		assert.equal(isProtectedNode(outlineNode("x", over)), false);
+	});
+});
+
+describe("outline sanitizing", () => {
+	const protectedWire = {
+		ref: "s",
+		role: "AXSecureTextField",
+		title: "Password",
+		value: SECRET_VALUE,
+		text: [{ string: SECRET_VALUE, confidence: 1 }],
+	};
+
+	test("a parsed protected node never carries a value or text", () => {
+		const outline = parsed({
+			lookId: "l",
+			outline: {
+				ref: "w",
+				role: "AXWindow",
+				children: [protectedWire, { ref: "r", role: "AXTextField", value: "ok" }],
+			},
+		});
+		const [, secure, readable] = outline.nodes;
+		assert.deepEqual([secure.title, secure.value, secure.text], ["Password", "", []]);
+		assert.equal(readable.value, "ok", "readable values survive");
+		assert.equal(searchOutlineRanked(outline, SECRET_VALUE).totalMatches, 0);
+	});
+
+	test("restoring a stored outline sanitizes protected nodes written before the fix", () => {
+		const restored = restoreOutline({
+			lookId: "l",
+			root: {
+				...outlineNode("@e1", { role: "AXWindow" }),
+				children: [{ ...outlineNode("@e2", { ...protectedWire, ref: "@e2" }), children: [] }],
+			},
+		});
+		assert.deepEqual([restored.nodes[1].value, restored.nodes[1].text], ["", []]);
+	});
+
+	test("diffs between a readable and a protected look name only the new fields", () => {
+		const parse = (lookId: string, child: object) =>
+			parsed({ lookId, outline: { ref: "w", role: "AXWindow", children: [child] } });
+		const base = parse("a", { ref: "c", role: "AXTextField", title: SECRET, value: SECRET_VALUE });
+		for (const child of [
+			{ ref: "c", ...protectedWire },
+			{ ref: "c2", role: "password text", title: PROTECTED_LABEL, value: SECRET_VALUE },
+		]) {
+			const next = stabilizeRefs(base, parse("b", child));
+			const rendered = renderChanges(changesBetween(base, next).changes);
+			assert.ok(rendered.length > 0);
+			assert.ok(!rendered.includes(SECRET) && !rendered.includes(SECRET_VALUE), rendered);
+			assert.ok(!JSON.stringify(changesBetween(base, next)).includes(SECRET_VALUE));
+		}
+	});
+});
+
+describe("graftScopedOutline", () => {
+	const base = () =>
+		outlineOf(
+			outlineNode("@e1", {
+				role: "AXWindow",
+				children: [
+					outlineNode("@e2", {
+						wireRef: "g",
+						truncated: true,
+						children: [
+							outlineNode("@e3", {
+								wireRef: "old",
+								role: "AXStaticText",
+								title: SECRET,
+								description: SECRET,
+								value: SECRET_VALUE,
+								text: [{ string: SECRET, confidence: 1 }],
+								children: [outlineNode("@e4", { wireRef: "deep", title: SECRET })],
+							}),
+						],
+					}),
+				],
+			}),
+		);
+	const scoped = (child: object) => outlineOf(outlineNode("g", { wireRef: "g", children: [outlineNode("n", child)] }));
+
+	test("preserved children stay readable when the scoped look has no protected node", () => {
+		const outline = base();
+		graftScopedOutline(outline, "@e2", scoped({ wireRef: "new", role: "AXButton", title: "New" }));
+		assert.equal(present(outline.nodes.find((node) => node.ref === "@e3")).title, SECRET);
+	});
+
+	test("preserved children and their subtrees are redacted when the scoped look has a protected node", () => {
+		const outline = base();
+		graftScopedOutline(outline, "@e2", scoped({ wireRef: "new", role: "password text", title: PROTECTED_LABEL }));
+		const preserved = present(outline.nodes.find((node) => node.ref === "@e3"));
+		assert.deepEqual(
+			[preserved.title, preserved.description, preserved.value, preserved.text],
+			[REDACTED_LABEL, "", "", []],
+		);
+		assert.equal(present(outline.nodes.find((node) => node.ref === "@e4")).title, REDACTED_LABEL);
+		assert.equal(
+			present(outline.nodes.find((node) => node.wireRef === "new")).title,
+			PROTECTED_LABEL,
+			"grafted nodes keep fields",
+		);
+		assert.ok(!JSON.stringify(serializeOutline(outline)).includes(SECRET));
+	});
+});
+
+describe("note retention", () => {
+	const look = (lookId: string, children: ReturnType<typeof outlineNode>[]) =>
+		outlineOf(outlineNode("@e1", { role: "AXWindow", children }), { lookId });
+	const window = { windowRef: "w", title: "Main", pairing: "exact" as const };
+
+	test("current regions record their node; retained unmatched regions lose their label and ref", () => {
+		const first = noteFromLook(undefined, look("a", [outlineNode("@e2", { title: SECRET })]), window);
+		assert.deepEqual(
+			first.regions.map((region) => [region.ref, region.label]),
+			[["@e2", SECRET]],
+		);
+		const second = noteFromLook(first, look("b", [outlineNode("@e3", { role: "AXButton", title: "Go" })]), window);
+		assert.deepEqual(second.regions, [
+			{ key: "AXButton:go", label: "go", status: "seen", ref: "@e3" },
+			{ key: "redacted", label: REDACTED_LABEL, status: "changed", detail: "not matched in latest look" },
+		]);
+		assert.ok(!JSON.stringify(second).includes(SECRET.toLowerCase()));
+	});
+
+	test("protected top-level nodes are noted by their marker, never their title", () => {
+		const note = noteFromLook(
+			undefined,
+			look("a", [outlineNode("@e2", { role: "AXSecureTextField", title: SECRET })]),
+			window,
+		);
+		assert.deepEqual(note.regions[0], {
+			key: `AXSecureTextField:${PROTECTED_LABEL}`,
+			label: PROTECTED_LABEL,
+			status: "seen",
+			ref: "@e2",
+		});
+	});
+
+	test("reconcileNote consults the outline's current classification", () => {
+		const note: WindowNote = {
+			windowRef: "w",
+			title: "Main",
+			pairing: "exact",
+			regions: [
+				{ key: "AXGroup:readable", label: "readable", status: "seen", ref: "@e2" },
+				{ key: `AXGroup:${SECRET}`, label: SECRET, status: "changed", detail: "acted here", ref: "@e3" },
+				{ key: `AXGroup:${SECRET} gone`, label: `${SECRET} gone`, status: "seen", ref: "@e9" },
+				{ key: `AXGroup:${SECRET} legacy`, label: `${SECRET} legacy`, status: "seen" },
+				{ key: "root:opened:r:Sheet", label: "sheet Sheet", status: "never-looked", detail: "root opened" },
+				{ key: "window:unpaired", label: "window capture", status: "never-looked" },
+				{ key: "redacted", label: REDACTED_LABEL, status: "changed" },
+			],
+		};
+		const outline = look("a", [
+			outlineNode("@e2", { title: "Readable" }),
+			outlineNode("@e3", { role: "password text", title: PROTECTED_LABEL, identifier: "/path" }),
+		]);
+		const reconciled = present(reconcileNote(note, outline));
+		assert.deepEqual(reconciled.regions, [
+			{ key: "AXGroup:readable", label: "readable", status: "seen", ref: "@e2" },
+			{ key: "password text:/path", label: PROTECTED_LABEL, status: "changed", detail: "acted here", ref: "@e3" },
+			{ key: "redacted", label: REDACTED_LABEL, status: "seen" },
+			{ key: "root:opened:r:Sheet", label: "sheet Sheet", status: "never-looked", detail: "root opened" },
+			{ key: "window:unpaired", label: "window capture", status: "never-looked" },
+			{ key: "redacted", label: REDACTED_LABEL, status: "changed" },
+		]);
+		assert.equal(note.regions[1].label, SECRET, "the input note is not mutated");
+		assert.equal(reconcileNote(undefined, outline), undefined);
+	});
+});

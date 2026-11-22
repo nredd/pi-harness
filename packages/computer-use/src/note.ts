@@ -1,11 +1,27 @@
-import { nodeByRef, outlineNodeLabel, type Outline, type OutlineNode } from "./outline.ts";
+import {
+	isProtectedNode,
+	nodeByRef,
+	type Outline,
+	type OutlineNode,
+	outlineNodeLabel,
+	PROTECTED_LABEL,
+	REDACTED_LABEL,
+} from "./outline.ts";
 
 interface NoteRegion {
 	key: string;
 	label: string;
 	status: "seen" | "changed" | "never-looked";
 	detail?: string;
+	/** Top-level outline node the label was read from; absent for root and window regions. */
+	ref?: string;
 }
+
+/** Key shared by every redacted region, so retained history collapses instead of growing. */
+const REDACTED_KEY = "redacted";
+
+/** Regions whose labels come from root listings or capture pairing, never from an outline node. */
+const NON_OUTLINE_KEY = /^(root|window):/;
 
 export interface WindowNote {
 	windowRef: string;
@@ -33,17 +49,44 @@ function normalizedLabel(value: string): string {
 	return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function nodeLabel(node: OutlineNode): string {
-	return outlineNodeLabel(node) || node.role || node.ref;
+/** A region whose text can no longer be attributed to a readable node; keeps only status and detail. */
+function redactedRegion(region: NoteRegion): NoteRegion {
+	return {
+		key: REDACTED_KEY,
+		label: REDACTED_LABEL,
+		status: region.status,
+		...(region.detail === undefined ? {} : { detail: region.detail }),
+	};
 }
 
 function regionKey(node: OutlineNode): string {
-	return `${node.role || "AXUnknown"}:${node.identifier || normalizedLabel(nodeLabel(node)) || node.ref}`;
+	return `${node.role || "AXUnknown"}:${node.identifier || regionLabel(node)}`;
 }
 
+/**
+ * A protected node is noted only by its marker, never its title. Any other node falls back to its role, which a
+ * readable node always has: `isProtectedNode` counts a blank role as unclassified.
+ */
 function regionLabel(node: OutlineNode): string {
-	const label = nodeLabel(node);
-	return normalizedLabel(label) || normalizedLabel(node.role) || node.ref;
+	if (isProtectedNode(node)) return PROTECTED_LABEL;
+	return normalizedLabel(outlineNodeLabel(node)) || normalizedLabel(node.role);
+}
+
+/**
+ * Re-check every region against `outline`'s current classification. A region keeps its label only while its node is
+ * present and readable; a protected node's region takes its current marker, and an absent or unattributed node's
+ * region is redacted. Root and window regions carry no outline text and pass through. Returns a new note.
+ */
+export function reconcileNote(note: WindowNote | undefined, outline: Outline): WindowNote | undefined {
+	if (!note) return undefined;
+	const regions = note.regions.map((region): NoteRegion => {
+		if (region.key === REDACTED_KEY || NON_OUTLINE_KEY.test(region.key)) return region;
+		const node = region.ref ? nodeByRef(outline, region.ref) : undefined;
+		if (!node) return redactedRegion(region);
+		if (!isProtectedNode(node)) return region;
+		return { ...region, key: regionKey(node), label: regionLabel(node) };
+	});
+	return { ...note, regions: uniqueRegions(regions) };
 }
 
 function topLevelRegions(outline: Outline): Array<{ node: OutlineNode; key: string; label: string }> {
@@ -83,6 +126,7 @@ function frontierRegions(
 				label: top?.label ?? regionLabel(ancestor),
 				status: "never-looked",
 				detail: `${node.scrollExtent.total} rows, ${node.scrollExtent.seen} seen`,
+				ref: ancestor.ref,
 			});
 		}
 		if (node.truncated) {
@@ -93,6 +137,7 @@ function frontierRegions(
 				label: top?.label ?? regionLabel(ancestor),
 				status: "never-looked",
 				detail: "subtree not walked",
+				ref: ancestor.ref,
 			});
 		}
 	}
@@ -106,14 +151,15 @@ export function noteFromLook(prev: WindowNote | undefined, outline: Outline, win
 		key: region.key,
 		label: region.label,
 		status: "seen",
+		ref: region.node.ref,
 	}));
 
 	if (prev) {
 		for (const old of prev.regions) {
 			if (old.status === "never-looked") continue;
-			if (!currentKeys.has(old.key)) {
-				regions.push({ ...old, status: "changed", detail: "not matched in latest look" });
-			}
+			// Unmatched means this look cannot say whether the node is still readable: keep the change, not its text.
+			if (!currentKeys.has(old.key))
+				regions.push(redactedRegion({ ...old, status: "changed", detail: "not matched in latest look" }));
 		}
 	}
 
@@ -154,7 +200,13 @@ export function noteAfterAct(
 				region.status = "changed";
 				region.detail = "acted here";
 			} else {
-				note.regions.unshift({ key, label: regionLabel(ancestor), status: "changed", detail: "acted here" });
+				note.regions.unshift({
+					key,
+					label: regionLabel(ancestor),
+					status: "changed",
+					detail: "acted here",
+					ref: ancestor.ref,
+				});
 			}
 		}
 	}
