@@ -194,6 +194,28 @@ test("a failed construction releases its scratch directory and owned provider", 
 	}
 });
 
+test("a provider registration that throws still releases the scratch directory", async ({ onTestFinished }) => {
+	const previous = process.env.TMPDIR;
+	const scratch = makeTestTempDir("harness-provider-fail-", onTestFinished);
+	process.env.TMPDIR = scratch;
+	const boom = new Error("model definition exploded");
+	const before = getApiProviders().length;
+	// The real `registerFauxProvider` reads each definition's `id`; this one throws mid-registration.
+	const exploding = {
+		get id(): string {
+			throw boom;
+		},
+	};
+	try {
+		await expect(createHarness({ models: [exploding] })).rejects.toBe(boom);
+		expect(readdirSync(scratch)).toEqual([]);
+		expect(getApiProviders()).toHaveLength(before);
+	} finally {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
+	}
+});
+
 test("reload restores a transport the registry reset dropped", async () => {
 	const h = await start({ extensionFactories: [echo] });
 	await h.session.reload();

@@ -301,15 +301,25 @@ function restorerFor(fauxProvider: FauxProviderRegistration): () => void {
  */
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
+	// Everything after the allocation runs inside the protected region, provider setup included.
+	try {
+		return await withFauxProvider(options, tempDir);
+	} catch (error) {
+		rmSync(tempDir, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+/** Register (or borrow) the faux provider and build on it, unregistering an owned one on failure. */
+async function withFauxProvider(options: HarnessOptions, tempDir: string): Promise<Harness> {
 	const owned = options.fauxProvider === undefined;
 	const fauxProvider: FauxProviderRegistration =
 		options.fauxProvider ?? registerFauxProvider({ models: options.models });
-	if (owned) fauxProvider.setResponses([]);
 	try {
+		if (owned) fauxProvider.setResponses([]);
 		return await buildHarness(options, tempDir, fauxProvider, owned);
 	} catch (error) {
 		if (owned) fauxProvider.unregister();
-		rmSync(tempDir, { recursive: true, force: true });
 		throw error;
 	}
 }

@@ -312,6 +312,38 @@ def test_sample_rejects_oversized_phase_output_and_cleans_scratch(
     assert all(not path.exists() for path in scratch)
 
 
+@pytest.mark.parametrize("target", ["uuid", "pane"])
+def test_sample_setup_failure_removes_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    """Setup between allocation and sampling runs inside the protected region.
+
+    Parameters:
+        tmp_path (Path): private socket root.
+        monkeypatch (pytest.MonkeyPatch): make one setup step raise.
+        target (str): setup step that raises.
+    """
+    error = RuntimeError(f"{target} setup failed")
+
+    def explode(*_: object, **__: object) -> None:
+        """Fail the patched setup step.
+
+        Raises:
+            RuntimeError: always.
+        """
+        raise error
+
+    monkeypatch.setattr(startup, "SOCKET_ROOT", tmp_path)
+    if target == "uuid":
+        monkeypatch.setattr(startup.uuid, "uuid4", explode)
+    else:
+        monkeypatch.setattr(startup, "TmuxPane", explode)
+    with pytest.raises(RuntimeError, match="setup failed") as caught:
+        startup.sample(["offline-fixture"], env={})
+    assert caught.value is error
+    assert list(tmp_path.iterdir()) == []
+
+
 REPORT: dict[str, Any] = {
     "summary": {"a": {m: {"median": 1.0} for m in startup.MILESTONES}},
 }
