@@ -1252,7 +1252,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			);
 		},
 		savePersistedRun,
-		savePersistedRun,
 	);
 
 	// A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener

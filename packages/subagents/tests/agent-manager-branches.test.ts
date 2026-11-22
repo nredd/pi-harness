@@ -222,3 +222,41 @@ describe("AgentManager names", () => {
 		expect(manager.resolveMention(ids[0]!)).toMatchObject({ kind: "tombstone", entry: { id: ids[0] } });
 	});
 });
+
+describe("AgentManager run journal observer", () => {
+	it("keeps a throwing journal write out of the spawn and foreground resume paths", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		const journaled: string[] = [];
+		const journal = (record: { status: string }) => {
+			journaled.push(record.status);
+			throw new Error("journal unwritable");
+		};
+		manager = new AgentManager(
+			undefined,
+			4,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			journal,
+		);
+		try {
+			answering("spawned", "/tmp/child.jsonl");
+			const record = await settledSpawn(manager, {});
+			expect(record).toMatchObject({ status: "completed", result: "spawned" });
+			vi.mocked(resumeAgent).mockResolvedValueOnce({ text: "resumed", aborted: false, steered: false } as any);
+			const resumed = await manager.resume(record.id, "again");
+			expect(resumed).toMatchObject({ status: "completed", result: "resumed" });
+			// Session creation, the resume start, and the foreground resume settle.
+			expect(journaled).toEqual(["running", "running", "completed"]);
+			expect(errors).toHaveBeenCalledTimes(1);
+			expect(errors.mock.calls[0]?.[0]).toContain("run journal observer failed");
+		} finally {
+			errors.mockRestore();
+		}
+	});
+});

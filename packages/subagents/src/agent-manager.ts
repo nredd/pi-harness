@@ -733,8 +733,8 @@ export class AgentManager {
 	private readonly unreadTtlMs = retentionMs("PI_SUBAGENTS_UNREAD_TTL_MIN", UNCONSUMED_RECORD_TTL_MS);
 	private onComplete?: OnAgentComplete;
 	private onStart?: OnAgentStart;
-	private readonly onSessionCreated?: (record: AgentRecord) => void;
-	private readonly onForegroundResumeSettled?: (record: AgentRecord) => void;
+	/** Journals a top-level run when its session exists and when a foreground resume settles. */
+	private readonly onRunJournal?: (record: AgentRecord) => void;
 	private onQueuedStop?: OnAgentQueuedStop;
 	private onReaped?: OnAgentReaped;
 	private onCompact?: OnAgentCompact;
@@ -810,16 +810,15 @@ export class AgentManager {
 		homeDir?: string,
 		onQueuedStop?: OnAgentQueuedStop,
 		onReaped?: OnAgentReaped,
-		onSessionCreated?: (record: AgentRecord) => void,
-		onForegroundResumeSettled?: (record: AgentRecord) => void,
+		onRunJournal?: (record: AgentRecord) => void,
 	) {
 		this.clock = clock;
 		this.homeDir = homeDir;
 
 		this.onComplete = onComplete;
 		this.onStart = onStart;
-		this.onSessionCreated = onSessionCreated;
-		this.onForegroundResumeSettled = onForegroundResumeSettled;
+		// A throwing journal write must not fail the run it describes.
+		this.onRunJournal = guardObserver("run journal", onRunJournal);
 		this.onQueuedStop = guardObserver("queued stop", onQueuedStop);
 		this.onReaped = guardObserver("reaped", onReaped);
 		this.onCompact = guardObserver("compaction", onCompact);
@@ -1517,7 +1516,7 @@ export class AgentManager {
 					}
 					record.pendingSteers = undefined;
 				}
-				this.onSessionCreated?.(record);
+				this.onRunJournal?.(record);
 				options.onSessionCreated?.(session);
 			},
 		})
@@ -1964,7 +1963,7 @@ export class AgentManager {
 		try {
 			// Positive evidence for the reap notice: only a live signal means the prompt runs.
 			record.ranThisRun = record.status === "running";
-			if (record.ranThisRun) this.onSessionCreated?.(record);
+			if (record.ranThisRun) this.onRunJournal?.(record);
 			this.settleOutcome(
 				record,
 				await resumeAgent(record.session, prompt, {
@@ -2004,7 +2003,7 @@ export class AgentManager {
 
 		this.releaseLease(record);
 		this.drainQueue();
-		this.onForegroundResumeSettled?.(record);
+		this.onRunJournal?.(record);
 		return record;
 	}
 
