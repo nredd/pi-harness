@@ -1,4 +1,5 @@
 import { effectiveBlockedBundleIds, getComputerUseConfig } from "../../config.ts";
+import { assertMacosPidUpperBound } from "../../find-params.ts";
 import { type LookResponse, parseLookResponse } from "../../outline.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
@@ -137,6 +138,7 @@ export const macosBackend: Pick<
 	},
 
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
+		if (Number.isFinite(query.pid)) assertMacosPidUpperBound(query.pid!, "pid");
 		return parseRoots(
 			await macosHelper.command<unknown>(
 				"listRoots",

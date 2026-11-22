@@ -95,7 +95,7 @@ private struct WindowPairing {
 	let confidence: String
 }
 
-private struct CapturedWindowImage {
+struct CapturedWindowImage {
 	let image: CGImage
 	let windowId: UInt32
 	let frame: CGRect
@@ -1306,7 +1306,9 @@ final class Bridge {
 
 	func handleRequest(
 		_ request: [String: Any], clientID: UUID?,
-		discoverRoots: ((Int32?, String?) throws -> [String: Any])? = nil
+		discoverRoots: ((Int32?, String?) throws -> [String: Any])? = nil,
+		lookWindowOwner: ((UInt32) -> Int32?)? = nil,
+		lookCapture: ((UInt32) throws -> CapturedWindowImage)? = nil
 	) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
 		if let refusal = lockedSessionRefusal(cmd: cmd, session: readSession()) {
@@ -1362,7 +1364,7 @@ final class Bridge {
 		case "setWindowFrame":
 			return try setWindowFrame(request)
 		case "look":
-			return try look(request)
+			return try look(request, windowOwner: lookWindowOwner ?? pidForWindowId, captureWindow: lookCapture ?? captureWindow)
 		case "act":
 			return try act(request)
 		case "actBatch":
@@ -2052,7 +2054,11 @@ final class Bridge {
 		return output
 	}
 
-	private func look(_ request: [String: Any]) throws -> [String: Any] {
+	private func look(
+		_ request: [String: Any], windowOwner: (UInt32) -> Int32?,
+		captureWindow: (UInt32) throws -> CapturedWindowImage
+	) throws -> [String: Any] {
+		let suppliedPid = try request["pid"] == nil || request["pid"] is NSNull ? nil : pidArg(request)
 		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
 		let maxDimension = optionalIntArg(request, "maxDimension").map { max(1, $0) }
@@ -2071,17 +2077,19 @@ final class Bridge {
 		if resolveCaptureTarget(windowId: windowId, wantsImage: shouldCapture) == .notCapturable {
 			throw BridgeFailure(message: "Root has no capturable window (unpaired with any on-screen window); use semantic observation (mode: semantic)", code: "root_not_capturable")
 		}
-		let capture = try shouldCapture ? windowId.map { try captureWindow(windowId: $0) } : nil
-		let captureMs = capture.map { _ in elapsedMs(captureStart) } ?? 0
-
 		let pid: Int32
-		if let windowId, let ownerPid = pidForWindowId(windowId) {
+		if let windowId, let ownerPid = windowOwner(windowId) {
 			pid = ownerPid
-		} else if let requestedRoot, let owner = pidForElement(requestedRoot) {
+		} else if !shouldCapture, let requestedRoot, let owner = pidForElement(requestedRoot) {
 			pid = owner
 		} else {
 			throw BridgeFailure(message: "Root is not owned by a running app", code: "root_not_found")
 		}
+		if let suppliedPid, suppliedPid != pid {
+			throw BridgeFailure(message: "pid does not match the resolved root owner", code: "pid_mismatch")
+		}
+		let capture = try shouldCapture ? windowId.map(captureWindow) : nil
+		let captureMs = capture.map { _ in elapsedMs(captureStart) } ?? 0
 		ensureEnhancedAccessibility(pid: pid)
 		if let windowRef, windowRef.hasPrefix("cgmenu:"), refStore.window(for: windowRef) == nil {
 			let frame = windowId.flatMap { windowInfo(windowId: $0)?.bounds } ?? CGRect(x: 0, y: 0, width: 1, height: 1)
@@ -2668,12 +2676,12 @@ final class Bridge {
 	}
 
 	func act(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
+		let pid = try pidArg(request)
 		let deadline = keyboardDeadline(request)
 		let lookId = try stringArg(request, "lookId")
 		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
 		}
-		let pid = try pidArg(request)
 		let action = try stringArg(request, "action")
 		let target = request["target"] as? [String: Any] ?? [:]
 		let params = request["params"] as? [String: Any] ?? [:]

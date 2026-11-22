@@ -352,6 +352,9 @@ Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based
 
 ### Target contract
 
+- On macOS, `find_roots` rejects PIDs above `2147483647` before app discovery. The native helper
+  validates the `act` PID before looking up the look. For `look`, an omitted or null PID is allowed;
+  a supplied PID must fit in a signed 32-bit integer and match the OS-resolved owner before capture.
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when
   positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`,
