@@ -360,6 +360,12 @@ private func assertRootIdentityEligibility() {
     var unreadUnpaired = unpaired
     unreadUnpaired.unread = true
     expect(!rootIdentityComparable(pairing: unreadUnpaired, fields: [ownTitle], frameRead: true), "nor is a window it left unpaired")
+    var contested = WindowPairing(candidate: candidate, score: 10, confidence: "low")
+    contested.contested = true
+    expect(!rootIdentityComparable(pairing: contested, fields: [ownTitle], frameRead: true), "a contested pairing is not comparable")
+    var contestedUnpaired = unpaired
+    contestedUnpaired.contested = true
+    expect(!rootIdentityComparable(pairing: contestedUnpaired, fields: [ownTitle], frameRead: true), "nor is a root a contested pairing left unpaired")
 }
 
 /// Scripted AX reads for one listing, read in production order through `RootInventoryWorld.classify` and `rootEntries`
@@ -485,11 +491,85 @@ private func assertClassifiedIdentity(_ bridge: Bridge) {
     borrowed.titles = ["sheet": .value("Save")]
     let open = borrowed.classify(bridge)
     expect(open.entries.map { $0["windowId"] as? Int } == [7, nil], "a sheet never borrows its window's CG window id")
-    expect(Set(open.snapshot.roots.keys) == ["window:7", "meta:sheet:AXSheet:Save:600,100,800,600"] && open.snapshot.complete, "the sheet keeps its own metadata identity beside its window")
+    expect(open.snapshot.roots.isEmpty && !open.snapshot.complete, "a window and a sheet that both claim one CG window are both unidentified")
+    let sheetFrame = CGRect(x: 700, y: 150, width: 400, height: 300)
+    let inset = paired()
+    inset.sheets = ["doc": [sheet]]
+    inset.titles = ["sheet": .value("Save")]
+    inset.frames = ["sheet": sheetFrame]
+    let insetSheet = inset.classify(bridge)
+    expect(insetSheet.entries.map { $0["windowId"] as? Int } == [7, nil], "an inset sheet does not claim its window's CG window")
+    expect(Set(insetSheet.snapshot.roots.keys) == ["window:7", "meta:sheet:AXSheet:Save:700,150,400,300"] && insetSheet.snapshot.complete, "the sheet keeps its own metadata identity beside its window")
     let separate = paired()
     separate.sheets = ["doc": [sheet]]
-    let sheetFrame = CGRect(x: 700, y: 150, width: 400, height: 300)
     separate.frames = ["sheet": sheetFrame]
     separate.candidates.append(CGWindowCandidate(windowId: 8, title: "", bounds: sheetFrame, isOnscreen: true, layer: 0, zOrder: 1))
-    expect(separate.classify(bridge).entries.map { $0["windowId"] as? Int } == [7, 8], "a sheet with a CG window of its own pairs with it")
+    let separated = separate.classify(bridge)
+    expect(separated.entries.map { $0["windowId"] as? Int } == [7, 8], "a sheet with a CG window of its own pairs with it")
+    expect(Set(separated.snapshot.roots.keys) == ["window:7", "window:8"] && separated.snapshot.complete, "exclusive claims key both roots by their CG window ids")
+    assertContestedPairings(bridge)
+}
+
+/// One conservative rule (`contestedClaims`): a CG candidate claimed by more than one root, or by a root whose pairing
+/// read failed, keys none of its claimants, so neither the listing order nor an unread competitor moves an identity (#1287).
+private func assertContestedPairings(_ bridge: Bridge) {
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
+    }
+    let frame = FakeListing.frame
+    let titledDoc = CGWindowCandidate(windowId: 9, title: "Doc", bounds: frame, isOnscreen: false, layer: 0, zOrder: 0)
+    let farFrame = CGRect(x: 0, y: 0, width: 800, height: 600)
+    func read(_ title: AXStringRead, _ frame: CGRect, frameRead: Bool = true) -> WindowPairingRead {
+        WindowPairingRead(title: title, frame: frame, frameRead: frameRead)
+    }
+    expect(contestedClaims([read(.value("Doc"), frame)], candidates: [titledDoc]) == [false], "a sole claimant of a sole candidate is exclusive")
+    expect(contestedClaims([read(.value("Doc"), frame), read(.value("Other"), farFrame)], candidates: [titledDoc]) == [false, false], "a read root scoring below 0 claims nothing")
+    expect(contestedClaims([read(.value("Doc"), frame), read(.failed, farFrame)], candidates: [titledDoc]) == [true, true], "an unread title claims a candidate it might match, so both claimants are contested")
+    expect(contestedClaims([read(.value("Doc"), frame), read(.value("Doc"), farFrame)], candidates: [titledDoc]) == [true, true], "two read roots scoring 0 or more for one candidate are both contested")
+    let second = CGWindowCandidate(windowId: 10, title: "Doc", bounds: farFrame, isOnscreen: false, layer: 0, zOrder: 1)
+    expect(contestedClaims([read(.value("Doc"), frame)], candidates: [titledDoc, second]) == [true], "a root claiming two candidates is contested")
+    expect(contestedClaims([read(.failed, frame)], candidates: []) == [false], "without candidates nothing is claimed")
+
+    // Two windows, one on-screen untitled CG window: `a` scores 9 for it, `b` far below 0. A failed pairing position
+    // read lifts `b` to 10, so `b` takes it and `a` loses its CG id.
+    let a = FakeRoot("a")
+    let b = FakeRoot("b")
+    func competitors(_ fail: [String: [Bool]] = [:]) -> FakeListing {
+        let listing = FakeListing([a, b])
+        listing.frames = ["a": CGRect(x: 620, y: 100, width: 800, height: 600), "b": farFrame]
+        listing.titles = ["a": .value("A"), "b": .value("B")]
+        listing.candidates = [CGWindowCandidate(windowId: 9, title: "", bounds: frame, isOnscreen: true, layer: 0, zOrder: 0)]
+        listing.fail = fail
+        return listing
+    }
+    let whole = competitors().classify(bridge)
+    expect(whole.snapshot.complete && Set(whole.snapshot.roots.keys) == ["window:9", "meta:window::B:0,0,800,600"], "the read listing keys `a` by its CG window id")
+    let unread = competitors(["b.position": [true]]).classify(bridge)
+    expect(unread.entries.map { $0["windowId"] as? Int } == [nil, 9], "the unread competitor takes the candidate")
+    expect(unread.snapshot.roots.isEmpty && !unread.snapshot.complete, "both claimants of the candidate are unidentified")
+    expect(changes(whole.snapshot, unread.snapshot).isEmpty && changes(unread.snapshot, whole.snapshot).isEmpty, "an unread competitor reports no change in either direction")
+
+    // Two sheets with distinct titles and equal geometry score alike for one leftover untitled CG window: the
+    // listing order alone would decide which one takes it.
+    let doc = FakeRoot("doc")
+    let save = FakeRoot("save")
+    let export = FakeRoot("export")
+    let sheetFrame = CGRect(x: 700, y: 150, width: 400, height: 300)
+    func sheets(_ order: [FakeRoot]) -> FakeListing {
+        let listing = FakeListing([doc])
+        listing.sheets = ["doc": order]
+        listing.frames = ["save": sheetFrame, "export": sheetFrame]
+        listing.titles = ["save": .value("Save"), "export": .value("Export")]
+        listing.candidates = [
+            CGWindowCandidate(windowId: 7, title: "", bounds: frame, isOnscreen: true, layer: 0, zOrder: 0),
+            CGWindowCandidate(windowId: 8, title: "", bounds: sheetFrame, isOnscreen: true, layer: 0, zOrder: 1),
+        ]
+        return listing
+    }
+    let forward = sheets([save, export]).classify(bridge)
+    let reverse = sheets([export, save]).classify(bridge)
+    expect(forward.entries.map { $0["windowId"] as? Int } == [7, 8, nil] && reverse.entries.map { $0["windowId"] as? Int } == [7, 8, nil], "the first sheet listed takes the candidate")
+    expect(Set(forward.snapshot.roots.keys) == ["window:7"] && Set(reverse.snapshot.roots.keys) == ["window:7"], "only the window keeps its identity")
+    expect(!forward.snapshot.complete && !reverse.snapshot.complete, "the contested sheets leave both snapshots incomplete")
+    expect(changes(forward.snapshot, reverse.snapshot).isEmpty && changes(reverse.snapshot, forward.snapshot).isEmpty, "reordering the sheets reports no change")
 }
