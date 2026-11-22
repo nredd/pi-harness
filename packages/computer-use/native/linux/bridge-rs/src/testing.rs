@@ -4,7 +4,7 @@
 //! dev-dependency enables), so the shipped helper does not expose it.
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -54,10 +54,20 @@ pub struct RecordingSink {
     pointer_map: Option<Vec<u8>>,
     /// Sleep inside every post, as a slow server round trip would.
     post_delay: Duration,
+    /// Announce each post attempt as it begins, so a test waits for that instead of
+    /// sleeping: on `Stderr`, a `linux-bridge testing: posting <id> <attempt>` line.
+    announce: Option<Announce>,
+}
+
+/// Where a [`RecordingSink`] announces post attempts.
+#[derive(Debug)]
+enum Announce {
+    Stderr(String),
+    Channel(mpsc::Sender<usize>),
 }
 impl RecordingSink {
     /// Build a sink from a JSON script, for process-level tests that drive the real
-    /// binary: `{"delayMs": 20, "failPosts": [1], "held": [[false, 8]]}`.
+    /// binary: `{"delayMs": 20, "failPosts": [1], "held": [[false, 8]], "announce": "id"}`.
     pub fn scripted(script: &Value) -> Self {
         let numbers = |key: &str| {
             script
@@ -74,6 +84,10 @@ impl RecordingSink {
             post_delay: Duration::from_millis(
                 script.get("delayMs").and_then(Value::as_u64).unwrap_or(0),
             ),
+            announce: script
+                .get("announce")
+                .and_then(Value::as_str)
+                .map(|id| Announce::Stderr(id.to_owned())),
             ..Self::default()
         };
         for held in script
@@ -141,6 +155,11 @@ impl RecordingSink {
     /// Cancel `state` after `posts` posts were applied, as a shutdown signal would.
     pub fn cancel_after(mut self, posts: usize, state: Arc<InputState>) -> Self {
         self.cancel_after = Some((posts, state));
+        self
+    }
+    /// Send each post attempt's number on `posts` as the attempt begins.
+    pub fn announce_posts(mut self, posts: mpsc::Sender<usize>) -> Self {
+        self.announce = Some(Announce::Channel(posts));
         self
     }
     /// Fail every key and button state query.
@@ -254,6 +273,13 @@ impl InputSink for RecordingSink {
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
         let admitted = self.pending_admission.replace(false);
         let attempt = self.attempts.replace(self.attempts.get() + 1);
+        match &self.announce {
+            Some(Announce::Stderr(id)) => eprintln!("linux-bridge testing: posting {id} {attempt}"),
+            Some(Announce::Channel(posts)) => {
+                let _ = posts.send(attempt);
+            }
+            None => {}
+        }
         if !self.post_delay.is_zero() {
             std::thread::sleep(self.post_delay);
         }

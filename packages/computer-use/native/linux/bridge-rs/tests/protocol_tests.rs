@@ -309,3 +309,37 @@ fn shutdown_with_release_debt() {
     assert!(stderr.contains("keycode 8"), "{stderr}");
     assert!(stderr.contains("restart Pi"), "{stderr}");
 }
+
+#[test]
+fn a_stalled_press_is_named_at_exit_within_the_kill_grace() {
+    for ending in ["TERM", "EOF"] {
+        let mut helper = Helper::spawn();
+        // The shift press stalls for 5 s, as an X11 reply that never comes would.
+        helper.send(&typing(
+            "stall",
+            "A",
+            json!({"delayMs": 5000, "announce": "stall"}),
+        ));
+        helper.ready("posting stall 0");
+        let started = Instant::now();
+        if ending == "EOF" {
+            helper.close_stdin();
+        } else {
+            helper.signal(ending);
+        }
+        let status = helper.wait(DEADLINE);
+        let elapsed = started.elapsed();
+        let stderr = helper.stderr();
+        // Inside the client's 750 ms SIGTERM-to-SIGKILL grace, with the press named.
+        assert!(
+            elapsed < Duration::from_millis(750),
+            "{ending}: {elapsed:?}"
+        );
+        assert_eq!(status.code(), Some(3), "{ending}: {stderr}");
+        assert!(
+            stderr.contains("keycode 8 (held by a running action)"),
+            "{ending}: {stderr}"
+        );
+        assert!(stderr.contains("restart Pi"), "{ending}: {stderr}");
+    }
+}

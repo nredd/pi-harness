@@ -646,11 +646,15 @@ impl Owed {
 }
 
 /// Helper-wide physical input state shared by every action: releases a cleanup
-/// could not confirm, and the shutdown flag. It lives in this process only.
+/// could not confirm, inputs a running action pressed, and the shutdown flag. It lives
+/// in this process only.
 #[derive(Debug, Default)]
 pub struct InputState {
     /// Unconfirmed releases in press order; the newest is released first.
     debt: Mutex<Vec<Owed>>,
+    /// Inputs a running action registered before submitting their press and has not
+    /// confirmed released yet. An exit that cannot wait for that action names them.
+    held: Mutex<Vec<Owed>>,
     cancelled: AtomicBool,
 }
 impl InputState {
@@ -696,6 +700,34 @@ impl InputState {
             ),
             None => error,
         }
+    }
+    /// What an exit that cannot wait for running actions must name: owed releases, as
+    /// in the exit report, then inputs a running action may hold.
+    pub fn possibly_held(&self) -> Vec<String> {
+        let mut names = self.exit_report();
+        names.extend(
+            self.held()
+                .iter()
+                .map(|owed| format!("{} (held by a running action)", owed.describe())),
+        );
+        names
+    }
+    /// Register `owed` as possibly held, before its press is submitted.
+    fn hold(&self, owed: Owed) {
+        self.held().push(owed);
+    }
+    /// Its release is confirmed, handed to the debt, or its press was rejected.
+    fn unhold(&self, owed: Owed) {
+        let mut held = self.held();
+        if let Some(index) = held
+            .iter()
+            .rposition(|entry| entry.event == owed.event && entry.detail == owed.detail)
+        {
+            held.remove(index);
+        }
+    }
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Owed>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
     /// Owed releases for an exit report: delivery-unknown ones say so.
     fn exit_report(&self) -> Vec<String> {
@@ -1084,14 +1116,19 @@ impl<'a, S: InputSink> Held<'a, S> {
             ));
         }
         admit()?;
-        self.owed.push(Owed {
+        let owed = Owed {
             event: release,
             detail,
             ambiguous: false,
-        });
+        };
+        self.owed.push(owed);
+        // Visible to an exit before submission: the server may execute the press even
+        // if its reply never comes back.
+        self.input.state.hold(owed);
         match self.input.post_checked(press, detail, 0, 0) {
             Err(PostFailure::Rejected(error)) => {
                 self.owed.pop();
+                self.input.state.unhold(owed);
                 Err(error)
             }
             result => result.map_err(PostFailure::into_error),
@@ -1114,6 +1151,7 @@ impl<'a, S: InputSink> Held<'a, S> {
         match self.input.post_checked(owed.event, owed.detail, 0, 0) {
             Ok(()) => {
                 self.owed.pop();
+                self.input.state.unhold(owed);
                 Ok(())
             }
             Err(PostFailure::Rejected(error)) => {
@@ -1138,15 +1176,21 @@ impl<'a, S: InputSink> Held<'a, S> {
 impl<S: InputSink> Drop for Held<'_, S> {
     fn drop(&mut self) {
         let mut unconfirmed = Vec::new();
+        let mut released = Vec::new();
         while let Some(owed) = self.owed.pop() {
             let input = self.input;
             let left = catch_unwind(AssertUnwindSafe(|| input.release_owed(owed)))
                 // A panic mid-post leaves its delivery unknown.
                 .unwrap_or(Some(owed.unknown()));
             unconfirmed.extend(left);
+            released.push(owed);
         }
         unconfirmed.reverse();
+        // Into the debt before leaving the held list, so an exit never sees neither.
         self.input.state.debt().extend(unconfirmed);
+        for owed in released {
+            self.input.state.unhold(owed);
+        }
     }
 }
 
@@ -1921,6 +1965,75 @@ mod tests {
             open_physical(PhysicalPolicy::Default, SessionKind::X11, &state, || Ok(5)).unwrap(),
             5
         );
+    }
+
+    /// A sink that records, at every post, what an exit would name as possibly held.
+    struct Watching {
+        inner: RecordingSink,
+        state: Arc<InputState>,
+        seen: RefCell<Vec<Vec<String>>>,
+    }
+    impl InputSink for Watching {
+        fn admit(&self) -> Result<(), ProtocolError> {
+            self.inner.admit()
+        }
+        fn admit_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+            self.inner.admit_point(x, y)
+        }
+        fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError> {
+            self.inner.keycode(sym)
+        }
+        fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError> {
+            self.inner.is_down(button, detail)
+        }
+        fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
+            self.seen.borrow_mut().push(self.state.possibly_held());
+            self.inner.post(event, detail, x, y)
+        }
+    }
+
+    fn watching(inner: RecordingSink) -> Input<Watching> {
+        let state = Arc::new(InputState::default());
+        let sink = Watching {
+            inner,
+            state: Arc::clone(&state),
+            seen: RefCell::default(),
+        };
+        Input::with_state(sink, state)
+    }
+
+    #[test]
+    fn a_press_is_visible_to_an_exit_before_it_is_submitted() {
+        let input = watching(RecordingSink::default());
+        input.type_text("A").unwrap();
+        let held = "keycode 8 (held by a running action)";
+        let both = vec![
+            held.to_owned(),
+            "keycode 9 (held by a running action)".to_owned(),
+        ];
+        // Shift press, `a` press, `a` release, shift release.
+        assert_eq!(
+            *input.sink().seen.borrow(),
+            [
+                vec![held.to_owned()],
+                both.clone(),
+                both,
+                vec![held.to_owned()]
+            ]
+        );
+        assert!(
+            input.state().possibly_held().is_empty(),
+            "all confirmed released"
+        );
+
+        // A rejected press is not held; an uncertain one stays named until cleanup
+        // hands it to the debt.
+        let input = watching(RecordingSink::default().fail_post(0));
+        assert!(input.type_text("A").is_err());
+        assert!(input.state().possibly_held().is_empty());
+        let input = watching(RecordingSink::default().lose_ack(0, true).fail_post(1));
+        assert!(input.type_text("A").is_err());
+        assert_eq!(input.state().possibly_held(), ["keycode 8"]);
     }
 
     fn owing(detail: u8) -> Arc<InputState> {

@@ -21,6 +21,10 @@ const REQUEST_WORKERS: usize = 8;
 const EXIT_SETTLE_LIMIT: Duration = Duration::from_millis(300);
 /// Exit status when releases stay unconfirmed at exit.
 const EXIT_RELEASE_DEBT: i32 = 3;
+/// How long an exiting helper waits for in-flight requests after shutdown began. One
+/// stuck on an X11 reply that never comes cannot unwind, so the helper names what it may
+/// hold and exits within the client's 750 ms SIGTERM-to-SIGKILL grace instead.
+const EXIT_JOIN_LIMIT: Duration = Duration::from_millis(300);
 const DEFAULT_MAX_NODES: usize = 512;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
@@ -110,7 +114,16 @@ async fn main() {
             let _ = output.send(Response::err(&id, shutting_down()));
         }
     }
-    while requests.join_next().await.is_some() {}
+    let joined = tokio::time::timeout(EXIT_JOIN_LIMIT, async {
+        while requests.join_next().await.is_some() {}
+    })
+    .await
+    .is_ok();
+    if !joined {
+        // A stuck request still holds whatever it pressed: its press was registered
+        // before submission, so name it and every owed release, then leave.
+        std::process::exit(exit_status(InputState::shared().possibly_held()));
+    }
     drop(output);
     let _ = writer.await;
     // Tokio's stdin reads on a blocking thread that runtime shutdown would wait on
@@ -128,12 +141,18 @@ async fn settle_before_exit() -> i32 {
     .await
     // The settlement catches its own panics; a join failure leaves the debt as it was.
     .unwrap_or_else(|_| InputState::shared().unconfirmed_releases());
-    if left.is_empty() {
+    exit_status(left)
+}
+
+/// The exit status for inputs that may stay held: 0 for none, else
+/// `EXIT_RELEASE_DEBT` with them named on stderr for the client.
+fn exit_status(held: Vec<String>) -> i32 {
+    if held.is_empty() {
         return 0;
     }
     eprintln!(
         "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",
-        left.join(", ")
+        held.join(", ")
     );
     EXIT_RELEASE_DEBT
 }
