@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pi_release.stack import find_package
 
-from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, install_usage_fixture
+from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, google_rpd_view, install_usage_fixture
 from harness.sessions import write_session
 
 if TYPE_CHECKING:
@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from harness.sandbox import Sandbox
     from harness.tmux import TmuxPane
 
-pytestmark = [pytest.mark.stack, pytest.mark.tui]
 STATS = re.compile(r"\bhit \d+\.\d%|\bCH\d+\.\d%")
 FULL_STATS = re.compile(
     r"^\s*in \S+ out \S+ (?:read \S+ )?(?:write \S+ )?"
@@ -45,6 +44,11 @@ STATUS = "STATUS-LINE-OK"
 # Reset suffix: full `(resets ..)` or compact ` @..`.
 RESET_SUFFIX = re.compile(r"\(resets [^)]+\)| @\S+")
 OPENAI_FIVE_HOUR = re.compile(r"\b(?:OpenAI|OAI) 5h\b")
+GOOGLE_QUOTA_ROW = re.compile(
+    r"^[ \t]*(?:Quota left:|Left:)[ \t]+Goog(?:le)?\b[^\r\n]*"
+    r"\b37/250[ \t]+req(?:uests)?[ \t]+obs(?:erved)?\b[^\r\n]*$",
+    re.MULTILINE,
+)
 
 
 def preset_shows_resets(preset: Path) -> bool:
@@ -124,6 +128,8 @@ def assert_footer(pane: TmuxPane, width: int, *, resets: bool) -> None:
     raise AssertionError(f"Footer did not repaint cleanly at {width}:\n{screen}")
 
 
+@pytest.mark.stack
+@pytest.mark.tui
 def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[..., TmuxPane]) -> None:
     """120 -> 60 -> 320 -> 120 preserves one stats/quota/status row without timer scaling.
 
@@ -164,3 +170,50 @@ def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[
     for width, height in ((60, 24), (320, 60), (120, 40)):
         pane.resize(width, height)
         assert_footer(pane, width, resets=resets)
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        "Quota left:\nGoogle 37/250 requests observed",
+        "Quota left: Google 37/250\nrequests observed",
+        "Quota left: Google 37/250 requests\nobserved",
+    ],
+)
+def test_google_quota_row_rejects_split_render(screen: str) -> None:
+    """Require every token of the Google count on the quota row.
+
+    Parameters:
+        screen (str): capture with the quota text split across two lines.
+    """
+    assert GOOGLE_QUOTA_ROW.search("\nLeft: Goog\t37/250 req obs\n") is not None
+    assert GOOGLE_QUOTA_ROW.search(screen) is None
+
+
+@pytest.mark.stack
+@pytest.mark.tui
+def test_google_meter_reaches_the_quota_footer(sandbox: Sandbox, tui: Callable[..., TmuxPane]) -> None:
+    """A faux `google` model shows its observed count, not subscription headroom.
+
+    Parameters:
+        sandbox (Sandbox): private installed stack.
+        tui (Callable[..., TmuxPane]): actual terminal launcher for that sandbox.
+    """
+    if (sandbox.agent_dir / "stack-name").read_text() != "local":
+        pytest.skip("The metered footer scenario targets the workspace preset, not a published pin")
+    preset = find_package("pi-preset", sandbox.settings()["packages"], sandbox.agent_dir)
+    # Slice 9 removes the hard-coded provider table. Keep the scenario runnable in parallel with it.
+    if "const QUOTA_PROVIDERS" in (preset / "src/footer-quota.ts").read_text():
+        pytest.skip("#1178 slice 9 must remove the legacy footer's provider allowlist")
+    usage = install_usage_fixture(sandbox)
+    usage.set(views=[google_rpd_view()])
+    screen = tui(
+        {"providers": {"google": {"models": ["faux-fast"], "steps": []}}},
+        model="google/faux-fast",
+        extra_args=["-e", str(USAGE_FIXTURE_EXTENSION)],
+        env=fixture_env(usage),
+        wait_pattern=STATUS,
+    ).wait_for(GOOGLE_QUOTA_ROW)
+    match = GOOGLE_QUOTA_ROW.search(screen)
+    assert match is not None, screen
+    assert "%" not in match[0], screen

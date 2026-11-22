@@ -5,13 +5,14 @@
  */
 import assert from "node:assert/strict";
 import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import { isolatedHomeEnv } from "../tests/lib/src/isolated-home.ts";
+import { makeTestTempDir } from "../tests/lib/src/temp-dir.ts";
 
 interface SpawnCall {
 	command: string;
@@ -90,11 +91,11 @@ function onlyCall(): SpawnCall {
 	return call;
 }
 
-test("entry dispatch launches only for the entry module and propagates the status", () => {
+test("entry dispatch launches only for the entry module and propagates the status", ({ onTestFinished }) => {
 	const argv = process.argv;
 	const exitCode = process.exitCode;
 	// `dispatch` passes the real environment; never append a fake timing to a real CI job summary.
-	const dir = mkdtempSync(join(tmpdir(), "pi-run-vitest-dispatch-"));
+	const dir = makeTestTempDir("pi-run-vitest-dispatch-", onTestFinished);
 	const summary = join(dir, "summary.md");
 	vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
 	try {
@@ -112,7 +113,6 @@ test("entry dispatch launches only for the entry module and propagates the statu
 		process.argv = argv;
 		process.exitCode = exitCode;
 		vi.unstubAllEnvs();
-		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
@@ -212,21 +212,17 @@ test("explicit toolchain homes win, otherwise the account's are pinned", () => {
 	});
 });
 
-test("a signal-killed child exits 1 and the timing lands in the step summary", () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-run-vitest-summary-"));
-	try {
-		const summary = join(dir, "summary.md");
-		spawn.result = { status: null, signal: "SIGKILL" };
-		assert.equal(main(["node"], { GITHUB_STEP_SUMMARY: summary }), 1);
-		onlyCall();
-		assert.match(readFileSync(summary, "utf8"), /^\nnode Vitest timing: .* \| exit 1\n$/);
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
+test("a signal-killed child exits 1 and the timing lands in the step summary", ({ onTestFinished }) => {
+	const dir = makeTestTempDir("pi-run-vitest-summary-", onTestFinished);
+	const summary = join(dir, "summary.md");
+	spawn.result = { status: null, signal: "SIGKILL" };
+	assert.equal(main(["node"], { GITHUB_STEP_SUMMARY: summary }), 1);
+	onlyCall();
+	assert.match(readFileSync(summary, "utf8"), /^\nnode Vitest timing: .* \| exit 1\n$/);
 });
 
-test("a removal failure warns without replacing the child status or losing timing", () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-run-vitest-removal-"));
+test("a removal failure warns without replacing the child status or losing timing", ({ onTestFinished }) => {
+	const dir = makeTestTempDir("pi-run-vitest-removal-", onTestFinished);
 	const summary = join(dir, "summary.md");
 	const failure = Object.assign(new Error("directory not empty"), { code: "ENOTEMPTY" });
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -242,7 +238,6 @@ test("a removal failure warns without replacing the child status or losing timin
 		removal.error = undefined;
 		const temp = spawn.calls[0]?.env.TMPDIR;
 		if (temp) rmSync(dirname(temp), { recursive: true, force: true });
-		rmSync(dir, { recursive: true, force: true });
 	}
 });
 

@@ -4,6 +4,8 @@
  * current one, so it renders as "reset, no newer reading" with no percentage (unknown, not the old value).
  */
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { sanitize } from "../diff/view.ts";
 import { duration } from "./format.ts";
 import { isExpired, type QuotaObservation } from "./harness/common.ts";
 
@@ -12,19 +14,38 @@ export const QUOTA_DIM_AFTER_MS = 15 * 60_000;
 /** Shown for a provider whose harness persists no quota. */
 export const NO_LOCAL_READING = "no local reading";
 const BAR_CELLS = 10;
+/** Widest quota label, in columns; longer labels end in `…` in both the overlay and print. */
+export const QUOTA_LABEL_MAX = 160;
+
+/** `text` with control characters made visible, cut to `max` columns ending in `…`; never adds ANSI codes. */
+export function clipLabel(text: string, max: number): string {
+	const clean = sanitize(text);
+	if (visibleWidth(clean) <= max) return clean;
+	let kept = "";
+	let width = 0;
+	for (const { segment } of new Intl.Segmenter().segment(clean)) {
+		width += visibleWidth(segment);
+		if (width > max - 1) break;
+		kept += segment;
+	}
+	return `${kept}…`;
+}
 
 export interface QuotaRow {
 	/** `provider[/limit] window`, plus an account tag when the same window has readings for several. */
-	label: string;
+	readonly label: string;
 	/** The window has reset since the reading: no percentage is known. */
-	expired: boolean;
-	usedPercent: number;
+	readonly expired: boolean;
+	readonly head:
+		| { readonly kind: "gauge"; readonly percent: number }
+		| { readonly kind: "text"; readonly text: string };
+	readonly basis?: "reported" | "observed" | "inferred";
 	/** `resets in 3h 12m`, or `reset 5m ago, no newer reading`. */
-	reset: string;
-	/** `observed 12m ago via codex` */
-	observed: string;
+	readonly reset?: string;
+	/** Legacy harness provenance, e.g. `observed 12m ago via codex`. */
+	readonly observed?: string;
 	/** Observed more than `QUOTA_DIM_AFTER_MS` ago. */
-	old: boolean;
+	readonly old: boolean;
 }
 
 /** `[#####-----]`-style gauge, `BAR_CELLS` cells wide; out-of-range percentages clamp. */
@@ -60,7 +81,8 @@ export function quotaRows(allReadings: readonly QuotaObservation[], now: number)
 			return {
 				label: `${base(q)}${tag}`,
 				expired,
-				usedPercent: q.usedPercent,
+				head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: q.usedPercent },
+				basis: "reported",
 				reset: expired
 					? `reset ${duration(now - q.resetAt)} ago, no newer reading`
 					: `resets in ${duration(q.resetAt - now)}`,
@@ -68,6 +90,12 @@ export function quotaRows(allReadings: readonly QuotaObservation[], now: number)
 				old: now - q.observedAt > QUOTA_DIM_AFTER_MS,
 			};
 		});
+}
+
+/** Preserve legacy harness provenance; router rows use the view's explicit evidence basis. */
+export function quotaDetails(row: QuotaRow): string[] {
+	if (row.observed !== undefined && row.reset !== undefined) return [row.reset, row.observed];
+	return [row.basis, row.reset].filter((detail) => detail !== undefined);
 }
 
 /** `47.3%`, or `100%` / `5%` without a pointless decimal. */

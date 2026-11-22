@@ -1,4 +1,5 @@
 import { effectiveBlockedBundleIds, getComputerUseConfig } from "../../config.ts";
+import { assertMacosPidUpperBound } from "../../find-params.ts";
 import { type LookResponse, parseLookResponse } from "../../outline.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
@@ -49,6 +50,18 @@ function parseFramePoints(raw: unknown): FramePoints {
 		w: Math.max(1, toFiniteNumber(frame.w, 1)),
 		h: Math.max(1, toFiniteNumber(frame.h, 1)),
 	};
+}
+
+/**
+ * Resolve the `listRoots` PID filter. An absent, null or non-finite PID keeps the documented
+ * unfiltered discovery. A finite PID must be an integer in `1...2147483647`; a fraction or
+ * out-of-range value is rejected so it can never be coerced into a different process's PID.
+ */
+function macosRootPidFilter(pid: unknown): number | undefined {
+	if (typeof pid !== "number" || !Number.isFinite(pid)) return undefined;
+	if (!Number.isInteger(pid) || pid <= 0) throw new Error("pid must be a positive integer when provided.");
+	assertMacosPidUpperBound(pid, "pid");
+	return pid;
 }
 
 function parseRoots(result: unknown): PlatformRoot[] {
@@ -137,11 +150,12 @@ export const macosBackend: Pick<
 	},
 
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
+		const pid = macosRootPidFilter(query.pid);
 		return parseRoots(
 			await macosHelper.command<unknown>(
 				"listRoots",
 				{
-					...(Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}),
+					...(pid === undefined ? {} : { pid }),
 					...(query.title?.trim() ? { title: query.title.trim() } : {}),
 				},
 				{ signal },

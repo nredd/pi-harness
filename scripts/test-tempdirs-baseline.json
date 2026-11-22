@@ -1,12 +1,5 @@
 {
-	"scripts/run-vitest.test.ts": 4,
-	"tests/inprocess/support.test.ts": 5,
-	"tests/inprocess/support.ts": 2,
-	"tests/inprocess/verification/launcher.test.ts": 6,
-	"tests/integration/probes/compaction-children.test.ts": 2,
-	"tests/integration/providers/preloads.test.ts": 2,
 	"tests/lib/src/git.ts": 2,
 	"tests/lib/src/resources.ts": 2,
-	"tests/lib/src/sandbox.ts": 5,
-	"tests/lib/tests/harness.test.ts": 4
+	"tests/lib/src/sandbox.ts": 5
 }

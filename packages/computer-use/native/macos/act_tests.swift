@@ -40,12 +40,14 @@ private final class ActFixture {
     var pasteCode: UInt16? = 9
     var range: CFTypeRef?
     var trace: [String] = []
+    var lookups: [String] = []
     var pointers: [CGPoint] = []
 
     var world: ActWorld {
         let keyboard = useNativeKeyboard ? bridge.actionWorld() : nil
         return ActWorld(
             lookRecord: { id in
+                self.lookups.append(id)
                 guard id == "look" else { return nil }
                 return LookRecord(lookId: id, windowId: 8, windowFrame: CGRect(x: 100, y: 200, width: 300, height: 200), imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
             },
@@ -216,6 +218,7 @@ func runActAssertions() throws {
     runAXScrollAssertions()
     try runBatchAssertions()
     try runRootPIDAssertions()
+    try runPIDAdmissionAssertions()
     expect(suppressionTapShouldReenable(.tapDisabledByTimeout) && suppressionTapShouldReenable(.tapDisabledByUserInput), "re-enable the tap on either disable notification")
     expect(!suppressionTapShouldReenable(.keyDown) && !suppressionTapShouldReenable(.mouseMoved), "ordinary user events stay suppressed")
     try runEventAssertions()
@@ -446,7 +449,92 @@ private func runRootPIDAssertions() throws {
     try actionFailure("invalid_args") {
         try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":18446744073709551615}"#)
     }
-    expect(discovered == [nil, nil, nil, 1234], "listRoots discovers unfiltered for null, missing and nonnumeric PIDs, and never discovers for out-of-range PIDs")
+    _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":2147483647}"#)
+    for pid in [2147483648, 0, -1] {
+        try actionFailure("invalid_args", message: "pid must be a positive 32-bit integer") {
+            try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":\#(pid)}"#)
+        }
+    }
+    expect(discovered == [nil, nil, nil, 1234, 2147483647], "listRoots discovers unfiltered for null, missing and nonnumeric PIDs, and never discovers for out-of-range PIDs")
+}
+
+private func runPIDAdmissionAssertions() throws {
+    let fixture = ActFixture()
+    var failures: [String] = []
+    func check(_ label: String, code: String = "invalid_args", message: String, _ run: () throws -> Any) throws {
+        do {
+            _ = try run()
+            failures.append("\(label): expected \(code)")
+        } catch let error as BridgeFailure {
+            if error.code != code || error.message != message {
+                failures.append("\(label): got \(error.code): \(error.message)")
+            }
+        }
+    }
+    let pidError = "pid must be a positive 32-bit integer"
+    let invalidPids = try JSONSerialization.jsonObject(with: Data(#"[2147483648, 1234.5, "1234", true, 0, -1]"#.utf8)) as! [Any]
+    for pid in invalidPids {
+        for lookId in ["stale", nil] as [String?] {
+            var request = fixture.request("click", policy: "background", coords: true)
+            request["pid"] = pid
+            request["lookId"] = lookId
+            try check("act pid \(String(reflecting: pid)), \(lookId ?? "missing look")", message: pidError) {
+                try fixture.bridge.act(request, world: fixture.world, supportsAgentCursor: false)
+            }
+        }
+    }
+    if !fixture.lookups.isEmpty || !fixture.trace.isEmpty {
+        failures.append("invalid act performed lookups or actions: \(fixture.lookups), \(fixture.trace)")
+    }
+
+    let refStore = AXRefStore()
+    let axPid = getpid()
+    let windowRef = refStore.storeWindow(AXUIElementCreateApplication(axPid))
+    let bridge = Bridge(activityGlow: nil, readSession: { nil }, refStore: refStore)
+    var observations: [String] = []
+    func look(pid: Any?, readText: String, owner: Int32? = 1234, includeImage: Bool = true, windowRef: String? = nil) throws -> Any {
+        var request: [String: Any] = ["cmd": "look", "windowId": 42, "readText": readText, "includeImage": includeImage]
+        request["pid"] = pid
+        request["windowRef"] = windowRef
+        return try bridge.handleRequest(request, clientID: nil, lookWindowOwner: { id in
+            observations.append("owner:\(id)")
+            return owner
+        }, lookCapture: { id in
+            observations.append("capture:\(id)")
+            throw BridgeFailure(message: "capture fixture", code: "fixture_capture")
+        })
+    }
+    for pid in invalidPids {
+        try check("look pid \(String(reflecting: pid))", message: pidError) {
+            try look(pid: pid, readText: "invalid sentinel")
+        }
+    }
+    if !observations.isEmpty { failures.append("invalid look resolved ownership or captured") }
+    try check("wrong owner", code: "pid_mismatch", message: "pid does not match the resolved root owner") {
+        try look(pid: 4321, readText: "never")
+    }
+    if observations != ["owner:42"] { failures.append("wrong owner did not stop at ownership: \(observations)") }
+    observations = []
+    // Ownership mismatch proves the semantic look resolved the stored AX owner without
+    // walking a live AX tree. An image look for the same root must not use the AX fallback.
+    let otherPid = axPid == 1 ? 2 : 1
+    try check("semantic look uses the stored AX owner", code: "pid_mismatch", message: "pid does not match the resolved root owner") {
+        try look(pid: otherPid, readText: "never", owner: nil, includeImage: false, windowRef: windowRef)
+    }
+    if observations != ["owner:42"] { failures.append("semantic look attempted capture: \(observations)") }
+    observations = []
+    try check("image look requires a CG owner", code: "root_not_found", message: "Root is not owned by a running app") {
+        try look(pid: axPid, readText: "never", owner: nil, windowRef: windowRef)
+    }
+    if observations != ["owner:42"] { failures.append("unresolved CG owner did not stop before capture: \(observations)") }
+    for pid in [nil, NSNull(), 1234] as [Any?] {
+        observations = []
+        try check("omitted, null or matching owner", code: "fixture_capture", message: "capture fixture") {
+            try look(pid: pid, readText: "never")
+        }
+        if observations != ["owner:42", "capture:42"] { failures.append("look did not resolve ownership before capture: \(observations)") }
+    }
+    expect(failures.isEmpty, failures.joined(separator: "\n"))
 }
 
 private func runEventAssertions() throws {
