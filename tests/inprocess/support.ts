@@ -129,39 +129,46 @@ export async function isolateStackHome(
 		removeScratch = cleanup;
 	});
 	let wake: WakeHelper | undefined;
-	try {
-		wake = spawnWake();
-		if (wake) await once(wake, "spawn");
-	} catch (error) {
-		removeScratch();
-		throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
-	}
 	const previous = new Map<string, string | undefined>();
-	// Subagent task dirs live under XDG_STATE_HOME (os.tmpdir() as fallback); keep both inside this root so cleanup removes them (#678, #900).
-	mkdirSync(join(root, "tmp"));
-	for (const [key, value] of Object.entries({
-		PI_CODING_AGENT_DIR: join(root, "agent"),
-		XDG_CONFIG_HOME: join(root, ".config"),
-		TMPDIR: join(root, "tmp"),
-		XDG_STATE_HOME: join(root, "state"),
-	})) {
-		previous.set(key, process.env[key]);
-		process.env[key] = value;
-	}
-	return {
-		root,
-		async cleanup() {
-			try {
-				for (const [key, value] of previous) {
-					if (value === undefined) delete process.env[key];
-					else process.env[key] = value;
-				}
-				removeScratch();
-			} finally {
-				if (wake) await stopWake(wake);
+	async function cleanup() {
+		try {
+			for (const [key, value] of previous) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
 			}
-		},
-	};
+			removeScratch();
+		} finally {
+			if (wake) await stopWake(wake);
+		}
+	}
+	try {
+		try {
+			const child = spawnWake();
+			if (child) await once(child, "spawn");
+			wake = child;
+		} catch (error) {
+			throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
+		}
+		// Subagent task dirs live under XDG_STATE_HOME (os.tmpdir() as fallback); keep both inside this root so cleanup removes them (#678, #900).
+		mkdirSync(join(root, "tmp"));
+		for (const [key, value] of Object.entries({
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			XDG_CONFIG_HOME: join(root, ".config"),
+			TMPDIR: join(root, "tmp"),
+			XDG_STATE_HOME: join(root, "state"),
+		})) {
+			previous.set(key, process.env[key]);
+			process.env[key] = value;
+		}
+		return { root, cleanup };
+	} catch (error) {
+		try {
+			await cleanup();
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], "Could not set up or roll back the stack fixture");
+		}
+		throw error;
+	}
 }
 
 /**

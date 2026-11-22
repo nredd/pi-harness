@@ -24,6 +24,8 @@ test("launcher isolates home and temp before the child starts and cleans both on
 		`#!/usr/bin/env node\nimport { mkdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+// Exempt from makeTestTempDir: this is a child of the launcher-owned TMPDIR,
+// left behind so the test can verify the launcher removes that parent on failure.
 const dir = join(tmpdir(), "bare-fixture");
 mkdirSync(dir);
 writeFileSync(join(tmpdir(), "uv-fixture.lock"), "lock");

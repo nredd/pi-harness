@@ -210,6 +210,29 @@ it("removes the fixture home when the wake helper throws before returning a chil
 	}
 });
 
+it("rolls back scratch and wake when creating the fixture tmp directory fails", async ({ onTestFinished }) => {
+	const temp = makeTestTempDir("pi-stack-mkdir-", onTestFinished);
+	const previous = process.env.TMPDIR;
+	const wake = new FakeWake(["SIGTERM"]);
+	try {
+		process.env.TMPDIR = temp;
+		const attempt = isolateStackHome(() => {
+			const [scratch] = readdirSync(temp);
+			if (!scratch) throw new Error("Expected a stack scratch directory before wake setup");
+			// Block the upcoming mkdirSync with a real file instead of mocking node:fs.
+			writeFileSync(join(temp, scratch, "tmp"), "blocked");
+			queueMicrotask(() => wake.emit("spawn"));
+			return wake;
+		});
+		await expect(attempt).rejects.toHaveProperty("code", "EEXIST");
+		expect.soft(readdirSync(temp)).toEqual([]);
+		expect(wake.signalCode).toBe("SIGTERM");
+	} finally {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
+	}
+});
+
 it("holds no wake helper off macOS", () => {
 	for (const platform of ["linux", "win32", "freebsd"] as const) expect(holdWake(platform)).toBeUndefined();
 });
