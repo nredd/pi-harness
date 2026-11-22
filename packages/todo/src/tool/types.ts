@@ -103,8 +103,17 @@ export const PLAN_REMINDER_MESSAGE_TYPE = "rpiv-todo-plan-reminder";
  */
 export const HELD_REMINDER_MESSAGE_TYPE = "rpiv-todo-held-reminder";
 
+/** Hidden settle marker for an open list left unchanged for `staleAfterSettles` settles. */
+export const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
+
 /** Hidden settle marker for autonomous work without a todo list. */
 export const EMPTY_REMINDER_MESSAGE_TYPE = "rpiv-todo-empty-reminder";
+
+/**
+ * Hidden custom message the `context` hook appends to the first request after a compaction, listing
+ * the open todos the compacted context no longer carries. Never persisted.
+ */
+export const COMPACTION_LIST_MESSAGE_TYPE = "rpiv-todo-compaction-list";
 
 /**
  * Custom (non-message) entry recording a spent stale- or empty-list prompt budget. Session start
