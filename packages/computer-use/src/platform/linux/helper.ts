@@ -197,8 +197,11 @@ export class LinuxHelperClient {
 	private pending = new Map<string, Pending<unknown>>();
 	/** Set for good once a helper exits owing releases: every later physical command is refused. */
 	private inputUnsafe?: string;
-	/** Whether a physical command was ever written in this client's lifetime. */
-	private physicalSent = false;
+	/**
+	 * Helpers a physical command was ever written to. Only such a helper can leave input held when a signal skips
+	 * its cleanup; one that only observed cannot, whatever an earlier helper of this client did.
+	 */
+	private physicalChildren = new WeakSet<ChildProcessWithoutNullStreams>();
 	/** Discarded helpers whose exit status is still unknown: any of them may yet exit owing releases. */
 	private unsettledExits = new Set<Promise<void>>();
 	/** Settles once the predecessor's refusal, if any, is latched here. */
@@ -224,9 +227,12 @@ export class LinuxHelperClient {
 		this.installPromise = undefined;
 		this.setupAbort?.abort();
 		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
+		// The bounded wait starts now, not after the predecessor's: concurrent resets overlap their waits
+		// instead of stacking them.
+		const exits = this.awaitDiscardedExits();
 		// A chain of resets: what any predecessor left held is carried down to the newest client.
 		await this.predecessor;
-		await this.awaitDiscardedExits();
+		await exits;
 		return this.inputUnsafe;
 	}
 
@@ -445,8 +451,8 @@ export class LinuxHelperClient {
 		child.on("exit", (code, signalName) => {
 			if (code === HELPER_EXIT_RELEASE_DEBT) this.latchOwedInput(stderr.toString("utf8"));
 			// Killed by a signal, e.g. the SIGKILL backstop of a stalled helper: it skipped its cleanup and exit
-			// report, so after physical input nothing says what it left held.
-			else if (signalName && this.physicalSent) this.refusePhysicalInput(KILLED_AFTER_INPUT_MESSAGE);
+			// report, so after physical input to this helper nothing says what it left held.
+			else if (signalName && this.physicalChildren.has(child)) this.refusePhysicalInput(KILLED_AFTER_INPUT_MESSAGE);
 			if (this.child === child) this.child = undefined;
 		});
 		child.on("close", (code, signalName) => {
@@ -528,7 +534,7 @@ export class LinuxHelperClient {
 			}
 			// Rechecked right before writing: a helper may have exited owing releases during the awaits above.
 			this.refuseUnsafe(physical);
-			if (physical) this.physicalSent = true;
+			if (physical) this.physicalChildren.add(child);
 			return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
 		}
 	}
@@ -587,7 +593,8 @@ export let linuxHelper = new LinuxHelperClient();
  * holds every physical write until that disposal settles, then wait, bounded, for the old helper's exit
  * status. Resolves to the refusal when it may have left input held: the caller must surface it, and the
  * fresh client inherits it before its first physical write, since the input is still held in this process's
- * desktop. Concurrent resets chain: each client's disposal waits for its own predecessor's.
+ * desktop. Concurrent resets chain: each client's disposal waits for its own predecessor's, alongside its own bounded
+ * exit wait, which starts when that disposal begins.
  */
 export async function resetLinuxHelper(): Promise<string | undefined> {
 	const disposal = linuxHelper.dispose();
