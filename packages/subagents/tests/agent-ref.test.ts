@@ -256,7 +256,7 @@ it("resolves in the 3.2 order among what the asker sees: id, run, workflow run, 
 	expect(shape(at("agent-scout"))).toMatchObject({ via: "name", id: b.id });
 	b.alias = undefined;
 	expect(shape(at("@agent-scout"))).toMatchObject({ via: "prefix", requested: "agent-scout", id: c.id });
-	// Saved history: an exact saved id beats another saved conversation's alias spelling it.
+	// Saved history: an exact saved id beats a live alias or another saved conversation's alias spelling it.
 	const tomb = (id: string, handle: string, alias?: string) => ({
 		id,
 		handle,
@@ -268,6 +268,7 @@ it("resolves in the 3.2 order among what the asker sees: id, run, workflow run, 
 	});
 	manager.rememberTombstone(tomb("alpha-id", "alpha"));
 	manager.rememberTombstone(tomb("beta-id", "beta", "alpha-id"));
+	a.alias = "alpha-id";
 	expect(at("alpha-id")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "alpha-id" } } });
 	expect(at("beta")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "beta-id" } } });
 
@@ -292,6 +293,15 @@ it("resolves in the 3.2 order among what the asker sees: id, run, workflow run, 
 		expect(resolveAgent(input, SESSION, sources)).toEqual(miss(input));
 		expect(resolveAgent(input, asStranger, sources)).toEqual(miss(input));
 	}
+	// An exact hidden id is terminal: a visible alias spelling it does not take it.
+	parent.alias = child.id;
+	expect(resolveAgent(child.id, SESSION, sources)).toEqual(miss(child.id));
+	const hiddenSurvivor = { ...child, id: "survivor-child" };
+	parent.alias = hiddenSurvivor.id;
+	expect(resolveAgent(hiddenSurvivor.id, SESSION, sourcesOf(manager, [hiddenSurvivor]))).toEqual(
+		miss(hiddenSurvivor.id),
+	);
+	parent.alias = undefined;
 	manager.linkSuccessor("was-child", child.id);
 	expect(resolveAgent("was-child", SESSION, sources)).toEqual(miss("was-child"));
 	expect(resolveAgent(worker.id, SESSION, sources)).toMatchObject({

@@ -91,7 +91,6 @@ const QUEUE_WAIT_POLL_MS = Math.floor(NOTIFICATION_HOLD_MS / 4);
 
 interface ControlToolDeps {
 	pi: ExtensionAPI;
-	manager: AgentManager;
 	clock: Clock;
 	/** Mark a settled result read: no completion notice, no failure badge. */
 	markRead: (record: AgentRecord) => void;
@@ -117,7 +116,6 @@ interface ControlToolDeps {
 export function registerControlTools(deps: ControlToolDeps): void {
 	const {
 		pi,
-		manager,
 		clock,
 		markRead,
 		resolveSessionRef,
@@ -160,14 +158,14 @@ export function registerControlTools(deps: ControlToolDeps): void {
 				const ref = resolveSessionRef(params.agent_id, "process");
 				if (ref.state === "saved" && ref.note) {
 					const { note } = ref;
-					const diagnostic = agentNotFound(manager, note.id, true);
+					const diagnostic = agentNotFound(note.id, note, true);
 					if (note.fromSavedSession && (note.status === "running" || note.reopenRefusal))
 						return errorResult(diagnostic);
 					return textResult(diagnostic);
 				}
 				// A workflow run or its child, a tombstone with no note, or nothing at all.
 				if (ref.state !== "live" && ref.state !== "queued" && ref.state !== "retained")
-					return errorResult(agentNotFound(manager, manager.latestId(params.agent_id)));
+					return errorResult(agentNotFound(params.agent_id));
 				const { record } = ref;
 
 				// Wait for completion if requested. Cancellation stops only this tool
@@ -286,7 +284,7 @@ export function registerControlTools(deps: ControlToolDeps): void {
 				if (ref.state === "retained") return resumeFinished(ref.record, false);
 				if (ref.state === "saved" && ref.note) return resumeFinished(ref.note, !!ref.note.fromSavedSession);
 				// A workflow run or its child, a tombstone with no note, or nothing at all.
-				if (ref.state !== "live" && ref.state !== "queued") return errorResult(agentNotFound(manager, params.agent_id));
+				if (ref.state !== "live" && ref.state !== "queued") return errorResult(agentNotFound(params.agent_id));
 				const { record } = ref;
 				// Running or queued under no Plan policy: a steer from a planning parent would drive edits.
 				if (planSteerBlocked(record, pi.events)) return errorResult(planSteerRefusal(record.id));

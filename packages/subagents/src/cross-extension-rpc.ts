@@ -13,7 +13,7 @@
  * completion-notification race, and what protocol version 2 does not promise.
  */
 
-import type { AgentRef } from "./agent-ref.ts";
+import { type AgentRef, refRecord } from "./agent-ref.ts";
 import type { ModelRegistry } from "./model-resolver.ts";
 import { selectModel } from "./model-selection.ts";
 import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.ts";
@@ -166,8 +166,9 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 	// name one it does not own — but the guard is cheap and the id may leak some
 	// other way. Same refuse-what-we-should-not-touch stance as `consume` below.
 	// A nested child is hidden from the session, so it is refused by its exact id
-	// off the record existing at all; saved history and a workflow run name nothing to act on.
-	const assertOwned = (agentId: string): Extract<AgentRef, { record: AgentRecord }> => {
+	// off the record existing at all; saved history, a workflow run and a non-string id name nothing.
+	const assertOwned = (agentId: unknown): Extract<AgentRef, { record: AgentRecord }> => {
+		if (typeof agentId !== "string") throw new Error("Agent not found");
 		const ref = manager.resolve(agentId);
 		if (ref.state === "live" || ref.state === "queued" || ref.state === "retained") return ref;
 		const owned =
@@ -177,7 +178,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 		throw new Error(owned ? "Agent is owned by another agent or workflow" : "Agent not found");
 	};
 
-	const unsubStop = handleRpc<{ requestId: string; agentId: string }>(events, "subagents:rpc:stop", ({ agentId }) => {
+	const unsubStop = handleRpc<{ requestId: string; agentId: unknown }>(events, "subagents:rpc:stop", ({ agentId }) => {
 		const ref = assertOwned(agentId);
 		// Not "not found": the lookup above already proved it exists. A retained
 		// record has already finished, and `abort` refuses one that settled since.
@@ -189,16 +190,16 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 	// notification for that same result is not delivered on top of it and does
 	// not cost the parent a turn. Deliberately outside the ping version
 	// handshake: an extension built against protocol v2 simply never calls it.
-	// Same guard as get_subagent_result: only a settled agent of the session's
-	// own has a result to consume; a running one's notification is still the
-	// caller's only signal that it finished.
-	const unsubConsume = handleRpc<{ requestId: string; agentId: string }>(
+	// A settled agent only: a running one's notification is still the caller's only signal that it finished.
+	// A workflow's child is consumed as before #1204 (#1282 decides that policy).
+	const unsubConsume = handleRpc<{ requestId: string; agentId: unknown }>(
 		events,
 		"subagents:rpc:consume",
 		({ agentId }) => {
-			const ref = manager.resolve(agentId);
-			if (ref.state !== "retained") throw new Error("Agent not found or still running");
-			manager.markRead(ref.record);
+			const record = typeof agentId === "string" ? refRecord(manager.resolve(agentId)) : undefined;
+			if (!record || record.status === "running" || record.status === "queued")
+				throw new Error("Agent not found or still running");
+			manager.markRead(record);
 		},
 	);
 
@@ -207,7 +208,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 	// review that landed mid-run — can hand it over instead of spawning a second
 	// agent for the same work or dropping the fact. Outside the ping version
 	// handshake, like consume: additive and best-effort.
-	const unsubSteer = handleRpc<{ requestId: string; agentId: string; message: unknown }>(
+	const unsubSteer = handleRpc<{ requestId: string; agentId: unknown; message: unknown }>(
 		events,
 		"subagents:rpc:steer",
 		({ agentId, message }) => {
@@ -215,7 +216,7 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 				throw new Error("Steer message must be a non-empty string");
 			const ref = assertOwned(agentId);
 			// Same refusal as `steer_subagent`, so another extension cannot steer a pre-Plan agent into edits.
-			if (planSteerBlocked(ref.record, events)) throw new Error(planSteerRefusal(agentId));
+			if (planSteerBlocked(ref.record, events)) throw new Error(planSteerRefusal(String(agentId)));
 			if (ref.state === "retained" || !manager.steer(ref.record.id, message)) throw new Error(NOT_RUNNING);
 		},
 	);

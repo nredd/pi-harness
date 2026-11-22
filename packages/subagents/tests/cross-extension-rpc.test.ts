@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRef } from "../src/agent-ref.ts";
+import { type AgentRef, refRecord } from "../src/agent-ref.ts";
 import {
 	type EventBus,
 	PROTOCOL_VERSION,
@@ -366,19 +366,26 @@ describe("cross-extension RPC", () => {
 			return reply.mock.calls[0]?.[0];
 		};
 
+		// A settled workflow child is consumed too, as before #1204: that policy is its own decision.
 		it("returns success when the result is consumed", async () => {
 			registerRpcHandlers(deps);
-			const ref = refTo("retained", { status: "completed" });
-			expect(await consumeAs(ref)).toEqual({ success: true });
+			for (const state of ["retained", "workflow-owned"] as const) {
+				const ref = refTo(state, { status: "completed" });
+				expect(await consumeAs(ref)).toEqual({ success: true });
+				expect(manager.markRead).toHaveBeenLastCalledWith(refRecord(ref));
+			}
 			expect(manager.resolve).toHaveBeenCalledWith("agent-42");
-			expect(manager.markRead).toHaveBeenCalledExactlyOnceWith((ref as { record: object }).record);
 		});
 
-		// Same guard as get_subagent_result: a workflow's child is its run's, not the caller's to read.
-		it("returns an error when the agent is unknown, still running, or a workflow's", async () => {
+		it("returns an error when the agent is unknown, still running, or a workflow run", async () => {
 			registerRpcHandlers(deps);
-			for (const state of ["unknown", "live", "queued", "saved", "workflow-owned"] as const)
-				expect(await consumeAs(refTo(state))).toEqual({ success: false, error: "Agent not found or still running" });
+			const runRef = { ...refTo("workflow-owned"), owner: { kind: "run", task: {} } } as AgentRef;
+			const running = (state: AgentRef["state"]) => [
+				refTo(state, { status: "running" }),
+				refTo(state, { status: "queued" }),
+			];
+			for (const ref of [refTo("unknown"), refTo("saved"), runRef, ...running("live"), ...running("workflow-owned")])
+				expect(await consumeAs(ref)).toEqual({ success: false, error: "Agent not found or still running" });
 			expect(manager.markRead).not.toHaveBeenCalled();
 		});
 

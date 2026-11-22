@@ -177,10 +177,20 @@ function lookup(
 	const base = (via: AgentRefVia): RefBase => ({ requested: handle.raw, latest, via });
 	const survivors = sources.survivors();
 
+	// An exact id is terminal: a hidden one must not fall through to an alias that spells it.
 	const own = sources.getRecord(latest);
-	if (own && sees(asker, own)) return classify(own, "manager", base("id"));
-	const survivor = survivors.find((record) => record.id === latest && sees(asker, record));
-	if (survivor) return classify(survivor, "survivor", base("id"));
+	const exact = own ?? survivors.find((record) => record.id === latest);
+	if (exact) return sees(asker, exact) ? classify(exact, own ? "manager" : "survivor", base("id")) : miss(handle.raw);
+
+	/** Saved history under `tombstone`, else the eviction note of the id asked for. */
+	const saved = (tombstone: AgentTombstone | undefined): AgentRef | undefined => {
+		const note = sources.getEvictedNote(tombstone?.id ?? latest);
+		if (tombstone || note)
+			return { ...base("saved"), state: "saved", note, tombstone, resume: savedResume(tombstone, note) };
+	};
+	// Id beats name: a known saved id is answered before any run id or alias can take it.
+	const savedId = asker.kind === "session" && steps.has("saved") ? saved(sources.tombstoneById(latest)) : undefined;
+	if (savedId) return savedId;
 
 	const run = steps.has("run") ? locate(sources, survivors, asker, (record) => record.runId === handle.raw) : undefined;
 	if (run) return classify(run.record, run.home, base("run"));
@@ -200,15 +210,8 @@ function lookup(
 		if (named) return classify(named.record, named.home, base(via));
 	}
 
-	if (!steps.has("saved")) return miss(handle.raw);
-	// Id beats name here too: another conversation's alias must not take a saved id.
-	const tombstone =
-		sources.tombstoneById(latest) ??
-		sources.tombstoneByName(handle.key) ??
-		(prefixed ? sources.tombstoneByName(prefixed) : undefined);
-	const note = sources.getEvictedNote(tombstone?.id ?? latest);
-	if (!tombstone && !note) return miss(handle.raw);
-	return { ...base("saved"), state: "saved", note, tombstone, resume: savedResume(tombstone, note) };
+	const tombstone = sources.tombstoneByName(handle.key) ?? (prefixed ? sources.tombstoneByName(prefixed) : undefined);
+	return (steps.has("saved") && tombstone && saved(tombstone)) || miss(handle.raw);
 }
 
 /** The record a ref carries, if any: a workflow run and saved history have none. */
@@ -275,11 +278,10 @@ export function createAgentLookup(
 	return { liveAgentById, resolveSessionRef };
 }
 
-/** "Not found", or what became of the agent when its record was evicted. */
-export function agentNotFound(manager: AgentManager, ref: string, withResult = false): string {
-	const note = manager.getEvictedNote(ref);
+/** "Not found" for `label` as asked, or what became of the agent by its resolved eviction `note`. */
+export function agentNotFound(label: string, note?: EvictedNote, withResult = false): string {
 	const result = withResult && note ? describeEvictedResult(note) : undefined;
 	return note
 		? describeEvicted(note) + (result ? `\n\n${result}` : "")
-		: `Agent not found: "${ref}". It may have been cleaned up.`;
+		: `Agent not found: "${label}". It may have been cleaned up.`;
 }

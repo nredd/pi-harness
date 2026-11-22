@@ -1290,7 +1290,7 @@ describe("resuming an evicted agent by name", () => {
 
 		const read = await tools
 			.get("get_subagent_result")
-			.execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
+			.execute("tc", { agent_id: "@explore" }, undefined, undefined, ctx());
 		expect(textOf(read)).toContain(`Agent "${id}"`);
 		expect(textOf(read)).toContain("evicted after");
 		expect(read.isError).not.toBe(true);
@@ -1298,7 +1298,7 @@ describe("resuming an evicted agent by name", () => {
 		vi.mocked(runAgent).mockClear();
 		const steered = await tools
 			.get("steer_subagent")
-			.execute("tc", { agent_id: "@explore", message: "hi" }, undefined, undefined, ctx());
+			.execute("tc", { agent_id: "explore", message: "hi" }, undefined, undefined, ctx());
 		await flush();
 		expect(textOf(steered)).toContain("Agent resumed in background");
 		expect(vi.mocked(runAgent)).toHaveBeenLastCalledWith(

@@ -2866,7 +2866,7 @@ Terse command-style prompts produce shallow, generic work.
 									: "no saved session is left to reopen.";
 						const why = note
 							? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}`
-							: agentNotFound(manager, latest);
+							: agentNotFound(latest);
 						return errorResult(`${continued}${why}`);
 					}
 					// The reopen is a fresh detached spawn: nothing can block on it here.
@@ -3883,7 +3883,6 @@ Terse command-style prompts produce shallow, generic work.
 
 	registerControlTools({
 		pi,
-		manager,
 		clock,
 		markRead,
 		resolveSessionRef,
