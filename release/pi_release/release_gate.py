@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,20 @@ OWNED_FAN_IN_STEPS = (
     "Require every planned shard to succeed",
     "Coverage accounting (existing reports, including test failures)",
 )
+# The Ubuntu fan-in also accounts for the native Windows x64 producer, whose capped and ratcheted
+# coverage (`computer-use-windows-native`) a skipped producer or step must not satisfy.
+WINDOWS_FAN_IN_STEPS = (
+    "Download Windows x64 coverage",
+    "Account for Windows x64 coverage separately",
+)
+WINDOWS_JOB = "computer-use Rust (windows-x64)"
+WINDOWS_STEPS = (
+    "Native Windows tests and LLVM reports (no desktop interaction)",
+    "Preserve Windows source-bound native reports",
+)
+# The producer names its upload after the attempt that ran it, which a carried-over job keeps.
+WINDOWS_ARTIFACT = "computer-use-rust-windows-x64-<attempt>"
+ATTEMPT = re.compile(r"[1-9][0-9]*")
 CONTRACT_STEPS = (
     "Packed plugins alone on exact stock Pi, plus packed preset audit",
     "Packed pi-plan-mode with its registry dependency on exact stock Pi",
@@ -128,16 +143,18 @@ def expected_jobs() -> dict[str, set[str]]:
     """Return required jobs and steps that must actually execute successfully.
 
     Returns:
-        dict[str, set[str]]: Every owned fan-in and its shards, every contracts cell, each stack cell
-        that runs one, and the Gitlinked core gate. Each shard names its planned gate steps. Stack
-        cells the plan never runs are excluded.
+        dict[str, set[str]]: Every owned fan-in and its shards, the native Windows producer, every
+        contracts cell, each stack cell that runs one, and the Gitlinked core gate. Each shard names
+        its planned gate steps, and the Ubuntu fan-in its Windows accounting. Stack cells the plan
+        never runs are excluded.
     """
-    expected = {}
+    expected = {WINDOWS_JOB: set(WINDOWS_STEPS)}
     for system in SYSTEMS:
         expected[f"owned ({system})"] = set(OWNED_FAN_IN_STEPS)
         for shard, gates in OWNED_SHARDS[system].items():
             expected[f"owned shard ({system}, {shard})"] = {OWNED_GATE_STEPS[gate] for gate in gates}
         expected[f"contracts ({system})"] = set(CONTRACT_STEPS)
+    expected["owned (ubuntu-24.04)"] |= set(WINDOWS_FAN_IN_STEPS)
     for system, stack, platform in STACK_CELLS:
         steps = {STACK_STEP, f"Standalone D and E ({stack})"}
         if platform == "linux-x64" and stack == "personal":
@@ -156,11 +173,12 @@ def expected_artifacts() -> dict[str, str]:
     """Return the complete matrix's retained execution artifacts and the job that uploads each.
 
     Returns:
-        dict[str, str]: Coverage, packed contracts, Node and standalone stack evidence, each mapped
-        to its producing job name.
+        dict[str, str]: Coverage, native Windows coverage, packed contracts, Node and standalone stack
+        evidence, each mapped to its producing job name. `WINDOWS_ARTIFACT` matches any attempt.
     """
     return {
         **{f"coverage-{system}": f"owned ({system})" for system in SYSTEMS},
+        WINDOWS_ARTIFACT: WINDOWS_JOB,
         **{f"contract-reports-{system}": f"contracts ({system})" for system in SYSTEMS},
         **{f"stack-{system}-{stack}": f"stack ({system}, {stack})" for system, stack, _ in STACK_CELLS},
         **{
@@ -168,6 +186,22 @@ def expected_artifacts() -> dict[str, str]:
             for system, stack, platform in STACK_CELLS
         },
     }
+
+
+def artifact_named(expected: str, name: str) -> bool:
+    """Match an exact artifact name, or the Windows producer's attempt-numbered one.
+
+    Parameters:
+        expected (str): Name from `expected_artifacts()`.
+        name (str): Listed artifact name.
+
+    Returns:
+        bool: Whether the listed artifact has the expected name.
+    """
+    if expected != WINDOWS_ARTIFACT:
+        return name == expected
+    prefix = WINDOWS_ARTIFACT.removesuffix("<attempt>")
+    return name.startswith(prefix) and ATTEMPT.fullmatch(name.removeprefix(prefix)) is not None
 
 
 def validate_execution(
@@ -230,7 +264,7 @@ def validate_execution(
         uploads = [
             artifact
             for artifact in validated_artifacts
-            if artifact.name == name
+            if artifact_named(name, artifact.name)
             and not artifact.expired
             and artifact.size_in_bytes > 0
             and artifact.workflow_run.id == execution.id

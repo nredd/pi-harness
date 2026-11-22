@@ -2937,6 +2937,7 @@ async function performDesktopTransaction(
 						execution.outcome ?? "unknown",
 						executedActions,
 						(ref) => nodeByRef(capture.outline, ref)?.value,
+						execution.error,
 					),
 				);
 				const timedOutIndex = timedOutStepIndex(execution);
