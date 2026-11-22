@@ -43,7 +43,10 @@ const JSON_TOKEN =
 const CUT_MESSAGE = /^\s*,?\s*"message"\s*:\s*"(?:[^"\\\r\n]|\\.)*$/;
 // Negative evidence is a status (checked separately), an error type, a transport error code or an
 // explicit safety verdict, never free text: "requests are blocked" can be the quota message itself.
-const NON_QUOTA_TYPE = /\b(?:SAFETY|UNAUTHENTICATED|PERMISSION_DENIED|UNAVAILABLE)\b/;
+// Error types count only as a whole structured field or at the start of the message (after any
+// status): the same uppercase word inside a quota message ("Model UNAVAILABLE until reset") is prose.
+const NON_QUOTA_TYPE = /^(?:SAFETY|UNAUTHENTICATED|PERMISSION_DENIED|UNAVAILABLE)$/;
+const NON_QUOTA_LEAD = /^\s*:?\s*(?:SAFETY|UNAUTHENTICATED|PERMISSION_DENIED|UNAVAILABLE)\b/;
 const NON_QUOTA_CODE =
 	/\b(?:Provider stopped with:|authentication_error\b|permission_error\b|model_capacity_exhausted\b|ECONNRESET\b|ECONNREFUSED\b|ENOTFOUND\b|ETIMEDOUT\b|fetch failed\b|socket hang up\b)/i;
 const OVERLOAD = /(?:^|[^a-z0-9])overloaded(?![a-z0-9])/i;
@@ -180,7 +183,9 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 	if (
 		isNonQuotaStatus(http) ||
 		isNonQuotaStatus(status) ||
-		NON_QUOTA_TYPE.test(signal) ||
+		codes.some((code) => NON_QUOTA_TYPE.test(code)) ||
+		NON_QUOTA_LEAD.test(leading ? text.slice(leading[0].length) : text) ||
+		NON_QUOTA_LEAD.test(prose) ||
 		NON_QUOTA_CODE.test(signal) ||
 		OVERLOAD.test(signal)
 	) {

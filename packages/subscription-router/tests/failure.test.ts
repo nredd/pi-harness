@@ -395,3 +395,18 @@ it.each<[string, string, FailureClassification]>([
 ])("requires affirmative billing evidence: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
 });
+
+// S5: an error type vetoes only from a structured field or the verdict position at the start of
+// the message, never from an uppercase word inside a genuine quota message.
+it.each<[string, string, FailureClassification]>([
+	[
+		"UNAVAILABLE inside a daily 429 body",
+		'429: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Daily quota exceeded. Model UNAVAILABLE until reset."}}',
+		daily,
+	],
+	["PERMISSION_DENIED inside daily prose", "429: Daily quota exceeded, PERMISSION_DENIED for new requests", daily],
+	["SAFETY after the status", "429: SAFETY: quota exceeded", other],
+	["UNAVAILABLE as a structured reason", rpc({ "@type": "google.rpc.ErrorInfo", reason: "UNAVAILABLE" }), other],
+])("matches non-quota types in verdict positions only: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
