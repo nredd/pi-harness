@@ -225,8 +225,10 @@ Windows saved roots and states retain the owner identity and recheck it against 
 The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
 On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
 poll. A closed HWND, or one now owned by a different PID, fails the next poll with `root_stale`.
-A replacement that reuses the exact numeric HWND and PID pair is indistinguishable, and these checks
-are not atomic with the subsequent UIA call.
+Text reads and each wait poll recheck that owner after acquiring the UIA root, before walking it,
+and again after the walk, discarding the result as `root_stale` if ownership changed. A replacement
+that reuses the exact numeric HWND and PID pair is indistinguishable. Semantic `act_ui` delivery
+checks the owner before resolving the element, not after acquiring the UIA root.
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
@@ -2816,7 +2818,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND still belongs to that PID before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 

@@ -52,7 +52,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. RuntimeId is a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND still belongs to that PID before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
 Discovery uses a selected-subtree UIA event registration and a bounded raw-view walk, never provider-side `FindAll(Subtree)` or a global screen-reader setting change. UIA connections/transactions have 500-ms limits. Coordinate fallback requires successful live snapshot, valid current bounds within the owning window and successful hit testing. Errors refuse before input; cached screenshot bounds are never used.
 

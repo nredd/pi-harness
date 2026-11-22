@@ -1555,10 +1555,11 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
     windows_bridge::desktop::validated_bounds(element.hwnd, Some(pid))?;
     let text = windows_bridge::uia::read_live_text(
         element.hwnd,
+        pid,
         &element.runtime_id,
         &element.automation_id,
     )
-    .map_err(stale_ref_from_uia)?;
+    .map_err(|error| owned_walk_error(error, "Read", stale_ref_from_uia))?;
     let characters = text.chars().collect::<Vec<_>>();
     let end = offset.saturating_add(limit).min(characters.len());
     let slice = if offset >= characters.len() {
@@ -1589,15 +1590,32 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
                     .get_or_insert_with(|| Instant::now() + Duration::from_millis(timeout_ms))
         },
         window::owner_pid,
-        windows_bridge::uia::live_elements,
+        windows_bridge::uia::acquire_root,
+        windows_bridge::uia::root_elements,
     )
 }
 
-fn handle_wait_for_with(
+/// Map an owner-bound UIA walk failure; UIA errors use the caller's mapping.
+fn owned_walk_error(
+    error: windows_bridge::uia::OwnedWalkError,
+    operation: &str,
+    uia_error: impl FnOnce(String) -> ProtocolError,
+) -> ProtocolError {
+    match error {
+        windows_bridge::uia::OwnedWalkError::RootStale => ProtocolError::new(
+            format!("{operation} target no longer belongs to its admitted PID; rediscover it with find_roots"),
+            ErrorCode::RootStale,
+        ),
+        windows_bridge::uia::OwnedWalkError::Uia(message) => uia_error(message),
+    }
+}
+
+fn handle_wait_for_with<Root>(
     args: &Value,
     mut next_poll: impl FnMut() -> bool,
     mut owner_pid: impl FnMut(isize) -> Option<u64>,
-    mut live_elements: impl FnMut(isize) -> Result<Vec<Value>, String>,
+    mut acquire_root: impl FnMut(isize) -> Result<Root, String>,
+    mut root_elements: impl FnMut(Root) -> Result<Vec<Value>, String>,
 ) -> Result<Value, ProtocolError> {
     let root = AdmittedRoot::parse(args)?;
     let text = args
@@ -1634,13 +1652,14 @@ fn handle_wait_for_with(
     }
     let mut node_count = 0;
     while next_poll() {
-        if owner_pid(root.hwnd) != Some(root.pid) {
-            return Err(ProtocolError::new(
-                "Wait target no longer belongs to its admitted PID; rediscover it with find_roots",
-                ErrorCode::RootStale,
-            ));
-        }
-        let elements = live_elements(root.hwnd).map_err(internal)?;
+        let elements = windows_bridge::uia::walk_owned_root(
+            root.hwnd,
+            root.pid,
+            &mut owner_pid,
+            &mut acquire_root,
+            &mut root_elements,
+        )
+        .map_err(|error| owned_walk_error(error, "Wait", internal))?;
         node_count = elements.len();
         let parents: HashMap<String, String> = elements
             .iter()
@@ -2141,35 +2160,110 @@ mod tests {
         );
     }
 
+    /// Run one owner-bound wait with scripted owner answers and a fake UIA walk.
+    fn scripted_wait(
+        args: Value,
+        owners: &[Option<u64>],
+        mut walk: impl FnMut() -> Result<Vec<Value>, String>,
+    ) -> (Result<Value, ProtocolError>, usize) {
+        let mut owners = owners.iter().copied();
+        let mut walks = 0;
+        let result = handle_wait_for_with(
+            &args,
+            || true,
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                owners.next().expect("unexpected additional owner check")
+            },
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                Ok(())
+            },
+            |()| {
+                walks += 1;
+                walk()
+            },
+        );
+        (result, walks)
+    }
+
     #[test]
     fn wait_checks_owner_again_before_every_poll() {
         for next_owner in [Some(8), None] {
             for gone in [false, true] {
-                let mut owners = [Some(7), next_owner].into_iter();
-                let mut polls = 0;
-                let error = handle_wait_for_with(
-                    &json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
-                    || true,
-                    |hwnd| {
-                        assert_eq!(hwnd, 22);
-                        owners.next().expect("unexpected additional owner check")
-                    },
-                    |hwnd| {
-                        assert_eq!(hwnd, 22);
-                        polls += 1;
-                        assert_eq!(polls, 1, "UIA must not query the stale HWND");
+                // The first poll stays owned and unsatisfied; the next poll's first check drifts.
+                let (result, walks) = scripted_wait(
+                    json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    &[Some(7), Some(7), Some(7), next_owner],
+                    || {
                         Ok(if gone {
                             vec![json!({"name": "Ready"})]
                         } else {
                             vec![]
                         })
                     },
-                )
-                .unwrap_err();
-                assert_eq!(error.code, ErrorCode::RootStale);
-                assert_eq!(polls, 1);
+                );
+                assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+                assert_eq!(walks, 1, "UIA must not walk the stale HWND");
             }
         }
+    }
+
+    #[test]
+    fn wait_refuses_a_replacement_root_before_walking_it() {
+        // Owned at the pre-check, replaced by the time ElementFromHandle returned.
+        let (result, walks) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(8)],
+            || panic!("must not walk a replacement root"),
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+        assert_eq!(walks, 0);
+    }
+
+    #[test]
+    fn wait_discards_a_satisfied_walk_when_ownership_changed_during_it() {
+        for gone in [false, true] {
+            for after in [Some(8), None] {
+                let (result, walks) = scripted_wait(
+                    json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    &[Some(7), Some(7), after],
+                    || {
+                        Ok(if gone {
+                            vec![]
+                        } else {
+                            vec![json!({"name": "Ready"})]
+                        })
+                    },
+                );
+                assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+                assert_eq!(walks, 1);
+            }
+        }
+        // A UIA failure across an owner change is drift, not an internal error.
+        let (result, _) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(7), None],
+            || Err("provider gone".to_owned()),
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+    }
+
+    #[test]
+    fn wait_reports_a_satisfied_walk_while_the_owner_holds() {
+        let (result, walks) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(7), Some(7)],
+            || Ok(vec![json!({"name": "Ready"})]),
+        );
+        assert_eq!(result.unwrap()["found"], json!(true));
+        assert_eq!(walks, 1);
+        let (result, _) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(7), Some(7)],
+            || Err("provider failure".to_owned()),
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::InternalError);
     }
 
     #[test]
@@ -2182,7 +2276,8 @@ mod tests {
                 &missing_identity,
                 || panic!("must not poll an unbound wait"),
                 |_| panic!("must not infer the owner"),
-                |_| panic!("must not query UIA"),
+                |_| -> Result<(), String> { panic!("must not query UIA") },
+                |()| panic!("must not walk UIA"),
             )
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidRequest);
@@ -2201,7 +2296,8 @@ mod tests {
                 &json!({"pid": pid, "windowId": hwnd, "lookId": look_id, "scopeRef": "same-ref", "text": "Ready"}),
                 || panic!("must not poll a mismatched scope"),
                 |_| panic!("must not check the owner of a mismatched scope"),
-                |_| panic!("must not query UIA for a mismatched scope"),
+                |_| -> Result<(), String> { panic!("must not query UIA for a mismatched scope") },
+                |()| panic!("must not walk UIA for a mismatched scope"),
             )
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::StaleLook);
