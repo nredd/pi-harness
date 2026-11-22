@@ -190,6 +190,9 @@ export interface PlatformReadTextRequest {
 	/** Observation that owns the element ref. Native backends must not resolve across observations. */
 	lookId: string;
 	elementRef: string;
+	/** Required by the Windows helper for live reads. */
+	pid?: number;
+	windowId?: number;
 	offset: number;
 	limit: number;
 }

@@ -221,19 +221,11 @@ hosted app. Match the exact executable basename, case-insensitively: `powershell
 no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, `OpenConsole.exe`,
 `wt.exe`, and `wsl.exe` when those processes own a root.
 
-Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. The Windows helper checks the owning look's PID before a live UIA text read; this does not make TypeScript admission atomic with native delivery.
-
-Windows helper limits:
-
-- After a helper restart, look IDs and element-ref counters start over. `uiaReadText` receives
-  neither the admitted PID nor HWND. A restored state for window A can read window B's look if B
-  was observed after the restart and got the same look ID and ref. B was admitted on its own
-  observation, so this is a wrong-window read, not a blocklist bypass. The Rust helper needs a
-  per-helper generation in look IDs and PID and HWND supplied to `uiaReadText`.
-- Windows `wait_for` and `act_ui` postcondition polling query the admitted HWND by number without
-  revalidating its PID between polls. If that window closes and another process reuses its HWND
-  during the wait, a poll can read the replacement. Bind waits to HWND and PID and revalidate
-  ownership before each poll.
+Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. Look IDs are scoped to one helper lifetime: after a restart, observe again before reading text.
+The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
+On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
+poll and report `root_stale` instead of polling a replacement. These checks are not atomic with the
+subsequent UIA call.
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved

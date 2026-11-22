@@ -1,5 +1,6 @@
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{hash_map::RandomState, HashMap, VecDeque};
+use std::hash::BuildHasher;
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -45,6 +46,7 @@ struct HelperState {
     roots: HashMap<String, Value>,
     looks: HashMap<String, LookRecord>,
     look_order: VecDeque<String>,
+    look_generation: u64,
     next_look: u64,
 }
 
@@ -55,17 +57,29 @@ static INPUT_CLOSED: AtomicBool = AtomicBool::new(false);
 
 impl Default for HelperState {
     fn default() -> Self {
+        // RandomState is seeded per process; the counter alone restarts at 1.
+        Self::new(RandomState::new().hash_one(std::process::id()))
+    }
+}
+
+impl HelperState {
+    fn new(look_generation: u64) -> Self {
         Self {
             store: RefStore::new(),
             roots: HashMap::new(),
             looks: HashMap::new(),
             look_order: VecDeque::new(),
+            look_generation,
             next_look: 1,
         }
     }
-}
 
-impl HelperState {
+    fn fresh_look_id(&mut self) -> String {
+        let look_id = format!("look_{:016x}_{}", self.look_generation, self.next_look);
+        self.next_look += 1;
+        look_id
+    }
+
     fn insert_look(&mut self, look_id: String, record: LookRecord) {
         self.looks.insert(look_id.clone(), record);
         self.look_order.push_back(look_id);
@@ -803,12 +817,10 @@ fn nest_outline_nodes(nodes: &[(String, String, Value)]) -> Vec<Value> {
 }
 
 fn fresh_look_id() -> Result<String, ProtocolError> {
-    let mut state = helper_state()
+    Ok(helper_state()
         .lock()
-        .map_err(|_| internal("helper state lock poisoned"))?;
-    let look_id = format!("look_{}", state.next_look);
-    state.next_look += 1;
-    Ok(look_id)
+        .map_err(|_| internal("helper state lock poisoned"))?
+        .fresh_look_id())
 }
 
 fn store_look_record(look_id: String, record: LookRecord) -> Result<(), ProtocolError> {
@@ -1465,7 +1477,34 @@ fn delta_item(change: &str, root: &Value) -> Value {
     item
 }
 
-fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
+/// The exact native root admitted by the caller, never inferred from live discovery.
+#[derive(Clone, Copy)]
+struct AdmittedRoot {
+    hwnd: isize,
+    pid: u64,
+}
+
+impl AdmittedRoot {
+    fn parse(args: &Value) -> Result<Self, ProtocolError> {
+        let pid = args
+            .get("pid")
+            .and_then(Value::as_u64)
+            .filter(|&pid| pid > 0 && u32::try_from(pid).is_ok())
+            .ok_or_else(|| invalid("Expected a valid target pid"))?;
+        let hwnd = args
+            .get("windowId")
+            .and_then(Value::as_i64)
+            .and_then(|id| isize::try_from(id).ok())
+            .filter(|&id| id != 0)
+            .ok_or_else(|| invalid("Expected an exact target windowId"))?;
+        Ok(Self { hwnd, pid })
+    }
+}
+
+fn read_text_element(
+    args: &Value,
+    state: &HelperState,
+) -> Result<(ElementRecord, u64), ProtocolError> {
     let look_id = args
         .get("lookId")
         .and_then(Value::as_str)
@@ -1474,14 +1513,27 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
         .get("elementRef")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("uiaReadText requires elementRef"))?;
+    let root = AdmittedRoot::parse(args)?;
+    let look = state.looks.get(look_id).ok_or_else(|| {
+        ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
+    })?;
+    if root.pid != look.pid || root.hwnd != look.hwnd {
+        return Err(ProtocolError::new(
+            "Owning look does not match the admitted root",
+            ErrorCode::StaleLook,
+        ));
+    }
+    Ok((state.element_for_look(look_id, element_ref)?, root.pid))
+}
+
+fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
     let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(4096) as usize;
     let (element, pid) = {
         let state = helper_state()
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
-        let element = state.element_for_look(look_id, element_ref)?;
-        (element, state.looks[look_id].pid)
+        read_text_element(args, &state)?
     };
     if element.is_secure {
         return Err(ProtocolError::new(
@@ -1515,6 +1567,29 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
         .and_then(Value::as_u64)
         .unwrap_or(10_000)
         .clamp(100, 60_000);
+    let mut deadline = None;
+    handle_wait_for_with(
+        args,
+        || {
+            if deadline.is_some() {
+                sleep(Duration::from_millis(150));
+            }
+            Instant::now()
+                < *deadline
+                    .get_or_insert_with(|| Instant::now() + Duration::from_millis(timeout_ms))
+        },
+        window::owner_pid,
+        windows_bridge::uia::live_elements,
+    )
+}
+
+fn handle_wait_for_with(
+    args: &Value,
+    mut next_poll: impl FnMut() -> bool,
+    mut owner_pid: impl FnMut(isize) -> Option<u64>,
+    mut live_elements: impl FnMut(isize) -> Result<Vec<Value>, String>,
+) -> Result<Value, ProtocolError> {
+    let root = AdmittedRoot::parse(args)?;
     let text = args
         .get("text")
         .and_then(Value::as_str)
@@ -1546,11 +1621,15 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
     if text.is_none() && role.is_none() && expected_value.is_none() {
         return Err(invalid("uiaWaitFor requires text, role, or value"));
     }
-    let hwnd = wait_target_hwnd(args)?;
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut node_count = 0;
-    while Instant::now() < deadline {
-        let elements = windows_bridge::uia::live_elements(hwnd).map_err(internal)?;
+    while next_poll() {
+        if owner_pid(root.hwnd) != Some(root.pid) {
+            return Err(ProtocolError::new(
+                "Wait target no longer belongs to its admitted PID; rediscover it with find_roots",
+                ErrorCode::RootStale,
+            ));
+        }
+        let elements = live_elements(root.hwnd).map_err(internal)?;
         node_count = elements.len();
         let parents: HashMap<String, String> = elements
             .iter()
@@ -1623,45 +1702,8 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
                 json!({ "found": true, "gone": if gone { Some(true) } else { None::<bool> }, "nodeCount": node_count }),
             );
         }
-        sleep(Duration::from_millis(150));
     }
     Ok(json!({ "found": false, "timedOut": true, "nodeCount": node_count }))
-}
-
-fn wait_target_hwnd(args: &Value) -> Result<isize, ProtocolError> {
-    if let Some(window_id) = args.get("windowId").and_then(Value::as_i64) {
-        return Ok(window_id as isize);
-    }
-    if let Some(root_ref) = args
-        .get("rootRef")
-        .or_else(|| args.get("windowRef"))
-        .and_then(Value::as_str)
-    {
-        let state = helper_state()
-            .lock()
-            .map_err(|_| internal("helper state lock poisoned"))?;
-        for root in state.roots.values() {
-            if root.get("rootRef").and_then(Value::as_str) == Some(root_ref)
-                || root.get("windowRef").and_then(Value::as_str) == Some(root_ref)
-            {
-                return Ok(root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize);
-            }
-        }
-    }
-    if let Some(pid) = args.get("pid").and_then(Value::as_u64) {
-        let roots = snapshot_roots(pid)?;
-        if let Some(root) = roots
-            .roots
-            .values()
-            .find(|root| root.get("pid").and_then(Value::as_u64) == Some(pid))
-        {
-            return Ok(root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize);
-        }
-    }
-    Err(ProtocolError::new(
-        "waitFor target root was not found",
-        ErrorCode::TargetNotFound,
-    ))
 }
 
 fn handle_open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
@@ -2029,12 +2071,101 @@ mod tests {
             .lock()
             .unwrap()
             .insert_look(look_id.to_owned(), look);
-        let error =
-            handle_read_text(&json!({"lookId": look_id, "elementRef": "same-ref"})).unwrap_err();
+        let error = handle_read_text(
+            &json!({"lookId": look_id, "elementRef": "same-ref", "pid": 1, "windowId": 1}),
+        )
+        .unwrap_err();
         #[cfg(windows)]
         assert_eq!(error.code, ErrorCode::CoordinateBlocked);
         #[cfg(not(windows))]
         assert_eq!(error.code, ErrorCode::UnsupportedPlatform);
+    }
+
+    #[test]
+    fn restored_text_ref_cannot_resolve_after_helper_restart() {
+        let mut first = HelperState::new(10);
+        let old_id = first.fresh_look_id();
+        first.insert_look(old_id.clone(), look_with_element(1.0));
+        let mut restarted = HelperState::new(20);
+        let new_id = restarted.fresh_look_id();
+        let mut other = look_with_element(2.0);
+        other.pid = 2;
+        other.hwnd = 2;
+        restarted.insert_look(new_id.clone(), other);
+
+        // Both helpers emitted their first look and can reuse the native element ref.
+        assert_ne!(old_id, new_id);
+        let mut read = json!({"lookId": old_id, "elementRef": "same-ref", "pid": 1, "windowId": 1});
+        assert_eq!(
+            read_text_element(&read, &first).unwrap().0.runtime_id,
+            vec![1]
+        );
+        assert_eq!(
+            read_text_element(&read, &restarted).unwrap_err().code,
+            ErrorCode::StaleLook
+        );
+        read["lookId"] = json!(new_id);
+        for (pid, hwnd) in [(1, 2), (2, 1)] {
+            read["pid"] = json!(pid);
+            read["windowId"] = json!(hwnd);
+            assert_eq!(
+                read_text_element(&read, &restarted).unwrap_err().code,
+                ErrorCode::StaleLook
+            );
+        }
+        read["windowId"] = json!(2);
+        assert_eq!(
+            read_text_element(&read, &restarted).unwrap().0.runtime_id,
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn wait_checks_owner_again_before_every_poll() {
+        for next_owner in [Some(8), None] {
+            for gone in [false, true] {
+                let mut owners = [Some(7), next_owner].into_iter();
+                let mut polls = 0;
+                let error = handle_wait_for_with(
+                    &json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    || true,
+                    |hwnd| {
+                        assert_eq!(hwnd, 22);
+                        owners.next().expect("unexpected additional owner check")
+                    },
+                    |hwnd| {
+                        assert_eq!(hwnd, 22);
+                        polls += 1;
+                        assert_eq!(polls, 1, "UIA must not query the stale HWND");
+                        Ok(if gone {
+                            vec![json!({"name": "Ready"})]
+                        } else {
+                            vec![]
+                        })
+                    },
+                )
+                .unwrap_err();
+                assert_eq!(error.code, ErrorCode::RootStale);
+                assert_eq!(polls, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn wait_refuses_to_infer_an_admitted_hwnd_or_pid() {
+        for missing_identity in [
+            json!({"pid": 7, "rootRef": "win:22", "text": "Ready"}),
+            json!({"windowId": 22, "text": "Ready"}),
+        ] {
+            let error = handle_wait_for_with(
+                &missing_identity,
+                || panic!("must not poll an unbound wait"),
+                |_| panic!("must not infer the owner"),
+                |_| panic!("must not query UIA"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidRequest);
+        }
     }
 
     #[test]
