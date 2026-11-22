@@ -211,12 +211,17 @@ export function collectorIdFor(provider: string, providers: Readonly<Record<stri
 	return providers[provider]?.collector?.id ?? provider;
 }
 
+/** One provider's grant to the registration it resolved. `reconfigured` marks a config-driven unbind. */
+interface CollectorBinding {
+	registration: CollectorRegistration;
+	binding: CollectorRegistration;
+	unbind: AbortController;
+	reconfigured: boolean;
+}
+
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
-	private readonly collectors = new Map<
-		string,
-		{ registration: CollectorRegistration; binding: CollectorRegistration; unbind: AbortController }
-	>();
+	private readonly collectors = new Map<string, CollectorBinding>();
 	private providers: Readonly<Record<string, ProviderConfig>> = {};
 	/** Aliased providers whose authorized registration retired. Only `configureCollectors` re-authorizes. */
 	private readonly revoked = new Set<string>();
@@ -241,11 +246,18 @@ export class UsageService {
 	 * re-authorizes aliases whose granted registration has since retired.
 	 */
 	configureCollectors(providers: Readonly<Record<string, ProviderConfig>> = {}): void {
+		// Swap atomically before any abort callback runs: a retirement those callbacks cause
+		// (e.g. a reentrant replacement) postdates this config and must stay revoked.
 		this.providers = providers;
-		for (const [provider, { registration, unbind }] of this.collectors) {
-			if (registration !== registrationFor(collectorIdFor(provider, providers))) unbind.abort();
-		}
 		this.revoked.clear();
+		const stale: CollectorBinding[] = [];
+		for (const [provider, entry] of this.collectors) {
+			if (entry.registration === registrationFor(collectorIdFor(provider, providers))) continue;
+			entry.reconfigured = true;
+			this.collectors.delete(provider);
+			stale.push(entry);
+		}
+		for (const { unbind } of stale) unbind.abort();
 	}
 
 	/**
@@ -436,13 +448,15 @@ export class UsageService {
 			collector: registration.collector,
 			signal: AbortSignal.any([registration.signal, unbind.signal]),
 		};
-		this.collectors.set(provider, { registration, binding, unbind });
+		const entry: CollectorBinding = { registration, binding, unbind, reconfigured: false };
+		this.collectors.set(provider, entry);
 		addAbortListener(binding.signal, () => {
 			this.invalidate(provider);
 			this.lastManualRefreshAt.delete(provider);
-			this.collectors.delete(provider);
+			if (this.collectors.get(provider) === entry) this.collectors.delete(provider);
 			// The alias granted credentials to this registration, not to a later owner of its ID.
-			if (id !== provider) this.revoked.add(provider);
+			// A config-driven unbind is not a retirement: the new config decides.
+			if (id !== provider && !entry.reconfigured) this.revoked.add(provider);
 		});
 		return binding;
 	}

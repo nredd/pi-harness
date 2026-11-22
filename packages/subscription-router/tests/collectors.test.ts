@@ -607,6 +607,51 @@ it("preserves alias credential authorization", async () => {
 	expect(trusted).toHaveBeenCalledOnce();
 });
 
+it("preserves revocation during reconfigure", async () => {
+	const { usage, getAccessToken } = harness();
+	const alias = "faux-alias";
+	const target = "faux-target";
+	const other = "faux-other-alias";
+	const replacement = vi.fn(async () => reading);
+	const started = deferred();
+	let reentrant: Promise<UsageSnapshot> | undefined;
+	// Reconfiguring the aliases aborts this read. Its abort handler replaces the collector `anthropic`
+	// uses and reads another alias the new config no longer grants.
+	install({
+		...fake,
+		read: ({ signal }) => {
+			signal.addEventListener("abort", () => {
+				install({ ...fake, provider: target, read: replacement });
+				reentrant = usage.get(ctx, other);
+			});
+			started.resolve();
+			return deferred<CollectorReading>().promise;
+		},
+	});
+	install({ ...fake, provider: target });
+	const anthropic = { collector: { id: target } };
+	const granted = { collector: { id: provider } };
+	usage.configureCollectors({ [alias]: granted, [other]: granted, anthropic });
+	expect(await usage.get(ctx, "anthropic")).toMatchObject({ status: "available" });
+	const pending = usage.get(ctx, alias);
+	await started.promise;
+	expect(usage.peek(other)).toBeUndefined();
+	const revoked = { collector: { id: "faux-unknown" } };
+	usage.configureCollectors({ [alias]: revoked, [other]: revoked, anthropic });
+	expect(await pending).toMatchObject({ status: "unavailable" });
+	expect(await reentrant).toMatchObject({ status: "unavailable" });
+	expect(await usage.get(ctx, "anthropic", { force: true })).toMatchObject({ status: "unavailable" });
+	expect(replacement).not.toHaveBeenCalled();
+	expect(getAccessToken.mock.calls).toEqual([
+		[ctx, "anthropic"],
+		[ctx, alias],
+	]);
+	// The alias reconfigured away from its old collector is not revoked: it resolves under the new config.
+	usage.configureCollectors({ [alias]: { collector: { id: target } } });
+	expect(await usage.get(ctx, alias)).toMatchObject({ status: "available" });
+	expect(replacement).toHaveBeenCalledOnce();
+});
+
 it("cancels an oversized streamed response before parsing without trusting content-length", async () => {
 	const { usage, fetch } = harness();
 	const cancel = vi.fn(async () => {
