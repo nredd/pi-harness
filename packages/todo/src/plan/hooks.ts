@@ -54,6 +54,7 @@ import {
 } from "../tool/types.ts";
 import { isChildActivation, trackEmptyReminder } from "./empty-reminder.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./reconcile.ts";
+import { trackStaleLists } from "./stale-reminder.ts";
 
 /** Persisted marker text; the `context` hook expands it on the request right after it. */
 export const PLAN_REMINDER_MARKER = "[rpiv-todo] Plan items were still open when this run tried to finish.";
@@ -418,35 +419,6 @@ export function formatCompactionList(state: TaskState): string {
 		}),
 		"They already exist: update them by id with `todo`, do not recreate them. Complete only with evidence and defer with a reason.",
 	].join("\n");
-}
-
-/**
- * Stale-list policy for one extension instance. The age is keyed by the canonical `TaskState`
- * object: a successful todo write replaces it, while reads and rejected writes keep its identity.
- * It therefore relies on `getState` returning the same object until the list changes. The budget
- * is per session and only human input rearms it.
- */
-function trackStaleLists() {
-	const age = new WeakMap<TaskState, number>();
-	const reminded = new Set<string>();
-	return {
-		/** Age `state` by one settle that would otherwise stop; true spends the budget and nudges. */
-		due(id: string, state: TaskState, threshold: number): boolean {
-			const next = Math.min((age.get(state) ?? 0) + 1, threshold);
-			age.set(state, next);
-			if (next < threshold || reminded.has(id)) return false;
-			reminded.add(id);
-			return true;
-		},
-		/** Mark `id`'s budget spent, as restored from its branch. */
-		spend(id: string): void {
-			reminded.add(id);
-		},
-		/** Rearm `id` on human input, or forget it at shutdown. */
-		rearm(id: string): void {
-			reminded.delete(id);
-		},
-	};
 }
 
 /**
