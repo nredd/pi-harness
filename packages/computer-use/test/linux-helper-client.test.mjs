@@ -317,6 +317,35 @@ describe("Linux helper exit owing releases (#1183)", () => {
 		assert.equal(await cleanReset, undefined);
 	});
 
+	test("a helper killed by a signal after physical input refuses physical input; before any, it does not", async () => {
+		const handlers = () => ({ listRoots: ok([]), act: ok({ outcome: "worked" }) });
+		const { client, children } = await clientFor(handlers);
+		assert.deepEqual(await client.command("act", {}), { outcome: "worked" });
+		const child = children.at(-1);
+		client.discardChild(new Error("replaced"));
+		// The helper ignores SIGTERM, e.g. its runtime is stalled: the backstop kills it.
+		await vi.waitFor(() => assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]), { timeout: 2_000 });
+		child.emit("exit", null, "SIGKILL");
+		await assert.rejects(client.command("act", {}), (error) => {
+			assert.equal(error.code, "input_unsafe");
+			assert.match(error.message, /killed after physical input; held keys\/buttons unknown/);
+			return true;
+		});
+		assert.deepEqual(await client.command("listRoots"), [], "observation still respawns");
+
+		// Only observation so far: a signal death leaves physical input alone.
+		const quiet = await clientFor(handlers);
+		await quiet.client.command("listRoots");
+		quiet.children.at(-1).emit("exit", null, "SIGKILL");
+		assert.deepEqual(await quiet.client.command("act", {}), { outcome: "worked" });
+
+		// A non-signal exit after physical input ran the helper's own exit path: its status is trusted.
+		const clean = await clientFor(handlers);
+		await clean.client.command("act", {});
+		exitOnly(clean.children.at(-1), 0);
+		assert.deepEqual(await clean.client.command("act", {}), { outcome: "worked" });
+	});
+
 	test("physical input on the fresh client waits for the predecessor's disposal; resets chain", async () => {
 		let acted = 0;
 		const { children, spawn, helper } = await clientFor(() => ({

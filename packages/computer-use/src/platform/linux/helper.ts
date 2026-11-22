@@ -141,6 +141,10 @@ function owedInputMessage(owed = "unknown keys or buttons"): string {
 	return `Refusing physical input: the Linux helper exited with the release of ${owed} unconfirmed; it may still be held. Release it by hand, then restart Pi.`;
 }
 
+/** The sticky refusal after a helper died by a signal, e.g. the SIGKILL backstop, once physical input was sent. */
+const KILLED_AFTER_INPUT_MESSAGE =
+	"Refusing physical input: the Linux helper was killed after physical input; held keys/buttons unknown. Release any held input by hand, then restart Pi.";
+
 const UNSETTLED_EXIT_MESSAGE = `Refusing physical input: a discarded Linux helper did not exit within ${DISCARDED_EXIT_WAIT_MS}ms, so whether it released its keys and buttons is unknown. Release any held input by hand, then restart Pi.`;
 
 function reason(error: unknown): string {
@@ -193,6 +197,8 @@ export class LinuxHelperClient {
 	private pending = new Map<string, Pending<unknown>>();
 	/** Set for good once a helper exits owing releases: every later physical command is refused. */
 	private inputUnsafe?: string;
+	/** Whether a physical command was ever written in this client's lifetime. */
+	private physicalSent = false;
 	/** Discarded helpers whose exit status is still unknown: any of them may yet exit owing releases. */
 	private unsettledExits = new Set<Promise<void>>();
 	/** Settles once the predecessor's refusal, if any, is latched here. */
@@ -436,8 +442,11 @@ export class LinuxHelperClient {
 		// `exit` can fire while stdout still holds a complete reply: only forget the child here so the next
 		// command respawns, and fail what is still pending once `close` says stdout is drained. Owed releases
 		// are latched on `exit` already, so no physical command can reach a respawned helper in between.
-		child.on("exit", (code) => {
+		child.on("exit", (code, signalName) => {
 			if (code === HELPER_EXIT_RELEASE_DEBT) this.latchOwedInput(stderr.toString("utf8"));
+			// Killed by a signal, e.g. the SIGKILL backstop of a stalled helper: it skipped its cleanup and exit
+			// report, so after physical input nothing says what it left held.
+			else if (signalName && this.physicalSent) this.refusePhysicalInput(KILLED_AFTER_INPUT_MESSAGE);
 			if (this.child === child) this.child = undefined;
 		});
 		child.on("close", (code, signalName) => {
@@ -519,6 +528,7 @@ export class LinuxHelperClient {
 			}
 			// Rechecked right before writing: a helper may have exited owing releases during the awaits above.
 			this.refuseUnsafe(physical);
+			if (physical) this.physicalSent = true;
 			return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
 		}
 	}
