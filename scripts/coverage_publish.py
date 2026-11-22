@@ -500,6 +500,8 @@ def host_plan(policy: dict[str, object], host: str, state: str) -> dict[str, obj
     for name, raw_package in object_value(policy["packages"]).items():
         package: Any = raw_package
         for label, cfg in package.get("signals", {}).items():
+            if os_name not in cfg.get("platforms", ("darwin", "linux")):
+                continue
             skipped = os_name in (*cfg.get("skip_hosts", []), *cfg.get("skip_os", []))
             signals[f"{name}/{label}"] = {
                 "enforcement": cfg.get("enforcement", "enforced"),

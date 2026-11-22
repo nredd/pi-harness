@@ -37,6 +37,28 @@ from coverage_publish_fixtures import (
 import coverage_publish as pub
 
 
+@pytest.mark.parametrize("host", ["ubuntu-24.04", "macos-14"])
+def test_publisher_plan_excludes_windows_only_signals(host: str) -> None:
+    """Keep native Windows signals out of both shared publisher denominators.
+
+    Parameters:
+        host (str): Publisher artifact host.
+    Returns:
+        None: The host plan excludes Windows evidence.
+    Raises:
+        AssertionError: A Windows-only signal appears in the plan.
+    """
+    policy = pub.read_summary(POLICY)
+    plan = pub.host_plan(policy, host, "available")
+    packages = pub.object_value(policy["packages"])
+    windows = pub.object_value(packages["computer-use-windows-native"])
+    windows_signals = pub.object_value(windows["signals"])
+    assert pub.object_value(windows_signals["primary"])["platforms"] == ["win32"]
+    signals = pub.object_value(plan["signals"])
+    assert "computer-use-vitest/primary" in signals
+    assert "computer-use-windows-native/primary" not in signals
+
+
 @pytest.mark.parametrize("repository", [FORK, REPO])
 def test_sticky_comment_and_retry(tmp_path: Path, repository: str) -> None:
     """Label PR-controlled numbers on both fork and same-repo comment writes.

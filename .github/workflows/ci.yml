@@ -464,11 +464,11 @@ jobs:
   # an isolated real-verifier comparison failed without it and verified the original signer/ref policy
   # with only that OS-runtime key restored ([receipt](https://github.com/nredd/pi-harness/actions/runs/43362875064)).
   # No token, profile/cache state or tool-injection variables are admitted by that correction.
-  # It uploads source-bound metadata
-  # and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
-  # job and refuses any non-success outcome when computer-use is selected.
-  # Windows native coverage is report-only, not a borrowed Ubuntu accounting signal or a claim of
-  # live desktop behavior; absent branches/statements stay unmeasured.
+  # It uploads source-bound metadata and raw reports as `computer-use-rust-windows-x64-<attempt>`.
+  # The Ubuntu fan-in requires this job to succeed when computer-use is selected; on a partial rerun
+  # it uses the artifact ID from the successful producer, even when that job was carried over.
+  # The Ubuntu fan-in checks the independent Windows x64 line/function caps from these artifacts.
+  # This is not live desktop evidence; absent branches/statements stay unmeasured.
 
   computer-use-windows:
     name: computer-use Rust (windows-x64)
@@ -484,6 +484,8 @@ jobs:
         || 'invalid windows_native_required') }}
     runs-on: windows-2025
     timeout-minutes: 25
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     defaults:
       run:
         shell: pwsh
@@ -541,10 +543,11 @@ jobs:
         working-directory: packages/computer-use
         run: node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs test/rust-coverage.test.mjs --coverage.enabled=false
       - name: Preserve Windows source-bound native reports
+        id: upload
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: computer-use-rust-windows-x64
+          name: computer-use-rust-windows-x64-${{ github.run_attempt }}
           path: |
             packages/computer-use/coverage/native-windows/compiler.log
             packages/computer-use/coverage/native-windows/coverage.json
@@ -601,7 +604,9 @@ jobs:
   # flip requires a new reasoned `enforcement_changes` entry relative to base; standing reasons or
   # historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
   # Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
-  # `computer-use` stays not measured, tracked for its native Swift/Rust and documentation site. Its 35 JS/TS runtime modules are measured by the enforced `computer-use-vitest` ratchet (#347, #645): per-OS uncovered lines, functions and branches may not grow. `dev-tools` uses #195's primary Istanbul decision with
+  # `computer-use` has separate native signals for Swift, Linux Rust and Windows x64 Rust.
+  # Its JS/TS runtime uses the enforced `computer-use-vitest` ratchet (#347, #645): per-OS uncovered
+  # lines, functions and branches may not grow. `dev-tools` uses #195's primary Istanbul decision with
   # all 23 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
   # Its Bun signal runs the same full Vitest suite on Bun and is enforced at 0/0 since #320. Python `scripts/` and `tests/integration/harness/` are measured by `PY_GATE`. The Vitest
   # producer configurations are measured by `import-audit` (#380, see `docs/coverage.md`).
@@ -625,6 +630,7 @@ jobs:
       # Preserve the JSON type so strings like "false" cannot pass the fan-in's validation.
       WINDOWS_REQUIRED: ${{ toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].windows_native_required) }}
       WINDOWS_RESULT: ${{ needs.computer-use-windows.result }}
+      WINDOWS_ARTIFACT_ID: ${{ needs.computer-use-windows.outputs.artifact-id }}
     runs-on: ubuntu-24.04
     timeout-minutes: &owned-timeout 15
     steps: &owned-steps
@@ -696,6 +702,34 @@ jobs:
           COVERAGE_HOST: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].guest }}
           COVERAGE_SKIPPED_GATES: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].skipped_gates }}
         run: make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST" COVERAGE_SKIPPED_GATES="$COVERAGE_SKIPPED_GATES"
+      - name: Download Windows x64 coverage
+        if: >-
+          ${{ !cancelled() && steps.plan.outputs.run == 'true'
+          && env.WINDOWS_REQUIRED == 'true' && env.WINDOWS_RESULT == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          # An empty input would download all artifacts; an invalid ID fails closed.
+          artifact-ids: ${{ env.WINDOWS_ARTIFACT_ID || 'missing' }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/windows-coverage
+      - name: Account for Windows x64 coverage separately
+        if: >-
+          ${{ !cancelled() && steps.plan.outputs.run == 'true'
+          && env.WINDOWS_REQUIRED == 'true' && env.WINDOWS_RESULT == 'success' }}
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        run: |
+          reports="$RUNNER_TEMP/windows-coverage"
+          destination="$reports/packages/computer-use/coverage/native-windows"
+          mkdir -p "$destination"
+          set -- "$reports"/windows-*
+          if [ "$#" -ne 1 ]; then
+            echo '::error::Expected exactly one Windows coverage producer directory'
+            exit 1
+          fi
+          cp "$1"/{lcov.info,coverage.json,metadata.json} "$destination/"
+          uv run --locked --project tests/integration python scripts/coverage_accounting.py \
+            --os win32 --base "$BASE" --reports-root "$reports" --summary coverage/windows-x64-summary.json
       # Keep accounting and artifact retention independent from presentation provenance. An older or
       # partial rerun's shard can still be retained for diagnosis, but may not be presented as current.
       - name: Record fan-in coverage provenance
@@ -739,6 +773,7 @@ jobs:
             scripts/coverage/**/lcov.info
             scripts/coverage/**/coverage-summary.json
             coverage/summary.json
+            coverage/windows-x64-summary.json
             coverage/provenance.json
           if-no-files-found: error
       - name: Packages without a Bun run (not run)

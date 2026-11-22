@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal, cast
 
@@ -43,6 +44,15 @@ FACADE_EXPORT = re.compile(
 # This is not a Rust parser and will reject, never exempt, an unfamiliar source construct.
 RUST_DECLARATIONS = re.compile(r"(?:\s*(?:pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;))*\s*")
 RUST_LINE_COMMENT = re.compile(r"//[^\n]*")
+WINDOWS_RUST_DECLARATIONS = re.compile(
+    r"(?:\s|//[^\n]*|/\*(?:(?!/\*|\*/)[\s\S])*\*/|pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;)*"
+)
+# The paired LLVM producer covers this crate; LLVM resolves remapped sysroot paths relative to it.
+WINDOWS_CRATE = "native/windows/bridge-rs"
+RUST_SYSROOT = re.compile(rf"{WINDOWS_CRATE}/rustc/[a-f0-9]{{40}}/library/.+")
+CoverageOS = Literal["darwin", "linux", "win32"]
+COVERAGE_OSES = ("darwin", "linux", "win32")
+LCOV_TOTALS = ("LF", "LH", "FNF", "FNH")
 
 
 class StrictModel(BaseModel):
@@ -173,7 +183,7 @@ class Signal(StrictModel):
     reason: str = Field(
         default="", description="Mandatory explanation and migration issue for report-only signals."
     )
-    producer: Literal["lcov", "coverage.py", "llvm-cov"] = Field(
+    producer: Literal["lcov", "coverage.py", "llvm-cov", "llvm-lcov"] = Field(
         default="lcov",
         description="Report writer; only coverage.py legitimately writes a bare record for an empty source.",
     )
@@ -181,7 +191,12 @@ class Signal(StrictModel):
         default_factory=list,
         description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
     )
-    skip_os: list[Literal["darwin", "linux"]] = Field(
+    platforms: list[CoverageOS] = Field(
+        default=["darwin", "linux"],
+        min_length=1,
+        description="Measured OSes eligible for this signal before explicit skips.",
+    )
+    skip_os: list[CoverageOS] = Field(
         default_factory=list, description="Explicitly unsupported producer platforms, reported NOT RUN."
     )
     gate: str = Field(
@@ -202,8 +217,8 @@ class Signal(StrictModel):
         """
         if self.enforcement == "report-only" and not self.reason.strip():
             raise ValueError("A report-only signal requires a nonblank `reason`")
-        if self.max_uncovered.keys() - {"darwin", "linux"}:
-            raise ValueError("Coverage floors support only measured darwin/linux OSes")
+        if self.max_uncovered.keys() - set(COVERAGE_OSES):
+            raise ValueError("Coverage floors support only measured darwin/linux/win32 OSes")
         if self.producer == "llvm-cov" and self.enforcement != "report-only":
             raise ValueError("LLVM native signals remain report-only until runtime attribution is resolved")
         if not {"text", "lcov"}.issubset(self.reporters):
@@ -519,13 +534,15 @@ class LcovRecord:
             raise ValueError(f"Duplicate or malformed branch: '{value}'")
         self.branches[identity] = 0 if parts[3] == "-" else int(parts[3])
 
-    def finish(self, bare_source: bool = False) -> FileCoverage:
+    def finish(self, bare_source: bool = False, *, llvm: bool = False) -> FileCoverage:
         """Check producer summaries against actual executable counters.
 
         Parameters:
             bare_source (bool): Accept a record with no rows at all, as coverage.py writes for a source
                 without executable lines, and a record with no function rows or totals, as it writes for a
                 module without functions. Other producers must emit totals, so either is truncation.
+            llvm (bool): Validate Windows LLVM summary units against the detailed rows; the
+                native reader also checks the summaries against raw JSON.
         Returns:
             FileCoverage: Validated executable line, function and branch counters.
         Raises:
@@ -545,16 +562,20 @@ class LcovRecord:
             "BRF": len(self.branches),
             "BRH": sum(value > 0 for value in self.branches.values()),
         }
-        # LCOV permits aggregate-only function counters. Validate detailed identities
-        # when present, otherwise require a consistent nonnegative aggregate pair.
-        if not self.functions and not self.definitions:
+        if llvm:
+            if not set(LCOV_TOTALS) <= self.summaries.keys():
+                raise ValueError("Missing LLVM LCOV totals")
+            self.validate_llvm_detail(totals)
+            totals |= {key: self.summaries[key] for key in LCOV_TOTALS}
+        # LCOV also permits aggregate-only function counters outside LLVM.
+        elif not self.functions and not self.definitions:
             totals["FNF"] = self.summaries.get("FNF", 0)
             totals["FNH"] = self.summaries.get("FNH", 0)
             if totals["FNH"] > totals["FNF"]:
                 raise ValueError("Inconsistent LCOV function totals")
         if any(value != totals[key] for key, value in self.summaries.items()):
             raise ValueError("Inconsistent LCOV totals")
-        if not {"LF", "LH", "FNF", "FNH"}.issubset(self.summaries):
+        if not set(LCOV_TOTALS) <= self.summaries.keys():
             raise ValueError("Missing LCOV totals")
         return FileCoverage(
             totals["LF"],
@@ -565,14 +586,39 @@ class LcovRecord:
             totals["BRF"] - totals["BRH"],
         )
 
+    def validate_llvm_detail(self, detail: dict[str, int]) -> None:
+        """Cross-check the Windows export without equating distinct LLVM counting units.
 
-def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCoverage]:
+        Parameters:
+            detail (dict[str, int]): Counts of detailed rows and positive hit rows.
+        Returns:
+            None: The evidence is consistent with the summaries.
+        Raises:
+            ValueError: Summaries or detailed rows contradict one another.
+        """
+        lf, lh, fnf, fnh = (self.summaries[key] for key in LCOV_TOTALS)
+        if lh > lf or fnh > fnf:
+            raise ValueError("Inconsistent LLVM LCOV totals")
+        # DA merges per-file lines; the summary can count overlapping function lines
+        # separately. A mapped line needs evidence, and each unhit DA line costs a miss.
+        if bool(lf) != bool(detail["LF"]) or detail["LF"] > lf or detail["LF"] - detail["LH"] > lf - lh:
+            raise ValueError("Inconsistent LLVM LCOV line detail")
+        if lh and not detail["LH"]:
+            raise ValueError("Inconsistent LLVM LCOV line detail")
+        # FN/FNDA list instantiations. Each hit source function needs a positive
+        # instantiation; each missed source function needs an unhit instantiation.
+        if detail["FNH"] < fnh or detail["FNF"] - detail["FNH"] < fnf - fnh:
+            raise ValueError("Inconsistent LLVM LCOV function detail")
+
+
+def parse_lcov(text: str, *, bare_sources: bool = False, llvm: bool = False) -> dict[str, FileCoverage]:
     """Parse LCOV strictly, checking counters rather than trusting summary fields.
 
     Parameters:
         text (str): Complete LCOV document.
         bare_sources (bool): Read coverage.py's dialect: a bare `SF`/`end_of_record` pair is an empty
             source, a module without functions omits FN totals, and branches are named, not numbered.
+        llvm (bool): Validate Windows source summaries without counting instantiations as functions.
     Returns:
         dict[str, FileCoverage]: Records keyed by the original source path.
     Raises:
@@ -593,7 +639,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
         if source is None:
             raise ValueError(f"LCOV data outside a source record: '{row}'")
         if row == "end_of_record":
-            records[source] = record.finish(bare_sources)
+            records[source] = record.finish(bare_sources, llvm=llvm)
             source = None
             continue
         record.add(row)
@@ -1168,6 +1214,8 @@ def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
         ValueError: A host is newly skipped, the gate changes, an OS floor disappears or an enforced
             counter (including a branch or statement cap) is raised or dropped.
     """
+    if not set(old.platforms) <= set(new.platforms):
+        raise ValueError(f"Cannot remove measured platforms: '{label}'")
     if not set(new.skip_os) <= set(old.skip_os):
         raise ValueError(f"Cannot add skipped platforms: '{label}'")
     if not set(new.skip_hosts) <= set(old.skip_hosts):
@@ -1222,6 +1270,71 @@ class LLVMReport(BaseModel):
     )
 
 
+def is_llvm_producer(producer: str) -> bool:
+    """Whether the declared producer uses LLVM source counters and region units.
+
+    Parameters:
+        producer (str): Producer name from the signal declaration.
+    Returns:
+        bool: True for raw LLVM JSON or paired LCOV and JSON.
+    Raises:
+        None.
+    """
+    return producer in {"llvm-cov", "llvm-lcov"}
+
+
+def read_llvm_reports(path: Path, signal: Signal) -> tuple[LLVMReport, dict[str, FileCoverage] | None]:
+    """Read the raw export and require a matching source map for a paired LCOV signal.
+
+    Parameters:
+        path (Path): Primary report path.
+        signal (Signal): LLVM dialect that selects one or both inputs.
+    Returns:
+        tuple[LLVMReport, dict[str, FileCoverage] | None]: Raw JSON and optional LCOV totals.
+    Raises:
+        OSError: A required report cannot be read.
+        ValueError: A report is invalid or source lists disagree.
+    """
+    if signal.producer == "llvm-cov":
+        return LLVMReport.model_validate_json(path.read_text()), None
+    lcov = parse_lcov(path.read_text(), llvm=True)
+    report = LLVMReport.model_validate_json(path.with_name("coverage.json").read_text())
+    if lcov.keys() != {file.filename for file in report.data[0].files}:
+        raise ValueError("LLVM LCOV and JSON source lists differ")
+    return report, lcov
+
+
+class LLVMSourceMetadata(BaseModel):
+    source_hashes: dict[str, str] = Field(
+        alias="sourceHashes", description="Crate-relative SHA-256 digests from the producer."
+    )
+
+
+def verify_llvm_source_hashes(metadata: Path, crate: Path) -> None:
+    """Match the Windows producer's complete native inputs against the checkout.
+
+    Parameters:
+        metadata (Path): Producer metadata beside the paired reports.
+        crate (Path): Source checkout's native crate root.
+    Returns:
+        None.
+    Raises:
+        ValueError: Metadata is missing, invalid, or describes different crate inputs.
+        OSError: A checkout input cannot be read.
+    """
+    try:
+        recorded = LLVMSourceMetadata.model_validate_json(metadata.read_bytes()).source_hashes
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Cannot read Windows coverage metadata '{metadata}': {error}") from error
+    # Match collectSourceHashes in packages/computer-use/scripts/rust-coverage.mjs.
+    inputs = [crate / "Cargo.toml", crate / "Cargo.lock"]
+    for directory in ("src", "tests"):
+        inputs.extend(file for file in (crate / directory).rglob("*") if file.is_file())
+    current = {file.relative_to(crate).as_posix(): sha256(file.read_bytes()).hexdigest() for file in inputs}
+    if recorded != current:
+        raise ValueError("Windows coverage metadata source hashes differ from the checkout")
+
+
 def llvm_records(
     root: Path, package: Package, signal: Signal, expected: set[str], reports_root: Path | None
 ) -> dict[str, FileCoverage]:
@@ -1230,7 +1343,7 @@ def llvm_records(
     Parameters:
         root (Path): Source checkout, used to validate map-free declaration modules.
         package (Package): Structurally scoped native source inventory.
-        signal (Signal): Raw LLVM JSON producer declaration.
+        signal (Signal): Raw LLVM JSON or paired LCOV and JSON producer declaration.
         expected (set[str]): Every owned Rust source, including separately named test modules in src.
         reports_root (Path | None): Downloaded artifact root, otherwise the checkout.
     Returns:
@@ -1239,9 +1352,10 @@ def llvm_records(
         ValueError: Malformed, duplicate, missing executable or zero-total source data.
         OSError: A report or classified source cannot be read.
     """
-    report = LLVMReport.model_validate_json(
-        ((reports_root or root) / package.root / signal.report).read_text()
-    )
+    path = (reports_root or root) / package.root / signal.report
+    if signal.producer == "llvm-lcov":
+        verify_llvm_source_hashes(path.with_name("metadata.json"), root / package.root / WINDOWS_CRATE)
+    report, lcov = read_llvm_reports(path, signal)
     records: dict[str, NativeFileCoverage] = {}
     marker = f"/{package.root}/"
     for file in report.data[0].files:
@@ -1250,7 +1364,11 @@ def llvm_records(
         if relative not in expected:
             # Dependency/sysroot/integration-test files are not production source. An unknown
             # source inside the package is an inventory error, never a filename-based exemption.
-            if marker in filename and not is_test_path(Path(relative)):
+            if (
+                marker in filename
+                and not is_test_path(Path(relative))
+                and not RUST_SYSROOT.fullmatch(relative)
+            ):
                 raise ValueError(f"LLVM source outside inventory: '{relative}'")
             continue
         if relative in records:
@@ -1258,13 +1376,18 @@ def llvm_records(
         if not {"lines", "functions", "regions"} <= file.summary.keys():
             raise ValueError(f"LLVM source lacks line/function/region counters: '{relative}'")
         lines, functions, regions = (file.summary[key] for key in ("lines", "functions", "regions"))
-        records[relative] = NativeFileCoverage(
+        counters = FileCoverage(
             lines.count,
             lines.count - lines.covered,
             functions.count,
             functions.count - functions.covered,
             0,
             0,
+        )
+        if lcov is not None and lcov[file.filename] != counters:
+            raise ValueError(f"LLVM LCOV and JSON counters differ: '{relative}'")
+        records[relative] = NativeFileCoverage(
+            **vars(counters),
             regions=regions.count,
             uncovered_regions=regions.count - regions.covered,
         )
@@ -1273,7 +1396,12 @@ def llvm_records(
         if counters is not None and (counters.lines or counters.functions or counters.regions):
             continue
         source = (root / package.root / relative).read_text()
-        if not RUST_DECLARATIONS.fullmatch(RUST_LINE_COMMENT.sub("", source)):
+        declarations = (
+            WINDOWS_RUST_DECLARATIONS.fullmatch(source)
+            if signal.producer == "llvm-lcov"
+            else RUST_DECLARATIONS.fullmatch(RUST_LINE_COMMENT.sub("", source))
+        )
+        if not declarations:
             reason = (
                 "Expected executable LLVM source missing"
                 if counters is None
@@ -1413,7 +1541,7 @@ def scoped_records(
         OSError: A report or source cannot be read.
         ValueError: Report or inventory validation fails.
     """
-    if signal.producer == "llvm-cov":
+    if is_llvm_producer(signal.producer):
         expected = set(signal.files) if signal.files is not None else inventory(root, package)
         return llvm_records(root, package, signal, expected, reports_root)
     return scoped_lcov_records(root, policy, package, signal, reports_root)
@@ -1532,7 +1660,7 @@ def not_run_reason(
     Raises:
         None.
     """
-    if runner_os in signal.skip_os:
+    if runner_os not in signal.platforms or runner_os in signal.skip_os:
         return f"OS '{runner_os}' has no native producer"
     if host is not None and host in signal.skip_hosts:
         return f"host '{host}' has no producer in that cell"
@@ -1656,7 +1784,7 @@ def account(
     Parameters:
         root (Path): Absolute repository root.
         policy (Policy): Validated coverage inventory and budgets.
-        runner_os (str): Measured runner platform; only darwin and linux are supported.
+        runner_os (str): Measured runner platform (darwin, linux or win32).
         reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
         measure (bool): Report validated measurements without enforcing budgets; not a gate.
         host (str | None): CI host class; signals listing it in `skip_hosts` are reported NOT RUN.
@@ -1668,7 +1796,7 @@ def account(
         ValueError: The OS is unmeasured, a skipped gate is declared by no policy signal, or a package
             inventory cannot be expanded.
     """
-    if runner_os not in {"darwin", "linux"}:
+    if runner_os not in COVERAGE_OSES:
         raise ValueError(f"Coverage is not measured on OS: '{runner_os}'")
     require_declared_gates(policy, skipped_gates)
     results: list[dict[str, object]] = []
@@ -1706,14 +1834,14 @@ def account(
                             if key not in {"branches", "uncovered_branches"}
                         }
                         | {"branch_metric": "not-produced"}
-                        if signal.producer == "llvm-cov"
+                        if is_llvm_producer(signal.producer)
                         else item
                     )
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
                     f"{label}/{runner_os} ({signal.enforcement}): "
-                    f"uncovered lines={uncovered_lines}, functions={uncovered_functions}, "
-                    f"branches={uncovered_branches}"
+                    f"uncovered lines={uncovered_lines}, functions={uncovered_functions}"
+                    + ("" if is_llvm_producer(signal.producer) else f", branches={uncovered_branches}")
                     + (f", statements={uncovered_statements}" if reads_statements(signal) else "")
                 )
                 reference = signal.max_uncovered.get(runner_os)
@@ -1862,7 +1990,7 @@ def parse_args() -> argparse.Namespace:
     bases = parser.add_mutually_exclusive_group()
     bases.add_argument("--base", help="Explicit Git base for gating, used unchanged; not used by --measure.")
     bases.add_argument("--compare-ref", help="Gate against the merge base of HEAD and this ref instead.")
-    parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
+    parser.add_argument("--os", default=sys.platform, choices=COVERAGE_OSES)
     parser.add_argument("--host", help="CI host class (e.g. wsl2) selecting signals' `skip_hosts`.")
     parser.add_argument(
         "--skipped-gates",

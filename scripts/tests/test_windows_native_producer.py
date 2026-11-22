@@ -52,6 +52,8 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
         step for step in steps if step.get("name") == "Preserve Windows source-bound native reports"
     )
     assert upload["if"] == "always()"
+    assert upload["with"]["name"] == "computer-use-rust-windows-x64-${{ github.run_attempt }}"
+    assert producer["outputs"]["artifact-id"] == f"${{{{ steps.{upload['id']}.outputs.artifact-id }}}}"
     assert upload["with"]["if-no-files-found"] == "error"
     assert "provenance.json" not in upload["with"]["path"]
     for report in ("lcov.info", "coverage.json", "metadata.json", "summary.txt", "*.log", "compiler.log"):
@@ -66,6 +68,54 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     assert "$env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP" in commands
     assert 'require("node:tls").rootCertificates' in commands
     assert "Git\\mingw64" not in commands
+
+
+def test_required_fan_in_accounts_the_windows_artifact_separately() -> None:
+    """Require accounting on the selected Ubuntu check, not on unrelated or macOS runs."""
+    jobs = workflow_jobs()
+    ubuntu = jobs["owned-ubuntu"]
+    steps = ubuntu["steps"]
+    by_name = {step.get("name"): step for step in steps}
+    download = by_name["Download Windows x64 coverage"]
+    account = by_name["Account for Windows x64 coverage separately"]
+    required = by_name["Require every planned shard to succeed"]
+    assert steps.index(required) < steps.index(download) < steps.index(account)
+    assert ubuntu["env"]["WINDOWS_ARTIFACT_ID"] == "${{ needs.computer-use-windows.outputs.artifact-id }}"
+    assert download["with"] == {
+        "artifact-ids": "${{ env.WINDOWS_ARTIFACT_ID || 'missing' }}",
+        "merge-multiple": True,
+        "path": "${{ runner.temp }}/windows-coverage",
+    }
+    assert download["if"] == account["if"]
+    assert "steps.plan.outputs.run == 'true' && env.WINDOWS_REQUIRED == 'true'" in account["if"]
+    assert jobs["owned-macos"]["env"]["WINDOWS_REQUIRED"] == "false"
+    assert "--os win32 --base" in account["run"]
+    assert 'cp "$1"/{lcov.info,coverage.json,metadata.json} "$destination/"' in account["run"]
+    assert "coverage/windows-x64-summary.json" in account["run"]
+    assert (
+        "coverage/windows-x64-summary.json"
+        in by_name["Preserve independent coverage reports and summary"]["with"]["path"]
+    )
+    assert not account.get("continue-on-error")
+
+
+def test_windows_coverage_docs_keep_replay_separate() -> None:
+    """Keep replay from overwriting the default Ubuntu accounting summary."""
+    docs = (ROOT / "docs/coverage.md").read_text()
+    replay = next(block for block in docs.split("```") if "--os win32 --base HEAD" in block)
+    assert "--summary coverage/windows-x64-summary.json" in replay
+
+
+def test_coverage_overviews_include_windows() -> None:
+    """Keep the platform and native signal overviews consistent with the required fan-in."""
+    docs = (ROOT / "docs/coverage.md").read_text()
+    assert "`win32`" in docs.split("Schema version 2", 1)[1].split("Unsupported OSes", 1)[0]
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    overview = workflow.split("# Policy: Fan-in and independent coverage accounting", 1)[1].split(
+        "\n  owned-ubuntu:", 1
+    )[0]
+    assert "Windows x64 Rust" in overview
+    assert "documentation site" not in overview
 
 
 def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> None:
@@ -85,7 +135,9 @@ def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> Non
     node = shutil.which("node")
     assert node is not None, "The repository's pinned Node toolchain is required"
     bundle = tmp_path / "public-roots.pem"
-    subprocess.run([node, "-e", match[1], str(bundle)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [node, "-e", match[1], str(bundle)], check=True, capture_output=True, text=True, timeout=30
+    )
     context = ssl.create_default_context(cafile=str(bundle))
     assert context.cert_store_stats()["x509_ca"] > 0
     assert context.check_hostname
@@ -218,6 +270,15 @@ def test_required_check_rejects_failed_or_missing_native_producer(
     )
     passes = decision is False or (decision is True and result == "success")
     assert (completed.returncode == 0) is passes, completed.stdout + completed.stderr
+    context = {
+        "steps.plan.outputs.run": "true",
+        "env.WINDOWS_REQUIRED": required,
+        "env.WINDOWS_RESULT": result,
+        "env.WINDOWS_ARTIFACT_ID": "12345",
+    }
+    for name in ("Download Windows x64 coverage", "Account for Windows x64 coverage separately"):
+        consumer = next(step for step in fan_in["steps"] if step.get("name") == name)
+        assert evaluate(consumer["if"], context) is (decision is True and result == "success")
     if not isinstance(decision, bool):
         assert "WINDOWS_REQUIRED must be true or false" in completed.stdout
     elif not passes:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,8 @@ from coverage_accounting import (
     Signal,
     account,
     check_signal_ratchet,
+    is_llvm_producer,
+    parse_lcov,
 )
 
 
@@ -218,7 +221,10 @@ def test_native_dependency_paths_and_declaration_fail_closed(tmp_path: Path) -> 
     files[0]["filename"] = files[0]["filename"].replace("/", "\\")
     output.write_text(json.dumps(report))
     assert not account(tmp_path, cfg, "linux")[1]
-    (tmp_path / "pkg/src/lib.rs").write_text("pub fn not_a_declaration() {}")
+    lib = tmp_path / "pkg/src/lib.rs"
+    lib.write_text(lib.read_text() + "/* Embedded reference: examples can include fn f() {}. */\n")
+    assert "Expected executable LLVM source missing: 'src/lib.rs'" in account(tmp_path, cfg, "linux")[1][0]
+    lib.write_text("pub fn not_a_declaration() {}")
     assert "Expected executable LLVM source missing" in account(tmp_path, cfg, "linux")[1][0]
 
 
@@ -268,12 +274,295 @@ def test_native_cli_retains_region_totals_and_missing_output_control(tmp_path: P
         "--summary",
         str(tmp_path / "summary.json"),
     ]
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=30)
     assert result.returncode == 0, result.stderr
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["packages"]["native/primary"]["regions"] == 9
     assert summary["packages"]["native/primary"]["uncovered_regions"] == 6
     output.unlink()
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=30)
     assert result.returncode == 1
     assert "No such file" in result.stderr
+
+
+def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Path, Path]:
+    """Build a Windows inventory and report destination on a portable checkout.
+
+    Parameters:
+        tmp_path (Path): Disposable source and separate reports roots.
+    Returns:
+        tuple[Policy, dict[str, Any], Path, Path]: Policy, raw export, package report and reports root.
+    Raises:
+        OSError: Fixture files cannot be written.
+    """
+    cfg, report, _ = native_fixture(tmp_path)
+    package = cfg.packages.pop("native")
+    package.root = "packages/computer-use"
+    package.owned = ["native/windows/bridge-rs/src/**/*.rs"]
+    crate = tmp_path / package.root / "native/windows/bridge-rs"
+    crate.mkdir(parents=True)
+    (tmp_path / "pkg/src").rename(crate / "src")
+    lib = crate / "src/lib.rs"
+    lib.write_text(lib.read_text() + "/* Embedded reference: examples can include fn f() {}. */\n")
+    cfg.packages["windows"] = package
+    signal = Signal(
+        report="coverage/native-windows/lcov.info",
+        max_uncovered={"win32": Counts(lines=7, functions=7)},
+        reporters=["text", "lcov", "json"],
+        producer="llvm-lcov",
+        platforms=["win32"],
+    )
+    package.signals["primary"] = signal
+    reports = tmp_path / "download"
+    path = reports / package.root / signal.report
+    path.parent.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text('[package]\nname = "fixture"\n')
+    (crate / "Cargo.lock").write_text("version = 4\n")
+    (crate / "tests").mkdir()
+    (crate / "tests/protocol.rs").write_text("#[test] fn protocol() {}\n")
+    source_hashes = {
+        name: sha256((crate / name).read_bytes()).hexdigest()
+        for name in (
+            "Cargo.toml",
+            "Cargo.lock",
+            "src/lib.rs",
+            "src/main.rs",
+            "src/policy_tests.rs",
+            "src/tests/mod.rs",
+            "tests/protocol.rs",
+        )
+    }
+    path.with_name("metadata.json").write_text(json.dumps({"sourceHashes": source_hashes}))
+    return cfg, report, path, reports
+
+
+def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
+    """Simulate missing, malformed, or stale producer metadata in a valid report pair.
+
+    Parameters:
+        path (Path): LCOV report path beside the metadata.
+        source (Path): Checkout source path to alter for the stale case.
+        case (str): Fixture corruption, if any.
+    Returns:
+        None.
+    Raises:
+        OSError: A fixture input cannot be read or modified.
+    """
+    metadata = path.with_name("metadata.json")
+    if case == "missing-metadata":
+        metadata.unlink()
+    if case == "malformed-metadata":
+        metadata.write_text("{}")
+    if case == "older-inputs":
+        # The source paths and executable counters still match after this edit.
+        source.write_text(source.read_text() + "// Changed after the older report pair.\n")
+
+
+def alter_windows_counters(lcov: str, files: list[dict[str, Any]], signal: Signal, case: str) -> str:
+    """Corrupt detail or covered totals without changing source membership or denominators.
+
+    Parameters:
+        lcov (str): Matching LCOV export.
+        files (list[dict[str, Any]]): JSON records, with ignored sysroot last.
+        signal (Signal): Policy signal whose cap is tightened in the forged case.
+        case (str): Fixture corruption, if any.
+    Returns:
+        str: LCOV text for the selected case.
+    Raises:
+        None.
+    """
+    if case == "stale-totals":
+        files[0]["summary"]["lines"]["covered"] = 0
+    if case == "stale-function-totals":
+        files[0]["summary"]["functions"]["covered"] = 0
+    if case == "forged-hits":
+        for file in files[:-1]:
+            for metric in ("lines", "functions"):
+                summary = file["summary"][metric]
+                summary["covered"] = summary["count"]
+        lcov = lcov.replace("LH:1", "LH:3").replace("FNH:1", "FNH:3")
+        lcov = lcov.replace("FNDA:1,first", "FNDA:0,first").replace("DA:1,1", "DA:1,0")
+        signal.max_uncovered["win32"] = Counts(lines=0, functions=0)
+    if case == "stripped-detail":
+        lcov = "".join(
+            row for row in lcov.splitlines(keepends=True) if not row.startswith(("DA:", "FN:", "FNDA:"))
+        )
+    return lcov
+
+
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("valid", ""),
+        ("missing-lcov", "No such file"),
+        ("missing-json", "No such file"),
+        ("missing-metadata", "Cannot read Windows coverage metadata"),
+        ("malformed-metadata", "Cannot read Windows coverage metadata"),
+        ("older-inputs", "metadata source hashes differ"),
+        ("missing-source", "source lists differ"),
+        ("stale-totals", "counters differ"),
+        ("stale-function-totals", "counters differ"),
+        ("forged-hits", "Inconsistent LLVM LCOV line detail"),
+        ("stripped-detail", "Inconsistent LLVM LCOV line detail"),
+        ("over-budget", "Budget exceeded"),
+        ("missing-floor", "Missing OS floor"),
+        ("sysroot-lookalike", "LLVM source outside inventory"),
+    ],
+)
+def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, case: str, error: str) -> None:
+    """Gate Windows by source totals, not LCOV instantiations or Linux coverage.
+
+    Parameters:
+        tmp_path (Path): Disposable source and separate reports roots.
+        case (str): Corruption or policy change to introduce, if any.
+        error (str): Expected failed validation, empty for a valid report.
+    Returns:
+        None: Only the Windows signal gates Windows reports.
+    Raises:
+        AssertionError: The coverage reader accepts invalid inputs or miscounts the producer units.
+    """
+    cfg, report, path, reports = windows_artifact_fixture(tmp_path)
+    signal = cfg.packages["windows"].signals["primary"]
+    files = report["data"][0]["files"]
+    prefix = r"D:\a\repo\repo\packages\computer-use\native\windows\bridge-rs"
+    for file in files:
+        relative = file["filename"].split("/src/")[1].replace("/", "\\")
+        file["filename"] = f"{prefix}\\src\\{relative}"
+    sysroot = f"\\rustc\\{'a' * 40}\\library\\std\\thread_local.rs"
+    if case == "sysroot-lookalike":
+        sysroot = sysroot.replace("library", "src")
+    files.append({"filename": prefix + sysroot, "summary": {}})
+    rows = (
+        "\nFN:1,first\nFN:1,second\nFN:2,third\nFN:2,fourth\n"
+        "FNDA:1,first\nFNDA:0,second\nFNDA:0,third\nFNDA:0,fourth\nDA:1,1\n"
+        "LF:3\nLH:1\nFNF:3\nFNH:1\nBRF:0\nBRH:0\nend_of_record\n"
+    )
+    lcov = "".join(f"SF:{file['filename']}{rows}" for file in files)
+    if case == "missing-source":
+        lcov = lcov.split("end_of_record\n", 1)[1]
+    lcov = alter_windows_counters(lcov, files, signal, case)
+    if case == "over-budget":
+        signal.max_uncovered["win32"].lines = 5
+    if case == "missing-floor":
+        del signal.max_uncovered["win32"]
+    alter_windows_metadata(
+        path, tmp_path / "packages/computer-use/native/windows/bridge-rs/src/main.rs", case
+    )
+    if case != "missing-lcov":
+        path.write_text(lcov)
+    if case != "missing-json":
+        path.with_name("coverage.json").write_text(json.dumps(report))
+    assert account(tmp_path, cfg, "linux") == ([], [])
+    assert account(tmp_path, cfg, "darwin") == ([], [])
+    results, failures = account(tmp_path, cfg, "win32", reports)
+    if error:
+        assert len(failures) == 1
+        assert error in failures[0]
+    else:
+        assert not failures
+        assert len(results) == 4
+        assert sum(int(str(row["uncovered_regions"])) for row in results) == 6
+        assert all(row["statements"] is None and "branches" not in row for row in results)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement", "error"),
+    [
+        ("LF:3\n", "", "Missing LLVM LCOV totals"),
+        ("LH:1\n", "", "Missing LLVM LCOV totals"),
+        ("FNF:3\n", "", "Missing LLVM LCOV totals"),
+        ("FNH:1\n", "", "Missing LLVM LCOV totals"),
+        ("LH:1\n", "LH:4\n", "Inconsistent LLVM LCOV totals"),
+        ("FNH:1\n", "FNH:4\n", "Inconsistent LLVM LCOV totals"),
+    ],
+)
+def test_llvm_rejects_each_missing_or_impossible_total(original: str, replacement: str, error: str) -> None:
+    """Change one field at a time so invalid line totals never mask invalid function totals.
+
+    Parameters:
+        original (str): Valid counter row to replace.
+        replacement (str): Invalid counter row or empty string to remove it.
+        error (str): Expected parser error.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The parser accepts the mutated record.
+    """
+    lcov = "SF:src/main.rs\nLF:3\nLH:1\nFNF:3\nFNH:1\nend_of_record\n"
+    with pytest.raises(ValueError, match=error):
+        parse_lcov(lcov.replace(original, replacement), llvm=True)
+
+
+@pytest.mark.parametrize(
+    ("totals", "detail", "metric"),
+    [
+        ("LF:2\nLH:1\nFNF:1\nFNH:1", "DA:1,0\n", "line"),
+        ("LF:1\nLH:1\nFNF:1\nFNH:1", "DA:1,1\nDA:2,1\n", "line"),
+        ("LF:2\nLH:2\nFNF:1\nFNH:1", "DA:1,1\nDA:2,0\n", "line"),
+        ("LF:1\nLH:1\nFNF:1\nFNH:1", "DA:1,1\nFN:1,f\nFNDA:0,f\n", "function"),
+        ("LF:1\nLH:1\nFNF:3\nFNH:1", "DA:1,1\nFN:1,f\nFNDA:1,f\n", "function"),
+        ("LF:1\nLH:1\nFNF:1\nFNH:1", "DA:1,1\n", "function"),
+    ],
+)
+def test_llvm_rejects_inconsistent_detail(totals: str, detail: str, metric: str) -> None:
+    """Check each kind of contradiction independently, in LLVM's distinct row and summary units.
+
+    Parameters:
+        totals (str): LLVM summary rows.
+        detail (str): LLVM detailed rows.
+        metric (str): Metric with contradictory evidence.
+    Returns:
+        None: The contradiction is rejected.
+    Raises:
+        AssertionError: Inconsistent detail is accepted.
+    """
+    with pytest.raises(ValueError, match=f"Inconsistent LLVM LCOV {metric} detail"):
+        parse_lcov(f"SF:src/main.rs\n{detail}{totals}\nend_of_record\n", llvm=True)
+
+
+@pytest.mark.parametrize(
+    ("producer", "uses_llvm"),
+    [
+        ("llvm-cov", True),
+        ("llvm-lcov", True),
+        ("llvm-unknown", False),
+        ("lcov", False),
+        ("coverage.py", False),
+    ],
+)
+def test_llvm_producer_selection_is_explicit(producer: str, uses_llvm: bool) -> None:
+    """Do not infer LLVM report semantics from a shared name prefix.
+
+    Parameters:
+        producer (str): Supported or unknown producer name.
+        uses_llvm (bool): Whether the producer should use LLVM source counters.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The predicate misclassifies the producer.
+    """
+    assert is_llvm_producer(producer) is uses_llvm
+
+
+def test_windows_native_policy_cannot_loosen_or_remove_platform() -> None:
+    """Ratchet the real Windows policy and never attribute it to Linux or macOS.
+
+    Parameters:
+        None.
+    Returns:
+        None: Windows caps cannot increase and the Windows platform cannot be dropped.
+    Raises:
+        AssertionError: The real policy or its ratchet no longer protects Windows x64.
+    """
+    root = Path(__file__).resolve().parents[2]
+    cfg = Policy.model_validate_json((root / "coverage/policy.json").read_text())
+    old = cfg.packages["computer-use-windows-native"].signals["primary"]
+    assert old.platforms == ["win32"]
+    assert old.enforcement == "enforced"
+    new = old.model_copy(deep=True)
+    new.max_uncovered["win32"].functions += 1
+    with pytest.raises(ValueError, match=r"Ratchet violation.*win32"):
+        check_signal_ratchet("computer-use-windows-native/primary", new, old)
+    new.platforms = ["linux"]
+    with pytest.raises(ValueError, match="Cannot remove measured platforms"):
+        check_signal_ratchet("computer-use-windows-native/primary", new, old)
