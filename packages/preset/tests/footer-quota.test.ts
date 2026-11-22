@@ -60,10 +60,13 @@ function legacyInput(state: LegacyState): footer.QuotaState {
 		return snap(provider, windows);
 	});
 	const parsed = present(footer.parseUsageReply(reply(snapshots), NOW));
-	for (const [id, quota] of Object.entries(state)) {
-		Object.assign(present(parsed[id]), { stale: quota.stale, expiresAt: quota.expiresAt });
-	}
-	return parsed;
+	// Parsed state is frozen, so overlay the legacy staleness on copies.
+	return Object.fromEntries(
+		Object.entries(parsed).map(([id, quota]) => {
+			const legacy = state[id];
+			return [id, legacy ? { ...quota, stale: legacy.stale, expiresAt: legacy.expiresAt } : quota];
+		}),
+	);
 }
 
 function legacyOutput(state: footer.QuotaState): LegacyState {
@@ -1333,6 +1336,36 @@ test("an oversized family never throws while matching the selected model", () =>
 	const opts = { ...fixed, model: { provider: "huge", id: `x-${family}` } };
 	assert.equal(footer.formatQuotaRow(state, "compact", plain, opts), "Left: huge calls 3 req obs");
 	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "huge", id: "x" } }), "");
+});
+
+test("poller state is deeply immutable, so a reader cannot corrupt the next render", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(
+		v2([
+			view("custom", {
+				display: { full: "Custom", compact: "C", footer: { show: [{ name: "named" }] } },
+				snapshot: snap("custom", [{ ...win("named", 40, "model"), families: ["opus"] }]),
+			}),
+		]),
+	);
+	const state = present(poller.getState());
+	const quota = present(state.custom);
+	const cell = present(quota.cells[0]);
+	assert.ok(cell.kind === "percent");
+	for (const mutate of [
+		() => (quota.cells as unknown[]).push(cell),
+		() => (cell.families as string[]).push("sonnet"),
+		() => ((quota.display.footer?.show ?? []) as unknown[]).pop(),
+		() => Object.assign(quota.display, { compact: "X" }),
+		() => Object.assign(state, { other: quota }),
+	]) {
+		assert.throws(mutate, TypeError);
+	}
+	assert.deepEqual(present(present(poller.getState()).custom).cells, quota.cells);
+	assert.deepEqual(cell.families, ["opus"]);
+	poller.dispose();
 });
 
 test("mark expiry repaints independently of the snapshot", () => {

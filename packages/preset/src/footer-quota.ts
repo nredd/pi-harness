@@ -80,14 +80,28 @@ type Cell =
 	| { kind: "mark"; families: string[]; until: number; evidence: "read" | "inferred" | "observed" }
 	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit };
 
-export interface ProviderQuota {
+/** Recursively readonly: state is shared between the poller and every render. */
+type Frozen<T> = T extends object ? { readonly [K in keyof T]: Frozen<T[K]> } : T;
+
+interface QuotaFields {
 	display: Display;
-	cells: Cell[];
+	cells: QuotaCell[];
 	stale: boolean;
 	expiresAt?: number;
 }
 
-export type QuotaState = Record<string, ProviderQuota>;
+export type ProviderQuota = Frozen<QuotaFields>;
+export type QuotaState = Frozen<Record<string, QuotaFields>>;
+type QuotaCell = Frozen<Cell>;
+
+/** Freeze a freshly built value in place, objects and arrays included. */
+function deepFreeze<T>(value: T): Frozen<T> {
+	if (value && typeof value === "object" && !Object.isFrozen(value)) {
+		Object.freeze(value);
+		for (const child of Object.values(value)) deepFreeze(child);
+	}
+	return value as Frozen<T>;
+}
 
 /** Remaining percent from a used percent: clamp 0..100, floor remaining; invalid -> `undefined`. */
 export function remainingPercent(used: unknown): number | undefined {
@@ -266,9 +280,9 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 }
 
 /** Merge stale percentages by bucket, retaining their reset and identity as one reading. */
-function mergePercents(seen: PercentCell[], prior: ProviderQuota | undefined, legacy: boolean): PercentCell[] {
+function mergePercents(seen: PercentCell[], prior: ProviderQuota | undefined, legacy: boolean): Frozen<PercentCell>[] {
 	const before = prior?.cells.filter((cell) => cell.kind === "percent") ?? [];
-	const readings = new Map(before.map((cell) => [cell.key, cell]));
+	const readings = new Map<string, Frozen<PercentCell>>(before.map((cell) => [cell.key, cell]));
 	for (const cell of seen) {
 		const old = readings.get(cell.key);
 		if (!old && (!legacy || prior?.expiresAt === undefined || cell.placeholder)) readings.set(cell.key, cell);
@@ -300,7 +314,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 				display,
 				snapshot: records(snapshots).find((snapshot) => snapshot.provider === provider),
 			}));
-	const state: QuotaState = Object.create(null);
+	const state: Record<string, QuotaFields> = Object.create(null);
 	for (const view of entries) {
 		if (typeof view.provider !== "string" || !view.provider) continue;
 		const id = view.provider;
@@ -324,12 +338,12 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 			cells: [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...auxiliaryCells(view, legacy)],
 		};
 	}
-	return state;
+	return deepFreeze(state);
 }
 
 /** Mark every provider stale, retaining values (error, timeout). */
 export function markStale(state: QuotaState): QuotaState {
-	return Object.fromEntries(Object.entries(state).map(([id, quota]) => [id, { ...quota, stale: true }]));
+	return deepFreeze(Object.fromEntries(Object.entries(state).map(([id, quota]) => [id, { ...quota, stale: true }])));
 }
 
 /** Whether a provider reading is stale at `now`: flagged, or expiry missing, invalid or passed. */
@@ -341,7 +355,9 @@ export function isStale(quota: ProviderQuota, now: number): boolean {
 
 /** Copy of `state` with effective staleness at `now`; cached figures are kept. */
 export function effectiveState(state: QuotaState, now: number): QuotaState {
-	return Object.fromEntries(Object.entries(state).map(([id, quota]) => [id, { ...quota, stale: isStale(quota, now) }]));
+	return deepFreeze(
+		Object.fromEntries(Object.entries(state).map(([id, quota]) => [id, { ...quota, stale: isStale(quota, now) }])),
+	);
 }
 
 export type Tier = "full" | "compact";
@@ -450,7 +466,7 @@ function matchesModel(id: string, family: string): boolean {
 	return false;
 }
 
-function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): Cell[] {
+function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): QuotaCell[] {
 	const models = quota.cells.flatMap((cell) => (cell.kind === "mark" && cell.until > opts.now ? cell.families : []));
 	if (opts.model?.provider === id) models.push(opts.model.id);
 	return quota.cells.filter((cell) => {
@@ -466,7 +482,7 @@ function quantityText(value: number, unit: Unit): string {
 	return unit === "usd" ? `$${value.toFixed(2)}` : String(value);
 }
 
-function countText(cell: Extract<Cell, { kind: "count" }>, full: boolean): string {
+function countText(cell: Extract<QuotaCell, { kind: "count" }>, full: boolean): string {
 	const basis = full ? cell.basis : { reported: "rep", observed: "obs", inferred: "inf" }[cell.basis];
 	const amount = quantityText(cell.amount, cell.unit);
 	const total = cell.limit === undefined ? amount : `${amount}/${quantityText(cell.limit, cell.unit)}`;
@@ -478,7 +494,7 @@ function countText(cell: Extract<Cell, { kind: "count" }>, full: boolean): strin
 	return `${full ? long : short} ${total}${cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`}${tail} ${basis}`;
 }
 
-function cellText(cell: Cell, layout: Layout, colorize: Colorize, opts: ResolvedOptions): string {
+function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: ResolvedOptions): string {
 	const full = layout.tier === "full";
 	switch (cell.kind) {
 		case "percent": {
@@ -520,18 +536,18 @@ function cellText(cell: Cell, layout: Layout, colorize: Colorize, opts: Resolved
 	}
 }
 
-function isEssential(cell: Cell): cell is Extract<Cell, { kind: "mark" | "percent" }> {
+function isEssential(cell: QuotaCell): cell is Extract<QuotaCell, { kind: "mark" | "percent" }> {
 	return cell.kind === "mark" || cell.kind === "percent";
 }
 
-function priority(cell: Cell): number {
+function priority(cell: QuotaCell): number {
 	if (cell.kind === "mark") return -1;
 	return cell.kind === "percent" ? (cell.remaining ?? 101) : 102;
 }
 
 interface Segment {
 	quota: ProviderQuota;
-	cells: Cell[];
+	cells: QuotaCell[];
 }
 
 function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, opts: ResolvedOptions): string[] {
@@ -543,7 +559,7 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 		const stale = quota.stale && shown.some((cell) => cell.kind === "percent");
 		const label = `${full ? quota.display.full : quota.display.compact}${stale ? " (stale)" : ""}`;
 		const groups = [shown.filter((cell) => cell.kind !== "mark"), shown.filter((cell) => cell.kind === "mark")];
-		const groupText = (group: Cell[]) =>
+		const groupText = (group: QuotaCell[]) =>
 			group
 				.map((cell) => cellText(cell, layout, colorize, opts))
 				.join(full && group.every((cell) => cell.kind !== "percent") ? dim("; ") : " ");
