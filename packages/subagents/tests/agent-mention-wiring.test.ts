@@ -1510,3 +1510,47 @@ describe("resuming an evicted agent by name", () => {
 		});
 	});
 });
+
+// Claude Code's names work for the model as well as the human, because its
+// `@` is backed by the same SendMessage the LLM calls. These give ours the
+// same property: one name space, whoever is doing the addressing.
+describe("handles as tool arguments", () => {
+	it("steers by handle and by the name the model gave the agent, then reads its result by handle", async () => {
+		const { tools } = boot();
+		const session = fakeSession();
+		let finish!: (result: unknown) => void;
+		vi.mocked(runAgent).mockImplementation(
+			(_ctx: any, _type: any, _prompt: any, opts: any) =>
+				new Promise((resolve) => {
+					opts.onSessionCreated?.(session);
+					finish = resolve;
+				}) as any,
+		);
+		await tools
+			.get("Agent")
+			.execute(
+				"tc-named",
+				{ prompt: "go", description: "audit", subagent_type: "Explore", name: "auth-audit", run_in_background: true },
+				undefined,
+				undefined,
+				ctx(),
+			);
+		await flush();
+
+		for (const [agent_id, message] of [
+			["explore", "look at the RPC path"],
+			["auth-audit", "keep going"],
+		]) {
+			const r = await tools.get("steer_subagent").execute("tc", { agent_id, message }, undefined, undefined, ctx());
+			expect(session.steer).toHaveBeenCalledWith(message);
+			expect(textOf(r)).not.toContain("Agent not found");
+		}
+
+		finish({ responseText: "first answer", session, aborted: false, steered: false, failure: undefined });
+		await flush();
+		const r = await tools
+			.get("get_subagent_result")
+			.execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
+		expect(textOf(r)).toContain("first answer");
+	});
+});
