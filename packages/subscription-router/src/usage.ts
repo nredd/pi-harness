@@ -20,6 +20,7 @@ import {
 	isBuiltinCollector,
 	isCollectorId,
 	registrationFor,
+	transferredTo,
 } from "./collectors.ts";
 
 import type { ProviderConfig } from "./config.ts";
@@ -442,7 +443,11 @@ export class UsageService {
 		if (this.revoked.has(provider)) return undefined;
 		const id = collectorIdFor(provider, this.providers);
 		const registration = registrationFor(id);
-		if (!registration) return undefined;
+		return registration && this.bind(provider, id, registration);
+	}
+
+	/** Grant `provider`'s credential to `registration` until it retires or config changes. */
+	private bind(provider: string, id: string, registration: CollectorRegistration): CollectorRegistration {
 		const unbind = new AbortController();
 		const binding = {
 			collector: registration.collector,
@@ -454,9 +459,12 @@ export class UsageService {
 			this.invalidate(provider);
 			this.lastManualRefreshAt.delete(provider);
 			if (this.collectors.get(provider) === entry) this.collectors.delete(provider);
-			// The alias granted credentials to this registration, not to a later owner of its ID.
-			// A config-driven unbind is not a retirement: the new config decides.
-			if (id !== provider && !entry.reconfigured) this.revoked.add(provider);
+			// The alias granted credentials to this registration, not to a later owner of its ID, unless
+			// the owner replaced it through its handle. A config-driven unbind is not a retirement.
+			if (id === provider || entry.reconfigured) return;
+			const successor = transferredTo(registration);
+			if (successor) this.bind(provider, id, successor);
+			else this.revoked.add(provider);
 		});
 		return binding;
 	}

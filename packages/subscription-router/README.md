@@ -310,8 +310,10 @@ Register before or after the router extension loads. The built-in IDs `anthropic
 Pi provider ID: non-blank, at most 256 characters, no whitespace or slashes. Other values throw and
 are never coerced, because Pi resolves a non-string credential argument as a model and reads its
 `provider`. For external IDs the last registration wins.
-Only the returned unregister function owns that registration; old cleanup cannot remove a replacement
-or restore a previous registration. Retirement drops cached usage and confirmed blocks, aborts
+Only the returned handle owns that registration: calling it unregisters, and old cleanup cannot
+remove a replacement or restore a previous registration. `handle.replace(adapter)` swaps in a new
+adapter for the same ID (another ID throws) and keeps alias grants; it throws once a later
+registration has displaced the handle's own. Retirement drops cached usage and confirmed blocks, aborts
 reads, and ignores late results. Registration reads each adapter field (`provider`, `display`,
 `acceptsCredential`, `kind`, `request`, `parse`, `read`) once into a frozen copy before it looks at
 the current owner, so a getter that registers reentrantly is itself displaced and retired.
@@ -319,7 +321,7 @@ the current owner, so a getter that registers reentrantly is itself displaced an
 
 Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
 of `src/collectors.ts` has initialized it, even before the router extension loads. The frozen
-protocol object has `version: 1` and `register(adapter) -> unregister()`, not a mutable map. Check
+protocol object has `version: 1` and `register(adapter) -> handle`, not a mutable map. Check
 the version before using it; router copies reject incompatible versions, and version 1 objects that
 lack `register`, `registrationFor`, `collectorFor` or `collectedProviders`, without changing the
 object. The first copy installs the registry in a non-writable, non-configurable global slot, so a
@@ -341,7 +343,12 @@ registered adapter; credentials still come from `<provider>`. Unknown explicit I
 without falling back to the provider ID. An alias is a credential grant to the registration that owns
 the ID when the alias first resolves, not to the name: once that registration is replaced or
 unregistered, the alias returns `unavailable` without a credential lookup until config loads again
-(session start or `/reload`), which re-authorizes the current owner.
+(session start or `/reload`), which re-authorizes the current owner. The one exception is the owner's
+own `handle.replace(adapter)`: the grant moves to the new adapter, so an owner that re-registers in
+its `session_start` after the router warmed the alias keeps it available across `/reload`. A plain
+`registerCollector` with the same ID, from the owner or anyone else, still revokes the alias.
+Config reloads swap the declarations and clear older revocations before aborting any read, so a
+retirement caused by an abort handler stays revoked.
 
 The router reads each declared own reading field once into plain records and dense arrays (at most
 128 items) without calling adapter methods such as `map`, then validates and uses only that copy. A

@@ -44,9 +44,22 @@ export interface CollectorRegistration {
 	readonly signal: AbortSignal;
 }
 
+/**
+ * Owner-held registration handle. Calling it unregisters. `replace(adapter)` installs a new adapter
+ * for the same ID and transfers alias credential grants to it; it throws once the handle no longer
+ * owns the current registration.
+ */
+export interface CollectorHandle {
+	(): void;
+	replace(collector: Collector): void;
+}
+
+/** Marks a retirement caused by the owner's `replace`, naming the registration that inherits grants. */
+const TRANSFER = Symbol.for("pi-subscription-router.collector-transfer");
+
 interface CollectorRegistry {
 	readonly version: 1;
-	register(collector: Collector): () => void;
+	register(collector: Collector): CollectorHandle;
 	registrationFor(id: string): CollectorRegistration | undefined;
 	collectorFor(id: string): Readonly<Collector> | undefined;
 	collectedProviders(): string[];
@@ -96,6 +109,20 @@ function snapshotAdapter(adapter: Collector): Readonly<Collector> {
 function createRegistry(): CollectorRegistry {
 	const entries = new Map<string, CollectorRegistration>();
 	const controllers = new WeakMap<CollectorRegistration, AbortController>();
+	/** Publish `collector`, then retire its predecessor. No extension code runs in between. */
+	const publish = (collector: Readonly<Collector>, transfer = false): CollectorRegistration => {
+		const old = entries.get(collector.provider);
+		const lifetime = new AbortController();
+		const entry = Object.freeze({ collector, signal: lifetime.signal });
+		controllers.set(entry, lifetime);
+		entries.set(collector.provider, entry);
+		if (old) {
+			const reason = new DOMException("Collector registration was replaced.", "AbortError");
+			if (transfer) Object.defineProperty(reason, TRANSFER, { value: entry });
+			controllers.get(old)?.abort(reason);
+		}
+		return entry;
+	};
 	return Object.freeze({
 		version: 1 as const,
 		register(adapter: Collector) {
@@ -109,17 +136,21 @@ function createRegistry(): CollectorRegistry {
 			}
 			if (builtins.has(provider))
 				throw new Error(`Cannot register collector "${provider}": ID is reserved for a built-in.`);
-			const old = entries.get(provider);
-			const lifetime = new AbortController();
-			const entry = Object.freeze({ collector, signal: lifetime.signal });
-			controllers.set(entry, lifetime);
-			entries.set(provider, entry);
-			if (old) controllers.get(old)?.abort();
-			return () => {
+			let entry = publish(collector);
+			const unregister = () => {
 				if (entries.get(provider) !== entry) return;
 				entries.delete(provider);
-				lifetime.abort();
+				controllers.get(entry)?.abort();
 			};
+			const replace = (next: Collector) => {
+				const replacement = snapshotAdapter(next);
+				if (replacement.provider !== provider)
+					throw new TypeError(`A replacement for collector "${provider}" must keep the collector ID.`);
+				if (entries.get(provider) !== entry)
+					throw new Error(`Collector "${provider}" registration is no longer current.`);
+				entry = publish(replacement, true);
+			};
+			return Object.freeze(Object.assign(unregister, { replace }));
 		},
 		registrationFor: (id: string) => entries.get(id),
 		collectorFor: (id: string) => registrationFor(id)?.collector,
@@ -153,9 +184,17 @@ function sharedRegistry(): CollectorRegistry {
 
 const registry = sharedRegistry();
 
-/** Register or replace an external collector. Cleanup never removes a later registration. */
-export function registerCollector(collector: Collector): () => void {
+/**
+ * Register or replace an external collector. Cleanup never removes a later registration. Only the
+ * returned handle's `replace` keeps alias grants; a plain re-registration revokes them.
+ */
+export function registerCollector(collector: Collector): CollectorHandle {
 	return registry.register(collector);
+}
+
+/** The registration that inherited `registration`'s alias grants through its owner's `replace`. */
+export function transferredTo(registration: CollectorRegistration): CollectorRegistration | undefined {
+	return (registration.signal.reason as { [TRANSFER]?: CollectorRegistration })[TRANSFER];
 }
 
 export function registrationFor(id: string): CollectorRegistration | undefined {

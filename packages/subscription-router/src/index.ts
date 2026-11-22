@@ -41,6 +41,7 @@ import { collectorIdFor, type RegistryContext, UsageService } from "./usage.ts";
 
 export {
 	type Collector,
+	type CollectorHandle,
 	type CollectorReading,
 	collectedProviders,
 	collectorFor,

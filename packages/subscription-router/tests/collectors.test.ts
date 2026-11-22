@@ -607,6 +607,44 @@ it("preserves alias credential authorization", async () => {
 	expect(trusted).toHaveBeenCalledOnce();
 });
 
+it("recovers alias after owner reload", async () => {
+	const { usage, getAccessToken } = harness();
+	const alias = "faux-alias";
+	const first = vi.fn(fake.read);
+	const reloaded = vi.fn(async () => ({ windows: [] }));
+	const stranger = vi.fn(fake.read);
+	// Owner extension factory, then the router factory applies config.
+	const handle = registerCollector({ ...fake, read: first });
+	cleanup.push(handle);
+	const { pi, handlers } = createRecordingPi();
+	await createSubscriptionRouter({
+		usage,
+		config: { ok: true, profiles: [], providers: { [alias]: { collector: { id: provider } } } },
+		now: () => T0,
+	})(pi);
+	// The router's session_start warm-up resolves the alias to the first registration.
+	const session = { ...ctx, scopedModels: [{ model: { provider: alias } }] } as unknown as ExtensionContext;
+	await handlers.get("session_start")?.[0]?.({}, session);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(first).toHaveBeenCalledOnce();
+	expect(usage.peek(alias)).toMatchObject({ status: "available", windows: reading.windows });
+	// The owner's own session_start replaces its registration through its handle.
+	expect(() => handle.replace({ ...fake, provider: "faux-other" })).toThrow(/keep the collector ID/);
+	handle.replace({ ...fake, read: reloaded });
+	expect(usage.peek(alias)).toBeUndefined();
+	expect(await usage.get(ctx, alias, { force: true })).toMatchObject({ status: "available", windows: [] });
+	expect(reloaded).toHaveBeenCalledWith(expect.objectContaining({ token: "fake-token" }));
+	// A different registrant of the same ID does not inherit the grant, and the old handle loses ownership.
+	install({ ...fake, read: stranger });
+	expect(() => handle.replace({ ...fake, read: reloaded })).toThrow(/no longer current/);
+	expect(await usage.get(ctx, alias, { force: true })).toMatchObject({ status: "unavailable" });
+	expect(stranger).not.toHaveBeenCalled();
+	expect(getAccessToken.mock.calls).toEqual([
+		[session, alias],
+		[ctx, alias],
+	]);
+});
+
 it("preserves revocation during reconfigure", async () => {
 	const { usage, getAccessToken } = harness();
 	const alias = "faux-alias";

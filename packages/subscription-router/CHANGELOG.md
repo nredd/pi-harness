@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Add a versioned registry for trusted quota collectors, with reserved built-in IDs, configured aliases and registration-owned evidence. Validate readings and cap HTTP response bodies at 256 KiB (#1178)
-- Harden the collector registry: primitive string IDs only, aliases bound to the granted registration, a router-owned reading copy validated once, total error sanitization, a 31-day horizon for external resets, adapter snapshots before predecessor selection, a locked registry slot that refuses malformed version 1 objects, and cancelled non-success bodies (#1178)
+- Harden the collector registry: primitive string IDs only, aliases bound to the granted registration, a router-owned reading copy validated once, total error sanitization, a 31-day horizon for external resets, adapter snapshots before predecessor selection, a locked registry slot that refuses malformed version 1 objects, cancelled non-success bodies, an owner-held `replace` that keeps alias grants, and atomic alias reconfiguration (#1178)
 
 - Exercise metered Google quota views in the offline stack fixtures while preserving the legacy snapshots-only reply (#1178)
 
