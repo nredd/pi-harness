@@ -1568,7 +1568,8 @@ child session with its own tools/model; the coordinator itself has no filesystem
 The run uses a worker thread, not a separate OS subprocess per agent.
 Ending the session stops every running workflow and waits for its worker thread to exit. No
 notice is sent while it waits, so a run that stops first does not start a turn in the closing
-session. On
+session, and a workflow launched meanwhile, through the tool or the flag, is refused with "The
+session is shutting down: no new workflow can start." On
 `/new`, `/resume`, `/fork` or `/reload` the run's `Stopped` notice is handed to the session you
 left and appears when you return to it; on quit it is dropped.
 

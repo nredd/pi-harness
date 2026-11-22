@@ -14,7 +14,12 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { NOTIFICATION_HOLD_MS } from "../../src/completion-outbox.ts";
 import { drainDetached } from "../../src/detached-results.ts";
-import { createSubagentsExtension, WORKFLOW_ENTRY_TYPE, WORKFLOW_FILE_FLAG } from "../../src/index.ts";
+import {
+	createSubagentsExtension,
+	WORKFLOW_ENTRY_TYPE,
+	WORKFLOW_FILE_FLAG,
+	WORKFLOW_SHUTDOWN_REFUSAL,
+} from "../../src/index.ts";
 import { runWorkflow, type WorkflowRunResult } from "../../src/workflow/runtime.ts";
 import { type BootedPi, bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "../fixtures/boot-extension.ts";
 
@@ -165,6 +170,44 @@ it("holds a Stopped notice while shutdown waits for another run, then drops it o
 	clock.advance(60_000);
 	expect(notices()).toEqual([]);
 	expect(drainDetached(sessionFile)).toEqual([]);
+});
+
+it("refuses a workflow launched through the tool while shutdown waits", async () => {
+	const run = await startToolRun();
+	const shutdown = booted.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, context);
+	await run.aborted;
+
+	const late = await booted.tools.get("SubagentWorkflow").execute("tc-late", { script }, undefined, undefined, context);
+	run.complete();
+	await shutdown;
+
+	expect(textOf(late)).toBe(WORKFLOW_SHUTDOWN_REFUSAL);
+	expect(runWorkflow).toHaveBeenCalledOnce();
+	expect(clock.pending).toBe(0);
+});
+
+it("refuses a flag-launched workflow while shutdown waits", async () => {
+	const flags: Record<string, string> = {};
+	const run = holdNextRun();
+	booted = bootPi(flags);
+	createSubagentsExtension({ clock })(booted.pi);
+	const start = booted.lifecycle.get("session_start")!;
+	await start({ type: "session_start", reason: "startup" }, context);
+	await booted.tools.get("SubagentWorkflow").execute("tc-held", { script }, undefined, undefined, context);
+	const shutdown = booted.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, context);
+	await run.aborted;
+
+	const path = join(hermetic.dir, "flow.js");
+	writeFileSync(path, script);
+	flags[WORKFLOW_FILE_FLAG] = path;
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await start({ type: "session_start", reason: "startup" }, context);
+	run.complete();
+	await shutdown;
+
+	expect(warn).toHaveBeenCalledWith(`[pi-subagents] ${WORKFLOW_SHUTDOWN_REFUSAL}`);
+	expect(runWorkflow).toHaveBeenCalledOnce();
+	warn.mockRestore();
 });
 
 it("records a flag-launched run's outcome before shutdown returns", async () => {

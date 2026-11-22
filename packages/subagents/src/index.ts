@@ -509,6 +509,9 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
 /** CLI flag that runs a workflow script at session start. */
 export const WORKFLOW_FILE_FLAG = "subagents-workflow-file";
 
+/** What a workflow launch gets once `session_shutdown` has begun: shutdown would neither stop nor join it. */
+export const WORKFLOW_SHUTDOWN_REFUSAL = "The session is shutting down: no new workflow can start.";
+
 /**
  * Re-exported from where they now live, because this is where they were
  * defined and a consumer (or a test) that matched a session entry on
@@ -1786,6 +1789,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			delete (globalThis as any)[MANAGER_KEY];
 		}
 		scheduler.stop();
+		// Before the abort pass below: a run launched after it would escape both it
+		// and the join, outliving teardown.
+		workflowsClosing = true;
 		// Before any run is aborted: a run that settles while another is still
 		// terminating must not send its notice into the closing session.
 		outbox.hold();
@@ -3394,6 +3400,9 @@ Terse command-style prompts produce shallow, generic work.
 	 */
 	const pendingWorkflowRuns = new Set<Promise<void>>();
 
+	/** Set once `session_shutdown` begins: both launch paths then refuse. */
+	let workflowsClosing = false;
+
 	/** Run a task in the background, then `settled`, for `session_shutdown` to join. */
 	function detachWorkflowRun(ctx: ExtensionContext, task: WorkflowTask, settled: () => void): void {
 		const run = runWorkflowTask(ctx, task)
@@ -3588,6 +3597,7 @@ Terse command-style prompts produce shallow, generic work.
 		},
 
 		execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
+			if (workflowsClosing) return textResult(WORKFLOW_SHUTDOWN_REFUSAL);
 			const resumeFrom = resolveResumeTarget(params.resumeFromRunId, workflowTasks);
 			if (resumeFrom !== undefined && !resumeFrom.ok) return textResult(resumeFrom.message);
 
@@ -3768,6 +3778,11 @@ Terse command-style prompts produce shallow, generic work.
 			if (ctx.hasUI) ctx.ui.notify(message, level);
 			else console.warn(`[pi-subagents] ${message}`);
 		};
+
+		if (workflowsClosing) {
+			report(WORKFLOW_SHUTDOWN_REFUSAL, "warning");
+			return;
+		}
 
 		// The flag is the same machinery by another door, so the master switch has
 		// to close it too — silently ignoring a flag the user typed would be worse
