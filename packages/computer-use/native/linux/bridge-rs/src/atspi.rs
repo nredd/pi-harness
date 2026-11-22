@@ -23,6 +23,8 @@ const REGISTRY_ROOT: &str = "/org/a11y/atspi/accessible/root";
 const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
 const COMPONENT: &str = "org.a11y.atspi.Component";
 const ACTION: &str = "org.a11y.atspi.Action";
+// AtspiRole wire IDs from atspi/atspi-constants.h in GNOME/at-spi2-core.
+const PASSWORD_TEXT_ROLE: u32 = 40;
 const MAX_ATSPI_ACTIONS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
@@ -197,10 +199,19 @@ impl AtspiClient {
         self.request(property, proxy.get_property(property)).await
     }
 
-    async fn role(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+    async fn role_name(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, ACCESSIBLE).await?;
         let member = "GetRoleName";
         self.request(member, proxy.call(member, &())).await
+    }
+
+    async fn role_id(&self, accessible: &AccessibleRef) -> Option<u32> {
+        let proxy = self.proxy(accessible, ACCESSIBLE).await.ok()?;
+        let member = "GetRole";
+        self.request(member, proxy.call(member, &()))
+            .await
+            .ok()
+            .filter(|id| matches!(id, 1..=66 | 68..=69 | 71..=130))
     }
 
     async fn interfaces(
@@ -265,7 +276,7 @@ impl AtspiClient {
             let app_name = self.string_property(&app, "Name").await.unwrap_or_default();
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let role = self.role(&window).await.unwrap_or_default();
+                let role = self.role_name(&window).await.unwrap_or_default();
                 let name = self
                     .string_property(&window, "Name")
                     .await
@@ -322,9 +333,13 @@ impl AtspiClient {
                 continue;
             }
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
-            let role = self.role(&accessible).await.unwrap_or_default();
-            let unknown_role = is_unknown_role(&role);
-            incomplete |= unknown_role;
+            let role_id = self.role_id(&accessible).await;
+            let role = match role_id {
+                None => "unknown".to_owned(),
+                Some(PASSWORD_TEXT_ROLE) => "password text".to_owned(),
+                Some(_) => field_or_default(self.role_name(&accessible).await, &mut incomplete),
+            };
+            incomplete |= role_id.is_none();
             let name = field_or_default(
                 self.string_property(&accessible, "Name").await,
                 &mut incomplete,
@@ -333,7 +348,7 @@ impl AtspiClient {
                 self.string_property(&accessible, "Description").await,
                 &mut incomplete,
             );
-            let is_secure = unknown_role || is_password_role(&role);
+            let is_secure = matches!(role_id, None | Some(PASSWORD_TEXT_ROLE));
             let value = if !is_secure && interfaces.contains(TEXT) {
                 field_or_default(self.read_text(&accessible).await, &mut incomplete)
             } else {
@@ -375,8 +390,10 @@ impl AtspiClient {
         &self,
         accessible: &AccessibleRef,
     ) -> Result<String, ProtocolError> {
-        let role = self.role(accessible).await.unwrap_or_default();
-        if is_unknown_role(&role) || is_password_role(&role) {
+        if matches!(
+            self.role_id(accessible).await,
+            None | Some(PASSWORD_TEXT_ROLE)
+        ) {
             return Err(ProtocolError::new(
                 "Cannot confirm that the live accessibility role permits reading text",
                 ErrorCode::SecureTextUnreadable,
@@ -636,16 +653,6 @@ async fn accessibility_bus_address(
 }
 
 /// Retain optional field defaults, but do not use a missing timed-out field to prove absence.
-fn is_unknown_role(role: &str) -> bool {
-    let role = role.trim();
-    role.is_empty() || role.eq_ignore_ascii_case("unknown")
-}
-
-fn is_password_role(role: &str) -> bool {
-    let role = role.trim();
-    role.eq_ignore_ascii_case("password text") || role.eq_ignore_ascii_case("password")
-}
-
 fn field_or_default<T: Default>(result: Result<T, ProtocolError>, incomplete: &mut bool) -> T {
     result.unwrap_or_else(|error| {
         *incomplete |= error.code == ErrorCode::Timeout;
@@ -862,6 +869,18 @@ mod tests {
 
         fn get_role_name(&self) -> &str {
             self.role
+        }
+
+        fn get_role(&self) -> u32 {
+            match self.role {
+                "desktop" => 14,
+                "dialog" => 16,
+                "frame" => 23,
+                "label" => 29,
+                "PaSsWoRd TeXt" => 40,
+                "application" => 75,
+                other => panic!("Missing fixture role ID for {other}"),
+            }
         }
 
         fn get_interfaces(&self) -> Vec<&str> {

@@ -1326,8 +1326,9 @@ mod tests {
 
     struct PeerNode {
         name: &'static str,
-        role: watch::Receiver<Option<&'static str>>,
+        role: watch::Receiver<Option<u32>>,
         stalled_role: Option<StalledReply>,
+        role_name: &'static str,
         stalled_children: Option<StalledReply>,
         child: Option<&'static str>,
         text: bool,
@@ -1345,13 +1346,19 @@ mod tests {
             ""
         }
 
-        async fn get_role_name(&self) -> zbus::fdo::Result<&str> {
-            if let Some(stall) = &self.stalled_role {
-                return stall.wait().await;
+        fn get_role_name(&self) -> &str {
+            self.role_name
+        }
+
+        async fn get_role(&self) -> zbus::fdo::Result<u32> {
+            let role = *self.role.borrow();
+            match role {
+                Some(id) => Ok(id),
+                None => match &self.stalled_role {
+                    Some(stall) => stall.wait().await,
+                    None => Err(zbus::fdo::Error::Failed("role unavailable".into())),
+                },
             }
-            self.role
-                .borrow()
-                .ok_or_else(|| zbus::fdo::Error::Failed("role unavailable".into()))
         }
 
         async fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
@@ -1402,7 +1409,8 @@ mod tests {
                     "/window",
                     PeerNode {
                         name: "Password",
-                        role: watch::channel(Some("password text")).1,
+                        role: watch::channel(None).1,
+                        role_name: "password text",
                         stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
@@ -1449,7 +1457,8 @@ mod tests {
                     "/window",
                     PeerNode {
                         name: "Fixture",
-                        role: watch::channel(Some("unknown")).1,
+                        role: watch::channel(Some(67)).1,
+                        role_name: "unknown",
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
@@ -1469,6 +1478,14 @@ mod tests {
                 .result
                 .unwrap();
                 assert_eq!(look["outline"]["value"], "");
+                let gone = peer_request(
+                    &state,
+                    &connection,
+                    "atspiWaitFor",
+                    json!({"rootRef":root_ref,"text":"private fixture text","gone":true}),
+                )
+                .await;
+                assert_eq!(gone.error.unwrap().code, ErrorCode::Timeout);
                 let reply = peer_request(
                     &state,
                     &connection,
@@ -1484,9 +1501,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn old_look_cannot_authorize_live_text() {
+    async fn rejects_unclassified_atspi_roles() {
         let reads = Arc::new(AtomicUsize::new(0));
-        let (role, current_role) = watch::channel(Some("text"));
+        let (role, current_role) = watch::channel(Some(61));
         let (state, root_ref) = peer_root_state();
         with_peer(
             |peer| {
@@ -1495,7 +1512,68 @@ mod tests {
                     PeerNode {
                         name: "Fixture",
                         role: current_role,
+                        role_name: "ordinary text",
                         stalled_role: None,
+                        stalled_children: None,
+                        child: None,
+                        text: true,
+                    },
+                )?
+                .serve_at("/window", PeerText(Arc::clone(&reads)))
+            },
+            async |connection| {
+                let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                let old = peer_request(&state, &connection, "look", look_args.clone())
+                    .await
+                    .result
+                    .unwrap();
+                assert_eq!(old["outline"]["value"], "private fixture text");
+                let permitted_reads = reads.load(Ordering::SeqCst);
+                for id in [0, 67, 70, 131, u32::MAX, 40] {
+                    role.send(Some(id)).unwrap();
+                    let look = peer_request(&state, &connection, "look", look_args.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    assert_eq!(look["outline"]["value"], "", "role ID {id}");
+                    let reply = peer_request(
+                        &state,
+                        &connection,
+                        "atspiReadText",
+                        json!({"lookId":old["lookId"],"elementRef":old["outline"]["ref"]}),
+                    )
+                    .await;
+                    assert_eq!(
+                        reply.error.unwrap().code,
+                        ErrorCode::SecureTextUnreadable,
+                        "role ID {id}"
+                    );
+                    assert_eq!(
+                        reads.load(Ordering::SeqCst),
+                        permitted_reads,
+                        "role ID {id}"
+                    );
+                }
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn old_look_cannot_authorize_live_text() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (role, current_role) = watch::channel(Some(61));
+        let (stall, mut requests) = StalledReply::new();
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Fixture",
+                        role: current_role,
+                        role_name: "text",
+                        stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
                         text: true,
@@ -1532,6 +1610,12 @@ mod tests {
                 let permitted_reads = reads.load(Ordering::SeqCst);
 
                 role.send(None).unwrap();
+                assert_eq!(
+                    read(&old_look).await.error.unwrap().code,
+                    ErrorCode::SecureTextUnreadable
+                );
+                assert_eq!(requests.try_recv(), Ok(()));
+                assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
                 let new_look = look().await;
                 assert_ne!(old_look["lookId"], new_look["lookId"]);
                 assert_eq!(new_look["outline"]["value"], "");
@@ -1540,14 +1624,8 @@ mod tests {
                     ErrorCode::SecureTextUnreadable
                 );
 
-                for live_role in [
-                    None,
-                    Some(""),
-                    Some("unknown"),
-                    Some("password text"),
-                    Some("password"),
-                ] {
-                    role.send(live_role).unwrap();
+                for live_role in [67, 40] {
+                    role.send(Some(live_role)).unwrap();
                     let reply = read(&old_look).await;
                     assert_eq!(
                         reply.error.map(|error| error.code),
@@ -1557,7 +1635,7 @@ mod tests {
                     assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
                 }
 
-                role.send(Some("text")).unwrap();
+                role.send(Some(61)).unwrap();
                 assert_eq!(
                     read(&old_look).await.result.unwrap()["text"],
                     "private fixture text"
@@ -1652,7 +1730,8 @@ mod tests {
                         "/window",
                         PeerNode {
                             name: "Window",
-                            role: watch::channel(Some("frame")).1,
+                            role: watch::channel(Some(23)).1,
+                            role_name: "frame",
                             stalled_role: None,
                             stalled_children: None,
                             child: Some("/window/parent"),
@@ -1663,7 +1742,8 @@ mod tests {
                         "/window/parent",
                         PeerNode {
                             name: "Parent",
-                            role: watch::channel(Some("panel")).1,
+                            role: watch::channel(Some(39)).1,
+                            role_name: "panel",
                             stalled_role: None,
                             stalled_children: stalled,
                             child: Some("/window/parent/match"),
@@ -1674,7 +1754,8 @@ mod tests {
                         "/window/parent/match",
                         PeerNode {
                             name: "Matching child",
-                            role: watch::channel(Some("label")).1,
+                            role: watch::channel(Some(29)).1,
+                            role_name: "label",
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
