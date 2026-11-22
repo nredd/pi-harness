@@ -227,8 +227,11 @@ The helper requires the admitted HWND and PID to match the owning look before a 
 On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
 poll. A closed HWND, or one now owned by a different PID, fails the next poll with `root_stale`.
 Text reads and each wait poll recheck that owner after acquiring the UIA root, before walking it,
-and again after the walk, discarding the result as `root_stale` if ownership changed. A replacement
-that reuses the exact numeric HWND and PID pair is indistinguishable. Semantic `act_ui` delivery
+and again after the walk, discarding the result as `root_stale` if a check detects ownership drift.
+These are samples, not continuous monitoring. A text read whose desktop access check refuses a
+closed or reassigned HWND also reports `root_stale`; `coordinate_blocked` means the owner still
+matched. A replacement that reuses the exact numeric HWND and PID pair passes every check
+(#1231). Semantic `act_ui` delivery
 checks the owner before resolving the element, not after acquiring the UIA root.
 
 Known blocked desktop roots fail before helper readiness for live operations, including
