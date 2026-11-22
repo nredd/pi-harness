@@ -510,6 +510,11 @@ node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
 node ARTIFACT import --agent-dir DIR --input REPO
 ```
 
+`--replace-harnesses` publishes this scan as a replacement generation. It bypasses the
+narrower-set, clock-rollback and unreadable-history safeguards below and unfreezes recovery files,
+so it drops published history absent from the scan, sealed months included, and viewers holding a
+newer snapshot reject the replacement as older until the clock passes it. The usage text says so too.
+
 `--harness` picks what an export reads; the default is `pi` only, so other tools are opt-in. Roots
 default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_DIR` or `~/.claude`,
 `CODEX_HOME` or `~/.codex`, `OPENCODE_DB` or `$XDG_DATA_HOME/opencode/opencode.db`); the flags take

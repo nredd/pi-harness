@@ -766,7 +766,12 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 /** Which harnesses an export reads, and where. Default is pi only: other tools are opt-in. */
 export interface ExportOptions {
 	harnesses?: readonly Harness[];
-	/** Allow publishing a narrower harness set than last time, dropping the missing harnesses' history. */
+	/**
+	 * Publish this scan as a replacement generation. Bypasses the narrower-set, clock-rollback and
+	 * unreadable-history safeguards and clears frozen recovery files, so it drops published history absent
+	 * from the scan, sealed months included. Viewers holding a newer snapshot reject the replacement as
+	 * older until the clock passes it.
+	 */
 	replaceHarnesses?: boolean;
 	roots?: Partial<HarnessRoots>;
 	env?: Record<string, string | undefined>;
