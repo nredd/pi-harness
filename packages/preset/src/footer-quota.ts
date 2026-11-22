@@ -16,68 +16,74 @@ export const REPLY_TIMEOUT_MS = 12_000;
 export const WARNING_AT = 20;
 export const ERROR_AT = 5;
 
-/** Router `durationMs` of a weekly window. */
 const WEEK_MS = 604_800_000;
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const MINUTE_MS = 60_000;
 
-/**
- * Providers shown, in order, with their router ids. `fiveHour` is the name of the 5h window to
- * look for, not a promise that one exists: its segment shows only while the provider's reading
- * reports it (`ProviderQuota.fiveHourReported`), since some Anthropic plans have no 5h quota.
- * A provider without the name never shows one (OpenAI Codex). `identify` says how the weekly
- * window is recognised: `name` (Anthropic's fixed `seven_day`), or `span` (OpenAI: a
- * reported 604800000 ms duration, or the legacy `7d` name on snapshots without `spanSource`).
- */
-export const QUOTA_PROVIDERS = [
-	{
-		id: "anthropic",
+// Only the v1 adapter supplies these defaults. V2 display and selectors come from the view.
+const LEGACY_DISPLAY = {
+	anthropic: {
 		full: "Anthropic",
 		compact: "Anth",
-		fiveHour: "five_hour",
-		weekly: "seven_day",
-		identify: "name",
+		footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true },
 	},
-	{
-		id: "openai-codex",
+	"openai-codex": {
 		full: "OpenAI",
 		compact: "OAI",
-		weekly: "7d",
-		identify: "span",
+		footer: { show: [{ durationMs: WEEK_MS }], placeholder: true },
 	},
-] as const satisfies readonly QuotaProviderSpec[];
+};
 
-interface QuotaProviderSpec {
-	id: string;
+type Selector = { name: string } | { durationMs: number };
+interface Display {
 	full: string;
 	compact: string;
-	fiveHour?: string;
-	weekly: string;
-	identify: "name" | "span";
+	footer?: { show?: Selector[]; placeholder: boolean };
 }
 
-/**
- * Last known remaining percentages (0-100) for one provider; `undefined` renders `--`.
- * `stale` is what the router reported; use `getState()` for effective staleness,
- * which also accounts for `expiresAt` passing.
- */
+type Unit = keyof typeof UNITS;
+const UNITS = {
+	requests: ["req", "requests"],
+	tokens: ["tok", "tokens"],
+	usd: ["USD", "USD"],
+	credits: ["credits", "credits"],
+} as const;
+
+interface WindowLabel {
+	name: string;
+	durationMs: number | undefined;
+	calendar: boolean;
+}
+
+interface PercentCell extends WindowLabel {
+	kind: "percent";
+	key: string;
+	families: string[];
+	remaining: number | undefined;
+	resetAt: number | undefined;
+	unidentified: boolean;
+	placeholder: boolean;
+}
+
+type Cell =
+	| PercentCell
+	| (WindowLabel & {
+			kind: "count";
+			amount: number;
+			left: boolean;
+			limit?: number;
+			unit: Unit;
+			basis: "reported" | "observed" | "inferred";
+			families: string[];
+	  })
+	| { kind: "mark"; families: string[]; until: number; evidence: "read" | "inferred" | "observed" }
+	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit };
+
 export interface ProviderQuota {
-	/**
-	 * True when the reading has a provider-scoped 5h window; only then is a `5h` segment shown.
-	 * Distinct from `fiveHour`, whose `undefined` means reported but invalid (`--`).
-	 */
-	fiveHourReported?: boolean;
-	fiveHour?: number;
-	/** Epoch ms the 5h window resets, as reported by the router; absent when unknown. */
-	fiveHourResetAt?: number;
-	weekly?: number;
-	/** Epoch ms the weekly window resets, as reported by the router; absent when unknown. */
-	weeklyResetAt?: number;
-	/**
-	 * True when `weekly`/`weeklyResetAt` describe a window whose span the router only assumed
-	 * (`spanSource: "assumed"`): it is shown as an unidentified quota, never as weekly.
-	 */
-	weeklyUnknown?: boolean;
+	display: Display;
+	cells: Cell[];
 	stale: boolean;
-	/** Epoch ms after which a fresh reading is stale. Absent: never fresh. */
 	expiresAt?: number;
 }
 
@@ -85,153 +91,237 @@ export type QuotaState = Record<string, ProviderQuota>;
 
 /** Remaining percent from a used percent: clamp 0..100, floor remaining; invalid -> `undefined`. */
 export function remainingPercent(used: unknown): number | undefined {
-	if (typeof used !== "number" || !Number.isFinite(used)) return undefined;
-	return Math.floor(100 - Math.min(100, Math.max(0, used)));
+	const value = finite(used);
+	return value === undefined ? undefined : Math.floor(100 - Math.min(100, Math.max(0, value)));
+}
+
+function finite(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function epoch(value: unknown): number | undefined {
+	const n = finite(value);
+	return n !== undefined && n > 0 && n <= 8.64e15 ? n : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-type WindowReading = Pick<
-	ProviderQuota,
-	"fiveHourReported" | "fiveHour" | "fiveHourResetAt" | "weekly" | "weeklyResetAt" | "weeklyUnknown"
->;
-
-/** Epoch ms from a router `resetAt`; non-finite or non-positive -> `undefined`. */
-function resetAtOf(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+function records(value: unknown): Record<string, unknown>[] {
+	return Array.isArray(value) ? value.map(asRecord).filter((record) => record !== undefined) : [];
 }
 
-/**
- * Whether a router window is proven weekly for a span-identified provider: a reported
- * 604800000 ms duration, or, only when the snapshot predates `spanSource`, the legacy `7d` name.
- */
-function isReportedWeekly(window: Record<string, unknown>, spec: QuotaProviderSpec): boolean {
-	if (window.spanSource === undefined) return window.name === spec.weekly;
-	return window.spanSource === "reported" && window.durationMs === WEEK_MS;
+/** Keep quota text single-line, ASCII and free of terminal controls, including from plug-ins. */
+function textOf(value: unknown): string | undefined {
+	return typeof value === "string" ? value.replace(/[^ -~]/g, "?").trim() || undefined : undefined;
 }
 
-function readingOf(window: Record<string, unknown>, key: "fiveHour" | "weekly"): WindowReading {
-	const out: WindowReading = { [key]: remainingPercent(window.usedPercent) };
-	const resetAt = resetAtOf(window.resetAt);
-	if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
-	return out;
+function familiesOf(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
 }
 
-/**
- * Remaining percents and reset times of the provider-scoped windows. Reset keys exist only when known.
- * Span-identified providers: weekly is the first proven-weekly window. Only if none exists and
- * the router reported windows with an assumed span, the most limiting of those is kept as an
- * unidentified quota (`weeklyUnknown`); reported non-weekly spans (e.g. 18000s) stay hidden.
- */
-function readWindows(windows: unknown[], spec: QuotaProviderSpec): WindowReading {
-	const provider = windows.flatMap((raw) => {
-		const window = asRecord(raw);
-		return window?.scope === "provider" ? [window] : [];
+function readDisplay(raw: unknown, id: string): Display {
+	const display = asRecord(raw);
+	const footer = asRecord(display?.footer);
+	const show = Array.isArray(footer?.show)
+		? records(footer.show).flatMap<Selector>((item) => {
+				if (typeof item.name === "string") return [{ name: item.name }];
+				const durationMs = finite(item.durationMs);
+				return durationMs === undefined ? [] : [{ durationMs }];
+			})
+		: undefined;
+	return {
+		full: textOf(display?.full) ?? id,
+		compact: textOf(display?.compact) ?? id,
+		footer: { show, placeholder: footer?.placeholder === true },
+	};
+}
+
+function windowLabel(raw: Record<string, unknown>, name: string): WindowLabel {
+	return {
+		name,
+		durationMs: finite(raw.durationMs),
+		calendar: raw.kind === "calendar" && asRecord(raw.resetRule)?.every === "day",
+	};
+}
+
+function buckets(windows: unknown): { raw: Record<string, unknown>; label: WindowLabel; families: string[] }[] {
+	return records(windows).flatMap((raw) => {
+		const name = textOf(raw.name);
+		if (!name || (raw.scope !== "model" && raw.scope !== "provider")) return [];
+		const families = raw.scope === "model" ? familiesOf(raw.families) : [];
+		return raw.scope === "model" && families.length === 0 ? [] : [{ raw, label: windowLabel(raw, name), families }];
 	});
-	if (spec.identify === "name") {
-		const out: WindowReading = provider.some((window) => window.name === spec.fiveHour)
-			? { fiveHourReported: true }
-			: {};
-		for (const window of provider) {
-			const key = window.name === spec.fiveHour ? "fiveHour" : window.name === spec.weekly ? "weekly" : undefined;
-			if (key) Object.assign(out, readingOf(window, key));
+}
+
+function selectorLabel(selector: Selector): WindowLabel {
+	if (!("name" in selector)) return { name: "quota", durationMs: selector.durationMs, calendar: false };
+	const durationMs = selector.name === "five_hour" ? 5 * HOUR_MS : selector.name === "seven_day" ? WEEK_MS : undefined;
+	return { name: textOf(selector.name) ?? "quota", durationMs, calendar: false };
+}
+
+function chooseWindows(raw: unknown, display: Display, legacy: boolean): PercentCell[] {
+	const windows = buckets(raw).filter(
+		({ raw, families }) => (raw.basis === undefined || raw.basis === "reported") && (!legacy || families.length === 0),
+	);
+	const reading = (
+		{ raw, label, families }: (typeof windows)[number],
+		key: string,
+		override?: WindowLabel,
+	): PercentCell => ({
+		...label,
+		...override,
+		kind: "percent",
+		key,
+		families,
+		remaining: remainingPercent(raw.usedPercent),
+		resetAt: epoch(raw.resetAt),
+		unidentified: raw.spanSource === "assumed",
+		placeholder: false,
+	});
+	const show = display.footer?.show;
+	if (!show) return windows.map((window) => reading(window, JSON.stringify([window.label.name, window.families])));
+	return show.flatMap((selector, i) => {
+		const chosenLabel = selectorLabel(selector);
+		const key = JSON.stringify(selector);
+		let matches = windows.filter(({ raw }) =>
+			"name" in selector
+				? raw.name === selector.name
+				: raw.spanSource === undefined && legacy
+					? raw.name === "7d"
+					: raw.spanSource !== "assumed" && raw.durationMs === selector.durationMs,
+		);
+		if (legacy) matches = "name" in selector ? matches.slice(-1) : matches.slice(0, 1);
+		if (!matches.length && "durationMs" in selector) {
+			// An assumed span cannot satisfy a selector, but the most limiting reading is still useful.
+			const assumed = windows.filter(({ raw }) => raw.spanSource === "assumed");
+			assumed.sort(
+				(a, b) => (remainingPercent(a.raw.usedPercent) ?? 101) - (remainingPercent(b.raw.usedPercent) ?? 101),
+			);
+			matches = assumed.slice(0, 1);
 		}
-		return out;
-	}
-	const weekly = provider.find((window) => isReportedWeekly(window, spec));
-	if (weekly) return readingOf(weekly, "weekly");
-	const assumed = provider.filter((window) => window.spanSource === "assumed");
-	const percent = (window: Record<string, unknown>) => remainingPercent(window.usedPercent);
-	let limiting: Record<string, unknown> | undefined;
-	for (const window of assumed) {
-		const left = percent(window);
-		if (limiting === undefined || (left !== undefined && (percent(limiting) ?? 101) > left)) limiting = window;
-	}
-	return limiting ? { ...readingOf(limiting, "weekly"), weeklyUnknown: true } : {};
+		if (matches.length)
+			return matches.map((window) =>
+				reading(window, JSON.stringify([key, window.families]), legacy ? chosenLabel : undefined),
+			);
+		return display.footer?.placeholder && i === show.length - 1
+			? [
+					{
+						...chosenLabel,
+						kind: "percent" as const,
+						key: JSON.stringify([key, []]),
+						families: [],
+						remaining: undefined,
+						resetAt: undefined,
+						unidentified: false,
+						placeholder: true,
+					},
+				]
+			: [];
+	});
 }
 
-/** Whether `prior` descends from a fresh reading: only a fresh snapshot sets `expiresAt`, and stale merges carry it. */
-function hasFreshReading(prior: ProviderQuota | undefined): prior is ProviderQuota & { expiresAt: number } {
-	return prior?.expiresAt !== undefined;
+function unitOf(value: unknown): Unit | undefined {
+	return typeof value === "string" && Object.hasOwn(UNITS, value) ? (value as Unit) : undefined;
 }
 
-/**
- * Per window: a valid new percent brings its own reset time (and identity); otherwise the prior
- * pair is retained. An unidentified new reading never displaces a retained proven-weekly one.
- * For a provider with a 5h window name, whether that window exists follows the last fresh reading,
- * so a stale cache from before a plan change cannot bring a dropped 5h back; before any fresh
- * reading it follows the stale replies. A provider without one (OpenAI) merges its 5h figure as
- * before; it is never shown.
- */
-function mergeReadings(seen: WindowReading, prior: ProviderQuota | undefined, spec: QuotaProviderSpec): WindowReading {
-	const out: WindowReading = {};
-	const fiveHourReported = hasFreshReading(prior)
-		? prior.fiveHourReported === true
-		: seen.fiveHourReported === true || prior?.fiveHourReported === true;
-	if (fiveHourReported) out.fiveHourReported = true;
-	const keys =
-		fiveHourReported || spec.fiveHour === undefined ? (["fiveHour", "weekly"] as const) : (["weekly"] as const);
-	for (const key of keys) {
-		const usable =
-			seen[key] !== undefined &&
-			!(key === "weekly" && seen.weeklyUnknown && prior?.weekly !== undefined && !prior.weeklyUnknown);
-		const source = usable ? seen : prior;
-		out[key] = source?.[key];
-		const resetAt = source?.[`${key}ResetAt`];
-		if (resetAt !== undefined) out[`${key}ResetAt`] = resetAt;
-		if (key === "weekly" && source?.weeklyUnknown) out.weeklyUnknown = true;
+function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] {
+	const counts = buckets(view.meters).flatMap<Cell>(({ raw, label, families }) => {
+		const quantity = asRecord(raw.quantity);
+		const unit = unitOf(quantity?.unit);
+		const used = finite(quantity?.used);
+		const amount = used ?? finite(quantity?.remaining);
+		// Zero observed calls do not create a quota row on their own.
+		if (!unit || amount === undefined || used === 0) return [];
+		const basis = raw.basis === "inferred" ? "inferred" : raw.basis === "observed" ? "observed" : "reported";
+		return [
+			{
+				...label,
+				kind: "count",
+				families,
+				amount,
+				left: used === undefined,
+				unit,
+				limit: finite(quantity?.limit),
+				basis,
+			},
+		];
+	});
+	const pools = records(view.pools).flatMap<Cell>((pool) => {
+		const name = textOf(pool.name);
+		const unit = unitOf(pool.unit);
+		const balance = finite(pool.balance);
+		return name && unit ? [{ kind: "pool", name, unit, balance, unlimited: pool.unlimited === true }] : [];
+	});
+	const marks = records(view.marks).flatMap<Cell>((mark) => {
+		const until = epoch(mark.until);
+		const evidence = mark.evidence === "observed" || mark.evidence === "inferred" ? mark.evidence : "read";
+		// Legacy reported rows already summarize collected quota. Do not add legacy read marks to them.
+		return until !== undefined && !(legacy && evidence === "read")
+			? [{ kind: "mark", families: familiesOf(mark.families), until, evidence }]
+			: [];
+	});
+	return [...counts, ...pools, ...marks];
+}
+
+/** Merge stale percentages by bucket, retaining their reset and identity as one reading. */
+function mergePercents(seen: PercentCell[], prior: ProviderQuota | undefined, legacy: boolean): PercentCell[] {
+	const before = prior?.cells.filter((cell) => cell.kind === "percent") ?? [];
+	const readings = new Map(before.map((cell) => [cell.key, cell]));
+	for (const cell of seen) {
+		const old = readings.get(cell.key);
+		if (!old && (!legacy || prior?.expiresAt === undefined || cell.placeholder)) readings.set(cell.key, cell);
+		if (
+			old &&
+			cell.remaining !== undefined &&
+			!(cell.unidentified && !old.unidentified && old.remaining !== undefined)
+		) {
+			readings.set(cell.key, cell);
+		}
 	}
-	return out;
+	return [...readings.values()].sort((a, b) =>
+		legacy ? Number(b.durationMs === 5 * HOUR_MS) - Number(a.durationMs === 5 * HOUR_MS) : 0,
+	);
 }
 
-/**
- * Validate an RPC reply envelope (`{ success, data: { snapshots } }`) into a state.
- * Returns `undefined` for a malformed or unsuccessful envelope.
- *
- * A snapshot is fresh only if `status` is `available`, `windows` is a non-empty array and
- * `expiresAt` is finite and in the future. A fresh snapshot replaces the provider
- * wholesale (an invalid window shows `--`, a missing 5h window is not shown, a missing
- * weekly one shows `--`). Anything else, including a
- * provider absent from the reply, is stale: values merge per field over `previous`
- * (valid snapshot values win, the rest are retained; a retained percent keeps its reset time),
- * and never re-add a 5h window the last fresh reading did not report.
- */
+/** Normalize legacy snapshots or v2 views at the event boundary, without depending on router code. */
 export function parseUsageReply(reply: unknown, now: number, previous?: QuotaState): QuotaState | undefined {
 	const envelope = asRecord(reply);
 	if (envelope?.success !== true) return undefined;
-	const snapshots = asRecord(envelope.data)?.snapshots;
-	if (!Array.isArray(snapshots)) return undefined;
-
-	const state: QuotaState = {};
-	for (const spec of QUOTA_PROVIDERS) {
-		const snapshot = asRecord(snapshots.find((raw) => asRecord(raw)?.provider === spec.id));
-		const prior = previous?.[spec.id];
-		const windows = Array.isArray(snapshot?.windows) ? snapshot.windows : undefined;
-		const expiresAt = snapshot?.expiresAt;
+	const data = asRecord(envelope.data);
+	const views = data?.views;
+	const snapshots = data?.snapshots;
+	if (!Array.isArray(views) && !Array.isArray(snapshots)) return undefined;
+	const entries = Array.isArray(views)
+		? records(views)
+		: Object.entries(LEGACY_DISPLAY).map(([provider, display]) => ({
+				provider,
+				display,
+				snapshot: records(snapshots).find((snapshot) => snapshot.provider === provider),
+			}));
+	const state: QuotaState = Object.create(null);
+	for (const view of entries) {
+		if (typeof view.provider !== "string" || !view.provider) continue;
+		const id = view.provider;
+		const legacy = Object.hasOwn(LEGACY_DISPLAY, id);
+		const prior = previous && Object.hasOwn(previous, id) ? previous[id] : undefined;
+		const display = readDisplay(view.display, textOf(id) ?? "quota");
+		const snapshot = asRecord(view.snapshot);
+		const expiresAt = epoch(snapshot?.expiresAt);
+		const windows = snapshot?.windows;
 		const fresh =
-			snapshot !== undefined &&
-			typeof snapshot.status === "string" &&
-			snapshot.status === "available" &&
-			windows !== undefined &&
+			snapshot?.status === "available" &&
+			Array.isArray(windows) &&
 			windows.length > 0 &&
-			typeof expiresAt === "number" &&
-			Number.isFinite(expiresAt) &&
+			expiresAt !== undefined &&
 			expiresAt > now;
-		if (fresh) {
-			state[spec.id] = {
-				...readWindows(windows, spec),
-				stale: false,
-				expiresAt,
-			};
-			continue;
-		}
-		const seen = windows ? readWindows(windows, spec) : {};
-		state[spec.id] = {
-			...mergeReadings(seen, prior, spec),
-			stale: true,
-			expiresAt: prior?.expiresAt,
+		const seen = chooseWindows(windows, display, legacy);
+		state[id] = {
+			display,
+			stale: !fresh,
+			expiresAt: fresh ? expiresAt : prior?.expiresAt,
+			cells: [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...auxiliaryCells(view, legacy)],
 		};
 	}
 	return state;
@@ -270,6 +360,8 @@ function formatValue(remaining: number | undefined, colorize: Colorize): string 
 export interface FormatOptions {
 	/** Epoch ms treated as the present. Default `Date.now()`. */
 	now?: number;
+	/** Physical model whose model-scoped buckets are relevant, if resolved. */
+	model?: { provider: string; id: string };
 	/** IANA zone for reset labels. Default: the process-local zone, like the router's own `toLocaleTimeString()`. */
 	timeZone?: string;
 }
@@ -304,6 +396,9 @@ interface Layout {
 	tier: Tier;
 	resets: boolean;
 	split: boolean;
+	essential?: boolean;
+	cap?: number;
+	prioritize?: boolean;
 }
 
 function windowText(
@@ -314,7 +409,7 @@ function windowText(
 	layout: Layout,
 	colorize: Colorize,
 	opts: Required<Pick<FormatOptions, "now">> & FormatOptions,
-	unidentified = false,
+	unidentified: boolean,
 ): string {
 	const dim = (text: string) => colorize("dim", text);
 	const value = formatValue(remaining, colorize);
@@ -332,60 +427,175 @@ function windowText(
 	return `${dim(`${name} `)}${value}${dim(suffix)}`;
 }
 
-function providerRows(state: QuotaState, layout: Layout, colorize: Colorize, opts: FormatOptions): string[] {
+function labels(cell: WindowLabel): [string, string] {
+	const span = cell.durationMs;
+	if (cell.calendar || span === DAY_MS) return ["day", "1d"];
+	if (span === WEEK_MS) return ["weekly", "7d"];
+	if (span === undefined || span < MINUTE_MS) return [cell.name, cell.name];
+	const label = span % HOUR_MS === 0 ? `${span / HOUR_MS}h` : `${span / MINUTE_MS}m`;
+	return [label, label];
+}
+
+function matchesModel(id: string, family: string): boolean {
+	const escaped = family.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|[-./:])${escaped}(?:$|[-./:])`, "i").test(id);
+}
+
+function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): Cell[] {
+	const models = quota.cells.flatMap((cell) => (cell.kind === "mark" && cell.until > opts.now ? cell.families : []));
+	if (opts.model?.provider === id) models.push(opts.model.id);
+	return quota.cells.filter((cell) => {
+		if (cell.kind === "mark") return cell.until > opts.now;
+		if (cell.kind === "pool") return true;
+		return !cell.families.length || cell.families.some((family) => models.some((model) => matchesModel(model, family)));
+	});
+}
+
+type ResolvedOptions = FormatOptions & { now: number };
+
+function quantityText(value: number, unit: Unit): string {
+	return unit === "usd" ? `$${value.toFixed(2)}` : String(value);
+}
+
+function countText(cell: Extract<Cell, { kind: "count" }>, full: boolean): string {
+	const basis = full ? cell.basis : { reported: "rep", observed: "obs", inferred: "inf" }[cell.basis];
+	const amount = quantityText(cell.amount, cell.unit);
+	const total = cell.limit === undefined ? amount : `${amount}/${quantityText(cell.limit, cell.unit)}`;
+	const [long, short] = labels(cell);
+	const tail = cell.left ? " left" : "";
+	if (cell.unit === "usd" && cell.durationMs !== undefined && !cell.calendar) {
+		return full ? `${total}${tail} last ${long} ${basis}` : `${total}${tail}/${short} ${basis}`;
+	}
+	return `${full ? long : short} ${total}${cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`}${tail} ${basis}`;
+}
+
+function cellText(cell: Cell, layout: Layout, colorize: Colorize, opts: ResolvedOptions): string {
+	const full = layout.tier === "full";
+	switch (cell.kind) {
+		case "percent": {
+			const label = cell.unidentified ? "quota" : labels(cell)[full ? 0 : 1];
+			return windowText(
+				label,
+				cell.remaining,
+				cell.resetAt,
+				cell.unidentified || cell.durationMs === WEEK_MS,
+				layout,
+				colorize,
+				opts,
+				cell.unidentified,
+			);
+		}
+		case "count":
+			return colorize("dim", countText(cell, full));
+		case "pool": {
+			const balance = cell.unlimited
+				? "unlimited"
+				: cell.balance === undefined
+					? "--"
+					: quantityText(cell.balance, cell.unit);
+			return colorize(
+				"dim",
+				`${cell.name} ${balance}${cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`}`,
+			);
+		}
+		case "mark": {
+			const families = cell.families.map((id) => textOf(id) ?? "model");
+			const scope = (full ? families : families.map((id) => id.replace(/^[a-z]+-\d+-/, ""))).join(",") || "provider";
+			const when = layout.resets ? formatResetAt(cell.until, opts.now, opts.timeZone, full) : undefined;
+			const evidence = full ? `(${cell.evidence})` : { inferred: "inf", observed: "obs", read: "read" }[cell.evidence];
+			return colorize(
+				"warning",
+				`${scope} blocked${when ? (full ? ` until ${when}` : `->${when.split(" ").at(-1)}`) : ""} ${evidence}`,
+			);
+		}
+	}
+}
+
+function isEssential(cell: Cell): cell is Extract<Cell, { kind: "mark" | "percent" }> {
+	return cell.kind === "mark" || cell.kind === "percent";
+}
+
+function priority(cell: Cell): number {
+	if (cell.kind === "mark") return -1;
+	return cell.kind === "percent" ? (cell.remaining ?? 101) : 102;
+}
+
+interface Segment {
+	quota: ProviderQuota;
+	cells: Cell[];
+}
+
+function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, opts: ResolvedOptions): string[] {
 	const full = layout.tier === "full";
 	const dim = (text: string) => colorize("dim", text);
-	const resolved = { ...opts, now: opts.now ?? Date.now() };
-	const segments = (QUOTA_PROVIDERS as readonly QuotaProviderSpec[]).map((spec) => {
-		// No reading yet: the tier is unknown, so only the weekly placeholder is shown.
-		const quota = state[spec.id] ?? { stale: true };
-		const label = `${full ? spec.full : spec.compact}${quota.stale ? " (stale)" : ""}`;
-		const windows: string[] = [];
-		if (quota.fiveHourReported)
-			windows.push(windowText("5h", quota.fiveHour, quota.fiveHourResetAt, false, layout, colorize, resolved));
-		const unidentified = quota.weeklyUnknown === true;
-		const weeklyLabel = unidentified ? "quota" : full ? "weekly" : "7d";
-		windows.push(
-			windowText(weeklyLabel, quota.weekly, quota.weeklyResetAt, true, layout, colorize, resolved, unidentified),
-		);
-		return `${dim(`${label} `)}${windows.join(" ")}`;
+	const rows = segments.flatMap(({ quota, cells }) => {
+		const shown = layout.essential ? cells.filter(isEssential) : cells;
+		if (!shown.length) return [];
+		const stale = quota.stale && shown.some((cell) => cell.kind === "percent");
+		const label = `${full ? quota.display.full : quota.display.compact}${stale ? " (stale)" : ""}`;
+		const groups = [shown.filter((cell) => cell.kind !== "mark"), shown.filter((cell) => cell.kind === "mark")];
+		const groupText = (group: Cell[]) =>
+			group
+				.map((cell) => cellText(cell, layout, colorize, opts))
+				.join(full && group.every((cell) => cell.kind !== "percent") ? dim("; ") : " ");
+		const ordered = layout.prioritize
+			? groupText([...shown].sort((a, b) => priority(a) - priority(b)))
+			: groups
+					.filter((group) => group.length)
+					.map(groupText)
+					.join(dim(full ? "; " : " | "));
+		return [dim(`${label} `) + ordered];
 	});
+	if (!rows.length) return [];
 	const lead = dim(full ? "Quota left: " : "Left: ");
-	if (layout.split) return segments.map((segment, i) => (i === 0 ? lead + segment : segment));
-	return [lead + segments.join(dim(" | "))];
+	if (!layout.split) return [lead + rows.join(dim(" | "))];
+	rows[0] = lead + rows[0];
+	if (layout.cap && rows.length > layout.cap)
+		return [...rows.slice(0, layout.cap), dim(`+${rows.length - layout.cap} more: /router status`)];
+	return rows;
 }
 
-/**
- * Single row text for one tier, with reset times; always lists both providers, Anthropic's 5h
- * only when reported. Labels are
- * dimmed and low values colored individually, so a value color never bleeds into the rest.
- * Windows with an unknown or already-past reset omit it (the percent is unchanged); OpenAI shows only its weekly window, or an `unknown window` quota when the router could not prove the span.
- */
+function segmentsOf(state: QuotaState, opts: ResolvedOptions): Segment[] {
+	return Object.entries(state).flatMap(([id, quota]) => {
+		const cells = activeCells(id, quota, opts);
+		return cells.length ? [{ quota, cells }] : [];
+	});
+}
+
+/** Single-row rendering for one label tier. */
 export function formatQuotaRow(state: QuotaState, tier: Tier, colorize: Colorize, opts: FormatOptions = {}): string {
-	return providerRows(state, { tier, resets: true, split: false }, colorize, opts).join("\n");
+	const resolved = { ...opts, now: opts.now ?? Date.now() };
+	return providerRows(segmentsOf(state, resolved), { tier, resets: true, split: false }, colorize, resolved).join("\n");
 }
 
-const NARROWEST: Layout = { tier: "compact", resets: false, split: true };
-/** Widest first; `NARROWEST` is the last resort callers may still clip. */
+const NO_RESETS: Layout = { tier: "compact", resets: false, split: true };
+const ESSENTIAL: Layout = { ...NO_RESETS, essential: true };
 const LAYOUTS: readonly Layout[] = [
 	{ tier: "full", resets: true, split: false },
 	{ tier: "compact", resets: true, split: false },
 	{ tier: "compact", resets: true, split: true },
-	NARROWEST,
+	NO_RESETS,
+	ESSENTIAL,
 ];
 
-/**
- * Rows for a terminal `width`, widest layout that fits untruncated: full single row, compact
- * single row, one compact row per provider, then the same without reset times. Narrow widths
- * wrap by provider rather than clip, so every value stays next to its provider label. Only the
- * narrowest layout can still exceed `width`; callers clip that last resort.
- */
+/** Choose the widest layout that fits before coloring. The TUI clips only as a last resort. */
 export function fitQuotaRows(state: QuotaState, width: number, colorize: Colorize, opts: FormatOptions = {}): string[] {
 	const plain: Colorize = (_color, text) => text;
 	const resolved = { ...opts, now: opts.now ?? Date.now() };
-	// Rows are ASCII (en-US month names, digits, `%`), so `.length` equals the visible width here.
-	const fits = (layout: Layout) => providerRows(state, layout, plain, resolved).every((row) => row.length <= width);
-	return providerRows(state, LAYOUTS.find(fits) ?? NARROWEST, colorize, resolved);
+	const segments = segmentsOf(state, resolved);
+	if (!segments.length) return [];
+	const hasEssential = segments.some(({ cells }) => cells.some(isEssential));
+	for (const layout of LAYOUTS) {
+		if (layout.essential && !hasEssential) continue;
+		const rows = providerRows(segments, layout, plain, resolved);
+		if ((!layout.split || rows.length <= 4) && rows.every((row) => row.length <= width)) {
+			return providerRows(segments, layout, colorize, resolved);
+		}
+	}
+	const allLegacy = Object.keys(state).every((id) => Object.hasOwn(LEGACY_DISPLAY, id));
+	// Never erase the footer altogether when only meters or pools are available.
+	const fallback = hasEssential ? ESSENTIAL : NO_RESETS;
+	return providerRows(segments, { ...fallback, cap: 4, prioritize: !allLegacy }, colorize, resolved);
 }
 
 /** Minimal event bus (matches `pi.events`). */
@@ -441,7 +651,7 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 	}
 
 	/**
-	 * Arm a timer for the earliest upcoming expiry of a fresh reading in `current`.
+	 * Arm a timer for the earliest expiry of a fresh reading or an active mark in `current`.
 	 * Only `settle` (never after `dispose`, which drops the in-flight token) and this
 	 * timer (cleared by `settle` and `dispose`) call it, so `current` is always the live state.
 	 * The timer re-arms only while live, since its `onChange` may dispose the poller.
@@ -453,6 +663,9 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 		for (const quota of Object.values(current)) {
 			if (!quota.stale && typeof quota.expiresAt === "number" && quota.expiresAt > t)
 				next = Math.min(next, quota.expiresAt);
+			for (const cell of quota.cells) {
+				if (cell.kind === "mark" && cell.until > t) next = Math.min(next, cell.until);
+			}
 		}
 		if (next === Number.POSITIVE_INFINITY) return;
 		expiryTimer = setT(

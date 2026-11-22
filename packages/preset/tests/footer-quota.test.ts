@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test, vi } from "vitest";
-import * as q from "../src/footer-quota.ts";
+import * as footer from "../src/footer-quota.ts";
 
 const NOW = 1_000_000;
 const win = (name: string, usedPercent: number, scope = "provider") => ({
@@ -20,6 +20,99 @@ const snap = (provider: string, windows: unknown[], extra: Record<string, unknow
 	expiresAt: NOW + 1,
 	...extra,
 });
+// Keep the original legacy assertions (especially exact row text) readable while testing cell-backed state.
+interface LegacyQuota {
+	fiveHourReported?: boolean;
+	fiveHour?: number;
+	fiveHourResetAt?: number;
+	weekly?: number;
+	weeklyResetAt?: number;
+	weeklyUnknown?: boolean;
+	stale: boolean;
+	expiresAt?: number;
+}
+type LegacyState = Record<string, LegacyQuota>;
+
+const originals = new WeakMap<LegacyState, footer.QuotaState>();
+
+function legacyInput(state: LegacyState): footer.QuotaState {
+	const original = originals.get(state);
+	if (original) return original;
+	const snapshots = Object.entries(state).map(([provider, quota]) => {
+		const anth = provider === "anthropic";
+		const windows = [
+			{
+				name: anth ? "seven_day" : "7d",
+				usedPercent: 100 - (quota.weekly ?? NaN),
+				resetAt: quota.weeklyResetAt,
+				scope: "provider",
+				spanSource: quota.weeklyUnknown ? "assumed" : undefined,
+			},
+		];
+		if (quota.fiveHourReported)
+			windows.push({
+				name: "five_hour",
+				scope: "provider",
+				usedPercent: 100 - (quota.fiveHour ?? NaN),
+				resetAt: quota.fiveHourResetAt,
+				spanSource: undefined,
+			});
+		return snap(provider, windows);
+	});
+	const parsed = present(footer.parseUsageReply(reply(snapshots), NOW));
+	for (const [id, quota] of Object.entries(state)) {
+		Object.assign(present(parsed[id]), { stale: quota.stale, expiresAt: quota.expiresAt });
+	}
+	return parsed;
+}
+
+function legacyOutput(state: footer.QuotaState): LegacyState {
+	const projected = Object.fromEntries(
+		Object.entries(state).map(([id, quota]) => {
+			const out: LegacyQuota = { stale: quota.stale, expiresAt: quota.expiresAt };
+			for (const cell of quota.cells) {
+				if (cell.kind !== "percent" || cell.placeholder) continue;
+				if (id === "anthropic" && cell.name === "five_hour") {
+					out.fiveHourReported = true;
+					out.fiveHour = cell.remaining;
+					if (cell.resetAt !== undefined) out.fiveHourResetAt = cell.resetAt;
+				} else {
+					out.weekly = cell.remaining;
+					if (cell.resetAt !== undefined) out.weeklyResetAt = cell.resetAt;
+					if (cell.unidentified) out.weeklyUnknown = true;
+				}
+			}
+			return [id, out];
+		}),
+	);
+	originals.set(projected, state);
+	return projected;
+}
+
+const q = {
+	...footer,
+	parseUsageReply(value: unknown, now: number, previous?: LegacyState): LegacyState | undefined {
+		const state = footer.parseUsageReply(value, now, previous && legacyInput(previous));
+		return state && legacyOutput(state);
+	},
+	markStale: (state: LegacyState) => legacyOutput(footer.markStale(legacyInput(state))),
+	formatQuotaRow: (state: LegacyState, ...args: Tail<Parameters<typeof footer.formatQuotaRow>>) =>
+		footer.formatQuotaRow(legacyInput(state), ...args),
+	fitQuotaRows: (state: LegacyState, ...args: Tail<Parameters<typeof footer.fitQuotaRows>>) =>
+		footer.fitQuotaRows(legacyInput(state), ...args),
+	createQuotaPoller(deps: footer.PollerDeps) {
+		const poller = footer.createQuotaPoller(deps);
+		return {
+			...poller,
+			getState() {
+				const state = poller.getState();
+				return state && legacyOutput(state);
+			},
+		};
+	},
+};
+type Tail<T> = T extends [unknown, ...infer Rest] ? Rest : never;
+
 const plain = (_c: string, t: string): string => t;
 
 // Share the router's golden data, not its implementation. The router suite checks the projected views.
@@ -38,10 +131,11 @@ const legacyFixtures = fixture.views.flatMap((row) => (row.legacyRows ? [{ ...ro
 
 test.each(legacyFixtures)("preserves the legacy footer bytes for $name", ({ usage, now, timeZone, legacyRows }) => {
 	const snapshots = usage.views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
-	const state = q.parseUsageReply({ success: true, data: { snapshots } }, now);
-	assert.ok(state);
-	for (const tier of ["full", "compact"] as const) {
-		assert.equal(q.formatQuotaRow(state, tier, plain, { now, timeZone }), legacyRows[tier]);
+	for (const data of [{ snapshots }, usage]) {
+		const state = present(footer.parseUsageReply({ success: true, data }, now));
+		for (const tier of ["full", "compact"] as const) {
+			assert.equal(footer.formatQuotaRow(state, tier, plain, { now, timeZone }), legacyRows[tier]);
+		}
 	}
 });
 
@@ -218,7 +312,7 @@ test("parse: provider error/unavailable/empty windows retain last-known values a
 		assert.equal(state?.anthropic?.weekly, 58);
 		// provider missing from reply entirely
 		assert.equal(state?.["openai-codex"]?.stale, true);
-		assert.equal(state?.["openai-codex"]?.fiveHour, 82);
+		assert.equal(state?.["openai-codex"]?.weekly, 63);
 	}
 });
 
@@ -945,9 +1039,9 @@ test("identity: reported 18000s primary plus assumed secondary shows only the un
 
 // --- Anthropic 5h only when reported (#311) ---------------------------------
 
-const anthOf = (windows: unknown[], extra: Record<string, unknown> = {}, previous?: q.QuotaState) =>
+const anthOf = (windows: unknown[], extra: Record<string, unknown> = {}, previous?: LegacyState) =>
 	present(q.parseUsageReply(reply([snap("anthropic", windows, { expiresAt: NOW + 5, ...extra })]), NOW, previous));
-const weeklyOnly = (extra: Record<string, unknown> = {}, previous?: q.QuotaState) =>
+const weeklyOnly = (extra: Record<string, unknown> = {}, previous?: LegacyState) =>
 	anthOf([resetWin("seven_day", 40, at("2026-01-14T09:00:00Z"))], extra, previous);
 
 test("5h: a fresh Anthropic snapshot with only seven_day has no 5h segment in any layout", () => {
@@ -1049,4 +1143,194 @@ test("5h: the no-data placeholder shows only the weekly window", () => {
 		"Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly --",
 	);
 	assert.equal(q.formatQuotaRow({}, "compact", plain, { now: CLOCK }), "Left: Anth (stale) 7d -- | OAI (stale) 7d --");
+});
+const v2 = (views: unknown[]) => ({ success: true, data: { version: 2, views, snapshots: [], blocks: [] } });
+const view = (provider: string, extra: Record<string, unknown> = {}) => ({ provider, ...extra });
+const projected = (views: unknown[], now = CLOCK, previous?: footer.QuotaState) =>
+	present(footer.parseUsageReply(v2(views), now, previous));
+const fixed = { now: CLOCK, timeZone: UTC };
+const hour = 3_600_000;
+const meter = (name: string, used: number, extra = {}) => ({
+	name,
+	scope: "provider",
+	basis: "observed",
+	quantity: { unit: "requests", used },
+	...extra,
+});
+const mark = (until: number, evidence?: string, families?: string[]) => ({ until, evidence, families });
+
+test("preset reads the shared metered and inferred-span v2 fixture", () => {
+	const metered = present(fixture.views.find(({ name }) => name === "metered"));
+	const state = present(footer.parseUsageReply({ success: true, data: metered.usage }, metered.now));
+	const opts = { now: metered.now, timeZone: metered.timeZone };
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, opts),
+		"Left: Goog 1d 37/250 req obs $1.24/10m obs prepaid-credits 12 credits | faux-fast blocked->08:00 inf",
+	);
+	assert.deepEqual(footer.fitQuotaRows(state, 120, plain, opts).length, 1);
+	const inferred = present(fixture.views.find(({ name }) => name === "inferred-span"));
+	const gauge = present(footer.parseUsageReply({ success: true, data: inferred.usage }, inferred.now));
+	assert.match(
+		footer.formatQuotaRow(gauge, "compact", plain, { now: inferred.now, timeZone: inferred.timeZone }),
+		/faux-subscription 10m \d+%/,
+	);
+});
+
+test("Google rows show counts without invented limits and marks in warning color", () => {
+	const now = at("2026-11-21T14:05:00Z");
+	const until = at("2026-11-22T00:00:00Z");
+	const state = projected(
+		[
+			view("google", {
+				display: { full: "Google", compact: "Goog" },
+				meters: [
+					meter("rpd", 37, {
+						kind: "calendar",
+						resetRule: { every: "day" },
+						scope: "model",
+						families: ["gemini-4-carbon"],
+					}),
+					meter("cost", 1.24, { kind: "rolling", durationMs: 600_000, quantity: { unit: "usd", used: 1.24 } }),
+					meter("other", 25, { scope: "model", families: ["gemini-4-sibling"] }),
+				],
+				marks: [mark(until, "inferred", ["gemini-4-carbon"])],
+			}),
+			view("google-vertex", { meters: [meter("calls", 0)] }),
+		],
+		now,
+	);
+	const opts = { now, timeZone: UTC };
+	const compact = "Left: Goog 1d 37 req obs $1.24/10m obs | carbon blocked->00:00 inf";
+	const full =
+		"Quota left: Google day 37 requests observed; $1.24 last 10m observed; gemini-4-carbon blocked until Nov 22 00:00 (inferred)";
+	const paint: string[] = [];
+	assert.equal(footer.formatQuotaRow(state, "full", plain, opts), full);
+	assert.equal(
+		footer.formatQuotaRow(
+			state,
+			"compact",
+			(color, text) => {
+				paint.push(`${color}:${text}`);
+				return text;
+			},
+			opts,
+		),
+		compact,
+	);
+	assert.deepEqual(
+		paint.filter((text) => !text.startsWith("dim:")),
+		["warning:carbon blocked->00:00 inf"],
+	);
+	assert.match(
+		footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "google", id: "gemini-4-sibling" } }),
+		/other 25 req obs/,
+	);
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, now: until }), "Left: Goog $1.24/10m obs");
+	assert.equal(footer.formatQuotaRow(projected([]), "full", plain, fixed), "");
+});
+
+test("generic width ladder fits, drops meters, caps providers and clips by priority", () => {
+	const window = (name: string, remaining: number, durationMs: number) => ({
+		...win(name, 100 - remaining),
+		durationMs,
+		resetAt: CLOCK + hour,
+	});
+	const provider = (id: string) =>
+		view(id, {
+			display: { full: `${id}-long`, compact: id },
+			snapshot: snap(id, [window("loose", 95, 2 * hour), window("tight", 3, hour)], { expiresAt: CLOCK + hour }),
+			meters: [meter("count", 37)],
+			marks: [mark(CLOCK + hour, "observed")],
+		});
+	const state = projected([provider("A"), provider("B")]);
+	const full = footer.formatQuotaRow(state, "full", plain, fixed);
+	const compact = footer.formatQuotaRow(state, "compact", plain, fixed);
+	const fit = (width: number, input = state) => footer.fitQuotaRows(input, width, plain, fixed);
+	assert.deepEqual(fit(full.length), [full]);
+	assert.deepEqual(fit(compact.length), [compact]);
+	const split = [
+		"Left: A 2h 95% @13:00 1h 3% @13:00 count 37 req obs | provider blocked->13:00 obs",
+		"B 2h 95% @13:00 1h 3% @13:00 count 37 req obs | provider blocked->13:00 obs",
+	];
+	assert.deepEqual(fit(present(split[0]).length), split);
+	const terse = [
+		"Left: A 2h 95% 1h 3% count 37 req obs | provider blocked obs",
+		"B 2h 95% 1h 3% count 37 req obs | provider blocked obs",
+	];
+	assert.deepEqual(fit(present(terse[0]).length), terse);
+	const essential = ["Left: A 2h 95% 1h 3% | provider blocked obs", "B 2h 95% 1h 3% | provider blocked obs"];
+	assert.deepEqual(fit(present(essential[0]).length), essential);
+	assert.deepEqual(fit(20), ["Left: A provider blocked obs 1h 3% 2h 95%", "B provider blocked obs 1h 3% 2h 95%"]);
+	assert.deepEqual(fit(70, projected(["A", "B", "C", "D", "E"].map(provider))), [
+		"Left: A provider blocked obs 1h 3% 2h 95%",
+		"B provider blocked obs 1h 3% 2h 95%",
+		"C provider blocked obs 1h 3% 2h 95%",
+		"D provider blocked obs 1h 3% 2h 95%",
+		"+1 more: /router status",
+	]);
+});
+
+test("custom selectors, scope, provenance and display-only quantities stay distinct", () => {
+	const durationMs = 2 * hour;
+	const windows = [
+		{ ...win("named", 80), durationMs },
+		{ ...win("hourly", 90), durationMs: hour },
+		{ ...win("estimated", 99), durationMs: hour, basis: "observed" },
+		{ ...win("named", 70, "model"), families: ["not-selected"] },
+		{ scope: "provider", usedPercent: 80 },
+		{ ...win("invalid", 80, "model"), families: [] },
+	];
+	const custom = view("custom", {
+		display: {
+			full: "Custom\nDisplay",
+			compact: " ",
+			footer: { show: [null, {}, { name: "named" }, { durationMs: hour }, { name: " " }], placeholder: true },
+		},
+		snapshot: snap("custom", windows, { expiresAt: CLOCK + hour }),
+		meters: [
+			{ ...meter("tok", 1), basis: "inferred", quantity: { unit: "tokens", remaining: 8 } },
+			{ ...meter("cash", 2), basis: "reported", quantity: { unit: "usd", used: 2 } },
+			{ ...meter("invalid", 1), quantity: { unit: "invalid", used: 1 } },
+		],
+		pools: [null, {}, { name: "wallet", unit: "usd", unlimited: true }, { name: "balance", unit: "credits" }],
+		marks: [mark(undefined as unknown as number), mark(CLOCK + hour, undefined, [" "])],
+	});
+	const state = projected([null, view(""), {}, view(" "), custom]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: custom 2h 20% 1h 10% quota -- tok 8 tok left inf cash $2.00 rep wallet unlimited balance -- credits | model blocked->13:00 read",
+	);
+	const stale = projected([{ ...custom, snapshot: undefined }], CLOCK, state);
+	assert.match(footer.formatQuotaRow(stale, "full", plain, fixed), /Custom\?Display \(stale\) 2h 20% 1h 10% quota --/);
+	const metered = view("meter", { meters: [meter("very-long-meter", 10), meter("second", 3)] });
+	assert.deepEqual(footer.fitQuotaRows(projected([metered]), 5, plain, fixed), [
+		"Left: meter very-long-meter 10 req obs second 3 req obs",
+	]);
+	assert.deepEqual(
+		footer.fitQuotaRows(projected([metered, view("read", { marks: [mark(CLOCK + hour)] })]), 30, plain, fixed),
+		["Left: read provider blocked read"],
+	);
+	const narrow = projected([
+		view("custom", {
+			snapshot: snap("custom", [win("unknown", NaN), win("ok", 60)]),
+			marks: [mark(CLOCK + hour, "read")],
+		}),
+	]);
+	assert.deepEqual(footer.fitQuotaRows(narrow, 5, plain, fixed), [
+		"Left: custom (stale) provider blocked read ok 40% unknown --",
+	]);
+});
+
+test("mark expiry repaints independently of the snapshot", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(v2([view("metered", { marks: [mark(NOW + 5, "inferred")] })]));
+	const rows = () => footer.fitQuotaRows(present(poller.getState()), 80, plain, { now: env.clock.now, timeZone: UTC });
+	assert.match(present(rows()[0]), /provider blocked/);
+	env.clock.now += 5;
+	present(env.live(5)[0]).fn();
+	assert.equal(env.changes(), 2);
+	assert.deepEqual(rows(), []);
+	poller.dispose();
 });

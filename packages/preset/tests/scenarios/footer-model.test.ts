@@ -38,6 +38,59 @@ function selectProfile(id: string): ExtensionFactory {
 	};
 }
 
+it("uses the physical route for model-scoped quota cells, then follows a new direct selection", async () => {
+	fixture = new FooterFixture();
+	const host = await fixture.start({
+		absent: true,
+		columns: 160,
+		models: [{ id: "alpha" }, { id: "beta" }],
+		useModelRuntimeStream: true,
+		settings: { defaultProvider: "router", defaultModel: "deep" },
+		extensionFactories: [
+			(pi) => {
+				pi.registerVirtualModel({
+					provider: "router",
+					id: "deep",
+					name: "Fixture profile",
+					route: (_request, ctx) => ({ model: model(ctx, "faux", "alpha"), thinkingLevel: "off" }),
+				});
+				pi.events.on("router:rpc:usage", (request) => {
+					const { requestId } = request as { requestId: string };
+					const meters = ["alpha", "beta"].map((family, i) => ({
+						name: family,
+						scope: "model",
+						families: [family],
+						basis: "observed",
+						quantity: { unit: "requests", used: i + 1 },
+					}));
+					pi.events.emit(`router:rpc:usage:reply:${requestId}`, {
+						success: true,
+						data: {
+							version: 2,
+							snapshots: [],
+							blocks: [],
+							views: [{ provider: "faux", meters, pools: [], marks: [] }],
+						},
+					});
+				});
+			},
+			selectProfile("deep"),
+		],
+	});
+	await fixture.advance(0);
+	const rows = () => host.viewport().filter((row) => row.startsWith("Quota left:"));
+	expect(rows()).toEqual([]);
+	host.harness.setResponses([fauxAssistantMessage("fixture answer")]);
+	await host.harness.session.prompt("offline fixture");
+	await host.settle();
+	expect(rows()).toEqual(["Quota left: faux alpha 1 requests observed"]);
+	const beta = host.harness.session.modelRuntime.getModel("faux", "beta");
+	if (!beta) throw new Error("Missing fixture model beta");
+	await host.harness.session.setModel(beta);
+	await host.settle();
+	expect(rows()).toEqual(["Quota left: faux beta 2 requests observed"]);
+});
+
 it.each(["default", "deep"])("shows the actual model and thinking without replacing router/%s", async (id) => {
 	const route: ExtensionFactory = (pi) => {
 		pi.registerVirtualModel({

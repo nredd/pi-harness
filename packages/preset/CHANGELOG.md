@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Render any provider's router quota views in the footer, including Gemini usage counts and inferred blocks, without changing legacy Anthropic or Codex rows. (#1178)
+
 ### Changed
 
 - Restore the `architect` routing hint, cost-ranked survey cards, `shortcut:` decisions, large-repo scoping, grill format and survey length limit. Keep the preset's intentional `codebase-design` preload (the local definition had `skills: false`). ([#1025](https://github.com/nredd/pi-harness/issues/1025))

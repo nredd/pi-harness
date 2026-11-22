@@ -129,9 +129,15 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   *assumed* a span (Codex payload with no `limit_window_seconds`), the footer does not claim 5h or weekly:
   it shows the most limiting such window as `OpenAI quota 62% (resets Oct 24 11:05; window unknown)`,
   compact `OAI quota? 62% @Oct 24 11:05`, with the same local-timezone date and time.
-  A proven weekly always wins over an assumed window, and a stale retained weekly is not displaced by one. Layout is the widest of: full row, compact row,
-  one compact row per provider, one per provider without resets; narrow terminals wrap by
-  provider so a value never loses its provider label (only the last layout can still be clipped). Deferred
+  A proven weekly always wins over an assumed window, and a stale retained weekly is not displaced by one.
+  When the router supplies `views`, the footer uses their labels and window selectors. It shows
+  reported percentages, metered counts and balances, and active blocks with their evidence.
+  Counts such as `37/250 req obs` describe locally observed usage, not account-wide quota;
+  unknown limits have no denominator. Model buckets appear for the routed or directly selected
+  model and for models with active blocks. No Google collector or credentials are needed by the footer.
+  The layout tries one full or compact row, then compact provider rows, then removes reset times
+  and drops counts and pools if needed. The fallback shows at most four provider rows and points
+  to `/router status` for the rest. Deferred
   startup, 60s polling, one outstanding request, unique reply channel, 12s timeout, expiry repaint,
   stale retained readings and recovery. Without a valid reply the row stays hidden. Disposal
   cancels listeners and timers; unreferenced default timers do not keep the process alive.
