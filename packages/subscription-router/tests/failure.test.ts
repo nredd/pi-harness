@@ -359,3 +359,19 @@ it.each([
 	expect(nextPacificMidnight(now)).toBe(expected);
 	expect(classify("RESOURCE_EXHAUSTED: Daily", now)).toStrictEqual({ ...daily, resetAt: expected });
 });
+
+// Core's `formatProviderError` prefixes are `<provider> API error (<status>): `. Any other
+// parenthesized number is prose and never outranks the body's structured status.
+it.each<[string, string, FailureClassification]>([
+	["free-prefix 402 is not a status", "Request ID (402): malformed input", weak],
+	[
+		"free-prefix 503 cannot veto a JSON daily 429",
+		'Shard (503): {"error":{"code":429,"message":"Daily quota exceeded"}}',
+		daily,
+	],
+	["free-prefix 401 is not a status", "Tenant (401): quota exceeded", unknown],
+	["core provider prefix 429", "google-vertex API error (429): Daily quota exceeded", daily],
+	["core provider prefix 503", "Azure OpenAI API error (503): quota exceeded", other],
+])("reads statuses only from core wrappers: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
