@@ -1,6 +1,6 @@
 /** A real package agent's scope, not a stub parser's interpretation of its frontmatter. */
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { toolCall } from "@nredd/pi-test-lib/faux";
 import { makeGitFixture } from "@nredd/pi-test-lib/git";
 import type { Harness } from "@nredd/pi-test-lib/harness";
@@ -20,9 +20,12 @@ import { isolateStackHome } from "./support.ts";
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
 let fixture: ReturnType<typeof makeGitFixture>;
+let removeFixture: (() => void) | undefined;
 beforeAll(async () => {
 	home = await isolateStackHome();
-	fixture = makeGitFixture();
+	fixture = makeGitFixture((cleanup) => {
+		removeFixture = cleanup;
+	});
 });
 beforeEach(async () => {
 	// Read tools must use provisioned rg/fd, never a live latest-release download.
@@ -37,7 +40,7 @@ afterEach(async () => {
 	}
 });
 afterAll(async () => {
-	if (fixture) rmSync(dirname(fixture.repo), { recursive: true, force: true });
+	removeFixture?.();
 	await home.cleanup();
 });
 

@@ -1,7 +1,8 @@
 /** Disposable temp roots, agent dirs and config homes; each restores the environment it changed. */
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeOwnedTempDir } from "./temp-dir.ts";
 
 /** Prefix of the `TMPDIR` sandbox, so leak checks can tell it from the real temp root. */
 export const SANDBOX_PREFIX = "pi-test-tmp-";
@@ -13,7 +14,7 @@ function setEnv(name: string, value: string | undefined): void {
 }
 
 /**
- * Redirect `TMPDIR` into a fresh sandbox so every `os.tmpdir()` write and helper `mkdtemp` lands in a
+ * Redirect `TMPDIR` into a fresh sandbox so every `os.tmpdir()` write and helper scratch dir lands in a
  * root removed on `restore`; `XDG_STATE_HOME` points at `<sandbox>/state` so state-dir writes (e.g.
  * subagent transcripts) are removed with it. The real root is exposed as `PI_TEST_REAL_TMPDIR`, and nested calls
  * sandbox inside the real one rather than inside each other.
@@ -23,7 +24,8 @@ export function sandboxTmpdir(): { sandbox: string; realTmp: string; restore: ()
 	const previousTmpdir = process.env.TMPDIR;
 	const previousReal = process.env.PI_TEST_REAL_TMPDIR;
 	const previousState = process.env.XDG_STATE_HOME;
-	const sandbox = realpathSync(mkdtempSync(join(realTmp, SANDBOX_PREFIX)));
+	const owned = makeOwnedTempDir(SANDBOX_PREFIX, { baseDir: realTmp });
+	const sandbox = realpathSync(owned.dir);
 	process.env.PI_TEST_REAL_TMPDIR = realTmp;
 	process.env.TMPDIR = sandbox;
 	process.env.XDG_STATE_HOME = join(sandbox, "state");
@@ -34,7 +36,7 @@ export function sandboxTmpdir(): { sandbox: string; realTmp: string; restore: ()
 			setEnv("TMPDIR", previousTmpdir);
 			setEnv("XDG_STATE_HOME", previousState);
 			setEnv("PI_TEST_REAL_TMPDIR", previousReal);
-			rmSync(sandbox, { recursive: true, force: true });
+			owned.remove();
 		},
 	};
 }
@@ -45,13 +47,13 @@ export function sandboxTmpdir(): { sandbox: string; realTmp: string; restore: ()
  */
 export function sandboxAgentDir(parent = tmpdir()): { dir: string; restore: () => void } {
 	const previous = process.env.PI_CODING_AGENT_DIR;
-	const dir = mkdtempSync(join(parent, "pi-test-agent-"));
+	const { dir, remove } = makeOwnedTempDir("pi-test-agent-", { baseDir: parent });
 	process.env.PI_CODING_AGENT_DIR = dir;
 	return {
 		dir,
 		restore() {
 			setEnv("PI_CODING_AGENT_DIR", previous);
-			rmSync(dir, { recursive: true, force: true });
+			remove();
 		},
 	};
 }
@@ -63,7 +65,7 @@ export function sandboxAgentDir(parent = tmpdir()): { dir: string; restore: () =
  */
 export function sandboxConfigHome(): { home: string; reset: () => void; restore: () => void } {
 	const previous = { xdg: process.env.XDG_CONFIG_HOME, agent: process.env.PI_CODING_AGENT_DIR };
-	const home = mkdtempSync(join(tmpdir(), "pi-test-home-"));
+	const { dir: home, remove } = makeOwnedTempDir("pi-test-home-");
 	const apply = () => {
 		delete process.env.PI_CODING_AGENT_DIR;
 		process.env.XDG_CONFIG_HOME = join(home, ".config");
@@ -79,7 +81,7 @@ export function sandboxConfigHome(): { home: string; reset: () => void; restore:
 		restore() {
 			setEnv("XDG_CONFIG_HOME", previous.xdg);
 			setEnv("PI_CODING_AGENT_DIR", previous.agent);
-			rmSync(home, { recursive: true, force: true });
+			remove();
 		},
 	};
 }

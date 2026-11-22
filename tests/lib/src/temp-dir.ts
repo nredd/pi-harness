@@ -6,6 +6,22 @@ import { isAbsolute, join, normalize, sep } from "node:path";
 export const CLEANUP_RETRY_OPTIONS = { maxRetries: 3, retryDelay: 50 } as const;
 
 /**
+ * Allocate a scratch directory whose removal the caller owns, for helpers with their own lifecycle
+ * (a `restore` or a `finally`) rather than a test hook. `remove` is idempotent. `baseDir` and the
+ * prefix rules match `makeTestTempDir`.
+ */
+export function makeOwnedTempDir(
+	prefix: string,
+	{ baseDir = tmpdir() }: { baseDir?: string } = {},
+): { dir: string; remove: () => void } {
+	if (baseDir !== tmpdir() && (isAbsolute(prefix) || normalize(prefix).split(sep).includes(".."))) {
+		throw new Error(`Test temp dir prefix must stay inside baseDir: ${JSON.stringify(prefix)}`);
+	}
+	const dir = mkdtempSync(join(baseDir, prefix));
+	return { dir, remove: () => rmSync(dir, { recursive: true, force: true, ...CLEANUP_RETRY_OPTIONS }) };
+}
+
+/**
  * Allocate a scratch directory and register its removal with the owning test's cleanup hook.
  * `baseDir` defaults to the OS temp directory. Set it to an existing directory when a fixture
  * must live there, and pass a prefix relative to that base: with an explicit `baseDir` an absolute
@@ -14,13 +30,9 @@ export const CLEANUP_RETRY_OPTIONS = { maxRetries: 3, retryDelay: 50 } as const;
 export function makeTestTempDir(
 	prefix: string,
 	onCleanup: (cleanup: () => void) => void,
-	{ baseDir = tmpdir() }: { baseDir?: string } = {},
+	options: { baseDir?: string } = {},
 ): string {
-	if (baseDir !== tmpdir() && (isAbsolute(prefix) || normalize(prefix).split(sep).includes(".."))) {
-		throw new Error(`makeTestTempDir prefix must stay inside baseDir: ${JSON.stringify(prefix)}`);
-	}
-	const dir = mkdtempSync(join(baseDir, prefix));
-	const cleanup = () => rmSync(dir, { recursive: true, force: true, ...CLEANUP_RETRY_OPTIONS });
+	const { dir, remove: cleanup } = makeOwnedTempDir(prefix, options);
 	try {
 		onCleanup(cleanup);
 	} catch (error) {
