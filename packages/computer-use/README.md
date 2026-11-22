@@ -459,10 +459,14 @@ Terminal `act_ui` results say the action was delivered, or, after a timed-out ac
   empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
   reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
   their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
-  process has exited. A timed-out size read is retried once and the window is filtered on the retry's
-  value. A partial listing still resolves the roots it names, e.g. an observed root among an app's first
-  128 windows, but the macOS client fails an authoritative listing without `complete: true` with
-  `inventory_incomplete`, including a reply from an older external helper that has no `complete` field.
+  process has exited. A timed-out size read is retried once and the window is filtered on the
+  retry's value. A partial listing still resolves the roots
+  it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
+  identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
+  `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
+  `observe_ui` without a root does the same for an omitted frontmost window. The macOS client fails an
+  authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
+  an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
   `focused` only after one. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
@@ -1801,8 +1805,9 @@ An `absent` condition holds only on complete evidence. The helper must walk the
 whole scope and read every field the condition tests (the macOS walk stops at
 depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
 without the helper's `complete: true`, e.g. from an older external helper, as
-incomplete. The successor observation, captured from the root the wait read and
-never from a foreground modal that opened meanwhile, must neither show the
+incomplete. The successor observation, captured from the exact root the wait read
+(its native ref or window id, never a same-title window and never a foreground
+modal that opened meanwhile), must neither show the
 condition nor mark a node `truncated` in the scope, above it or, unless the
 scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
 missing from the successor proves nothing while the condition shows anywhere in
@@ -1811,8 +1816,8 @@ it. A root closure proven from a complete listing also settles it. Otherwise
 keeping the delivery outcome from before the check (its message claims delivery
 only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
 instead of `gone`, with `unreadRefs` only when the successor has unread nodes
-there. When the root of a claimed absence cannot be observed afterward,
-`wait_for` returns `inconclusive: true` with `observationError` and no successor
+there. When the root of a claimed absence cannot be observed or resolved by that
+identity afterward, `wait_for` returns `inconclusive: true` with `observationError` and no successor
 state. A `wait_for` that timed out while the helper still saw the condition is a
 failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.
@@ -2898,10 +2903,14 @@ Terminal `act_ui` results say the action was delivered, or name the timed-out ac
   empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
   reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
   their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
-  process has exited. A timed-out size read is retried once and the window is filtered on the retry's
-  value. A partial listing still resolves the roots it names, e.g. an observed root among an app's first
-  128 windows, but the macOS client fails an authoritative listing without `complete: true` with
-  `inventory_incomplete`, including a reply from an older external helper that has no `complete` field.
+  process has exited. A timed-out size read is retried once and the window is filtered on the
+  retry's value. A partial listing still resolves the roots
+  it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
+  identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
+  `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
+  `observe_ui` without a root does the same for an omitted frontmost window. The macOS client fails an
+  authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
+  an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
   `focused` only after one. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.

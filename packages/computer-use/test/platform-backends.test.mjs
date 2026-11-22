@@ -107,8 +107,11 @@ describe("macOS backend", () => {
 					metadata: { k: 1 },
 				},
 			],
+			complete: true,
 		});
-		assert.deepEqual(await macosBackend.listRoots({}), [
+		const listed = await macosBackend.listRoots({});
+		assert.equal(listed.complete, undefined, "a complete listing carries no partial marker");
+		assert.deepEqual(listed, [
 			{
 				kind: "sheet",
 				rootRef: "r1",
@@ -142,6 +145,7 @@ describe("macOS backend", () => {
 		]);
 		const roots = await macosBackend.listRoots({});
 		assert.equal(roots.length, 3);
+		assert.equal(roots.complete, false, "a reply without `complete: true` is partial");
 		assert.deepEqual(roots[0], {
 			kind: "window",
 			rootRef: "only-window",
@@ -172,7 +176,7 @@ describe("macOS backend", () => {
 		assert.equal(roots[2].rootRef, undefined);
 		for (const bad of [undefined, {}, { roots: 1 }]) {
 			fakes.macos.command.mockResolvedValueOnce(bad);
-			assert.deepEqual(await macosBackend.listRoots({}), []);
+			assert.deepEqual(await macosBackend.listRoots({}), Object.assign([], { complete: false }));
 		}
 	});
 
@@ -199,6 +203,7 @@ describe("macOS backend", () => {
 		fakes.macos.command.mockResolvedValue({ roots, complete: false });
 		const positive = await macosBackend.listRoots({ pid: 42 });
 		assert.equal(positive.length, 129);
+		assert.equal(positive.complete, false, "the bridge resolves a saved root from it by identity only");
 		assert.ok(
 			positive.some((root) => root.rootRef === "w5"),
 			"an existing target still resolves",

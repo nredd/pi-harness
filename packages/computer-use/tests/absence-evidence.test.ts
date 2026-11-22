@@ -11,6 +11,13 @@ afterEach(() => {
 
 const UNREAD = { truncated: true };
 
+/** A focused window with the saved root's title but another identity, e.g. a second document named alike. */
+const lookalike = () =>
+	desktopRoot({ rootRef: "ax:b", windowRef: "ax:b", windowId: 200, title: "Main", zOrder: 0, isFocused: true });
+
+/** A listing the helper could not read completely (`complete: false`), as the macOS backend reports it. */
+const partialListing = (roots: object[]) => Object.assign(roots, { complete: false });
+
 test("an inconclusive check keeps the delivery outcome", () => {
 	for (const outcome of ["worked", "didnt", "unknown"] as const)
 		assert.equal(outcomeAfterCheck(outcome, "inconclusive"), outcome);
@@ -289,7 +296,7 @@ test("a partial listing still resolves the existing target", async ({ onTestFini
 	);
 	fake.listRootsHook = (query: { authoritative?: boolean }) => {
 		if (query.authoritative) throw Object.assign(new Error("inventory incomplete"), { code: "inventory_incomplete" });
-		return [...many, ...fake.roots];
+		return partialListing([...many, ...fake.roots]);
 	};
 	const { stateId } = await fake.observe();
 	const waited = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go" });
@@ -508,3 +515,85 @@ test.for([
 		});
 	},
 );
+
+test("a partial listing never substitutes a same-title window for the omitted target", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const { stateId } = await fake.observe();
+	fake.listRootsHook = () => partialListing([lookalike()]);
+	for (const call of [() => fake.observe(), () => fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go" })])
+		await assert.rejects(call(), (error: { code?: string; message: string }) => {
+			assert.equal(error.code, "inventory_incomplete");
+			assert.match(error.message, /incomplete and does not name it; it may still be open/);
+			return true;
+		});
+	fake.listRootsHook = () => partialListing([]);
+	await assert.rejects(
+		fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go" }),
+		/The current controlled window could not be verified: the window listing was incomplete/,
+	);
+	assert.ok(
+		fake.looks.every((look: { target: { windowId?: number } }) => look.target.windowId === 100),
+		"no look reached the lookalike",
+	);
+	// The verified identity still resolves from a partial listing.
+	fake.listRootsHook = () => partialListing([lookalike(), ...fake.roots]);
+	await fake.observe();
+	assert.equal(fake.looks.at(-1).target.windowId, 100);
+	// A complete listing that lacks the window id still follows a unique exact title, as before.
+	fake.listRootsHook = () => [lookalike()];
+	await fake.observe();
+	assert.equal(fake.looks.at(-1).target.windowId, 200);
+});
+
+test("observe_ui never binds a saved root ref to a same-title window from a partial listing", async ({
+	onTestFinished,
+}) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const listed = await fake.call(fake.bridge.executeFind, {});
+	const root = /@r\d+/.exec(fake.text(listed))![0];
+	fake.listRootsHook = () => partialListing([lookalike()]);
+	await assert.rejects(fake.observe({ root }), (error: { code?: string; message: string }) => {
+		assert.equal(error.code, "inventory_incomplete");
+		assert.match(
+			error.message,
+			new RegExp(`Root ref '${root}' could not be verified: the window listing was incomplete`),
+		);
+		return true;
+	});
+	assert.equal(fake.looks.length, 0);
+	// A complete listing keeps the title fallback for a root whose window id changed.
+	fake.listRootsHook = () => [lookalike()];
+	await fake.observe({ root });
+	assert.equal(fake.looks.at(-1).target.windowId, 200);
+});
+
+test("wait_for never corroborates an absence from a same-title window", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.tree = [wireButton("go", "Go")];
+	const { stateId } = await fake.observe();
+	// The lookalike's complete outline lacks the condition; only the waited root could corroborate it.
+	fake.lookPayload = (request: { target: { windowId?: number } }) =>
+		lookPayload({
+			lookId: `look-${request.target.windowId}`,
+			children: request.target.windowId === 200 ? [wireButton("ok", "OK")] : [wireButton("go", "Go")],
+			window: { windowId: request.target.windowId ?? 0 },
+		});
+	for (const [listing, reason] of [
+		[() => partialListing([lookalike()]), /incomplete and does not name it/],
+		[() => [lookalike()], /The current controlled window is no longer available/],
+	] as const) {
+		fake.listRootsHook = undefined;
+		fake.waitFor = async () => {
+			fake.listRootsHook = listing;
+			return { found: true, gone: true, complete: true, nodeCount: 2 };
+		};
+		const looks = fake.looks.length;
+		const result = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", until: "absent" });
+		assert.deepEqual(
+			[result.details.found, result.details.gone, result.details.inconclusive],
+			[false, undefined, true],
+		);
+		assert.match(result.details.observationError, reason);
+		assert.equal(fake.looks.length, looks, "the lookalike is never observed");
+	}
+});

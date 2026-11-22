@@ -15,6 +15,7 @@ import type {
 	PlatformReadTextResponse,
 	PlatformRoot,
 	PlatformRootKind,
+	PlatformRootList,
 	PlatformRootQuery,
 	PlatformTarget,
 	PlatformWaitForRequest,
@@ -149,7 +150,7 @@ export const macosBackend: Pick<
 		return parseApps(await macosHelper.command<unknown>("listApps", {}, { signal }));
 	},
 
-	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
+	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRootList> {
 		const pid = macosRootPidFilter(query.pid);
 		const reply = await macosHelper.command<unknown>(
 			"listRoots",
@@ -159,15 +160,19 @@ export const macosBackend: Pick<
 			},
 			{ signal },
 		);
-		// A partial listing still resolves the roots it names, but its omissions never prove closure.
-		if (query.authoritative && (reply as { complete?: unknown } | undefined)?.complete !== true)
+		// A partial listing still resolves the roots it names by identity, but its omissions never prove closure.
+		const complete = (reply as { complete?: unknown } | undefined)?.complete === true;
+		if (query.authoritative && !complete)
 			throw Object.assign(
 				new Error(
 					`The Accessibility root inventory${pid === undefined ? "" : ` of pid ${pid}`} is not known to be complete; its missing roots are unknown, not closed.`,
 				),
 				{ code: "inventory_incomplete" },
 			);
-		return parseRoots(reply);
+		const roots: PlatformRootList = parseRoots(reply);
+		// A reply without `complete: true`, e.g. from an older external helper, is partial.
+		if (!complete) roots.complete = false;
+		return roots;
 	},
 
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {

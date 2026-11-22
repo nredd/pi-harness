@@ -118,6 +118,7 @@ import type {
 	PlatformActRequest,
 	PlatformDiagnostics,
 	PlatformRoot,
+	PlatformRootList,
 	PlatformWaitForResponse,
 } from "./platform/types.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
@@ -735,7 +736,7 @@ async function listApps(signal?: AbortSignal): Promise<HelperApp[]> {
 	return await currentPlatformBackend.listApps(signal);
 }
 
-async function listWindows(pid: number, signal?: AbortSignal): Promise<HelperWindow[]> {
+async function listWindows(pid: number, signal?: AbortSignal): Promise<PlatformRootList> {
 	return await currentPlatformBackend.listRoots({ pid }, signal);
 }
 
@@ -1057,10 +1058,19 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
 	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
+	// A partial listing admits the ref only by its verified identity: a same-title window is another root.
+	const partial = windows.complete === false;
 	const match =
 		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
 		(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
-		windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
+		(partial
+			? undefined
+			: windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle)));
+	if (!match && partial)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Root ref '${selector}' could not be verified: the window listing was incomplete and does not name it; it may still be open. Call find_roots again, or observe_ui it later.`,
+		);
 	if (!match) {
 		throw new Error(`Root ref '${selector}' is stale. Call find_roots again and choose a current window.`);
 	}
@@ -1075,7 +1085,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean } = {},
+	options: { preferModal?: boolean; exactIdentity?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
@@ -1083,7 +1093,8 @@ async function resolveCurrentTarget(
 	assertAppNotBlocked(current);
 	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
-	if (!windows.length) {
+	const partial = windows.complete === false;
+	if (!windows.length && !partial) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
 	}
 
@@ -1097,6 +1108,14 @@ async function resolveCurrentTarget(
 	match ??= hadStableWindowId
 		? windows.find((window) => window.windowId !== undefined && window.windowId === current.windowId)
 		: undefined;
+	// A partial listing, or a caller that needs this exact root, admits it only by its verified identity: a
+	// title or ranking match could be another window.
+	if (!match && partial)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			"The current controlled window could not be verified: the window listing was incomplete and does not name it; it may still be open. Call observe_ui again, or find_roots to choose a root.",
+		);
+	if (!match && options.exactIdentity) throw new Error(CURRENT_TARGET_GONE_ERROR);
 	if (!match) {
 		const exactTitleMatches =
 			titleQuery && titleQuery !== "(untitled)"
@@ -1164,6 +1183,12 @@ async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTar
 	}
 
 	let selected = windows.find((window) => window.windowId !== undefined && window.windowId === frontmost.windowId);
+	// A partial listing that omits the named frontmost window cannot stand in another for it, by title or rank.
+	if (!selected && windows.complete === false && frontmost.windowId !== undefined)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			"The frontmost window could not be verified: the window listing was incomplete and does not name it; it may still be open. Call observe_ui again, or find_roots to choose a root.",
+		);
 	if (!selected && frontmost.windowTitle) {
 		const title = normalizeText(frontmost.windowTitle);
 		selected = windows.find((window) => normalizeText(window.title) === title);
@@ -2198,7 +2223,8 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 	try {
 		// A desktop state hydrates from a saved record, which always carries its resource identity. The successor
 		// re-resolves the root the wait read (by its native ref, so a changed window id is followed) without
-		// moving to a foreground modal: a modal opened meanwhile is another root, not evidence for this one.
+		// moving to a foreground modal: a modal opened meanwhile is another root, not evidence for this one. Only the
+		// exact waited root corroborates an absence: a same-title window reached by fallback never does.
 		refreshed = (
 			await resourceScheduler.readAt(
 				state.resourceKey!,
@@ -2208,7 +2234,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 						signal,
 						"auto",
 						AUTO_IMAGE_MAX_DIMENSION,
-						await resolveCurrentTarget(signal, { preferModal: false }),
+						await resolveCurrentTarget(signal, { preferModal: false, exactIdentity: absenceClaimed }),
 					),
 			)
 		).value;
@@ -4372,8 +4398,9 @@ An `absent` condition holds only on complete evidence. The helper must walk the
 whole scope and read every field the condition tests (the macOS walk stops at
 depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
 without the helper's `complete: true`, e.g. from an older external helper, as
-incomplete. The successor observation, captured from the root the wait read and
-never from a foreground modal that opened meanwhile, must neither show the
+incomplete. The successor observation, captured from the exact root the wait read
+(its native ref or window id, never a same-title window and never a foreground
+modal that opened meanwhile), must neither show the
 condition nor mark a node `truncated` in the scope, above it or, unless the
 scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
 missing from the successor proves nothing while the condition shows anywhere in
@@ -4382,8 +4409,8 @@ it. A root closure proven from a complete listing also settles it. Otherwise
 keeping the delivery outcome from before the check (its message claims delivery
 only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
 instead of `gone`, with `unreadRefs` only when the successor has unread nodes
-there. When the root of a claimed absence cannot be observed afterward,
-`wait_for` returns `inconclusive: true` with `observationError` and no successor
+there. When the root of a claimed absence cannot be observed or resolved by that
+identity afterward, `wait_for` returns `inconclusive: true` with `observationError` and no successor
 state. A `wait_for` that timed out while the helper still saw the condition is a
 failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.

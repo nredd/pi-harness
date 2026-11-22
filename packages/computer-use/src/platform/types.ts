@@ -90,6 +90,12 @@ export interface PlatformRoot extends PlatformAppIdentity {
 	metadata?: Record<string, unknown>;
 }
 
+/**
+ * A root listing. `complete: false` (macOS) marks one the helper could not read completely: a root it omits is
+ * unknown, not closed, and a saved root resolves from it only by its verified identity, never a lookalike.
+ */
+export type PlatformRootList = PlatformRoot[] & { complete?: boolean };
+
 export interface PlatformFrontmostResult extends PlatformAppIdentity {
 	appName: string;
 	pid: number;
@@ -245,7 +251,7 @@ export interface ComputerUsePlatformBackend {
 	setActivity?(active: boolean): void | Promise<void>;
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
-	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]>;
+	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRootList>;
 	/** Explain why no roots are visible on this host (e.g. a WSL2 guest), appended to empty `find_roots` text. */
 	emptyRootsHint?(): string | undefined;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
