@@ -506,11 +506,11 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Report-only real-source Swift baseline for #757, not native 100%. Thin live adapters remain documented exceptions under #645; policy above them still needs deterministic seams.",
-      "note": "Full production source linked into one headless instrumented binary. Raw LLVM JSON preserves regions separately; LCOV accounts lines/functions, not fabricated branches or statements. Local initial reference; exact-HEAD hosted artifact must confirm it before merge.",
+      "note": "Full production source linked into one headless instrumented binary. Raw LLVM JSON preserves regions separately; LCOV accounts lines/functions, not fabricated branches or statements. Report-only: the darwin cap is the local measurement on this PR HEAD (no margin); hosted excess is reported, never failed. PR CI runs no Swift, so the first hosted macOS main artifact confirms it.",
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 2439, "functions": 576, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 2015, "functions": 481, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "Report full-source headless Swift coverage for #645 without claiming all-native coverage. Swift tests run locally and on macOS main/dispatch, not in PR CI.",
