@@ -1316,7 +1316,17 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			return fleet;
 		},
 	});
-	const { liveAgentById, resolveAgentRef } = createAgentLookup(manager, () => currentCtx);
+	const { liveAgentById, resolveSessionRef } = createAgentLookup(
+		manager,
+		() => currentCtx,
+		() => workflowTasks,
+	);
+	/** Mark a settled result read: its completion notice is not sent, and its failure badge clears. */
+	function markRead(record: AgentRecord): void {
+		markConsumed(record, clock.now());
+		fleet.acknowledgeFailure(record.id);
+		outbox.cancel(record.id);
+	}
 
 	const registryEntry = {
 		waitForAll: () => manager.waitForAll(),
@@ -1531,23 +1541,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				manager: {
 					spawn: spawnTopLevel,
 					awaitStartup: (id) => manager.awaitStartup(id),
-					getRecord: (id) => manager.getRecord(id),
-					// Unguarded on purpose: the stop handler now runs the top-level check
-					// itself off `getRecord`, and reports the refusal instead of the
-					// "Agent not found" a false from here used to be read as.
+					resolve: (id) => resolveSessionRef(id, "none"),
+					hasRecord: (id) => manager.getRecord(id) !== undefined,
+					// Unguarded on purpose: the stop handler runs the ownership check itself
+					// off `resolve`, and reports the refusal instead of a bare false.
 					abort: (id) => manager.abort(id),
-					consumeResult: (id) => {
-						const record = resolveAgentRef(id);
-						// Same guard as get_subagent_result: a running agent has no result
-						// to consume, and its notification is still the caller's only
-						// signal that it finished.
-						if (!record || record.parentAgentId) return false;
-						if (record.status === "running" || record.status === "queued") return false;
-						markConsumed(record, clock.now());
-						fleet.acknowledgeFailure(record.id);
-						outbox.cancel(record.id);
-						return true;
-					},
+					markRead,
 					steer: (id, message) => manager.steer(id, message),
 				},
 			});
@@ -2867,7 +2866,7 @@ Terse command-style prompts produce shallow, generic work.
 									: "no saved session is left to reopen.";
 						const why = note
 							? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}`
-							: agentNotFound(manager, latest);
+							: agentNotFound(latest);
 						return errorResult(`${continued}${why}`);
 					}
 					// The reopen is a fresh detached spawn: nothing can block on it here.
@@ -3884,13 +3883,9 @@ Terse command-style prompts produce shallow, generic work.
 
 	registerControlTools({
 		pi,
-		manager,
 		clock,
-		fleet,
-		outbox,
-		workflowTasks,
-		liveAgentById,
-		resolveAgentRef,
+		markRead,
+		resolveSessionRef,
 		isShowCostEnabled,
 		formatLifetimeTokens,
 		textResult,

@@ -7,7 +7,7 @@
  * their results are spooled for the session they belong to.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -414,7 +414,7 @@ describe("session switch with a running background agent", () => {
 		expect(listRunningDetached(sessionFile)).toEqual([]);
 	});
 
-	it("lets the reopened session read and steer a survivor by id, handle and name (#330)", async () => {
+	it("lets the reopened session read and steer a survivor by id, handle and name, and another session only read it (#330)", async () => {
 		const first = bootPi();
 		subagentsExtension(first.pi);
 		await first.lifecycle.get("session_start")!({ type: "session_start" }, ctx(sessionFile));
@@ -446,9 +446,26 @@ describe("session switch with a running background agent", () => {
 			.execute("g", { agent_id: "nope" }, undefined, undefined, ctx(sessionFile));
 		expect(unknown.content[0].text).toContain("Agent not found");
 
+		// A session the survivor does not wake reads it, but steers and stops only its own.
+		const otherFile = join(dirname(sessionFile), "other-session.jsonl");
+		await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "new" }, ctx(sessionFile));
+		const other = bootPi();
+		subagentsExtension(other.pi);
+		await other.lifecycle.get("session_start")!({ type: "session_start", reason: "new" }, ctx(otherFile));
+		const run = (tool: string, params: object) =>
+			other.tools.get(tool).execute("o", params, undefined, undefined, ctx(otherFile));
+		for (const ref of [agent.id, ` @${alias!.toUpperCase()}`])
+			expect((await run("get_subagent_result", { agent_id: ref })).content[0].text).toContain("Status: running");
+		expect((await run("steer_subagent", { agent_id: agent.id, message: "hi" })).content[0].text).toBe(
+			`Agent not found: "${agent.id}". It may have been cleaned up.`,
+		);
+		expect((await run("stop_subagent", { agent_id: agent.id })).content[0].text).toContain(
+			`No agent or workflow "${agent.id}"`,
+		);
+
 		agent.finish();
 		await flush();
-		await back.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+		await other.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, ctx(otherFile));
 	});
 
 	it("keeps a survivor that settled while detached answerable by id after its result is delivered (#330)", async () => {
