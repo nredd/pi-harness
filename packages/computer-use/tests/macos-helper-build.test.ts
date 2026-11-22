@@ -411,6 +411,15 @@ test("rejects a stale activity connection even when the daemon was already marke
 	assert.deepEqual(commands(), ["diagnostics", "diagnostics", "diagnostics"]);
 });
 
+test("restart refuses, never shuts down, a daemon replaced by a stale build", async () => {
+	const { client, fake, commands, spawn } = await rig(current);
+	await client.ensureProtocol();
+	fake.diagnostics.buildIdentity = older;
+	await assert.rejects(client.restart(), { code: "stale_helper" });
+	assert.ok(!commands().includes("shutdown"));
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
 test("an invalid build probe never sends the tool command", async () => {
 	const { client, commands, fake } = await rig(current);
 	await client.ensureProtocol();

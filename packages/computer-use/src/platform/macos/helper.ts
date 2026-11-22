@@ -92,10 +92,6 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
 let expectedBuild: string | undefined;
 
-function rethrowStaleHelper(error: unknown): void {
-	if (error instanceof HelperCommandError && error.code === "stale_helper") throw error;
-}
-
 /**
  * Serialize launch and runtime setup across every client of the managed socket. Beside the daemon's own
  * `<socket>.lock`, which the daemon holds for its lifetime, so the two never contend.
@@ -559,7 +555,8 @@ export class MacosHelperClient {
 		if (usingExternalHelperSocket) {
 			throw new HelperTransportError(`External helper at ${HELPER_SOCKET_PATH} must be restarted by its operator.`);
 		}
-		await this.command("shutdown", {}, { signal, timeoutMs: 2_000 }).catch(rethrowStaleHelper);
+		// A failed shutdown is not fatal; the probe below still refuses a stale or unverifiable resident.
+		await this.command("shutdown", {}, { signal, timeoutMs: 2_000 }).catch(() => undefined);
 		this.daemonAvailable = false;
 		await sleep(400, signal);
 		if (!(await this.ensureDaemon(signal))) {
