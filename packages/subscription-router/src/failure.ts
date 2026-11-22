@@ -39,8 +39,11 @@ const PREFIXED_STATUS = /^[^{}()\r\n]*\(([45]\d{2})\)\s*:/;
 const JSON_TOKEN =
 	/\s*(?:"(?:[^"\\\r\n]|\\.)*"|[{}[\],:]|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.+-]))/y;
 const CUT_MESSAGE = /^\s*,?\s*"message"\s*:\s*"(?:[^"\\\r\n]|\\.)*$/;
-const NON_QUOTA =
-	/\b(?:Provider stopped with:|SAFETY\b|blocked\b|unauthorized\b|unauthenticated\b|forbidden\b|permission[ _]denied\b|model_capacity_exhausted\b|unavailable\b|network\b|ECONNRESET\b|ECONNREFUSED\b|ENOTFOUND\b|ETIMEDOUT\b|fetch failed\b|socket hang up\b)/i;
+// Negative evidence is a status (checked separately), an error type, a transport error code or an
+// explicit safety verdict, never free text: "requests are blocked" can be the quota message itself.
+const NON_QUOTA_TYPE = /\b(?:SAFETY|UNAUTHENTICATED|PERMISSION_DENIED|UNAVAILABLE)\b/;
+const NON_QUOTA_CODE =
+	/\b(?:Provider stopped with:|authentication_error\b|permission_error\b|model_capacity_exhausted\b|ECONNRESET\b|ECONNREFUSED\b|ENOTFOUND\b|ETIMEDOUT\b|fetch failed\b|socket hang up\b)/i;
 const OVERLOAD = /(?:^|[^a-z0-9])overloaded(?![a-z0-9])/i;
 const VERDICT = /\b(?:RESOURCE_EXHAUSTED|rate_limit_error|rate_limit_exceeded|too_many_requests|QUOTA_EXHAUSTED)\b/i;
 const LEGACY_LIMIT =
@@ -162,7 +165,13 @@ export function classify(errorMessage: string | undefined, now: number): Failure
 	const signal = [...codes, message].join(" ");
 	const quota = { scope: "model", cause: "quota" } as const;
 	// Negative evidence wins even when the message contains quota/billing words or a retry hint.
-	if (isNonQuotaStatus(http) || isNonQuotaStatus(status) || NON_QUOTA.test(signal) || OVERLOAD.test(signal)) {
+	if (
+		isNonQuotaStatus(http) ||
+		isNonQuotaStatus(status) ||
+		NON_QUOTA_TYPE.test(signal) ||
+		NON_QUOTA_CODE.test(signal) ||
+		OVERLOAD.test(signal)
+	) {
 		return { class: "not-quota", scope: "model", cause: "other" };
 	}
 	if (http === 402 || BILLING.test(signal)) return { class: "billing", scope: "provider", cause: "billing" };

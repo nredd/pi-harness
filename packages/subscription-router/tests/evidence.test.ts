@@ -67,6 +67,14 @@ describe("failure-inferred evidence", () => {
 		});
 	});
 
+	it("marks a daily 429 on the first failure even when its prose says requests are blocked", async () => {
+		const text = "429: Daily quota exceeded; requests are blocked until reset";
+		expect(await decide(failureEvidence(new FailureHistory()), failure(text))).toMatchObject({
+			kind: "block",
+			decision: { window: "inferred:daily", resetAt: nextPacificMidnight(T0) },
+		});
+	});
+
 	it("caps a daily mark at 24 hours on the 25-hour fall-back day", async () => {
 		// 00:00:30 PDT on 2030-11-03: the next Pacific midnight is 25 hours away.
 		const failedAt = Date.parse("2030-11-03T07:00:30Z");
