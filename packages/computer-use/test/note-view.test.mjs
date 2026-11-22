@@ -20,7 +20,8 @@ describe("noteFromLook", () => {
 		const note = noteFromLook(undefined, outlineOf(root), win);
 		assert.deepEqual(regionsOf(note), [
 			["AXToolbar:tb", "tb", "seen", undefined],
-			["AXUnknown:side bar", "side bar", "seen", undefined],
+			// A blank role is unclassified, so its title is never noted (#1234).
+			["AXUnknown:[protected]", "[protected]", "seen", undefined],
 			["AXList:axlist", "axlist", "seen", undefined],
 		]);
 		assert.deepEqual(
@@ -29,16 +30,16 @@ describe("noteFromLook", () => {
 		);
 	});
 
-	test("a childless root is its own region; blank labels fall back to the role, then the ref", () => {
+	test("a childless root is its own region; blank labels fall back to the role, a blank role is protected", () => {
 		const blankRole = noteFromLook(undefined, outlineOf(n("@e9", { title: " " })), win);
-		assert.deepEqual(regionsOf(blankRole), [["AXGroup:@e9", "axgroup", "seen", undefined]]);
+		assert.deepEqual(regionsOf(blankRole), [["AXGroup:axgroup", "axgroup", "seen", undefined]]);
 		const blankBoth = noteFromLook(undefined, outlineOf(n("@e8", { role: "", title: " " })), win);
-		assert.deepEqual(regionsOf(blankBoth), [["AXUnknown:@e8", "@e8", "seen", undefined]]);
-		const bare = noteFromLook(undefined, outlineOf(n("@e7", { role: "" })), win);
-		assert.deepEqual(regionsOf(bare), [["AXUnknown:@e7", "@e7", "seen", undefined]]);
+		assert.deepEqual(regionsOf(blankBoth), [["AXUnknown:[protected]", "[protected]", "seen", undefined]]);
+		const bare = noteFromLook(undefined, outlineOf(n("@e7", { role: " " })), win);
+		assert.deepEqual(regionsOf(bare), [[" :[protected]", "[protected]", "seen", undefined]]);
 	});
 
-	test("regions that vanished since the previous look are changed, never-looked ones are dropped", () => {
+	test("regions that vanished since the previous look are changed and redacted, never-looked ones are dropped", () => {
 		const prev = {
 			windowRef: "@r1",
 			title: "Doc",
@@ -52,7 +53,8 @@ describe("noteFromLook", () => {
 		const note = noteFromLook(prev, outlineOf(n("@e0", { children: [n("@e3", { role: "AXList" })] })), win);
 		assert.deepEqual(regionsOf(note), [
 			["AXList:axlist", "axlist", "seen", undefined],
-			["AXGone:x", "gone", "changed", "not matched in latest look"],
+			// Unmatched: this look cannot confirm the node is still readable (#1234).
+			["redacted", "[redacted]", "changed", "not matched in latest look"],
 		]);
 	});
 

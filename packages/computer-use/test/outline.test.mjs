@@ -766,7 +766,8 @@ describe("interactive controls", () => {
 		assert.equal(label({}), "");
 		assert.equal(
 			outlineNodePath(outlineOf({ children: [{ role: "AXButton", subrole: "AXClose" }] }).nodes[1]),
-			"AXUnknown ▸ AXButton/AXClose",
+			// A role-less root is unclassified, so it carries only the protected marker (#1234).
+			'AXUnknown "[protected]" ▸ AXButton/AXClose',
 		);
 	});
 });

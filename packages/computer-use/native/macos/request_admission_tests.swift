@@ -2,14 +2,14 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// Fail the run, and exit before the caller can act, when a request reaches a live boundary.
-private func forbidden<T>(_ boundary: String) -> T {
-    expect(false, "request admission must never reach \(boundary)")
+/// Fail the run, and exit before the caller can act, when a headless test reaches a live boundary.
+func forbidden<T>(_ boundary: String) -> T {
+    expect(false, "headless tests must never reach \(boundary)")
     fatalError("unreachable: \(boundary)")
 }
 
 /// An input sink whose every event, delivery, delay and layout read fails the test.
-private let forbiddenInputSink = NativeInputSink(
+let forbiddenInputSink = NativeInputSink(
     mouseEvent: { _, _, _ in forbidden("mouse event creation") },
     wheelEvent: { _, _ in forbidden("wheel event creation") },
     keyEvent: { _, _ in forbidden("key event creation") },

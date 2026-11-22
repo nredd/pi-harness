@@ -359,6 +359,11 @@ The child is reaped before assertions; a source-level guard forbids AX queries/a
 Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
 Its AX traversal fixture returns a fresh equivalent node on the cycle's back edge, so identity-only
 dedupe fails it; the walk dedupes by AX equivalence (hash buckets, then `CFEqual`).
+`native/macos/root_pairing_tests.swift` feeds synthetic CG window lists, detached `LookNode`
+trees and fabricated root snapshots to root ranking, CG candidate and owner filters, AX/CG pairing,
+look rect scaling, OCR placement, root identities and the root snapshot delta. Its only live calls
+are AX title and frame reads on handles for PIDs above the macOS range, so pairing there sees empty
+titles and frames; geometry and title pairing are checked on the scoring functions directly.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 
@@ -1181,6 +1186,18 @@ The runtime is state-scoped and outline-first:
 
 - `observe_ui` returns a compact control list and running note; `detail: "outline"` returns the folded outline.
 - `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
+- Retained outline text is bounded by what the current snapshot can classify (#1234). A node is protected when it is a macOS secure text field, has the Linux `password text` or `unknown` role, carries the helper's `[protected]` marker, or has no role at all. Covered:
+  - Protected node metadata: on parse and restore its title reads `[protected]` and its description, identifier, value and OCR text are dropped, so search, folds, diffs and serialized details never see them. Role, subrole, refs and geometry stay.
+  - Scoped `expand_ui` grafts: when the scoped look contains a protected node, preserved children it did not confirm keep their refs and role but lose title, description, identifier, value and OCR text (`[redacted]`), and are marked `unconfirmed`.
+  - Running notes: `search_ui`, `expand_ui` and `inspect_ui` rebuild each node region's key and label from the node now at its ref, so a protected node reads `[protected]`, an unconfirmed one `[redacted]`, and a missing one is redacted. Root-listing and capture-pairing regions carry typed provenance and pass through. A legacy region without provenance is reclassified by its ref, or redacted.
+- Not covered:
+  - A scoped look with no protected node keeps preserved, unconfirmed children as is.
+  - Older `stateId`s: each answers `search_ui`, `expand_ui` and `inspect_ui` from its own snapshot, so a state taken while a node was readable still shows its label after a later look saw it protected (#1263). Revocation across retained states is #1279.
+  - `@o` pages a state produced before a graft saw protection stay readable (#1279).
+  - Session restore reads the outline saved by `observe_ui`/`act_ui`; a scoped graft is not persisted, so a restart restores the pre-graft text under the same `stateId` (#1279).
+  - Windows password edits carry no protection signal on the wire, so none of the above triggers for them (#1263).
+  - Screenshots and OCR: protected pixels are not masked before OCR or image encoding, and OCR text attributed to another node or a picture-only title is untouched (#1263).
+  - `read_text` reads live text from the helper, independent of retained outlines, and error `@o` pages are not tied to a state.
 - `act_ui` is the state-scoped desktop action entrypoint. The carried macOS `desktop_input` tool is a separately gated physical fallback with a shared transaction lock.
 - UI observations are immutable records; request-local hydration replaces global current state.
 - Cached queries bypass scheduling; live work is ordered per physical resource.
