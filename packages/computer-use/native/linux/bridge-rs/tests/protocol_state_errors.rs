@@ -25,6 +25,8 @@ fn root(n: usize, frame: Option<Rect>) -> RootSnapshot {
         pid: n as u64,
         name: format!("root {n}"),
         app_name: "fixture".into(),
+        executable: None,
+        wm_class: None,
         role: "frame".into(),
         frame,
         x11_window: None,
@@ -130,7 +132,7 @@ fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
         (
             "version",
             "invalid_request",
-            "Unsupported Linux helper protocol 0; expected 5.",
+            "Unsupported Linux helper protocol 0; expected 6.",
         ),
         (
             "command",

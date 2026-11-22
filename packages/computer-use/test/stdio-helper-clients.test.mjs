@@ -81,7 +81,7 @@ function realisticChild(children, options, hold) {
 function envelope(platform, handlers = {}, extra = {}) {
 	return createHelperEngine({
 		profile: "envelope",
-		protocolVersion: platform === "Windows" ? 6 : 5,
+		protocolVersion: 6,
 		platform,
 		handlers,
 		diagnostics: { invariants: REQUIRED_INVARIANTS },
@@ -489,7 +489,7 @@ describe("Linux helper client", () => {
 		vi.resetModules();
 		vi.stubEnv("PI_COMPUTER_USE_LINUX_HELPER_PATH", "");
 		const module = await import("../src/platform/linux/helper.ts");
-		assert.equal(module.LINUX_HELPER_PROTOCOL_VERSION, 5);
+		assert.equal(module.LINUX_HELPER_PROTOCOL_VERSION, 6);
 		assert.equal(
 			module.LINUX_HELPER_PATH,
 			path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge"),
@@ -563,7 +563,7 @@ describe("Linux helper client", () => {
 			["diagnostics", "look", "look"],
 		);
 		assert.deepEqual(engine.requests[1].raw, {
-			protocolVersion: 5,
+			protocolVersion: 6,
 			id: engine.requests[1].id,
 			cmd: "look",
 			args: { app: "x" },
@@ -614,7 +614,7 @@ describe("Linux helper client", () => {
 		await assert.rejects(client.ensureInstalled(), (error) => {
 			assert.match(
 				error.message,
-				/^Command failed \(2\): .*--platform linux --runtime\nno prebuilt\nInstalled Linux helper .* was rejected: Linux helper protocol mismatch: expected 5, got 4\.$/s,
+				/^Command failed \(2\): .*--platform linux --runtime\nno prebuilt\nInstalled Linux helper .* was rejected: Linux helper protocol mismatch: expected 6, got 4\.$/s,
 			);
 			assert.doesNotMatch(error.message, /Restart Pi/);
 			return true;
@@ -624,7 +624,7 @@ describe("Linux helper client", () => {
 
 	test("a rejected helper that setup replaces is re-probed and then used", async () => {
 		install();
-		const stale = linuxEngine({ diagnostics: ok({ protocolVersion: 5, architectureVersion: 0, invariants: [] }) });
+		const stale = linuxEngine({ diagnostics: ok({ protocolVersion: 6, architectureVersion: 0, invariants: [] }) });
 		const fresh = linuxEngine({ look: ok("fresh") });
 		let generation = 0;
 		const { client, spawn, children } = await linux({
@@ -640,7 +640,7 @@ describe("Linux helper client", () => {
 	});
 
 	test("an installed helper that fails validation after setup names the path and the reason", async () => {
-		const engine = linuxEngine({ diagnostics: ok({ protocolVersion: 5, architectureVersion: 9 }) });
+		const engine = linuxEngine({ diagnostics: ok({ protocolVersion: 6, architectureVersion: 9 }) });
 		const { client, children } = await linux({ setup: installing, helper: { engine } });
 		await assert.rejects(client.ensureInstalled(), (error) => {
 			assert.ok(error.message.startsWith(`Linux helper installed at ${helperPath} failed validation: `));
@@ -659,7 +659,7 @@ describe("Linux helper client", () => {
 		const engine = linuxEngine({ diagnostics: ok(null) });
 		const { client } = await linux({ setup: { exitCode: 1 }, helper: { engine } });
 		await assert.rejects(client.ensureInstalled(), (error) =>
-			error.message.includes("was rejected: protocol mismatch: expected 5, got unknown."),
+			error.message.includes("was rejected: protocol mismatch: expected 6, got unknown."),
 		);
 	});
 
@@ -777,7 +777,7 @@ describe("Linux helper client", () => {
 			look: split(ok({ roots: [1, 2, 3] }), 4, 1),
 			noise: (request) =>
 				raw(
-					`\n   \n{not json\n${JSON.stringify({ protocolVersion: 5, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 5, id: request.id, ok: true, result: "after noise" })}\n`,
+					`\n   \n{not json\n${JSON.stringify({ protocolVersion: 6, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 6, id: request.id, ok: true, result: "after noise" })}\n`,
 				),
 		});
 		const { client } = await linux({ helper: { engine } });
@@ -812,9 +812,9 @@ describe("Linux helper client", () => {
 		const { client } = await linux({ helper: { engine } });
 		await assert.rejects(
 			client.command("old"),
-			/Linux helper protocol mismatch: expected 5, got 4\. Restart Pi to use the installed helper\./,
+			/Linux helper protocol mismatch: expected 6, got 4\. Restart Pi to use the installed helper\./,
 		);
-		await assert.rejects(client.command("unversioned"), /expected 5, got unknown\./);
+		await assert.rejects(client.command("unversioned"), /expected 6, got unknown\./);
 	});
 
 	test("a command with no reply times out and a late reply is ignored", async () => {
@@ -823,7 +823,7 @@ describe("Linux helper client", () => {
 		const { client, children } = await linux({ helper: { engine } });
 		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
 		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 5, id: engine.requests.at(-1).id, ok: true, result: {} })}\n`,
+			`${JSON.stringify({ protocolVersion: 6, id: engine.requests.at(-1).id, ok: true, result: {} })}\n`,
 		);
 		engine.script("hang", ok("again"));
 		assert.equal(await client.command("hang"), "again");

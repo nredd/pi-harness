@@ -70,6 +70,15 @@ function parseRootKind(raw: unknown): PlatformRootKind {
 		: "window";
 }
 
+/** Block-only names: the helper's ambiguous `exe` link names plus the app-settable X11 `WM_CLASS` pair. */
+function parseBlockAliases(raw: any): { blockAliases?: string[] } {
+	const wmClass = raw?.metadata?.wmClass;
+	const aliases = [...(Array.isArray(raw?.blockAliases) ? raw.blockAliases : []), wmClass?.instance, wmClass?.class]
+		.map(toOptionalString)
+		.filter((alias) => alias !== undefined);
+	return aliases.length ? { blockAliases: aliases } : {};
+}
+
 function parseRoots(result: unknown): PlatformRoot[] {
 	const roots = Array.isArray(result) ? result : (result as any)?.roots;
 	if (!Array.isArray(roots)) return [];
@@ -81,8 +90,9 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
 			pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
 			appName: toOptionalString(raw?.appName ?? raw?.processName),
-			// The helper currently copies the AT-SPI accessible Name into processName (#1180).
-			appId: toOptionalString(raw?.processName),
+			// The executable basename; the accessible app name is presentation only (#1180).
+			appId: toOptionalString(raw?.appId),
+			...parseBlockAliases(raw),
 			title: toOptionalString(raw?.title) ?? "",
 			role: toOptionalString(raw?.role),
 			subrole: toOptionalString(raw?.subrole),

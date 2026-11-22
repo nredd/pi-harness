@@ -46,10 +46,15 @@ export interface PlatformRootQuery {
 }
 
 interface PlatformAppIdentity {
-	/** Host app identifier. Linux currently reports an untrusted AT-SPI name (#1180). */
+	/** Host app identifier: macOS bundle id, Windows or Linux executable basename. */
 	appId?: string;
 	/** macOS alias for the bundle identifier. */
 	bundleId?: string;
+	/**
+	 * Linux block-only names: the X11 `WM_CLASS` instance and class, and a literal `exe` link name
+	 * ending in ` (deleted)`. A match refuses the root; these names never admit or identify one.
+	 */
+	blockAliases?: string[];
 }
 
 export interface PlatformApp extends PlatformAppIdentity {

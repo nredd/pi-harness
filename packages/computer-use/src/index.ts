@@ -278,10 +278,7 @@ const COMPUTER_USE_TOOL_NAMES = new Set(COMPUTER_USE_TOOLS.map((tool) => tool.na
 function formatConfigStatus(): string {
 	const loaded = getLoadedComputerUseConfig();
 	const entries = `blocked_apps: ${loaded.config.blocked_apps.join(", ") || "(none)"}`;
-	const blocklistStatus =
-		hostPlatform() === "linux"
-			? [entries, "blocklist: configured entries are listed but INACTIVE on Linux until #1180 (identity)"]
-			: [`${entries} (system authentication agents are always blocked)`];
+	const blocklistStatus = [`${entries} (system authentication agents are always blocked)`];
 	return [
 		"pi-computer-use configuration",
 		`browser_use: ${loaded.config.browser_use ? "enabled" : "disabled"}`,

@@ -384,6 +384,8 @@ interface OutlineToolDetails {
 }
 
 interface ResolvedTarget extends CurrentTarget {
+	/** Block-only names from this live root lookup; see `PlatformAppIdentity.blockAliases`. */
+	blockAliases?: string[];
 	windowRef: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
@@ -397,6 +399,7 @@ interface WindowRefRecord {
 	ref: string;
 	appName: string;
 	appId?: string;
+	blockAliases?: string[];
 	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
@@ -820,10 +823,15 @@ class ComputerUseError extends Error {
 	}
 }
 
-type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId">;
+type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId" | "blockAliases">;
+
+/** Windows and Linux resolve an executable identity per root; a root without one is refused. */
+function requiresLiveIdentity(): boolean {
+	return currentPlatformBackend.name === "windows" || currentPlatformBackend.name === "linux";
+}
 
 function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: true } | undefined {
-	if (currentPlatformBackend.name === "windows" && !target.appId) return { identityUnresolved: true };
+	if (requiresLiveIdentity() && !target.appId) return { identityUnresolved: true };
 	return blockedAppId(currentPlatformBackend.name, target);
 }
 
@@ -897,14 +905,16 @@ function storeBrowserRootRef(contextId: string): string {
 }
 
 function windowAppId(app: HelperApp, window: HelperWindow): string | undefined {
-	// Windows resolves the owner on each root lookup. Never mask a failed lookup with a saved identity.
-	return currentPlatformBackend.name === "windows" ? window.appId : (window.appId ?? app.appId);
+	// Windows and Linux resolve the owner on each root lookup. Never mask a failed lookup with a saved identity.
+	return requiresLiveIdentity() ? window.appId : (window.appId ?? app.appId);
 }
 
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
 	return storeWindowRef({
 		appName: app.appName,
 		appId: windowAppId(app, window),
+		// Block-only names come from this root lookup alone, like a live identity.
+		blockAliases: window.blockAliases,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -957,6 +967,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 	const baseTarget = {
 		appName: app.appName,
 		appId: storedRef.appId,
+		blockAliases: storedRef.blockAliases,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -1008,11 +1019,13 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 /**
  * A Windows root is bound to its original owner and window instance, not a matching title or HWND: the
  * helper issues a new native ref for a same-HWND replacement, so the saved ref must still be listed.
+ * A Linux text read binds the same way to the exact AT-SPI root that owns the look (#1180).
  */
-async function resolveWindowsRoot(
+async function resolveExactRoot(
 	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
 	signal?: AbortSignal,
 ): Promise<ResolvedTarget> {
+	const platform = currentPlatformBackend.name === "windows" ? "Windows" : "Linux";
 	const windows = await listWindows(saved.pid, signal);
 	const match = windows.find(
 		(window) =>
@@ -1024,18 +1037,18 @@ async function resolveWindowsRoot(
 	if (!match)
 		throw new ComputerUseError(
 			"root_stale",
-			"Saved Windows root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
+			`Saved ${platform} root is no longer available for its original owner and window instance. Rediscover it with find_roots.`,
 		);
 	if (match.instanceUnavailable)
 		throw new ComputerUseError(
 			"root_stale",
 			"Windows root could not be admitted: its owner or window instance is unverifiable, so it cannot be observed or controlled.",
 		);
-	assertAppNotBlocked({ appName: saved.appName, appId: match.appId });
+	assertAppNotBlocked({ appName: saved.appName, appId: match.appId, blockAliases: match.blockAliases });
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
 		throw new ComputerUseError(
 			"app_blocked",
-			"Windows root owner identity changed. Rediscover it with find_roots and observe it again.",
+			`${platform} root owner identity changed. Rediscover it with find_roots and observe it again.`,
 		);
 	}
 	const target = toResolvedTarget(saved, match);
@@ -1055,7 +1068,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
 	assertAppNotBlocked(fromRef);
-	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
+	if (currentPlatformBackend.name === "windows") return await resolveExactRoot(fromRef, signal);
 	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
 	// A partial listing admits the ref only by its verified identity: a same-title window is another root.
@@ -1082,16 +1095,18 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 /**
  * Re-resolve the current root. `preferModal` (observe) may move to a confirmed foreground modal; act
  * transactions pass `false` so actions and the successor capture stay on the root the state belongs to.
+ * `exact` (Linux `read_text`) re-lists the root only by its native ref and live owner identity, like Windows;
+ * `exactIdentity` (a claimed `wait_for` absence) drops the title and ranking fallbacks of the listing path.
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean; exactIdentity?: boolean } = {},
+	options: { preferModal?: boolean; exact?: boolean; exactIdentity?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
 	assertAppNotBlocked(current);
-	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
+	if (currentPlatformBackend.name === "windows" || options.exact) return await resolveExactRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
 	const partial = windows.complete === false;
 	if (!windows.length && !partial) {
@@ -1923,7 +1938,8 @@ async function performReadText(
 	const state = operationState();
 	const raw = (
 		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
-			const target = currentPlatformBackend.name === "windows" ? await resolveCurrentTarget(signal) : undefined;
+			// Revalidate the exact root owning the look and its live identity before any live read.
+			const target = requiresLiveIdentity() ? await resolveCurrentTarget(signal, { exact: true }) : undefined;
 			return await currentPlatformBackend.readText(
 				{
 					...(target ? { pid: target.pid, windowId: target.windowId } : {}),
@@ -4107,8 +4123,7 @@ function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, 
 	if (!currentTarget) return;
 	const refusalForState = () => {
 		const savedRef = currentTarget.windowRef;
-		const latest =
-			currentPlatformBackend.name === "windows" && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
+		const latest = requiresLiveIdentity() && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
 		return appPolicyRefusal(currentTarget) ?? (latest && appPolicyRefusal(latest));
 	};
 	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {

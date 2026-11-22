@@ -98,6 +98,8 @@ pub struct WindowInfo {
     pub id: u32,
     pub pid: u64,
     pub title: String,
+    /// `WM_CLASS` (instance, class), app-supplied.
+    pub wm_class: Option<(String, String)>,
     pub frame: Rect,
     pub focused: bool,
     pub minimized: bool,
@@ -147,6 +149,11 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
                 .copied()
                 .unwrap_or(0) as u64,
             title: title(&conn, id, &a),
+            wm_class: conn
+                .get_property(false, id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .and_then(|reply| wm_class_property(reply.format, reply.bytes_after, &reply.value)),
             frame: Rect {
                 x: translated
                     .as_ref()
@@ -190,11 +197,33 @@ pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
             root.is_focused = w.focused;
             root.is_minimized = w.minimized;
             root.z_order = Some(w.z_order);
+            root.wm_class.clone_from(&w.wm_class);
             if root.name.is_empty() {
                 root.name.clone_from(&w.title);
             }
         }
     }
+}
+/// Parse a `WM_CLASS` property reply: only a complete 8-bit value, never a truncated or
+/// differently formatted one.
+pub fn wm_class_property(format: u8, bytes_after: u32, value: &[u8]) -> Option<(String, String)> {
+    (format == 8 && bytes_after == 0)
+        .then(|| parse_wm_class(value))
+        .flatten()
+}
+/// Parse an ICCCM `WM_CLASS` value: two NUL-terminated Latin-1 strings, instance then class.
+/// Anything else is unattributed rather than guessed.
+pub fn parse_wm_class(value: &[u8]) -> Option<(String, String)> {
+    let value = value.strip_suffix(&[0])?;
+    let mut parts = value.split(|&byte| byte == 0);
+    let latin1 = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|&byte| char::from(byte))
+            .collect::<String>()
+    };
+    let (instance, class) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && !class.is_empty()).then(|| (latin1(instance), latin1(class)))
 }
 fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
     a.map(|a| {

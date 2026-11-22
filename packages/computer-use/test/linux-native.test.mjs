@@ -436,7 +436,7 @@ describe.skipIf(process.platform !== "linux")(
 					});
 					try {
 						const diagnostics = await client.command("diagnostics", {}, { timeoutMs: DIAGNOSTICS_TIMEOUT_MS });
-						assert.equal(diagnostics.protocolVersion, 5);
+						assert.equal(diagnostics.protocolVersion, 6);
 						assert.equal(diagnostics.os, "linux");
 						assert.equal(diagnostics.arch, archName);
 						assert.equal(diagnostics.architectureVersion, 1);
