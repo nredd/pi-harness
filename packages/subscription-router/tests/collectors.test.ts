@@ -145,6 +145,41 @@ it("runs registered HTTP requests and blocks only the exhausted model bucket", a
 	expect(getAccessToken).toHaveBeenCalledTimes(1);
 });
 
+it("preserves adapter receiver state", async () => {
+	const { usage, fetch } = harness();
+	let tokenReads = 0;
+	const adapter = {
+		provider,
+		kind: "http" as const,
+		endpoint: "https://quota.example.invalid/receiver",
+		get scheme() {
+			tokenReads += 1;
+			return "Bearer";
+		},
+		request(this: { endpoint: string; scheme: string }, token: string) {
+			return { url: this.endpoint, headers: { Authorization: `${this.scheme} ${token}` } };
+		},
+		parse: (): CollectorReading | undefined => undefined,
+		set sink(_value: unknown) {},
+	};
+	Object.defineProperty(adapter, "hidden", { value: "not copied", enumerable: false });
+	// A declared method is kept even when it is not enumerable.
+	Object.defineProperty(adapter, "parse", { value: () => reading, enumerable: false });
+	install(adapter);
+	expect(tokenReads).toBe(1);
+	const snapshot = collectorFor(provider);
+	expect(Object.isFrozen(snapshot)).toBe(true);
+	expect(snapshot).toMatchObject({ endpoint: adapter.endpoint, scheme: "Bearer" });
+	expect(snapshot).not.toHaveProperty("hidden");
+	expect(snapshot).not.toHaveProperty("sink");
+	expect(await usage.get(ctx, provider)).toMatchObject({ status: "available" });
+	expect(fetch).toHaveBeenCalledWith(
+		adapter.endpoint,
+		expect.objectContaining({ headers: { Authorization: "Bearer fake-token" } }),
+	);
+	expect(tokenReads).toBe(1);
+});
+
 it("does not let old cleanup or an in-flight reading survive replacement", async () => {
 	const { usage } = harness();
 	const pending = deferred<CollectorReading>();

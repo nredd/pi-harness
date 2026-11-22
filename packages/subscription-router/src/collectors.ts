@@ -59,15 +59,36 @@ const builtins = new Map(
 	]),
 );
 
-const ADAPTER_KEYS = ["provider", "display", "acceptsCredential", "kind", "request", "parse", "read"] as const;
+const ADAPTER_KEYS: readonly PropertyKey[] = [
+	"provider",
+	"display",
+	"acceptsCredential",
+	"kind",
+	"request",
+	"parse",
+	"read",
+];
 
-/** Read each declared adapter field once. Getters run here, before any registry state is read. */
+/**
+ * Read own enumerable fields (receiver state that methods reach through `this`) and each declared
+ * field once. Own fields go through their descriptors, so an accessor runs exactly once; inherited
+ * declared fields, e.g. class methods, are read once. Getters run here, before any registry state is read.
+ */
 function snapshotAdapter(adapter: Collector): Readonly<Collector> {
-	const source = adapter as Partial<Record<(typeof ADAPTER_KEYS)[number], unknown>>;
-	const copy: Record<string, unknown> = {};
+	const copy: Record<PropertyKey, unknown> = {};
+	const keep = (key: PropertyKey, value: unknown) => {
+		if (value !== undefined) Object.defineProperty(copy, key, { value, enumerable: true });
+	};
+	const seen = new Set<PropertyKey>();
+	const descriptors: Record<PropertyKey, PropertyDescriptor> = Object.getOwnPropertyDescriptors(adapter);
+	for (const key of Reflect.ownKeys(descriptors)) {
+		const descriptor = descriptors[key] as PropertyDescriptor;
+		if (!descriptor.enumerable && !ADAPTER_KEYS.includes(key)) continue;
+		seen.add(key);
+		keep(key, "value" in descriptor ? descriptor.value : descriptor.get?.call(adapter));
+	}
 	for (const key of ADAPTER_KEYS) {
-		const value = source[key];
-		if (value !== undefined) copy[key] = value;
+		if (!seen.has(key)) keep(key, Reflect.get(adapter, key));
 	}
 	return Object.freeze(copy) as Readonly<Collector>;
 }
