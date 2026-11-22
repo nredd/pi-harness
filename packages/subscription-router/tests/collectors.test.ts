@@ -363,10 +363,12 @@ it("validates the copied reading", async () => {
 		},
 		set kind(_kind: unknown) {},
 	};
-	const stringLength = new Proxy([valid], {
-		getOwnPropertyDescriptor: (target, key) =>
-			key === "length" ? { value: "1", writable: true } : Reflect.getOwnPropertyDescriptor(target, key),
-	});
+	const withLength = (length: unknown) =>
+		new Proxy([valid], {
+			getOwnPropertyDescriptor: (target, key) =>
+				key === "length" ? { value: length, writable: true } : Reflect.getOwnPropertyDescriptor(target, key),
+		});
+	const lengths = ["1", Number.NaN, -1, 1.5, Infinity, 129];
 	const hostile = [
 		{ windows },
 		{ windows: [shifting] },
@@ -378,7 +380,7 @@ it("validates the copied reading", async () => {
 		},
 		{ windows: Object.assign([valid], { length: 129 }) },
 		{ windows: Object.assign([], { 1: valid }) },
-		{ windows: stringLength },
+		...lengths.map((length) => ({ windows: withLength(length) })),
 		{ windows: { 0: valid, length: 1 } },
 		Object.create({ windows: [valid] }),
 	];
@@ -398,11 +400,7 @@ it("validates the copied reading", async () => {
 	expect(families.slice).not.toHaveBeenCalled();
 	expect(readings.slice(1).map(({ status, message }) => ({ status, message }))).toEqual([
 		{ status: "error", message: "Usage request failed." },
-		{ status: "error", message: "Usage response had an unsupported shape." },
-		{ status: "error", message: "Usage response had an unsupported shape." },
-		{ status: "error", message: "Usage response had an unsupported shape." },
-		{ status: "error", message: "Usage response had an unsupported shape." },
-		{ status: "error", message: "Usage response had an unsupported shape." },
+		...Array.from({ length: 10 }, () => ({ status: "error", message: "Usage response had an unsupported shape." })),
 	]);
 });
 

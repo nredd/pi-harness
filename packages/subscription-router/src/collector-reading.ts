@@ -63,6 +63,7 @@ const MAX_ITEMS = 128;
 const { apply, getOwnPropertyDescriptor } = Reflect;
 const { hasOwn } = Object;
 const { isArray } = Array;
+const { isInteger } = Number;
 
 type Copier = (value: unknown) => unknown;
 
@@ -85,11 +86,14 @@ function record(source: unknown, keys: readonly string[], nested: Readonly<Recor
 	return copy;
 }
 
-/** A dense router-owned array read by index, never through the adapter's methods, or `null`. */
+/**
+ * A dense router-owned array read by index, never through the adapter's methods, or `null`.
+ * A proxy can report any `length`, so only an integer in [0, MAX_ITEMS] is copied.
+ */
 function list(source: unknown, item: Copier = (value) => value): unknown[] | null {
 	if (!isArray(source)) return null;
 	const length = own(source, "length");
-	if (typeof length !== "number" || length > MAX_ITEMS) return null;
+	if (typeof length !== "number" || !isInteger(length) || length < 0 || length > MAX_ITEMS) return null;
 	const copy: unknown[] = [];
 	for (let index = 0; index < length; index += 1) copy.push(item(own(source, String(index))));
 	return copy;
