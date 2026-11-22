@@ -116,11 +116,13 @@ function refPath(node: OutlineNode): string[] {
 	return refs;
 }
 
-/** Only a read parent proves removal: a node missing under an unread (`truncated`) survivor may still exist. */
+/**
+ * Only a fully read ancestry proves removal: a node missing under any unread (`truncated`) surviving
+ * ancestor may still exist, because a bounded read marks the nearest retained ancestor, not every parent.
+ */
 function removalUnproven(node: OutlineNode, after: Map<string, OutlineNode>): boolean {
 	for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
-		const survivor = after.get(ancestor.ref);
-		if (survivor) return survivor.truncated;
+		if (after.get(ancestor.ref)?.truncated) return true;
 	}
 	return false;
 }
