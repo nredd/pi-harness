@@ -360,6 +360,18 @@ private func runKeyboardActionAssertions() throws {
     keys.trace = []
     _ = try keys.act("setText", policy: "background", params: ["text": "new"])
     expect(keys.trace.contains("atomic:new:1234:pid"), "web replacement posts atomic text after selecting the original value")
+    // Posted replacement text whose readback is stale or failed may have landed: unknown, never `didnt`.
+    for (reads, label) in [(["before", "before", "before"], "stale readback"), (["before", "before", nil], "failed readback"), (["before", "before", "new"], "confirmed readback")] as [([String?], String)] {
+        let web = ActFixture()
+        web.web = true
+        web.valueReads = reads
+        let result = try web.act("setText", policy: "background", params: ["text": "new"])
+        let evidence = result["evidence"] as? [String: Any]
+        let confirmed = reads.last == "new"
+        expect(result["outcome"] as? String == (confirmed ? "worked" : "unknown") && (evidence?["deliveryUnknown"] as? Bool == true) == !confirmed && result["error"] == nil, "web \(label) after posting text: \(result)")
+        expect((evidence?["value"] as? String) == reads.last ?? nil, "web \(label) reports only a value it actually read")
+        expect(web.trace.filter { $0.hasPrefix("atomic:") }.count == 1, "web \(label) posts the replacement once")
+    }
     keys.trace = []
     _ = try keys.act("paste", coords: true, params: ["text": "temporary", "preserveFocus": true])
     expect(Array(keys.trace.prefix(9)) == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "clipboard:temporary", "layout", "keyboard", "keyCode:9:1234:hid"], "paste checks focus before reading, before writing and after layout lookup")

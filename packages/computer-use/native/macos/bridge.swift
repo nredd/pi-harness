@@ -3362,11 +3362,16 @@ final class Bridge {
 				try keyboard.deliver { try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard) }
 				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
-				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
+				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString)
 				performed["grounding"] = "keyboard-events"
 				performed["delivery"] = delivery
 				performed["selectionGrounding"] = selected ? "ax" : "keyboard"
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The replacement text was posted, so a stale or failed readback may hide text that landed: unknown, never
+				// `didnt`, which would read as not delivered and invite a replay.
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			var targetElement = element
 			var status = world.setAttribute(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
