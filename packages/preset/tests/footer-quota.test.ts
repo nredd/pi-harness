@@ -1338,6 +1338,22 @@ test("custom selectors, scope, provenance and display-only quantities stay disti
 	]);
 });
 
+test.each([
+	["opus", true],
+	["Claude-OPUS-4", true],
+	["claude.opus:1", true],
+	["xopus-opus", true],
+	["xopus", false],
+	["opusx", false],
+	["claude-opus4", false],
+])("model %s matches family `opus` at token boundaries: %s", (id, matches) => {
+	const state = projected([
+		view("p", { snapshot: fresh("p"), meters: [meter("calls", 3, { scope: "model", families: ["opus"] })] }),
+	]);
+	const row = footer.formatQuotaRow(state, "compact", plain, { ...fixed, model: { provider: "p", id } });
+	assert.equal(row, matches ? "Left: p calls 3 req obs" : "");
+});
+
 test("an oversized family never throws while matching the selected model", () => {
 	// A regex built from this family is too large for V8; rendering must stay total.
 	const family = "(".repeat(100_000);
@@ -1394,6 +1410,11 @@ test("the provider cap never hides a blocked provider without saying so", () => 
 		"A 1h 50%",
 		"+1 more: /router status",
 	]);
+	// Too narrow for the pointer: the count still shows.
+	assert.equal(
+		fit([healthy("A", 50), healthy("B", 10), healthy("C", 90), healthy("D", 30), blocked], 20).at(-1),
+		"+1 more",
+	);
 	const marked = (id: string) => view(id, { marks: [mark(CLOCK + hour, "observed")] });
 	assert.deepEqual(fit(["A", "B", "C", "D", "E", "F"].map(marked), 40).at(-1), "+2 more (2 blocked): /router status");
 });
