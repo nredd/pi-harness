@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- On macOS, stamp every pointer event (moves, clicks, drag steps and wheel) from a monotonic clock when posted, so a drag's reserved mouse-up no longer carries a timestamp from before its mouse-down (#1174).
 - Keep a timed-out action's outcome `unknown` through postconditions, observed values and root closure, and say so instead of claiming delivery. A single act rejected with code `timeout` or a returned timed-out step now stops the transaction with `stoppedAt`, keeps the completed prefix, says not to replay it, and records `delivery unknown` in the saved state's note. A failed identity probe after an empty listing no longer proves `target_closed`. Mark unread Linux AT-SPI2 nodes `truncated`, read a Linux node without the marker as unread, fail PID-scoped root listings that time out, keep scoped looks that stay unread `truncated`, suppress removals under any unread surviving ancestor, lead zero `search_ui` matches in an incomplete outline with `Inconclusive` plus `inconclusive` and `unreadRefs`, and report an empty `read_text` page from an unread node as `inconclusive`. macOS and Windows native gaps are tracked in #1240, #1241, #1242 and #1243 (refs #1190).
 - Reject out-of-range macOS drag paths before HID lock, focus or event allocation, and return `invalid_args` for malformed window IDs in all five native request sites (#1173).
 - Always block the macOS Touch ID/password prompt hosted by `com.apple.LocalAuthenticationRemoteService` (#688).
