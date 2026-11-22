@@ -1,5 +1,6 @@
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{hash_map::RandomState, HashMap, VecDeque};
+use std::hash::BuildHasher;
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -34,6 +35,16 @@ struct LookRecord {
     elements: HashMap<String, ElementRecord>,
 }
 
+impl LookRecord {
+    /// Return the element this look issued as `reference`.
+    fn element(&self, reference: &str) -> Result<ElementRecord, ProtocolError> {
+        self.elements
+            .get(reference)
+            .cloned()
+            .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RootSnapshot {
     roots: HashMap<String, Value>,
@@ -45,6 +56,7 @@ struct HelperState {
     roots: HashMap<String, Value>,
     looks: HashMap<String, LookRecord>,
     look_order: VecDeque<String>,
+    look_generation: u64,
     next_look: u64,
 }
 
@@ -55,17 +67,34 @@ static INPUT_CLOSED: AtomicBool = AtomicBool::new(false);
 
 impl Default for HelperState {
     fn default() -> Self {
+        // RandomState is randomly keyed; the counter alone restarts at 1.
+        Self::from_entropy(&RandomState::new())
+    }
+}
+
+impl HelperState {
+    /// Key this helper lifetime's look generation with `entropy`.
+    fn from_entropy(entropy: &impl BuildHasher) -> Self {
+        Self::new(entropy.hash_one(std::process::id()))
+    }
+
+    fn new(look_generation: u64) -> Self {
         Self {
             store: RefStore::new(),
             roots: HashMap::new(),
             looks: HashMap::new(),
             look_order: VecDeque::new(),
+            look_generation,
             next_look: 1,
         }
     }
-}
 
-impl HelperState {
+    fn fresh_look_id(&mut self) -> String {
+        let look_id = format!("look_{:016x}_{}", self.look_generation, self.next_look);
+        self.next_look += 1;
+        look_id
+    }
+
     fn insert_look(&mut self, look_id: String, record: LookRecord) {
         self.looks.insert(look_id.clone(), record);
         self.look_order.push_back(look_id);
@@ -74,22 +103,6 @@ impl HelperState {
                 self.looks.remove(&expired);
             }
         }
-    }
-
-    fn element_for_look(
-        &self,
-        look_id: &str,
-        reference: &str,
-    ) -> Result<ElementRecord, ProtocolError> {
-        self.looks
-            .get(look_id)
-            .ok_or_else(|| {
-                ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
-            })?
-            .elements
-            .get(reference)
-            .cloned()
-            .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))
     }
 }
 
@@ -803,12 +816,10 @@ fn nest_outline_nodes(nodes: &[(String, String, Value)]) -> Vec<Value> {
 }
 
 fn fresh_look_id() -> Result<String, ProtocolError> {
-    let mut state = helper_state()
+    Ok(helper_state()
         .lock()
-        .map_err(|_| internal("helper state lock poisoned"))?;
-    let look_id = format!("look_{}", state.next_look);
-    state.next_look += 1;
-    Ok(look_id)
+        .map_err(|_| internal("helper state lock poisoned"))?
+        .fresh_look_id())
 }
 
 fn store_look_record(look_id: String, record: LookRecord) -> Result<(), ProtocolError> {
@@ -1465,7 +1476,52 @@ fn delta_item(change: &str, root: &Value) -> Value {
     item
 }
 
-fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
+/// The exact native root admitted by the caller, never inferred from live discovery.
+#[derive(Clone, Copy)]
+struct AdmittedRoot {
+    hwnd: isize,
+    pid: u64,
+}
+
+impl AdmittedRoot {
+    fn parse(args: &Value) -> Result<Self, ProtocolError> {
+        let pid = args
+            .get("pid")
+            .and_then(Value::as_u64)
+            .filter(|&pid| pid > 0 && u32::try_from(pid).is_ok())
+            .ok_or_else(|| invalid("Expected a valid target pid"))?;
+        let hwnd = args
+            .get("windowId")
+            .and_then(Value::as_i64)
+            .and_then(|id| isize::try_from(id).ok())
+            .filter(|&id| id != 0)
+            .ok_or_else(|| invalid("Expected an exact target windowId"))?;
+        Ok(Self { hwnd, pid })
+    }
+
+    /// Return `look_id` only if this admitted root issued it.
+    fn owned_look<'a>(
+        self,
+        state: &'a HelperState,
+        look_id: &str,
+    ) -> Result<&'a LookRecord, ProtocolError> {
+        let look = state.looks.get(look_id).ok_or_else(|| {
+            ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
+        })?;
+        if self.pid != look.pid || self.hwnd != look.hwnd {
+            return Err(ProtocolError::new(
+                "Owning look does not match the admitted root",
+                ErrorCode::StaleLook,
+            ));
+        }
+        Ok(look)
+    }
+}
+
+fn read_text_element(
+    args: &Value,
+    state: &HelperState,
+) -> Result<(ElementRecord, u64), ProtocolError> {
     let look_id = args
         .get("lookId")
         .and_then(Value::as_str)
@@ -1474,14 +1530,45 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
         .get("elementRef")
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("uiaReadText requires elementRef"))?;
+    let root = AdmittedRoot::parse(args)?;
+    // Resolve from the validated record so the owner check and lookup cannot diverge.
+    let element = root.owned_look(state, look_id)?.element(element_ref)?;
+    Ok((element, root.pid))
+}
+
+fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
+    handle_read_text_with(
+        args,
+        helper_state(),
+        window::owner_pid,
+        |hwnd, pid| windows_bridge::desktop::validated_bounds(hwnd, Some(pid)).map(drop),
+        windows_bridge::uia::acquire_root,
+        |root, element| {
+            windows_bridge::uia::read_text_in_root(
+                root,
+                &element.runtime_id,
+                &element.automation_id,
+            )
+        },
+    )
+}
+
+/// Read text through the owner-bound walk, with Win32 and UIA access injected.
+fn handle_read_text_with<Root>(
+    args: &Value,
+    state: &Mutex<HelperState>,
+    mut owner_pid: impl FnMut(isize) -> Option<u64>,
+    desktop_preflight: impl FnOnce(isize, u64) -> Result<(), ProtocolError>,
+    acquire_root: impl FnOnce(isize) -> Result<Root, String>,
+    read_in_root: impl FnOnce(Root, &ElementRecord) -> Result<String, String>,
+) -> Result<Value, ProtocolError> {
     let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(4096) as usize;
     let (element, pid) = {
-        let state = helper_state()
+        let state = state
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
-        let element = state.element_for_look(look_id, element_ref)?;
-        (element, state.looks[look_id].pid)
+        read_text_element(args, &state)?
     };
     if element.is_secure {
         return Err(ProtocolError::new(
@@ -1489,14 +1576,27 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
             ErrorCode::SecureTextUnreadable,
         ));
     }
-    // A recycled HWND must not read from an owner other than the one that issued this look.
-    windows_bridge::desktop::validated_bounds(element.hwnd, Some(pid))?;
-    let text = windows_bridge::uia::read_live_text(
+    // The preflight also refuses a closed or reassigned HWND; report that as owner
+    // loss, keeping `coordinate_blocked` for a refusal while the owner still matches.
+    if let Err(refused) = desktop_preflight(element.hwnd, pid) {
+        return Err(if owner_pid(element.hwnd) == Some(pid) {
+            refused
+        } else {
+            owned_walk_error(
+                windows_bridge::uia::OwnedWalkError::RootStale,
+                "Read",
+                stale_ref_from_uia,
+            )
+        });
+    }
+    let text = windows_bridge::uia::walk_owned_root(
         element.hwnd,
-        &element.runtime_id,
-        &element.automation_id,
+        pid,
+        &mut owner_pid,
+        acquire_root,
+        |root| read_in_root(root, &element),
     )
-    .map_err(stale_ref_from_uia)?;
+    .map_err(|error| owned_walk_error(error, "Read", stale_ref_from_uia))?;
     let characters = text.chars().collect::<Vec<_>>();
     let end = offset.saturating_add(limit).min(characters.len());
     let slice = if offset >= characters.len() {
@@ -1515,6 +1615,46 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
         .and_then(Value::as_u64)
         .unwrap_or(10_000)
         .clamp(100, 60_000);
+    let mut deadline = None;
+    handle_wait_for_with(
+        args,
+        || {
+            if deadline.is_some() {
+                sleep(Duration::from_millis(150));
+            }
+            Instant::now()
+                < *deadline
+                    .get_or_insert_with(|| Instant::now() + Duration::from_millis(timeout_ms))
+        },
+        window::owner_pid,
+        windows_bridge::uia::acquire_root,
+        windows_bridge::uia::root_elements,
+    )
+}
+
+/// Map an owner-bound UIA walk failure; UIA errors use the caller's mapping.
+fn owned_walk_error(
+    error: windows_bridge::uia::OwnedWalkError,
+    operation: &str,
+    uia_error: impl FnOnce(String) -> ProtocolError,
+) -> ProtocolError {
+    match error {
+        windows_bridge::uia::OwnedWalkError::RootStale => ProtocolError::new(
+            format!("{operation} target no longer belongs to its admitted PID; rediscover it with find_roots"),
+            ErrorCode::RootStale,
+        ),
+        windows_bridge::uia::OwnedWalkError::Uia(message) => uia_error(message),
+    }
+}
+
+fn handle_wait_for_with<Root>(
+    args: &Value,
+    mut next_poll: impl FnMut() -> bool,
+    mut owner_pid: impl FnMut(isize) -> Option<u64>,
+    mut acquire_root: impl FnMut(isize) -> Result<Root, String>,
+    mut root_elements: impl FnMut(Root) -> Result<Vec<Value>, String>,
+) -> Result<Value, ProtocolError> {
+    let root = AdmittedRoot::parse(args)?;
     let text = args
         .get("text")
         .and_then(Value::as_str)
@@ -1533,24 +1673,33 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
         args.get("lookId").and_then(Value::as_str),
         args.get("scopeRef").and_then(Value::as_str),
     ) {
-        (Some(look_id), Some(scope_ref)) => Some(
-            helper_state()
+        (Some(look_id), Some(scope_ref)) => {
+            let state = helper_state()
                 .lock()
-                .map_err(|_| internal("helper state lock poisoned"))?
-                .element_for_look(look_id, scope_ref)?
-                .runtime_id,
-        ),
+                .map_err(|_| internal("helper state lock poisoned"))?;
+            // A valid scope from another root must never steer this root's UIA poll.
+            Some(
+                root.owned_look(&state, look_id)?
+                    .element(scope_ref)?
+                    .runtime_id,
+            )
+        }
         (None, Some(_)) => return Err(invalid("scopeRef requires lookId")),
         _ => None,
     };
     if text.is_none() && role.is_none() && expected_value.is_none() {
         return Err(invalid("uiaWaitFor requires text, role, or value"));
     }
-    let hwnd = wait_target_hwnd(args)?;
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut node_count = 0;
-    while Instant::now() < deadline {
-        let elements = windows_bridge::uia::live_elements(hwnd).map_err(internal)?;
+    while next_poll() {
+        let elements = windows_bridge::uia::walk_owned_root(
+            root.hwnd,
+            root.pid,
+            &mut owner_pid,
+            &mut acquire_root,
+            &mut root_elements,
+        )
+        .map_err(|error| owned_walk_error(error, "Wait", internal))?;
         node_count = elements.len();
         let parents: HashMap<String, String> = elements
             .iter()
@@ -1623,45 +1772,8 @@ fn handle_wait_for(args: &Value) -> Result<Value, ProtocolError> {
                 json!({ "found": true, "gone": if gone { Some(true) } else { None::<bool> }, "nodeCount": node_count }),
             );
         }
-        sleep(Duration::from_millis(150));
     }
     Ok(json!({ "found": false, "timedOut": true, "nodeCount": node_count }))
-}
-
-fn wait_target_hwnd(args: &Value) -> Result<isize, ProtocolError> {
-    if let Some(window_id) = args.get("windowId").and_then(Value::as_i64) {
-        return Ok(window_id as isize);
-    }
-    if let Some(root_ref) = args
-        .get("rootRef")
-        .or_else(|| args.get("windowRef"))
-        .and_then(Value::as_str)
-    {
-        let state = helper_state()
-            .lock()
-            .map_err(|_| internal("helper state lock poisoned"))?;
-        for root in state.roots.values() {
-            if root.get("rootRef").and_then(Value::as_str) == Some(root_ref)
-                || root.get("windowRef").and_then(Value::as_str) == Some(root_ref)
-            {
-                return Ok(root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize);
-            }
-        }
-    }
-    if let Some(pid) = args.get("pid").and_then(Value::as_u64) {
-        let roots = snapshot_roots(pid)?;
-        if let Some(root) = roots
-            .roots
-            .values()
-            .find(|root| root.get("pid").and_then(Value::as_u64) == Some(pid))
-        {
-            return Ok(root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize);
-        }
-    }
-    Err(ProtocolError::new(
-        "waitFor target root was not found",
-        ErrorCode::TargetNotFound,
-    ))
 }
 
 fn handle_open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
@@ -1976,9 +2088,9 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_bind_guarded_helper_capability_without_dto_version_change() {
+    fn diagnostics_bind_guarded_helper_capability_to_protocol_5() {
         let value = diagnostics();
-        assert_eq!(value["protocolVersion"], 4);
+        assert_eq!(value["protocolVersion"], 5);
         assert_eq!(value["architectureVersion"], 1);
         assert_eq!(value["capabilities"], json!(["fail-closed-live-target-v1"]));
     }
@@ -2029,12 +2141,376 @@ mod tests {
             .lock()
             .unwrap()
             .insert_look(look_id.to_owned(), look);
-        let error =
-            handle_read_text(&json!({"lookId": look_id, "elementRef": "same-ref"})).unwrap_err();
-        #[cfg(windows)]
-        assert_eq!(error.code, ErrorCode::CoordinateBlocked);
-        #[cfg(not(windows))]
-        assert_eq!(error.code, ErrorCode::UnsupportedPlatform);
+        let error = handle_read_text(
+            &json!({"lookId": look_id, "elementRef": "same-ref", "pid": 1, "windowId": 1}),
+        )
+        .unwrap_err();
+        // No live window owns HWND 0 on any platform, so the refusal is owner loss.
+        assert_eq!(error.code, ErrorCode::RootStale);
+    }
+
+    /// Run one owner-bound text read with scripted owner answers and fake UIA access.
+    fn scripted_read(
+        owners: &[Option<u64>],
+        preflight: Result<(), ProtocolError>,
+        read: impl FnOnce() -> Result<String, String>,
+    ) -> (Result<Value, ProtocolError>, usize) {
+        let mut state = HelperState::new(1);
+        let mut look = look_with_element(1.0);
+        look.pid = 7;
+        look.hwnd = 22;
+        look.elements.get_mut("same-ref").unwrap().hwnd = 22;
+        state.insert_look("look".to_owned(), look);
+        let mut owners = owners.iter().copied();
+        let mut reads = 0;
+        let result = handle_read_text_with(
+            &json!({"lookId": "look", "elementRef": "same-ref", "pid": 7, "windowId": 22, "offset": 1, "limit": 3}),
+            &Mutex::new(state),
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                owners.next().expect("unexpected additional owner check")
+            },
+            |hwnd, pid| {
+                assert_eq!((hwnd, pid), (22, 7));
+                preflight
+            },
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                Ok(())
+            },
+            |(), element| {
+                assert_eq!(element.runtime_id, vec![1]);
+                reads += 1;
+                read()
+            },
+        );
+        (result, reads)
+    }
+
+    fn desktop_refusal() -> Result<(), ProtocolError> {
+        Err(ProtocolError::new(
+            "Target is not on the interactive desktop",
+            ErrorCode::CoordinateBlocked,
+        ))
+    }
+
+    #[test]
+    fn read_reports_owner_loss_behind_a_desktop_refusal_as_root_stale() {
+        // The preflight refuses a closed or reassigned HWND before any UIA access.
+        for owner in [None, Some(8)] {
+            let (result, reads) = scripted_read(&[owner], desktop_refusal(), || {
+                panic!("must not read a lost root")
+            });
+            assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+            assert_eq!(reads, 0);
+        }
+    }
+
+    #[test]
+    fn read_keeps_a_desktop_refusal_while_the_owner_holds() {
+        let (result, reads) = scripted_read(&[Some(7)], desktop_refusal(), || {
+            panic!("must not read a refused desktop")
+        });
+        assert_eq!(result.unwrap_err().code, ErrorCode::CoordinateBlocked);
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn read_refuses_a_replacement_root_before_reading_it() {
+        // Owned at the pre-check, replaced by the time ElementFromHandle returned.
+        let (result, reads) = scripted_read(&[Some(7), Some(8)], Ok(()), || {
+            panic!("must not read a replacement root")
+        });
+        assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn read_discards_text_when_ownership_changed_during_it() {
+        for after in [Some(8), None] {
+            let (result, reads) = scripted_read(&[Some(7), Some(7), after], Ok(()), || {
+                Ok("replacement secret".to_owned())
+            });
+            let error = result.unwrap_err();
+            assert_eq!(error.code, ErrorCode::RootStale);
+            assert!(!error.message.contains("secret"));
+            assert_eq!(reads, 1);
+        }
+    }
+
+    #[test]
+    fn read_returns_text_while_the_owner_holds() {
+        let (result, reads) = scripted_read(&[Some(7), Some(7), Some(7)], Ok(()), || {
+            Ok("Ready".to_owned())
+        });
+        let result = result.unwrap();
+        assert_eq!(result["text"], "ead");
+        assert_eq!(result["totalChars"], 5);
+        assert_eq!(result["hasMore"], true);
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn helper_refuses_protocol_4_clients_without_owner_bound_reads() {
+        assert_eq!(PROTOCOL_VERSION, 5);
+        let response = handle_request(&Request {
+            protocol_version: 4,
+            id: "old".to_owned(),
+            cmd: "uiaReadText".to_owned(),
+            args: json!({"lookId": "look_1", "elementRef": "same-ref"}),
+        });
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(error.message.contains("protocol 4; expected 5"));
+    }
+
+    /// Deterministic stand-in for `RandomState`, keyed by an explicit seed.
+    struct SeededEntropy(u64);
+
+    impl BuildHasher for SeededEntropy {
+        type Hasher = std::collections::hash_map::DefaultHasher;
+
+        fn build_hasher(&self) -> Self::Hasher {
+            let mut hasher = Self::Hasher::new();
+            std::hash::Hasher::write_u64(&mut hasher, self.0);
+            hasher
+        }
+    }
+
+    #[test]
+    fn look_generations_follow_the_injected_entropy() {
+        let generation = |seed| HelperState::from_entropy(&SeededEntropy(seed)).look_generation;
+        assert_eq!(generation(1), generation(1), "the same seed reproduces");
+        assert_ne!(generation(1), generation(2), "different seeds differ");
+        let mut first = HelperState::from_entropy(&SeededEntropy(1));
+        let mut second = HelperState::from_entropy(&SeededEntropy(2));
+        assert_ne!(first.fresh_look_id(), second.fresh_look_id());
+    }
+
+    #[test]
+    fn default_helper_states_mint_distinct_look_generations_smoke() {
+        // Probabilistic smoke test of real production randomness: two 64-bit keyed
+        // hashes collide with probability ~2^-64. Determinism lives in the test above.
+        let mut first = HelperState::default();
+        let mut second = HelperState::default();
+        assert_ne!(first.look_generation, second.look_generation);
+        assert_ne!(first.fresh_look_id(), second.fresh_look_id());
+    }
+
+    #[test]
+    fn restored_text_ref_cannot_resolve_after_helper_restart() {
+        let mut first = HelperState::new(10);
+        let old_id = first.fresh_look_id();
+        first.insert_look(old_id.clone(), look_with_element(1.0));
+        let mut restarted = HelperState::new(20);
+        let new_id = restarted.fresh_look_id();
+        let mut other = look_with_element(2.0);
+        other.pid = 2;
+        other.hwnd = 2;
+        restarted.insert_look(new_id.clone(), other);
+
+        // Both helpers emitted their first look and can reuse the native element ref.
+        assert_ne!(old_id, new_id);
+        let mut read = json!({"lookId": old_id, "elementRef": "same-ref", "pid": 1, "windowId": 1});
+        assert_eq!(
+            read_text_element(&read, &first).unwrap().0.runtime_id,
+            vec![1]
+        );
+        assert_eq!(
+            read_text_element(&read, &restarted).unwrap_err().code,
+            ErrorCode::StaleLook
+        );
+        read["lookId"] = json!(new_id);
+        for (pid, hwnd) in [(1, 2), (2, 1)] {
+            read["pid"] = json!(pid);
+            read["windowId"] = json!(hwnd);
+            assert_eq!(
+                read_text_element(&read, &restarted).unwrap_err().code,
+                ErrorCode::StaleLook
+            );
+        }
+        read["windowId"] = json!(2);
+        assert_eq!(
+            read_text_element(&read, &restarted).unwrap().0.runtime_id,
+            vec![2]
+        );
+    }
+
+    /// Run one owner-bound wait with scripted owner answers and a fake UIA walk.
+    fn scripted_wait(
+        args: Value,
+        owners: &[Option<u64>],
+        mut walk: impl FnMut() -> Result<Vec<Value>, String>,
+    ) -> (Result<Value, ProtocolError>, usize) {
+        let mut owners = owners.iter().copied();
+        let mut walks = 0;
+        let result = handle_wait_for_with(
+            &args,
+            || true,
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                owners.next().expect("unexpected additional owner check")
+            },
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                Ok(())
+            },
+            |()| {
+                walks += 1;
+                walk()
+            },
+        );
+        (result, walks)
+    }
+
+    #[test]
+    fn wait_checks_owner_again_before_every_poll() {
+        for next_owner in [Some(8), None] {
+            for gone in [false, true] {
+                // The first poll stays owned and unsatisfied; the next poll's first check drifts.
+                let (result, walks) = scripted_wait(
+                    json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    &[Some(7), Some(7), Some(7), next_owner],
+                    || {
+                        Ok(if gone {
+                            vec![json!({"name": "Ready"})]
+                        } else {
+                            vec![]
+                        })
+                    },
+                );
+                assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+                assert_eq!(walks, 1, "UIA must not walk the stale HWND");
+            }
+        }
+    }
+
+    #[test]
+    fn wait_refuses_a_replacement_root_before_walking_it() {
+        // Owned at the pre-check, replaced by the time ElementFromHandle returned.
+        let (result, walks) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(8)],
+            || panic!("must not walk a replacement root"),
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+        assert_eq!(walks, 0);
+    }
+
+    #[test]
+    fn wait_discards_a_satisfied_walk_when_ownership_changed_during_it() {
+        for gone in [false, true] {
+            for after in [Some(8), None] {
+                let (result, walks) = scripted_wait(
+                    json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    &[Some(7), Some(7), after],
+                    || {
+                        Ok(if gone {
+                            vec![]
+                        } else {
+                            vec![json!({"name": "Ready"})]
+                        })
+                    },
+                );
+                assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+                assert_eq!(walks, 1);
+            }
+        }
+        // A UIA failure across an owner change is drift, not an internal error.
+        let (result, _) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(7), None],
+            || Err("provider gone".to_owned()),
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+    }
+
+    #[test]
+    fn wait_reports_a_satisfied_walk_while_the_owner_holds() {
+        let (result, walks) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(7), Some(7)],
+            || Ok(vec![json!({"name": "Ready"})]),
+        );
+        assert_eq!(result.unwrap()["found"], json!(true));
+        assert_eq!(walks, 1);
+        let (result, _) = scripted_wait(
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[Some(7), Some(7), Some(7)],
+            || Err("provider failure".to_owned()),
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn scoped_wait_matches_role_and_value_below_the_owned_scope() {
+        let look_id = "scoped-wait-match";
+        let mut look = look_with_element(5.0);
+        look.pid = 7;
+        look.hwnd = 22;
+        helper_state()
+            .lock()
+            .unwrap()
+            .insert_look(look_id.to_owned(), look);
+        let walk = || {
+            Ok(vec![
+                json!({"runtimeId": [5], "parentRuntimeId": [1], "role": "group", "name": "Panel"}),
+                json!({"runtimeId": [6], "parentRuntimeId": [5], "role": "edit", "name": "Status", "value": " Done "}),
+                json!({"runtimeId": [9], "parentRuntimeId": [1], "role": "edit", "name": "Status", "value": "Done"}),
+                json!({"role": "edit", "name": "Status", "value": "Done"}),
+            ])
+        };
+        let args = json!({"pid": 7, "windowId": 22, "lookId": look_id, "scopeRef": "same-ref", "text": "status", "role": "edit", "value": "done"});
+        let (result, walks) = scripted_wait(args.clone(), &[Some(7), Some(7), Some(7)], walk);
+        assert_eq!(result.unwrap()["found"], json!(true));
+        assert_eq!(walks, 1);
+
+        // An exact scope excludes the descendant, so the matching element is gone.
+        let mut exact = args;
+        exact["scopeExact"] = json!(true);
+        exact["gone"] = json!(true);
+        let (result, walks) = scripted_wait(exact, &[Some(7), Some(7), Some(7)], walk);
+        assert_eq!(result.unwrap()["gone"], json!(true));
+        assert_eq!(walks, 1);
+    }
+
+    #[test]
+    fn wait_refuses_to_infer_an_admitted_hwnd_or_pid() {
+        for missing_identity in [
+            json!({"pid": 7, "rootRef": "win:22", "text": "Ready"}),
+            json!({"windowId": 22, "text": "Ready"}),
+        ] {
+            let error = handle_wait_for_with(
+                &missing_identity,
+                || panic!("must not poll an unbound wait"),
+                |_| panic!("must not infer the owner"),
+                |_| -> Result<(), String> { panic!("must not query UIA") },
+                |()| panic!("must not walk UIA"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidRequest);
+        }
+    }
+
+    #[test]
+    fn scoped_wait_refuses_a_look_from_another_root_before_uia() {
+        let look_id = "scoped-wait-owner-check";
+        helper_state()
+            .lock()
+            .unwrap()
+            .insert_look(look_id.to_owned(), look_with_element(1.0));
+        for (pid, hwnd) in [(2, 1), (1, 2), (2, 2)] {
+            let error = handle_wait_for_with(
+                &json!({"pid": pid, "windowId": hwnd, "lookId": look_id, "scopeRef": "same-ref", "text": "Ready"}),
+                || panic!("must not poll a mismatched scope"),
+                |_| panic!("must not check the owner of a mismatched scope"),
+                |_| -> Result<(), String> { panic!("must not query UIA for a mismatched scope") },
+                |()| panic!("must not walk UIA for a mismatched scope"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::StaleLook);
+        }
     }
 
     #[test]
@@ -2042,16 +2518,19 @@ mod tests {
         let mut state = HelperState::default();
         state.insert_look("look-a".to_owned(), look_with_element(1.0));
         state.insert_look("look-b".to_owned(), look_with_element(2.0));
+        let owner = AdmittedRoot { hwnd: 1, pid: 1 };
         assert_eq!(
-            state
-                .element_for_look("look-a", "same-ref")
+            owner
+                .owned_look(&state, "look-a")
+                .and_then(|look| look.element("same-ref"))
                 .unwrap()
                 .runtime_id,
             vec![1]
         );
         assert_eq!(
-            state
-                .element_for_look("look-b", "same-ref")
+            owner
+                .owned_look(&state, "look-b")
+                .and_then(|look| look.element("same-ref"))
                 .unwrap()
                 .runtime_id,
             vec![2]
@@ -2061,10 +2540,7 @@ mod tests {
         }
         assert_eq!(state.looks.len(), MAX_LOOK_RECORDS);
         assert_eq!(
-            state
-                .element_for_look("look-a", "same-ref")
-                .unwrap_err()
-                .code,
+            owner.owned_look(&state, "look-a").unwrap_err().code,
             ErrorCode::StaleLook
         );
     }

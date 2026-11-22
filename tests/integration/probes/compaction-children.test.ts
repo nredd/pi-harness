@@ -1,7 +1,6 @@
 /** #751: genuine subagent sessions share candidate core policy, not parent settings state. */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -11,13 +10,14 @@ import {
 	getMessageText,
 } from "@earendil-works/pi-coding-agent/testing";
 import { loadFactory } from "../../inprocess/support.ts";
+import { makeTestTempDir } from "../../lib/src/temp-dir.ts";
 
 const subagents = await loadFactory(new URL("../../../packages/subagents/dist/index.ts", import.meta.url));
 
 for (const routed of [false, true]) {
-	test(`candidate core compacts ${routed ? "routed" : "direct"} children with child-local settings`, async () => {
+	test(`candidate core compacts ${routed ? "routed" : "direct"} children with child-local settings`, async (context) => {
 		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-		const root = mkdtempSync(join(tmpdir(), "pi-policy-child-"));
+		const root = makeTestTempDir("pi-policy-child-", (cleanup) => context.after(cleanup));
 		try {
 			const agentDir = join(root, "agent");
 			mkdirSync(join(agentDir, "agents"), { recursive: true });
@@ -120,7 +120,6 @@ for (const routed of [false, true]) {
 		} finally {
 			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-			rmSync(root, { recursive: true, force: true });
 		}
 	});
 }

@@ -6,7 +6,7 @@ import { costLabel } from "../../src/stats/format.ts";
 import { freshnessLines } from "../../src/stats/freshness.ts";
 import type { QuotaObservation } from "../../src/stats/harness/common.ts";
 import type { Call } from "../../src/stats/load.ts";
-import { claudeHasNoReading, gauge, quotaRows, usedLabel } from "../../src/stats/quota.ts";
+import { claudeHasNoReading, gauge, QUOTA_LABEL_MAX, quotaRows, usedLabel } from "../../src/stats/quota.ts";
 import { at, call } from "../fixtures/stats/fixtures.ts";
 
 const ESC = String.fromCharCode(27);
@@ -365,6 +365,50 @@ describe("StatsView quota block", () => {
 		const narrow = text(view, 60);
 		expect(narrow).toMatch(/openai-codex\/codex 7d +█+░* +47\.3%\n +resets in 3h · observed 12m ago via codex/);
 		expect(narrow).toMatch(/openai-codex 5h +reset|openai-codex\/codex 5h +\n? *reset/);
+	});
+
+	it("bounds a giant router label so legacy and router rows keep their readings at narrow widths", () => {
+		const giant = "x".repeat(10_000);
+		const routerQuota = [
+			{ label: giant, head: { kind: "gauge", percent: 40 }, basis: "inferred", expired: false, old: false },
+			{ label: "vendor day", head: { kind: "text", text: "37/250 requests" }, expired: false, old: false },
+			{
+				label: "y".repeat(100),
+				head: { kind: "text", text: "" },
+				reset: "reset 0s ago, no newer reading",
+				expired: true,
+				old: false,
+			},
+			{
+				label: "vendor mark",
+				head: { kind: "text", text: "blocked until 2026-01-16 08:00 UTC" },
+				expired: false,
+				old: false,
+			},
+		] as const;
+		const view = make(calls, { quota: [quota()], routerQuota });
+		for (const width of [8, 20, 40, 60, 80]) {
+			const lines = view.render(width);
+			expect(lines.every((l) => visibleWidth(l) <= width)).toBe(true);
+		}
+		for (const width of [40, 60, 80]) {
+			const shown = text(view, width);
+			expect(shown).toMatch(/████░░░░░░ +40%/);
+			expect(shown).toMatch(/█████░░░░░ +47\.3%/);
+			expect(shown).toContain("37/250 requests");
+			expect(shown).toContain("blocked until 2026-01-16");
+			expect(shown).toContain("reset 0s ago, no newer reading");
+			expect(shown).toContain("no local reading");
+			expect(shown).not.toContain("x".repeat(QUOTA_LABEL_MAX));
+			expect(shown).toContain("…");
+		}
+		// Short rows keep their reading beside the label instead of padding to the giant one.
+		const wide = text(view, 80);
+		expect(wide).toMatch(/vendor day +37\/250 requests/);
+		expect(wide).toMatch(/anthropic \(Claude Code\) +no local reading/);
+		const printed = summary(calls, [], NOW, undefined, routerQuota);
+		expect(printed).toContain(`  ${"x".repeat(QUOTA_LABEL_MAX - 1)}…: 40% used · inferred`);
+		expect(printed).toContain("  anthropic (Claude Code): no local reading");
 	});
 
 	it("leaves the chart its rows when the block is short, and scrolls to the block on a short pane", () => {
