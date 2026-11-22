@@ -3,7 +3,8 @@
  * extensions in completion order and each event awaits the earlier extensions' handlers, so an
  * extension registered before todo can delay todo's view of one completion past a later one.
  * The counter follows the tool-result messages instead, which core emits serially in assistant
- * source order.
+ * source order, and reads each one's name and outcome from its completion, which no `message_end`
+ * replacement reaches.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,38 +30,54 @@ afterEach(() => {
 	rmSync(config, { force: true });
 });
 
-/** A non-todo tool, so the parent does work without a list. */
-const probe: ExtensionFactory = (pi) => {
-	pi.registerTool({
-		name: "probe",
-		label: "probe",
-		description: "Test probe",
-		parameters: Type.Object({}),
-		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
-	});
-};
-
 /**
- * Registered before todo: holds todo's completion until the probe's completion has passed every
- * handler, so todo sees the probe first whichever tool finished first. No timers.
+ * Holds todo's completion until the probe's completion has passed every handler, so todo sees
+ * the probe first whichever tool finished first. No timers. The hold runs in an extension
+ * registered before todo; the release runs in the probe's own handler, registered after todo.
  */
-const holdTodoCompletion: ExtensionFactory = (pi) => {
+function heldTodo(): { hold: ExtensionFactory; probe: ExtensionFactory } {
 	let release!: () => void;
 	const probeDone = new Promise<void>((resolve) => {
 		release = resolve;
 	});
-	pi.on("tool_execution_end", async (event) => {
-		if (event.toolName === TOOL_NAME) await probeDone;
-		else release();
+	return {
+		hold: (pi) => {
+			pi.on("tool_execution_end", async (event) => {
+				if (event.toolName === TOOL_NAME) await probeDone;
+			});
+		},
+		/** A non-todo tool, so the parent does work without a list. */
+		probe: (pi) => {
+			pi.registerTool({
+				name: "probe",
+				label: "probe",
+				description: "Test probe",
+				parameters: Type.Object({}),
+				execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
+			});
+			pi.on("tool_execution_end", (event) => {
+				if (event.toolName === "probe") release();
+			});
+		},
+	};
+}
+
+/** Registered before todo: renames every `todo` tool-result message before todo's handler sees it. */
+const renameTodoResult: ExtensionFactory = (pi) => {
+	pi.on("message_end", (event) => {
+		const { message } = event;
+		if (message.role === "toolResult" && message.toolName === TOOL_NAME)
+			return { message: { ...message, toolName: "renamed" } };
 	});
 };
 
-async function run(calls: ReturnType<typeof fauxToolCall>[]): Promise<Harness> {
+async function run(calls: ReturnType<typeof fauxToolCall>[], before: ExtensionFactory[] = []): Promise<Harness> {
 	mkdirSync(dirname(config), { recursive: true });
 	writeFileSync(config, JSON.stringify({ emptyAfterToolCalls: 1, emptyReminderCooldownSettles: 1 }));
+	const { hold, probe } = heldTodo();
 	const harness = await createHarness({
 		sessionManager: SessionManager.inMemory(),
-		extensionFactories: [holdTodoCompletion, (pi) => registerTodo(pi), probe],
+		extensionFactories: [...before, hold, (pi) => registerTodo(pi), probe],
 	});
 	harnesses.push(harness);
 	await harness.session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
@@ -82,6 +99,15 @@ it("counts work after a todo call in the same parallel batch, even when todo's c
 
 it("lets a todo call reset work that came before it in the same parallel batch", async () => {
 	const harness = await run([fauxToolCall("probe", {}), fauxToolCall(TOOL_NAME, { action: "list" })]);
+	expect(markers(harness)).toEqual([]);
+	expect(harness.getPendingResponseCount()).toBe(1);
+});
+
+it("resets on a todo call whose result message an earlier extension renamed", async () => {
+	const harness = await run(
+		[fauxToolCall("probe", {}), fauxToolCall(TOOL_NAME, { action: "list" })],
+		[renameTodoResult],
+	);
 	expect(markers(harness)).toEqual([]);
 	expect(harness.getPendingResponseCount()).toBe(1);
 });

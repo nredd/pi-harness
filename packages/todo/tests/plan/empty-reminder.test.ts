@@ -52,10 +52,15 @@ async function setup({
 		return result;
 	};
 	await emit("session_start", { reason });
+	let nextCallId = 0;
 	return {
 		emit,
 		tool: (toolName = "read", isError = false, context = ctx) =>
-			emit("message_end", { message: { role: "toolResult", toolName, isError } }, context),
+			emit(
+				"message_end",
+				{ message: { role: "toolResult", toolCallId: `call-${nextCallId++}`, toolName, isError } },
+				context,
+			),
 		settle: (outcome = "completed", context = ctx) =>
 			emit("agent_before_settle", { outcome, entries: [], context: { contextMessages: [] } }, context),
 		input: (source = "interactive") => emit("input", { source }),
@@ -89,7 +94,7 @@ it("counts work across settles, skips conversation, and expands the trailing mar
 it("counts only tool-result messages, not other messages or raw tool completions", async () => {
 	const { tool, settle, emit } = await setup({ calls: 1 });
 	await emit("message_end", { message: { role: "assistant", content: [] } });
-	await emit("tool_execution_end", { toolName: "read", isError: false });
+	await emit("tool_execution_end", { toolCallId: "raw", toolName: "read", isError: false });
 	expect(await settle()).toBeUndefined();
 	await tool();
 	expect(await settle()).toEqual(reminder);
@@ -103,6 +108,39 @@ it("nudges for a successful Agent call, but not a failed one or an unfinished ru
 	expect(await settle("aborted")).toBeUndefined();
 	expect(await settle()).toBeUndefined();
 	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+/** A failed `Agent` completion for `toolCallId`, then a result message that reports success. */
+const failedAgentResult = (emit: Awaited<ReturnType<typeof setup>>["emit"]) => ({
+	end: (toolCallId: string, extra: Record<string, unknown> = {}) =>
+		emit("tool_execution_end", { toolCallId, toolName: "Agent", isError: true, ...extra }),
+	result: (toolCallId: string) =>
+		emit("message_end", { message: { role: "toolResult", toolCallId, toolName: "Agent", isError: false } }),
+});
+
+it("takes the name and outcome from the model-issued completion, not the result message", async () => {
+	const { settle, emit } = await setup({ calls: 5 });
+	const { end, result } = failedAgentResult(emit);
+	await end("a");
+	await result("a");
+	expect(await settle()).toBeUndefined();
+});
+
+it("falls back to the result message over a nested call's completion", async () => {
+	const { settle, emit } = await setup({ calls: 5 });
+	const { end, result } = failedAgentResult(emit);
+	await end("a", { parentToolCallId: "p" });
+	await result("a");
+	expect(await settle()).toEqual(reminder);
+});
+
+it("falls back to the result message over a completion from an earlier turn", async () => {
+	const { settle, emit } = await setup({ calls: 5 });
+	const { end, result } = failedAgentResult(emit);
+	await end("a");
+	await emit("turn_start", {});
+	await result("a");
 	expect(await settle()).toEqual(reminder);
 });
 
@@ -252,7 +290,9 @@ it("evicts the tracker on a same-session RPC rebind", async () => {
 	expect(await settle("completed", rpc)).toBeUndefined();
 });
 
-it("counts a read that completes while the todo overlay refresh is pending", async () => {
+// Hook isolation, not the core lifecycle: core awaits a batch's tool_execution_end handlers before
+// any of its tool-result message_end events, so a real batch cannot overlap the pending refresh.
+it("hook isolation: message_end counting does not wait on a pending todo overlay refresh", async () => {
 	const overlay = await import("../../src/todo-overlay.ts");
 	const releaseImport = deferred<typeof overlay>();
 	const importOverlay = vi.fn(() => releaseImport.promise);
