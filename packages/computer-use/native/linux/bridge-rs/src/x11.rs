@@ -756,42 +756,36 @@ impl<S: InputSink> Input<S> {
             ErrorCode::InputUnsafe,
         ))
     }
+    /// Pointer actions check their point up front, then recheck it before the motion
+    /// and before every button press: a point can become covered while the same
+    /// window stays active.
     pub fn move_pointer(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)
     }
     pub fn click(&self, x: i32, y: i32, button: &str, count: u64) -> Result<(), ProtocolError> {
         let b = button_detail(button)?;
         self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)?;
         let mut held = Held::new(self);
         for _ in 0..count.clamp(1, 3) {
-            held.tap(BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, b)?;
+            held.tap_at(b, (x, y))?;
         }
         Ok(())
     }
     pub fn scroll(&self, x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
         self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)?;
         let mut held = Held::new(self);
         for _ in 0..dy.abs().ceil().clamp(0., 100.) as usize {
-            held.tap(
-                BUTTON_PRESS_EVENT,
-                BUTTON_RELEASE_EVENT,
-                if dy < 0. { 4 } else { 5 },
-            )?;
+            held.tap_at(if dy < 0. { 4 } else { 5 }, (x, y))?;
         }
         for _ in 0..dx.abs().ceil().clamp(0., 100.) as usize {
-            held.tap(
-                BUTTON_PRESS_EVENT,
-                BUTTON_RELEASE_EVENT,
-                if dx < 0. { 6 } else { 7 },
-            )?;
+            held.tap_at(if dx < 0. { 6 } else { 7 }, (x, y))?;
         }
         Ok(())
     }
-    /// Validate the whole path up front, then recheck each destination at effect: a
-    /// point can become covered while the same window stays active.
+    /// Validate the whole path up front, then recheck the start before the motion and
+    /// the press, and each destination before its motion.
     pub fn drag(&self, path: &[(i32, i32)], button: &str) -> Result<(), ProtocolError> {
         if path.len() < 2 {
             return Err(invalid("drag requires at least two points"));
@@ -800,13 +794,11 @@ impl<S: InputSink> Input<S> {
         for &(x, y) in path {
             self.preflight_point(x, y)?;
         }
-        self.fake(MOTION_NOTIFY_EVENT, 0, path[0].0, path[0].1)?;
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, path[0].0, path[0].1)?;
         let mut held = Held::new(self);
-        held.press(BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, b)?;
+        held.press_at(b, path[0])?;
         for &(x, y) in &path[1..] {
-            self.admit()?;
-            self.sink.admit_point(x, y)?;
-            self.post(MOTION_NOTIFY_EVENT, 0, x, y)?;
+            self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)?;
         }
         held.release()
     }
@@ -885,9 +877,9 @@ impl<S: InputSink> Input<S> {
             .keycode(sym)?
             .ok_or_else(|| invalid(format!("No keycode for keysym 0x{sym:x}")))
     }
-    /// Admit, then post one event.
-    fn fake(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
-        self.admit()?;
+    /// Admit the target and the point, then post one event.
+    fn fake_at(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.preflight_point(x, y)?;
         self.post(event, detail, x, y)
     }
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
@@ -949,6 +941,23 @@ impl<'a, S: InputSink> Held<'a, S> {
     /// pressed. A rejected press is not owed; an uncertain one is, because the server
     /// may have executed it.
     fn press(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
+        let input = self.input;
+        self.press_admitted(press, release, detail, || input.admit())
+    }
+    /// Press pointer button `detail`, admitting the target and `point` at effect.
+    fn press_at(&mut self, detail: u8, (x, y): (i32, i32)) -> Result<(), ProtocolError> {
+        let input = self.input;
+        self.press_admitted(BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, detail, || {
+            input.preflight_point(x, y)
+        })
+    }
+    fn press_admitted(
+        &mut self,
+        press: u8,
+        release: u8,
+        detail: u8,
+        admit: impl FnOnce() -> Result<(), ProtocolError>,
+    ) -> Result<(), ProtocolError> {
         let button = release == BUTTON_RELEASE_EVENT;
         if self.input.sink.is_down(button, detail)? == Some(true) {
             let name = Owed {
@@ -962,7 +971,7 @@ impl<'a, S: InputSink> Held<'a, S> {
                 ErrorCode::InputUnsafe,
             ));
         }
-        self.input.admit()?;
+        admit()?;
         self.owed.push(Owed {
             event: release,
             detail,
@@ -1007,6 +1016,10 @@ impl<'a, S: InputSink> Held<'a, S> {
     }
     fn tap(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
         self.press(press, release, detail)?;
+        self.release()
+    }
+    fn tap_at(&mut self, detail: u8, point: (i32, i32)) -> Result<(), ProtocolError> {
+        self.press_at(detail, point)?;
         self.release()
     }
 }
@@ -1895,7 +1908,7 @@ mod tests {
     #[test]
     fn drag_rechecks_each_destination_at_effect() {
         // Three prevalidated points, then the third is covered after the first motion.
-        let input = Input::with_sink(RecordingSink::default().cover_points_after(4));
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(6));
         let error = input.drag(&[(1, 1), (2, 2), (3, 3)], "left").unwrap_err();
         assert_eq!(error.code, ErrorCode::OccludedTarget);
         assert_eq!(
@@ -1908,6 +1921,35 @@ mod tests {
             ]
         );
         assert_eq!(input.sink().events()[2].x, 2);
+    }
+
+    #[test]
+    fn drag_rechecks_start_before_press() {
+        // The start is covered after the whole-path preflight: nothing posts.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(3));
+        let error = input.drag(&[(1, 1), (2, 2), (3, 3)], "left").unwrap_err();
+        assert_eq!(error.code, ErrorCode::OccludedTarget);
+        assert!(input.sink().events().is_empty());
+
+        // Covered after the start motion: the button never goes down.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(3));
+        input.drag(&[(1, 1), (2, 2)], "left").unwrap_err();
+        assert_eq!(trace(&input), [("move", 0, true)]);
+
+        // Clicks and scrolls recheck their point before each press too.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(2));
+        input.click(1, 1, "left", 1).unwrap_err();
+        assert_eq!(trace(&input), [("move", 0, true)]);
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(3));
+        input.scroll(1, 1, 0.0, 3.0).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 5, true),
+                ("button-", 5, true)
+            ]
+        );
     }
 
     #[test]
