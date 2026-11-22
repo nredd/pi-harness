@@ -758,6 +758,14 @@ function createSetup(argv, deps) {
 	 * @throws {Error} When `codesign` fails.
 	 */
 	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier, resolvedIdentity = undefined) {
+	 * @param {string} outputPath Bundle or binary to sign.
+	 * @param {string} [identifier] Code-signing identifier.
+	 * @param {string} [resolvedIdentity] An identity the caller already resolved, so no lookup runs between the
+	 * caller's last destination check and `codesign`.
+		const identity = resolvedIdentity ?? (await resolveCodeSignIdentity());
+	 * @throws {Error} When `codesign` fails.
+	 */
+	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier, resolvedIdentity = undefined) {
 		if (env.PI_COMPUTER_USE_NO_SIGN === "1") {
 			return "unsigned";
 		}
@@ -870,9 +878,13 @@ function createSetup(argv, deps) {
 		for (let attempt = 0; attempt < 20; attempt += 1) {
 			if (!(await helperIsRunning())) return;
 			await sleep(100);
-		}
-		throw new HelperLifecycleRefusal(
-			`The helper at ${helperAppExecutablePath} is still running after pkill; it was not replaced. ${LIFECYCLE_REPAIR}`,
+	 * nothing exists there. The bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real
+	 * entries (no symlinks), and `plutil` (XML or binary plist) must read `CFBundleIdentifier` as a string that is
+	 * byte-for-byte `helperBundleId` (`-expect string` rejects a dictionary, whose keys `raw` would print; `-n` drops
+	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
+	 *
+	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
+	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
 		);
 	}
 
@@ -881,6 +893,7 @@ function createSetup(argv, deps) {
 	 * nothing exists there. The bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real
 	 * entries (no symlinks), and `plutil` (XML or binary plist) must read `CFBundleIdentifier` as a string that is
 	 * byte-for-byte `helperBundleId` (`-expect string` rejects a dictionary, whose keys `raw` would print; `-n` drops
+			[path.dirname(helperAppPath), "its parent directory", true],
 	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
 	 *
 	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
@@ -901,10 +914,10 @@ function createSetup(argv, deps) {
 			[path.dirname(helperAppPath), "its parent directory", true],
 			[path.dirname(infoPlistPath), "Contents", true],
 			[infoPlistPath, "Contents/Info.plist", false],
-		];
+				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
 		for (const [entry, label, directory] of entries) {
 			let stats;
-			try {
+			identifier = String(stdout);
 				stats = await fs.lstat(entry);
 			} catch (error) {
 				if (entry === helperAppPath && error?.code === "ENOENT") return undefined;
@@ -923,7 +936,7 @@ function createSetup(argv, deps) {
 				lifecycleProbeOptions,
 			);
 			identifier = String(stdout);
-		} catch (error) {
+			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle (${reason}); automatic setup does not replace it. Remove that entry, or correct or unset PI_COMPUTER_USE_HELPER_APP_PATH, then run \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
 			return `plutil cannot read its CFBundleIdentifier: ${errorText(error)}`;
 		}
 		return identifier === helperBundleId ? undefined : `its CFBundleIdentifier is ${JSON.stringify(identifier)}`;
@@ -989,7 +1002,7 @@ function createSetup(argv, deps) {
 <key>CFBundleExecutable</key><string>bridge</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>${version}</string>
-<key>CFBundleVersion</key><string>${version}</string>
+				await signHelper(helperAppPath, helperBundleId, signingIdentity);
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 </dict></plist>\n`;
@@ -1013,7 +1026,7 @@ function createSetup(argv, deps) {
 			}
 			await registerHelperApp();
 			return false;
-		}
+		await signHelper(helperAppPath, helperBundleId, signingIdentity);
 
 		const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 		if (signingIdentity === "-" && existingSourceHash !== undefined && !allowAdhocUpdate) {
