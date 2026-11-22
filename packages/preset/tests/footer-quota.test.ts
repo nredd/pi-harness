@@ -1793,3 +1793,22 @@ test("a failed view says so unless a cached value is actually rendered", () => {
 	// An available snapshot with only a placeholder has nothing to report as failed.
 	assert.equal(row(failed(placeholder, "available")), "Left: e 1h --");
 });
+
+const LEGACY_ANTHROPIC = {
+	full: "Anthropic",
+	compact: "Anth",
+	footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true },
+};
+
+test("legacy-selection freshness follows the snapshot expiry for meters and pools", () => {
+	const anthropic = (expiresAt: number) =>
+		view("anthropic", {
+			display: LEGACY_ANTHROPIC,
+			snapshot: snap("anthropic", [], { expiresAt }),
+			meters: [meter("calls", 3)],
+			pools: [{ name: "wallet", unit: "credits", balance: 4 }],
+		});
+	const row = (expiresAt: number) => footer.formatQuotaRow(projected([anthropic(expiresAt)]), "compact", plain, fixed);
+	assert.equal(row(CLOCK + hour), "Left: Anth 7d -- calls 3 req obs wallet 4 credits");
+	assert.equal(row(CLOCK - 1), "Left: Anth (stale) 7d -- calls 3 req obs wallet 4 credits");
+});

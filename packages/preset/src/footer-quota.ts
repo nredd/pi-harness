@@ -392,18 +392,16 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
-		// Freshness covers meters and pools too, so only legacy rows need a percentage window.
+		const aux = auxiliaryCells(view, legacy);
+		// Freshness is the snapshot's status and expiry against the clock. Only a legacy row with no
+		// counts or pools also needs a percentage window, which keeps its pinned retained readings.
 		const fresh =
 			snapshot?.status === "available" &&
-			Array.isArray(windows) &&
-			(windows.length > 0 || !legacy) &&
 			expiresAt !== undefined &&
-			expiresAt > now;
+			expiresAt > now &&
+			(!legacy || (Array.isArray(windows) && windows.length > 0) || aux.some((cell) => cell.kind !== "mark"));
 		const seen = chooseWindows(windows, display, legacy);
-		const cells: QuotaFields["cells"] = [
-			...(fresh ? seen : mergePercents(seen, prior, legacy)),
-			...auxiliaryCells(view, legacy),
-		];
+		const cells: QuotaFields["cells"] = [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...aux];
 		const status = snapshot?.status;
 		// Legacy rows keep their pinned placeholders, so only generic rows report a failure as text.
 		const failed =
