@@ -320,7 +320,7 @@ async fn handle_request_with(
                 state,
                 &request.args,
                 &connect,
-                x11::list_windows,
+                x11::list_display_windows,
                 X11_ENRICHMENT_TIMEOUT,
             )
             .await
@@ -454,14 +454,15 @@ const X11_ENRICHMENT_TIMEOUT: Duration = Duration::from_secs(2);
 /// `root` is `null` only when the bounded lookup proved it absent. The owner PID and
 /// executable are live, and the X11 pairing ranks against the root's own live name and
 /// extents, never the frame or title an earlier pairing saved in the look. The X11 listing
-/// gets `enrichment` at most: past it, or without X11, the root carries no class evidence.
-/// `metadata.x11Pairing` says which: `paired`, `ambiguous` (tied windows' classes are
-/// block-only aliases), `unpaired` or `unavailable`.
+/// gets `enrichment` at most. `metadata.x11Pairing` says how it went: `paired`, `ambiguous`
+/// (tied windows' classes are block-only aliases), `unpaired`, `absent` (no X display, so no
+/// class evidence exists) or `unavailable` (the listing failed or timed out, so class
+/// evidence is missing, which the bridge refuses as `inventory_incomplete`).
 async fn look_root(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
     connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
-    windows: impl FnOnce() -> Result<Vec<x11::WindowInfo>, ProtocolError> + Send + 'static,
+    windows: impl FnOnce() -> Result<Option<Vec<x11::WindowInfo>>, ProtocolError> + Send + 'static,
     enrichment: Duration,
 ) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "atspiLookRoot requires lookId")?;
@@ -483,9 +484,10 @@ async fn look_root(
         ..root
     };
     let pairing = match bounded(enrichment, windows).await {
-        Some(Ok(windows)) => {
+        Some(Ok(Some(windows))) => {
             x11::enrich_roots(std::slice::from_mut(&mut root), &windows)[0].as_str()
         }
+        Some(Ok(None)) => "absent",
         _ => "unavailable",
     };
     let reference = lock(state)?.root_ref(&root.accessible).unwrap_or_default();
@@ -3308,7 +3310,7 @@ mod tests {
                         &state,
                         &args,
                         connect,
-                        move || Ok(windows),
+                        move || Ok(Some(windows)),
                         X11_ENRICHMENT_TIMEOUT,
                     )
                     .await
@@ -3391,12 +3393,19 @@ mod tests {
                 assert_eq!(root["metadata"]["x11Pairing"], "unpaired");
                 assert!(root["windowId"].is_null());
 
-                // Without X11 there is no class evidence, and the root is still found.
+                // Without an X display no class evidence exists: confirmed absence.
+                let found = look_root(&state, &args, connect, || Ok(None), X11_ENRICHMENT_TIMEOUT)
+                    .await
+                    .unwrap();
+                assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "absent");
+                assert_eq!(found["root"]["pid"], 42);
+                // An X display that cannot be listed is missing evidence, never absence.
                 let found = look_root(
                     &state,
                     &args,
                     connect,
-                    || Err(capability("no X11")),
+                    || Err(capability("X11 unavailable: connection refused")),
                     X11_ENRICHMENT_TIMEOUT,
                 )
                 .await
@@ -3406,7 +3415,8 @@ mod tests {
                 assert_eq!(found["root"]["pid"], 42);
 
                 // A stalled X11 listing never holds the reply: the membership result comes
-                // back past the enrichment deadline, without class evidence.
+                // back past the enrichment deadline marked `unavailable`, never as a clean
+                // check, though the stalled window's class would have blocked it.
                 let (release, stalled) = std::sync::mpsc::channel::<()>();
                 let started = Instant::now();
                 let found = look_root(
@@ -3415,7 +3425,7 @@ mod tests {
                     connect,
                     move || {
                         let _ = stalled.recv_timeout(Duration::from_secs(5));
-                        Ok(vec![editor_window(71, &saved, "KeePassXC")])
+                        Ok(Some(vec![editor_window(71, &saved, "KeePassXC")]))
                     },
                     Duration::from_millis(50),
                 )

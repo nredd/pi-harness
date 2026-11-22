@@ -1,7 +1,11 @@
 //! Exercise production X11 root matching using snapshots, without a display server.
 
 use linux_bridge::atspi::{AccessibleRef, Rect, RootSnapshot};
-use linux_bridge::x11::{enrich_roots, parse_wm_class, wm_class_property, Pairing, WindowInfo};
+use linux_bridge::x11::{
+    enrich_roots, parse_wm_class, windows_on, wm_class_property, Pairing, WindowInfo,
+};
+use linux_bridge::{ErrorCode, ProtocolError};
+use std::ffi::OsStr;
 
 fn frame(x: i32) -> Rect {
     Rect {
@@ -225,4 +229,25 @@ fn rejects_unknown_process_ids_even_when_both_are_zero() {
     assert_eq!(pairings, [Pairing::Unpaired]);
     assert_eq!(roots[0].x11_window, None);
     assert_eq!(roots[0].frame, Some(frame(10)));
+}
+
+#[test]
+fn only_a_missing_x_display_is_confirmed_absence_of_class_evidence() {
+    let unlisted = || -> Result<Vec<WindowInfo>, ProtocolError> {
+        panic!("listed windows without an X display")
+    };
+    assert_eq!(windows_on(None, unlisted).unwrap(), None);
+    assert_eq!(windows_on(Some(OsStr::new("")), unlisted).unwrap(), None);
+    let display = Some(OsStr::new(":0"));
+    let listed = windows_on(display, || Ok(vec![window(1, 7, "Editor", 0)])).unwrap();
+    assert_eq!(listed.map(|windows| windows.len()), Some(1));
+    // A configured display that cannot be listed is an error, never absence.
+    let error = windows_on(display, || {
+        Err(ProtocolError::new(
+            "X11 unavailable",
+            ErrorCode::CapabilityDeferred,
+        ))
+    })
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::CapabilityDeferred);
 }

@@ -126,6 +126,24 @@ pub fn available() -> bool {
     SessionKind::detect() == SessionKind::X11 && connect().is_ok()
 }
 
+/// The X11 windows of this process's `DISPLAY`, via [`windows_on`].
+pub fn list_display_windows() -> Result<Option<Vec<WindowInfo>>, ProtocolError> {
+    windows_on(std::env::var_os("DISPLAY").as_deref(), list_windows)
+}
+
+/// The windows `list` reads from `display`. `Ok(None)` only when no X display is configured
+/// (no X11 session and no XWayland): confirmed absence of `WM_CLASS` evidence. A configured
+/// display whose listing fails is an error, never absence (#1300).
+pub fn windows_on(
+    display: Option<&std::ffi::OsStr>,
+    list: impl FnOnce() -> Result<Vec<WindowInfo>, ProtocolError>,
+) -> Result<Option<Vec<WindowInfo>>, ProtocolError> {
+    match display {
+        Some(display) if !display.is_empty() => list().map(Some),
+        _ => Ok(None),
+    }
+}
+
 pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
     let (conn, screen) = connect()?;
     let root = conn.setup().roots[screen].root;

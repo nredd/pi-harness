@@ -1058,7 +1058,10 @@ async function resolveExactRoot(
  * A Linux text read binds to the AT-SPI root (bus name and object path) its look retains, not to the `@w`
  * inventory handle a later PID-scoped listing reissues (#1300), and never to its X11 window: the read is
  * AT-SPI only. The helper reads the registry and that root's own application only; a lookup that could not
- * finish is `inventory_incomplete`, never absence. Live identity and policy are checked as for any root.
+ * finish is `inventory_incomplete`, never absence. Live identity and policy are checked as for any root. X11
+ * `WM_CLASS` can only add a block, so a root without class aliases passes policy only when its `x11Pairing` proves
+ * the X11 check ran (`LINUX_X11_CHECKED`) or no X display exists (`absent`); a failed, timed-out or skipped listing
+ * (`unavailable`), or any other status, is `inventory_incomplete`.
  */
 async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise<CurrentTarget> {
 	const current = operationState().currentTarget!;
@@ -1083,8 +1086,17 @@ async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise
 			"app_blocked",
 			"Linux root owner identity changed. Rediscover it with find_roots and observe it again.",
 		);
+	const x11Pairing = live.metadata?.x11Pairing;
+	if (!LINUX_X11_CHECKED.has(x11Pairing))
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Saved Linux root's X11 class evidence could not be read (x11Pairing: ${String(x11Pairing)}), so blocked_apps cannot be checked. It may still be open; retry read_text, or observe_ui it again.`,
+		);
 	return current;
 }
+
+/** `atspiLookRoot` X11 statuses under which a root's class aliases are complete: see `revalidateLookRoot`. */
+const LINUX_X11_CHECKED = new Set<unknown>(["paired", "ambiguous", "unpaired", "absent"]);
 
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {

@@ -53,11 +53,13 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 		ensureReady: async (_ctx: unknown, state: unknown) => state,
 	});
 	// `lookRootClient` answers `atspiLookRoot` through a real helper client instead, e.g. over a no-reply transport.
+	// `x11Pairing` is the X11 status every `atspiLookRoot` reply reports for its root.
 	const state: {
 		roots: Root[];
 		lookRootError?: Error;
 		lookRootClient?: Pick<typeof linuxHelper, "command">;
-	} = { roots: initial };
+		x11Pairing?: unknown;
+	} = { roots: initial, x11Pairing: "paired" };
 	// Like the helper, every listing replaces the handle table: a root it omits loses its `@w` handle, and a
 	// later listing issues a new one (#1300).
 	let handles = new Map<string, string>();
@@ -82,7 +84,9 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 				if (state.lookRootError) throw state.lookRootError;
 				const identity = lookRoots.get(String(args?.lookId));
 				const root = state.roots.find((candidate) => nativeIdentity(candidate) === identity);
-				return { root: root ? { ...root, rootRef: handles.get(identity!) ?? "" } : null };
+				if (!root) return { root: null };
+				const metadata = { ...root.metadata, x11Pairing: state.x11Pairing };
+				return { root: { ...root, rootRef: handles.get(identity!) ?? "", metadata } };
 			}
 			case "look": {
 				const identity = [...handles].find(([, handle]) => handle === args?.rootRef)?.[0];
@@ -346,6 +350,36 @@ test("Linux read_text never reads an unfinished root lookup as absence", async (
 	state.lookRootError = Object.assign(new Error("Owning look is no longer available"), { code: "stale_look" });
 	await expect(readText(stateId, ref)).rejects.toMatchObject({ code: "stale_look" });
 	expect(calls("atspiReadText")).toBe(0);
+});
+
+test("Linux read_text refuses a root whose X11 class evidence is missing, not absent", async ({ onTestFinished }) => {
+	const { state, find, observe, calls, search, readText } = useLinuxRoots(onTestFinished, [
+		linuxRoot(101, "Editor", "fixture-editor"),
+	]);
+	const [{ windowRef }] = await find();
+	const { stateId } = (await observe(windowRef)).details.capture;
+	const ref = await search(stateId);
+	// A failed, timed-out or single-flight-refused X11 listing on an X display carries no class aliases, which
+	// is no clean policy check: the window's WM_CLASS might be blocked. So is a missing or unknown status.
+	for (const x11Pairing of ["unavailable", undefined, "bogus", 1]) {
+		state.x11Pairing = x11Pairing;
+		await expect(readText(stateId, ref), String(x11Pairing)).rejects.toMatchObject({
+			code: "inventory_incomplete",
+			message: expect.stringMatching(/X11 class evidence could not be read .* It may still be open/),
+		});
+	}
+	expect(calls("atspiReadText")).toBe(0);
+	// A blocked executable is refused as blocked first.
+	state.x11Pairing = "unavailable";
+	state.roots = [linuxRoot(101, "Editor", "kitty")];
+	await expect(readText(stateId, ref)).rejects.toMatchObject({ code: "app_blocked" });
+	// No X display (no X11 or XWayland) confirms there is no class evidence; a completed listing is evidence.
+	state.roots = [linuxRoot(101, "Editor", "fixture-editor")];
+	for (const x11Pairing of ["absent", "paired", "ambiguous", "unpaired"]) {
+		state.x11Pairing = x11Pairing;
+		expect((await readText(stateId, ref)).details.text, x11Pairing).toBe("private body");
+	}
+	expect(calls("atspiReadText")).toBe(4);
 });
 
 test("Linux read_text reads only a client deadline on its root lookup as inventory_incomplete", async ({
