@@ -513,8 +513,10 @@ and inline/source test hits do not establish runtime coverage. The separate `com
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
 It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
 `computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.
-Regions are not branches or statements; no `BRDA` is fabricated. Missing selected-host reports
-fail closed; Linux explicitly report NOT RUN. The owner permits narrow thin live
+Regions are not branches or statements; no `BRDA` is fabricated. Its darwin cap is a report-only
+reference measured locally on the PR HEAD with no margin: PR CI runs no Swift, hosted excess is
+reported and never fails accounting, and the first hosted macOS `main` artifact confirms the number.
+Missing selected-host reports fail closed; Linux explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
 or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures its executable JS/TS runtime/producer inventory with Istanbul,

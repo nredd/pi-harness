@@ -359,6 +359,11 @@ The child is reaped before assertions; a source-level guard forbids AX queries/a
 Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
 Its AX traversal fixture returns a fresh equivalent node on the cycle's back edge, so identity-only
 dedupe fails it; the walk dedupes by AX equivalence (hash buckets, then `CFEqual`).
+`native/macos/root_pairing_tests.swift` feeds synthetic CG window lists, detached `LookNode`
+trees and fabricated root snapshots to root ranking, CG candidate and owner filters, AX/CG pairing,
+look rect scaling, OCR placement, root identities and the root snapshot delta. Its only live calls
+are AX title and frame reads on handles for PIDs above the macOS range, so pairing there sees empty
+titles and frames; geometry and title pairing are checked on the scoring functions directly.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 
@@ -462,7 +467,7 @@ Measured, not assumed:
   Window refs persist until their AX element dies or the helper restarts. The daemon does not exit when idle.
 - Refs carry a per-process epoch, so a ref from before a helper restart never resolves; it used to be possible
   for `w3` from an old helper to name a different window in a new one.
-- Helper restarts happen on reinstall, protocol/binary mismatch, permission relaunch. The extension's `@rN`
+- Helper restarts happen on reinstall and permission relaunch; a protocol or executable mismatch is refused, not restarted. The extension's `@rN`
   records survive them, so `@rN` can outlive its native ref: expect `root_not_found` / "stale", then rediscover
   with `find_roots`. Refs from earlier sessions, pids and state ids are stale.
 - Root deltas in `act_ui` results carry helper-native refs until `normalizeRootDeltaRefs()` maps them, once per
@@ -482,11 +487,14 @@ Measured, not assumed:
 ### Helper lifecycle
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
-- `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
+- `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces or re-signs the bundle, and changes nothing inside the bundle until `pgrep` reports no match (exit 1). Each `pkill`/`pgrep` probe is killed after 1 s or 64 KiB of output. A probe error, timeout or overflow, or a helper still matched by 20 `pgrep` checks 100 ms apart (about 2 s; up to ~23 s if every probe runs to its deadline), refuses the replacement. A refusal is final for that run: setup does not fall back to a source build and retry. Its message ends with the repair: quit the helper, then run `node scripts/setup-helper.mjs --runtime`. npm `--postinstall` never stops a helper: when one is running, or `pgrep` fails, it warns and leaves the bundle as is
+- Limit (#1285): `pgrep -f` matches the literal command line. A helper launched through a symlinked app path has a different one, so setup can miss it and replace its bundle while it runs. Matching the kernel's executable identity needs the shared lifecycle machinery in #1285
+- Automatic setup (`--postinstall`, `--runtime`) with a `PI_COMPUTER_USE_HELPER_APP_PATH` override replaces only nothing or this helper's own bundle: the bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real entries, not symlinks, and `plutil -extract CFBundleIdentifier raw -expect string -n` must print the plist's (XML or binary) `CFBundleIdentifier` as a string that is byte for byte `com.injaneity.pi-computer-use`; a dictionary keyed by that ID is refused. Anything else, or anything it cannot inspect, is refused and left untouched; the refusal says to remove that entry, or correct or unset the override, then run `node scripts/setup-helper.mjs --runtime`. It rechecks right before changing the bundle, and signing reuses the identity resolved before that recheck, so no `security` lookup runs between the recheck and `codesign`. An operator run without those flags keeps replacing the destination
+- Limit (#1285): the identifier guard prevents accidental overwrites; it is not authentication and does not stop a hostile bundle. Only the destination's parent is checked for a symlink, and a concurrent retarget of a symlinked ancestor between the final check and the recursive removal is not closed: that needs a private quarantine rename under a trusted parent
 - The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the Swift sources `build:native` compiles (line endings normalized; any other `.swift` file in the checkout is ignored). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
 - The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched; once a probe timed out, a later absence is not proof either, only a verified reply is. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
-- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
-- After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check, and `ensureProtocol()`'s protocol and executable checks. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
+- After the build matches, `ensureProtocol()` refuses a managed daemon with `helper_mismatch` when it reports another protocol, no executable path or another executable. It never shuts down, relaunches or stops that daemon: quit it, and the next command launches the installed app. It does not compare the daemon's start time with the installed binary; the build check refuses stale code
 
 ### Whole-desktop control
 
@@ -594,9 +602,7 @@ Notes: desktop tools and `act_ui` share one lock. An `act_ui` transaction takes 
 (physical HID) step (the `needsForeground`/current-focus case, the side-effect-free foreground retry, the
 `foreground_required` fallback) and keeps it until the transaction ends, so a later step relying on focus set by an
 earlier one is never interleaved with `desktop_input`. Transactions that stay background/pid/AX never take it. Lock order is window write lock, then
-desktop lock; the desktop tools take only the desktop lock. A queued call that is aborted never runs. A restart is triggered when the
-helper process started before the installed binary's `ctime`, so anything that touches the binary's metadata
-costs one helper restart (and invalidates native refs) at the next session start.
+desktop lock; the desktop tools take only the desktop lock. A queued call that is aborted never runs.
 
 ## License
 
@@ -1523,7 +1529,7 @@ From the installed package root, explicitly repair a missing or stale helper wit
 node scripts/setup-helper.mjs --runtime
 ```
 
-Setup stops the old daemon only when it replaces the bundle. If it reports the app already current but the refusal persists, e.g. a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
+Setup stops the old daemon only when it replaces or re-signs the bundle, and never under npm `--postinstall`. If it reports the app already current but the refusal persists, e.g. `helper_mismatch` for a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
 
 For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
