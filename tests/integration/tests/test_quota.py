@@ -162,7 +162,7 @@ def test_set_writes_views_without_widening_legacy_snapshots(tmp_path: Path) -> N
         tmp_path (Path): private state and log files.
     """
     fixture = quota.UsageFixture(tmp_path / "state.json", tmp_path / "log.jsonl")
-    meter = {
+    meter: quota.UsageMeter = {
         "name": "rpd",
         "scope": "model",
         "families": ["faux-fast"],
