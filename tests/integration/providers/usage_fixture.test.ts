@@ -86,6 +86,33 @@ test.each(["tui", "print", "rpc"])("forwards the metered v2 row in %s mode", (mo
 	fixture.shutdown();
 });
 
+test.each(["print", "rpc"])("forwards the stack's Google request meter without snapshots in %s mode", (mode) => {
+	const metered = sharedViews.views.find(({ name }) => name === "metered");
+	const google = metered?.usage.views.find(({ provider }) => provider === "google");
+	assert.ok(google);
+	const rpd = google.meters.find(({ name, quantity }) => name === "rpd" && quantity.unit === "requests");
+	assert.ok(rpd);
+	const { resetAt: _resetAt, ...meter } = rpd;
+	const stackView = {
+		provider: "google",
+		display: google.display,
+		access: "metered",
+		meters: [meter],
+		pools: [],
+		marks: [],
+	};
+	const fixture = harness({ snapshots: [], blocks: [], views: [stackView] });
+	fixture.start(mode);
+	fixture.request({ requestId: "stack-google" });
+	assert.deepEqual(fixture.emitted, [
+		[
+			"router:rpc:usage:reply:stack-google",
+			{ success: true, data: { version: 2, snapshots: [], blocks: [], views: [stackView] } },
+		],
+	]);
+	fixture.shutdown();
+});
+
 test("error mode replies with a failure and hang mode never replies", () => {
 	const fixture = harness({ mode: "error" });
 	fixture.request({ requestId: "r1" });
