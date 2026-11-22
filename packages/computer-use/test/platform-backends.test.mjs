@@ -189,6 +189,56 @@ describe("macOS backend", () => {
 		assert.deepEqual(lastCall(fakes.macos)[1], {});
 	});
 
+	test("an authoritative listRoots needs the helper's complete field; a partial listing still resolves roots", async () => {
+		// 129 windows: over the native cap, so the helper reports the listing incomplete (#1242).
+		const roots = Array.from({ length: 129 }, (_, index) => ({
+			kind: "window",
+			rootRef: `w${index}`,
+			title: `W${index}`,
+		}));
+		fakes.macos.command.mockResolvedValue({ roots, complete: false });
+		const positive = await macosBackend.listRoots({ pid: 42 });
+		assert.equal(positive.length, 129);
+		assert.ok(
+			positive.some((root) => root.rootRef === "w5"),
+			"an existing target still resolves",
+		);
+		for (const reply of [{ roots, complete: false }, { roots: [] }, [], { roots: [], complete: "true" }]) {
+			fakes.macos.command.mockResolvedValueOnce(reply);
+			await assert.rejects(macosBackend.listRoots({ pid: 42, authoritative: true }), (error) => {
+				assert.equal(error.code, "inventory_incomplete");
+				assert.match(error.message, /of pid 42 is not known to be complete; its missing roots are unknown, not closed/);
+				return true;
+			});
+		}
+		assert.deepEqual(lastCall(fakes.macos)[1], { pid: 42 }, "the flag never reaches the helper");
+		fakes.macos.command.mockResolvedValueOnce({ roots: [], complete: false });
+		await assert.rejects(
+			macosBackend.listRoots({ authoritative: true }),
+			/The Accessibility root inventory is not known to be complete/,
+		);
+		fakes.macos.command.mockResolvedValueOnce({ roots: [roots[0]], complete: true });
+		assert.equal((await macosBackend.listRoots({ pid: 42, authoritative: true })).length, 1);
+	});
+
+	test("a gone waitFor reply without the helper's complete field fails closed", async () => {
+		const gone = { pid: 1, rootRef: "r", text: "Go", gone: true, timeoutMs: 250 };
+		// An older external protocol-8 helper answers `gone` without `complete`, even from a truncated walk.
+		fakes.macos.command.mockResolvedValueOnce({ found: true, gone: true, nodeCount: 3 });
+		assert.deepEqual(await macosBackend.waitFor(gone), { found: false, incomplete: true, nodeCount: 3 });
+		fakes.macos.command.mockResolvedValueOnce({ found: true, gone: true, complete: "yes", nodeCount: 3 });
+		assert.equal((await macosBackend.waitFor(gone)).incomplete, true);
+		const complete = { found: true, gone: true, complete: true, nodeCount: 3 };
+		fakes.macos.command.mockResolvedValueOnce(complete);
+		assert.deepEqual(await macosBackend.waitFor(gone), complete);
+		const timedOut = { found: false, timedOut: true, nodeCount: 3 };
+		fakes.macos.command.mockResolvedValueOnce(timedOut);
+		assert.deepEqual(await macosBackend.waitFor(gone), timedOut, "a timed-out reply is unchanged");
+		const present = { found: true, nodeCount: 3 };
+		fakes.macos.command.mockResolvedValueOnce(present);
+		assert.deepEqual(await macosBackend.waitFor({ ...gone, gone: false }), present, "a presence wait needs no field");
+	});
+
 	test("listRoots rejects a finite fractional or out-of-range pid before the helper call", async () => {
 		// #1209 deliberately replaces the old truncation (42.8 -> 42): a fraction could select another process.
 		fakes.macos.command.mockResolvedValue([]);

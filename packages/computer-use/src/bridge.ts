@@ -2766,7 +2766,8 @@ export async function terminalDesktopActionResult(
 	let liveRoots: PlatformRoot[] = [];
 	try {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
-			const roots = await currentPlatformBackend.listRoots({ pid: target.pid });
+			// Only a complete listing proves the root closed; a partial one fails the probe.
+			const roots = await currentPlatformBackend.listRoots({ pid: target.pid, authoritative: true });
 			liveRoots = roots;
 			exactRootAvailable = roots.some((root) => exactPlatformRootMatchesTarget(root, target));
 			if (exactRootAvailable) break;

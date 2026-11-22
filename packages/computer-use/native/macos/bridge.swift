@@ -2275,17 +2275,12 @@ final class Bridge {
 		}
 	}
 
-	/// A PID-scoped listing fails rather than return a partial inventory: a root it omitted would read as
-	/// closed. Unscoped and title listings stay best-effort.
+	/// Every listed root is a validated positive match. `complete` is true only when the inventory read every
+	/// live root, so a root missing from it closed; a partial listing (e.g. over `windowListCap`) still
+	/// resolves the roots it names.
 	private func listRoots(pid: Int32?, title: String? = nil) throws -> [String: Any] {
 		let inventory = rootInventory(pid: pid, title: title)
-		if let pid, !inventory.complete {
-			throw BridgeFailure(
-				message: "The Accessibility root inventory of pid \(pid) could not be read completely; its roots are unknown, not closed",
-				code: "inventory_incomplete"
-			)
-		}
-		return ["roots": inventory.roots]
+		return ["roots": inventory.roots, "complete": inventory.complete]
 	}
 
 	private func rootInventory(pid: Int32?, title: String?) -> (roots: [[String: Any]], complete: Bool) {
@@ -3828,7 +3823,7 @@ final class Bridge {
 			switch pass.verdict {
 			case .found(let match): found = match
 			// Only a whole, fully read scope proves the condition gone.
-			case .absent: if waitForGone { return ["found": true, "gone": true, "nodeCount": lastCount] }
+			case .absent: if waitForGone { return ["found": true, "gone": true, "complete": true, "nodeCount": lastCount] }
 			case .undecided: lastUndecided = true
 			}
 			if let match = found {

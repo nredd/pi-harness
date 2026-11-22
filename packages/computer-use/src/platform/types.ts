@@ -38,6 +38,11 @@ export interface PlatformReadyState {
 export interface PlatformRootQuery {
 	pid?: number;
 	title?: string;
+	/**
+	 * The caller reads a missing root as closed. The macOS backend then fails with `inventory_incomplete` unless the
+	 * helper reported the listing `complete`; a reply without the field (an older external helper) fails closed.
+	 */
+	authoritative?: boolean;
 }
 
 interface PlatformAppIdentity {
@@ -222,7 +227,10 @@ export interface PlatformWaitForResponse {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
-	/** A `gone` wait that timed out because its last walk could not read the whole scope: absence is unknown. */
+	/**
+	 * A `gone` wait whose last walk could not read the whole scope: absence is unknown. The macOS backend also sets it
+	 * for a `gone` reply without the helper's `complete` field, e.g. from an older external helper.
+	 */
 	incomplete?: boolean;
 	nodeCount?: number;
 }

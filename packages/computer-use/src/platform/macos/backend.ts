@@ -151,16 +151,23 @@ export const macosBackend: Pick<
 
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
 		const pid = macosRootPidFilter(query.pid);
-		return parseRoots(
-			await macosHelper.command<unknown>(
-				"listRoots",
-				{
-					...(pid === undefined ? {} : { pid }),
-					...(query.title?.trim() ? { title: query.title.trim() } : {}),
-				},
-				{ signal },
-			),
+		const reply = await macosHelper.command<unknown>(
+			"listRoots",
+			{
+				...(pid === undefined ? {} : { pid }),
+				...(query.title?.trim() ? { title: query.title.trim() } : {}),
+			},
+			{ signal },
 		);
+		// A partial listing still resolves the roots it names, but its omissions never prove closure.
+		if (query.authoritative && (reply as { complete?: unknown } | undefined)?.complete !== true)
+			throw Object.assign(
+				new Error(
+					`The Accessibility root inventory${pid === undefined ? "" : ` of pid ${pid}`} is not known to be complete; its missing roots are unknown, not closed.`,
+				),
+				{ code: "inventory_incomplete" },
+			);
+		return parseRoots(reply);
 	},
 
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
@@ -242,6 +249,16 @@ export const macosBackend: Pick<
 		args: PlatformWaitForRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformWaitForResponse> {
-		return await macosHelper.command("axWaitFor", normalizeTarget(args), options);
+		const reply = await macosHelper.command<PlatformWaitForResponse & { complete?: unknown }>(
+			"axWaitFor",
+			normalizeTarget(args),
+			options,
+		);
+		// Only a helper that reports `complete` walked and read the whole scope; anything else fails closed.
+		if (args.gone && reply?.found && reply.complete !== true) {
+			const { gone: _gone, ...rest } = reply;
+			return { ...rest, found: false, incomplete: true };
+		}
+		return reply;
 	},
 };

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { outcomeAfterCheck } from "../src/actions.ts";
-import { installFakeDesktop, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
+import { desktopRoot, installFakeDesktop, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -252,10 +252,16 @@ test("a proven closure keeps a helper-verified absence verified", async ({ onTes
 });
 
 test("an inventory the helper could not read completely cannot close the root", async ({ onTestFinished }) => {
-	// The macOS helper now fails a PID-scoped listing whose window or sheet inventory was partial.
+	// 129 roots: over the native cap, so only the positive listing answers; the authoritative probe fails closed.
+	const many = Array.from({ length: 129 }, (_, index) =>
+		desktopRoot({ rootRef: `ax:m${index}`, windowRef: `ax:m${index}`, windowId: 1000 + index, title: `M${index}` }),
+	);
+	const queries: Array<{ pid?: number; authoritative?: boolean }> = [];
 	const { result, execution } = await actExpectingAbsence(onTestFinished, async (fake) => {
-		fake.listRootsHook = () => {
-			throw Object.assign(new Error("inventory incomplete"), { code: "inventory_incomplete" });
+		fake.listRootsHook = (query: { pid?: number; authoritative?: boolean }) => {
+			queries.push(query);
+			if (query.authoritative) throw Object.assign(new Error("inventory incomplete"), { code: "inventory_incomplete" });
+			return [...fake.roots, ...many];
 		};
 		fake.lookPayload = () => {
 			throw new Error("capture failed");
@@ -270,6 +276,25 @@ test("an inventory the helper could not read completely cannot close the root", 
 		(execution.rootDelta ?? []).some((delta: { change: string }) => delta.change === "closed"),
 		false,
 	);
+	assert.ok(
+		queries.length > 0 && queries.every((query) => query.authoritative === true),
+		"the closure probe asks for an authoritative listing",
+	);
+});
+
+test("a partial listing still resolves the existing target", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const many = Array.from({ length: 128 }, (_, index) =>
+		desktopRoot({ rootRef: `ax:m${index}`, windowRef: `ax:m${index}`, windowId: 1000 + index, title: `M${index}` }),
+	);
+	fake.listRootsHook = (query: { authoritative?: boolean }) => {
+		if (query.authoritative) throw Object.assign(new Error("inventory incomplete"), { code: "inventory_incomplete" });
+		return [...many, ...fake.roots];
+	};
+	const { stateId } = await fake.observe();
+	const waited = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go" });
+	assert.equal(waited.details.found, true, "the positive listing resolves the observed root");
+	assert.equal(fake.looks.at(-1).target.windowId, 100);
 });
 
 test("a preexisting absence without a successor observation is inconclusive", async ({ onTestFinished }) => {
