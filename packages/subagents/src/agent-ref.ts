@@ -12,13 +12,13 @@ export const MAX_AGENT_HANDLE_CHARS = 128;
 const WORKFLOW_RUN_ID = /^wf_[a-z0-9-]{6,}$/;
 
 /** One handle as typed (`raw`, trimmed, one leading `@` dropped) and its lowercase name `key`. */
-export interface AgentHandle {
+interface AgentHandle {
 	raw: string;
 	key: string;
 }
 
 /** Normalize any string that names an agent; undefined when it is empty or too long to be one. */
-export function normalizeHandle(input: string): AgentHandle | undefined {
+function normalizeHandle(input: string): AgentHandle | undefined {
 	const raw = input.trim().replace(/^@/, "");
 	if (raw === "" || raw.length > MAX_AGENT_HANDLE_CHARS) return undefined;
 	return { raw, key: raw.toLowerCase() };
@@ -28,10 +28,10 @@ export function normalizeHandle(input: string): AgentHandle | undefined {
 export type Asker = { kind: "session" } | { kind: "agent"; parentAgentId: string };
 
 /** Which lookup step answered: the exact id, a run id, a workflow run id, a name, its `agent-` form, or saved history. */
-export type AgentRefVia = "id" | "run" | "workflow-run" | "name" | "prefix" | "saved" | "none";
+type AgentRefVia = "id" | "run" | "workflow-run" | "name" | "prefix" | "saved" | "none";
 
 /** Why a saved agent cannot be reopened. */
-export type SavedResumeRefusal = "tombstone-bound" | "name-taken" | "historical" | "no-saved-session";
+type SavedResumeRefusal = "tombstone-bound" | "name-taken" | "historical" | "no-saved-session";
 
 /**
  * What a handle names from where the asker stands. `requested` is the normalized
@@ -213,8 +213,21 @@ function lookup(
 
 /** The record a ref carries, if any: a workflow run and saved history have none. */
 export function refRecord(ref: AgentRef): AgentRecord | undefined {
-	if (ref.state === "workflow-owned") return ref.owner.kind === "child" ? ref.owner.record : undefined;
-	return "record" in ref ? ref.record : undefined;
+	switch (ref.state) {
+		case "live":
+		case "queued":
+		case "retained":
+			return ref.record;
+		case "workflow-owned":
+			if (ref.owner.kind === "child") return ref.owner.record;
+			// Exhaustive: a new owner kind fails to compile here instead of mapping to undefined.
+			ref.owner.kind satisfies "run";
+			return undefined;
+		default:
+			// Exhaustive likewise for a new state.
+			ref.state satisfies "saved" | "unknown";
+			return undefined;
+	}
 }
 
 const SESSION: Asker = { kind: "session" };
