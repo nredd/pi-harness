@@ -69,7 +69,16 @@ it("uses the physical route for model-scoped quota cells, then follows a new dir
 							version: 2,
 							snapshots: [],
 							blocks: [],
-							views: [{ provider: "faux", meters, pools: [], marks: [] }],
+							// The router copies meters from a snapshot that vouches for them until it expires.
+							views: [
+								{
+									provider: "faux",
+									snapshot: { provider: "faux", status: "available", windows: [], expiresAt: 8.64e15 },
+									meters,
+									pools: [],
+									marks: [],
+								},
+							],
 						},
 					});
 				});
