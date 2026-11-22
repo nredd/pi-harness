@@ -221,7 +221,7 @@ test("an evicted newest state does not fall back to an older inline one", async 
 	);
 });
 
-test("a failed write removes its temporary file", async () => {
+test("a failed write removes its temporary file and fails closed on the earlier copy", async () => {
 	const { saveStoredOutline, loadStoredOutline, outlineStoreDir, serializeOutline } = await modules();
 	const outline = serializeOutline(outlineOf(0, 0));
 	const now = vi.spyOn(Date, "now").mockReturnValue(1);
@@ -229,8 +229,9 @@ test("a failed write removes its temporary file", async () => {
 		saveStoredOutline("w", outline);
 		const dir = outlineStoreDir();
 		const [first] = fs.readdirSync(dir);
-		// The next save reuses the timestamp with the next sequence number; block its final name with a non-empty directory so the rename fails.
-		const blocked = first.replace(/-(\d{6})-/, (_, seq) => `-${String(Number(seq) + 1).padStart(6, "0")}-`);
+		saveStoredOutline("other", outline);
+		// The next save reuses the timestamp with the sequence number after "other"; block its final name with a non-empty directory so the rename fails.
+		const blocked = first.replace(/-(\d{6})-/, (_, seq) => `-${String(Number(seq) + 2).padStart(6, "0")}-`);
 		fs.mkdirSync(`${dir}/${blocked}`);
 		fs.writeFileSync(`${dir}/${blocked}/keep`, "x");
 		assert.doesNotThrow(() => saveStoredOutline("w", outline));
@@ -239,7 +240,9 @@ test("a failed write removes its temporary file", async () => {
 			[],
 		);
 		fs.rmSync(`${dir}/${blocked}`, { recursive: true });
-		assert.ok(loadStoredOutline("w"), "the earlier entry survives the failed write");
+		// The failed write may have been a redacted replacement: the earlier text must not stay restorable (#1234).
+		assert.equal(loadStoredOutline("w"), undefined, "the earlier entry is dropped with the failed write");
+		assert.ok(loadStoredOutline("other"), "other states' entries survive");
 	} finally {
 		now.mockRestore();
 	}

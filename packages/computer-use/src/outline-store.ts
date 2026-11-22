@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { debuglog } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -50,7 +50,9 @@ function removeQuietly(file: string): void {
 /**
  * Persist `outline` for `stateId` outside the Pi session file, then evict all but the newest
  * `limit` entries. Never throws: a failed write only means a later restore reports the state
- * as unavailable. Side effects: writes and deletes files under `outlineStoreDir()`.
+ * as unavailable. A failed write also drops older copies for `stateId`, so a redacted
+ * replacement that could not be written never leaves the earlier text restorable.
+ * Side effects: writes and deletes files under `outlineStoreDir()`.
  */
 export function saveStoredOutline(stateId: string, outline: SerializedOutline, limit = OUTLINE_STORE_LIMIT): void {
 	const dir = outlineStoreDir();
@@ -69,6 +71,7 @@ export function saveStoredOutline(stateId: string, outline: SerializedOutline, l
 		}
 	} catch (error) {
 		removeQuietly(tmp);
+		for (const entry of listEntries(dir)) if (entry.key === key) removeQuietly(path.join(dir, entry.name));
 		debugLog("outline store: could not save %s: %s", stateId, String(error));
 	}
 }
