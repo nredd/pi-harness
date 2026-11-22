@@ -357,6 +357,9 @@ interface OutlineToolDetails {
 	returned?: number;
 	hasMore?: boolean;
 	matches?: SerializedOutlineSearchMatch[];
+	/** Zero matches in an outline with unread (`truncated`) nodes do not prove absence. */
+	inconclusive?: true;
+	unreadRefs?: string[];
 	target?: SerializedOutlineNode;
 	note?: WindowNote;
 }
@@ -2251,6 +2254,12 @@ async function performSearchUi(
 		escalatedOCR = true;
 	}
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
+	// Browser snapshots are not partial reads; expand_ui cannot re-read them.
+	const unreadRefs =
+		ranked.totalMatches === 0 && !isBrowserContextId(state.contextId)
+			? outline.nodes.filter((node) => node.truncated).map((node) => node.ref)
+			: [];
+	const inconclusive = unreadRefs.length > 0;
 	const details: OutlineToolDetails = {
 		tool: "search_ui",
 		stateId: state.currentCapture?.stateId,
@@ -2260,6 +2269,7 @@ async function performSearchUi(
 		returned: matches.length,
 		hasMore: ranked.totalMatches > matches.length,
 		note: state.currentNote,
+		...(inconclusive ? { inconclusive: true as const, unreadRefs } : {}),
 	};
 	const collides = (match: OutlineSearchMatch) =>
 		matches.some((other) => other !== match && other.role === match.role && other.label === match.label);
@@ -2275,7 +2285,9 @@ async function performSearchUi(
 	const moreText =
 		ranked.totalMatches > matches.length
 			? ` Refine the query to inspect ${ranked.totalMatches - matches.length} additional matches.`
-			: "";
+			: inconclusive
+				? ` Inconclusive: the outline is incomplete (unread: ${unreadRefs.slice(0, 5).join(", ")}); expand_ui an unread ref before concluding the element is absent.`
+				: "";
 	return {
 		content: [
 			{
@@ -2619,6 +2631,7 @@ export async function terminalDesktopActionResult(
 	condition?: ReturnType<typeof validateCondition>,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
 	await normalizeRootDeltaRefs(execution, target);
+	const timedOut = timedOutStepIndex(execution) >= 0;
 	let exactRootAvailable: boolean | undefined;
 	let liveRoots: PlatformRoot[] = [];
 	try {
@@ -2664,8 +2677,11 @@ export async function terminalDesktopActionResult(
 			gone: condition.gone || undefined,
 			timeoutMs: condition.timeoutMs,
 		};
-		execution.outcome = outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus);
-		if (verificationStatus === "failed") {
+		execution.outcome = settledOutcome(
+			execution,
+			outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus),
+		);
+		if (verificationStatus === "failed" && !timedOut) {
 			execution.error = {
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
@@ -2719,9 +2735,12 @@ export async function terminalDesktopActionResult(
 		successors.length > 0
 			? ` It was replaced by ${successors.map((item) => `${item.kind} ${JSON.stringify(item.title ?? "")}${item.isModal ? " (modal)" : ""}`).join(", ")}.`
 			: "";
+	const delivered = timedOut
+		? "Whether the action was delivered is unknown (it timed out)"
+		: "The action was delivered";
 	const result = targetClosed
-		? `The action was delivered, and its source root ${target.appName} — ${target.windowTitle} closed before a successor observation could be captured.${successorText}`
-		: `The action was delivered, but its source root ${target.appName} — ${target.windowTitle} could not be observed afterward: ${message}`;
+		? `${delivered}, and its source root ${target.appName} — ${target.windowTitle} closed before a successor observation could be captured.${successorText}`
+		: `${delivered}, but its source root ${target.appName} — ${target.windowTitle} could not be observed afterward: ${message}`;
 	return {
 		content: [
 			{
@@ -2740,6 +2759,23 @@ function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
 	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
 	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
+}
+
+/** Index of the step that timed out, or -1: its delivery stays unknown whatever is observed afterward. */
+function timedOutStepIndex(execution: ExecutionTrace): number {
+	return (execution.steps ?? []).findIndex((step) => step.outcome === "unknown" && step.error?.code === "timeout");
+}
+
+/** Later evidence settles an act's outcome, except after a timed-out step: postconditions and values cannot prove delivery. */
+function settledOutcome(execution: ExecutionTrace, settled: ActOutcome): ActOutcome {
+	return timedOutStepIndex(execution) < 0 ? settled : execution.outcome!;
+}
+
+function timeoutSummary(execution: ExecutionTrace): string | undefined {
+	const index = timedOutStepIndex(execution);
+	return index < 0
+		? undefined
+		: `Action ${index + 1} timed out; whether it was delivered is unknown. Check the returned state before retrying.`;
 }
 
 async function performDesktopTransaction(
@@ -2797,7 +2833,10 @@ async function performDesktopTransaction(
 						gone: gone || undefined,
 						timeoutMs,
 					};
-					execution.outcome = outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status);
+					execution.outcome = settledOutcome(
+						execution,
+						outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status),
+					);
 					if (!verification.found) {
 						execution.error = {
 							code: "postcondition_failed",
@@ -2815,10 +2854,13 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
-				execution.outcome = outcomeAfterObservedValues(
-					execution.outcome ?? "unknown",
-					executedActions,
-					(ref) => nodeByRef(capture.outline, ref)?.value,
+				execution.outcome = settledOutcome(
+					execution,
+					outcomeAfterObservedValues(
+						execution.outcome ?? "unknown",
+						executedActions,
+						(ref) => nodeByRef(capture.outline, ref)?.value,
+					),
 				);
 				for (const action of executedActions) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {
@@ -2829,6 +2871,7 @@ async function performDesktopTransaction(
 				const built = await buildToolResult(
 					"act_ui",
 					keyboardStopSummary(execution) ??
+						timeoutSummary(execution) ??
 						`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
 					capture,
 					execution,
@@ -4064,7 +4107,7 @@ Successor diff (1 change, S1 → S2):
 Use stateId S2 for subsequent actions and queries.
 ```
 
-Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
+Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly; a node missing under a parent the successor could not read (`truncated`) is not reported as removed. A `search_ui` with zero matches in an outline with `truncated` nodes is `inconclusive` and names the unread refs to expand. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
 
 Coordinate fallback uses image pixels from the observed state:
 

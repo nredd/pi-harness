@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Keep a timed-out action's outcome `unknown` through postconditions, observed values and root closure, and say so instead of claiming delivery. Mark unread Linux AT-SPI2 nodes `truncated`, fail PID-scoped root listings that time out, keep scoped looks that stay unread `truncated`, suppress unproven removals under unread parents, and report zero `search_ui` matches in an incomplete outline as inconclusive (#1190).
 - Reject invalid macOS PIDs before discovery, look lookup or capture, and refuse observations whose supplied PID disagrees with the native root owner (#1209).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).
 - On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).

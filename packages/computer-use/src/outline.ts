@@ -748,7 +748,8 @@ function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRe
 	target.focused = source.focused;
 	target.offscreen = source.offscreen;
 	target.pictureOnly = source.pictureOnly;
-	target.truncated = false;
+	// A scoped look that still could not read the subtree leaves the node unread.
+	target.truncated = source.truncated;
 	target.scrollExtent = source.scrollExtent ? { ...source.scrollExtent } : undefined;
 	target.text = source.text.map((text) => ({ ...text, rect: text.rect ? { ...text.rect } : undefined }));
 }

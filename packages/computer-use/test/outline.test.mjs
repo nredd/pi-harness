@@ -417,7 +417,7 @@ describe("graftScopedOutline", () => {
 			"pictureOnly",
 		])
 			assert.equal(target[flag], true, flag);
-		assert.equal(target.truncated, false, "a regrafted node is no longer truncated");
+		assert.equal(target.truncated, true, "a scoped root that is still unread stays truncated (#1190)");
 		assert.deepEqual(target.scrollExtent, { seen: 2, total: 9 });
 		assert.deepEqual(target.text, [{ string: "scoped text", confidence: 0.5, rect: { x: 1, y: 1, w: 2, h: 2 } }]);
 	});
