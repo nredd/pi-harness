@@ -13,7 +13,7 @@ export function macosHelperBuild(root) {
 	const hash = createHash("sha256");
 	const sources = readdirSync(directory).filter((name) => name.endsWith(".swift") && !name.endsWith("_tests.swift"));
 	for (const name of sources.sort()) {
-		const contents = readFileSync(path.join(directory, name));
+		const contents = Buffer.from(readFileSync(path.join(directory, name), "utf8").replaceAll("\r\n", "\n"));
 		hash.update(`${name}:${contents.length}:`).update(contents);
 	}
 	return `${version}+${hash.digest("hex")}`;

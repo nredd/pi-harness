@@ -237,6 +237,8 @@ test("passes a version and production source hash to swiftc", async () => {
 	assert.ok(compiled);
 	writeFileSync(versionFile, '{"version":"1.2.4"}');
 	assert.equal(macosHelperBuild(root), `1.2.4+${digest}`);
+	for (const file of fixture) writeFileSync(path.join(dir, `${file}.swift`), "// v1\r\n");
+	assert.equal(macosHelperBuild(root), `1.2.4+${digest}`, "CRLF checkouts have the same source hash");
 	writeFileSync(path.join(dir, "bridge.swift"), "// v2\n");
 	assert.notEqual(macosHelperBuild(root), `1.2.4+${digest}`);
 });
