@@ -2590,7 +2590,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use t
 
 ## Tree extraction
 
-An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
 
 The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
 
@@ -2808,7 +2808,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are i
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first, and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
 
 When an image is requested, the helper:
 

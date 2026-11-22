@@ -320,15 +320,22 @@ private func runLookOutlineAssertions() {
       childNodes: { _ in { node($0.name) } },
       now: {
         defer { readings += 1 }
-        return Date(timeIntervalSinceReferenceDate: readings)
+        return readings
       })
-    return world.build(root: root, nodeLimit: nodeLimit, timeLimit: Double(expiresAfter) + 0.5)
+    return world.build(root: root, nodeLimit: nodeLimit, timeLimit: Double(expiresAfter) + 0.5, requestDeadline: .infinity)
   }
-  /// Root construction costs `rootCost` seconds and each child node `childCost` seconds on the walk's clock.
-  func timed(_ root: Node, children: [String: [Node]], rootCost: Double, childCost: Double) -> LookNode {
+  /// Root construction costs `rootCost` seconds and each child node `childCost` seconds on the walk's clock, which
+  /// reads 0 when the request starts. Returns the outline, the clock when the walk returned and the children reads.
+  func timed(
+    _ root: Node, children: [String: [Node]], rootCost: Double, childCost: Double, requestDeadline: TimeInterval = .infinity
+  ) -> (outline: LookNode, finishedAt: Double, reads: [String]) {
     var clock = 0.0
+    var reads: [String] = []
     let world = LookOutlineWorld<Node>(
-      children: { children[$0.name] ?? [] },
+      children: {
+        reads.append($0.name)
+        return children[$0.name] ?? []
+      },
       rootNode: {
         clock += rootCost
         return node($0.name)
@@ -339,8 +346,9 @@ private func runLookOutlineAssertions() {
           return node(child.name)
         }
       },
-      now: { Date(timeIntervalSinceReferenceDate: clock) })
-    return world.build(root: root, nodeLimit: 2000, timeLimit: 20)
+      now: { clock })
+    let outline = world.build(root: root, nodeLimit: 2000, timeLimit: 20, requestDeadline: requestDeadline)
+    return (outline, clock, reads)
   }
   func find(_ name: String, in tree: LookNode) -> LookNode? {
     tree.ref == name ? tree : tree.children.lazy.compactMap { find(name, in: $0) }.first
@@ -369,12 +377,27 @@ private func runLookOutlineAssertions() {
   check(build(root, children: tree, expiresAfter: 0).truncated, "an expired deadline marks the node it stops at")
   let late = build(root, children: tree, expiresAfter: 2)
   check(late.truncated && late.children.map(\.ref) == ["unread"], "a deadline during the children marks the parent")
-  let slowRoot = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 19, childCost: 2)
+  let slowRoot = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 19, childCost: 2).outline
   check(
     !slowRoot.truncated && find("parent", in: slowRoot)?.truncated == false && find("grandchild", in: slowRoot) != nil,
     "the root node's reads never spend the walk's 20 s budget")
-  let slowChildren = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 0, childCost: 21)
+  let slowChildren = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 0, childCost: 21).outline
   check(find("parent", in: slowChildren)?.truncated == true, "child construction still spends it")
+
+  // A 19 s root, then a chain of 2 s children: the walk's own 20 s would run to 39 s, past the client's 33 s abort.
+  let chain = (0..<12).map { Node("c\($0)") }
+  var chainChildren: [String: [Node]] = ["root": [chain[0]]]
+  for (index, link) in chain.dropLast().enumerated() { chainChildren[link.name] = [chain[index + 1]] }
+  let capped = timed(root, children: chainChildren, rootCost: 19, childCost: 2, requestDeadline: lookWalkDeadline)
+  check(capped.finishedAt <= lookWalkDeadline + 2, "a slow root cannot start a walk past the request deadline")
+  check(
+    find("c2", in: capped.outline)?.truncated == true && find("c3", in: capped.outline) == nil,
+    "the walk stops at the request deadline and returns a truncated outline")
+  check(capped.reads == ["root", "c0", "c1"], "no queued node's children are read past the request deadline")
+  let overrun = timed(root, children: chainChildren, rootCost: 26, childCost: 2, requestDeadline: lookWalkDeadline)
+  check(
+    overrun.outline.truncated && overrun.outline.children.isEmpty && overrun.finishedAt == 26 && overrun.reads.isEmpty,
+    "a root that overran the request deadline reads no children")
   print("macos look outline evidence checks passed")
 }
 

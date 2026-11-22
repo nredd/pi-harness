@@ -210,15 +210,17 @@ struct LookOutlineWorld<Element: AnyObject> {
 	let rootNode: (Element) -> LookNode
 	/// The node builder for one parent's children, so per-parent reads (e.g. visible children) run once.
 	let childNodes: (Element) -> (Element) -> LookNode
-	/// The clock the walk's time budget runs on.
-	let now: () -> Date
+	/// The monotonic clock (seconds) the walk's time budget runs on.
+	let now: () -> TimeInterval
 
-	/// Build `root`'s node, then walk breadth-first below it until `nodeLimit` nodes or `timeLimit` seconds after the
-	/// root node was built: the root's own reads never spend the walk's budget. A node whose children could not be
-	/// read, or whose children the budget cut, is `truncated`: its subtree is unread, never a leaf.
-	func build(root: Element, nodeLimit: Int, timeLimit: TimeInterval) -> LookNode {
+	/// Build `root`'s node, then walk breadth-first below it until `nodeLimit` nodes, `timeLimit` seconds after the
+	/// root node was built (the root's own reads never spend the walk's budget) or `requestDeadline` on `now`'s clock,
+	/// whichever comes first: a slow root cannot push the walk past the client's timeout. Past the deadline no queued
+	/// node's children are read. A node whose children could not be read, or whose children the budget cut, is
+	/// `truncated`: its subtree is unread, never a leaf.
+	func build(root: Element, nodeLimit: Int, timeLimit: TimeInterval, requestDeadline: TimeInterval) -> LookNode {
 		let rootNode = self.rootNode(root)
-		let deadline = now().addingTimeInterval(timeLimit)
+		let deadline = min(now() + timeLimit, requestDeadline)
 		let expired = { now() >= deadline }
 		var walked = 1
 		var seen = Set<ObjectIdentifier>([ObjectIdentifier(root)])
@@ -227,12 +229,16 @@ struct LookOutlineWorld<Element: AnyObject> {
 		while index < queue.count {
 			let (element, node) = queue[index]
 			index += 1
+			if expired() {
+				node.truncated = true
+				continue
+			}
 			guard let elements = children(element) else {
 				node.truncated = true
 				continue
 			}
 			if elements.isEmpty { continue }
-			if walked >= nodeLimit || expired() {
+			if walked >= nodeLimit {
 				node.truncated = true
 				continue
 			}
@@ -252,6 +258,10 @@ struct LookOutlineWorld<Element: AnyObject> {
 		return rootNode
 	}
 }
+
+/// Seconds after a look starts by which its outline walk stops, whatever the root's own reads cost: the client
+/// aborts a look at 33 s (`LOOK_TIMEOUT_MS`), and the rest leaves room for OCR and the reply.
+let lookWalkDeadline: TimeInterval = 25
 
 /// The deepest level below its scope a `waitFor` pass walks.
 let waitForMaxDepth = 12
@@ -2816,6 +2826,7 @@ final class Bridge {
 		let readText = optionalStringArg(request, "readText") ?? "auto"
 		let baseLookId = optionalStringArg(request, "baseLookId")
 		let includeImage = boolArg(request, "includeImage") ?? true
+		let requestDeadline = ProcessInfo.processInfo.systemUptime + lookWalkDeadline
 		guard readText == "auto" || readText == "always" || readText == "never" else {
 			throw BridgeFailure(message: "readText must be auto, always, or never", code: "invalid_args")
 		}
@@ -2898,7 +2909,7 @@ final class Bridge {
 		var lookStored = false
 		defer { if !lookStored { refStore.dropElements(owner: lookId) } }
 		let describeStart = Date()
-		let outline = buildLookOutline(root: rootElement, owner: lookId, transform: transform)
+		let outline = buildLookOutline(root: rootElement, owner: lookId, transform: transform, requestDeadline: requestDeadline)
 		let describeMs = elapsedMs(describeStart)
 
 		var readTextMs = 0
@@ -3002,7 +3013,8 @@ final class Bridge {
 	}
 
 	/// The look's outline (see `LookOutlineWorld.build`): a failed children read marks the node `truncated`.
-	private func buildLookOutline(root: AXUIElement, owner: String, transform: @escaping (CGRect) -> CGRect) -> LookNode {
+	/// - Parameter requestDeadline: The look's `lookWalkDeadline`, on the `systemUptime` clock.
+	private func buildLookOutline(root: AXUIElement, owner: String, transform: @escaping (CGRect) -> CGRect, requestDeadline: TimeInterval) -> LookNode {
 		let world = LookOutlineWorld<AXUIElement>(
 			children: { self.axElementArrayEvidence($0, attribute: kAXChildrenAttribute as CFString) },
 			rootNode: { self.lookNode(element: $0, transform: transform, offscreen: false, owner: owner) },
@@ -3014,12 +3026,12 @@ final class Bridge {
 					return self.lookNode(element: child, transform: transform, offscreen: offscreen, owner: owner)
 				}
 			},
-			now: { Date() }
+			now: { ProcessInfo.processInfo.systemUptime }
 		)
 		// Apps with slow AX servers (e.g. Outlook) can take >30s to describe; the
 		// client aborts at 33s, so stop walking well before that and return a
 		// truncated outline instead.
-		return world.build(root: root, nodeLimit: 2000, timeLimit: 20.0)
+		return world.build(root: root, nodeLimit: 2000, timeLimit: 20.0, requestDeadline: requestDeadline)
 	}
 
 	/// `owner` is the look whose lifetime bounds the element ref; nil for one-off element queries.
@@ -5774,7 +5786,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use t
 
 ## Tree extraction
 
-An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
 
 The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
 
@@ -6002,7 +6014,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are i
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first, and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
 
 When an image is requested, the helper:
 
