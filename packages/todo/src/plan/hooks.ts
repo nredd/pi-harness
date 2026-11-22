@@ -9,6 +9,8 @@
  *   is appended and one more model request is requested. The `context` hook
  *   swaps the marker for the live open-item list on that request only, so the
  *   list itself is never persisted.
+ * - After a compaction, the first request outside Plan mode gets the open
+ *   todo list appended once, since the compacted context no longer carries it.
  */
 
 import type {
@@ -17,7 +19,6 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	SessionBoundaryDraft,
-	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentRunState,
@@ -36,6 +37,7 @@ import type { TaskState } from "../state/state.ts";
 import { commitState, getState, sid } from "../state/store.ts";
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
 import {
+	COMPACTION_LIST_MESSAGE_TYPE,
 	EMPTY_REMINDER_MESSAGE_TYPE,
 	HELD_REMINDER_MESSAGE_TYPE,
 	NUDGE_BUDGET_ENTRY_TYPE,
@@ -44,12 +46,14 @@ import {
 	PLAN_APPROVED_VERSION,
 	PLAN_REMINDER_MESSAGE_TYPE,
 	type PlanApprovedPayload,
+	STALE_REMINDER_MESSAGE_TYPE,
 	STATE_ENTRY_TYPE,
 	type Task,
 	type TaskSnapshot,
 } from "../tool/types.ts";
-import { isChildActivation, trackEmptyReminder } from "./empty-reminder.ts";
+import { isChildActivation, type ToolCompletion, trackEmptyReminder } from "./empty-reminder.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./reconcile.ts";
+import { trackStaleLists } from "./stale-reminder.ts";
 
 /** Persisted marker text; the `context` hook expands it on the request right after it. */
 export const PLAN_REMINDER_MARKER = "[rpiv-todo] Plan items were still open when this run tried to finish.";
@@ -58,7 +62,6 @@ export const PLAN_REMINDER_MARKER = "[rpiv-todo] Plan items were still open when
 export const HELD_REMINDER_MARKER =
 	"[rpiv-todo] Todos were held with nothing armed to wake you when this run tried to finish.";
 
-const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
 export const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
 
 export const EMPTY_REMINDER_MARKER = "[rpiv-todo] Autonomous work continued without a todo list.";
@@ -400,6 +403,23 @@ export function formatHeldReminder(tasks: readonly Task[]): string {
 	].join("\n");
 }
 
+/** The one-shot list for the first request after a compaction: every open todo, in id order. */
+export function formatCompactionList(state: TaskState): string {
+	const byId = new Map(state.tasks.map((t) => [t.id, t]));
+	const open = state.tasks.filter((t) => t.status === "pending" || t.status === "in_progress");
+	return [
+		"[rpiv-todo] The conversation was compacted, so here is the todo list it no longer shows. These todos are still open:",
+		...open.map((t) => {
+			const owner = ownerLabel(t.owner);
+			const blockers = (t.blockedBy ?? []).filter((id) => OPEN.has(byId.get(id)?.status ?? "deleted"));
+			const details = [owner, blockers.length ? `blocked by ${blockers.map((id) => `#${id}`).join(", ")}` : ""];
+			const detail = details.filter(Boolean).join("; ");
+			return `- #${t.id} ${t.status} ${sanitizeTerminalText(t.subject)}${detail ? ` (${detail})` : ""}`;
+		}),
+		"They already exist: update them by id with `todo`, do not recreate them. Complete only with evidence and defer with a reason.",
+	].join("\n");
+}
+
 /**
  * The report of `in_progress` todos a run stopped with, or `undefined` when there are none.
  * Same shape as the `subagents` and `session-kit` monitor settle notices,
@@ -442,8 +462,12 @@ export function formatInProgressNotice(
  *   changed that session's list.
  */
 export interface PlanSessionHooks {
-	/** Track tool completions synchronously, before refreshing the overlay. */
-	toolFinished(event: ToolExecutionEndEvent, ctx: ExtensionContext): void;
+	/**
+	 * Count one tool result toward the empty-list nudge. Feed it from `message_end`: core emits
+	 * tool-result messages one at a time in assistant source order, while parallel
+	 * `tool_execution_end` events run concurrently and an earlier extension's handler can reorder them.
+	 */
+	toolFinished(event: ToolCompletion, ctx: ExtensionContext): void;
 	/**
 	 * Call from `session_start` after replay: binds the session and applies a pending approval.
 	 * `resumed` is true only for a process `startup`: `/new`, `/resume`, `/fork` and `/reload` detach live agents instead, so no owner is provably lost.
@@ -454,6 +478,10 @@ export interface PlanSessionHooks {
 		branch: ReturnType<ExtensionContext["sessionManager"]["getBranch"]>,
 		mode: ExtensionContext["mode"],
 	): Promise<void>;
+	/** Call from `session_compact` after replay: the next request outside Plan mode gets the open list once. */
+	sessionCompacted(sessionId: string): void;
+	/** Whether `sessionId`'s next request outside Plan mode gets the open list: the pending flag `sessionCompacted` sets. */
+	compactionListPending(sessionId: string): boolean;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
 }
@@ -516,10 +544,9 @@ export function registerPlanHooks(
 		return { entries: [...event.entries, draft], continue: true };
 	};
 
-	// Todo writes replace the canonical state; reads and rejected writes keep its identity.
-	// The age follows the snapshot, while the reminder budget follows human input.
-	const staleAge = new WeakMap<TaskState, number>();
-	const staleReminded = new Set<string>();
+	const stale = trackStaleLists();
+	// Sessions compacted since their last request outside Plan mode. In memory only, see the README.
+	const compacted = new Set<string>();
 	const parentTuiSessions = new Set<string>();
 	// Core needs a persisted non-assistant tail to accept a continuation after a normal reply.
 	// Keep the permission to expand that placeholder request-local, not in the restored branch.
@@ -566,12 +593,7 @@ export function registerPlanHooks(
 		}
 		// Age only completed settles that would otherwise stop, independent of any armed wake.
 		if (!parentTuiSessions.has(id) || !hasOpenTodos(state)) return undefined;
-		const threshold = getStaleAfterSettles(options.homeDir);
-		const age = Math.min((staleAge.get(state) ?? 0) + 1, threshold);
-		staleAge.set(state, age);
-		if (age < threshold || staleReminded.has(id)) return undefined;
-		staleReminded.add(id);
-		return nudge(id, event, "stale");
+		return stale.due(id, state, getStaleAfterSettles(options.homeDir)) ? nudge(id, event, "stale") : undefined;
 	};
 	pi.on("agent_before_settle", onSettle);
 
@@ -587,7 +609,7 @@ export function registerPlanHooks(
 		if (event.source === "extension") return;
 		const id = sid(ctx);
 		reported.delete(id);
-		staleReminded.delete(id);
+		stale.rearm(id);
 		pendingNudges.delete(id);
 		emptyTrackers.get(id)?.humanInput();
 	});
@@ -610,9 +632,31 @@ export function registerPlanHooks(
 		const id = sid(ctx);
 		const pendingNudge = pendingNudges.get(id);
 		pendingNudges.delete(id);
+		// Plan mode keeps a pending compaction list for the first request after it.
 		if (isPlanning(ctx, event.messages)) return undefined;
-		const last = event.messages[event.messages.length - 1] as SettleMessage | undefined;
 		const state = getState(id);
+		const swapped = swapMarker(id, event.messages, pendingNudge, state);
+		// One request only: an empty open list spends the pending compaction list too.
+		if (!compacted.delete(id) || !hasOpenTodos(state)) return swapped && { messages: swapped };
+		// Appended last, like the reminders, so later requests keep the cached prefix.
+		const list = {
+			role: "custom",
+			customType: COMPACTION_LIST_MESSAGE_TYPE,
+			content: formatCompactionList(state),
+			display: false,
+			timestamp: Date.now(),
+		} as (typeof event.messages)[number];
+		return { messages: [...(swapped ?? event.messages), list] };
+	});
+
+	/** The request's messages with a trailing reminder marker expanded, or `undefined` to keep them. */
+	function swapMarker<M>(
+		id: string,
+		messages: readonly M[],
+		pendingNudge: string | undefined,
+		state: TaskState,
+	): M[] | undefined {
+		const last = messages[messages.length - 1] as SettleMessage | undefined;
 		if (isReminder(last, HELD_REMINDER_MESSAGE_TYPE)) refreshSurvivors(id);
 		let content: string;
 		if (isReminder(last)) {
@@ -631,10 +675,10 @@ export function registerPlanHooks(
 			content =
 				"You have been working without a todo list. If this work has multiple steps, use `todo` to record what is still open before continuing. Do not create tasks for a simple request that is already done.";
 		} else return undefined;
-		const messages = [...event.messages];
-		messages[messages.length - 1] = { ...(last as object), content } as (typeof messages)[number];
-		return { messages };
-	});
+		const swapped = [...messages];
+		swapped[swapped.length - 1] = { ...(last as object), content } as M;
+		return swapped;
+	}
 
 	return {
 		toolFinished(event, ctx) {
@@ -644,12 +688,13 @@ export function registerPlanHooks(
 		async sessionStarted(sessionId, resumed, branch, mode) {
 			live.add(sessionId);
 			pendingNudges.delete(sessionId);
+			compacted.delete(sessionId);
 			const parentTui = mode === "tui" && !childActivation;
 			if (parentTui) {
 				parentTuiSessions.add(sessionId);
 				// A persisted user message could be an extension prompt; only a live
 				// human input event can safely rearm after restoring a spent budget.
-				if (budgetSpent(branch, "stale")) staleReminded.add(sessionId);
+				if (budgetSpent(branch, "stale")) stale.spend(sessionId);
 			} else parentTuiSessions.delete(sessionId);
 			if (parentTui && emptyConfig.toolCalls > 0) {
 				emptyTrackers.set(sessionId, trackEmptyReminder(emptyConfig, budgetSpent(branch, "empty")));
@@ -670,11 +715,18 @@ export function registerPlanHooks(
 			pending.delete(sessionId);
 			if (payload) await seed(payload);
 		},
+		sessionCompacted(sessionId) {
+			compacted.add(sessionId);
+		},
+		compactionListPending(sessionId) {
+			return compacted.has(sessionId);
+		},
 		sessionEnded(sessionId) {
 			live.delete(sessionId);
 			reported.delete(sessionId);
 			resumedOwners.delete(sessionId);
-			staleReminded.delete(sessionId);
+			stale.rearm(sessionId);
+			compacted.delete(sessionId);
 			parentTuiSessions.delete(sessionId);
 			pendingNudges.delete(sessionId);
 			emptyTrackers.delete(sessionId);
