@@ -629,7 +629,13 @@ Installation state, never synced:
 - `DIR/pi-session-kit/outboxes/<sha256>.json`: one outbox's bookkeeping, keyed by the SHA-256 of
   the resolved `<OUT>/machines/<UUID>` path and written only under that outbox's export lock (the
   `outboxes/` directory is created 0700, the file is written 0600 through an atomic rename), so
-  two outboxes of one agent dir cannot record stale state over each other's recovery set. It holds
+  two outboxes of one agent dir cannot record stale state over each other's recovery set. The key is
+  the lowercase hex SHA-256 of that `realpath`, so aliases of one outbox share a file. The format is
+  exactly `{version, harnesses, failures, recoveryPending, recoveryFiles, lostHarnesses,
+  historyHarnesses}` with `version: 1` required (no `salt`, no other field): `harnesses` and
+  `historyHarnesses` are harness lists or `null`, `failures` maps a harness to a positive count,
+  `recoveryPending` is a boolean, `recoveryFiles` a list of shard filenames or `null`, and
+  `lostHarnesses` a harness list. Any other shape fails the export. `harnesses` is
   the harness set the last successful export published (`null` until one is recorded), written only
   after the manifest is published. `failures` holds consecutive failed exports per harness.
   `historyHarnesses` records which harnesses published events or quota, not merely enrolled empty tools.
