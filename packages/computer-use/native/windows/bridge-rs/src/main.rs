@@ -9,7 +9,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use windows_bridge::{
-    capture, input, protocol::PROTOCOL_VERSION, refs::RefStore, window, window::WindowInstance,
+    capture, input,
+    protocol::PROTOCOL_VERSION,
+    refs::{NativeHandle, RefStore},
+    window,
+    window::WindowInstance,
     ErrorCode, ProtocolError, Request, Response,
 };
 
@@ -56,8 +60,9 @@ struct RootSnapshot {
 struct HelperState {
     store: RefStore,
     roots: HashMap<String, Value>,
-    /// Window instances bound to saved roots at discovery, keyed by HWND.
-    root_instances: HashMap<isize, WindowInstance>,
+    /// Each saved root's HWND and the window instance its root ref was issued for,
+    /// keyed by that ref; `None` when discovery could not admit the window.
+    root_instances: HashMap<String, (isize, Option<WindowInstance>)>,
     looks: HashMap<String, LookRecord>,
     look_order: VecDeque<String>,
     look_generation: u64,
@@ -101,19 +106,26 @@ impl HelperState {
     }
 
     /// Replace the saved roots (all, or only `filter_pid`'s) with `discovered` and bind
-    /// each to the window instance `admit` tags. A root whose instance cannot be admitted
-    /// for its listed PID stays listed but unbound, so every later use refuses it.
+    /// each root ref to the live window instance `read` reports, but only if discovery
+    /// issued that ref for this instance of its listed PID. Any other root stays listed
+    /// but unbound, so every later use refuses it.
     fn save_roots(
         &mut self,
         filter_pid: Option<u64>,
         discovered: Vec<Value>,
-        mut admit: impl FnMut(isize) -> Option<WindowInstance>,
+        mut read: impl FnMut(isize) -> Option<WindowInstance>,
     ) {
         if let Some(pid) = filter_pid {
-            self.roots
-                .retain(|_, root| root.get("pid").and_then(Value::as_u64) != Some(pid));
-            self.root_instances
-                .retain(|_, instance| instance.pid != pid);
+            let root_instances = &mut self.root_instances;
+            self.roots.retain(|_, root| {
+                let keep = root.get("pid").and_then(Value::as_u64) != Some(pid);
+                if let Some(root_ref) = root.get("rootRef").and_then(Value::as_str) {
+                    if !keep {
+                        root_instances.remove(root_ref);
+                    }
+                }
+                keep
+            });
         } else {
             self.store.retain_window_refs(
                 discovered
@@ -124,13 +136,24 @@ impl HelperState {
             self.root_instances.clear();
         }
         for root in discovered {
-            if let Some(hwnd) = root.get("windowId").and_then(Value::as_i64) {
+            if let (Some(hwnd), Some(root_ref)) = (
+                root.get("windowId").and_then(Value::as_i64),
+                root.get("rootRef").and_then(Value::as_str),
+            ) {
                 let hwnd = hwnd as isize;
                 let pid = root.get("pid").and_then(Value::as_u64);
-                match admit(hwnd).filter(|instance| Some(instance.pid) == pid) {
-                    Some(instance) => self.root_instances.insert(hwnd, instance),
-                    None => self.root_instances.remove(&hwnd),
-                };
+                // The ref names (HWND, tag); a window replaced since enumeration maps
+                // to another ref, so it never binds to this one.
+                let instance = read(hwnd).filter(|instance| {
+                    Some(instance.pid) == pid
+                        && self
+                            .store
+                            .insert_window(NativeHandle::new(hwnd), instance.token)
+                            .to_string()
+                            == root_ref
+                });
+                self.root_instances
+                    .insert(root_ref.to_owned(), (hwnd, instance));
             }
             self.roots.insert(root_identity(&root), root);
         }
@@ -365,11 +388,7 @@ fn handle_list_roots(args: &Value) -> Result<Value, ProtocolError> {
         .lock()
         .map_err(|_| internal("helper state lock poisoned"))?;
     let result = window::list_windows(&mut state.store, filter_pid)?;
-    state.save_roots(
-        filter_pid,
-        roots_array(&result),
-        window::admit_window_instance,
-    );
+    state.save_roots(filter_pid, roots_array(&result), window::window_instance);
     Ok(result)
 }
 
@@ -381,35 +400,29 @@ fn handle_focus_window(args: &Value) -> Result<Value, ProtocolError> {
         .ok_or_else(|| invalid("focusWindow requires rootRef"))?;
     let wref = windows_bridge::refs::WindowRef::parse(root_ref)
         .ok_or_else(|| invalid(format!("Invalid root ref '{root_ref}'")))?;
-    let (store, expected_pid, root_instances) = {
+    let (store, hwnd, instance) = {
         let state = helper_state()
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
-        let pid = state
+        let root = state
             .roots
             .values()
             .find(|root| root.get("rootRef").and_then(Value::as_str) == Some(root_ref))
-            .and_then(|root| root.get("pid"))
-            .and_then(Value::as_u64)
             .ok_or_else(|| ProtocolError::new("Focus root is stale", ErrorCode::StaleRef))?;
-        (state.store.clone(), pid, state.root_instances.clone())
+        let admitted = AdmittedRoot {
+            hwnd: root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize,
+            pid: root.get("pid").and_then(Value::as_u64).unwrap_or(0),
+        };
+        let instance = admitted.admitted_instance(&state, None, Some(root_ref))?;
+        (state.store.clone(), admitted.hwnd, instance)
     };
     with_physical_input(|| {
-        #[cfg(windows)]
-        {
-            let hwnd = store
-                .get_window(&wref)
-                .ok_or_else(|| ProtocolError::new("Focus root is stale", ErrorCode::StaleRef))?
-                .raw();
-            // Never raise a replacement window that reuses the saved root's HWND.
-            let instance = root_instances
-                .get(&hwnd)
-                .ok_or_else(window::unverified_instance)?;
-            window::ensure_instance(hwnd, *instance)?;
-            windows_bridge::desktop::validated_bounds(hwnd, Some(expected_pid))?;
-        }
-        #[cfg(not(windows))]
-        let _ = (expected_pid, root_instances);
+        // Checked after the lease wait: never raise a replacement reusing the HWND.
+        window::ensure_instance(
+            hwnd,
+            instance,
+            windows_bridge::desktop::validated_bounds(hwnd, Some(instance.pid)),
+        )?;
         window::focus_window(&store, &wref)
     })
 }
@@ -455,28 +468,39 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
     if roots_missing {
         let _ = handle_list_roots(&json!({}));
     }
-    let (mut store, roots, root_instances) = {
+    let (mut store, identity, root, instance) = {
         let state = helper_state()
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
+        let (identity, root) = state
+            .roots
+            .iter()
+            .find(|(_, root)| {
+                // An issued root ref denotes one window instance. Never widen it to
+                // the HWND, whose latest discovery may be a replacement.
+                root_ref.as_deref().is_none_or(|r| {
+                    root.get("rootRef").and_then(Value::as_str) == Some(r)
+                        || root.get("windowRef").and_then(Value::as_str) == Some(r)
+                }) && window_id
+                    .is_none_or(|id| root.get("windowId").and_then(Value::as_i64) == Some(id))
+            })
+            .ok_or_else(|| match root_ref {
+                Some(_) => window::unverified_instance(true),
+                None => ProtocolError::new("Root not found", ErrorCode::TargetNotFound),
+            })?;
+        // Observe only the instance this root ref was issued for.
+        let instance = AdmittedRoot {
+            hwnd: root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize,
+            pid: root.get("pid").and_then(Value::as_u64).unwrap_or(0),
+        }
+        .admitted_instance(&state, None, root.get("rootRef").and_then(Value::as_str))?;
         (
             state.store.clone(),
-            state.roots.clone(),
-            state.root_instances.clone(),
+            identity.clone(),
+            root.clone(),
+            instance,
         )
     };
-
-    let (identity, root) = roots
-        .iter()
-        .find(|(_, root)| {
-            root_ref.as_deref().is_some_and(|r| {
-                root.get("rootRef").and_then(Value::as_str) == Some(r)
-                    || root.get("windowRef").and_then(Value::as_str) == Some(r)
-            }) || window_id
-                .is_some_and(|id| root.get("windowId").and_then(Value::as_i64) == Some(id))
-        })
-        .map(|(id, root)| (id.clone(), root.clone()))
-        .ok_or_else(|| ProtocolError::new("Root not found", ErrorCode::TargetNotFound))?;
 
     let root_ref = root
         .get("rootRef")
@@ -484,15 +508,11 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         .unwrap_or(&identity)
         .to_owned();
     let root_hwnd = root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize;
-    // Observe only the instance bound at discovery, never a replacement reusing its HWND.
-    let instance = *root_instances
-        .get(&root_hwnd)
-        .ok_or_else(window::unverified_instance)?;
-    window::ensure_instance(root_hwnd, instance)?;
-    #[cfg(windows)]
-    let live_frame = windows_bridge::desktop::validated_bounds(
-        root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize,
-        root.get("pid").and_then(Value::as_u64),
+    // A closed or replaced window reports root_stale, not the desktop refusal.
+    let live_frame = window::ensure_instance(
+        root_hwnd,
+        instance,
+        windows_bridge::desktop::validated_bounds(root_hwnd, Some(instance.pid)),
     )?;
     let kind = root.get("kind").and_then(Value::as_str).unwrap_or("window");
     let is_outline_only = kind == "menu" || !include_image;
@@ -501,6 +521,8 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         .get("framePoints")
         .cloned()
         .unwrap_or_else(|| json!({"x":0,"y":0,"w":1,"h":1}));
+    #[cfg(not(windows))]
+    let _ = live_frame;
     #[cfg(windows)]
     let frame =
         json!({"x":live_frame.x,"y":live_frame.y,"w":live_frame.width,"h":live_frame.height});
@@ -540,17 +562,23 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         let wref = windows_bridge::refs::WindowRef::parse(&root_ref)
             .ok_or_else(|| invalid(format!("Invalid root ref '{root_ref}'")))?;
         let shot = with_physical_input(|| {
-            #[cfg(windows)]
-            windows_bridge::desktop::validated_bounds(
-                root.get("windowId").and_then(Value::as_i64).unwrap_or(0) as isize,
-                root.get("pid").and_then(Value::as_u64),
+            // Rechecked after the lease wait, since capture may restore or raise the
+            // window, and after capture, so no image of a replacement is returned.
+            window::ensure_instance(
+                root_hwnd,
+                instance,
+                windows_bridge::desktop::validated_bounds(root_hwnd, Some(instance.pid)),
             )?;
-            capture::screenshot(
-                &mut store,
-                &wref,
-                scope_ref.is_none(),
-                max_dimension,
-                root.get("pid").and_then(Value::as_u64).unwrap_or(0),
+            window::ensure_instance(
+                root_hwnd,
+                instance,
+                capture::screenshot(
+                    &mut store,
+                    &wref,
+                    scope_ref.is_none(),
+                    max_dimension,
+                    instance.pid,
+                ),
             )
         })?;
         if let Some(capture) = shot.get("capture") {
@@ -577,8 +605,12 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         {
             if let Some(wref) = windows_bridge::refs::WindowRef::parse(&root_ref) {
                 if let Some(native) = store.get_window(&wref) {
-                    elements = windows_bridge::uia::live_elements(native.raw())
-                        .map_err(stale_ref_from_uia)?;
+                    elements = window::ensure_instance(
+                        root_hwnd,
+                        instance,
+                        windows_bridge::uia::live_elements(native.raw())
+                            .map_err(stale_ref_from_uia),
+                    )?;
                 }
             }
         }
@@ -603,6 +635,7 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         elements = windows_bridge::uia::extract_elements_from(
             &mut store,
             scope.hwnd,
+            instance,
             &scope.runtime_id,
             &scope.automation_id,
         )
@@ -610,7 +643,7 @@ fn handle_look(args: &Value) -> Result<Value, ProtocolError> {
         base_look = Some(owning_look);
     }
     // Discard elements captured across a replacement of the observed instance.
-    window::ensure_instance(root_hwnd, instance)?;
+    window::ensure_instance(root_hwnd, instance, Ok(()))?;
 
     let look_id = fresh_look_id()?;
     let describe_started = Instant::now();
@@ -946,10 +979,12 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
         return Err(invalid("act pid does not own the observed root"));
     }
     parsed.pid = Some(record.pid);
-    #[cfg(windows)]
-    windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
-    #[cfg(windows)]
-    window::ensure_instance(record.hwnd, record.instance)?;
+    // A closed or replaced window reports root_stale, not the desktop refusal.
+    window::ensure_instance(
+        record.hwnd,
+        record.instance,
+        windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid)),
+    )?;
     let target_pid = parsed
         .pid
         .or((record.pid != 0).then_some(record.pid))
@@ -977,9 +1012,12 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
                     ));
                 }
                 with_physical_input(|| {
-                    window::ensure_instance(record.hwnd, record.instance)?;
-                    let current =
-                        windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid))?;
+                    // Rechecked after the lease wait, immediately before delivery.
+                    let current = window::ensure_instance(
+                        record.hwnd,
+                        record.instance,
+                        windows_bridge::desktop::validated_bounds(record.hwnd, Some(record.pid)),
+                    )?;
                     if (current.x, current.y, current.width, current.height)
                         != (
                             record.frame_x,
@@ -1146,13 +1184,14 @@ fn act_on_ref(
         .get(reference)
         .cloned()
         .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))?;
-    #[cfg(windows)]
-    windows_bridge::desktop::validated_bounds(element.hwnd, Some(record.pid))?;
-    // Even semantic mutation must start from the exact live identity/geometry.
+    // Even semantic mutation must start from the exact live identity/geometry. Each
+    // UIA delivery below resolves its element again and refuses it unless the window
+    // is still the observed instance after that resolution.
     live_ref_target(&element, record.instance)?;
     match parsed.action.as_str() {
         "press" | "click" => match windows_bridge::uia::press(
             element.hwnd,
+            record.instance,
             &element.runtime_id,
             &element.automation_id,
         )? {
@@ -1183,6 +1222,7 @@ fn act_on_ref(
                 .unwrap_or("");
             match windows_bridge::uia::set_text(
                 element.hwnd,
+                record.instance,
                 &element.runtime_id,
                 &element.automation_id,
                 text,
@@ -1208,6 +1248,7 @@ fn act_on_ref(
                 .unwrap_or(0.0);
             match windows_bridge::uia::scroll(
                 element.hwnd,
+                record.instance,
                 &element.runtime_id,
                 &element.automation_id,
                 sx,
@@ -1246,6 +1287,7 @@ fn coordinate_fallback(
                 window::ensure_point_owned(element.hwnd, &json!({"x":x,"y":y}))?;
                 windows_bridge::uia::occlusion_ok(
                     element.hwnd,
+                    instance,
                     &element.runtime_id,
                     &element.automation_id,
                     x,
@@ -1261,6 +1303,7 @@ fn coordinate_fallback(
                 window::ensure_point_owned(element.hwnd, &json!({"x":x,"y":y}))?;
                 windows_bridge::uia::occlusion_ok(
                     element.hwnd,
+                    instance,
                     &element.runtime_id,
                     &element.automation_id,
                     x,
@@ -1272,6 +1315,7 @@ fn coordinate_fallback(
                 if matches!(parsed.action.as_str(), "setText" | "typeText" | "keypress") {
                     windows_bridge::uia::focus_for_input(
                         element.hwnd,
+                        instance,
                         &element.runtime_id,
                         &element.automation_id,
                         parsed.action != "keypress",
@@ -1299,13 +1343,20 @@ fn live_ref_target(
     ),
     ProtocolError,
 > {
-    window::ensure_instance(element.hwnd, instance)?;
-    let window = windows_bridge::desktop::validated_bounds(element.hwnd, Some(instance.pid))?;
-    let snapshot =
-        windows_bridge::uia::snapshot(element.hwnd, &element.runtime_id, &element.automation_id)
-            .map_err(stale_ref_from_uia)?;
-    // The RuntimeId and AutomationId could match an element of a replacement window.
-    window::ensure_instance(element.hwnd, instance)?;
+    let window = window::ensure_instance(
+        element.hwnd,
+        instance,
+        windows_bridge::desktop::validated_bounds(element.hwnd, Some(instance.pid)),
+    )?;
+    // The RuntimeId and AutomationId could match an element of a replacement window;
+    // `snapshot` refuses one by rechecking the instance after its resolution.
+    let snapshot = windows_bridge::uia::snapshot(
+        element.hwnd,
+        instance,
+        &element.runtime_id,
+        &element.automation_id,
+    )
+    .map_err(stale_ref_from_uia)?;
     let target = windows_bridge::guard::LiveTarget {
         runtime_id: snapshot.runtime_id,
         bounds: windows_bridge::guard::Bounds {
@@ -1396,7 +1447,9 @@ fn resolved_executable(
 }
 
 fn stale_ref_from_uia(message: String) -> ProtocolError {
-    if message.contains("stale") || message.contains("Element reference") {
+    if message == window::STALE_INSTANCE {
+        window::unverified_instance(true)
+    } else if message.contains("stale") || message.contains("Element reference") {
         ProtocolError::new("Element reference is stale", ErrorCode::StaleRef)
     } else {
         ProtocolError::new(message, ErrorCode::InternalError)
@@ -1571,21 +1624,26 @@ impl AdmittedRoot {
     }
 
     /// Return the window instance this root was admitted as: the owning look's when
-    /// `look_id` is given, else the instance bound when the root was discovered.
+    /// `look_id` is given, else the one `root_ref` was issued for at discovery. The
+    /// ref is required without a look; a later rediscovery binds a replacement to a
+    /// new ref, never to this one.
     fn admitted_instance(
         self,
         state: &HelperState,
         look_id: Option<&str>,
+        root_ref: Option<&str>,
     ) -> Result<WindowInstance, ProtocolError> {
         if let Some(look_id) = look_id {
             return Ok(self.owned_look(state, look_id)?.instance);
         }
-        state
-            .root_instances
-            .get(&self.hwnd)
-            .copied()
-            .filter(|instance| instance.pid == self.pid)
-            .ok_or_else(window::unverified_instance)
+        let root_ref = root_ref.ok_or_else(|| invalid("Expected the exact target rootRef"))?;
+        match state.root_instances.get(root_ref) {
+            Some((hwnd, Some(instance))) if *hwnd == self.hwnd && instance.pid == self.pid => {
+                Ok(*instance)
+            }
+            Some((hwnd, None)) if *hwnd == self.hwnd => Err(window::unverified_instance(false)),
+            _ => Err(window::unverified_instance(true)),
+        }
     }
 }
 
@@ -1754,7 +1812,11 @@ fn handle_wait_for_with<Root>(
         let state = state
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
-        let instance = root.admitted_instance(&state, look_id)?;
+        let root_ref = args
+            .get("rootRef")
+            .or_else(|| args.get("windowRef"))
+            .and_then(Value::as_str);
+        let instance = root.admitted_instance(&state, look_id, root_ref)?;
         // A valid scope from another root must never steer this root's UIA poll.
         let scope_runtime_id = match (look_id, scope_ref) {
             (Some(look_id), Some(scope_ref)) => Some(
@@ -2494,8 +2556,8 @@ mod tests {
         )
     }
 
-    /// Helper state holding look `look` of window 22 in PID 7 and, when `saved` is
-    /// given, the instance bound to that window when it was discovered.
+    /// Helper state holding look `look` of window 22 in PID 7 and root ref `@w22` of
+    /// that window, bound to `saved` (`None`: listed but never admitted).
     fn wait_state(saved: Option<WindowInstance>) -> HelperState {
         let mut state = HelperState::new(1);
         let mut look = look_with_element(5.0);
@@ -2503,9 +2565,7 @@ mod tests {
         look.hwnd = 22;
         look.instance = owned_by(7);
         state.insert_look("look".to_owned(), look);
-        state
-            .root_instances
-            .extend(saved.map(|instance| (22, instance)));
+        state.root_instances.insert("@w22".to_owned(), (22, saved));
         state
     }
 
@@ -2544,7 +2604,7 @@ mod tests {
             for gone in [false, true] {
                 // The first poll stays owned and unsatisfied; the next poll's first check drifts.
                 let (result, walks) = scripted_wait(
-                    json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready", "gone": gone}),
                     &[Some(7), Some(7), Some(7), next_owner],
                     || {
                         Ok(if gone {
@@ -2562,7 +2622,7 @@ mod tests {
 
     #[test]
     fn wait_refuses_a_same_hwnd_same_pid_replacement_window() {
-        let plain = json!({"pid": 7, "windowId": 22, "text": "Ready"});
+        let plain = json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready"});
         let mut looked = plain.clone();
         looked["lookId"] = json!("look");
         for replacement in replacements_of(7) {
@@ -2599,19 +2659,49 @@ mod tests {
     }
 
     #[test]
-    fn wait_without_a_look_refuses_a_root_with_no_admitted_instance() {
+    fn wait_without_a_look_requires_the_root_ref_bound_to_an_admitted_instance() {
         let ready = || Ok(vec![json!({"name": "Ready"})]);
-        // Never discovered or admission failed, or discovered for another PID.
-        for saved in [None, Some(owned_by(8))] {
-            let (result, walks) = scripted_instance_wait(
-                wait_state(saved),
-                json!({"pid": 7, "windowId": 22, "text": "Ready"}),
-                &[],
-                ready,
-            );
-            assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+        let plain = |root_ref: &str| json!({"pid": 7, "windowId": 22, "rootRef": root_ref, "text": "Ready"});
+        // Listed but never admitted, or admitted for another PID.
+        for (saved, admitted) in [(None, false), (Some(owned_by(8)), true)] {
+            let (result, walks) =
+                scripted_instance_wait(wait_state(saved), plain("@w22"), &[], ready);
+            let error = result.unwrap_err();
+            assert_eq!(error.code, ErrorCode::RootStale);
+            assert_eq!(error.message, window::unverified_instance(admitted).message);
             assert_eq!(walks, 0);
         }
+        // A ref no longer saved (the window was rediscovered as a replacement), a ref
+        // of another window, or none at all never falls back to the HWND's binding.
+        let mut other_window = wait_state(Some(owned_by(7)));
+        other_window
+            .root_instances
+            .insert("@w23".to_owned(), (23, Some(owned_by(7))));
+        for (state, args) in [
+            (wait_state(Some(owned_by(7))), plain("@w21")),
+            (other_window, plain("@w23")),
+        ] {
+            let (result, walks) = scripted_instance_wait(state, args, &[], ready);
+            let error = result.unwrap_err();
+            assert_eq!(error.code, ErrorCode::RootStale);
+            assert_eq!(error.message, window::STALE_INSTANCE);
+            assert_eq!(walks, 0);
+        }
+        let (result, _) = scripted_instance_wait(
+            wait_state(Some(owned_by(7))),
+            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            &[],
+            ready,
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::InvalidRequest);
+        let (result, walks) = scripted_instance_wait(
+            wait_state(Some(owned_by(7))),
+            plain("@w22"),
+            &[Some(owned_by(7)); 3],
+            ready,
+        );
+        assert_eq!(result.unwrap()["found"], json!(true));
+        assert_eq!(walks, 1);
         // The look binds its own instance even when no saved root does.
         let (result, walks) = scripted_instance_wait(
             wait_state(None),
@@ -2624,44 +2714,104 @@ mod tests {
     }
 
     #[test]
-    fn saved_roots_bind_the_instance_admitted_for_their_listed_pid() {
+    fn uia_refusals_across_a_replacement_report_root_stale() {
+        // UIA resolution returns the instance refusal as a string; never a stale element.
+        let error = stale_ref_from_uia(window::STALE_INSTANCE.to_owned());
+        assert_eq!(error.code, ErrorCode::RootStale);
+        assert_eq!(error.message, window::STALE_INSTANCE);
+        let element = stale_ref_from_uia("Element reference is stale".to_owned());
+        assert_eq!(element.code, ErrorCode::StaleRef);
+    }
+
+    /// A discovered root whose ref was issued for `(hwnd, generation)`.
+    fn issued_root(state: &mut HelperState, hwnd: isize, pid: u64, generation: usize) -> Value {
+        let root_ref = state
+            .store
+            .insert_window(NativeHandle::new(hwnd), generation)
+            .to_string();
+        json!({"windowId": hwnd, "pid": pid, "kind": "window", "title": "t", "rootRef": root_ref})
+    }
+
+    #[test]
+    fn saved_roots_bind_only_the_instance_their_ref_was_issued_for() {
         let mut state = HelperState::new(1);
+        let replaced = WindowInstance {
+            token: owned_by(7).token + 1,
+            ..owned_by(7)
+        };
         let roots = vec![
-            root(21, 7, "a", false),
-            root(22, 7, "b", false),
-            root(23, 9, "c", false),
+            issued_root(&mut state, 21, 7, owned_by(7).token),
+            issued_root(&mut state, 22, 7, owned_by(7).token),
+            issued_root(&mut state, 23, 9, owned_by(9).token),
+            issued_root(&mut state, 24, 7, owned_by(7).token),
+            issued_root(&mut state, 25, 7, 0),
         ];
-        let mut admitted = Vec::new();
+        let refs = roots
+            .iter()
+            .map(|root| root["rootRef"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        let mut read = Vec::new();
         state.save_roots(None, roots, |hwnd| {
-            admitted.push(hwnd);
-            // 22 changed owner after enumeration; 23 could not be tagged.
+            read.push(hwnd);
+            // 22 changed owner and 24 was replaced after enumeration, 23 is
+            // unreadable and 25 was listed without an admitted tag.
             match hwnd {
-                21 => Some(owned_by(7)),
+                21 | 25 => Some(owned_by(7)),
                 22 => Some(owned_by(8)),
+                24 => Some(replaced),
                 _ => None,
             }
         });
-        assert_eq!(admitted, [21, 22, 23]);
-        assert_eq!(state.roots.len(), 3, "unbound roots stay listed");
-        assert_eq!(state.root_instances, HashMap::from([(21, owned_by(7))]));
-
-        // A PID-scoped rediscovery rebinds only that PID's roots.
-        state.root_instances.insert(23, owned_by(9));
-        state.save_roots(Some(7), vec![root(22, 7, "b", false)], |_| {
-            Some(owned_by(7))
-        });
+        assert_eq!(read, [21, 22, 23, 24, 25]);
+        assert_eq!(state.roots.len(), 5, "unbound roots stay listed");
+        let bindings = |state: &HelperState| {
+            let mut bindings = state
+                .root_instances
+                .iter()
+                .map(|(root_ref, binding)| (root_ref.clone(), *binding))
+                .collect::<Vec<_>>();
+            bindings.sort_by(|a, b| a.0.cmp(&b.0));
+            bindings
+        };
         assert_eq!(
-            state.root_instances,
-            HashMap::from([(22, owned_by(7)), (23, owned_by(9))])
+            bindings(&state),
+            [
+                (refs[0].clone(), (21, Some(owned_by(7)))),
+                (refs[1].clone(), (22, None)),
+                (refs[2].clone(), (23, None)),
+                (refs[3].clone(), (24, None)),
+                (refs[4].clone(), (25, None)),
+            ]
         );
-        assert_eq!(state.roots.len(), 2);
-        // A failed admission unbinds a previously bound window.
-        let unadmitted = |_| None;
-        state.save_roots(Some(7), vec![root(22, 7, "b", false)], unadmitted);
-        assert_eq!(state.root_instances, HashMap::from([(23, owned_by(9))]));
+
+        // A PID-scoped rediscovery of a same-HWND replacement of 21 issues and binds a
+        // new ref; the old ref no longer denotes anything, PID 9 stays untouched.
+        let replacement = issued_root(&mut state, 21, 7, replaced.token);
+        let new_ref = replacement["rootRef"].as_str().unwrap().to_owned();
+        assert_ne!(new_ref, refs[0]);
+        state.save_roots(Some(7), vec![replacement], |_| Some(replaced));
+        assert_eq!(
+            bindings(&state),
+            [
+                (refs[2].clone(), (23, None)),
+                (new_ref.clone(), (21, Some(replaced))),
+            ]
+        );
+        let admitted = AdmittedRoot { hwnd: 21, pid: 7 };
+        assert_eq!(
+            admitted
+                .admitted_instance(&state, None, Some(&new_ref))
+                .unwrap(),
+            replaced
+        );
+        let error = admitted
+            .admitted_instance(&state, None, Some(&refs[0]))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::RootStale);
+        assert_eq!(error.message, window::STALE_INSTANCE);
 
         // Full rediscovery drops every root no longer listed.
-        state.save_roots(None, vec![], unadmitted);
+        state.save_roots(None, vec![], |_| None);
         assert!(state.roots.is_empty());
         assert!(state.root_instances.is_empty());
     }
@@ -2670,7 +2820,7 @@ mod tests {
     fn wait_refuses_a_replacement_root_before_walking_it() {
         // Owned at the pre-check, replaced by the time ElementFromHandle returned.
         let (result, walks) = scripted_wait(
-            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready"}),
             &[Some(7), Some(8)],
             || panic!("must not walk a replacement root"),
         );
@@ -2683,7 +2833,7 @@ mod tests {
         for gone in [false, true] {
             for after in [Some(8), None] {
                 let (result, walks) = scripted_wait(
-                    json!({"pid": 7, "windowId": 22, "text": "Ready", "gone": gone}),
+                    json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready", "gone": gone}),
                     &[Some(7), Some(7), after],
                     || {
                         Ok(if gone {
@@ -2699,7 +2849,7 @@ mod tests {
         }
         // A UIA failure across an owner change is drift, not an internal error.
         let (result, _) = scripted_wait(
-            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready"}),
             &[Some(7), Some(7), None],
             || Err("provider gone".to_owned()),
         );
@@ -2709,14 +2859,14 @@ mod tests {
     #[test]
     fn wait_reports_a_satisfied_walk_while_the_owner_holds() {
         let (result, walks) = scripted_wait(
-            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready"}),
             &[Some(7), Some(7), Some(7)],
             || Ok(vec![json!({"name": "Ready"})]),
         );
         assert_eq!(result.unwrap()["found"], json!(true));
         assert_eq!(walks, 1);
         let (result, _) = scripted_wait(
-            json!({"pid": 7, "windowId": 22, "text": "Ready"}),
+            json!({"pid": 7, "windowId": 22, "rootRef": "@w22", "text": "Ready"}),
             &[Some(7), Some(7), Some(7)],
             || Err("provider failure".to_owned()),
         );

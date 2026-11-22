@@ -93,7 +93,7 @@ pub struct RefStore {
     next_window_id: u64,
     next_element_id: u64,
     windows: HashMap<u64, NativeHandle>,
-    window_ids: HashMap<NativeHandle, u64>,
+    window_ids: HashMap<(NativeHandle, usize), u64>,
     elements: HashMap<u64, NativeHandle>,
 }
 
@@ -109,15 +109,18 @@ impl RefStore {
         }
     }
 
-    /// Insert a window native handle and return its `WindowRef`.
-    pub fn insert_window(&mut self, handle: NativeHandle) -> WindowRef {
-        if let Some(id) = self.window_ids.get(&handle).copied() {
+    /// Insert a window native handle observed as instance `generation` and return
+    /// its `WindowRef`. The same handle and generation keep their ref; a new
+    /// generation (a replacement window reusing the handle) gets a new one, so an
+    /// earlier ref never comes to denote the replacement.
+    pub fn insert_window(&mut self, handle: NativeHandle, generation: usize) -> WindowRef {
+        if let Some(id) = self.window_ids.get(&(handle, generation)).copied() {
             return WindowRef { id };
         }
         let id = self.next_window_id;
         self.next_window_id += 1;
         self.windows.insert(id, handle);
-        self.window_ids.insert(handle, id);
+        self.window_ids.insert((handle, generation), id);
         WindowRef { id }
     }
 

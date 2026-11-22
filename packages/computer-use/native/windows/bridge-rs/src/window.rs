@@ -440,7 +440,13 @@ fn list_windows_impl(
         let bounds = unsafe { get_window_bounds_json(hwnd) };
         let class_name = unsafe { get_window_class(hwnd) };
         let (is_browser, browser_family) = classify_browser(&process_name);
-        let wref = store.insert_window(NativeHandle::new(hwnd.0 as isize));
+        // A root is bound only to an instance admitted for its listed owner. The ref
+        // is per instance, so a replacement reusing this HWND gets a new ref.
+        let (bound, generation) = match admit_window_instance(hwnd.0 as isize) {
+            Some(instance) if instance.pid == u64::from(pid) => (true, instance.token),
+            _ => (false, 0),
+        };
+        let wref = store.insert_window(NativeHandle::new(hwnd.0 as isize), generation);
         let dpi = unsafe { GetDpiForWindow(hwnd) };
         let scale_factor = if dpi > 0 { f64::from(dpi) / 96.0 } else { 1.0 };
         let owner = unsafe { GetWindow(hwnd, GW_OWNER).ok() };
@@ -482,6 +488,7 @@ fn list_windows_impl(
             "metadata": { "className": class_name, "exStyle": ex_style, "isBrowser": is_browser, "browserFamily": browser_family },
             "isBrowser": is_browser,
             "browserFamily": browser_family,
+            "instanceUnavailable": !bound,
         }));
     }
 
@@ -549,6 +556,10 @@ pub fn window_instance(hwnd: isize) -> Option<WindowInstance> {
 /// Tag `hwnd` with an instance token unless it already carries one, then return its
 /// instance. `None` when the tag cannot be written and confirmed, so the caller must
 /// refuse the window rather than admit it unbound.
+///
+/// Admissions in this helper are serialized, so two concurrent first admissions of
+/// one window never overwrite each other's tag. Separate helper processes are not
+/// serialized against each other (see the README limits).
 pub fn admit_window_instance(hwnd: isize) -> Option<WindowInstance> {
     #[cfg(not(windows))]
     {
@@ -559,6 +570,10 @@ pub fn admit_window_instance(hwnd: isize) -> Option<WindowInstance> {
     {
         use std::hash::BuildHasher;
         static MINTED: AtomicU64 = AtomicU64::new(0);
+        static ADMISSION: Mutex<()> = Mutex::new(());
+        // Held across the read, write and read-back so a concurrent first admission
+        // reads this tag instead of writing its own over it.
+        let _serial = ADMISSION.lock().ok()?;
         let nonce = std::collections::hash_map::RandomState::new()
             .hash_one(MINTED.fetch_add(1, Ordering::Relaxed)) as usize;
         ensure_instance_token(
@@ -578,19 +593,39 @@ pub fn admit_window_instance(hwnd: isize) -> Option<WindowInstance> {
     }
 }
 
-/// Refuse with `root_stale` unless `hwnd` is still exactly the `admitted` instance.
-pub fn ensure_instance(hwnd: isize, admitted: WindowInstance) -> Result<(), ProtocolError> {
+/// Return `outcome` only while `hwnd` is still exactly the `admitted` instance.
+///
+/// Sample the instance AFTER the live call that produced `outcome`: a refusal or
+/// result seen across a replacement (or a closed window) reports `root_stale`
+/// instead. Pass `Ok(())` for a bare check. Never pass a mutation's outcome; a
+/// performed or uncertain mutation must not be relabelled.
+pub fn ensure_instance<T>(
+    hwnd: isize,
+    admitted: WindowInstance,
+    outcome: Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
     if window_instance(hwnd) == Some(admitted) {
-        Ok(())
+        outcome
     } else {
-        Err(unverified_instance())
+        Err(unverified_instance(true))
     }
 }
 
-/// The refusal for a window that is gone, replaced or not provably the admitted instance.
-pub fn unverified_instance() -> ProtocolError {
+/// Message of the refusal for an admitted window that is gone or replaced; UIA
+/// helpers return it as a string error and callers map it back to `root_stale`.
+pub const STALE_INSTANCE: &str =
+    "Target window is no longer the admitted instance; rediscover it with find_roots";
+
+/// The `root_stale` refusal for a window that is not provably its admitted instance:
+/// `admitted` names a verified root that went stale, otherwise discovery could never
+/// bind it (its owner, process start or instance tag was unreadable).
+pub fn unverified_instance(admitted: bool) -> ProtocolError {
     ProtocolError::new(
-        "Target window is no longer the admitted instance; rediscover it with find_roots",
+        if admitted {
+            STALE_INSTANCE
+        } else {
+            "Target window could not be admitted: its owner, process start or instance tag is unverifiable, so it cannot be observed or controlled"
+        },
         ErrorCode::RootStale,
     )
 }
@@ -987,10 +1022,31 @@ mod unit_tests {
             process_started: 1,
             token: 1,
         };
+        // A refusal seen after the window went away reports the lost instance.
+        let refused = ensure_instance(
+            1,
+            admitted,
+            Err::<(), _>(ProtocolError::new("blocked", ErrorCode::CoordinateBlocked)),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::RootStale);
+        assert_eq!(refused.message, STALE_INSTANCE);
         assert_eq!(
-            ensure_instance(1, admitted).unwrap_err().code,
+            ensure_instance(1, admitted, Ok(5)).unwrap_err().code,
             ErrorCode::RootStale
         );
+    }
+
+    #[test]
+    fn instance_refusals_tell_unadmitted_roots_from_stale_ones() {
+        let stale = unverified_instance(true);
+        let unadmitted = unverified_instance(false);
+        assert_eq!(
+            (stale.code, unadmitted.code),
+            (ErrorCode::RootStale, ErrorCode::RootStale)
+        );
+        assert_eq!(stale.message, STALE_INSTANCE);
+        assert!(unadmitted.message.contains("could not be admitted"));
     }
 
     /// Real Win32 instance tags on a message-only window owned by this test process.
@@ -1032,13 +1088,21 @@ mod unit_tests {
         assert_ne!(admitted.process_started, 0);
         assert_eq!(window_instance(raw), Some(admitted));
         assert_eq!(admit_window_instance(raw), Some(admitted), "keep the tag");
-        assert!(ensure_instance(raw, admitted).is_ok());
+        assert_eq!(ensure_instance(raw, admitted, Ok(5)).unwrap(), 5);
+        // A refusal while the admitted instance is still live is kept as is.
+        let blocked = ProtocolError::new("blocked", ErrorCode::CoordinateBlocked);
+        assert_eq!(
+            ensure_instance(raw, admitted, Err::<(), _>(blocked))
+                .unwrap_err()
+                .code,
+            ErrorCode::CoordinateBlocked
+        );
         let replaced = WindowInstance {
             token: admitted.token.wrapping_add(1),
             ..admitted
         };
         assert_eq!(
-            ensure_instance(raw, replaced).unwrap_err().code,
+            ensure_instance(raw, replaced, Ok(())).unwrap_err().code,
             ErrorCode::RootStale
         );
         assert_eq!(process_started(u64::from(u32::MAX) + 1), None);
@@ -1047,10 +1111,22 @@ mod unit_tests {
             RemovePropW(hwnd, INSTANCE_PROPERTY).expect("remove the instance tag");
         }
         assert_eq!(
-            ensure_instance(raw, admitted).unwrap_err().code,
+            ensure_instance(raw, admitted, Ok(())).unwrap_err().code,
             ErrorCode::RootStale,
             "same HWND and PID without the tag is a different instance"
         );
+        // Concurrent first admissions of one window agree on a single tag.
+        let admissions = std::thread::scope(|scope| {
+            let workers = (0..8)
+                .map(|_| scope.spawn(move || admit_window_instance(raw)))
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("admission thread"))
+                .collect::<Vec<_>>()
+        });
+        let live = window_instance(raw).expect("one admitted tag");
+        assert!(admissions.iter().all(|admitted| *admitted == Some(live)));
         // SAFETY: this thread created the window and destroys it exactly once.
         unsafe { DestroyWindow(hwnd) }.expect("destroy the fixture window");
         assert_eq!(window_instance(raw), None);
@@ -1176,7 +1252,7 @@ mod unit_tests {
     #[test]
     fn test_list_windows_window_ref_prefix() {
         let mut store = RefStore::new();
-        let reference = store.insert_window(crate::refs::NativeHandle::new(42));
+        let reference = store.insert_window(crate::refs::NativeHandle::new(42), 0);
         let result = window_list_response(vec![json!({"ref":reference.to_string()})]);
         if let Some(windows) = result["windows"].as_array() {
             for w in windows {

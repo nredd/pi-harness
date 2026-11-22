@@ -226,23 +226,50 @@ no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, 
 
 Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. Look IDs are scoped to one helper lifetime: after a restart, observe again before reading text.
 The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
-`find_roots` binds each saved Windows root to a window instance: the owning PID, that process's
-creation time, and an opaque instance tag the helper stores as the `PiComputerUseWindowInstance-v1`
-window property (one `SetPropW` per window lifetime; an existing tag is kept). Windows drops window
-properties when the window is destroyed, so a replacement window that reuses the exact HWND, even in
-the same process, has no tag or a different one, and a reused PID has a different creation time.
-Looks record that instance. A root whose tag cannot be written and read back stays listed but is
-refused with `root_stale`, as is a wait without a look on a root with no bound instance.
+Windows roots and looks are bound to a window instance: the owning PID, that process's creation
+time, and an opaque instance tag the helper stores as the `PiComputerUseWindowInstance-v1` window
+property (written once per window lifetime under a per-helper lock; an existing tag is kept). Windows
+drops window properties when the window is destroyed, so a replacement window that reuses the exact
+HWND, even in the same process, has no tag or a different one, and a reused PID has a different
+creation time. Each root ref names one instance:
+- Discovery issues the native root ref (`@w`) per HWND and tag, and `find_roots` issues the `@r` per
+  native ref, so a same-HWND replacement is listed under a NEW `@r`. A root ref denotes the instance it
+  was issued for; rediscovery never moves an old ref onto the replacement
+- An old `@r`, and every look, wait, focus or action that resolves through it, fails with `root_stale`
+  once its instance is gone; call `find_roots` and observe the new `@r`. A look stays bound to the
+  instance it observed, whatever a later discovery lists
+- A root whose owner, process start or tag cannot be verified at discovery (e.g. a UIPI-protected or
+  exited process) is listed as `unbound` and refused with `root_stale` and a "could not be admitted"
+  message, distinct from the stale-instance message
+- Without a look, the helper requires the exact `rootRef` for `uiaWaitFor` and resolves only that ref's
+  binding, never the latest binding of the HWND
+
 On Windows, `wait_for` and `act_ui` postconditions check the admitted instance before every UIA
 poll. A closed HWND, a different owning PID or process, or a replacement window fails the next poll
 with `root_stale`. Text reads and each wait poll recheck that instance after acquiring the UIA root,
 before walking it, and again after the walk, discarding the result as `root_stale` if a check
-detects drift. These are samples, not continuous monitoring. A text read whose desktop access check
-refuses a closed or reassigned HWND also reports `root_stale`; `coordinate_blocked` means the
-instance still matched. Looks check the instance before capture and discard elements captured
-across a replacement, and focusing a saved root refuses a replacement before raising it. Semantic `act_ui` delivery checks the instance before and after resolving the
-element, not after acquiring the UIA root. An owning process that copies the tag onto its own
-replacement window is not detected.
+detects drift. These are samples, not continuous monitoring. Whenever a live call (desktop access
+check, capture, UIA resolution) fails, the helper samples the instance again before returning, so a
+closed or replaced window reports `root_stale`; `coordinate_blocked` means the instance still matched.
+Looks check the instance before capture, again after waiting for the input lease and after capture,
+and discard elements captured across a replacement. Focusing a saved root rechecks after the lease
+wait, before raising it. Point actions recheck after the lease wait, before delivery. Every ref action
+(semantic pattern, focus for typing, occlusion hit test and coordinate fallback) resolves its UIA
+element through that check: the instance is sampled before acquiring the root, after it and after
+the RuntimeId search, so the element a mutation uses is the one validated.
+
+Limits of the instance tag:
+- It detects NON-ADVERSARIAL replacement, not authenticity. Any process UIPI lets write the window
+  (the owner, or an equal or higher integrity process) can copy the admitted tag onto its own
+  replacement or overwrite it; neither is detected
+- A restarted helper accepts a tag that already exists without writing one, including one a previous
+  helper or another process wrote
+- Two helper processes (e.g. two Pi sessions) are not serialized against each other; concurrent first
+  admissions of one window can leave one helper's binding stale, which fails closed with `root_stale`
+- The tag binds the top-level HWND. For a frame-hosted app (e.g. `ApplicationFrameHost.exe`) it binds
+  the host window, not the embedded app, so replacing only the hosted content is not detected
+- Checks are samples between steps; a replacement in the instant between the last check and a
+  mutation is not detected
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
@@ -2835,7 +2862,7 @@ description: 'Windows backend contract, UIA behavior, refs, actions, deltas, pro
 
 The TypeScript Windows backend is intentionally stateless. It forwards root-forest seam calls to the Rust helper:
 
-- `listRoots({ pid? })`: cheap HWND metadata only. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
+- `listRoots({ pid? })`: cheap HWND metadata only, plus `instanceUnavailable` when the window could not be bound to a verifiable instance. `rootRef` is issued per HWND and instance tag. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
 - `look`: atomic observe result with `lookId`, outline, window payload (`rootRef`, `kind`, frame, scale), and optional image. Menu/outline-only roots omit `image`; coordinate acts against those roots fail with `coordinate_unavailable_for_root`.
 - `act`: forwards the typed `PlatformActRequest` whole. The helper validates `lookId`, resolves refs from helper-owned look state, applies policy, executes, and returns honest outcome/evidence plus `performed.deltaSource` and shallow `rootDelta`.
 - `uiaReadText` / `uiaWaitFor`: helper-side live UIA reads/polls. No TypeScript screenshot polling or module-level element state is used.
@@ -2860,7 +2887,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND is still the window instance admitted by `listRoots` or the owning look (PID, process creation time and instance tag) before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`, and `waitFor` without `lookId` also requires the exact `rootRef`; each read and poll checks that the HWND is still the window instance that ref or the owning look was issued for (PID, process creation time and instance tag) before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 

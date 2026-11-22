@@ -55,17 +55,18 @@ pub fn extract_elements(store: &mut RefStore, hwnd: isize) -> Vec<Value> {
 pub fn extract_elements_from(
     store: &mut RefStore,
     hwnd: isize,
+    instance: crate::window::WindowInstance,
     runtime_id: &[i32],
     automation_id: &str,
 ) -> Result<Vec<Value>, String> {
     #[cfg(not(windows))]
     {
-        let _ = (store, hwnd, runtime_id, automation_id);
+        let _ = (store, hwnd, instance, runtime_id, automation_id);
         Ok(Vec::new())
     }
     #[cfg(windows)]
     {
-        native::uia_extract_from(store, hwnd, runtime_id, automation_id)
+        native::uia_extract_from(store, hwnd, instance, runtime_id, automation_id)
     }
 }
 
@@ -250,6 +251,7 @@ mod native {
         ElementAnnotationSignals,
     };
     use crate::refs::{NativeHandle, RefStore};
+    use crate::window::WindowInstance;
     use crate::{ErrorCode, ProtocolError};
 
     use windows::core::{Interface, BSTR};
@@ -373,10 +375,11 @@ mod native {
     pub fn uia_extract_from(
         store: &mut RefStore,
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<Vec<Value>, String> {
-        let (_com, uia, root) = resolve(hwnd, runtime_id_target, automation_id)?;
+        let (_com, uia, root) = resolve(hwnd, instance, runtime_id_target, automation_id)?;
         extract_from_root(store, &uia, &root)
     }
 
@@ -709,10 +712,11 @@ mod native {
 
     pub fn snapshot(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<ElementSnapshot, String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        let (_com, _uia, element) = resolve(hwnd, instance, runtime_id_target, automation_id)?;
         ensure_actionable(&element)?;
         // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         let rect = unsafe {
@@ -733,11 +737,12 @@ mod native {
 
     pub fn press(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<PressResult, ProtocolError> {
         let (_com, _uia, element) =
-            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+            resolve(hwnd, instance, runtime_id_target, automation_id).map_err(before_delivery)?;
         ensure_actionable(&element).map_err(before_delivery)?;
         if let Some(pattern) = probe_pattern::<IUIAutomationInvokePattern>(
             &element,
@@ -848,6 +853,8 @@ mod native {
     fn before_delivery(message: String) -> ProtocolError {
         let code = if message == "Element reference is stale" {
             ErrorCode::StaleRef
+        } else if message == crate::window::STALE_INSTANCE {
+            ErrorCode::RootStale
         } else {
             ErrorCode::InternalError
         };
@@ -903,12 +910,13 @@ mod native {
 
     pub fn set_text(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
         text: &str,
     ) -> Result<SetTextResult, ProtocolError> {
         let (_com, _uia, element) =
-            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+            resolve(hwnd, instance, runtime_id_target, automation_id).map_err(before_delivery)?;
         ensure_actionable(&element).map_err(before_delivery)?;
         if let Some(pattern) = probe_pattern::<IUIAutomationValuePattern>(
             &element,
@@ -947,23 +955,16 @@ mod native {
         Ok(SetTextResult::NoPattern)
     }
 
-    pub fn focus(
-        hwnd: isize,
-        runtime_id_target: &[i32],
-        automation_id: &str,
-    ) -> Result<(), ProtocolError> {
-        focus_for_input(hwnd, runtime_id_target, automation_id, false)
-    }
-
     /// Focus and verify the exact control, preserving mutating-call/read-back uncertainty.
     pub fn focus_for_input(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
         for_text: bool,
     ) -> Result<(), ProtocolError> {
         let (_com, _uia, element) =
-            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+            resolve(hwnd, instance, runtime_id_target, automation_id).map_err(before_delivery)?;
         focus_element(&element, for_text)
     }
 
@@ -1003,13 +1004,14 @@ mod native {
 
     pub fn scroll(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
         x: f64,
         y: f64,
     ) -> Result<ScrollResult, ProtocolError> {
         let (_com, _uia, element) =
-            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+            resolve(hwnd, instance, runtime_id_target, automation_id).map_err(before_delivery)?;
         ensure_actionable(&element).map_err(before_delivery)?;
         if let Some(pattern) = probe_pattern::<IUIAutomationScrollPattern>(
             &element,
@@ -1042,13 +1044,14 @@ mod native {
 
     pub fn occlusion_ok(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
         x: f64,
         y: f64,
     ) -> Result<bool, ProtocolError> {
         let (_com, uia, target) =
-            resolve(hwnd, runtime_id_target, automation_id).map_err(before_delivery)?;
+            resolve(hwnd, instance, runtime_id_target, automation_id).map_err(before_delivery)?;
         let hit = unsafe {
             uia.ElementFromPoint(POINT {
                 x: x.round() as i32,
@@ -1073,16 +1076,36 @@ mod native {
         )
     }
 
+    /// Resolve the observed element of `hwnd` only while it is the `instance` the
+    /// element was observed in. This is the exact element every caller then reads
+    /// or mutates, so the instance is rechecked after ElementFromHandle and the
+    /// RuntimeId search; a replacement or an error seen across one is refused as
+    /// [`crate::window::STALE_INSTANCE`].
     fn resolve(
         hwnd: isize,
+        instance: WindowInstance,
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<(ComGuard, IUIAutomation, IUIAutomationElement), String> {
         if runtime_id_target.is_empty() {
             return Err("Element reference is stale".to_owned());
         }
-        let root = acquire_root(hwnd)?;
-        let element = find_in_root(&root, runtime_id_target, automation_id)?;
+        let (root, element) = match super::walk_owned_root(
+            hwnd,
+            instance,
+            crate::window::window_instance,
+            acquire_root,
+            |root| {
+                let element = find_in_root(&root, runtime_id_target, automation_id)?;
+                Ok((root, element))
+            },
+        ) {
+            Ok(resolved) => resolved,
+            Err(super::OwnedWalkError::RootStale) => {
+                return Err(crate::window::STALE_INSTANCE.to_owned())
+            }
+            Err(super::OwnedWalkError::Uia(message)) => return Err(message),
+        };
         let UiaRoot { uia, com, .. } = root;
         Ok((com, uia, element))
     }
@@ -1190,7 +1213,7 @@ mod native {
 
 #[cfg(windows)]
 pub use native::{
-    acquire_root, focus, focus_for_input, live_elements, occlusion_ok, press, read_text_in_root,
+    acquire_root, focus_for_input, live_elements, occlusion_ok, press, read_text_in_root,
     root_elements, scroll, set_text, snapshot, uia_extract, ElementSnapshot, PressResult,
     ScrollResult, SetTextResult, UiaRoot,
 };
@@ -1246,6 +1269,7 @@ pub fn live_elements(_hwnd: isize) -> Result<Vec<Value>, String> {
 #[cfg(not(windows))]
 pub fn snapshot(
     _hwnd: isize,
+    _instance: crate::window::WindowInstance,
     _runtime_id: &[i32],
     _automation_id: &str,
 ) -> Result<ElementSnapshot, String> {
@@ -1254,6 +1278,7 @@ pub fn snapshot(
 #[cfg(not(windows))]
 pub fn press(
     _hwnd: isize,
+    _instance: crate::window::WindowInstance,
     _runtime_id: &[i32],
     _automation_id: &str,
 ) -> Result<PressResult, crate::ProtocolError> {
@@ -1265,6 +1290,7 @@ pub fn press(
 #[cfg(not(windows))]
 pub fn set_text(
     _hwnd: isize,
+    _instance: crate::window::WindowInstance,
     _runtime_id: &[i32],
     _automation_id: &str,
     _text: &str,
@@ -1278,6 +1304,7 @@ pub fn set_text(
 #[cfg(not(windows))]
 pub fn focus_for_input(
     _hwnd: isize,
+    _instance: crate::window::WindowInstance,
     _runtime_id: &[i32],
     _automation_id: &str,
     _for_text: bool,
@@ -1288,19 +1315,9 @@ pub fn focus_for_input(
     ))
 }
 #[cfg(not(windows))]
-pub fn focus(
-    _hwnd: isize,
-    _runtime_id: &[i32],
-    _automation_id: &str,
-) -> Result<(), crate::ProtocolError> {
-    Err(crate::ProtocolError::new(
-        "UIA is only supported on Windows",
-        crate::ErrorCode::UnsupportedPlatform,
-    ))
-}
-#[cfg(not(windows))]
 pub fn scroll(
     _hwnd: isize,
+    _instance: crate::window::WindowInstance,
     _runtime_id: &[i32],
     _automation_id: &str,
     _x: f64,
@@ -1314,6 +1331,7 @@ pub fn scroll(
 #[cfg(not(windows))]
 pub fn occlusion_ok(
     _hwnd: isize,
+    _instance: crate::window::WindowInstance,
     _runtime_id: &[i32],
     _automation_id: &str,
     _x: f64,
@@ -1373,6 +1391,32 @@ mod unit_tests {
             result,
             Err(OwnedWalkError::Uia("coordinate_blocked".to_owned()))
         );
+    }
+
+    #[test]
+    fn owned_walk_never_returns_an_element_resolved_across_a_replacement() {
+        // `resolve` acquires the root and finds the delivery element through this walk:
+        // a replacement at the second sample (after ElementFromHandle) or the last one
+        // (after the RuntimeId search) refuses the element every mutation would use.
+        for (owners, searched) in [
+            ([Some(7), Some(8), Some(7)], false),
+            ([Some(7), Some(7), None], true),
+        ] {
+            let mut owners = owners.into_iter();
+            let mut search_ran = false;
+            let result = walk_owned_root(
+                22,
+                7,
+                |_| owners.next().expect("unexpected owner check"),
+                |_| Ok("root"),
+                |root| {
+                    search_ran = true;
+                    Ok((root, "element"))
+                },
+            );
+            assert_eq!(result, Err(OwnedWalkError::RootStale));
+            assert_eq!(search_ran, searched);
+        }
     }
 
     // -- Role mapping (cross-platform) --------------------------------------

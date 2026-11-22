@@ -107,3 +107,70 @@ test("Windows live observation commands carry the admitted PID and HWND", async 
 	expect(result.details).toHaveProperty("execution");
 	expect(result.details).not.toHaveProperty("execution.verification");
 });
+
+test("A Windows root ref denotes one window instance, never a same-HWND replacement", async ({ onTestFinished }) => {
+	const original = { ...currentPlatformBackend };
+	const cwd = makeTestTempDir("cu-observation-instance-", onTestFinished);
+	onTestFinished(() => {
+		Object.assign(currentPlatformBackend, original);
+		vi.restoreAllMocks();
+		vi.unstubAllEnvs();
+	});
+	vi.stubEnv("PI_CODING_AGENT_DIR", cwd);
+	vi.stubEnv("PI_COMPUTER_USE_BLOCKED_APPS", undefined);
+	vi.stubEnv("PI_COMPUTER_USE_CDP_PORT", undefined);
+	Object.assign(currentPlatformBackend, platformBackendForRuntime("win32"), {
+		ensureReady: async (_ctx: unknown, state: unknown) => state,
+	});
+	// The helper issues a new native ref when a window reusing the HWND and PID replaces the original.
+	let listed: Record<string, unknown> = { ...root, rootRef: "@w1" };
+	const command = vi.spyOn(windowsHelper, "command").mockImplementation(async (name, args) => {
+		switch (name) {
+			case "listRoots":
+				return { roots: [listed] };
+			case "look":
+				return {
+					lookId: `look-${String(args?.rootRef)}`,
+					window: { rootRef: args?.rootRef, framePoints: { x: 0, y: 0, w: 100, h: 100 }, scaleFactor: 1 },
+					outline: { ref: "native-window", role: "window", title: "Notes", children: [] },
+					readText: { requested: false, executed: false },
+				};
+			default:
+				throw new Error(`Unexpected helper command ${name}`);
+		}
+	});
+	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } } as Parameters<
+		typeof executeFind
+	>[4];
+	const observe = async (rootRef: string) =>
+		await executeObserve("t", { root: rootRef, mode: "semantic" }, undefined, undefined, ctx);
+	const originalRef = (await executeFind("t", {}, undefined, undefined, ctx)).details.windows[0].windowRef;
+	await observe(originalRef);
+
+	listed = { ...root, rootRef: "@w2" };
+	await expect(observe(originalRef)).rejects.toMatchObject({
+		code: "root_stale",
+		message: expect.stringContaining("original owner and window instance"),
+	});
+	const looks = () => command.mock.calls.filter(([name]) => name === "look").map(([, args]) => args?.rootRef);
+	expect(looks()).toEqual(["@w1"]);
+
+	const replacement = (await executeFind("t", {}, undefined, undefined, ctx)).details.windows[0];
+	expect(replacement.windowRef).not.toBe(originalRef);
+	expect(replacement.nativeWindowRef).toBe("@w2");
+	await observe(replacement.windowRef);
+	expect(looks()).toEqual(["@w1", "@w2"]);
+	// Rediscovery never revives the old ref onto the replacement.
+	await expect(observe(originalRef)).rejects.toMatchObject({ code: "root_stale" });
+
+	// A root the helper could not bind is listed as unbound and refused, distinctly from a stale one.
+	listed = { ...root, rootRef: "@w3", instanceUnavailable: true };
+	const unbound = await executeFind("t", {}, undefined, undefined, ctx);
+	expect(unbound.details.windows[0]).toMatchObject({ nativeWindowRef: "@w3", instanceUnavailable: true });
+	expect(JSON.stringify(unbound.content)).toContain("unbound");
+	await expect(observe(unbound.details.windows[0].windowRef)).rejects.toMatchObject({
+		code: "root_stale",
+		message: expect.stringContaining("could not be admitted"),
+	});
+	expect(looks()).toEqual(["@w1", "@w2"]);
+});
