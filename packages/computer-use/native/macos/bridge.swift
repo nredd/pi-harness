@@ -820,7 +820,8 @@ struct NativeInputSink {
 	let keyboardInputSource: () -> KeyboardInputSource
 	var checkCancellation: (() throws -> Void)?
 	/// Post-time stamp for pointer events, in `CGEventTimestamp` units (nanoseconds since startup, paused in sleep).
-	var eventTimestamp: () -> CGEventTimestamp = { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
+	/// No default: every sink, including test fakes, names its clock.
+	let eventTimestamp: () -> CGEventTimestamp
 
 	func checkDragCancellation() throws {
 		try Task.checkCancellation()
@@ -860,7 +861,8 @@ struct NativeInputSink {
 		},
 		postHID: { event, _ in event.post(tap: .cghidEventTap) },
 		sleep: { _ = usleep($0) },
-		keyboardInputSource: currentKeyboardInputSource
+		keyboardInputSource: currentKeyboardInputSource,
+		eventTimestamp: { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
 	)
 }
 

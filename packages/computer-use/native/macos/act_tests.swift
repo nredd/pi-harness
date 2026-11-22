@@ -618,6 +618,15 @@ private func runEventAssertions() throws {
         var flags: CGEventFlags = []
         var text: String = ""
         var horizontal: Int64 = 0
+        /// `CGEvent.timestamp` at post, and the fake-clock stamp issued for this post (nil when none was).
+        var stamp: CGEventTimestamp = 0
+        var issued: CGEventTimestamp?
+
+        /// Shape only: stamps are clock values, asserted per post by `stampedAtPost`.
+        static func == (lhs: Event, rhs: Event) -> Bool {
+            lhs.type == rhs.type && lhs.pid == rhs.pid && lhs.delivery == rhs.delivery && lhs.point == rhs.point
+                && lhs.data == rhs.data && lhs.flags == rhs.flags && lhs.text == rhs.text && lhs.horizontal == rhs.horizontal
+        }
     }
     var events: [Event] = []
     var delays: [useconds_t] = []
@@ -634,13 +643,23 @@ private func runEventAssertions() throws {
     var onInputSleep: () -> Void = {}
     var onHIDPrepare: () -> Bool = { false }
     var onHIDPost: (CGEventType) -> Void = { _ in }
-    // Fake monotonic clock shared by allocation and post, so a stale creation stamp sorts before later events.
+    // Fake monotonic clock shared by allocation and post. Every tick is unique, so a creation stamp can never
+    // equal the stamp issued for a post: each pointer event must carry the stamp issued for its own post.
     var clockTicks: CGEventTimestamp = 0
     func tick() -> CGEventTimestamp { clockTicks += 1; return clockTicks }
-    var stamps: [CGEventTimestamp] = []
+    var pendingStamp: CGEventTimestamp?
+    func issueStamp() -> CGEventTimestamp {
+        expect(pendingStamp == nil, "each post-time stamp is consumed by its own post before the next is issued")
+        let stamp = tick()
+        pendingStamp = stamp
+        return stamp
+    }
+    func stampedAtPost(_ events: [Event]) -> Bool {
+        !events.isEmpty && events.allSatisfy { $0.issued != nil && $0.stamp == $0.issued }
+    }
     func record(_ event: CGEvent, pid: Int32, delivery: String) {
-        stamps.append(event.timestamp)
-        var entry = Event(type: event.type, pid: pid, delivery: delivery)
+        var entry = Event(type: event.type, pid: pid, delivery: delivery, stamp: event.timestamp, issued: pendingStamp)
+        pendingStamp = nil
         switch event.type {
         case .keyDown, .keyUp:
             entry.data = event.getIntegerValueField(.keyboardEventKeycode)
@@ -672,7 +691,9 @@ private func runEventAssertions() throws {
             return event
         },
         wheelEvent: { vertical, horizontal in
-            rejectWheel ? nil : NativeInputSink.createWheelEvent(vertical, horizontal)
+            let event = rejectWheel ? nil : NativeInputSink.createWheelEvent(vertical, horizontal)
+            event?.timestamp = tick()
+            return event
         },
         keyEvent: { code, down in
             keyAllocations += 1
@@ -689,7 +710,7 @@ private func runEventAssertions() throws {
         checkCancellation: {
             if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
         },
-        eventTimestamp: tick
+        eventTimestamp: issueStamp
     )
     let world = Bridge(activityGlow: nil, inputSink: sink, physicalInputLock: inputLock).actionWorld()
     let start = CGPoint(x: 100, y: 200)
@@ -700,10 +721,11 @@ private func runEventAssertions() throws {
     }
     try world.postMouseClick(start, 1234, .right, 2, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.rightMouseDown, start, 1), mouse(.rightMouseUp, start, 1), mouse(.rightMouseDown, start, 2), mouse(.rightMouseUp, start, 2)] && delays == [12_000, 70_000, 12_000], "PID double click emits ordered pairs with click-state increments and delays")
-    events = []; delays = []; stamps = []
+    expect(stampedAtPost(events), "every PID double-click event carries the stamp issued for its own post: \(events.map { ($0.stamp, $0.issued) })")
+    events = []; delays = []
     try world.postMouseDrag([start, end], 1234, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
-    expect(stamps.count == 5 && zip(stamps, stamps.dropFirst()).allSatisfy { $0 < $1 }, "preallocated release is restamped at post, after the down and every drag step: \(stamps)")
+    expect(stampedAtPost(events), "every drag event, including the preallocated release, carries the stamp issued for its own post: \(events.map { ($0.stamp, $0.issued) })")
     events = []; delays = []
     let dragFixture = ActFixture()
     dragFixture.postDrag = world.postMouseDrag
@@ -807,6 +829,7 @@ private func runEventAssertions() throws {
     events = []; delays = []
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
+    expect(stampedAtPost(events), "HID move and wheel events carry the stamp issued for their own post: \(events.map { ($0.stamp, $0.issued) })")
     events = []; delays = []
     try world.postKeyPress([" Cmd + Shift + a ", "tab"], 1234, "pid", { _, _ in })
     let flags: CGEventFlags = [.maskCommand, .maskShift]
