@@ -35,7 +35,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { nanoid } from "nanoid";
 import { Type } from "typebox";
-import { abortable } from "./abortable.ts";
 import { hasAgentBadge, renderAgentName } from "./agent-color.ts";
 import {
 	buildNewAgentFile,
@@ -56,21 +55,19 @@ import {
 	markConsumed,
 	type OwnedPending,
 } from "./agent-manager.ts";
+import { agentNotFound, createAgentLookup } from "./agent-ref.ts";
 import { rosterJson } from "./agent-roster.ts";
 import {
 	childSessionDir,
-	getAgentConversation,
 	getDefaultMaxTurns,
 	getGraceTurns,
 	getRememberAgents,
 	normalizeMaxTurns,
 	resolveEffectiveMaxTurns,
-	resolveRunTurnCap,
 	SUBAGENT_TOOL_NAMES,
 	setDefaultMaxTurns,
 	setGraceTurns,
 	setRememberAgents,
-	steerAgent,
 } from "./agent-runner.ts";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.ts";
 import {
@@ -90,7 +87,8 @@ import {
 } from "./agent-types.ts";
 import { inChildSessionContext } from "./child-context.ts";
 import { type Clock, realClock } from "./clock.ts";
-import { CompletionOutbox, NOTIFICATION_HOLD_MS } from "./completion-outbox.ts";
+import { CompletionOutbox } from "./completion-outbox.ts";
+import { createStopActions, isLiveWorkflow, registerControlTools } from "./control-tools.ts";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.ts";
 import { loadCustomAgents } from "./custom-agents.ts";
 import {
@@ -122,6 +120,8 @@ import {
 	resolveCwdParam,
 	resolveTurnCap,
 } from "./invocation-config.ts";
+import { createActivityTracker, createAgentActivityMap } from "./launch/activity.ts";
+import { couldNotResume, createTopLevelLaunch, resumeTurnLimit } from "./launch/top-level.ts";
 import {
 	describeMention,
 	handleBase,
@@ -131,7 +131,6 @@ import {
 	stripAgentPrefix,
 } from "./mention.ts";
 import { runMentionClone } from "./mention-clone.ts";
-import { applyModelCallEvent, type ModelCallEvent } from "./model-call.ts";
 import { explainModel, modelConfigurationWarnings } from "./model-explanation.ts";
 import { type ModelFallback, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.ts";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.ts";
@@ -160,10 +159,7 @@ import {
 	renderNotice,
 } from "./notification-result.ts";
 import {
-	appendModelFallbackEntry,
-	appendModelTierEntry,
 	createOutputFilePath,
-	ensureOutputFile,
 	getOutputTranscriptDefault,
 	retainReferencedTranscripts,
 	schedulePrune,
@@ -182,14 +178,7 @@ import {
 	setPackageWorkflowsGate,
 	setProjectTrusted,
 } from "./package-resources.ts";
-import {
-	answerPlanGateQueries,
-	PLAN_PARK_REFUSAL,
-	PLAN_SCHEDULE_REFUSAL,
-	planningNow,
-	planSteerBlocked,
-	planSteerRefusal,
-} from "./plan-mode-children.ts";
+import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow } from "./plan-mode-children.ts";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
 import { savedAgentNote } from "./saved-agent-record.ts";
@@ -214,7 +203,6 @@ import type {
 	AgentInvocation,
 	AgentMentionMode,
 	AgentRecord,
-	AgentTombstone,
 	JoinMode,
 	NotificationDetails,
 	SubagentType,
@@ -297,60 +285,6 @@ function errorResult(msg: string) {
 function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): string {
 	const t = getLifetimeTotal(o.lifetimeUsage);
 	return t > 0 ? formatTokens(t) : "";
-}
-
-/**
- * Create an AgentActivity state and spawn callbacks for tracking tool usage.
- * Used by both foreground and background paths to avoid duplication.
- */
-function createActivityTracker(maxTurns: number | undefined, onStreamUpdate: (() => void) | undefined, clock: Clock) {
-	const state: AgentActivity = {
-		activeTools: new Map(),
-		toolUses: 0,
-		turnCount: 1,
-		maxTurns,
-		responseText: "",
-		session: undefined,
-	};
-
-	const callbacks = {
-		onToolActivity: (activity: { type: "start" | "end"; toolName: string }) => {
-			if (activity.type === "start") {
-				state.activeTools.set(`${activity.toolName}_${Date.now()}`, activity.toolName);
-			} else {
-				for (const [key, name] of state.activeTools) {
-					if (name === activity.toolName) {
-						state.activeTools.delete(key);
-						break;
-					}
-				}
-				state.toolUses++;
-			}
-			onStreamUpdate?.();
-		},
-		onTextDelta: (_delta: string, fullText: string) => {
-			state.responseText = fullText;
-			onStreamUpdate?.();
-		},
-		onTurnEnd: (turnCount: number) => {
-			state.turnCount = turnCount;
-			onStreamUpdate?.();
-		},
-		onModelCall: (event: ModelCallEvent) => {
-			state.modelCall = applyModelCallEvent(state.modelCall, event, clock.now());
-			onStreamUpdate?.();
-		},
-		onSessionCreated: (session: any) => {
-			state.session = session;
-		},
-		// Spend is accumulated on the AgentRecord (agent-manager), which is what
-		// every surface reads; this callback exists here only to repaint on it.
-		onAssistantUsage: (_usage: LifetimeUsage) => {
-			onStreamUpdate?.();
-		},
-	};
-
-	return { state, callbacks };
 }
 
 /**
@@ -706,7 +640,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	let canonicalAgentsLoaded = false;
 
 	// ---- Agent activity tracking + widget ----
-	const agentActivity = new Map<string, AgentActivity>();
+	const agentActivity = createAgentActivityMap();
 
 	// ---- Usage reporting (both off by default; see SubagentsSettings) ----
 	/** Attach subagent spend to tool results, so the parent session counts it. */
@@ -853,9 +787,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		const withChars = notices.filter((n) => n.chars !== undefined);
 		return withChars.length > 0 ? Object.fromEntries(withChars.map((n) => [n.id, n.chars])) : undefined;
 	}
-	// A queued result wait must observe completion before its held notification
-	// can fire, so successful waits can still suppress that redundant nudge.
-	const QUEUE_WAIT_POLL_MS = Math.floor(NOTIFICATION_HOLD_MS / 4);
 
 	function sendIndividualNudge(record: AgentRecord) {
 		agentActivity.delete(record.id);
@@ -1324,108 +1255,25 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	// session's entry. The first activation (the root session) wins; child
 	// activations leave it alone.
 	const MANAGER_KEY = Symbol.for("pi-subagents:manager");
-	// Process-external callers may supply arbitrary options. Nested ownership and
-	// config-root metadata are internal capabilities issued only by scoped tools.
-	/**
-	 * Resolve the agent type and spawn. Trusts its options — every caller must
-	 * either be in-process or have gone through `spawnTopLevel` first.
-	 */
-	const spawnResolved = (piRef: any, ctxRef: any, type: string, prompt: string, options: any) => {
-		// Cross-extension callers get the same dispatch contract as the LLM (#183).
-		// The RPC layer already throws for an unresolvable model rather than falling
-		// back silently; a bad agent type should not be quieter. Throws become error
-		// envelopes at the RPC boundary. Reload first so an agent file added mid
-		// session is spawnable here too, not only through the Agent tool.
-		reloadCustomAgents();
-		const dispatch = resolveSpawnType(type);
-		if (!dispatch.ok) throw new Error(dispatch.message);
-		// Every programmatic spawn lands here — cross-extension RPC, both `@handle`
-		// mention paths, and the `Symbol.for("pi-subagents:manager")` registry — and
-		// none came through the Agent tool, which is where the UI activity tracker is
-		// otherwise created. Without one the widget and FleetView have no tool name
-		// and no turn count, so the row reads `thinking…` for the agent's whole life
-		// while the header's tool-use count climbs beside it (#181). Double-tracking
-		// is not possible: the Agent tool calls `manager.spawn` directly. The tracker
-		// callbacks are the funnel's own — a caller's are not honoured, since a
-		// half-wired tracker renders worse than none.
-		//
-		// The turn limit is resolved rather than read off `options`, which a mention
-		// spawn deliberately omits so the agent's own config can decide: a tracker
-		// built with `undefined` renders `↻3` where the Agent tool renders `↻3≤20`.
-		// Like the tool's own, it is a prediction — editing the agent file mid-run
-		// leaves the displayed ceiling stale.
-		const maxTurns = resolveTurnCap(options?.maxTurns, getAgentConfig(dispatch.type)?.maxTurns);
-		const { state, callbacks } = createActivityTracker(
-			// `maxTurns` is already the tighter caller/definition cap: only the default and 0 remain.
-			resolveEffectiveMaxTurns(maxTurns),
-			undefined,
-			clock,
-		);
-		// Repaints are left to the manager's `onStart` callback, which already starts
-		// the widget/fleet timers for agents that enter this way.
-		const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { ...options, maxTurns, ...callbacks });
-		agentActivity.set(id, state);
-		return id;
-	};
-
-	const spawnTopLevel = (piRef: any, ctxRef: any, type: string, prompt: string, options: any) => {
-		const safeOptions = { ...(options ?? {}) };
-		delete safeOptions.parentAgentId;
-		// Internal too: a forged value would hide an RPC-spawned agent inside
-		// someone else's workflow, and take it out of the concurrency pool with it.
-		delete safeOptions.workflowId;
-		delete safeOptions.rosterWorkflowRun;
-		delete safeOptions.depth;
-		delete safeOptions.maxSubagentDepth;
-		delete safeOptions.configCwd;
-		delete safeOptions.configProjectTrusted;
-		// Also internal: it names a transcript directory, so a forged value would
-		// be a path-traversal primitive.
-		delete safeOptions.rootSessionId;
-		// Worse than rootSessionId: this one names a file to OPEN and replay as a
-		// conversation. Only the mention dispatcher may set it, and only from a
-		// path this extension itself recorded — never from anything a caller sent.
-		delete safeOptions.resumeSessionFile;
-		// Bypasses handle allocation, so a forged value would duplicate a live
-		// agent's name and make `@handle` ambiguous. Same rule: dispatcher only.
-		delete safeOptions.reclaim;
-		// Would make the new agent claim an evicted agent's id on lifecycle events.
-		delete safeOptions.previousId;
-		// Every spawn through here is DETACHED — the caller gets an id back and
-		// awaits nothing. A forged `blocking` would charge it to the foreground
-		// pool and could defer it behind a queue whose gate nobody is holding.
-		delete safeOptions.blocking;
-		// The spawn path's own disclosure; a caller-supplied one could hide a
-		// fallback or invent one. The runner reports the real outcome itself.
-		delete safeOptions.modelFallback;
-		delete safeOptions.modelSelection;
-		delete safeOptions.modelTier;
-		delete safeOptions.previousModelTier;
-		delete safeOptions.previousModelFallback;
-		return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
-	};
-
-	const liveAgentById = (id: string) =>
-		manager.getRecord(id) ?? listAllRunningDetached().find(({ agent }) => agent.record.id === id)?.agent.record;
-
-	/**
-	 * Resolve a tool's `agent_id` as an id OR a handle, so the model addresses
-	 * agents by the same names the user types. Ids are tried first, keeping the
-	 * existing behaviour exact — a handle is only consulted when the string is
-	 * not an id at all. Only live records: a tombstone has nothing to steer and
-	 * no result to read. Callers still enforce the nested-ownership rejection.
-	 */
-	const resolveAgentRef = (ref: string): AgentRecord | undefined => {
-		const byId = manager.getRecord(ref);
-		if (byId) return byId;
-		const resolved = manager.resolveMention(ref);
-		if (resolved?.kind === "live") return resolved.record;
-		// Survivors of a /reload, /new or /resume live in the orphaned manager, so
-		// this fresh one has never heard of them (#330). Same live records, so
-		// reading and steering them work unchanged.
-		const survivors = listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()).map((d) => d.record);
-		return survivors.find((r) => r.id === ref) ?? survivors.find((r) => r.handle === ref || r.alias === ref);
-	};
+	const { spawnTopLevel, reopenEvicted, startBackgroundResume } = createTopLevelLaunch({
+		pi,
+		manager,
+		clock,
+		agentActivity,
+		reloadCustomAgents,
+		savedSessionChecker,
+		getDefaultJoinMode,
+		joinTurnGroup,
+		eventFields,
+		// Registry wiring precedes UI construction; access the UI only on resume.
+		get widget() {
+			return widget;
+		},
+		get fleet() {
+			return fleet;
+		},
+	});
+	const { liveAgentById, resolveAgentRef } = createAgentLookup(manager, () => currentCtx);
 
 	const registryEntry = {
 		waitForAll: () => manager.waitForAll(),
@@ -2083,6 +1931,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	fleet.setParkedSource(
 		() => scheduler.list().filter((job) => job.enabled && job.quotaParked && job.lastStatus !== "running").length,
 	);
+	const stopActions = createStopActions(
+		manager,
+		() => currentCtx,
+		() => workflowTasks,
+	);
+	const { stoppableAgents, stopAllRunning } = stopActions;
 	fleet.setStopAll(stopAllRunning);
 	/** Replay UI-only state from the active branch, like workflow/goal custom snapshots. */
 	function restoreFleetDisclosure(ctx: ExtensionContext): void {
@@ -2254,234 +2108,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				groupJoin.onAgentComplete(record);
 			}
 		}
-	}
-
-	/**
-	 * The turn budget for resuming `record`, from its OWN type — resume ignores
-	 * `subagent_type`. Use the tighter of its definition and the requested
-	 * (or original invocation) cap, falling back to the project default (#368).
-	 */
-	function resumeTurnLimit(record: AgentRecord, explicit?: number): number | undefined {
-		// Preserve 0 until the runner resolves it: normalizing it here would turn
-		// an explicit unlimited budget into "unspecified" and restore the spawn cap.
-		return resolveRunTurnCap(explicit ?? record.invocation?.maxTurns, getAgentConfig(record.type)?.maxTurns);
-	}
-
-	/** Why `reopenEvicted` did not reopen; `type-unavailable` keeps the tombstone, `session-gone` drops it. */
-	type ReopenFailure =
-		| { reason: "session-gone" }
-		| { reason: "type-unavailable"; type: string }
-		| { reason: "spawn-failed"; message: string };
-
-	/** The one wording both reopen callers use, `target` being `@handle` or `agent "<id>"`. */
-	function couldNotResume(target: string, failure: ReopenFailure): string {
-		switch (failure.reason) {
-			case "session-gone":
-				return `Could not resume ${target} — its session is gone.`;
-			case "type-unavailable":
-				return `Could not resume ${target} — the ${failure.type} agent is no longer available.`;
-			case "spawn-failed":
-				return `Could not resume ${target}: ${failure.message}`;
-		}
-	}
-
-	/**
-	 * Reopen an evicted agent's conversation from its session file. An ordinary
-	 * spawn carrying that file, so the new record picks up the widget, fleet row,
-	 * transcript and completion notification unchanged, and `reclaim` hands it
-	 * back the names the tombstone was holding. Always detached.
-	 *
-	 * Shared by `@handle message` and the Agent tool's `resume` of an evicted id
-	 * (#330); they differ only in how they report the outcome, see
-	 * `couldNotResume`. The evicted id is linked to the new one before the first
-	 * await, so a second resume of the old id in the same turn finds the live
-	 * record instead of reopening the file twice.
-	 */
-	async function reopenEvicted(
-		ctx: ExtensionContext,
-		entry: AgentTombstone,
-		prompt: string,
-		opts: { maxTurns?: number } = {},
-	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
-		const saved = manager.getEvictedNote(entry.id);
-		if (saved?.fromSavedSession) {
-			const checked = savedSessionChecker(ctx)(saved, saved.sessionFile!);
-			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
-			entry = { ...entry, sessionFile: checked.file };
-		}
-		// Checked here rather than left to SessionManager.open: that runs inside
-		// runAgent, whose rejection lands on the record as an agent error, not in
-		// the catch below. A `/new` in another pi window or a manual delete makes
-		// the conversation unrecoverable (Claude Code's `not_reachable`), so drop
-		// the entry — a row that can only ever fail is worse than none — and say
-		// so rather than quietly sending this message to an unrelated agent.
-		if (!existsSync(entry.sessionFile)) {
-			manager.dropTombstone(entry.handle);
-			return { ok: false, failure: { reason: "session-gone" } };
-		}
-
-		// The Agent tool deliberately falls back to general-purpose for a type it
-		// cannot resolve (#183), which covers a deleted file AND a merely
-		// disabled one. A resume must not inherit that: reopening this
-		// conversation under a different agent's prompt and tools is not
-		// continuing it, and the new record would re-tombstone under the
-		// substitute, so the handle would never find its way back.
-		reloadCustomAgents();
-		const dispatch = resolveSpawnType(entry.type);
-		if (!dispatch.ok || dispatch.fellBackFrom !== undefined) {
-			// The tombstone stays: re-enabling the agent makes the handle work
-			// again, which a drop would foreclose.
-			return { ok: false, failure: { reason: "type-unavailable", type: entry.type } };
-		}
-
-		let id: string | undefined;
-		try {
-			// spawnResolved, not spawnTopLevel: the latter strips
-			// `resumeSessionFile` and `reclaim` as untrusted. This path is the
-			// exception — both come from a tombstone this extension wrote.
-			id = spawnResolved(pi, ctx, dispatch.type, prompt, {
-				description: entry.description,
-				maxTurns: opts.maxTurns,
-				reclaim: { handle: entry.handle, alias: entry.alias },
-				previousId: entry.id,
-				resumeSessionFile: entry.sessionFile,
-				// Historical disclosures never replace the continuation's current selection.
-				...(entry.modelFallback ? { previousModelFallback: entry.modelFallback } : {}),
-				...(entry.modelTier ? { previousModelTier: entry.modelTier } : {}),
-				isBackground: true,
-			});
-			manager.linkSuccessor(entry.id, id);
-			// The agent may still be starting — wait, so a startup failure lands in
-			// the catch below instead of being announced as a resume.
-			await manager.awaitStartup(id);
-			// The tombstone deliberately stays. `resolveMention` prefers the live
-			// record holding these same names, so it cannot shadow the resume — and
-			// if this run dies before establishing its own session, the original
-			// transcript is still the right thing for the next mention to reopen.
-			// Once the resumed record is evicted it overwrites this entry in place,
-			// keyed by the same handle, so nothing accumulates.
-			return { ok: true, id };
-		} catch (err) {
-			// The type is already settled above, so what is left is a spawn-time
-			// failure: a strict worktree-isolation error, an unusable cwd.
-			// A run that never started is no successor: the old id reopens again next time.
-			if (id !== undefined) manager.unlinkSuccessor(entry.id);
-			return { ok: false, failure: { reason: "spawn-failed", message: errorMessage(err) } };
-		}
-	}
-
-	/**
-	 * Launch a detached resume of an existing agent and wire everything a
-	 * re-running agent needs: transcript anchoring, activity tracking, join-mode
-	 * batching, the widget/fleet refresh, and the `subagents:created` event.
-	 *
-	 * Shared by the Agent tool's `resume` + `run_in_background` branch and the
-	 * `@handle message` prompt mention — they differ only in how they report the
-	 * outcome. Returns the record, or undefined when the manager refused because
-	 * the agent is still running (see AgentManager.resume).
-	 *
-	 * Callers must have already established that the record has a session.
-	 */
-	async function startBackgroundResume(
-		ctx: ExtensionContext,
-		existing: AgentRecord,
-		prompt: string,
-		opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
-	): Promise<AgentRecord | undefined> {
-		const id = existing.id;
-		const priorSettleSeq = existing.settleSeq;
-		const resumeSeq = manager.nextSequence();
-		// A resume always runs detached, and a detached run joins by the default mode.
-		const joinMode = defaultJoinMode;
-		// Assigned unconditionally: the completion notification carries this as
-		// `<tool-use-id>`, so a mention-resume (which passes none) has to CLEAR the
-		// id left by the spawn that created the record. Keeping it would point the
-		// orchestrator's new result at a tool call that was answered runs ago.
-		existing.toolCallId = opts.toolCallId;
-		existing.joinMode = joinMode;
-		// Reuse the agent's transcript rather than starting a fresh one: the
-		// path is deterministic per agent+session, so writing an initial entry
-		// would truncate the previous run's turns (see ensureOutputFile).
-		if (opts.outputTranscript) {
-			// Keep a transcript that still exists where it is: an ENOSPC/EROFS retry (#900) may have
-			// relocated it under the temp root, and a recomputed path would start an empty file elsewhere.
-			if (!existing.outputFile || !existsSync(existing.outputFile)) {
-				existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
-			}
-			ensureOutputFile(existing.outputFile);
-			// A fresh transcript for a later resume must still say what the agent ran on.
-			if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
-			if (existing.modelTier) appendModelTierEntry(existing.outputFile, id, existing.modelTier);
-		}
-		// Anchor streaming past the turns already on disk, captured BEFORE the
-		// run starts. The resumed prompt lands as an ordinary user message at
-		// this index, so it is written exactly once.
-		// Both callers resume only a record that still holds its session.
-		const transcriptAnchor = existing.session!.messages.length;
-
-		const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(
-			normalizeMaxTurns(opts.maxTurns),
-			undefined,
-			clock,
-		);
-		// resumeAgent has no onSessionCreated — the session predates this run —
-		// so seed it directly, or the widget shows no context % for the agent.
-		bgState.session = existing.session;
-
-		// No `signal`: a background spawn deliberately omits it, and a detached
-		// resume must behave the same. Passing it would abort this agent when
-		// the parent turn is interrupted (user Esc), while agents started with
-		// run_in_background in that same turn keep going.
-		const record = await manager.resume(id, prompt, undefined, {
-			isBackground: true,
-			maxTurns: opts.maxTurns,
-			onTurnEnd: bgCallbacks.onTurnEnd,
-			onTextDelta: bgCallbacks.onTextDelta,
-			onModelCall: bgCallbacks.onModelCall,
-			onToolActivity: bgCallbacks.onToolActivity,
-			onAssistantUsage: bgCallbacks.onAssistantUsage,
-			// Fires when the run actually starts — immediately, or on queue
-			// drain. Wiring it here (rather than after resume() returns) means a
-			// resume stopped while still queued never started streaming, so
-			// there is no subscription left behind for a later run to trip over.
-			onStarted: () => {
-				const rec = manager.getRecord(id);
-				if (rec?.session && rec.outputFile) {
-					rec.outputCleanup = streamToOutputFile(rec.session, rec.outputFile, id, ctx.cwd, transcriptAnchor);
-				}
-			},
-		});
-		if (!record) return undefined;
-
-		// Only a resume from an Agent call belongs to that call's turn.
-		if (opts.toolCallId !== undefined) joinTurnGroup(id, joinMode);
-
-		agentActivity.set(id, bgState);
-		// This agent already finished once, so the widget holds a finished-age
-		// for it that is past the linger limit — without clearing it, the
-		// resumed run's ✓/✗ line never renders and the agent just vanishes.
-		widget.markRunning(id);
-		widget.ensureTimer();
-		widget.update();
-		fleet.ensureTimer();
-		fleet.update();
-
-		// Resume ignores subagent_type (the record keeps the type it was
-		// spawned with), so report the record's own identity — a "created"
-		// event carrying the caller's type would re-register the agent under
-		// the wrong one in cross-extension mirrors keyed by id.
-		pi.events.emit(SUBAGENT_CREATED_EVENT, {
-			id,
-			type: existing.type,
-			description: existing.description,
-			isBackground: true,
-			...(record.status === "queued" && priorSettleSeq !== undefined
-				? { queuedAfterSettleSeq: priorSettleSeq, queuedResumeSeq: resumeSeq }
-				: {}),
-			...eventFields(existing),
-		});
-
-		return record;
 	}
 
 	// Grab UI context from first tool execution + clear lingering widget on new turn
@@ -3160,7 +2786,7 @@ Terse command-style prompts produce shallow, generic work.
 									: "no saved session is left to reopen.";
 						const why = note
 							? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}`
-							: agentNotFound(latest);
+							: agentNotFound(manager, latest);
 						return errorResult(`${continued}${why}`);
 					}
 					// The reopen is a fresh detached spawn: nothing can block on it here.
@@ -4128,344 +3754,23 @@ Terse command-style prompts produce shallow, generic work.
 		});
 	}
 
-	/** "Not found", or what became of the agent when its record was evicted. */
-	function agentNotFound(ref: string, withResult = false): string {
-		const note = manager.getEvictedNote(ref);
-		const result = withResult && note ? describeEvictedResult(note) : undefined;
-		return note
-			? describeEvicted(note) + (result ? `\n\n${result}` : "")
-			: `Agent not found: "${ref}". It may have been cleaned up.`;
-	}
-
-	// ---- get_subagent_result tool ----
-
-	registerToolReportingUsage(
-		defineTool({
-			name: SUBAGENT_TOOL_NAMES.GET_RESULT,
-			label: "Get Agent Result",
-			description:
-				"Check status and retrieve a background agent's full result: use it while the agent runs, or when its completion notification says the result was truncated. Use the agent ID returned by Agent.",
-			promptSnippet: "Check status and retrieve results from a background agent",
-			parameters: Type.Object({
-				agent_id: Type.String({
-					description:
-						"The agent ID to check. The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
-				}),
-				wait: Type.Optional(
-					Type.Boolean({
-						description: "If true, wait for the agent to complete before returning. Default: false.",
-					}),
-				),
-				verbose: Type.Optional(
-					Type.Boolean({
-						description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
-					}),
-				),
-			}),
-			execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
-				const latest = manager.latestId(params.agent_id);
-				const record = liveAgentById(latest) ?? resolveAgentRef(latest);
-				if (!record) {
-					const note = manager.getEvictedNote(latest);
-					if (!note) return errorResult(agentNotFound(latest));
-					const diagnostic = agentNotFound(latest, true);
-					if (note.fromSavedSession && (note.status === "running" || note.reopenRefusal))
-						return errorResult(diagnostic);
-					return textResult(diagnostic);
-				}
-				if (!isTopLevelAgent(record)) return errorResult(agentNotFound(latest));
-
-				// Wait for completion if requested. Cancellation stops only this tool
-				// call; the background agent keeps running and remains unconsumed so its
-				// completion notification can still be delivered.
-				// Queued agents have no promise yet (it's created when the queue starts
-				// them), so poll until they leave the queue, then await like a running one.
-				if (params.wait && (record.status === "running" || record.status === "queued")) {
-					while (record.status === "queued") {
-						await abortable(
-							record.startGate ?? new Promise<void>((resolve) => clock.setTimeout(resolve, QUEUE_WAIT_POLL_MS)),
-							signal,
-						);
-					}
-					if (record.promise) await abortable(record.promise, signal);
-				}
-
-				const displayName = getDisplayName(record.type);
-				const duration = formatDuration(record.startedAt, record.completedAt, clock.now());
-				const tokens = formatLifetimeTokens(record);
-				const contextPercent = getSessionContextPercent(record.session);
-				const statsParts = [`Tool uses: ${record.toolUses}`];
-				if (tokens) statsParts.push(tokens);
-				if (showCost) {
-					const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
-					if (costText) statsParts.push(`Cost: ${costText}`);
-				}
-				if (contextPercent !== null) statsParts.push(`Context: ${Math.round(contextPercent)}%`);
-				if (record.compactionCount) statsParts.push(`Compactions: ${record.compactionCount}`);
-				statsParts.push(`Duration: ${duration}`);
-
-				let output =
-					`Agent: ${record.id}\n` +
-					`Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status, record.stoppedBy)} | ${statsParts.join(" | ")}\n` +
-					`Description: ${record.description}\n` +
-					(modelSelectionNote(record) ? `${modelSelectionNote(record)}\n` : "") +
-					`\n`;
-
-				if (record.status === "running") {
-					output += "Agent is still running. Use wait: true or check back later.";
-				} else if (record.status === "error") {
-					output += `Error: ${record.error}${partialOutputSuffix(record)}`;
-				} else {
-					output += record.result?.trim() || "No output.";
-				}
-
-				// Mark result as consumed — suppresses the completion notification
-				if (record.status !== "running" && record.status !== "queued") {
-					markConsumed(record, clock.now());
-					fleet.acknowledgeFailure(record.id);
-					outbox.cancel(record.id);
-				}
-
-				// Verbose: include full conversation
-				if (params.verbose && record.session) {
-					const conversation = getAgentConversation(record.session);
-					if (conversation) {
-						output += `\n\n--- Agent Conversation ---\n${conversation}`;
-					}
-				}
-
-				return textResult(output);
-			},
-		}),
-	);
-
-	// ---- steer_subagent tool ----
-
-	registerToolReportingUsage(
-		defineTool({
-			name: SUBAGENT_TOOL_NAMES.STEER,
-			label: "Steer Agent",
-			description:
-				"Send a message to an agent. A running agent is interrupted after its current tool execution and the message is injected into its conversation, " +
-				"allowing you to redirect its work mid-run. A queued agent gets the message when it starts. A finished agent is resumed in the background " +
-				"with its full history and the message as its next prompt, exactly like Agent's resume; you will be notified when it completes. " +
-				"A saved conversation can also reopen after a process restart. A live stopped record is not resumed. To end an agent's run, use stop_subagent: a steer is read only after its current tool call, and the agent may ignore it.",
-			promptSnippet: "Send a message to a background agent: steer it mid-run, or resume it once finished",
-			parameters: Type.Object({
-				agent_id: Type.String({
-					description:
-						"The agent ID to message. The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
-				}),
-				message: Type.String({
-					description: "The message to send. This will appear as a user message in the agent's conversation.",
-				}),
-			}),
-			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
-				// An evicted id that was reopened answers as the record it continues under (#330).
-				const latest = manager.latestId(params.agent_id);
-				const record = resolveAgentRef(latest);
-				if (record && !isTopLevelAgent(record)) return errorResult(agentNotFound(params.agent_id));
-				if (record?.status !== "running" && record?.status !== "queued") {
-					// Finished: continue it, as Claude Code's SendMessage does. An evicted
-					// record is known only by its note; Agent's resume reopens its session
-					// from disk or explains why it cannot.
-					const finished = record ?? manager.getEvictedNote(latest);
-					if (!finished) return errorResult(agentNotFound(params.agent_id));
-					const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
-					if (finished.status === "stopped" && !historical) {
-						return errorResult(
-							`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`,
-						);
-					}
-					// The Agent tool's own resume path, not a copy: same reopen, turn
-					// budget, transcript and result. `subagent_type` is the record's own,
-					// so its frontmatter governs as it does for an `@handle` resume.
-					return agentTool.execute(
-						toolCallId,
-						{
-							resume: latest === params.agent_id ? finished.id : params.agent_id,
-							prompt: params.message,
-							description: finished.description,
-							subagent_type: finished.type,
-							run_in_background: true,
-						},
-						signal,
-						onUpdate,
-						ctx,
-					);
-				}
-				// Running or queued under no Plan policy: a steer from a planning parent would drive edits.
-				if (planSteerBlocked(record, pi.events)) return errorResult(planSteerRefusal(record.id));
-				if (!record.session) {
-					// Queued for a concurrency slot, or running with its session still
-					// being built: either way the manager flushes `pendingSteers` into the
-					// session the moment it exists, ahead of the first turn.
-					if (!record.pendingSteers) record.pendingSteers = [];
-					record.pendingSteers.push(params.message);
-					pi.events.emit("subagents:steered", { id: record.id, message: params.message });
-					return textResult(
-						record.status === "queued"
-							? `Steering message queued for agent ${record.id} (status: queued). It will be delivered when the agent starts.`
-							: `Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`,
-					);
-				}
-
-				try {
-					await steerAgent(record.session, params.message);
-					pi.events.emit("subagents:steered", { id: record.id, message: params.message });
-					const tokens = formatLifetimeTokens(record);
-					const contextPercent = getSessionContextPercent(record.session);
-					const stateParts: string[] = [];
-					if (tokens) stateParts.push(tokens);
-					if (showCost) {
-						const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
-						if (costText) stateParts.push(costText);
-					}
-					stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
-					if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
-					if (record.compactionCount)
-						stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
-					return textResult(
-						`Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +
-							`Current state: ${stateParts.join(" · ")}`,
-					);
-				} catch (err) {
-					return errorResult(`Failed to steer agent: ${errorMessage(err)}`);
-				}
-			},
-		}),
-	);
-
-	// ---- stop_subagent tool ----
-
-	/** A workflow run a stop can still reach: running or paused, not already told to stop. */
-	const isLiveWorkflow = (task: WorkflowTask) =>
-		(task.status === "running" || task.status === "paused") && !task.abortController.signal.aborted;
-
-	/** Survivors of a session switch, still running in the orphaned manager (#330). */
-	const runningSurvivors = () => listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.());
-
-	/**
-	 * Agents a stop can reach: this session's own running or queued top-level
-	 * agents, then survivors. Never a nested or workflow child: those belong to
-	 * their owner, which stops them with itself (#446's ownership invariant).
-	 */
-	function stoppableAgents(): AgentRecord[] {
-		const own = manager
-			.listAgents()
-			.filter((r) => isTopLevelAgent(r) && (r.status === "running" || r.status === "queued"));
-		return [
-			...own,
-			...runningSurvivors()
-				.map((d) => d.record)
-				.filter((r) => r.status === "running"),
-		];
-	}
-
-	/** Stop one top-level agent through the manager that owns it, this one or an orphan's. */
-	function stopAgent(record: AgentRecord, by?: AgentRecord["stoppedBy"]): boolean {
-		if (manager.getRecord(record.id) === record) return manager.abort(record.id, by);
-		return !!runningSurvivors()
-			.find((d) => d.record === record)
-			?.abort(by);
-	}
-
-	/** What a stop that matched nothing lists instead: everything still running or queued. */
-	function describeStoppable(): string {
-		const lines = [
-			...stoppableAgents().map((r) => `- ${r.id} @${r.alias ?? r.handle} (${r.status}): ${r.description}`),
-			...[...workflowTasks.values()]
-				.filter(isLiveWorkflow)
-				.map((t) => `- ${t.id} workflow "${t.meta!.name}" (${t.status})`),
-		];
-		return lines.length > 0 ? `Running or queued:\n${lines.join("\n")}` : "Nothing is running or queued.";
-	}
-
-	/**
-	 * Stop every running or queued top-level agent, survivor, and workflow run
-	 * (whose agents stop with it). A scheduled job that has not fired is not
-	 * running, so it is untouched. The human-side stop: records stay unmarked.
-	 */
-	function stopAllRunning(): { agents: number; workflows: number } {
-		const runs = [...workflowTasks.values()].filter(isLiveWorkflow);
-		for (const task of runs) task.abortController.abort();
-		return { agents: stoppableAgents().filter((record) => stopAgent(record)).length, workflows: runs.length };
-	}
-
-	registerToolReportingUsage(
-		defineTool({
-			name: SUBAGENT_TOOL_NAMES.STOP,
-			label: "Stop Agent",
-			description:
-				"Stop (cancel, kill) a running or queued background agent, or a SubagentWorkflow run by the run id it returned. " +
-				"Use it when an agent's work is no longer wanted, e.g. a sibling already answered. Unlike steer_subagent, the agent cannot ignore it: " +
-				"the run is aborted at once, its current tool call gets the abort signal, and it starts no further tool call. Its status becomes `stopped`. " +
-				"A running agent's partial output, and any worktree branch with changes, arrives in one completion notice; a queued agent never starts. " +
-				"A workflow stops with all of its agents. A stopped agent is not resumed. " +
-				"A run of another extension's `workflow` tool is not ours to stop: use that extension's control (e.g. `workflow_control` with action `stop`).",
-			promptSnippet: "Stop or cancel a running background agent or workflow",
-			// Plan mode admits a trusted tool only on `readOnlyHint`. Stopping edits no
-			// file and starts nothing; it only ends work already running, so it must
-			// stay callable in Plan, where an orchestrator should still be able to
-			// stand a fan-out down.
-			annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-			parameters: Type.Object({
-				agent_id: Type.String({
-					description:
-						"The agent ID to stop. Its handle or name also works. A SubagentWorkflow run id stops that workflow run.",
-				}),
-			}),
-			execute: async (_toolCallId, params) => {
-				const task = workflowTasks.get(params.agent_id);
-				if (task && isLiveWorkflow(task)) {
-					// Marked first: the run's notice is written when it settles, after this returns.
-					task.stoppedBy = "parent";
-					task.abortController.abort();
-					return textResult(
-						`Workflow "${task.meta!.name}" (${task.id}) stopped, with its agents. A completion notice follows.`,
-					);
-				}
-				if (task && (task.status === "running" || task.status === "paused")) {
-					// Told to stop, still unwinding: not "not running", and nothing more to do.
-					return textResult(
-						`Workflow "${task.meta!.name}" (${task.id}) is already stopping. A completion notice follows.`,
-					);
-				}
-				const latest = manager.latestId(params.agent_id);
-				const found = resolveAgentRef(latest);
-				const record = found && isTopLevelAgent(found) ? found : undefined;
-				if (record?.status !== "running" && record?.status !== "queued") {
-					const note = manager.getEvictedNote(latest);
-					if (!record && !task && note?.fromSavedSession) {
-						return {
-							...textResult(
-								`${describeEvicted(note)}.\nNo live registry handle is available here; this historical entry cannot stop work.\n${describeStoppable()}`,
-							),
-							isError: true,
-						};
-					}
-					const status = record?.status ?? task?.status ?? note?.status;
-					const what = status
-						? `"${params.agent_id}" is not running (status: ${status})`
-						: `No agent or workflow "${params.agent_id}"`;
-					return { ...textResult(`${what}, so there is nothing to stop.\n${describeStoppable()}`), isError: true };
-				}
-				const wasQueued = record.status === "queued";
-				stopAgent(record, "parent");
-				const statsParts = [`Tool uses: ${record.toolUses}`];
-				const tokens = formatLifetimeTokens(record);
-				if (tokens) statsParts.push(tokens);
-				return textResult(
-					`Agent ${record.id} stopped.\n` +
-						`Type: ${getDisplayName(record.type)} | Status: ${record.status} | ${statsParts.join(" | ")}\n` +
-						`Description: ${record.description}\n\n` +
-						(wasQueued
-							? "It was still queued, so it never started and no completion notice follows."
-							: "It starts no further tool call. One completion notice with its partial output follows."),
-				);
-			},
-		}),
-	);
+	registerControlTools({
+		pi,
+		manager,
+		clock,
+		fleet,
+		outbox,
+		workflowTasks,
+		liveAgentById,
+		resolveAgentRef,
+		isShowCostEnabled,
+		formatLifetimeTokens,
+		textResult,
+		errorResult,
+		stopActions,
+		registerToolReportingUsage,
+		agentTool,
+	});
 
 	// ---- /agents interactive menu ----
 

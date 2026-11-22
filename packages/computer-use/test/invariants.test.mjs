@@ -529,10 +529,7 @@ test("INV-19 macOS root identity resolution", () => {
 		swift.includes("let requestedRoot = windowRef.flatMap { refStore.window(for: $0) }"),
 		"look does not resolve native root refs from the window store",
 	);
-	assert(
-		swift.includes("else if let requestedRoot, let owner = pidForElement(requestedRoot)"),
-		"look cannot recover the owner pid from a stored native root",
-	);
+	// The semantic-only AX owner fallback is exercised by the headless Swift look fixture.
 	assert(
 		!swift.includes("CGWindowListCopyWindowInfo([.optionIncludingWindow]"),
 		"window lookup uses optionIncludingWindow without an above/below selector",

@@ -354,13 +354,22 @@ Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based
 
 ### Target contract
 
+- On macOS, `find_roots` rejects PIDs above `2147483647` before app discovery. Root discovery
+  sends only positive integer PID filters in that range to the helper. A finite fractional,
+  zero, negative or out-of-range discovery PID is rejected, no longer truncated (`42.8` used to
+  become `42`); an absent, null or non-finite PID still means unfiltered discovery. Native PID arguments
+  accept only integers from `1` through `2147483647`, not zero or negative values. `act` validates
+  the PID before looking up the look. For `look`, an omitted or null PID is allowed; a supplied PID
+  must match the OS-resolved owner before capture. Native `listRoots` retains unfiltered discovery
+  for omitted, null or nonnumeric filters.
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when
   positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`,
   `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in `src/platform/macos/backend.ts`,
   which sends only `windowRef`.
 - The helper treats only a missing or null `windowId` as absent. A supplied ID must be a positive
-  unsigned 32-bit integer or the helper returns `invalid_args`. A stale `windowRef` without an ID
+  unsigned 32-bit integer or the helper returns `invalid_args`. The PID is checked first, so a request
+  with both an invalid PID and an invalid ID reports the PID error. A stale `windowRef` without an ID
   never falls back to the app's first window. With a valid ID it still pairs by ID.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
@@ -2752,7 +2761,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- For root targeting, the helper treats only a missing or null `windowId` as absent. All five request sites (`setWindowFrame`, `focusedElement`, `focusWindow`, `look`, `axWaitFor`) return `invalid_args` for a supplied ID that is not a positive unsigned 32-bit integer.
+- For root targeting, the helper treats only a missing or null `windowId` as absent. All five request sites (`setWindowFrame`, `focusedElement`, `focusWindow`, `look`, `axWaitFor`) return `invalid_args` for a supplied ID that is not a positive unsigned 32-bit integer. The PID is validated first, so a request with both an invalid PID and an invalid ID reports `pid must be a positive 32-bit integer`.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture

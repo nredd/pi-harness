@@ -126,6 +126,70 @@ def test_set_rewrites_state_and_omits_missing_providers(tmp_path: Path) -> None:
     assert not fixture.log_path.exists()
 
 
+@pytest.mark.parametrize("fixture_name", ["legacy-reported", "metered"])
+def test_view_matches_shared_contract(fixture_name: str) -> None:
+    """Mirror the shared v2 provider views, with and without optional fields.
+
+    Parameters:
+        fixture_name (str): shared view scenario.
+    """
+    rows = quota.shared_views(fixture_name)
+    assert rows, f"'{fixture_name}' has no provider views"
+    if fixture_name == "metered":
+        assert any(
+            row["provider"] == "google"
+            and any(
+                meter["name"] == "rpd" and meter["quantity"]["unit"] == "requests" for meter in row["meters"]
+            )
+            for row in rows
+        ), "'metered' must include Google's request meter"
+    for expected in rows:
+        display = expected["display"]
+        assert (
+            quota.view(
+                expected["provider"],
+                display["full"],
+                display["compact"],
+                access=expected["access"],
+                display_footer=display.get("footer"),
+                reading=expected.get("snapshot"),
+                meters=expected["meters"],
+                pools=expected["pools"],
+                marks=expected["marks"],
+            )
+            == expected
+        )
+
+
+def test_set_writes_views_without_widening_legacy_snapshots(tmp_path: Path) -> None:
+    """Keep a metered `google` request count distinct from collected usage windows.
+
+    Parameters:
+        tmp_path (Path): private state and log files.
+    """
+    fixture = quota.UsageFixture(tmp_path / "state.json", tmp_path / "log.jsonl")
+    shared_google = next(row for row in quota.shared_views("metered") if row["provider"] == "google")
+    shared_meter = next(meter for meter in shared_google["meters"] if meter["name"] == "rpd")
+    expected_meter = {key: value for key, value in shared_meter.items() if key != "resetAt"}
+    fixture.set(anthropic=(20, 40), views=[quota.google_rpd_view()])
+    state = json.loads(fixture.state_path.read_text())
+    assert [s["provider"] for s in state["snapshots"]] == ["anthropic"]
+    assert state["views"] == [
+        {
+            "provider": "google",
+            "display": {"full": "Google", "compact": "Goog"},
+            "access": "metered",
+            "meters": [expected_meter],
+            "pools": [],
+            "marks": [],
+        }
+    ]
+    fixture.set(views=[])
+    assert json.loads(fixture.state_path.read_text())["views"] == []
+    fixture.set()
+    assert "views" not in json.loads(fixture.state_path.read_text())
+
+
 def test_install_removes_only_the_router_and_seeds_empty_state(tmp_path: Path) -> None:
     """The router package goes (it would race the fixture); every other entry and setting stays.
 

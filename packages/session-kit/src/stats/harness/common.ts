@@ -41,6 +41,17 @@ export interface QuotaObservation {
 export const isExpired = (q: QuotaObservation, now: number): boolean => q.resetAt <= now;
 
 /**
+ * Freshness rank independent of expiry, positive when `a` ranks above `b`: the later `observedAt`, then the
+ * serialized reading in UTF-16 code-unit order, so ties do not depend on input order. Shared with snapshot
+ * compaction, which must keep every reading this ranking can still let win.
+ */
+export function compareFreshness(a: QuotaObservation, b: QuotaObservation): number {
+	if (a.observedAt !== b.observedAt) return a.observedAt - b.observedAt;
+	const [x, y] = [JSON.stringify(a), JSON.stringify(b)];
+	return Number(x > y) - Number(x < y);
+}
+
+/**
  * One reading per `(provider, limitId, window, account)`, whichever harness or machine saw it. A reading
  * that has not yet reset beats an expired one, then the freshest `observedAt` wins. Never summed. Ties
  * break on the serialized reading so the result does not depend on input order. An expired winner is
@@ -49,11 +60,7 @@ export const isExpired = (q: QuotaObservation, now: number): boolean => q.resetA
 export function mergeQuota(readings: Iterable<QuotaObservation>, now: number): QuotaObservation[] {
 	const best = new Map<string, QuotaObservation>();
 	const beats = (a: QuotaObservation, b: QuotaObservation): boolean =>
-		isExpired(a, now) !== isExpired(b, now)
-			? isExpired(b, now)
-			: a.observedAt !== b.observedAt
-				? a.observedAt > b.observedAt
-				: JSON.stringify(a) > JSON.stringify(b);
+		isExpired(a, now) !== isExpired(b, now) ? isExpired(b, now) : compareFreshness(a, b) > 0;
 	for (const q of readings) {
 		const key = JSON.stringify([q.provider, q.limitId, q.window, q.account]);
 		const prev = best.get(key);

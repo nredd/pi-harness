@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { getApiProvider, getApiProviders } from "@earendil-works/pi-ai/compat";
@@ -21,6 +20,7 @@ import {
 	type HarnessOptions,
 	registerFauxProvider,
 } from "../src/harness.ts";
+import { makeTestTempDir } from "../src/temp-dir.ts";
 
 const harnesses: Harness[] = [];
 afterEach(() => {
@@ -156,9 +156,9 @@ test("a faux provider whose transport is gone is refused", async () => {
 	await expect(createHarness({ fauxProvider: faux })).rejects.toThrow("Faux transport missing");
 });
 
-test("a failed construction releases its scratch directory and owned provider", async () => {
+test("a failed construction releases its scratch directory and owned provider", async ({ onTestFinished }) => {
 	const previous = process.env.TMPDIR;
-	const scratch = mkdtempSync(join(tmpdir(), "harness-fail-"));
+	const scratch = makeTestTempDir("harness-fail-", onTestFinished);
 	process.env.TMPDIR = scratch;
 	const boom = new Error("factory exploded");
 	const before = getApiProviders().length;
@@ -191,7 +191,6 @@ test("a failed construction releases its scratch directory and owned provider", 
 	} finally {
 		if (previous === undefined) delete process.env.TMPDIR;
 		else process.env.TMPDIR = previous;
-		rmSync(scratch, { recursive: true, force: true });
 	}
 });
 
@@ -209,43 +208,41 @@ test("reload restores a transport the registry reset dropped", async () => {
 	expect(bare.session.getAllTools().map((tool) => tool.name)).not.toContain("echo");
 });
 
-test("models, tools, active names, cwd, session and start event options reach the session", async () => {
-	const root = mkdtempSync(join(tmpdir(), "harness-opts-"));
-	try {
-		const tool: AgentTool = {
-			name: "base_tool",
-			label: "Base",
-			description: "Replaces built-ins",
-			parameters: Type.Object({}),
-			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
-		};
-		const sessionManager = SessionManager.inMemory(root);
-		const h = await start({
-			models: [{ id: "m-one" }, { id: "m-two" }],
-			tools: [tool],
-			initialActiveToolNames: ["base_tool"],
-			cwd: root,
-			sessionManager,
-			sessionStartEvent: { type: "session_start", reason: "startup" },
-		});
-		expect(h.models.map((model) => model.id)).toEqual(["m-one", "m-two"]);
-		expect(h.getModel("m-two")?.id).toBe("m-two");
-		expect(h.cwd).toBe(root);
-		expect(h.tempDir).not.toBe(root);
-		expect(h.sessionManager).toBe(sessionManager);
-		await h.session.bindExtensions({ mode: "print" });
-		expect(h.session.getActiveToolNames()).toEqual(["base_tool"]);
+test("models, tools, active names, cwd, session and start event options reach the session", async ({
+	onTestFinished,
+}) => {
+	const root = makeTestTempDir("harness-opts-", onTestFinished);
+	const tool: AgentTool = {
+		name: "base_tool",
+		label: "Base",
+		description: "Replaces built-ins",
+		parameters: Type.Object({}),
+		execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+	};
+	const sessionManager = SessionManager.inMemory(root);
+	const h = await start({
+		models: [{ id: "m-one" }, { id: "m-two" }],
+		tools: [tool],
+		initialActiveToolNames: ["base_tool"],
+		cwd: root,
+		sessionManager,
+		sessionStartEvent: { type: "session_start", reason: "startup" },
+	});
+	expect(h.models.map((model) => model.id)).toEqual(["m-one", "m-two"]);
+	expect(h.getModel("m-two")?.id).toBe("m-two");
+	expect(h.cwd).toBe(root);
+	expect(h.tempDir).not.toBe(root);
+	expect(h.sessionManager).toBe(sessionManager);
+	await h.session.bindExtensions({ mode: "print" });
+	expect(h.session.getActiveToolNames()).toEqual(["base_tool"]);
 
-		const allowed = await start({ extensionFactories: [echo], allowedToolNames: ["echo"], excludedToolNames: ["x"] });
-		await allowed.session.bindExtensions({ mode: "print" });
-		expect(allowed.session.getActiveToolNames()).toEqual(["echo"]);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+	const allowed = await start({ extensionFactories: [echo], allowedToolNames: ["echo"], excludedToolNames: ["x"] });
+	await allowed.session.bindExtensions({ mode: "print" });
+	expect(allowed.session.getActiveToolNames()).toEqual(["echo"]);
 });
 
-test("typed built-in tools execute real reads and report missing files", async () => {
-	const root = mkdtempSync(join(tmpdir(), "harness-builtin-"));
+test("typed built-in tools execute real reads and report missing files", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("harness-builtin-", onTestFinished);
 	let harness: Harness | undefined;
 	try {
 		writeFileSync(join(root, "input.txt"), "fixture content\n");
@@ -273,7 +270,6 @@ test("typed built-in tools execute real reads and report missing files", async (
 		expect(getToolResult(harness, "read").isError).toBe(true);
 	} finally {
 		harness?.cleanup();
-		rmSync(root, { recursive: true, force: true });
 	}
 });
 

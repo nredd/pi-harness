@@ -110,6 +110,8 @@ make help                    # every target
   Native malformed-source, missing-tool, version and checksum controls run in the Python suite.
   This is static analysis, NOT execution or coverage. The existing inert workflow-data inventory and
   per-file shell/PowerShell coverage decisions under #695 remain unchanged. No kcov/Pester policy is added.
+- `check-scripts-python` clears stale coverage, renders both Python LCOV reports when fresh data
+  exists, and preserves pytest failures. A successful pytest run without coverage fails the gate.
 - `check-scripts` enforces package layout with a shrinking allowlist. Retired sync markers are denied in
   script commands and code even under renamed entry points; repeated occurrences of an allowlisted
   import escape cannot grow versus the merge base. Shared `tests/inprocess` and `tests/lib` also

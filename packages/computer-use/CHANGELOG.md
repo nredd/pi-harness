@@ -10,6 +10,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 - Reject out-of-range macOS drag paths before HID lock, focus or event allocation, and return `invalid_args` for malformed window IDs in all five native request sites (#1173).
 - Always block the macOS Touch ID/password prompt hosted by `com.apple.LocalAuthenticationRemoteService` (#688).
+- Reject invalid macOS PIDs before discovery, look lookup or capture, and refuse observations whose supplied PID disagrees with the native root owner (#1209).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).
 - On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).
 - Bound Linux AT-SPI2 D-Bus requests, refuse text reads when the role is unknown, and do not confirm absence from incomplete snapshots. A timed-out semantic action has an unknown outcome and is not retried (#1167).
