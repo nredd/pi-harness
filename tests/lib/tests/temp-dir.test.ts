@@ -2,7 +2,7 @@ import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { CLEANUP_RETRY_OPTIONS, makeTestTempDir } from "../src/temp-dir.ts";
+import { CLEANUP_RETRY_OPTIONS, makeOwnedTempDir, makeTestTempDir } from "../src/temp-dir.ts";
 
 vi.mock(import("node:fs"), async (importOriginal) => {
 	const fs = await importOriginal();
@@ -84,4 +84,17 @@ test("preserves both errors when registration and cleanup fail", ({ onTestFinish
 			throw registrationError;
 		}),
 	).toThrow(expect.objectContaining({ errors: [registrationError, removalError] }));
+});
+
+test("an owned directory is removed only by its returned remove, with the same retries", ({ onTestFinished }) => {
+	const baseDir = makeTestTempDir("pi-test-lib-", onTestFinished);
+	const { dir, remove } = makeOwnedTempDir("owned-", { baseDir });
+	expect(dirname(dir)).toBe(baseDir);
+	writeFileSync(join(dir, "fixture.txt"), "fixture");
+	expect(existsSync(dir)).toBe(true);
+	remove();
+	remove();
+	expect(rmSync).toHaveBeenCalledWith(dir, { recursive: true, force: true, ...CLEANUP_RETRY_OPTIONS });
+	expect(readdirSync(baseDir)).toEqual([]);
+	expect(() => makeOwnedTempDir("../escape-", { baseDir })).toThrow(/stay inside baseDir/u);
 });

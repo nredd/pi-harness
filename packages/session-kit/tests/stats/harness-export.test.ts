@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +22,7 @@ import {
 	validateShard,
 	validateSnapshot,
 } from "../../src/stats/snapshot.ts";
-import { assistantLine, at, call, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, at, call, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
 import { CANARY, claudeRow } from "../fixtures/stats/harness/fixtures.ts";
 import { bumpOpenCode, CODEX_RESET_S, seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
@@ -42,6 +42,14 @@ beforeEach(({ onTestFinished }) => {
 	viewer = join(dir, "viewer");
 	home = join(dir, "home");
 });
+
+/** The installation file: salt plus legacy bookkeeping that outboxes without their own file inherit. */
+const installationState = (): string => join(agent, "pi-session-kit", "export-state.json");
+/** This machine's bookkeeping for the outbox under `output`. */
+function outboxState(output = repo): string {
+	const machines = join(output, "machines");
+	return outboxStatePath(agent, join(machines, readdirSync(machines)[0] ?? "missing"));
+}
 
 const quota = (extra: Partial<QuotaObservation> = {}): QuotaObservation => ({
 	harness: "codex",
@@ -539,16 +547,26 @@ describe("exportStats with harnesses", () => {
 
 	describe("harness set", () => {
 		const all: Harness[] = ["pi", "claude", "codex", "opencode"];
-		const statePath = () => join(agent, "pi-session-kit", "export-state.json");
+		const statePath = () => outboxState();
 
-		it("persists the published set and a private salt in installation state", async () => {
+		it("persists a private salt in installation state and the published set per outbox", async () => {
 			seedPi();
 			const roots = seedHarnessHome(home);
 			await exportStats(agent, repo, undefined, { harnesses: ["pi", "codex"], roots, home });
-			const state = JSON.parse(readFileSync(statePath(), "utf8"));
+			const installation = readFileSync(installationState(), "utf8");
+			const state = JSON.parse(installation);
 			expect(state).toEqual({
 				version: 1,
 				salt: expect.stringMatching(/^[a-f0-9]{32}$/),
+				harnesses: null,
+				failures: {},
+				recoveryPending: false,
+				recoveryFiles: [],
+				lostHarnesses: [],
+				historyHarnesses: [],
+			});
+			expect(JSON.parse(readFileSync(statePath(), "utf8"))).toEqual({
+				version: 1,
 				harnesses: ["pi", "codex"],
 				failures: {},
 				recoveryPending: false,
@@ -563,7 +581,7 @@ describe("exportStats with harnesses", () => {
 			expect(out).not.toContain(state.salt);
 			// and survives later exports
 			await exportStats(agent, repo, undefined, { harnesses: ["pi", "codex"], roots, home });
-			expect(JSON.parse(readFileSync(statePath(), "utf8")).salt).toBe(state.salt);
+			expect(readFileSync(installationState(), "utf8")).toBe(installation);
 		});
 
 		it("refuses a narrower set than last published unless replacing is explicit", async () => {
@@ -607,12 +625,12 @@ describe("exportStats with harnesses", () => {
 			const roots = seedHarnessHome(home);
 			// no state, nothing published: any set is fine, including one without pi
 			await exportStats(agent, join(dir, "elsewhere"), undefined, { harnesses: ["codex"], roots, home });
-			expect(JSON.parse(readFileSync(statePath(), "utf8")).harnesses).toEqual(["codex"]);
+			expect(JSON.parse(readFileSync(outboxState(join(dir, "elsewhere")), "utf8")).harnesses).toEqual(["codex"]);
 			// state without a recorded set (as created before any export finished) and a pi-era manifest
-			const salt = JSON.parse(readFileSync(statePath(), "utf8")).salt;
-			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null, failures: {} }));
+			const salt = JSON.parse(readFileSync(installationState(), "utf8")).salt;
+			writeFileSync(installationState(), JSON.stringify({ version: 1, salt, harnesses: null, failures: {} }));
 			await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
-			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null, failures: {} }));
+			rmSync(statePath());
 			await expect(exportStats(agent, repo, undefined, { harnesses: ["claude"], roots, home })).rejects.toThrow(
 				/missing: pi/,
 			);
@@ -630,6 +648,18 @@ describe("exportStats with harnesses", () => {
 				JSON.stringify({ version: 1, salt, harnesses: ["pi", "pi"], failures: {} }),
 				JSON.stringify({ version: 1, salt, harnesses: ["vim"], failures: {} }),
 				JSON.stringify({ version: 1, salt, harnesses: ["pi"], failures: {}, extra: 1 }),
+			]) {
+				writeFileSync(installationState(), bad);
+				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow();
+			}
+			writeFileSync(installationState(), JSON.stringify({ version: 1, salt, harnesses: null, failures: {} }));
+			const outbox = JSON.parse(readFileSync(statePath(), "utf8"));
+			for (const bad of [
+				"{",
+				JSON.stringify({ ...outbox, salt }),
+				JSON.stringify({ ...outbox, version: 2 }),
+				JSON.stringify({ ...outbox, harnesses: ["vim"] }),
+				JSON.stringify({ ...outbox, recoveryFiles: undefined }),
 			]) {
 				writeFileSync(statePath(), bad);
 				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow();
@@ -694,9 +724,7 @@ describe("exportStats with harnesses", () => {
 			const sessions = new Set(published(second.snapshotDir).flatMap((sh) => sh.sessions.map((x) => x.id)));
 			expect(carried && sessions.has(carried.sessionId)).toBe(true);
 			// the set is still recorded, and a recovered harness replaces the carried copy
-			expect(JSON.parse(readFileSync(join(agent, "pi-session-kit", "export-state.json"), "utf8")).harnesses).toEqual(
-				harnesses,
-			);
+			expect(JSON.parse(readFileSync(outboxState(), "utf8")).harnesses).toEqual(harnesses);
 			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home });
 			expect(third.harnesses?.opencode).toEqual({ found: true, problems: [] });
 		});
@@ -796,8 +824,10 @@ describe("exportStats with harnesses", () => {
 			// every shard is valid and digest-correct, but an event has no session metadata
 			publish((await machineIdentity(agent)).machineId, 2, [event("opencode", "orphan")], [], []);
 			const opts = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
-			// no recorded set either, so what was published cannot be established without saying so
-			await expect(exportStats(agent, repo, undefined, opts)).rejects.toThrow(/Cannot establish/);
+			// a readable manifest over inconsistent history is kept until replacement is explicit
+			await expect(exportStats(agent, repo, undefined, opts)).rejects.toThrow(
+				"Published usage history is unreadable (shards inconsistent with each other)",
+			);
 			const result = await exportStats(agent, repo, undefined, { ...opts, replaceHarnesses: true });
 			expect(result.harnesses?.opencode).toMatchObject({ failed: "lost" });
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
@@ -807,8 +837,7 @@ describe("exportStats with harnesses", () => {
 			seedPi();
 			const roots = seedHarnessHome(home);
 			const first = await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
-			const manifest = JSON.parse(readFileSync(join(first.snapshotDir, "manifest.json"), "utf8")) as Manifest;
-			for (const ref of manifest.shards) writeFileSync(join(first.snapshotDir, ref.file), "tampered");
+			writeFileSync(join(first.snapshotDir, "manifest.json"), "tampered");
 			const second = await exportStats(agent, repo, undefined, {
 				harnesses: ["pi", "opencode"],
 				roots,
@@ -877,8 +906,8 @@ describe("exportStats with harnesses", () => {
 	it("still succeeds, with a warning, when the snapshot is out but the export state cannot be written", async () => {
 		seedPi();
 		const roots = seedHarnessHome(home);
-		const state = join(agent, "pi-session-kit", "export-state.json");
 		await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
+		const state = outboxState();
 		bumpOpenCode(roots.opencode);
 		const sabotage = async () => {
 			// by now the state was read; make writing it fail
@@ -901,8 +930,8 @@ describe("exportStats with harnesses", () => {
 	it("still refuses to narrow after a widening whose state write failed", async () => {
 		seedPi();
 		const roots = seedHarnessHome(home);
-		const state = join(agent, "pi-session-kit", "export-state.json");
 		await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
+		const state = outboxState();
 		const recorded = readFileSync(state, "utf8");
 		const sabotage = async () => {
 			rmSync(state);
@@ -927,7 +956,7 @@ describe("exportStats with harnesses", () => {
 			bumpOpenCode(roots.opencode);
 			return () => Promise.reject(Object.assign(new Error("locked"), { errcode: 5 }));
 		};
-		const statePath = () => join(agent, "pi-session-kit", "export-state.json");
+		const statePath = () => outboxState();
 		const manifestOf = (snapshotDir: string) =>
 			JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
 
@@ -946,8 +975,7 @@ describe("exportStats with harnesses", () => {
 			expect(m2.lastGoodAt).toEqual({ pi: m2.exportedAt, claude: m2.exportedAt, opencode: m1.exportedAt });
 
 			// a clean read gets its mark even when the previous snapshot cannot be trusted
-			const unreadable = manifestOf(second.snapshotDir);
-			for (const ref of unreadable.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
+			writeFileSync(join(second.snapshotDir, "manifest.json"), "tampered");
 			const healthy = await exportStats(agent, repo, undefined, { harnesses, roots, home });
 			expect(manifestOf(healthy.snapshotDir).lastGoodAt).toEqual({
 				pi: manifestOf(healthy.snapshotDir).exportedAt,
@@ -956,8 +984,7 @@ describe("exportStats with harnesses", () => {
 			});
 			await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			// no mark at all for a harness whose previous snapshot could not be read
-			const manifest = manifestOf(second.snapshotDir);
-			for (const ref of manifest.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
+			writeFileSync(join(second.snapshotDir, "manifest.json"), "tampered");
 			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			expect(manifestOf(third.snapshotDir).lastGoodAt).not.toHaveProperty("opencode");
 		});
@@ -977,7 +1004,7 @@ describe("exportStats with harnesses", () => {
 			expect(manifestOf(result.snapshotDir).lastGoodAt?.opencode).toBe(OCT);
 			// a pi-era (v1) snapshot has no marks at all: carried data is as old as its export
 			publish(id, 1, [v1Event("legacy")]);
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			const v1 = await exportStats(agent, repo, undefined, {
 				harnesses: ["pi", "opencode"],
 				roots,
@@ -997,12 +1024,10 @@ describe("exportStats with harnesses", () => {
 				join(repo, "machines", base.machineId, "manifest.json"),
 				JSON.stringify({ ...base, exportedAt: ahead, lastGoodAt: { opencode: ahead } }),
 			);
-			const result = await exportStats(agent, repo, undefined, {
-				harnesses: ["pi", "opencode"],
-				roots,
-				home,
-				loadSqlite: busyDb(roots),
-			});
+			const options = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
+			// A clock behind the published export would reopen sealed months: only explicit replacement proceeds.
+			await expect(exportStats(agent, repo, undefined, options)).rejects.toThrow("Clock is behind");
+			const result = await exportStats(agent, repo, undefined, { ...options, replaceHarnesses: true });
 			const m = manifestOf(result.snapshotDir);
 			expect(m.exportedAt).toBeLessThan(ahead);
 			expect(m.lastGoodAt?.opencode).toBe(m.exportedAt);
@@ -1076,15 +1101,15 @@ describe("exportStats with harnesses", () => {
 			const absent = { ...roots, opencode: join(dir, "nonexistent.db") };
 			await exportStats(agent, repo, undefined, { harnesses: ["pi", "claude", "opencode"], roots: absent, home });
 			// claude has events; opencode has none but was published (it carries a mark): both count
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			await expect(exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home })).rejects.toThrow(
 				/missing: claude, opencode/,
 			);
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			await expect(exportStats(agent, repo, undefined, { harnesses: ["pi", "claude"], roots, home })).rejects.toThrow(
 				/missing: opencode/,
 			);
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			await exportStats(agent, repo, undefined, { harnesses: ["pi", "claude", "opencode"], roots: absent, home });
 		});
 
@@ -1095,10 +1120,10 @@ describe("exportStats with harnesses", () => {
 			const run = (harnesses: Harness[]) => exportStats(agent, repo, undefined, { harnesses, roots, home });
 			publish(id, 2, [], [quota({ harness: "codex" })]);
 			await expect(run(["pi"])).rejects.toThrow(/missing: codex/);
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			publish(id, 1, []);
 			await expect(run(["codex"])).rejects.toThrow(/missing: pi/);
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			writeFileSync(join(repo, "machines", id, "manifest.json"), "{");
 			await expect(run(["codex"])).rejects.toThrow(/missing: pi/);
 		});
@@ -1109,7 +1134,7 @@ describe("exportStats with harnesses", () => {
 			const run = (replaceHarnesses?: boolean) =>
 				exportStats(agent, repo, undefined, { harnesses: ["pi", "claude"], replaceHarnesses, roots, home });
 			const first = await run();
-			unlinkSync(statePath());
+			rmSync(statePath(), { force: true });
 			writeFileSync(join(first.snapshotDir, "manifest.json"), "{");
 			await expect(run()).rejects.toThrow(/Cannot establish which harnesses/);
 			// the recorded set alone is enough to keep protecting a narrowing over a corrupt snapshot

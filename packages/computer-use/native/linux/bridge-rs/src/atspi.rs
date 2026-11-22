@@ -23,6 +23,9 @@ const REGISTRY_ROOT: &str = "/org/a11y/atspi/accessible/root";
 const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
 const COMPONENT: &str = "org.a11y.atspi.Component";
 const ACTION: &str = "org.a11y.atspi.Action";
+// AtspiRole wire IDs from atspi/atspi-constants.h in GNOME/at-spi2-core.
+const PASSWORD_TEXT_ROLE: u32 = 40;
+const PROTECTED_LABEL: &str = "[protected]";
 const MAX_ATSPI_ACTIONS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
@@ -197,10 +200,18 @@ impl AtspiClient {
         self.request(property, proxy.get_property(property)).await
     }
 
-    async fn role(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+    async fn role_name(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, ACCESSIBLE).await?;
         let member = "GetRoleName";
         self.request(member, proxy.call(member, &())).await
+    }
+
+    async fn role_access(&self, accessible: &AccessibleRef) -> RoleAccess {
+        let Ok(proxy) = self.proxy(accessible, ACCESSIBLE).await else {
+            return RoleAccess::Unclassified;
+        };
+        let member = "GetRole";
+        classify_role(self.request(member, proxy.call(member, &())).await.ok())
     }
 
     async fn interfaces(
@@ -262,14 +273,30 @@ impl AtspiClient {
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
-            let app_name = self.string_property(&app, "Name").await.unwrap_or_default();
+            let app_name = self
+                .checked_metadata(&app, async || {
+                    self.string_property(&app, "Name").await.unwrap_or_default()
+                })
+                .await
+                .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let role = self.role(&window).await.unwrap_or_default();
-                let name = self
-                    .string_property(&window, "Name")
+                let (role, name) = self
+                    .checked_metadata(&window, async || {
+                        (
+                            self.role_name(&window).await.unwrap_or_default(),
+                            self.string_property(&window, "Name")
+                                .await
+                                .unwrap_or_default(),
+                        )
+                    })
                     .await
-                    .unwrap_or_default();
+                    .unwrap_or_else(|access| {
+                        (
+                            access.protected_name().to_owned(),
+                            PROTECTED_LABEL.to_owned(),
+                        )
+                    });
                 roots.push(RootSnapshot {
                     frame: self.bounds(&window).await,
                     accessible: window,
@@ -289,6 +316,24 @@ impl AtspiClient {
             }
         }
         Ok(roots)
+    }
+
+    /// Read provider metadata only while the live role is readable before and after the read.
+    async fn checked_metadata<T>(
+        &self,
+        accessible: &AccessibleRef,
+        read: impl AsyncFnOnce() -> T,
+    ) -> Result<T, RoleAccess> {
+        let access = self.role_access(accessible).await;
+        let Some(id) = access.readable() else {
+            return Err(access);
+        };
+        let metadata = read().await;
+        match self.role_access(accessible).await {
+            RoleAccess::Readable(confirmed) if confirmed == id => Ok(metadata),
+            RoleAccess::Password => Err(RoleAccess::Password),
+            _ => Err(RoleAccess::Unclassified),
+        }
     }
 
     pub async fn snapshot(
@@ -322,25 +367,45 @@ impl AtspiClient {
                 continue;
             }
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
-            let role = self.role(&accessible).await.unwrap_or_default();
-            let unknown_role = role.trim().is_empty();
-            incomplete |= unknown_role;
-            let name = field_or_default(
-                self.string_property(&accessible, "Name").await,
-                &mut incomplete,
-            );
-            let description = field_or_default(
-                self.string_property(&accessible, "Description").await,
-                &mut incomplete,
-            );
-            let is_secure = unknown_role
-                || role.eq_ignore_ascii_case("password text")
-                || role.eq_ignore_ascii_case("password");
-            let value = if !is_secure && interfaces.contains(TEXT) {
-                field_or_default(self.read_text(&accessible).await, &mut incomplete)
+            let access = self.role_access(&accessible).await;
+            incomplete |= access == RoleAccess::Unclassified;
+            let mut readable = access.readable();
+            let mut value = String::new();
+            let (mut role, mut name, mut description) = if readable.is_some() {
+                (
+                    field_or_default(self.role_name(&accessible).await, &mut incomplete),
+                    field_or_default(
+                        self.string_property(&accessible, "Name").await,
+                        &mut incomplete,
+                    ),
+                    field_or_default(
+                        self.string_property(&accessible, "Description").await,
+                        &mut incomplete,
+                    ),
+                )
             } else {
-                String::new()
+                let protected = access.protected_name().to_owned();
+                (protected, PROTECTED_LABEL.to_owned(), String::new())
             };
+            if let Some(id) = readable {
+                let result = if interfaces.contains(TEXT) {
+                    self.read_checked_text(&accessible, id).await
+                } else {
+                    self.confirm_role(&accessible, id)
+                        .await
+                        .map(|()| String::new())
+                };
+                match result {
+                    Err(error) if error.code == ErrorCode::SecureTextUnreadable => {
+                        readable = None;
+                        incomplete = true;
+                        role = RoleAccess::Unclassified.protected_name().to_owned();
+                        name = PROTECTED_LABEL.to_owned();
+                        description.clear();
+                    }
+                    other => value = field_or_default(other, &mut incomplete),
+                }
+            }
             if depth == 0 {
                 root_fields_incomplete = incomplete;
             }
@@ -361,7 +426,7 @@ impl AtspiClient {
                 description,
                 value,
                 interfaces,
-                is_secure,
+                is_secure: readable.is_none(),
                 depth,
             });
         }
@@ -372,11 +437,43 @@ impl AtspiClient {
         })
     }
 
-    pub async fn read_text(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+    /// Authorize an explicit text read against the live role, never a cached look.
+    pub async fn read_live_text(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<String, ProtocolError> {
+        let id = self
+            .role_access(accessible)
+            .await
+            .readable()
+            .ok_or_else(unconfirmed_role)?;
+        self.read_checked_text(accessible, id).await
+    }
+
+    /// Discard the reply if the live role no longer matches the authorizing role.
+    async fn read_checked_text(
+        &self,
+        accessible: &AccessibleRef,
+        role: u32,
+    ) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, TEXT).await?;
         let member = "GetText";
-        self.request(member, proxy.call(member, &(0i32, -1i32)))
-            .await
+        let reply = self
+            .request(member, proxy.call(member, &(0i32, -1i32)))
+            .await;
+        self.confirm_role(accessible, role).await?;
+        reply
+    }
+
+    async fn confirm_role(
+        &self,
+        accessible: &AccessibleRef,
+        expected: u32,
+    ) -> Result<(), ProtocolError> {
+        if self.role_access(accessible).await != RoleAccess::Readable(expected) {
+            return Err(unconfirmed_role());
+        }
+        Ok(())
     }
 
     pub async fn press(&self, node: &NodeSnapshot) -> Result<bool, ProtocolError> {
@@ -622,6 +719,51 @@ async fn accessibility_bus_address(
     address.parse().map_err(unavailable)
 }
 
+/// Whether a live `GetRole` reply permits reading provider names, descriptions and text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoleAccess {
+    /// A recognized, non-password role ID.
+    Readable(u32),
+    /// The password text role.
+    Password,
+    /// An unavailable, invalid, unknown, extended or unrecognized role.
+    Unclassified,
+}
+
+impl RoleAccess {
+    /// Return the role ID that authorizes a read, if any.
+    fn readable(self) -> Option<u32> {
+        match self {
+            Self::Readable(id) => Some(id),
+            Self::Password | Self::Unclassified => None,
+        }
+    }
+
+    /// Use a fixed role label rather than provider strings for a protected node.
+    fn protected_name(self) -> &'static str {
+        match self {
+            Self::Password => "password text",
+            Self::Readable(_) | Self::Unclassified => "unknown",
+        }
+    }
+}
+
+/// The single readable-role rule for root discovery, snapshots and explicit reads.
+fn classify_role(role_id: Option<u32>) -> RoleAccess {
+    match role_id {
+        Some(PASSWORD_TEXT_ROLE) => RoleAccess::Password,
+        Some(id @ (1..=66 | 68..=69 | 71..=130)) => RoleAccess::Readable(id),
+        _ => RoleAccess::Unclassified,
+    }
+}
+
+fn unconfirmed_role() -> ProtocolError {
+    ProtocolError::new(
+        "Cannot confirm that the live accessibility role permits reading text",
+        ErrorCode::SecureTextUnreadable,
+    )
+}
+
 /// Retain optional field defaults, but do not use a missing timed-out field to prove absence.
 fn field_or_default<T: Default>(result: Result<T, ProtocolError>, incomplete: &mut bool) -> T {
     result.unwrap_or_else(|error| {
@@ -841,6 +983,18 @@ mod tests {
             self.role
         }
 
+        fn get_role(&self) -> u32 {
+            match self.role {
+                "desktop" => 14,
+                "dialog" => 16,
+                "frame" => 23,
+                "label" => 29,
+                "PaSsWoRd TeXt" => 40,
+                "application" => 75,
+                other => panic!("Missing fixture role ID for {other}"),
+            }
+        }
+
         fn get_interfaces(&self) -> Vec<&str> {
             if self.has_text {
                 vec![TEXT]
@@ -953,6 +1107,115 @@ mod tests {
                     [WINDOW, DIALOG]
                 );
                 assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+            },
+        )
+        .await;
+    }
+
+    /// Reply once with a readable role, then persistently with `after`.
+    struct FlippingNode {
+        name: &'static str,
+        readable: u32,
+        after: u32,
+        role_requests: std::sync::atomic::AtomicUsize,
+        children: &'static [(&'static str, &'static str)],
+    }
+
+    impl FlippingNode {
+        fn new(
+            name: &'static str,
+            readable: u32,
+            after: u32,
+            children: &'static [(&'static str, &'static str)],
+        ) -> Self {
+            Self {
+                name,
+                readable,
+                after,
+                role_requests: Default::default(),
+                children,
+            }
+        }
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl FlippingNode {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            self.children
+                .iter()
+                .map(|&(destination, path)| (destination, OwnedObjectPath::try_from(path).unwrap()))
+                .collect()
+        }
+
+        fn get_role_name(&self) -> &str {
+            "frame"
+        }
+
+        fn get_role(&self) -> u32 {
+            let order = std::sync::atomic::Ordering::SeqCst;
+            if self.role_requests.fetch_add(1, order) == 0 {
+                self.readable
+            } else {
+                self.after
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_discards_metadata_when_the_role_turns_protected_during_the_read() {
+        const DESTINATION: &str = ":1.42";
+        const APP: &str = "/app";
+        const SECRET: &str = "private fixture title";
+        with_peer(
+            |server| {
+                server
+                    .serve_at(FIXTURE_DBUS_ROOT, MockBus)?
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        TreeNode {
+                            name: "Registry",
+                            role: "desktop",
+                            children: &[(DESTINATION, APP)],
+                            has_text: false,
+                        },
+                    )?
+                    .serve_at(
+                        APP,
+                        FlippingNode::new(
+                            SECRET,
+                            75,
+                            PASSWORD_TEXT_ROLE,
+                            &[
+                                (DESTINATION, "/app/unknown"),
+                                (DESTINATION, "/app/password"),
+                                (DESTINATION, "/app/changed"),
+                            ],
+                        ),
+                    )?
+                    .serve_at("/app/unknown", FlippingNode::new(SECRET, 23, 67, &[]))?
+                    .serve_at(
+                        "/app/password",
+                        FlippingNode::new(SECRET, 23, PASSWORD_TEXT_ROLE, &[]),
+                    )?
+                    .serve_at("/app/changed", FlippingNode::new(SECRET, 23, 16, &[]))
+            },
+            async |connection| {
+                let roots = peer_client(connection).list_roots(None).await.unwrap();
+                let roles = roots
+                    .iter()
+                    .map(|root| root.role.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(roles, ["unknown", "password text", "unknown"]);
+                for (index, root) in roots.iter().enumerate() {
+                    assert_eq!(root.name, PROTECTED_LABEL);
+                    assert_eq!(root.app_name, PROTECTED_LABEL);
+                    assert!(!root_json("@w1", root, index).to_string().contains(SECRET));
+                }
             },
         )
         .await;

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Render any provider's router quota views in the footer, including Gemini usage counts and inferred blocks, without changing legacy Anthropic or Codex rows. (#1178)
+- Qualify inferred and assumed quota spans, keep count reset times, label stale counts and pools, keep rows for failed views, rank blocked providers ahead of the footer's provider cap and fit fallback rows to the width without cutting a block's evidence. (#1178)
+- Rank blocked providers by lowest remaining quota under the footer's provider cap, bound quota labels, fit the `+N more` pointer to any width while keeping the hidden blocked count, report failed views unless a cached value is visible, budget legacy-selection rows that carry a block and reuse the effective quota state between renders. (#1178)
+- Show confirmed model blocks on legacy rows (v1 `blocks` and read marks; the pre-view footer ignored blocks), search every block for one that fits a narrow row and count dropped blocks as ` +K!`, report a failed view after each layout drops its cached value, tag colliding provider labels with a stable id hash, and keep the day on compact cross-day blocks. (#1178)
+
 ### Changed
 
 - Use one read-only worktree sweep guard in `ship-issue` and `get-it-merged`. Authorize no deletion of worktrees, branches or claimed scratch. This keep-only rollout supersedes the earlier scratch-removal policy. Keep the legacy command available during rollout. Report upstream as unchecked when no PR exists; never run the checkout's configured transport. Require Git 2.36+ to disable fsmonitor safely and restrict child environments to an allowlist. (#1175)

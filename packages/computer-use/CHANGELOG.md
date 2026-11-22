@@ -8,6 +8,13 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Reject out-of-range macOS drag paths before HID lock, focus or event allocation, and return `invalid_args` for malformed window IDs in all five native request sites (#1173).
+- Always block the macOS Touch ID/password prompt hosted by `com.apple.LocalAuthenticationRemoteService` (#688).
+- Refuse stale managed macOS helpers, including older helpers with no build stamp, without reinstalling, restarting or stopping them. Show the reported build and, on refusal, the expected build in `/computer-use`. Launch the daemon or run setup only when the socket provably has no listener; inconclusive or slow probes never launch. A probe that timed out after connecting is never proof of absence. Check an external helper's protocol on every connection, classifying the socket before and at connect, and recheck an external helper's permissions without restarting it. The build stamp hashes only the Swift sources `build:native` compiles (#1211).
+- Validate numeric AT-SPI roles and suppress Linux text, titles and descriptions for protected, unclassified or unavailable roles; discard text or root names if the live role changes during a read (#1189).
+- Scope Windows look IDs to one helper lifetime and require `read_text` to match the owning window and PID (#1206).
+- Recheck the Windows window owner before every `wait_for` or `act_ui` postcondition poll and report `root_stale` when ownership is lost. Text reads and wait polls also recheck it after acquiring the UIA root and after the walk, and a scoped wait refuses a look from another root (#1207).
+- Bump the Windows helper protocol to `5` so a client and helper from before owner-bound reads and waits fail the version check instead of silently ignoring the owner fields (#1206, #1207).
 - Reject invalid macOS PIDs before discovery, look lookup or capture, and refuse observations whose supplied PID disagrees with the native root owner (#1209).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).
 - On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).

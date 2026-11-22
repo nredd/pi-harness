@@ -67,13 +67,13 @@ describe("envelope profile over a fake child's stdio", () => {
 	test("serves requests, scripted errors with codes, and unknown commands", async () => {
 		const engine = createHelperEngine({
 			profile: "envelope",
-			protocolVersion: 4,
+			protocolVersion: 5,
 			handlers: { look: ok({ roots: [] }), click: fail("denied", "permission_denied") },
 		});
 		const { client } = await windowsClient(engine);
 		assert.deepEqual(await client.command("look", { app: "x" }), { roots: [] });
 		assert.deepEqual(engine.requests[0].args, { app: "x" });
-		assert.equal(engine.requests[0].raw.protocolVersion, 4);
+		assert.equal(engine.requests[0].raw.protocolVersion, 5);
 		await assert.rejects(
 			client.command("click"),
 			(error) => error.code === "permission_denied" && error.message === "denied",
@@ -82,18 +82,18 @@ describe("envelope profile over a fake child's stdio", () => {
 			client.command("nope"),
 			(error) => error.code === "unsupported_command" && error.message === "Unknown command 'nope'",
 		);
-		assert.equal((await client.command("diagnostics")).protocolVersion, 4);
+		assert.equal((await client.command("diagnostics")).protocolVersion, 5);
 		client.dispose();
 	});
 
 	test("withProtocol makes the client reject a protocol mismatch; body() sends arbitrary replies", async () => {
 		const engine = createHelperEngine({
 			profile: "envelope",
-			protocolVersion: 4,
-			handlers: { old: withProtocol(3), weird: body({ ok: false }) },
+			protocolVersion: 5,
+			handlers: { old: withProtocol(4), weird: body({ ok: false }) },
 		});
 		const { client } = await windowsClient(engine);
-		await assert.rejects(client.command("old"), /protocol mismatch: expected 4, got 3/);
+		await assert.rejects(client.command("old"), /protocol mismatch: expected 5, got 4/);
 		await assert.rejects(client.command("weird"), /Windows helper command failed\./);
 		client.dispose();
 	});

@@ -1,6 +1,18 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	link,
+	lstat,
+	mkdir,
+	readdir,
+	readFile,
+	realpath,
+	rename,
+	rmdir,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
@@ -217,7 +229,12 @@ export async function machineIdentity(dir = agentDir()): Promise<Identity> {
 	);
 }
 
-/** Local export state, never synced: the secret salt and the harness set last published. */
+/**
+ * Local export state, never synced: the installation's secret salt plus one outbox's bookkeeping. The
+ * bookkeeping lives in a per-outbox file written only under that outbox's export lock, so two outboxes
+ * of one agent dir cannot overwrite each other's recovery set; `export-state.json` holds the salt and,
+ * for outboxes without their own file yet, the legacy installation-wide bookkeeping they inherit.
+ */
 export interface ExportState {
 	/** Keys the account discriminators on quota readings. Never leaves the machine. */
 	salt: string;
@@ -240,12 +257,48 @@ const shardFileList = (value: unknown): value is string[] =>
 	Array.isArray(value) &&
 	value.every((file) => typeof file === "string" && SHARD_FILE.test(file)) &&
 	new Set(value).size === value.length;
+/** One outbox's bookkeeping: everything in the export state but the installation's salt. */
+type OutboxState = Omit<ExportState, "salt">;
+const RECOVERY_KEYS = ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"];
 const stateFile = (dir: string): string => join(dir, "pi-session-kit", "export-state.json");
+/** Keyed by the resolved outbox, so aliases of one outbox share its bookkeeping and lock. */
+async function outboxStateFile(dir: string, snapshotDir: string): Promise<string> {
+	const key = createHash("sha256")
+		.update(await realpath(snapshotDir))
+		.digest("hex");
+	return join(dir, "pi-session-kit", "outboxes", `${key}.json`);
+}
+/**
+ * Private like the state it holds: the `outboxes/` directory is 0700, also when an older kit created it
+ * under a looser umask. On POSIX it must be a real directory owned by this user (not a symlink), else the
+ * export is refused. Without POSIX ownership (Windows) the platform's permissions apply.
+ */
+async function privateOutboxes(dir: string): Promise<void> {
+	await mkdir(dir, { recursive: true, mode: 0o700 });
+	const uid = process.getuid?.();
+	if (uid === undefined) return;
+	const info = await lstat(dir);
+	if (!info.isDirectory() || info.uid !== uid)
+		throw new Error(
+			`Outbox bookkeeping directory ${JSON.stringify(dir)} is not a directory owned by this user; move it aside and retry`,
+		);
+	if ((info.mode & 0o777) !== 0o700) await chmod(dir, 0o700);
+}
+/** Written 0600 through an atomic rename into the directory `privateOutboxes` checked. */
+async function recordOutbox(path: string, state: OutboxState): Promise<void> {
+	await atomicJson(path, { version: 1, ...state });
+}
 function validateState(value: unknown): ExportState {
-	const optional = ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"].filter(
-		(key) => record(value) && Object.hasOwn(value, key),
-	);
+	const optional = RECOVERY_KEYS.filter((key) => record(value) && Object.hasOwn(value, key));
 	exact(value, ["version", "salt", "harnesses", "failures", ...optional]);
+	if (typeof value.salt !== "string" || !/^[a-f0-9]{32}$/.test(value.salt)) throw new Error("Invalid export state");
+	return { salt: value.salt, ...validateBookkeeping(value) };
+}
+function validateOutbox(value: unknown): OutboxState {
+	exact(value, ["version", "harnesses", "failures", ...RECOVERY_KEYS]);
+	return validateBookkeeping(value);
+}
+function validateBookkeeping(value: Record<string, unknown>): OutboxState {
 	const harnesses = value.harnesses;
 	const failures = value.failures;
 	if (
@@ -254,15 +307,12 @@ function validateState(value: unknown): ExportState {
 		("recoveryFiles" in value && value.recoveryFiles !== null && !shardFileList(value.recoveryFiles)) ||
 		("lostHarnesses" in value && !harnessList(value.lostHarnesses)) ||
 		("historyHarnesses" in value && value.historyHarnesses !== null && !harnessList(value.historyHarnesses)) ||
-		typeof value.salt !== "string" ||
-		!/^[a-f0-9]{32}$/.test(value.salt) ||
 		!(harnesses === null || harnessList(harnesses)) ||
 		!record(failures) ||
 		!Object.entries(failures).every(([h, n]) => HARNESSES.includes(h as Harness) && count(n) && n > 0)
 	)
 		throw new Error("Invalid export state");
 	return {
-		salt: value.salt,
 		harnesses: harnesses as Harness[] | null,
 		failures: failures as ExportState["failures"],
 		recoveryPending: value.recoveryPending === true,
@@ -287,6 +337,15 @@ async function exportState(dir: string): Promise<ExportState> {
 		}),
 		validateState,
 	);
+}
+/** This outbox's own bookkeeping, `null` when it has none. Corrupt fails. */
+async function ownOutbox(path: string): Promise<OutboxState | null> {
+	try {
+		return validateOutbox(await jsonFile(path));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return null;
+	}
 }
 
 /**
@@ -436,26 +495,32 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 	return decodeWithinBudget(bytes, manifest, month, MAX_BYTES).shard;
 }
 
+/** The machine's expansion budget is spent: authenticated bytes, too many of them, not damage. */
+class OverBudget extends Error {
+	constructor(options?: ErrorOptions) {
+		super("Machine snapshot exceeds 128 MiB expanded", options);
+	}
+}
+
 /** Charge actual wire bytes before parsing another shard or publishing its reference. */
 function expandWithinBudget(
 	bytes: Buffer,
 	version: number,
 	remaining: number,
 ): { text: string; expandedBytes: number } {
-	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	if (remaining <= 0) throw new OverBudget();
 	let text: string;
 	try {
 		text = (version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE")
-			throw new Error("Machine snapshot exceeds 128 MiB expanded", { cause: error });
+		if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") throw new OverBudget({ cause: error });
 		throw error;
 	}
 	return { text, expandedBytes: chargeExpansion(Buffer.byteLength(text), remaining) };
 }
 
 function chargeExpansion(expandedBytes: number, remaining: number): number {
-	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	if (expandedBytes > remaining) throw new OverBudget();
 	return expandedBytes;
 }
 
@@ -724,7 +789,12 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 /** Which harnesses an export reads, and where. Default is pi only: other tools are opt-in. */
 export interface ExportOptions {
 	harnesses?: readonly Harness[];
-	/** Allow publishing a narrower harness set than last time, dropping the missing harnesses' history. */
+	/**
+	 * Publish this scan as a replacement generation. Bypasses the narrower-set, clock-rollback,
+	 * unreadable-history and missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
+	 * from the scan, sealed months included. Viewers holding a newer snapshot never import the replacement;
+	 * they accept this machine again only from a later export timestamped at or after the snapshot they hold.
+	 */
 	replaceHarnesses?: boolean;
 	roots?: Partial<HarnessRoots>;
 	env?: Record<string, string | undefined>;
@@ -765,28 +835,66 @@ const emptyContribution = (): Contribution => ({ calls: [], sessions: [], quota:
 /** This machine's last published snapshot: `null` if there is none, `"unreadable"` if it cannot be trusted. */
 type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unreadable";
 
-async function loadPrevious(snapshotDir: string): Promise<Previous> {
+/**
+ * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
+ * invalid), and the first authenticated shard the expansion budget could not hold.
+ */
+interface Damaged {
+	damaged: string[];
+	overBudget?: string;
+}
+
+async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 	let manifest: Manifest;
 	try {
 		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
-	try {
-		const shards: Shard[] = [];
-		const expandedSizes: number[] = [];
-		let remaining = MAX_BYTES;
-		for (const ref of manifest.shards) {
+	const shards: Shard[] = [];
+	const expandedSizes: number[] = [];
+	const damaged: string[] = [];
+	let overBudget: string | undefined;
+	let remaining = MAX_BYTES;
+	// Read every reference so the owner learns all the files to restore, not just the first.
+	for (const ref of manifest.shards) {
+		try {
 			const read = await readShard(snapshotDir, manifest, ref, remaining);
 			shards.push(read.shard);
 			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
+		} catch (error) {
+			if (!(error instanceof OverBudget)) damaged.push(ref.file);
+			else overBudget ??= ref.file;
 		}
-		validateSnapshot({ manifest, shards });
-		return { manifest, shards, expandedSizes };
-	} catch {
-		return "unreadable";
 	}
+	if (damaged.length > 0 || overBudget !== undefined) return { damaged, overBudget };
+	try {
+		validateSnapshot({ manifest, shards });
+	} catch {
+		return { damaged: [] };
+	}
+	return { manifest, shards, expandedSizes };
+}
+
+/**
+ * Publishing over a readable manifest with unreadable shards would evict its intact history from the
+ * active snapshot. Keep it, naming what to restore, unless the owner explicitly asks for replacement.
+ */
+function intactPrevious(previous: Previous | Damaged, replace: boolean): Previous {
+	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
+	if (replace) return "unreadable";
+	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
+	if (previous.damaged.length === 0 && previous.overBudget !== undefined)
+		throw new Error(
+			`Published usage history exceeds the 128 MiB expanded machine budget (from ${previous.overBudget}); ` +
+				"those files match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
+		);
+	const what = previous.damaged.length > 0 ? previous.damaged.join(", ") : "shards inconsistent with each other";
+	throw new Error(
+		`Published usage history is unreadable (${what}); restore it from the sync checkout, ` +
+			"or pass --replace-harnesses to publish without it",
+	);
 }
 
 /**
@@ -1039,8 +1147,46 @@ async function publishStats(
 	identity: Identity,
 ): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
-	const state = await exportState(dir);
-	const previous = await loadPrevious(snapshotDir);
+	// One instant, taken first, is both checked and published.
+	const exportedAt = Date.now();
+	const loadedPrevious = await loadPrevious(snapshotDir);
+	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
+	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
+	// the active month, be replaced by the scan and pruned. Refuse before the salt, the scan cache or any
+	// bookkeeping can be written.
+	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
+	if (exportedAt < publishedAt && !options.replaceHarnesses) {
+		const published = new Date(publishedAt).toISOString();
+		throw new Error(
+			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ${published}); ` +
+				"refusing to reopen sealed months. Fix the clock, or pass --replace-harnesses to publish anyway: " +
+				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot keep " +
+				"it and never import this replacement; they accept this machine again only from a later export " +
+				`timestamped at or after ${published}`,
+		);
+	}
+	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
+	// stale recovery state over this one's.
+	const statePath = await outboxStateFile(dir, snapshotDir);
+	await privateOutboxes(dirname(statePath));
+	const own = await ownOutbox(statePath);
+	// A missing manifest is a first export only if nothing says this outbox published before. Otherwise
+	// publishing the scan would replace its sealed history and prune the shards that hold it.
+	if (loadedPrevious === null && !options.replaceHarnesses) {
+		const shards = (await readdir(snapshotDir, { withFileTypes: true })).some(
+			(entry) => entry.isFile() && SHARD_FILE.test(entry.name),
+		);
+		if (own !== null || shards)
+			throw new Error(
+				`Published usage manifest is missing from ${JSON.stringify(snapshotDir)}, but this outbox published ` +
+					"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
+					"or pass --replace-harnesses to publish without that history",
+			);
+	}
+	const installation = await exportState(dir);
+	const { salt: _, ...inherited } = installation;
+	const bookkeeping = { state: own ?? inherited, own: own !== null };
+	const state: ExportState = { ...bookkeeping.state, salt: installation.salt };
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
 	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);
@@ -1076,7 +1222,6 @@ async function publishStats(
 		);
 	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
-	const exportedAt = Date.now();
 	const scans = await loadHarnesses({
 		now: exportedAt,
 		harnesses: external,
@@ -1139,9 +1284,22 @@ async function publishStats(
 					reportedLost.some((lost) => lost === h) ||
 					(state.lostHarnesses.includes(h) && (h === "pi" || !(report[h]?.found && !report[h]?.failed))),
 			);
+	// Without this outbox's own bookkeeping (deleted, or the checkout moved and so rekeyed), a shard
+	// neither the active manifest nor the inherited fields account for may be a frozen recovery file:
+	// its ownership is unknown, so freeze it instead of pruning it. Only replacement accepts the loss.
+	const unaccounted: string[] = [];
+	if (!bookkeeping.own && !options.replaceHarnesses) {
+		const accounted = new Set([
+			...(previous !== null && previous !== "unreadable" ? previous.manifest.shards.map((ref) => ref.file) : []),
+			...(state.recoveryFiles ?? []),
+		]);
+		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
+			if (entry.isFile() && SHARD_FILE.test(entry.name) && !accounted.has(entry.name)) unaccounted.push(entry.name);
+	}
 	const recoveryPending =
-		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
-	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));
+		!options.replaceHarnesses &&
+		(state.recoveryPending || previous === "unreadable" || reportedLost.length > 0 || unaccounted.length > 0);
+	const protectedFiles = new Set(options.replaceHarnesses ? [] : [...(state.recoveryFiles ?? []), ...unaccounted]);
 	const captureRecovery = recoveryPending && (previous === "unreadable" || state.recoveryFiles === null);
 	if (captureRecovery) {
 		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
@@ -1150,8 +1308,15 @@ async function publishStats(
 	const recoveryFiles = [...protectedFiles].sort();
 	// Freeze recovery scope BEFORE replacing unreadable history. Ordinary exports never add newly
 	// superseded files to this set, so subsequent active generations still prune automatically.
-	if (recoveryPending && (captureRecovery || !state.recoveryPending))
-		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending, recoveryFiles, lostHarnesses });
+	if (recoveryPending && (captureRecovery || !state.recoveryPending || unaccounted.length > 0))
+		await recordOutbox(statePath, {
+			harnesses: state.harnesses,
+			failures: state.failures,
+			recoveryPending,
+			recoveryFiles,
+			lostHarnesses,
+			historyHarnesses: state.historyHarnesses,
+		});
 	// Uncorrected past months stay sealed. An explicit replacement drops their old generations.
 	const sealed =
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
@@ -1228,15 +1393,18 @@ async function publishStats(
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
 	const warnings = recoveryPending ? ["recovery files retained: explicit replacement required"] : [];
+	if (unaccounted.length > 0)
+		warnings.push(
+			`no bookkeeping for this outbox: froze ${unaccounted.length} unaccounted shard files as recovery files; ` +
+				"pass --replace-harnesses to drop them",
+		);
 	const keep = new Set([...snapshot.manifest.shards.map((ref) => ref.file), ...recoveryFiles]);
 	warnings.push(...(await pruneOutbox(snapshotDir, keep)));
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
 	// derives the set from the snapshot itself, so a widening is still protected.
-	const stateWarnings = await atomicJson(stateFile(dir), {
-		version: 1,
-		salt: state.salt,
+	const stateWarnings = await recordOutbox(statePath, {
 		harnesses: published,
 		failures,
 		recoveryPending,

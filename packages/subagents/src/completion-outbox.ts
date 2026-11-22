@@ -52,6 +52,8 @@ export type ResultAllotment = (chars: Readonly<Record<string, number>>) => Recor
 export class CompletionOutbox {
 	private items: OutboxItem[] = [];
 	private timer: TimerHandle | undefined;
+	/** Set by {@link hold}: completions still queue, but nothing is sent. */
+	private held = false;
 
 	private send: (message: OutboxMessage) => void;
 	private parentRunning: () => boolean;
@@ -102,6 +104,18 @@ export class CompletionOutbox {
 		if (this.items.length > 0) this.arm();
 	}
 
+	/**
+	 * The session is shutting down: from now on nothing is sent, so no notice
+	 * reaches a closing session, while completions still queue for
+	 * {@link takePending} to hand to the session's spool. Not undone: shutdown
+	 * ends with {@link dispose}.
+	 */
+	hold(): void {
+		this.held = true;
+		this.timer?.cancel();
+		this.timer = undefined;
+	}
+
 	dispose(): void {
 		this.timer?.cancel();
 		this.timer = undefined;
@@ -110,6 +124,7 @@ export class CompletionOutbox {
 
 	/** Not reset by later items: the first completion is never pushed back. */
 	private arm(): void {
+		if (this.held) return;
 		this.timer ??= this.clock.setTimeout(() => {
 			this.timer = undefined;
 			this.flush();
@@ -131,6 +146,7 @@ export class CompletionOutbox {
 	}
 
 	private flush(): void {
+		if (this.held) return;
 		const message = this.takePending();
 		if (!message) return;
 		// A send from a timer can outlive the session it was meant for (pi -p
