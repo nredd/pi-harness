@@ -701,9 +701,10 @@ reset, using separate shards for readings of the same key. If the quota history 
 or the candidate exceeds the reader's cumulative expansion budget, export fails without publishing
 or pruning. No format change is required; readers still accept older, larger manifests.
 
-The manifest switches to the new references before obsolete files are pruned. A failed compaction
-leaves the previous manifest readable, and frozen recovery copies are still protected. Usage data
-stays local; compaction does not enable remote sharing.
+The manifest switches to the new references before obsolete files are pruned. Write errors before
+manifest publication leave the previous manifest and its shards readable; frozen recovery copies
+stay protected. Rename provides atomic visibility, not power-loss durability: files and directories
+are not fsynced. Usage data stays local; compaction does not enable remote sharing.
 
 Event exact keys:
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -534,51 +534,6 @@ it("compacts an already over-cap month missing from the scan and keeps last-good
 	expect((await loadCombined(viewer)).quota).toEqual([expect.objectContaining({ usedPercent: 32 })]);
 });
 
-it("concurrent exports preserve winning manifest", async () => {
-	const first = await exportStats(agent, out);
-	const path = join(first.snapshotDir, "manifest.json");
-	const seed = (input: number) =>
-		sessionFile(join(agent, "sessions", "active.jsonl"), {
-			startMs: at("2026-11-01"),
-			lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input })],
-		});
-	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-	let pause!: () => void;
-	const paused = new Promise<void>((resolve) => {
-		pause = resolve;
-	});
-	let resume!: () => void;
-	const release = new Promise<void>((resolve) => {
-		resume = resolve;
-	});
-	let blocked = false;
-	vi.mocked(rename).mockImplementation(async (from, to) => {
-		if (to === path && !blocked) {
-			blocked = true;
-			pause();
-			await release;
-		}
-		await actual.rename(from, to);
-	});
-	seed(7);
-	const a = exportStats(agent, out);
-	await Promise.race([paused, a]);
-	let result: unknown;
-	try {
-		seed(13);
-		result = await exportStats(agent, out).catch((error: unknown) => error);
-	} finally {
-		resume();
-		await a;
-	}
-	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
-	expect(result).toMatchObject({ code: "EEXIST", path: join(first.snapshotDir, ".export.lock") });
-	await exportStats(agent, out);
-	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
-});
-
 async function sealedFixture(rows: Partial<Shard>[]) {
 	const { snapshotDir } = await exportStats(agent, out);
 	const before = manifest(snapshotDir);
@@ -638,32 +593,6 @@ const event = (i: number, sessionId: string) => {
 	return { id: eventId(row), ...row };
 };
 
-it("preserves equal-timestamp call order and totals across compaction", async () => {
-	const meta = session(1);
-	const [a, b] = [event(1, meta.id), event(2, meta.id)].sort((a, b) => b.id.localeCompare(a.id));
-	if (!a || !b) throw new Error("Missing fixture events");
-	await sealedFixture([{ sessions: [meta] }, { events: [a] }, { events: [b] }, ...filler]);
-	const read = async (dir: string) => {
-		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
-		return (await loadCombined(dir)).calls;
-	};
-	const before = await read(viewer);
-	await exportStats(agent, out);
-	const after = await read(join(root, "fresh"));
-	for (const calls of [before, after]) {
-		expect(calls).toHaveLength(2);
-		for (const [key, total] of [
-			["input", 3],
-			["output", 4],
-			["cacheRead", 6],
-			["cacheWrite", 8],
-			["cost", 0.375],
-		] as const)
-			expect(calls.reduce((sum, call) => sum + (call[key] ?? 0), 0)).toBe(total);
-	}
-	expect(after).toEqual(before);
-});
-
 it("does not publish if preserving quota winners would exceed the cap", async () => {
 	const { before, snapshotDir } = await sealedFixture([
 		{},
@@ -696,6 +625,141 @@ it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", 
 	const fresh = join(root, "fresh");
 	expect(await importStats(fresh, out)).toMatchObject({ imported: 1, problems: [] });
 	expect(await read(fresh)).toEqual(before);
+});
+
+it("preserves equal-timestamp call order and totals across compaction", async () => {
+	const meta = session(1);
+	const [a, b] = [event(1, meta.id), event(2, meta.id)].sort((a, b) => b.id.localeCompare(a.id));
+	if (!a || !b) throw new Error("Missing fixture events");
+	await sealedFixture([{ sessions: [meta] }, { events: [a] }, { events: [b] }, ...filler]);
+	const read = async (dir: string) => {
+		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
+		return (await loadCombined(dir)).calls;
+	};
+	const before = await read(viewer);
+	await exportStats(agent, out);
+	const after = await read(join(root, "fresh"));
+	for (const calls of [before, after]) {
+		expect(calls).toHaveLength(2);
+		for (const [key, total] of [
+			["input", 3],
+			["output", 4],
+			["cacheRead", 6],
+			["cacheWrite", 8],
+			["cost", 0.375],
+		] as const)
+			expect(calls.reduce((sum, call) => sum + (call[key] ?? 0), 0)).toBe(total);
+	}
+	expect(after).toEqual(before);
+});
+
+it("compaction respects machine expansion budget", async () => {
+	const dense = session(100);
+	const events = Array.from({ length: 8000 }, (_, i) => event(i + 1, dense.id));
+	const { before, snapshotDir } = await sealedFixture([
+		{ month: "2026-09" },
+		{},
+		{ events, sessions: [dense] },
+		...Array.from({ length: 31 }, (_, i) => ({ sessions: [session(i + 1)] })),
+	]);
+	const expanded = before.shards.map((ref) => gunzipSync(readFileSync(join(snapshotDir, ref.file))).toString());
+	const padding = 128 * 1024 * 1024 - expanded.reduce((sum, json) => sum + Buffer.byteLength(json), 0) - 100;
+	// Charge unchanged September's authenticated wire as ballast without allocating 128 MiB per test worker.
+	const measure = Buffer.byteLength;
+	vi.spyOn(Buffer, "byteLength").mockImplementation(
+		(value, encoding) => measure(value, encoding) + (value === expanded[0] ? padding : 0),
+	);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	await exportStats(agent, out).catch((error: unknown) => {
+		expect(error).toMatchObject({ message: expect.stringMatching(/128 MiB|larger than/) });
+	});
+	expect(manifest(snapshotDir)).toEqual(before);
+	expect(readdirSync(snapshotDir)).toEqual(expect.arrayContaining(before.shards.map((ref) => ref.file)));
+	expect(await importStats(join(root, "fresh"), out)).toMatchObject({ imported: 1, problems: [] });
+});
+
+it.each(["partial shard write", "manifest rename"])("keeps the old generation after a %s failure", async (failure) => {
+	const { before, snapshotDir } = await sealedFixture([
+		{},
+		{ quota: [quotaRow(32)] },
+		{ quota: [quotaRow(31)] },
+		...filler,
+	]);
+	const path = join(snapshotDir, "manifest.json");
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	const oldFiles = new Set(before.shards.map((ref) => join(snapshotDir, ref.file)));
+	let unpublished: string | undefined;
+	vi.mocked(writeFile).mockImplementation(async (file, data, options) => {
+		if (String(file).endsWith(".json.gz") && !oldFiles.has(String(file))) {
+			unpublished = String(file);
+			if (failure === "partial shard write" && Buffer.isBuffer(data)) {
+				await actual.writeFile(file, data.subarray(0, 7), options);
+				throw new Error(failure);
+			}
+		}
+		await actual.writeFile(file, data, options);
+	});
+	vi.mocked(rename).mockImplementation(async (from, to) => {
+		if (to === path && failure === "manifest rename") throw new Error(failure);
+		await actual.rename(from, to);
+	});
+	await expect(exportStats(agent, out)).rejects.toThrow(failure);
+	if (!unpublished) throw new Error("No new compacted shard was written");
+	const bytes = readFileSync(unpublished);
+	if (failure === "partial shard write") expect(bytes.length).toBe(7);
+	else expect(() => gunzipSync(bytes)).not.toThrow();
+	expect(manifest(snapshotDir)).toEqual(before);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	vi.mocked(rename).mockRestore();
+	vi.mocked(writeFile).mockRestore();
+	await exportStats(agent, out);
+	expect(manifest(snapshotDir).shards.length).toBeLessThan(before.shards.length);
+	expect(await importStats(join(root, "fresh"), out)).toMatchObject({ imported: 1, problems: [] });
+});
+
+it("concurrent exports preserve winning manifest", async () => {
+	const first = await exportStats(agent, out);
+	const path = join(first.snapshotDir, "manifest.json");
+	const seed = (input: number) =>
+		sessionFile(join(agent, "sessions", "active.jsonl"), {
+			startMs: at("2026-11-01"),
+			lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input })],
+		});
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	let pause!: () => void;
+	const paused = new Promise<void>((resolve) => {
+		pause = resolve;
+	});
+	let resume!: () => void;
+	const release = new Promise<void>((resolve) => {
+		resume = resolve;
+	});
+	let blocked = false;
+	vi.mocked(rename).mockImplementation(async (from, to) => {
+		if (to === path && !blocked) {
+			blocked = true;
+			pause();
+			await release;
+		}
+		await actual.rename(from, to);
+	});
+	seed(7);
+	const a = exportStats(agent, out);
+	await Promise.race([paused, a]);
+	let result: unknown;
+	try {
+		seed(13);
+		result = await exportStats(agent, out).catch((error: unknown) => error);
+	} finally {
+		resume();
+		await a;
+	}
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
+	expect(result).toMatchObject({ code: "EEXIST", path: join(first.snapshotDir, ".export.lock") });
+	await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
 });
 
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {

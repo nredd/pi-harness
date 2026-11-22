@@ -434,17 +434,29 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 	return decodeWithinBudget(bytes, manifest, month, MAX_BYTES).shard;
 }
 
-/** Charge decompressed bytes before parsing or retaining another shard in a machine transaction. */
+/** Charge actual wire bytes before parsing another shard or publishing its reference. */
+function expandWithinBudget(
+	bytes: Buffer,
+	version: number,
+	remaining: number,
+): { text: string; expandedBytes: number } {
+	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	const text = (version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
+	return { text, expandedBytes: chargeExpansion(Buffer.byteLength(text), remaining) };
+}
+
+function chargeExpansion(expandedBytes: number, remaining: number): number {
+	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	return expandedBytes;
+}
+
 function decodeWithinBudget(
 	bytes: Buffer,
 	manifest: Manifest,
 	month: string,
 	remaining: number,
 ): { shard: Shard; expandedBytes: number } {
-	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
-	const text = (manifest.version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
-	const expandedBytes = Buffer.byteLength(text);
-	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	const { text, expandedBytes } = expandWithinBudget(bytes, manifest.version, remaining);
 	if (manifest.version !== 3) {
 		const shard = validateShard(JSON.parse(text) as unknown, manifest, month);
 		if (JSON.stringify(shard) !== text) throw new Error("Noncanonical shard JSON");
@@ -742,7 +754,7 @@ interface Contribution {
 const emptyContribution = (): Contribution => ({ calls: [], sessions: [], quota: [] });
 
 /** This machine's last published snapshot: `null` if there is none, `"unreadable"` if it cannot be trusted. */
-type Previous = { manifest: Manifest; shards: Shard[] } | null | "unreadable";
+type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unreadable";
 
 async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	let manifest: Manifest;
@@ -753,14 +765,16 @@ async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	}
 	try {
 		const shards: Shard[] = [];
+		const expandedSizes: number[] = [];
 		let remaining = MAX_BYTES;
 		for (const ref of manifest.shards) {
 			const read = await readShard(snapshotDir, manifest, ref, remaining);
 			shards.push(read.shard);
+			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
 		}
 		validateSnapshot({ manifest, shards });
-		return { manifest, shards };
+		return { manifest, shards, expandedSizes };
 	} catch {
 		return "unreadable";
 	}
@@ -1101,7 +1115,7 @@ async function publishStats(
 			: null;
 	const current = monthOf(exportedAt);
 	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
-	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard }[]>();
+	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
 	if (sealed)
 		for (const [i, shard] of sealed.shards.entries()) {
 			if (shard.month >= current || revised.has(shard.month)) continue;
@@ -1110,12 +1124,14 @@ async function publishStats(
 			refs.push({
 				ref: nth(sealed.manifest.shards, i),
 				shard: shard as CompactShard,
+				expandedBytes: nth(sealed.expandedSizes, i),
 			});
 			prior.set(shard.month, refs);
 		}
 	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
 	const publishedShards: CompactShard[] = [];
 	const writes: { file: string; bytes: Buffer }[] = [];
+	let remaining = MAX_BYTES;
 	for (const month of [...new Set([...prior.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
@@ -1131,7 +1147,8 @@ async function publishStats(
 			deltas = compactDeltas(base.shard, [...old.slice(1).map(({ shard }) => shard), ...deltas]);
 			old = [base];
 		}
-		for (const { ref, shard } of old) {
+		for (const { ref, shard, expandedBytes } of old) {
+			remaining -= chargeExpansion(expandedBytes, remaining);
 			snapshot.manifest.shards.push(ref);
 			publishedShards.push(shard);
 		}
@@ -1139,6 +1156,7 @@ async function publishStats(
 			validateShard(shard, snapshot.manifest, month);
 			const bytes = encodeShard(shard);
 			if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+			remaining -= expandWithinBudget(bytes, SNAPSHOT_VERSION, remaining).expandedBytes;
 			const sha256 = digest(bytes);
 			const file = `${month}-${sha256}.json.gz`;
 			writes.push({ file, bytes });
