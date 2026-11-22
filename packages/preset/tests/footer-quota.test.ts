@@ -1338,6 +1338,42 @@ test("an oversized family never throws while matching the selected model", () =>
 	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "huge", id: "x" } }), "");
 });
 
+test("legacy compatibility applies only to legacy footer selections, not to every view with a legacy id", () => {
+	const windows = [
+		span("five_hour", 25, 5 * hour, "reported", CLOCK + hour),
+		span("seven_day", 40, WEEK, "reported", CLOCK + hour),
+		{ ...span("seven_day_opus", 90, WEEK, "reported", CLOCK + hour), scope: "model", families: ["opus"] },
+	];
+	const anthropic = (footerData?: unknown) =>
+		view("anthropic", {
+			display: { full: "Anthropic", compact: "Anth", footer: footerData },
+			snapshot: snap("anthropic", windows, { expiresAt: CLOCK + hour }),
+		});
+	const opus = { ...fixed, model: { provider: "anthropic", id: "claude-opus-4" } };
+	const row = (footerData?: unknown) =>
+		footer.formatQuotaRow(projected([anthropic(footerData)]), "compact", plain, { ...opus, now: CLOCK + 1 });
+	// The built-in legacy selection keeps the legacy row, model buckets hidden.
+	assert.equal(
+		row({ show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true }),
+		"Left: Anth 5h 75% @13:00 7d 60% @Jan 10 13:00",
+	);
+	// A v2 selection that names the model bucket, or no selection at all, shows the selected model's bucket.
+	assert.equal(
+		row({ show: [{ name: "seven_day" }, { name: "seven_day_opus" }] }),
+		"Left: Anth 7d 60% @Jan 10 13:00 7d 10% @Jan 10 13:00",
+	);
+	assert.equal(row(), "Left: Anth 5h 75% @13:00 7d 60% @Jan 10 13:00 7d 10% @Jan 10 13:00");
+	// A Codex snapshot without span provenance is still weekly under a v2 duration selector.
+	const codex = snap("openai-codex", [resetWin("7d", 20, CLOCK + hour)], { expiresAt: CLOCK + hour });
+	const v1 = present(footer.parseUsageReply(reply([codex]), CLOCK));
+	const wrapped = projected([
+		view("openai-codex", { display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }] } }, snapshot: codex }),
+	]);
+	const codexRow = (state: footer.QuotaState) => footer.formatQuotaRow(state, "compact", plain, fixed).split(" | ").at(-1);
+	assert.equal(codexRow(v1), "OAI 7d 80% @Jan 10 13:00");
+	assert.equal(codexRow(wrapped), "Left: OAI 7d 80% @Jan 10 13:00");
+});
+
 test("poller state is deeply immutable, so a reader cannot corrupt the next render", () => {
 	const env = fakeEnv();
 	const poller = footer.createQuotaPoller(env.deps);

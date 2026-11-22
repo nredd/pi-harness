@@ -88,6 +88,8 @@ interface QuotaFields {
 	cells: QuotaCell[];
 	stale: boolean;
 	expiresAt?: number;
+	/** Rendered with the legacy Anthropic/Codex rules, which keep those rows byte-identical. */
+	legacy: boolean;
 }
 
 export type ProviderQuota = Frozen<QuotaFields>;
@@ -202,8 +204,9 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 		let matches = windows.filter(({ raw }) =>
 			"name" in selector
 				? raw.name === selector.name
-				: raw.spanSource === undefined && legacy
-					? raw.name === "7d"
+				: raw.spanSource === undefined && (legacy || raw.durationMs === undefined)
+					? // A snapshot without span provenance predates spans: its `7d` bucket is the weekly one.
+						raw.name === "7d" && (legacy || selector.durationMs === WEEK_MS)
 					: raw.spanSource !== "assumed" && raw.durationMs === selector.durationMs,
 		);
 		if (legacy) matches = "name" in selector ? matches.slice(-1) : matches.slice(0, 1);
@@ -217,7 +220,11 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 		}
 		if (matches.length)
 			return matches.map((window) =>
-				reading(window, JSON.stringify([key, window.families]), legacy ? chosenLabel : undefined),
+				reading(
+					window,
+					JSON.stringify([key, window.families]),
+					legacy || window.label.durationMs === undefined ? chosenLabel : undefined,
+				),
 			);
 		return display.footer?.placeholder && i === show.length - 1
 			? [
@@ -318,9 +325,13 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 	for (const view of entries) {
 		if (typeof view.provider !== "string" || !view.provider) continue;
 		const id = view.provider;
-		const legacy = Object.hasOwn(LEGACY_DISPLAY, id);
 		const prior = previous && Object.hasOwn(previous, id) ? previous[id] : undefined;
 		const display = readDisplay(view.display, textOf(id) ?? "quota");
+		// Legacy quirks belong to the legacy footer selection (v1, or a v2 view that keeps it), not to the id.
+		const legacy =
+			Object.hasOwn(LEGACY_DISPLAY, id) &&
+			JSON.stringify(display.footer) ===
+				JSON.stringify(LEGACY_DISPLAY[id as keyof typeof LEGACY_DISPLAY].footer);
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
@@ -333,6 +344,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		const seen = chooseWindows(windows, display, legacy);
 		state[id] = {
 			display,
+			legacy,
 			stale: !fresh,
 			expiresAt: fresh ? expiresAt : prior?.expiresAt,
 			cells: [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...auxiliaryCells(view, legacy)],
@@ -617,7 +629,7 @@ export function fitQuotaRows(state: QuotaState, width: number, colorize: Coloriz
 			return providerRows(segments, layout, colorize, resolved);
 		}
 	}
-	const allLegacy = Object.keys(state).every((id) => Object.hasOwn(LEGACY_DISPLAY, id));
+	const allLegacy = Object.values(state).every((quota) => quota.legacy);
 	// Never erase the footer altogether when only meters or pools are available.
 	const fallback = hasEssential ? ESSENTIAL : NO_RESETS;
 	return providerRows(segments, { ...fallback, cap: 4, prioritize: !allLegacy }, colorize, resolved);
