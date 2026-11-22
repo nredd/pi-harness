@@ -31,17 +31,30 @@ private func rectFields(_ value: Any?) -> [Double]? {
     return fields.count == 4 ? fields : nil
 }
 
+/// Pid above the macOS range: no process answers AX queries for it and no CG window belongs to it.
+private let absentPid = Int32.max
+private let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
+private let usable = boundsDictionary(CGRect(x: 1, y: 2, width: 300, height: 200))
+
 /// Drive the pure root, CG window-list, AX/CG pairing, look geometry and OCR placement policy in
 /// `Bridge` with synthetic window lists and detached look trees. The only live reads are AX queries
 /// on application handles above the macOS pid range, which no process answers, and the read-only CG
 /// window list that `rootDelta` enumerates for that absent pid. Input goes to the fail-fast sink.
 func runRootPairingAssertions() {
     let bridge = Bridge(activityGlow: nil, readSession: { nil }, inputSink: forbiddenInputSink)
-    let absentPid = Int32.max
-    let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
-    let usable = boundsDictionary(CGRect(x: 1, y: 2, width: 300, height: 200))
+    assertRootRanking(bridge)
+    assertWindowCandidates(bridge)
+    assertWindowOwners(bridge)
+    assertPairing(bridge)
+    assertLookGeometry(bridge)
+    assertOCRPlacement(bridge)
+    assertAXSource(bridge)
+    assertRootIdentityAndDelta(bridge)
+    print("macos root, pairing and OCR placement assertions passed")
+}
 
-    // Root ranking, kind and metadata.
+/// Root ranking, kind and metadata.
+private func assertRootRanking(_ bridge: Bridge) {
     expect(bridge.scoreWindow([:]) == 0, "a window without state scores 0")
     expect(bridge.scoreWindow(["isFocused": true, "isMain": true, "isMinimized": false, "isOnscreen": true, "windowId": 9]) == 250, "every ranking signal adds its weight")
     expect(bridge.scoreWindow(["isFocused": false, "isMain": "yes", "isMinimized": true, "isOnscreen": false]) == 0, "false, minimized and non-boolean state add nothing")
@@ -54,8 +67,11 @@ func runRootPairingAssertions() {
     let metadata = bridge.rootMetadata(pairing: WindowPairing(candidate: nil, score: 12.5, confidence: "high"), sheetCount: 2)
     let pairingMetadata = metadata["pairing"] as? [String: Any]
     expect(metadata.count == 2 && metadata["sheetCount"] as? Int == 2 && pairingMetadata?["confidence"] as? String == "high" && pairingMetadata?["score"] as? Double == 12.5, "root metadata carries pairing confidence, score and sheet count")
+}
 
-    // Same-pid CG window candidates: only layer-0 windows with a number and parseable bounds.
+/// Same-pid CG window candidates (layer-0 windows with a number and parseable bounds) and on-screen
+/// popup menus from one pid or any pid.
+private func assertWindowCandidates(_ bridge: Bridge) {
     let candidates = bridge.cgWindowCandidates(pid: 42, entries: [
         windowEntry(pid: 7, number: 1, bounds: usable),
         windowEntry(pid: nil, number: 2, bounds: usable),
@@ -73,7 +89,6 @@ func runRootPairingAssertions() {
     let manyWindows = (1...130).map { windowEntry(pid: 42, number: UInt32($0), bounds: usable) }
     expect(bridge.cgWindowCandidates(pid: 42, entries: manyWindows).map(\.windowId) == (1...128).map { UInt32($0) }, "window candidates stop at 128")
 
-    // Popup menus: popup level and on screen, from one pid or any pid.
     let popupEntries = [
         windowEntry(pid: 7, layer: popupLevel, number: 10, bounds: usable, onscreen: true),
         windowEntry(pid: nil, layer: popupLevel, number: 11, bounds: usable, onscreen: true),
@@ -89,8 +104,11 @@ func runRootPairingAssertions() {
     expect(bridge.cgPopupMenuCandidates(pid: nil, entries: popupEntries).map(\.windowId) == [10, 17], "popup candidates without a pid accept every owner")
     let manyPopups = (1...130).map { windowEntry(pid: 42, layer: popupLevel, number: UInt32($0), bounds: usable, onscreen: true) }
     expect(bridge.cgPopupMenuCandidates(pid: nil, entries: manyPopups).count == 128, "popup candidates stop at 128")
+}
 
-    // Window owners: one per pid, layer 0, at least 100x80 points.
+/// Window owners: one per pid, layer 0, at least 100x80 points. Broad discovery owners also accept
+/// on-screen popup menus of any size.
+private func assertWindowOwners(_ bridge: Bridge) {
     let owners = bridge.cgWindowOwners(entries: [
         windowEntry(pid: nil, bounds: usable, name: "No pid"),
         windowEntry(pid: 11, layer: 25, bounds: usable, name: "Overlay"),
@@ -103,7 +121,6 @@ func runRootPairingAssertions() {
     ])
     expect(owners.map(\.pid) == [11, absentPid] && owners.map(\.name) == ["Eleven", "Unknown App"], "owners dedupe by pid, skip small or non-zero-layer windows and name unknown processes")
 
-    // Broad discovery owners also accept on-screen popup menus of any size.
     let broad = bridge.cgBroadRootOwners(entries: [
         windowEntry(pid: 20, layer: 3, bounds: usable, name: "Floating"),
         windowEntry(pid: nil, bounds: usable, name: "No pid"),
@@ -118,8 +135,10 @@ func runRootPairingAssertions() {
         windowEntry(pid: 23, layer: nil, bounds: usable, name: "Default layer"),
     ])
     expect(broad.map(\.pid) == [21, 22, absentPid, 23] && broad.map(\.name) == ["Menu", "Twenty-two", "Unknown App", "Default layer"], "broad owners take on-screen menus and usable windows once per pid")
+}
 
-    // AX/CG pairing scores and confidence.
+/// AX/CG pairing scores, confidence and one-to-one assignment.
+private func assertPairing(_ bridge: Bridge) {
     let frame = CGRect(x: 0, y: 0, width: 200, height: 100)
     let near = CGWindowCandidate(windowId: 1, title: " report ", bounds: CGRect(x: 10, y: 20, width: 210, height: 100), isOnscreen: true, layer: 0, zOrder: 0)
     expect(bridge.windowPairScore(frame: frame, title: "Report", candidate: near) == 108, "equal titles add 100, geometry subtracts its distance over 20, on screen adds 10")
@@ -136,8 +155,8 @@ func runRootPairingAssertions() {
     let untitled = CGWindowCandidate(windowId: 5, title: "", bounds: frame, isOnscreen: true, layer: 0, zOrder: 4)
     expect(bridge.pairingConfidence(frame: frame, title: "", candidate: untitled, score: 10) == "low", "exact geometry without equal titles is not exact")
 
-    // One-to-one pairing over AX handles no process answers: frames and titles read empty, so only
-    // on-screen state ranks the candidates.
+    // AX handles no process answers read empty frames and titles, so only on-screen state ranks the
+    // candidates.
     let windows = (0..<3).map { AXUIElementCreateApplication(absentPid - Int32($0)) }
     let pairings = bridge.windowPairings(windows: windows, candidates: [offscreen, near])
     let paired = windows.compactMap { pairings[ObjectIdentifier($0)] }
@@ -148,17 +167,21 @@ func runRootPairingAssertions() {
     expect(unpaired?.candidate == nil && unpaired?.confidence == "low", "windows without candidates are unpaired")
     expect(bridge.bestCandidate(for: windows[0], candidates: [offscreen, near])?.windowId == 1, "the best candidate is the highest score")
     expect(bridge.bestCandidate(for: windows[0], candidates: []) == nil, "no candidates means no best candidate")
+}
 
-    // Look geometry: screen frames scale into the image and clamp to it.
+/// Look geometry: screen frames scale into the image and clamp to it.
+private func assertLookGeometry(_ bridge: Bridge) {
     let transform = bridge.rectTransform(windowFrame: CGRect(x: 100, y: 200, width: 200, height: 100), imageWidth: 400, imageHeight: 200)
     expect(transform(CGRect(x: 150, y: 225, width: 50, height: 25)) == CGRect(x: 100, y: 50, width: 100, height: 50), "frames scale by the image to window ratio")
     expect(transform(CGRect(x: 50, y: 150, width: 100, height: 100)) == CGRect(x: 0, y: 0, width: 100, height: 100), "frames clamp at the image origin")
     let unscaled = bridge.rectTransform(windowFrame: CGRect(x: 10, y: 10, width: 0, height: 0), imageWidth: 50, imageHeight: 40)
     expect(unscaled(CGRect(x: 20, y: 15, width: 100, height: 100)) == CGRect(x: 10, y: 5, width: 40, height: 35), "a zero-size window keeps scale 1 and clamps to the image")
     expect(bridge.clampRect(CGRect(x: 500, y: -50, width: 10, height: 10), width: 400, height: 200) == CGRect(x: 400, y: 0, width: 0, height: 0), "a rect outside the image collapses onto its edge")
+}
 
-    // OCR placement: duplicates of intersecting AX labels drop, text lands on the deepest
-    // non-picture node, and text outside every node becomes a numbered picture-only node.
+/// OCR placement: duplicates of intersecting AX labels drop, text lands on the deepest non-picture
+/// node, and text outside every node becomes a numbered picture-only node.
+private func assertOCRPlacement(_ bridge: Bridge) {
     expect(bridge.normalizedLabel("  Save\n\tAS  ") == "save as" && bridge.normalizedLabel(" \n") == "", "labels lowercase and collapse whitespace")
     let save = lookNode("save", CGRect(x: 10, y: 10, width: 100, height: 40), title: "Save")
     let search = lookNode("search", CGRect(x: 200, y: 10, width: 150, height: 40), value: "Query", description: "Search")
@@ -185,8 +208,10 @@ func runRootPairingAssertions() {
         OCRBox(string: "Edge", confidence: 1, rect: CGRect(x: 75, y: 75, width: 10, height: 10)),
     ], to: pictureRoot)
     expect(inner.children.map(\.ref) == ["pic_1"] && inner.children.first?.title == "Inner" && pictureRoot.children.map(\.ref) == ["inner", "pic_2"], "picture-only text nests under the deepest container and numbers in order")
+}
 
-    // AX source classification.
+/// AX source classification.
+private func assertAXSource(_ bridge: Bridge) {
     for (role, insideWebArea, isBrowser, containsWebArea, source) in [
         ("AXGroup", true, false, false, "web_content_ax"), ("AXWebArea", false, true, false, "web_content_ax"),
         ("AXButton", false, true, false, "browser_chrome_ax"), ("AXButton", false, false, true, "browser_chrome_ax"),
@@ -194,8 +219,10 @@ func runRootPairingAssertions() {
     ] {
         expect(bridge.axSource(role: role, insideWebArea: insideWebArea, isBrowser: isBrowser, containsWebArea: containsWebArea) == source, "axSource(\(role), \(insideWebArea), \(isBrowser), \(containsWebArea)) is \(source)")
     }
+}
 
-    // Root identities and post-action deltas.
+/// Root identities and post-action deltas.
+private func assertRootIdentityAndDelta(_ bridge: Bridge) {
     expect(bridge.rootIdentity(["windowId": 7, "title": "Ignored"]) == "window:7", "a CG window id identifies the root")
     expect(bridge.rootIdentity([:]) == "meta:window:::0,0,0,0", "metadata identity defaults every field")
     let sheet: [String: Any] = ["windowId": 0, "kind": "sheet", "role": "AXSheet", "title": "Save", "framePoints": ["x": 10.9, "y": -3.2, "w": NSNumber(value: 300), "h": 200]]
@@ -208,5 +235,4 @@ func runRootPairingAssertions() {
     let delta = bridge.rootDelta(before: ["window:7": ["title": "Gone"], "meta:sheet:AXSheet:Save:10,-3,300,200": sheet], beforeFrontmostPid: nil, pid: absentPid)
     expect(delta.count == 2 && delta.allSatisfy { $0["change"] as? String == "closed" && $0["pid"] as? Int == Int(absentPid) } && Set(delta.compactMap { $0["title"] as? String }) == ["Gone", "Save"], "roots of an absent pid all close")
 
-    print("macos root, pairing and OCR placement assertions passed")
 }
