@@ -21,9 +21,6 @@ const DIAGNOSTICS_PROBE_TIMEOUT_MS = 4_000;
  * client never launches or installs because diagnostics timed out, it fails closed when this runs out.
  */
 const READ_ONLY_PROBE_BUDGET_MS = 8_000;
-/** Polls, `LAUNCH_POLL_MS` apart, for a launched daemon to start listening. */
-const LAUNCH_POLLS = 30;
-const LAUNCH_POLL_MS = 100;
 
 export const HELPER_BUNDLE_ID = "com.injaneity.pi-computer-use";
 export const HELPER_APP_PATH = resolveMacosHelperAppPath();
@@ -513,26 +510,17 @@ export class MacosHelperClient {
 
 	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
 		if (this.daemonAvailable) return true;
+		// Launch only on positive absence: `probeResident` throws on anything inconclusive, and `launchDaemon`
+		// refuses an external socket.
 		if (!(await this.probeResident(signal))) {
-			// Launch only on positive absence; an external helper is its operator's to launch.
-			if (!usingExternalHelperSocket) await this.launchDaemon(signal).catch(() => undefined);
-			return await this.awaitListener(signal);
+			await this.launchDaemon(signal).catch(() => undefined);
+			for (let index = 1; !(await this.probeResident(signal)); index += 1) {
+				if (index >= 30) return false;
+				await sleep(100, signal);
+			}
 		}
-		return this.markAvailable();
-	}
-
-	private markAvailable(): true {
 		this.daemonAvailable = true;
 		return true;
-	}
-
-	/** Poll for a listener; absence keeps waiting, every inconclusive or refused probe throws. */
-	private async awaitListener(signal?: AbortSignal): Promise<boolean> {
-		for (let index = 0; index < LAUNCH_POLLS; index += 1) {
-			if (await this.probeResident(signal)) return this.markAvailable();
-			await sleep(LAUNCH_POLL_MS, signal);
-		}
-		return false;
 	}
 
 	async command<T>(
