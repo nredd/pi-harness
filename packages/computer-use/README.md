@@ -357,8 +357,9 @@ Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`,
   `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in `src/platform/macos/backend.ts`,
   which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A request with a `windowRef` and no usable `windowId` that no longer resolves fails; it
-  never falls back to the app's first window. With a positive `windowId` it still pairs by id.
+- The helper treats only a missing or null `windowId` as absent. A supplied ID must be a positive
+  unsigned 32-bit integer or the helper returns `invalid_args`. A stale `windowRef` without an ID
+  never falls back to the app's first window. With a valid ID it still pairs by ID.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ### Capture
@@ -2749,7 +2750,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- For root targeting, the helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window. The helper's `setWindowFrame` and `focusedElement` commands return `invalid_args` for a supplied `windowId` that is not a positive unsigned 32-bit integer.
+- For root targeting, the helper treats only a missing or null `windowId` as absent. All five request sites (`setWindowFrame`, `focusedElement`, `focusWindow`, `look`, `axWaitFor`) return `invalid_args` for a supplied ID that is not a positive unsigned 32-bit integer.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture

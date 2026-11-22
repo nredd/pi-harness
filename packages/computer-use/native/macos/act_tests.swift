@@ -452,21 +452,24 @@ private func runRootPIDAssertions() throws {
 
 private func runWindowIDAssertions() throws {
     let bridge = Bridge(activityGlow: nil, readSession: { nil })
-    let invalidIds = ["-1", "0", "4294967296", "18446744073709551615", "1.5", "true", #""12""#, "null"]
-    for command in ["setWindowFrame", "focusedElement"] {
+    let invalidIds: [Any] = [1.5, -1, 0, UInt64(UInt32.max) + 1, UInt64.max, Double.nan, true, "12"]
+    for command in ["setWindowFrame", "focusedElement", "focusWindow", "look", "axWaitFor"] {
         for id in invalidIds {
-            let json = "{\"cmd\":\"\(command)\",\"pid\":1234,\"windowId\":\(id)}"
-            let request = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
-            try actionFailure("invalid_args", message: "windowId must be a positive 32-bit unsigned integer") {
+            // Use an impossible PID and suppress images so a parser regression cannot focus or capture a live window.
+            let request: [String: Any] = ["cmd": command, "pid": Int(Int32.max), "windowId": id, "includeImage": false, "role": "AXButton"]
+            do {
                 _ = try bridge.handleRequest(request, clientID: nil)
-                return [:]
+                expect(false, "\(command) accepted invalid windowId \(id)")
+            } catch let failure as BridgeFailure {
+                expect(failure.code == "invalid_args" && failure.message == "windowId must be a positive 32-bit unsigned integer", "\(command) must reject invalid windowId \(id) before window lookup, got \(failure)")
             }
         }
     }
     let omitted = try checkedWindowId(nil)
+    let null = try checkedWindowId(NSNull())
     let smallest = try checkedWindowId(NSNumber(value: 1))
     let largest = try checkedWindowId(NSNumber(value: UInt32.max))
-    expect(omitted == nil && smallest == 1 && largest == UInt32.max, "only omission selects no id; both positive UInt32 boundaries are accepted")
+    expect(omitted == nil && null == nil && smallest == 1 && largest == UInt32.max, "missing and null IDs are absent; both positive UInt32 boundaries are accepted")
 }
 
 private func runEventAssertions() throws {

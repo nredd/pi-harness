@@ -26,12 +26,7 @@ func runPureAssertions() {
     check(resolveCaptureTarget(windowId: nil, wantsImage: true) == .notCapturable, "unpaired visual errors")
     check(resolveCaptureTarget(windowId: 0, wantsImage: true) == .notCapturable, "window 0 never captured")
 
-    // Window id normalization and fallback rule
-    check(normalizedWindowId(nil) == nil, "nil id")
-    check(normalizedWindowId(0) == nil, "0 is no window")
-    check(normalizedWindowId(-4) == nil, "negative is no window")
-    check(normalizedWindowId(5_000_000_000) == nil, "out of range")
-    check(normalizedWindowId(4259) == 4259, "valid id")
+    // Window fallback rule
     check(allowsFirstWindowFallback(windowId: nil, windowRef: nil), "unqualified may fall back")
     check(!allowsFirstWindowFallback(windowId: nil, windowRef: "ax:dlg"), "stale ref must not fall back to first window")
     check(!allowsFirstWindowFallback(windowId: 7, windowRef: nil), "id request must not fall back")

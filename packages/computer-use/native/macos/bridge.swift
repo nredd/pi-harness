@@ -234,15 +234,9 @@ func resolveCaptureTarget(windowId: UInt32?, wantsImage: Bool) -> CaptureTarget 
 	if let windowId, windowId > 0 { return wantsImage ? .capture(windowId: windowId) : .semanticOnly }
 	return wantsImage ? .notCapturable : .semanticOnly
 }
-/// Wire `windowId` -> CG window id. 0, negative and out-of-range values mean "no window" (unpaired root).
-func normalizedWindowId(_ raw: Int?) -> UInt32? {
-	guard let raw, raw > 0, raw <= Int(UInt32.max) else { return nil }
-	return UInt32(raw)
-}
-
-/// Commands with a strict window target may omit the id, but must not fall back on a malformed one.
+/// A missing or null wire ID is unpaired; a malformed ID must not trigger fallback.
 func checkedWindowId(_ raw: Any?) throws -> UInt32? {
-	guard let raw else { return nil }
+	guard let raw, !(raw is NSNull) else { return nil }
 	guard let value = raw as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
 		let id = UInt32(exactly: value.doubleValue), id > 0
 	else {
@@ -1436,11 +1430,6 @@ final class Bridge {
 		return pid
 	}
 
-	/// `windowId` from the wire, treating invalid ids as absent (unpaired roots have no CG window).
-	func positiveWindowId(_ request: [String: Any]) -> UInt32? {
-		normalizedWindowId(optionalIntArg(request, "windowId"))
-	}
-
 	func optionalIntArg(_ request: [String: Any], _ key: String) -> Int? {
 		if let value = request[key] as? Int {
 			return value
@@ -1849,7 +1838,7 @@ final class Bridge {
 
 	private func focusWindow(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = positiveWindowId(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["focused": false, "reason": "window_not_found"]
@@ -2069,7 +2058,7 @@ final class Bridge {
 	}
 
 	private func look(_ request: [String: Any]) throws -> [String: Any] {
-		let windowId = positiveWindowId(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		let maxDimension = optionalIntArg(request, "maxDimension").map { max(1, $0) }
 		let readText = optionalStringArg(request, "readText") ?? "auto"
@@ -3345,8 +3334,8 @@ final class Bridge {
 
 	private func axWaitFor(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		ensureEnhancedAccessibility(pid: pid)
-		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
 		let role = optionalStringArg(request, "role")?.trimmingCharacters(in: .whitespacesAndNewlines)
 		let text = optionalStringArg(request, "text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -5208,7 +5197,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- Only a missing or null `windowId` is absent. Other values must be positive unsigned 32-bit integers or the helper returns `invalid_args`. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture
