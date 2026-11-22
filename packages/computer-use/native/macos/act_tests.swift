@@ -28,6 +28,8 @@ private final class ActFixture {
     var web = false
     var supported = true
     var value = "before"
+    /// Scripted `AXValue` reads, consumed first: `nil` is a failed read. Falls back to `value` once empty.
+    var valueReads: [String?] = []
     var hits: [AXUIElement] = []
     var statuses: [AXError] = []
     var refind = true
@@ -67,7 +69,7 @@ private final class ActFixture {
                 case kAXRoleAttribute: return "AXButton"
                 case kAXValueAttribute:
                     self.onValueRead()
-                    return self.value
+                    return self.valueReads.isEmpty ? self.value : self.valueReads.removeFirst()
                 default: return nil
                 }
             },
@@ -309,6 +311,20 @@ private func runKeyboardActionAssertions() throws {
     let stale = ActFixture()
     let unconfirmed = try stale.act("typeText", policy: "background", params: ["text": "before"])
     expect(unconfirmed["outcome"] as? String == "unknown" && stale.trace.filter { $0.hasPrefix("type:") } == ["type:before:1234:pid"], "posted text with an unchanged readback is unknown and typed once")
+    expect((unconfirmed["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true, "an unconfirmed posted text is flagged deliveryUnknown")
+    // Only two successful, different reads confirm posted text; a failed read never fabricates a value (#1241).
+    for (reads, label) in [(["before", nil], "failed post-read"), ([nil, "hi"], "failed pre-read"), ([nil, nil], "two failed reads")] as [([String?], String)] {
+        let fixture = ActFixture()
+        fixture.valueReads = reads
+        let result = try fixture.act("typeText", policy: "background", params: ["text": "hi"])
+        let evidence = result["evidence"] as? [String: Any]
+        expect(result["outcome"] as? String == "unknown" && evidence?["deliveryUnknown"] as? Bool == true && evidence?["valueChanged"] as? Bool == false, "\(label) after posted text is unknown: \(result)")
+        expect((evidence?["value"] as? String) == reads[1], "\(label) reports only a value it actually read")
+    }
+    let typer = ActFixture()
+    let confirmed = try typer.act("typeText", policy: "background", params: ["text": "hi"])
+    let typedEvidence = confirmed["evidence"] as? [String: Any]
+    expect(confirmed["outcome"] as? String == "worked" && typedEvidence?["value"] as? String == "hi" && typedEvidence?["deliveryUnknown"] == nil, "two different successful reads confirm posted text")
     let keys = ActFixture()
     keys.blocked = true
     try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd", "a"]]) }

@@ -3104,10 +3104,14 @@ final class Bridge {
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
 				world.sleep(30_000)
-				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
-				let changed = afterValue != (beforeValue ?? "")
-				// The text was posted: an unchanged or stale readback is unknown, never didnt, which would invite a resend (#1241).
-				return finish(["outcome": changed ? "worked" : "unknown", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
+				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString)
+				// Only two successful reads that differ confirm the posted text; a failed read never stands in for a value.
+				let changed = beforeValue != nil && afterValue != nil && afterValue != beforeValue
+				var evidence: [String: Any] = ["valueChanged": changed]
+				if let afterValue { evidence["value"] = afterValue }
+				// The text was posted: an unconfirmed readback is unknown, never didnt, which would invite a resend (#1241).
+				if !changed { evidence["deliveryUnknown"] = true }
+				return finish(["outcome": changed ? "worked" : "unknown", "performed": performed, "evidence": evidence])
 			}
 		} else if let element, action == "secondaryAction" {
 			// AX-only: runs one action the element itself advertises, checked live against its current action list.
