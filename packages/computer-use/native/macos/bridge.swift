@@ -350,6 +350,7 @@ let alwaysBlockedBundleIds: [String] = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ]
 
 /// The request's `blockedBundleIds` (sent by the TypeScript policy) plus the always-blocked agents.

@@ -2287,7 +2287,7 @@ Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, Pow
 
 The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 
-The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
+The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`, `com.apple.ScreenSaver.Engine` and `com.apple.LocalAuthenticationRemoteService` (the macOS Touch ID/password prompt) are always blocked and cannot be removed by this option.
 
 On macOS and Windows, `find_roots` marks matching roots `blocked`, and a known blocked root fails with `app_blocked` before helper calls. This is a guard against mistakes, not a sandbox: focus can change between a check and delivery. The helper-side checks below are macOS-only: keyboard delivery checks the frontmost app on every unit but probes AX key focus only on a bounded cadence, so an app that takes key focus without becoming frontmost can receive a few units (up to eight) before the next probe. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
 

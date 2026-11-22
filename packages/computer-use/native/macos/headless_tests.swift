@@ -45,6 +45,7 @@ func runPureAssertions() {
     check(!isBlockedBundleId("com.apple.TextEdit", blocked: ["com.apple.Terminal"]), "unlisted app is allowed")
     check(!isBlockedBundleId(nil, blocked: ["com.apple.Terminal"]) && !isBlockedBundleId("", blocked: [""]), "no bundle id never matches")
     check(blockedBundleIdList([:]) == alwaysBlockedBundleIds, "system agents are blocked with no request list")
+    check(isBlockedBundleId("com.apple.LocalAuthenticationRemoteService", blocked: blockedBundleIdList(["blockedBundleIds": [] as [String]])), "LocalAuthentication prompt is refused even with an empty request list")
     check(isBlockedBundleId("com.apple.SecurityAgent", blocked: blockedBundleIdList(["blockedBundleIds": []])), "empty request list keeps system agents blocked")
     check(isBlockedBundleId("com.example.Vault", blocked: blockedBundleIdList(["blockedBundleIds": ["com.example.Vault", 7]])), "request list extends the blocklist")
     check(sessionIsLocked(["CGSSessionScreenIsLocked": true]), "screen-locked flag locks the session")

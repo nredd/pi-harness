@@ -12,6 +12,7 @@ const SYSTEM_AGENTS = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ];
 
 afterEach(() => {
