@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
@@ -20,12 +20,18 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	vi.doUnmock("node:net");
+	vi.doUnmock("node:os");
 	vi.doUnmock("node:child_process");
 	vi.resetModules();
 });
 
-async function rig(buildIdentity: string | undefined, { external = false, installed = true } = {}) {
-	const app = path.join(makeTestTempDir("cu-build-app-", onTestFinished), "fixture.app");
+async function rig(buildIdentity: string | undefined, { external = false, installed = true, alias = false } = {}) {
+	const home = makeTestTempDir("cu-build-app-", onTestFinished);
+	const app = path.join(home, "fixture.app");
+	vi.doMock("node:os", async (original) => {
+		const real = await original<typeof import("node:os")>();
+		return { ...real, default: { ...real.default, homedir: () => home } };
+	});
 	const executable = path.join(app, "Contents", "MacOS", "bridge");
 	if (installed) {
 		mkdirSync(path.dirname(executable), { recursive: true });
@@ -38,7 +44,14 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 		handlers: { listApps: ok([]), setActivityGlow: ok({}) },
 	});
 	onTestFinished(() => fake.stop());
-	vi.stubEnv("PI_CU_SOCKET_PATH", external ? socketPath : undefined);
+	let override = external ? socketPath : undefined;
+	if (alias) {
+		const managedDir = path.join(home, "Library", "Caches", "pi-computer-use");
+		mkdirSync(managedDir, { recursive: true });
+		symlinkSync(managedDir, path.join(home, "alias"));
+		override = `${path.relative(process.cwd(), home)}/unused/../alias/BRIDGE.sock/`;
+	}
+	vi.stubEnv("PI_CU_SOCKET_PATH", override);
 	vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", app);
 	vi.doMock("node:net", async (original) => {
 		const real = await original<typeof import("node:net")>();
@@ -75,6 +88,13 @@ test.each([older, undefined])(
 		assert.equal(spawn.mock.calls.length, 0);
 	},
 );
+
+test("a relative, symlinked socket override still refuses a stale managed daemon", async () => {
+	const { client, commands, spawn } = await rig(older, { alias: true });
+	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
+	assert.deepEqual(commands(), ["diagnostics"]);
+	assert.equal(spawn.mock.calls.length, 0);
+});
 
 test("refuses a stale resident daemon before setup when the executable is missing", async () => {
 	const { client, spawn, commands } = await rig(older, { installed: false });

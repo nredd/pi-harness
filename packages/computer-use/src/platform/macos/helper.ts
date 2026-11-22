@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, realpathSync } from "node:fs";
 import { access, mkdir, realpath, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -18,8 +18,28 @@ export const HELPER_BUNDLE_ID = "com.injaneity.pi-computer-use";
 export const HELPER_APP_PATH = resolveMacosHelperAppPath();
 export const HELPER_APP_EXECUTABLE_PATH = path.join(HELPER_APP_PATH, "Contents", "MacOS", "bridge");
 const DEFAULT_HELPER_SOCKET_PATH = path.join(os.homedir(), "Library", "Caches", "pi-computer-use", "bridge.sock");
-export const HELPER_SOCKET_PATH = process.env.PI_CU_SOCKET_PATH ?? DEFAULT_HELPER_SOCKET_PATH;
-const usingExternalHelperSocket = HELPER_SOCKET_PATH !== DEFAULT_HELPER_SOCKET_PATH;
+const configuredSocketPath = path.resolve(process.env.PI_CU_SOCKET_PATH ?? DEFAULT_HELPER_SOCKET_PATH);
+const usingExternalHelperSocket = !isManagedSocket(configuredSocketPath);
+export const HELPER_SOCKET_PATH = usingExternalHelperSocket ? configuredSocketPath : DEFAULT_HELPER_SOCKET_PATH;
+
+function canonicalSocketDirectory(socketPath: string): string {
+	const directory = path.dirname(socketPath);
+	try {
+		return realpathSync.native(directory);
+	} catch {
+		return directory;
+	}
+}
+
+function isManagedSocket(socketPath: string): boolean {
+	if (socketPath === DEFAULT_HELPER_SOCKET_PATH) return true;
+	// Reserve case variants of the managed socket name in its directory even
+	// before the socket exists, when there is no inode to compare.
+	return (
+		path.basename(socketPath).toLowerCase() === path.basename(DEFAULT_HELPER_SOCKET_PATH) &&
+		canonicalSocketDirectory(socketPath) === canonicalSocketDirectory(DEFAULT_HELPER_SOCKET_PATH)
+	);
+}
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
